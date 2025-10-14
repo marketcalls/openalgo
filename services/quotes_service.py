@@ -75,8 +75,16 @@ def get_quotes_with_auth(auth_token: str, feed_token: Optional[str], broker: str
             'data': quotes
         }, 200
     except Exception as e:
-        logger.error(f"Error in broker_module.get_quotes: {e}")
-        traceback.print_exc()
+        # Check if this is a permission error
+        error_msg = str(e)
+        if 'permission' in error_msg.lower() or 'insufficient' in error_msg.lower():
+            # Log at debug level for permission errors (common with personal APIs)
+            logger.debug(f"Quote fetch permission denied: {error_msg}")
+        else:
+            # Log other errors normally
+            logger.error(f"Error in broker_module.get_quotes: {e}")
+            traceback.print_exc()
+
         return False, {
             'status': 'error',
             'message': str(e)

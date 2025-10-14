@@ -104,6 +104,7 @@ class ExecutionEngine:
         """
         Fetch real-time quote for a symbol using API key
         Returns dict with ltp, high, low, open, close, etc.
+        Returns None if quote cannot be fetched (permission error, API error, etc.)
         """
         try:
             # Get any user's API key for fetching quotes
@@ -111,7 +112,7 @@ class ExecutionEngine:
             api_key_obj = ApiKeys.query.first()
 
             if not api_key_obj:
-                logger.warning("No API keys found for fetching quotes")
+                logger.debug("No API keys found for fetching quotes")
                 return None
 
             # Decrypt the API key
@@ -129,11 +130,13 @@ class ExecutionEngine:
                 logger.debug(f"Fetched quote for {symbol}: LTP={quote_data.get('ltp', 0)}")
                 return quote_data
             else:
-                logger.warning(f"Failed to fetch quote for {symbol}: {response.get('message', 'Unknown error')}")
+                # Log at debug level to avoid spam for permission errors
+                logger.debug(f"Could not fetch quote for {symbol}: {response.get('message', 'Unknown error')}")
                 return None
 
         except Exception as e:
-            logger.error(f"Error fetching quote for {symbol} on {exchange}: {e}")
+            # Handle all exceptions gracefully - don't stop execution engine
+            logger.debug(f"Exception fetching quote for {symbol}: {str(e)}")
             return None
 
     def _process_order(self, order, quote):

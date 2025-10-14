@@ -244,7 +244,8 @@ class BrokerData:
             }
             
         except ZerodhaPermissionError as e:
-            logger.exception(f"Permission error fetching quotes: {e}")
+            # Log at debug level to avoid spam for personal API without data feed
+            logger.debug(f"Permission error fetching quotes: {e}")
             raise
         except (ZerodhaAPIError, Exception) as e:
             logger.exception(f"Error fetching quotes: {e}")
