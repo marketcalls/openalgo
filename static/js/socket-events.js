@@ -263,21 +263,21 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Password change notification
     socket.on('password_change', function(data) {
-        playAlertSound();
+        playAlertSound('password_change', { message: data.message });
         showToast(data.message, 'info');
         //refreshCurrentPageContent();
     });
 
     // Master contract download notification
     socket.on('master_contract_download', function(data) {
-        playAlertSound();
+        playAlertSound('master_contract_download', { message: data.message });
         showToast(`Master Contract: ${data.message}`, 'info');
         //refreshCurrentPageContent();
     });
 
     // Cancel order notification
     socket.on('cancel_order_event', function(data) {
-        playAlertSound();
+        playAlertSound('cancel_order_event', { orderid: data.orderid });
         showToast(`Cancel Order ID: ${data.orderid}`, 'warning');
         if (isOnAnalyzerPage) {
             refreshAnalyzer();
@@ -288,8 +288,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Modify order notification
     socket.on('modify_order_event', function(data) {
-        playAlertSound();
-        const message = data.status === 'success' 
+        playAlertSound('modify_order_event', { orderid: data.orderid, status: data.status });
+        const message = data.status === 'success'
             ? `Order Modified Successfully - Order ID: ${data.orderid}`
             : `Failed to Modify Order - Order ID: ${data.orderid}`;
         showToast(message, data.status === 'success' ? 'success' : 'error');
@@ -303,7 +303,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Close position notification
     socket.on('close_position_event', function(data) {
-        playAlertSound();
+        playAlertSound('close_position_event', { message: data.message, status: data.status });
         showToast(data.message, data.status === 'success' ? 'success' : 'error');
         if (isOnAnalyzerPage) {
             refreshAnalyzer();
@@ -317,12 +317,21 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Order placement notification
     socket.on('order_event', function(data) {
-        playAlertSound();
+        // Only play audio for non-batch orders OR for the last order in a batch
+        const shouldPlayAudio = !data.batch_order || data.is_last_order;
+        if (shouldPlayAudio) {
+            playAlertSound('order_event', {
+                symbol: data.symbol,
+                action: data.action,
+                orderid: data.orderid
+            });
+        }
+
         const type = data.action.toUpperCase() === 'BUY' ? 'success' : 'error';
-        
+
         // Show toast notification
         showToast(`${data.action.toUpperCase()} Order Placed for Symbol: ${data.symbol}, Order ID: ${data.orderid}`, type);
-        
+
         // For batch orders (basket/split), only refresh on the last order
         if (!data.batch_order || data.is_last_order) {
             if (isOnAnalyzerPage) {
@@ -338,8 +347,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Generic order notification handler
     socket.on('order_notification', function(data) {
-        playAlertSound();
-        
+        playAlertSound('order_notification', {
+            symbol: data.symbol,
+            status: data.status,
+            message: data.message
+        });
+
         // Determine notification type based on status
         let type = 'info';
         if (data.status && typeof data.status === 'string') {
@@ -369,7 +382,18 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Analyzer update notification
     socket.on('analyzer_update', function(data) {
-        playAlertSound();
+        // Only play audio for actual trading actions, not for passive monitoring
+        const passiveApiTypes = ['orderstatus', 'openposition', 'orderbook', 'tradebook', 'positions', 'holdings'];
+        const isPassiveMonitoring = passiveApiTypes.includes(data.request.api_type);
+
+        if (!isPassiveMonitoring) {
+            playAlertSound('analyzer_update', {
+                api_type: data.request.api_type,
+                symbol: data.request.symbol,
+                status: data.response.status
+            });
+        }
+
         let message = '';
         let type = data.response.status === 'success' ? 'success' : 'error';
 
@@ -474,12 +498,61 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Helper function to play alert sound
-    function playAlertSound() {
+    // Audio throttling configuration
+    let lastAudioAttemptTime = 0;
+    const AUDIO_THROTTLE_MS = 1000; // Minimum time between audio notifications (milliseconds)
+    let audioEnabled = false; // Track if user has interacted with page (for autoplay policy)
+
+    // Helper function to play alert sound with throttling
+    function playAlertSound(eventType = 'unknown', eventData = {}) {
+        const now = Date.now();
+        const isFirstAttempt = lastAudioAttemptTime === 0;
+        const timeSinceLastAttempt = isFirstAttempt ? 0 : now - lastAudioAttemptTime;
+
+        // Throttle: Only play if enough time has passed since last attempt
+        if (timeSinceLastAttempt < AUDIO_THROTTLE_MS && !isFirstAttempt) {
+            return;
+        }
+
+        // Update last attempt time before playing
+        lastAudioAttemptTime = now;
+
+        // Play the sound
         if (alertSound) {
-            alertSound.play().catch(function(error) {});
+            alertSound.play()
+                .then(() => {
+                    audioEnabled = true; // Mark that audio is working
+                })
+                .catch(function(error) {
+                    // Silently handle autoplay policy errors
+                });
         }
     }
+
+    // Enable audio on any user interaction (for browser autoplay policy)
+    function enableAudio() {
+        if (!audioEnabled && alertSound) {
+            // Preload audio by playing it silently (volume 0) to satisfy browser autoplay policy
+            const originalVolume = alertSound.volume;
+            alertSound.volume = 0;
+            alertSound.play()
+                .then(() => {
+                    alertSound.pause();
+                    alertSound.currentTime = 0;
+                    alertSound.volume = originalVolume;
+                    audioEnabled = true;
+                })
+                .catch(() => {
+                    alertSound.volume = originalVolume;
+                    // Silently fail - will try again on next interaction
+                });
+        }
+    }
+
+    // Listen for any user interaction to enable audio
+    ['click', 'touchstart', 'keydown'].forEach(eventType => {
+        document.addEventListener(eventType, enableAudio, { once: true, passive: true });
+    });
 
     // Initial page load - set up click handlers
     if (isOnAnalyzerPage) {
@@ -494,7 +567,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (requestData.apikey) {
                         delete requestData.apikey;
                     }
-                    
+
                     document.getElementById('request-data').textContent = JSON.stringify(requestData, null, 2);
                     document.getElementById('response-data').textContent = JSON.stringify(responseData, null, 2);
                     document.getElementById('requestModal').showModal();

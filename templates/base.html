@@ -32,10 +32,10 @@
     
     <!-- Compiled Tailwind CSS with DaisyUI -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
-    
-    <!-- Socket.IO -->
-    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
-    
+
+    <!-- Socket.IO (Local) -->
+    <script src="{{ url_for('static', filename='js/socket.io.min.js') }}"></script>
+
     <!-- Audio for alerts -->
     <audio id="alert-sound" src="{{ url_for('static', filename='sounds/alert.mp3') }}" preload="auto"></audio>
 

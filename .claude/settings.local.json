@@ -20,7 +20,8 @@
       "Read(//c/Users/Admin1/Desktop/**)",
       "Bash(sqlite3:*)",
       "Bash(python:*)",
-      "Bash(uv run:*)"
+      "Bash(uv run:*)",
+      "Bash(curl:*)"
     ],
     "deny": [],
     "ask": []
