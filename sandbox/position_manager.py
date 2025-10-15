@@ -243,11 +243,18 @@ class PositionManager:
                 ltp = Decimal(str(quote.get('ltp', 0)))
                 if ltp > 0:
                     position.ltp = ltp
-                    position.pnl = self._calculate_position_pnl(
+
+                    # Calculate current unrealized P&L for open position
+                    current_unrealized_pnl = self._calculate_position_pnl(
                         position.quantity,
                         position.average_price,
                         ltp
                     )
+
+                    # Display = accumulated realized P&L + current unrealized P&L
+                    accumulated_realized = position.accumulated_realized_pnl if position.accumulated_realized_pnl else Decimal('0.00')
+                    position.pnl = accumulated_realized + current_unrealized_pnl
+
                     position.pnl_percent = self._calculate_pnl_percent(
                         position.average_price,
                         ltp,

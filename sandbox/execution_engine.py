@@ -398,6 +398,10 @@ class ExecutionEngine:
                         reduced_quantity, execution_price
                     )
 
+                    # Add realized P&L to accumulated realized P&L
+                    # This tracks all partial closes throughout the day
+                    position.accumulated_realized_pnl = (position.accumulated_realized_pnl or Decimal('0.00')) + realized_pnl
+
                     # Release margin PROPORTIONALLY for reduced quantity
                     # Use exact margin stored in position, release proportionally
                     current_margin = position.margin_blocked if hasattr(position, 'margin_blocked') and position.margin_blocked else Decimal('0.00')
