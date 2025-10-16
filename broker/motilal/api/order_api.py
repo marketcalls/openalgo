@@ -3,7 +3,7 @@ import os
 import httpx
 from database.auth_db import get_auth_token
 from database.token_db import get_token , get_br_symbol, get_symbol
-from broker.angel.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from broker.motilal.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -16,35 +16,47 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
-    
+
+    # Motilal Oswal Header Parameters as per documentation
     headers = {
-      'Authorization': f'Bearer {AUTH_TOKEN}',
+      'Authorization': AUTH_TOKEN,
       'Content-Type': 'application/json',
       'Accept': 'application/json',
-      'X-UserType': 'USER',
-      'X-SourceID': 'WEB',
-      'X-ClientLocalIP': 'CLIENT_LOCAL_IP',
-      'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-      'X-MACAddress': 'MAC_ADDRESS',
-      'X-PrivateKey': api_key
+      'User-Agent': 'MOSL/V.1.1.0',
+      'ApiKey': api_key,
+      'ClientLocalIp': '1.2.3.4',
+      'ClientPublicIp': '1.2.3.4',
+      'MacAddress': '00:00:00:00:00:00',
+      'SourceId': 'WEB',
+      'vendorinfo': os.getenv('BROKER_VENDOR_CODE', ''),
+      'osname': 'Windows 10',
+      'osversion': '10.0.19041',
+      'devicemodel': 'AHV',
+      'manufacturer': 'DELL',
+      'productname': 'OpenAlgo',
+      'productversion': '1.0.0',
+      'browsername': 'Chrome',
+      'browserversion': '120.0'
     }
-    
-    url = f"https://apiconnect.angelbroking.com{endpoint}"
-    
+
+    # Use Production or UAT URL based on environment
+    base_url = os.getenv('BROKER_API_URL', 'https://openapi.motilaloswal.com')
+    url = f"{base_url}{endpoint}"
+
     if method == "GET":
         response = client.get(url, headers=headers)
     elif method == "POST":
         response = client.post(url, headers=headers, content=payload)
     else:
         response = client.request(method, url, headers=headers, content=payload)
-    
+
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
-    
+
     # Handle empty response
     if not response.text:
         return {}
-    
+
     try:
         return json.loads(response.text)
     except json.JSONDecodeError:
@@ -52,16 +64,16 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
         return {}
 
 def get_order_book(auth):
-    return get_api_response("/rest/secure/angelbroking/order/v1/getOrderBook",auth)
+    return get_api_response("/rest/book/v2/getorderbook", auth, method="POST")
 
 def get_trade_book(auth):
-    return get_api_response("/rest/secure/angelbroking/order/v1/getTradeBook",auth)
+    return get_api_response("/rest/book/v1/gettradebook", auth, method="POST")
 
 def get_positions(auth):
-    return get_api_response("/rest/secure/angelbroking/order/v1/getPosition",auth)
+    return get_api_response("/rest/book/v1/getposition", auth, method="POST")
 
 def get_holdings(auth):
-    return get_api_response("/rest/secure/angelbroking/portfolio/v1/getAllHolding",auth)
+    return get_api_response("/rest/report/v1/getdpholding", auth, method="POST")
 
 def get_open_position(tradingsymbol, exchange, producttype,auth):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
@@ -72,10 +84,17 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
 
     net_qty = '0'
 
-    if positions_data and positions_data.get('status') and positions_data.get('data'):
+    # Motilal returns status as "SUCCESS" string, not boolean
+    if positions_data and positions_data.get('status') == 'SUCCESS' and positions_data.get('data'):
         for position in positions_data['data']:
-            if position.get('tradingsymbol') == tradingsymbol and position.get('exchange') == exchange and position.get('producttype') == producttype:
-                net_qty = position.get('netqty', '0')
+            # Motilal uses 'symbol' not 'tradingsymbol' and 'productname' not 'producttype'
+            # Since Motilal uses DELIVERY for both CNC and MIS in cash segment,
+            # we need to match positions based on Motilal's product type
+            if position.get('symbol') == tradingsymbol and position.get('exchange') == exchange and position.get('productname') == producttype:
+                # Calculate net quantity from buy and sell quantities
+                buyqty = int(position.get('buyquantity', 0))
+                sellqty = int(position.get('sellquantity', 0))
+                net_qty = str(buyqty - sellqty)
                 break  # Assuming you need the first match
 
     return net_qty
@@ -85,57 +104,100 @@ def place_order_api(data,auth):
     BROKER_API_KEY = os.getenv('BROKER_API_KEY')
     data['apikey'] = BROKER_API_KEY
     token = get_token(data['symbol'], data['exchange'])
-    newdata = transform_data(data, token)  
+
+    logger.info(f"Placing order for symbol: {data['symbol']}, exchange: {data['exchange']}, token: {token}")
+
+    if not token:
+        logger.error(f"Failed to get token for symbol: {data['symbol']}, exchange: {data['exchange']}")
+        return None, {"status": "ERROR", "message": "Invalid symbol or token not found", "errorcode": "TOKEN_NOT_FOUND"}, None
+
+    newdata = transform_data(data, token)
+
+    # Motilal Oswal Header Parameters
     headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
+        'Authorization': AUTH_TOKEN,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'X-UserType': 'USER',
-        'X-SourceID': 'WEB',
-        'X-ClientLocalIP': 'CLIENT_LOCAL_IP', 
-        'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-        'X-MACAddress': 'MAC_ADDRESS',
-        'X-PrivateKey': newdata['apikey']
+        'User-Agent': 'MOSL/V.1.1.0',
+        'ApiKey': BROKER_API_KEY,
+        'ClientLocalIp': '1.2.3.4',
+        'ClientPublicIp': '1.2.3.4',
+        'MacAddress': '00:00:00:00:00:00',
+        'SourceId': 'WEB',
+        'vendorinfo': os.getenv('BROKER_VENDOR_CODE', ''),
+        'osname': 'Windows 10',
+        'osversion': '10.0.19041',
+        'devicemodel': 'AHV',
+        'manufacturer': 'DELL',
+        'productname': 'OpenAlgo',
+        'productversion': '1.0.0',
+        'browsername': 'Chrome',
+        'browserversion': '120.0'
     }
-    payload = json.dumps({
-        "variety": newdata.get('variety', 'NORMAL'),
-        "tradingsymbol": newdata['tradingsymbol'],
-        "symboltoken": newdata['symboltoken'],
-        "transactiontype": newdata['transactiontype'],
-        "exchange": newdata['exchange'],
-        "ordertype": newdata.get('ordertype', 'MARKET'),
-        "producttype": newdata.get('producttype', 'INTRADAY'),
-        "duration": newdata.get('duration', 'DAY'),
-        "price": newdata.get('price', '0'),
-        "triggerprice": newdata.get('triggerprice', '0'),
-        "squareoff": newdata.get('squareoff', '0'),
-        "stoploss": newdata.get('stoploss', '0'),
-        "quantity": newdata['quantity']
-    })
 
-    logger.debug(f"{payload}")
-    
+    # Motilal Oswal Place Order Payload
+    # Build payload with only non-empty optional fields
+    payload_dict = {
+        "exchange": newdata['exchange'],
+        "symboltoken": int(newdata['symboltoken']),  # Must be integer
+        "buyorsell": newdata['buyorsell'],
+        "ordertype": newdata.get('ordertype', 'MARKET'),
+        "producttype": newdata.get('producttype', 'NORMAL'),
+        "orderduration": newdata.get('orderduration', 'DAY'),
+        "price": float(newdata.get('price', '0')),
+        "triggerprice": float(newdata.get('triggerprice', '0')),
+        "quantityinlot": int(newdata['quantity']),
+        "disclosedquantity": int(newdata.get('disclosedquantity', '0')),
+        "amoorder": newdata.get('amoorder', 'N')
+    }
+
+    # Add optional fields only if they have values
+    if newdata.get('algoid'):
+        payload_dict['algoid'] = newdata['algoid']
+    if newdata.get('goodtilldate'):
+        payload_dict['goodtilldate'] = newdata['goodtilldate']
+    if newdata.get('tag'):
+        payload_dict['tag'] = newdata['tag']
+    if newdata.get('participantcode'):
+        payload_dict['participantcode'] = newdata['participantcode']
+
+    payload = json.dumps(payload_dict)
+
+    logger.info(f"Motilal Place Order Request Payload: {payload_dict}")
+    logger.debug(f"Payload JSON: {payload}")
+
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
-    
+
+    # Use Production or UAT URL based on environment
+    base_url = os.getenv('BROKER_API_URL', 'https://openapi.motilaloswal.com')
+
     # Make the request using the shared client
     response = client.post(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/placeOrder",
+        f"{base_url}/rest/trans/v1/placeorder",
         headers=headers,
         content=payload
     )
-    
+
     # Add status attribute to make response compatible with http.client response
     # as the rest of the codebase expects .status instead of .status_code
     response.status = response.status_code
-    
+
     # Parse the JSON response
     response_data = response.json()
-    
-    if response_data['status'] == True:
-        orderid = response_data['data']['orderid']
+
+    # Log the full response for debugging
+    logger.info(f"Motilal Place Order Response: {response_data}")
+    logger.info(f"Response Status Code: {response.status_code}")
+
+    # Motilal returns status as "SUCCESS" string, not boolean
+    if response_data.get('status') == 'SUCCESS':
+        orderid = response_data.get('uniqueorderid')
+        logger.info(f"Order placed successfully. Order ID: {orderid}")
     else:
         orderid = None
+        logger.error(f"Order placement failed. Status: {response_data.get('status')}, Message: {response_data.get('message')}, Error Code: {response_data.get('errorcode')}")
+
     return response, response_data, orderid
 
 def place_smartorder_api(data,auth):
@@ -232,27 +294,32 @@ def close_all_positions(current_api_key,auth):
 
     positions_response = get_positions(AUTH_TOKEN)
 
-    # Check if the positions data is null or empty
-    if positions_response['data'] is None or not positions_response['data']:
+    # Check if the positions data is null or empty - Motilal uses 'SUCCESS' string
+    if positions_response.get('status') != 'SUCCESS' or positions_response.get('data') is None or not positions_response['data']:
         return {"message": "No Open Positions Found"}, 200
 
-    if positions_response['status']:
+    if positions_response.get('status') == 'SUCCESS':
         # Loop through each position to close
         for position in positions_response['data']:
+            # Calculate net quantity from buy and sell quantities
+            buyqty = int(position.get('buyquantity', 0))
+            sellqty = int(position.get('sellquantity', 0))
+            net_qty = buyqty - sellqty
+
             # Skip if net quantity is zero
-            if int(position['netqty']) == 0:
+            if net_qty == 0:
                 continue
 
             # Determine action based on net quantity
-            action = 'SELL' if int(position['netqty']) > 0 else 'BUY'
-            quantity = abs(int(position['netqty']))
+            action = 'SELL' if net_qty > 0 else 'BUY'
+            quantity = abs(net_qty)
 
 
             #get openalgo symbol to send to placeorder function
             symbol = get_symbol(position['symboltoken'],position['exchange'])
             logger.info(f"The Symbol is {symbol}")
 
-            # Prepare the order payload
+            # Prepare the order payload - Motilal uses 'productname' instead of 'producttype'
             place_order_payload = {
                 "apikey": current_api_key,
                 "strategy": "Squareoff",
@@ -260,7 +327,7 @@ def close_all_positions(current_api_key,auth):
                 "action": action,
                 "exchange": position['exchange'],
                 "pricetype": "MARKET",
-                "product": reverse_map_product_type(position['producttype']),
+                "product": reverse_map_product_type(position['productname'], position['exchange']),
                 "quantity": str(quantity)
             }
 
@@ -274,7 +341,7 @@ def close_all_positions(current_api_key,auth):
             # logger.info(f"{orderid}")
 
 
-            
+
             # Note: Ensure place_order_api handles any errors and logs accordingly
 
     return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
@@ -284,43 +351,54 @@ def cancel_order(orderid,auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
-    
+
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
-    
-    # Set up the request headers
+
+    # Motilal Oswal Header Parameters
     headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
+        'Authorization': AUTH_TOKEN,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'X-UserType': 'USER',
-        'X-SourceID': 'WEB',
-        'X-ClientLocalIP': 'CLIENT_LOCAL_IP', 
-        'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-        'X-MACAddress': 'MAC_ADDRESS',
-        'X-PrivateKey': api_key
+        'User-Agent': 'MOSL/V.1.1.0',
+        'ApiKey': api_key,
+        'ClientLocalIp': '1.2.3.4',
+        'ClientPublicIp': '1.2.3.4',
+        'MacAddress': '00:00:00:00:00:00',
+        'SourceId': 'WEB',
+        'vendorinfo': os.getenv('BROKER_VENDOR_CODE', ''),
+        'osname': 'Windows 10',
+        'osversion': '10.0.19041',
+        'devicemodel': 'AHV',
+        'manufacturer': 'DELL',
+        'productname': 'OpenAlgo',
+        'productversion': '1.0.0',
+        'browsername': 'Chrome',
+        'browserversion': '120.0'
     }
-    
-    # Prepare the payload
+
+    # Prepare the payload - Motilal uses uniqueorderid
     payload = json.dumps({
-        "variety": "NORMAL",
-        "orderid": orderid,
+        "uniqueorderid": orderid
     })
-    
+
+    # Use Production or UAT URL based on environment
+    base_url = os.getenv('BROKER_API_URL', 'https://openapi.motilaloswal.com')
+
     # Make the request using the shared client
     response = client.post(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/cancelOrder",
+        f"{base_url}/rest/trans/v1/cancelorder",
         headers=headers,
         content=payload
     )
-    
+
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
-    
+
     data = json.loads(response.text)
-    
-    # Check if the request was successful
-    if data.get("status"):
+
+    # Motilal returns status as "SUCCESS" string
+    if data.get("status") == "SUCCESS":
         # Return a success response
         return {"status": "success", "orderid": orderid}, 200
     else:
@@ -333,42 +411,56 @@ def modify_order(data,auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
-    
+
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
     token = get_token(data['symbol'], data['exchange'])
     data['symbol'] = get_br_symbol(data['symbol'],data['exchange'])
 
-    transformed_data = transform_modify_order_data(data, token)  # You need to implement this function
-    # Set up the request headers
+    transformed_data = transform_modify_order_data(data, token)
+
+    # Motilal Oswal Header Parameters
     headers = {
-        'Authorization': f'Bearer {AUTH_TOKEN}',
+        'Authorization': AUTH_TOKEN,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'X-UserType': 'USER',
-        'X-SourceID': 'WEB',
-        'X-ClientLocalIP': 'CLIENT_LOCAL_IP', 
-        'X-ClientPublicIP': 'CLIENT_PUBLIC_IP',
-        'X-MACAddress': 'MAC_ADDRESS',
-        'X-PrivateKey': api_key
+        'User-Agent': 'MOSL/V.1.1.0',
+        'ApiKey': api_key,
+        'ClientLocalIp': '1.2.3.4',
+        'ClientPublicIp': '1.2.3.4',
+        'MacAddress': '00:00:00:00:00:00',
+        'SourceId': 'WEB',
+        'vendorinfo': os.getenv('BROKER_VENDOR_CODE', ''),
+        'osname': 'Windows 10',
+        'osversion': '10.0.19041',
+        'devicemodel': 'AHV',
+        'manufacturer': 'DELL',
+        'productname': 'OpenAlgo',
+        'productversion': '1.0.0',
+        'browsername': 'Chrome',
+        'browserversion': '120.0'
     }
     payload = json.dumps(transformed_data)
 
+    # Use Production or UAT URL based on environment
+    base_url = os.getenv('BROKER_API_URL', 'https://openapi.motilaloswal.com')
+
     # Make the request using the shared client
     response = client.post(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/modifyOrder",
+        f"{base_url}/rest/trans/v2/modifyorder",
         headers=headers,
         content=payload
     )
-    
+
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
-    
+
     data = json.loads(response.text)
 
-    if data.get("status") == "true" or data.get("message") == "SUCCESS":
-        return {"status": "success", "orderid": data["data"]["orderid"]}, 200
+    # Motilal returns status as "SUCCESS" string
+    if data.get("status") == "SUCCESS":
+        return {"status": "success", "orderid": data.get("uniqueorderid")}, 200
     else:
         return {"status": "error", "message": data.get("message", "Failed to modify order")}, response.status
 
@@ -377,27 +469,30 @@ def cancel_all_orders_api(data,auth):
     # Get the order book
 
     AUTH_TOKEN = auth
-    
+
 
     order_book_response = get_order_book(AUTH_TOKEN)
     #logger.info(f"{order_book_response}")
-    if order_book_response['status'] != True:
+    # Motilal returns status as "SUCCESS" string
+    if order_book_response.get('status') != 'SUCCESS':
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
-    # Filter orders that are in 'open' or 'trigger_pending' state
+    # Filter orders that are in 'open' or 'trigger pending' state
+    # Motilal uses 'orderstatus' field and 'Confirm', 'Sent' statuses for open orders
     orders_to_cancel = [order for order in order_book_response.get('data', [])
-                        if order['status'] in ['open', 'trigger pending']]
+                        if order.get('orderstatus', '').lower() in ['confirm', 'sent', 'open']]
     #logger.info(f"{orders_to_cancel}")
     canceled_orders = []
     failed_cancellations = []
 
     # Cancel the filtered orders
     for order in orders_to_cancel:
-        orderid = order['orderid']
+        # Motilal uses uniqueorderid
+        orderid = order['uniqueorderid']
         cancel_response, status_code = cancel_order(orderid,auth)
         if status_code == 200:
             canceled_orders.append(orderid)
         else:
             failed_cancellations.append(orderid)
-    
+
     return canceled_orders, failed_cancellations
