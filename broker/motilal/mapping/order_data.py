@@ -33,24 +33,28 @@ def map_order_data(order_data):
             # Extract the instrument_token and exchange for the current order
             symboltoken = order['symboltoken']
             exchange = order['exchange']
-            
+
             # Use the get_symbol function to fetch the symbol from the database
             symbol_from_db = get_symbol(symboltoken, exchange)
-            
+
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
-                order['tradingsymbol'] = symbol_from_db
-                if (order['exchange'] == 'NSE' or order['exchange'] == 'BSE') and order['producttype'] == 'DELIVERY':
-                    order['producttype'] = 'CNC'
-                               
-                elif order['producttype'] == 'INTRADAY':
-                    order['producttype'] = 'MIS'
-                
-                elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['producttype'] == 'CARRYFORWARD':
+                order['symbol'] = symbol_from_db  # Motilal uses 'symbol' field
+                # Map Motilal product types to OpenAlgo format
+                if (order['exchange'] == 'NSE' or order['exchange'] == 'BSE'):
+                    if order['producttype'] == 'DELIVERY':
+                        order['producttype'] = 'CNC'
+                    elif order['producttype'] == 'VALUEPLUS':
+                        order['producttype'] = 'MIS'  # Motilal uses VALUEPLUS for margin intraday
+
+                elif order['producttype'] == 'NORMAL':
+                    order['producttype'] = 'MIS'  # Motilal uses NORMAL for F&O intraday
+
+                elif order['exchange'] in ['NSEFO', 'MCX', 'NSECD'] and order['producttype'] == 'VALUEPLUS':
                     order['producttype'] = 'NRML'
             else:
                 logger.info(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
-                
+
     return order_data
 
 
@@ -71,18 +75,19 @@ def calculate_order_statistics(order_data):
 
     if order_data:
         for order in order_data:
-            # Count buy and sell orders
-            if order['transactiontype'] == 'BUY':
+            # Count buy and sell orders - Motilal uses 'buyorsell' field
+            if order.get('buyorsell', '').upper() == 'BUY':
                 total_buy_orders += 1
-            elif order['transactiontype'] == 'SELL':
+            elif order.get('buyorsell', '').upper() == 'SELL':
                 total_sell_orders += 1
-            
-            # Count orders based on their status
-            if order['status'] == 'complete':
+
+            # Count orders based on their status - Motilal uses 'orderstatus' field
+            order_status = order.get('orderstatus', '').lower()
+            if order_status == 'traded' or order_status == 'complete':
                 total_completed_orders += 1
-            elif order['status'] == 'open':
+            elif order_status in ['confirm', 'sent', 'open']:
                 total_open_orders += 1
-            elif order['status'] == 'rejected':
+            elif order_status in ['rejected', 'error']:
                 total_rejected_orders += 1
 
     # Compile and return the statistics
@@ -102,31 +107,57 @@ def transform_order_data(orders):
         orders = [orders]
 
     transformed_orders = []
-    
+
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
             logger.warning(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
 
+        # Map Motilal order types to OpenAlgo standard format
+        # Motilal returns: Market, Limit, Stoploss (title case)
+        # OpenAlgo standard: MARKET, LIMIT, SL, SL-M (uppercase)
         ordertype = order.get("ordertype", "")
-        if ordertype == 'STOPLOSS_LIMIT':
-            ordertype = 'SL'
-        if ordertype == 'STOPLOSS_MARKET':
-            ordertype = 'SL-M'
+        if ordertype == 'Stoploss' or ordertype == 'STOPLOSS':
+            # Determine if it's SL or SL-M based on trigger price
+            if float(order.get("triggerprice", 0)) > 0:
+                ordertype = 'SL'
+            else:
+                ordertype = 'SL-M'
+        elif ordertype == 'Market':
+            ordertype = 'MARKET'
+        elif ordertype == 'Limit':
+            ordertype = 'LIMIT'
+        else:
+            # Default to uppercase if unrecognized
+            ordertype = ordertype.upper()
+
+        # Map Motilal order status to OpenAlgo standard format
+        # Motilal returns: Traded, Confirm, Sent, Error, Rejected (title case)
+        # OpenAlgo standard: complete, open, rejected (lowercase)
+        order_status = order.get("orderstatus", "")
+        if order_status == 'Traded' or order_status == 'Complete':
+            order_status = 'complete'
+        elif order_status in ['Confirm', 'Sent', 'Open']:
+            order_status = 'open'
+        elif order_status in ['Rejected', 'Error']:
+            order_status = 'rejected'
+        else:
+            # Keep lowercase for standard format
+            order_status = order_status.lower()
 
         transformed_order = {
-            "symbol": order.get("tradingsymbol", ""),
+            "symbol": order.get("symbol", ""),  # Motilal uses 'symbol'
             "exchange": order.get("exchange", ""),
-            "action": order.get("transactiontype", ""),
-            "quantity": order.get("quantity", 0),
+            "action": order.get("buyorsell", "").upper(),  # Ensure uppercase BUY/SELL
+            "quantity": order.get("orderqty", 0),  # Motilal uses 'orderqty'
             "price": order.get("averageprice", 0.0),
             "trigger_price": order.get("triggerprice", 0.0),
             "pricetype": ordertype,
             "product": order.get("producttype", ""),
-            "orderid": order.get("orderid", ""),
-            "order_status": order.get("status", ""),
-            "timestamp": order.get("updatetime", "")
+            "orderid": order.get("uniqueorderid", ""),  # Motilal uses 'uniqueorderid'
+            "order_status": order_status,  # Standardized lowercase status
+            "timestamp": order.get("lastmodifiedtime", "")  # Motilal uses 'lastmodifiedtime'
         }
 
         transformed_orders.append(transformed_order)
@@ -160,44 +191,52 @@ def map_trade_data(trade_data):
     if trade_data:
         for order in trade_data:
             # Extract the instrument_token and exchange for the current order
-            symbol = order['tradingsymbol']
+            symbol = order['symbol']  # Motilal uses 'symbol'
             exchange = order['exchange']
-            
+
             # Use the get_symbol function to fetch the symbol from the database
             symbol_from_db = get_oa_symbol(symbol, exchange)
-            
+
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
-                order['tradingsymbol'] = symbol_from_db
-                if (order['exchange'] == 'NSE' or order['exchange'] == 'BSE') and order['producttype'] == 'DELIVERY':
-                    order['producttype'] = 'CNC'
-                               
-                elif order['producttype'] == 'INTRADAY':
-                    order['producttype'] = 'MIS'
-                
-                elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['producttype'] == 'CARRYFORWARD':
+                order['symbol'] = symbol_from_db
+                # Map Motilal product types to OpenAlgo format
+                if (order['exchange'] == 'NSE' or order['exchange'] == 'BSE'):
+                    if order['producttype'] == 'DELIVERY':
+                        order['producttype'] = 'CNC'
+                    elif order['producttype'] == 'VALUEPLUS':
+                        order['producttype'] = 'MIS'  # Motilal uses VALUEPLUS for margin intraday
+
+                elif order['producttype'] == 'NORMAL':
+                    order['producttype'] = 'MIS'  # Motilal uses NORMAL for F&O intraday
+
+                elif order['exchange'] in ['NSEFO', 'MCX', 'NSECD'] and order['producttype'] == 'VALUEPLUS':
                     order['producttype'] = 'NRML'
             else:
                 logger.info(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
-                
+
     return trade_data
 
 
 
 
 def transform_tradebook_data(tradebook_data):
+    """
+    Transforms Motilal Oswal tradebook data to OpenAlgo format.
+    Motilal field names: symbol, buyorsell, tradeqty, tradeprice, tradetime, etc.
+    """
     transformed_data = []
     for trade in tradebook_data:
         transformed_trade = {
-            "symbol": trade.get('tradingsymbol', ''),
+            "symbol": trade.get('symbol', ''),  # Motilal uses 'symbol'
             "exchange": trade.get('exchange', ''),
             "product": trade.get('producttype', ''),
-            "action": trade.get('transactiontype', ''),
-            "quantity": trade.get('quantity', 0),
-            "average_price": trade.get('fillprice', 0.0),
+            "action": trade.get('buyorsell', ''),  # Motilal uses 'buyorsell'
+            "quantity": trade.get('tradeqty', 0),  # Motilal uses 'tradeqty'
+            "average_price": trade.get('tradeprice', 0.0),  # Motilal uses 'tradeprice'
             "trade_value": trade.get('tradevalue', 0),
-            "orderid": trade.get('orderid', ''),
-            "timestamp": trade.get('filltime', '')
+            "orderid": trade.get('uniqueorderid', ''),  # Motilal uses 'uniqueorderid'
+            "timestamp": trade.get('tradetime', '')  # Motilal uses 'tradetime'
         }
         transformed_data.append(transformed_trade)
     return transformed_data
@@ -208,73 +247,101 @@ def map_position_data(position_data):
 
 
 def transform_positions_data(positions_data):
+    """
+    Transforms Motilal Oswal positions data to OpenAlgo format.
+    Motilal doesn't have netqty - calculate from buyquantity and sellquantity.
+    """
     transformed_data = []
     for position in positions_data:
+        # Calculate net quantity from buy and sell quantities
+        buyqty = int(position.get('buyquantity', 0))
+        sellqty = int(position.get('sellquantity', 0))
+        net_qty = buyqty - sellqty
+
+        # Calculate average price (weighted average if needed)
+        buyamt = float(position.get('buyamount', 0.0))
+        sellamt = float(position.get('sellamount', 0.0))
+        avg_price = 0.0
+        if net_qty != 0:
+            if net_qty > 0:  # Long position
+                avg_price = buyamt / buyqty if buyqty > 0 else 0.0
+            else:  # Short position
+                avg_price = sellamt / sellqty if sellqty > 0 else 0.0
+
         transformed_position = {
-            "symbol": position.get('tradingsymbol', ''),
+            "symbol": position.get('symbol', ''),  # Motilal uses 'symbol'
             "exchange": position.get('exchange', ''),
-            "product": position.get('producttype', ''),
-            "quantity": position.get('netqty', 0),
-            "average_price": position.get('avgnetprice', 0.0),
-            "ltp": position.get('ltp', 0.0),  
-            "pnl": position.get('pnl', 0.0),  
+            "product": position.get('productname', ''),  # Motilal uses 'productname'
+            "quantity": net_qty,
+            "average_price": avg_price,
+            "ltp": position.get('LTP', 0.0),  # Motilal uses 'LTP'
+            "pnl": position.get('marktomarket', 0.0) + position.get('bookedprofitloss', 0.0),  # Total P&L
         }
         transformed_data.append(transformed_position)
     return transformed_data
 
 def transform_holdings_data(holdings_data):
+    """
+    Transforms Motilal Oswal holdings data to OpenAlgo format.
+    Motilal returns data differently - check the API response structure.
+    """
     transformed_data = []
-    for holdings in holdings_data['holdings']:
+    # Motilal returns holdings directly in the data array
+    holdings_list = holdings_data if isinstance(holdings_data, list) else holdings_data.get('holdings', [])
+
+    for holdings in holdings_list:
+        # Calculate P&L percentage if not provided
+        buy_avg = float(holdings.get('buyavgprice', 0.0))
+        dp_qty = int(holdings.get('dpquantity', 0))
+        # P&L calculation would need current price, which may not be in holdings response
+
         transformed_position = {
-            "symbol": holdings.get('tradingsymbol', ''),
-            "exchange": holdings.get('exchange', ''),
-            "quantity": holdings.get('quantity', 0),
-            "product": holdings.get('product', ''),
-            "pnl": holdings.get('profitandloss', 0.0),
-            "pnlpercent": holdings.get('pnlpercentage', 0.0)
+            "symbol": holdings.get('scripname', ''),  # Motilal uses 'scripname'
+            "exchange": "NSE",  # Default to NSE, adjust based on scripcode mapping
+            "quantity": dp_qty,
+            "product": "CNC",  # Holdings are always CNC/DELIVERY
+            "pnl": 0.0,  # Would need current price to calculate
+            "pnlpercent": 0.0
         }
         transformed_data.append(transformed_position)
     return transformed_data
 
 def map_portfolio_data(portfolio_data):
     """
-    Processes and modifies a list of Portfolio dictionaries based on specific conditions and
-    ensures both holdings and totalholding parts are transmitted in a single response.
-    
+    Processes Motilal Oswal portfolio/holdings data.
+    Motilal returns holdings in a simple list format with DP holding data.
+
     Parameters:
-    - portfolio_data: A dictionary, where keys are 'holdings' and 'totalholding',
-                      and values are lists/dictionaries representing the portfolio information.
-    
+    - portfolio_data: A dictionary containing holdings data
+
     Returns:
-    - The modified portfolio_data with 'product' fields changed for 'holdings' and 'totalholding' included.
+    - The modified portfolio_data with mapped fields.
     """
-    # Check if 'data' is None or doesn't contain 'holdings'
-    if portfolio_data.get('data') is None or 'holdings' not in portfolio_data['data']:
+    # Motilal returns status as "SUCCESS" string
+    if portfolio_data.get('status') != 'SUCCESS' or portfolio_data.get('data') is None:
         logger.info("No data available.")
-        # Return an empty structure or handle this scenario as needed
         return {}
 
     # Directly work with 'data' for clarity and simplicity
     data = portfolio_data['data']
 
-    # Modify 'product' field for each holding if applicable
-    if data.get('holdings'):
-        for portfolio in data['holdings']:
-            symbol = portfolio['tradingsymbol']
-            exchange = portfolio['exchange']
-            symbol_from_db = get_oa_symbol(symbol, exchange)
-            
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol_from_db:
-                portfolio['tradingsymbol'] = symbol_from_db
-            if portfolio['product'] == 'DELIVERY':
-                portfolio['product'] = 'CNC'  # Modify 'product' field
-            else:
-                logger.info("AngelOne Portfolio - Product Value for Delivery Not Found or Changed.")
-    
-    # The function already works with 'data', which includes 'holdings' and 'totalholding',
-    # so we can return 'data' directly without additional modifications.
-    return data
+    # Motilal returns holdings as a list directly
+    if isinstance(data, list):
+        for portfolio in data:
+            scripname = portfolio.get('scripname', '')
+            # Map Motilal scripname to OpenAlgo symbol if needed
+            # This would require looking up by ISIN or scripcode
+            isin = portfolio.get('scripisinno', '')
+            if isin:
+                # Try to get symbol from database using ISIN
+                symbol_from_db = get_oa_symbol(isin, 'NSE')
+                if symbol_from_db:
+                    portfolio['scripname'] = symbol_from_db
+
+            # All holdings are CNC/DELIVERY product
+            portfolio['product'] = 'CNC'
+
+    return {'holdings': data, 'totalholding': None}  # Match expected structure
 
 
 def calculate_portfolio_statistics(holdings_data):

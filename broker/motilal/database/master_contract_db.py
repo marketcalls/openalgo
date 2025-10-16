@@ -261,6 +261,11 @@ def process_motilal_csv(df, exchange_name):
     df.loc[df['instrumenttype'].str.contains('EQ|CASH', na=False, case=False), 'symbol'] = (
         df['symbol'].str.replace(' EQ', '', regex=False).str.strip()
     )
+    
+    # Additional cleanup: Remove EQ suffix for NSE exchange
+    df.loc[df['exchange'] == 'NSE', 'symbol'] = (
+        df['symbol'].str.replace(' EQ', '', regex=False).str.strip()
+    )
 
     # Standardize index names
     df['symbol'] = df['symbol'].replace({
