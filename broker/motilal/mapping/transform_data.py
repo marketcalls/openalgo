@@ -33,10 +33,19 @@ def transform_data(data,token):
     return transformed
 
 
-def transform_modify_order_data(data, token):
+def transform_modify_order_data(data, token, lastmodifiedtime, qtytradedtoday):
     """
     Transforms modify order data for Motilal Oswal API.
     Motilal uses different field names compared to Angel Broking.
+
+    Args:
+        data: OpenAlgo modify order request data
+        token: Symbol token for the instrument
+        lastmodifiedtime: Last modified time from order book (dd-MMM-yyyy HH:mm:ss format)
+        qtytradedtoday: Quantity traded today from order book
+
+    Returns:
+        Dict containing Motilal-formatted modify order request
     """
     return {
         "uniqueorderid": data["orderid"],  # Motilal uses uniqueorderid
@@ -47,8 +56,8 @@ def transform_modify_order_data(data, token):
         "newquantityinlot": int(data["quantity"]),
         "newdisclosedquantity": int(data.get("disclosed_quantity", "0")),
         "newgoodtilldate": "",
-        "lastmodifiedtime": "",  # Format: dd-MMM-yyyy HH:mm:ss - should be fetched from order book
-        "qtytradedtoday": 0  # Should be fetched from order book
+        "lastmodifiedtime": lastmodifiedtime,  # Fetched from order book
+        "qtytradedtoday": qtytradedtoday  # Fetched from order book
     }
 
 
