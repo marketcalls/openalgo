@@ -295,6 +295,7 @@ services:
       - openalgo_db:/app/db
       - ./log:/app/log
       - ./logs:/app/logs
+      - ./strategies:/app/strategies
       - ./.env:/app/.env:ro
 
     environment:
