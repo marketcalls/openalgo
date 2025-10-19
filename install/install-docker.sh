@@ -59,8 +59,20 @@ log "========================================" "$GREEN"
 
 # Check if running as root
 if [[ $EUID -eq 0 ]]; then
-   log "This script should not be run as root. Please run as a regular user with sudo privileges." "$RED"
-   exit 1
+   log "WARNING: Running as root user is not recommended for production." "$YELLOW"
+   log "For better security, consider creating a non-root user with sudo privileges." "$YELLOW"
+   read -p "Do you want to continue as root? (y/n): " continue_as_root
+   if [[ ! $continue_as_root =~ ^[Yy]$ ]]; then
+       log "Installation cancelled. Create a non-root user with:" "$BLUE"
+       log "  adduser yourusername" "$BLUE"
+       log "  usermod -aG sudo yourusername" "$BLUE"
+       log "  su - yourusername" "$BLUE"
+       exit 0
+   fi
+   log "Continuing as root user..." "$YELLOW"
+   SUDO=""
+else
+   SUDO="sudo"
 fi
 
 # Check OS
@@ -173,13 +185,13 @@ fi
 
 # Update system
 log "\n=== Updating System ===" "$BLUE"
-sudo apt-get update -y
-sudo apt-get upgrade -y
+$SUDO apt-get update -y
+$SUDO apt-get upgrade -y
 check_status "System update failed"
 
 # Install required packages
 log "\n=== Installing Required Packages ===" "$BLUE"
-sudo apt-get install -y \
+$SUDO apt-get install -y \
     apt-transport-https \
     ca-certificates \
     curl \
@@ -196,8 +208,8 @@ check_status "Package installation failed"
 log "\n=== Installing Docker ===" "$BLUE"
 if ! command -v docker &> /dev/null; then
     curl -fsSL https://get.docker.com -o get-docker.sh
-    sudo sh get-docker.sh
-    sudo usermod -aG docker $USER
+    $SUDO sh get-docker.sh
+    $SUDO usermod -aG docker $USER
     rm get-docker.sh
     check_status "Docker installation failed"
 else
@@ -217,55 +229,55 @@ if [ -d "$INSTALL_PATH" ]; then
     log "Warning: $INSTALL_PATH already exists" "$YELLOW"
     read -p "Remove existing installation? (y/n): " remove_existing
     if [[ $remove_existing =~ ^[Yy]$ ]]; then
-        sudo rm -rf $INSTALL_PATH
+        $SUDO rm -rf $INSTALL_PATH
     else
         log "Installation cancelled" "$RED"
         exit 1
     fi
 fi
 
-sudo git clone https://github.com/marketcalls/openalgo.git $INSTALL_PATH
+$SUDO git clone https://github.com/marketcalls/openalgo.git $INSTALL_PATH
 check_status "Git clone failed"
 
 cd $INSTALL_PATH
 
 # Create required directories
 log "\n=== Creating Required Directories ===" "$BLUE"
-sudo mkdir -p log logs keys db strategies/scripts
-sudo chown -R 1000:1000 log logs
+$SUDO mkdir -p log logs keys db strategies/scripts
+$SUDO chown -R 1000:1000 log logs
 check_status "Directory creation failed"
 
 # Configure environment file
 log "\n=== Configuring Environment File ===" "$BLUE"
-sudo cp .sample.env .env
+$SUDO cp .sample.env .env
 
 # Update .env file
-sudo sed -i "s|YOUR_BROKER_API_KEY|$BROKER_API_KEY|g" .env
-sudo sed -i "s|YOUR_BROKER_API_SECRET|$BROKER_API_SECRET|g" .env
-sudo sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" .env
-sudo sed -i "s|<broker>|$BROKER_NAME|g" .env
-sudo sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" .env
-sudo sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$API_KEY_PEPPER|g" .env
+$SUDO sed -i "s|YOUR_BROKER_API_KEY|$BROKER_API_KEY|g" .env
+$SUDO sed -i "s|YOUR_BROKER_API_SECRET|$BROKER_API_SECRET|g" .env
+$SUDO sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" .env
+$SUDO sed -i "s|<broker>|$BROKER_NAME|g" .env
+$SUDO sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" .env
+$SUDO sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$API_KEY_PEPPER|g" .env
 
 # Update XTS market data credentials if applicable
 if is_xts_broker "$BROKER_NAME"; then
-    sudo sed -i "s|YOUR_BROKER_MARKET_API_KEY|$BROKER_API_KEY_MARKET|g" .env
-    sudo sed -i "s|YOUR_BROKER_MARKET_API_SECRET|$BROKER_API_SECRET_MARKET|g" .env
+    $SUDO sed -i "s|YOUR_BROKER_MARKET_API_KEY|$BROKER_API_KEY_MARKET|g" .env
+    $SUDO sed -i "s|YOUR_BROKER_MARKET_API_SECRET|$BROKER_API_SECRET_MARKET|g" .env
 fi
 
 # Update WebSocket and host configurations
-sudo sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" .env
-sudo sed -i "s|WEBSOCKET_HOST='127.0.0.1'|WEBSOCKET_HOST='0.0.0.0'|g" .env
-sudo sed -i "s|ZMQ_HOST='127.0.0.1'|ZMQ_HOST='0.0.0.0'|g" .env
-sudo sed -i "s|FLASK_HOST_IP='127.0.0.1'|FLASK_HOST_IP='0.0.0.0'|g" .env
-sudo sed -i "s|CORS_ALLOWED_ORIGINS = '.*'|CORS_ALLOWED_ORIGINS = 'https://$DOMAIN'|g" .env
-sudo sed -i "s|CSP_CONNECT_SRC = \"'self'.*\"|CSP_CONNECT_SRC = \"'self' wss://$DOMAIN https://$DOMAIN wss: ws: https://cdn.socket.io\"|g" .env
+$SUDO sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" .env
+$SUDO sed -i "s|WEBSOCKET_HOST='127.0.0.1'|WEBSOCKET_HOST='0.0.0.0'|g" .env
+$SUDO sed -i "s|ZMQ_HOST='127.0.0.1'|ZMQ_HOST='0.0.0.0'|g" .env
+$SUDO sed -i "s|FLASK_HOST_IP='127.0.0.1'|FLASK_HOST_IP='0.0.0.0'|g" .env
+$SUDO sed -i "s|CORS_ALLOWED_ORIGINS = '.*'|CORS_ALLOWED_ORIGINS = 'https://$DOMAIN'|g" .env
+$SUDO sed -i "s|CSP_CONNECT_SRC = \"'self'.*\"|CSP_CONNECT_SRC = \"'self' wss://$DOMAIN https://$DOMAIN wss: ws: https://cdn.socket.io\"|g" .env
 
 check_status "Environment configuration failed"
 
 # Create docker-compose.yaml
 log "\n=== Creating Docker Compose Configuration ===" "$BLUE"
-cat > docker-compose.yaml << 'EOF'
+$SUDO tee docker-compose.yaml > /dev/null << 'EOF'
 services:
   openalgo:
     image: openalgo:latest
@@ -308,17 +320,17 @@ check_status "Docker Compose configuration failed"
 
 # Configure firewall
 log "\n=== Configuring Firewall ===" "$BLUE"
-sudo ufw --force enable
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
-sudo ufw allow ssh
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
+$SUDO ufw --force enable
+$SUDO ufw default deny incoming
+$SUDO ufw default allow outgoing
+$SUDO ufw allow ssh
+$SUDO ufw allow 80/tcp
+$SUDO ufw allow 443/tcp
 check_status "Firewall configuration failed"
 
 # Initial Nginx configuration
 log "\n=== Configuring Nginx (Initial) ===" "$BLUE"
-sudo tee /etc/nginx/sites-available/$DOMAIN > /dev/null << EOF
+$SUDO tee /etc/nginx/sites-available/$DOMAIN > /dev/null << EOF
 server {
     listen 80;
     listen [::]:80;
@@ -334,24 +346,24 @@ server {
 }
 EOF
 
-sudo ln -sf /etc/nginx/sites-available/$DOMAIN /etc/nginx/sites-enabled/
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo nginx -t
+$SUDO ln -sf /etc/nginx/sites-available/$DOMAIN /etc/nginx/sites-enabled/
+$SUDO rm -f /etc/nginx/sites-enabled/default
+$SUDO nginx -t
 check_status "Nginx configuration test failed"
 
-sudo systemctl enable nginx
-sudo systemctl reload nginx
+$SUDO systemctl enable nginx
+$SUDO systemctl reload nginx
 check_status "Nginx reload failed"
 
 # Obtain SSL certificate
 log "\n=== Obtaining SSL Certificate ===" "$BLUE"
 log "Please wait while we obtain SSL certificate from Let's Encrypt..." "$YELLOW"
-sudo certbot --nginx -d $DOMAIN --non-interactive --agree-tos --email $ADMIN_EMAIL
+$SUDO certbot --nginx -d $DOMAIN --non-interactive --agree-tos --email $ADMIN_EMAIL
 check_status "SSL certificate obtention failed"
 
 # Final Nginx configuration with SSL
 log "\n=== Configuring Nginx (Production with SSL) ===" "$BLUE"
-sudo tee /etc/nginx/sites-available/$DOMAIN > /dev/null << EOF
+$SUDO tee /etc/nginx/sites-available/$DOMAIN > /dev/null << EOF
 # Rate limiting zones
 limit_req_zone \$binary_remote_addr zone=api_limit:10m rate=50r/s;
 limit_req_zone \$binary_remote_addr zone=general_limit:10m rate=10r/s;
@@ -552,10 +564,10 @@ server {
 }
 EOF
 
-sudo nginx -t
+$SUDO nginx -t
 check_status "Nginx configuration test failed"
 
-sudo systemctl reload nginx
+$SUDO systemctl reload nginx
 check_status "Nginx reload failed"
 
 # Build and start Docker container
@@ -585,7 +597,7 @@ fi
 log "\n=== Creating Management Scripts ===" "$BLUE"
 
 # Status script
-sudo tee /usr/local/bin/openalgo-status > /dev/null << 'EOFSCRIPT'
+$SUDO tee /usr/local/bin/openalgo-status > /dev/null << 'EOFSCRIPT'
 #!/bin/bash
 echo "=========================================="
 echo "OpenAlgo Status"
@@ -601,10 +613,10 @@ echo "Recent Logs:"
 sudo docker compose -f /opt/openalgo/docker-compose.yaml logs --tail=30
 EOFSCRIPT
 
-sudo chmod +x /usr/local/bin/openalgo-status
+$SUDO chmod +x /usr/local/bin/openalgo-status
 
 # Restart script
-sudo tee /usr/local/bin/openalgo-restart > /dev/null << 'EOFSCRIPT'
+$SUDO tee /usr/local/bin/openalgo-restart > /dev/null << 'EOFSCRIPT'
 #!/bin/bash
 echo "Restarting OpenAlgo..."
 cd /opt/openalgo
@@ -614,19 +626,19 @@ echo "Container Status:"
 sudo docker ps --filter "name=openalgo-web"
 EOFSCRIPT
 
-sudo chmod +x /usr/local/bin/openalgo-restart
+$SUDO chmod +x /usr/local/bin/openalgo-restart
 
 # Logs script
-sudo tee /usr/local/bin/openalgo-logs > /dev/null << 'EOFSCRIPT'
+$SUDO tee /usr/local/bin/openalgo-logs > /dev/null << 'EOFSCRIPT'
 #!/bin/bash
 cd /opt/openalgo
 sudo docker compose logs -f --tail=100
 EOFSCRIPT
 
-sudo chmod +x /usr/local/bin/openalgo-logs
+$SUDO chmod +x /usr/local/bin/openalgo-logs
 
 # Backup script
-sudo tee /usr/local/bin/openalgo-backup > /dev/null << 'EOFSCRIPT'
+$SUDO tee /usr/local/bin/openalgo-backup > /dev/null << 'EOFSCRIPT'
 #!/bin/bash
 BACKUP_DIR="/opt/openalgo-backups"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -643,18 +655,18 @@ ls -t openalgo_backup_*.tar.gz 2>/dev/null | tail -n +8 | xargs -r rm
 echo "Backup completed!"
 EOFSCRIPT
 
-sudo chmod +x /usr/local/bin/openalgo-backup
+$SUDO chmod +x /usr/local/bin/openalgo-backup
 
 log "Management scripts created successfully!" "$GREEN"
 
 # Setup SSL auto-renewal
 log "\n=== Setting Up SSL Auto-Renewal ===" "$BLUE"
-sudo mkdir -p /etc/letsencrypt/renewal-hooks/deploy
-sudo tee /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh > /dev/null << 'EOFSCRIPT'
+$SUDO mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+$SUDO tee /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh > /dev/null << 'EOFSCRIPT'
 #!/bin/bash
 systemctl reload nginx
 EOFSCRIPT
-sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+$SUDO chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
 
 # Installation complete
 log "\n============================================" "$GREEN"
