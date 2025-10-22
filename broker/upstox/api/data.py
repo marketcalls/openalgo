@@ -458,24 +458,55 @@ class BrokerData:
                         try:
                             quotes = self.get_quotes(symbol, exchange)
                             logger.info(f"Quotes API response: {quotes}")
-                            
+
                             if quotes and quotes.get('ltp', 0) > 0:
-                                # Create today's daily candle with midnight timestamp
-                                today_ts = int((datetime.combine(today, datetime.min.time()) + timedelta(hours=5, minutes=30)).timestamp())
-                                today_candle = [
-                                    today_ts * 1000,  # Upstox uses milliseconds
-                                    quotes.get('open', quotes.get('ltp', 0)),
-                                    quotes.get('high', quotes.get('ltp', 0)),
-                                    quotes.get('low', quotes.get('ltp', 0)),
-                                    quotes.get('ltp', 0),
-                                    quotes.get('volume', 0),
-                                    quotes.get('oi', 0)
-                                ]
-                                all_candles.append(today_candle)
-                                logger.info("Added today's daily candle from quotes API")
+                                # Check if quotes data is stale by comparing with most recent historical candle
+                                is_stale = False
+                                if all_candles:
+                                    # Find the most recent candle by timestamp (candles may not be sorted yet)
+                                    last_candle = max(all_candles, key=lambda x: x[0])
+                                    # Compare OHLCV with last candle to detect stale quotes
+                                    # If quotes match the last candle exactly, it's likely stale data
+                                    last_open = last_candle[1]
+                                    last_high = last_candle[2]
+                                    last_low = last_candle[3]
+                                    last_close = last_candle[4]
+                                    last_volume = last_candle[5]
+
+                                    quotes_open = quotes.get('open', quotes.get('ltp', 0))
+                                    quotes_high = quotes.get('high', quotes.get('ltp', 0))
+                                    quotes_low = quotes.get('low', quotes.get('ltp', 0))
+                                    quotes_close = quotes.get('ltp', 0)
+                                    quotes_volume = quotes.get('volume', 0)
+
+                                    # Check if all OHLCV values match (indicating stale data)
+                                    if (last_open == quotes_open and
+                                        last_high == quotes_high and
+                                        last_low == quotes_low and
+                                        last_close == quotes_close and
+                                        last_volume == quotes_volume):
+                                        is_stale = True
+                                        logger.warning(f"Quotes data appears stale (identical to last candle). Skipping today's candle to avoid duplicates.")
+                                        logger.warning(f"Last candle: O={last_open}, H={last_high}, L={last_low}, C={last_close}, V={last_volume}")
+                                        logger.warning(f"Quotes data: O={quotes_open}, H={quotes_high}, L={quotes_low}, C={quotes_close}, V={quotes_volume}")
+
+                                if not is_stale:
+                                    # Create today's daily candle with midnight timestamp
+                                    today_ts = int((datetime.combine(today, datetime.min.time()) + timedelta(hours=5, minutes=30)).timestamp())
+                                    today_candle = [
+                                        today_ts * 1000,  # Upstox uses milliseconds
+                                        quotes.get('open', quotes.get('ltp', 0)),
+                                        quotes.get('high', quotes.get('ltp', 0)),
+                                        quotes.get('low', quotes.get('ltp', 0)),
+                                        quotes.get('ltp', 0),
+                                        quotes.get('volume', 0),
+                                        quotes.get('oi', 0)
+                                    ]
+                                    all_candles.append(today_candle)
+                                    logger.info("Added today's daily candle from quotes API")
                             else:
                                 logger.info("No valid quotes data available for today")
-                                
+
                         except Exception as e:
                             logger.info(f"Could not get today's data from quotes API: {e}")
                             logger.exception("Quotes API exception details:")
