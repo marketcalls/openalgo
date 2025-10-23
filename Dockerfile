@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir uv && \
 
 
 # ------------------------------ Production Stage --------------------------- #
-FROM python:3.12-slim-bullseye AS production
+FROM python:3.15-rc-slim-trixie AS production
 
 # 0 – set timezone to IST (Asia/Kolkata)
 RUN apt-get update && apt-get install -y --no-install-recommends tzdata && \
