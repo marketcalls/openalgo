@@ -764,7 +764,7 @@ class OrderManager:
                     'trigger_price': float(order.trigger_price) if order.trigger_price else 0.0,
                     'price_type': order.price_type,
                     'product': order.product,
-                    'status': order.order_status,
+                    'order_status': order.order_status,
                     'average_price': float(order.average_price) if order.average_price else 0.0,
                     'filled_quantity': order.filled_quantity,
                     'pending_quantity': order.pending_quantity,
