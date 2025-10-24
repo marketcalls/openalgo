@@ -12,10 +12,12 @@ services:
 
     # persistent DB, logs + mount the host .env read-only so dotenv can read it
     volumes:
-      # Use named volume for database to avoid SQLite locking issues on Windows
       - openalgo_db:/app/db
+      - ./log:/app/log                   # ← Application logs
       - ./logs:/app/logs
-      - ./.env:/app/.env:ro   # ← .env stays on your machine
+      - ./strategies:/app/strategies     # ← Python strategies (MAIN FIX)
+      - ./keys:/app/keys                 # ← API keys/certificates
+      - ./.env:/app/.env:ro
 
     # (optional) extra env-vars that are NOT in .env
     environment:
