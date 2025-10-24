@@ -75,30 +75,31 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.user_id = user_id
         self.broker_name = broker_name
         
-        # For Dhan, use credentials from .env file
+        # For Dhan, use credentials from .env file and database
         import os
         from dotenv import load_dotenv
         load_dotenv()
-        
-        # Get Dhan credentials from environment
-        client_id = os.getenv('BROKER_API_KEY')  # This is the Dhan client ID
-        auth_token = os.getenv('BROKER_API_SECRET')  # This is the Dhan access token
-        
-        if not client_id or not auth_token:
-            # Fall back to database if env vars not set
-            if not auth_data:
-                auth_token = get_auth_token(user_id)
-                client_id = user_id
-                if not auth_token:
-                    self.logger.error(f"No authentication token found for user {user_id}")
-                    raise ValueError(f"No authentication token found for user {user_id}")
-            else:
-                auth_token = auth_data.get('auth_token')
-                client_id = auth_data.get('client_id', user_id)
-                if not auth_token:
-                    self.logger.error("Missing required authentication data")
-                    raise ValueError("Missing required authentication data")
-        
+
+        # Get Dhan client_id from BROKER_API_KEY (format: client_id:::api_key)
+        broker_api_key = os.getenv('BROKER_API_KEY')
+        if broker_api_key and ':::' in broker_api_key:
+            client_id = broker_api_key.split(':::')[0]
+        else:
+            client_id = broker_api_key or user_id
+
+        # Get OAuth access token from database (NOT from BROKER_API_SECRET)
+        # BROKER_API_SECRET is the OAuth app secret, not the access token
+        if not auth_data:
+            auth_token = get_auth_token(user_id)
+            if not auth_token:
+                self.logger.error(f"No OAuth access token found in database for user {user_id}")
+                raise ValueError(f"No OAuth access token found for user {user_id}")
+        else:
+            auth_token = auth_data.get('auth_token')
+            if not auth_token:
+                self.logger.error("Missing required authentication data")
+                raise ValueError("Missing required authentication data")
+
         self.logger.debug(f"Using Dhan credentials - Client ID: {client_id}")
         
         # Store the client_id for later use
