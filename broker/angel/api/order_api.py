@@ -43,13 +43,13 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     
     # Handle empty response
     if not response.text:
-        return {}
+        return {'status': 'error', 'message': 'Empty response from API'}
     
     try:
         return json.loads(response.text)
     except json.JSONDecodeError:
         logger.error(f"Failed to parse JSON response from {endpoint}: {response.text}")
-        return {}
+        return {'status': 'error', 'message': f'Invalid JSON response from API: {response.text}'}
 
 def get_order_book(auth):
     return get_api_response("/rest/secure/angelbroking/order/v1/getOrderBook",auth)
