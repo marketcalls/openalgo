@@ -13,20 +13,32 @@ logger = get_logger(__name__)
 logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth_token, method="GET", payload=''):
-
-    token, sid, hsServerId, access_token = auth_token.split(":::")
-
-    conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
-    payload = ''
-    query_params = {"sId": hsServerId}
+    """
+    Updated for Kotak Neo API v2 - uses dynamic baseUrl and new header structure
+    """
+    session_token, session_sid, base_url, access_token = auth_token.split(":::")
+    
+    # Debug logging for baseUrl
+    logger.info(f"ORDER API - Using baseUrl: {base_url}")
+    
+    # Extract hostname from base_url
+    if base_url.startswith('https://'):
+        hostname = base_url.replace('https://', '')
+    else:
+        hostname = base_url
+    
+    logger.info(f"ORDER API - Extracted hostname: {hostname}")
+    
+    conn = http.client.HTTPSConnection(hostname)
+    
     headers = {
-    'accept': 'application/json',
-    'Sid': sid,
-    'Auth': token,
-    'neo-fin-key': 'neotradeapi',
-    'Authorization': f'Bearer {access_token}'
+        'accept': 'application/json',
+        'Sid': session_sid,
+        'Auth': session_token,
+        'neo-fin-key': 'neotradeapi'
     }
-    conn.request(method, f"{endpoint}?" + urllib.parse.urlencode(query_params), payload, headers)
+    
+    conn.request(method, endpoint, payload, headers)
     res = conn.getresponse()
     data = res.read()
     logger.info(f"{data.decode('utf-8')}")
@@ -34,16 +46,16 @@ def get_api_response(endpoint, auth_token, method="GET", payload=''):
     return json.loads(data.decode("utf-8"))
 
 def get_order_book(auth_token):
-    return get_api_response("/Orders/2.0/quick/user/orders", auth_token)
+    return get_api_response("/quick/user/orders", auth_token)
 
 def get_trade_book(auth_token):
-    return get_api_response("/Orders/2.0/quick/user/trades", auth_token)
+    return get_api_response("/quick/user/trades", auth_token)
 
 def get_positions(auth_token):
-    return get_api_response("/Orders/2.0/quick/user/positions", auth_token)
+    return get_api_response("/quick/user/positions", auth_token)
 
 def get_holdings(auth_token):
-    return get_api_response("/Portfolio/1.0/portfolio/v1/holdings?alt=false", auth_token)
+    return get_api_response("/portfolio/v1/holdings", auth_token)
 
 def get_open_position(tradingsymbol, exchange, producttype, auth_token):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
@@ -63,26 +75,35 @@ def get_open_position(tradingsymbol, exchange, producttype, auth_token):
     return net_qty
 
 def place_order_api(data, auth_token):
-    token, sid, hsServerId, access_token = auth_token.split(":::")
+    session_token, session_sid, base_url, access_token = auth_token.split(":::")
     
-    conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
+    # Debug logging for baseUrl
+    logger.info(f"PLACE ORDER API - Using baseUrl: {base_url}")
+    
+    # Extract hostname from base_url
+    if base_url.startswith('https://'):
+        hostname = base_url.replace('https://', '')
+    else:
+        hostname = base_url
+    
+    logger.info(f"PLACE ORDER API - Extracted hostname: {hostname}")
+    
+    conn = http.client.HTTPSConnection(hostname)
     token_id = get_token(data['symbol'], data['exchange'])
     newdata = transform_data(data, token_id)
     
     json_string = json.dumps(newdata)
     payload = f'jData={urllib.parse.quote(json_string)}'
-    query_params = {"sId": hsServerId}
     
     headers = {
         'accept': 'application/json',
-        'Sid': sid,
-        'Auth': token,
+        'Sid': session_sid,
+        'Auth': session_token,
         'neo-fin-key': 'neotradeapi',
-        'Authorization': f'Bearer {access_token}',
         'Content-Type': 'application/x-www-form-urlencoded'
     }
 
-    conn.request("POST", "/Orders/2.0/quick/order/rule/ms/place?" + urllib.parse.urlencode(query_params), payload, headers)
+    conn.request("POST", "/quick/order/rule/ms/place", payload, headers)
     try:
         res = conn.getresponse()
         data = res.read()
@@ -226,54 +247,62 @@ def close_all_positions(current_api_key, auth_token):
     return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
 
 def cancel_order(orderid, auth_token):
-    token, sid, hsServerId, access_token = auth_token.split(":::")
+    session_token, session_sid, base_url, access_token = auth_token.split(":::")
     
-    conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
-    payload = f'jData={urllib.parse.quote(json.dumps({"on": orderid}))}'
-    query_params = {"sId": hsServerId}
+    # Extract hostname from base_url
+    if base_url.startswith('https://'):
+        hostname = base_url.replace('https://', '')
+    else:
+        hostname = base_url
+    
+    conn = http.client.HTTPSConnection(hostname)
+    payload = f'jData={urllib.parse.quote(json.dumps({"on": orderid, "am": "NO"}))}'
 
     headers = {
         'accept': 'application/json',
-        'Sid': sid,
-        'Auth': token,
+        'Sid': session_sid,
+        'Auth': session_token,
         'neo-fin-key': 'neotradeapi',
-        'Authorization': f'Bearer {access_token}',
         'Content-Type': 'application/x-www-form-urlencoded'
     }
     
-    conn.request("POST", "/Orders/2.0/quick/order/cancel?" + urllib.parse.urlencode(query_params), payload, headers)
+    conn.request("POST", "/quick/order/cancel", payload, headers)
     try:
         res = conn.getresponse()
         data = res.read()
         response_data = json.loads(data.decode("utf-8"))
         
-        if response_data.get("stat"):
-            return {"status": "success", "orderid": response_data.get("result")}, 200
-        return {"status": "error", "message": response_data.get("message", "Failed to cancel order")}, res.status
+        if response_data.get("stat") == "Ok":
+            return {"status": "success", "orderid": response_data.get("nOrdNo")}, 200
+        return {"status": "error", "message": response_data.get("emsg", "Failed to cancel order")}, res.status
     except Exception as e:
         logger.error(f"Error in cancel_order: {e}")
         return {"status": "error", "message": str(e)}, 500
 
 def modify_order(data, auth_token):
-    token, sid, hsServerId, access_token = auth_token.split(":::")
+    session_token, session_sid, base_url, access_token = auth_token.split(":::")
     
-    conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
+    # Extract hostname from base_url
+    if base_url.startswith('https://'):
+        hostname = base_url.replace('https://', '')
+    else:
+        hostname = base_url
+    
+    conn = http.client.HTTPSConnection(hostname)
     token_id = get_token(data['symbol'], data['exchange'])
     newdata = transform_modify_order_data(data, token_id)
     
     payload = f'jData={urllib.parse.quote(json.dumps(newdata))}'
-    query_params = {"sId": hsServerId}
 
     headers = {
         'accept': 'application/json',
-        'Sid': sid,
-        'Auth': token,
+        'Sid': session_sid,
+        'Auth': session_token,
         'neo-fin-key': 'neotradeapi',
-        'Authorization': f'Bearer {access_token}',
         'Content-Type': 'application/x-www-form-urlencoded'
     }
     
-    conn.request("POST", "/Orders/2.0/quick/order/vr/modify?" + urllib.parse.urlencode(query_params), payload, headers)
+    conn.request("POST", "/quick/order/vr/modify", payload, headers)
     try:
         res = conn.getresponse()
         data = res.read()
@@ -281,7 +310,7 @@ def modify_order(data, auth_token):
         
         if response_data.get("stat") == "Ok":
             return {"status": "success", "orderid": response_data["nOrdNo"]}, 200
-        return {"status": "error", "message": response_data.get("message", "Failed to modify order")}, res.status
+        return {"status": "error", "message": response_data.get("emsg", "Failed to modify order")}, res.status
     except Exception as e:
         logger.error(f"Error in modify_order: {e}")
         return {"status": "error", "message": str(e)}, 500
