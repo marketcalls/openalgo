@@ -133,12 +133,17 @@ class DhanWebSocket:
             # Continue anyway, the thread isolation should handle most cases
     
     def _run_websocket(self):
-        """Run the WebSocket connection in a separate thread"""
+        """Run the WebSocket connection in a separate thread with exponential backoff"""
+        reconnect_attempt = 0
+        max_reconnect_attempts = 10
+        base_delay = 5
+        max_delay = 60
+
         while self.running:
             try:
                 #self.logger.info(f"Connecting to Dhan WebSocket ({'20-depth' if self.is_20_depth else '5-depth'})...")
                 #self.logger.info(f"WebSocket URL: {self.ws_url}")
-                
+
                 self.ws = websocket.WebSocketApp(
                     self.ws_url,
                     on_open=self._on_open,
@@ -148,17 +153,29 @@ class DhanWebSocket:
                     on_ping=lambda ws, msg: self.logger.debug("Received ping"),
                     on_pong=lambda ws, msg: self.logger.debug("Received pong")
                 )
-                
+
                 # Run the WebSocket with ping interval
-                self.ws.run_forever(ping_interval=10, ping_timeout=5)
-                
+                self.ws.run_forever(ping_interval=30, ping_timeout=10)
+
             except Exception as e:
                 self.logger.error(f"WebSocket connection error: {e}", exc_info=True)
                 self.connected = False
-                
+
                 if self.running:
-                    self.logger.info("Reconnecting in 5 seconds...")
-                    time.sleep(5)
+                    reconnect_attempt += 1
+                    if reconnect_attempt >= max_reconnect_attempts:
+                        self.logger.error(f"Maximum reconnection attempts ({max_reconnect_attempts}) reached. Stopping.")
+                        self.running = False
+                        break
+
+                    # Calculate delay with exponential backoff
+                    delay = min(base_delay * (2 ** (reconnect_attempt - 1)), max_delay)
+                    self.logger.info(f"Reconnecting in {delay} seconds... (attempt {reconnect_attempt}/{max_reconnect_attempts})")
+                    time.sleep(delay)
+            else:
+                # Reset reconnect attempt counter on successful connection
+                if self.connected:
+                    reconnect_attempt = 0
     
     def disconnect(self):
         """Disconnect from WebSocket"""
@@ -276,8 +293,17 @@ class DhanWebSocket:
     def _on_close(self, ws, close_status_code, close_msg):
         """Handle WebSocket connection close"""
         self.connected = False
-        self.logger.debug(f"WebSocket connection closed: {close_status_code} - {close_msg}")
-        
+
+        # Check if this is an immediate disconnect (common with auth issues)
+        if close_status_code is None or close_status_code == 1000:
+            self.logger.warning(
+                f"WebSocket closed immediately after connection: status={close_status_code}, "
+                f"message='{close_msg}'. This may indicate: 1) Multiple concurrent connections "
+                f"with same credentials, 2) Invalid/expired token, or 3) Server-side rate limiting."
+            )
+        else:
+            self.logger.debug(f"WebSocket connection closed: {close_status_code} - {close_msg}")
+
         if self.on_close:
             self.on_close(self)
     

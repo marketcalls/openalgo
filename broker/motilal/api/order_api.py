@@ -407,7 +407,19 @@ def cancel_order(orderid,auth):
 
 
 def modify_order(data,auth):
+    """
+    Modifies an existing order for Motilal Oswal.
 
+    Motilal API requires lastmodifiedtime and qtytradedtoday fields which must be fetched
+    from the order book before modifying.
+
+    Args:
+        data: Order modification data containing orderid, symbol, exchange, quantity, price, etc.
+        auth: Authentication token
+
+    Returns:
+        Tuple of (response_dict, status_code)
+    """
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
@@ -415,10 +427,39 @@ def modify_order(data,auth):
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
+    # First, fetch the order details from order book to get lastmodifiedtime and qtytradedtoday
+    orderid = data.get("orderid")
+    logger.info(f"Fetching order details for orderid: {orderid}")
+
+    order_book_response = get_order_book(AUTH_TOKEN)
+
+    # Check if order book was fetched successfully
+    if order_book_response.get('status') != 'SUCCESS' or not order_book_response.get('data'):
+        logger.error("Failed to fetch order book")
+        return {"status": "error", "message": "Failed to fetch order book"}, 500
+
+    # Find the order in the order book
+    order_details = None
+    for order in order_book_response.get('data', []):
+        if order.get('uniqueorderid') == orderid:
+            order_details = order
+            break
+
+    if not order_details:
+        logger.error(f"Order with orderid {orderid} not found in order book")
+        return {"status": "error", "message": f"Order {orderid} not found in order book"}, 404
+
+    # Extract required fields from order book
+    lastmodifiedtime = order_details.get('lastmodifiedtime', '')
+    qtytradedtoday = int(order_details.get('qtytradedtoday', 0))  # Motilal uses 'qtytradedtoday'
+
+    logger.info(f"Order details: lastmodifiedtime={lastmodifiedtime}, qtytradedtoday={qtytradedtoday}")
+
     token = get_token(data['symbol'], data['exchange'])
     data['symbol'] = get_br_symbol(data['symbol'],data['exchange'])
 
-    transformed_data = transform_modify_order_data(data, token)
+    # Pass the order details to the transformation function
+    transformed_data = transform_modify_order_data(data, token, lastmodifiedtime, qtytradedtoday)
 
     # Motilal Oswal Header Parameters
     headers = {
@@ -443,6 +484,9 @@ def modify_order(data,auth):
     }
     payload = json.dumps(transformed_data)
 
+    logger.info(f"Motilal Modify Order Request Payload: {transformed_data}")
+    logger.debug(f"Payload JSON: {payload}")
+
     # Use Production or UAT URL based on environment
     base_url = os.getenv('BROKER_API_URL', 'https://openapi.motilaloswal.com')
 
@@ -456,13 +500,17 @@ def modify_order(data,auth):
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
 
-    data = json.loads(response.text)
+    response_data = json.loads(response.text)
+
+    # Log the response for debugging
+    logger.info(f"Motilal Modify Order Response: {response_data}")
+    logger.info(f"Response Status Code: {response.status_code}")
 
     # Motilal returns status as "SUCCESS" string
-    if data.get("status") == "SUCCESS":
-        return {"status": "success", "orderid": data.get("uniqueorderid")}, 200
+    if response_data.get("status") == "SUCCESS":
+        return {"status": "success", "orderid": response_data.get("uniqueorderid")}, 200
     else:
-        return {"status": "error", "message": data.get("message", "Failed to modify order")}, response.status
+        return {"status": "error", "message": response_data.get("message", "Failed to modify order")}, response.status
 
 
 def cancel_all_orders_api(data,auth):

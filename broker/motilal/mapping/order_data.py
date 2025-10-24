@@ -89,6 +89,7 @@ def calculate_order_statistics(order_data):
                 total_open_orders += 1
             elif order_status in ['rejected', 'error']:
                 total_rejected_orders += 1
+            # Note: 'cancel' status orders are not counted in statistics (following Angel One implementation)
 
     # Compile and return the statistics
     return {
@@ -133,8 +134,8 @@ def transform_order_data(orders):
             ordertype = ordertype.upper()
 
         # Map Motilal order status to OpenAlgo standard format
-        # Motilal returns: Traded, Confirm, Sent, Error, Rejected (title case)
-        # OpenAlgo standard: complete, open, rejected (lowercase)
+        # Motilal returns: Traded, Confirm, Sent, Error, Rejected, Cancel (title case)
+        # OpenAlgo standard: complete, open, rejected, cancelled (lowercase)
         order_status = order.get("orderstatus", "")
         if order_status == 'Traded' or order_status == 'Complete':
             order_status = 'complete'
@@ -142,16 +143,38 @@ def transform_order_data(orders):
             order_status = 'open'
         elif order_status in ['Rejected', 'Error']:
             order_status = 'rejected'
+        elif order_status == 'Cancel':
+            order_status = 'cancelled'
         else:
             # Keep lowercase for standard format
             order_status = order_status.lower()
+
+        # Determine which price to use:
+        # - For executed orders: use averageprice (execution price)
+        # - For pending/open orders: use price (order price)
+        avg_price = float(order.get("averageprice", 0.0))
+        order_price = float(order.get("price", 0.0))
+
+        # Log for debugging price issues
+        if order_price == 0 and ordertype == 'LIMIT' and order_status == 'open':
+            logger.warning(f"LIMIT order with open status has price=0.")
+            logger.warning(f"Order ID: {order.get('uniqueorderid')}")
+            logger.warning(f"Symbol: {order.get('symbol')}")
+            logger.warning(f"Order Type: {order.get('ordertype')}")
+            logger.warning(f"Order Status: {order.get('orderstatus')}")
+            logger.warning(f"Raw price field value: '{order.get('price')}' (type: {type(order.get('price'))})")
+            logger.warning(f"Raw averageprice field value: '{order.get('averageprice')}' (type: {type(order.get('averageprice'))})")
+            logger.warning(f"Full raw order data: {json.dumps(order, indent=2)}")
+
+        # If averageprice is 0, use the order price (for pending orders)
+        display_price = avg_price if avg_price > 0 else order_price
 
         transformed_order = {
             "symbol": order.get("symbol", ""),  # Motilal uses 'symbol'
             "exchange": order.get("exchange", ""),
             "action": order.get("buyorsell", "").upper(),  # Ensure uppercase BUY/SELL
             "quantity": order.get("orderqty", 0),  # Motilal uses 'orderqty'
-            "price": order.get("averageprice", 0.0),
+            "price": display_price,  # Use execution price if available, else order price
             "trigger_price": order.get("triggerprice", 0.0),
             "pricetype": ordertype,
             "product": order.get("producttype", ""),
@@ -243,7 +266,58 @@ def transform_tradebook_data(tradebook_data):
 
 
 def map_position_data(position_data):
-    return map_order_data(position_data)
+    """
+    Processes and modifies position data based on specific conditions.
+    Motilal uses 'productname' field instead of 'producttype' for positions.
+
+    Parameters:
+    - position_data: Response from Motilal positions API
+
+    Returns:
+    - Modified position_data with updated symbols and product types
+    """
+    # Check if position_data is empty or doesn't have 'data' key
+    if not position_data or 'data' not in position_data or position_data['data'] is None:
+        logger.info("No position data available.")
+        return []
+
+    position_data_list = position_data['data']
+    logger.info(f"Processing {len(position_data_list)} positions")
+
+    if position_data_list:
+        for position in position_data_list:
+            # Extract the symboltoken and exchange for the current position
+            symboltoken = position.get('symboltoken')
+            exchange = position.get('exchange')
+
+            # Use the get_symbol function to fetch the symbol from the database
+            symbol_from_db = get_symbol(symboltoken, exchange)
+
+            # Check if a symbol was found; if so, update the symbol in the current position
+            if symbol_from_db:
+                position['symbol'] = symbol_from_db
+
+                # Map Motilal product types to OpenAlgo format
+                # Motilal uses 'productname' field for positions instead of 'producttype'
+                productname = position.get('productname', '')
+
+                if exchange in ['NSE', 'BSE']:
+                    # Cash segment product mapping
+                    if productname == 'DELIVERY':
+                        position['productname'] = 'CNC'
+                    elif productname == 'VALUEPLUS':
+                        position['productname'] = 'MIS'  # Motilal uses VALUEPLUS for margin intraday
+
+                elif productname == 'NORMAL':
+                    # F&O segment product mapping
+                    position['productname'] = 'MIS'  # Motilal uses NORMAL for F&O intraday
+
+                elif exchange in ['NSEFO', 'MCX', 'NSECD'] and productname == 'VALUEPLUS':
+                    position['productname'] = 'NRML'
+            else:
+                logger.info(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original symbol.")
+
+    return position_data_list
 
 
 def transform_positions_data(positions_data):
