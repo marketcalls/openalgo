@@ -113,11 +113,14 @@ class WebSocketTestClient:
         """Disconnect from the WebSocket server"""
         if self.ws:
             self.ws.close()
-            # Wait for websocket to close
+            # Wait for websocket to close with better timeout handling
             timeout = 2
             start_time = time.time()
             while self.connected and time.time() - start_time < timeout:
                 time.sleep(0.1)
+            
+            # Additional small delay to ensure closure is complete
+            time.sleep(0.2)
             self.ws = None
             
     def _authenticate(self) -> bool:
@@ -481,12 +484,21 @@ class WebSocketServerTester:
         
     def cleanup_clients(self) -> None:
         """Clean up all test clients"""
-        for client in self.clients:
+        for i, client in enumerate(self.clients):
             client.disconnect()
+            # Small delay between disconnections
+            if i < len(self.clients) - 1:
+                time.sleep(0.1)
+        
         self.clients.clear()
+        
         if self.shared_client:
+            time.sleep(0.1)  # Delay before shared client
             self.shared_client.disconnect()
             self.shared_client = None
+        
+        # Final delay for all connections to settle
+        time.sleep(0.5)
             
     def test_authentication_valid(self) -> bool:
         """Test 1: Valid authentication"""
@@ -813,14 +825,21 @@ class WebSocketServerTester:
                 test_passed = False
             
         # Clean up with proper disconnection
+        # Clean up with proper disconnection
         print("Cleaning up...")
-        for client in clients:
+        for i, client in enumerate(clients):
             try:
                 client.unsubscribe_all()
                 time.sleep(0.5)
                 client.disconnect()
+                # Delay between client cleanups
+                if i < len(clients) - 1:
+                    time.sleep(0.2)
             except Exception as e:
                 print(f"Error during cleanup: {e}")
+
+        # Final wait for all connections to settle
+        time.sleep(1.0)
                 
         return test_passed
         
@@ -882,7 +901,7 @@ class WebSocketServerTester:
         time.sleep(1)
         
         results = client.get_test_results()
-        error_count = sum(1 for result in results if "ERROR" in result or "error" in result)
+        error_count = sum(1 for result in results if "ERROR" in result or "FAILED" in result)
         
         test_passed = False
         if error_count > 0:
@@ -981,7 +1000,7 @@ class WebSocketServerTester:
             
             time.sleep(1)
             results = client.get_test_results()
-            error_count = sum(1 for result in results if "ERROR" in result)
+            error_count = sum(1 for result in results if "ERROR" in result or "FAILED" in result)
             
             if error_count > 0:
                 self.log_test("UNAUTH_REQUESTS", "PASS", f"Unauthenticated requests properly rejected ({error_count} errors)")

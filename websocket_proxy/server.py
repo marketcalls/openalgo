@@ -314,9 +314,9 @@ class WebSocketProxy:
                             if is_last_client:
                                 adapter = self.broker_adapters[user_id]
                                 adapter.unsubscribe(symbol, exchange, mode)
-                                logger.info(f"Last client disconnected, unsubscribed from {symbol}.{exchange}.{mode_to_str[mode]}")
+                                logger.info(f"Last client disconnected, unsubscribed from {symbol}.{exchange}.{mode_to_str.get(mode, mode)}")
                             else:
-                                logger.info(f"Client disconnected from {symbol}.{exchange}.{mode_to_str[mode]}, but other clients still subscribed")
+                                logger.info(f"Client disconnected from {symbol}.{exchange}.{mode_to_str.get(mode, mode)}, but other clients still subscribed")
                     except json.JSONDecodeError as e:
                         logger.exception(f"Error parsing subscription: {sub_json}, Error: {e}")
                     except Exception as e:
@@ -668,7 +668,7 @@ class WebSocketProxy:
                             })
                             continue
                         else:
-                            logger.info(f"First client subscribed to {symbol}.{exchange}.{mode_to_str[mode]}, broker subscribe successful")
+                            logger.info(f"First client subscribed to {symbol}.{exchange}.{mode_to_str.get(mode, mode)}, broker subscribe successful")
                     except Exception as e:
                         self._remove_global_subscription(client_id, user_id, symbol, exchange, mode)
                         subscription_success = False
@@ -684,7 +684,7 @@ class WebSocketProxy:
                         continue
                 else:
                     response = {"status": "success", "message": "Already subscribed by other clients"}
-                    logger.info(f"Client subscribed to {symbol}.{exchange}.{mode_to_str[mode]}, but other clients already subscribed")
+                    logger.info(f"Client subscribed to {symbol}.{exchange}.{mode_to_str.get(mode, mode)}, but other clients already subscribed")
                 
                 subscription_info = {
                     "symbol": symbol,

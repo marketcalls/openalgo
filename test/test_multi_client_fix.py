@@ -92,6 +92,8 @@ class WebSocketClient:
         """Close the WebSocket connection"""
         if self.websocket:
             await self.websocket.close()
+            # Wait for connection to close cleanly
+            await asyncio.sleep(0.5)  # Give time for proper WebSocket closure
             logger.info(f"Client {self.client_id} disconnected")
 
 async def test_multi_client_subscription():
@@ -145,6 +147,14 @@ async def test_multi_client_subscription():
         for i, client in enumerate(clients):
             market_data_count = len([msg for msg in client.received_messages if msg.get('type') == 'market_data'])
             logger.info(f"Client {client.client_id} received {market_data_count} market data messages")
+            assert market_data_count > 0, f"Client {client.client_id} should have received market data before unsubscription"
+        
+        # Store counts before unsubscription
+        counts_before_unsub = []
+        for i, client in enumerate(clients):
+            market_data_count = len([msg for msg in client.received_messages if msg.get('type') == 'market_data'])
+            counts_before_unsub.append(market_data_count)
+            logger.info(f"Client {client.client_id} received {market_data_count} market data messages before unsubscription")
         
         # Now unsubscribe one client
         logger.info("Unsubscribing client_1...")
@@ -159,6 +169,12 @@ async def test_multi_client_subscription():
         for i, client in enumerate(clients):
             market_data_count = len([msg for msg in client.received_messages if msg.get('type') == 'market_data'])
             logger.info(f"Client {client.client_id} total market data messages: {market_data_count}")
+        
+        # Assert that clients 1 and 2 continue receiving data after client 0 unsubscribes
+        for i in range(1, len(clients)):  # Skip client 0 (unsubscribed)
+            final_count = len([msg for msg in clients[i].received_messages if msg.get('type') == 'market_data'])
+            initial_count = counts_before_unsub[i]
+            assert final_count > initial_count, f"Client {clients[i].client_id} should continue receiving data after other client unsubscribes (initial: {initial_count}, final: {final_count})"
         
         # Wait for remaining tasks to complete
         await asyncio.sleep(2)
@@ -179,9 +195,14 @@ async def test_multi_client_subscription():
     finally:
         # Close all connections
         logger.info("Closing all client connections...")
-        for client in clients:
+        for i, client in enumerate(clients):
             await client.close()
+            # Small delay between client disconnections
+            if i < len(clients) - 1:  # Don't delay after last client
+                await asyncio.sleep(0.2)
         
+        # Additional wait for all connections to fully close
+        await asyncio.sleep(1.0)
         logger.info("Multi-client subscription test completed!")
 
 async def main():
