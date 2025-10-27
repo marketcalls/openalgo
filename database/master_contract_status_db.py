@@ -22,7 +22,7 @@ if DB_PATH and 'sqlite' in DB_PATH:
         DB_PATH,
         echo=False,
         poolclass=NullPool,
-        connect_args={'check_same_thread': False}
+        connect_args={'check_same_thread': False, 'timeout': 30}
     )
 else:
     # For other databases like PostgreSQL, use connection pooling
