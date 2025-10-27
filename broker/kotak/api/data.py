@@ -70,7 +70,7 @@ class BrokerData:
             url = f"{self.quotes_base_url}{endpoint}"
 
             logger.info(f"QUOTES API - Making request to: {url}")
-            logger.info(f"QUOTES API - Using access_token: {self.access_token[:10]}...")
+            logger.debug(f"QUOTES API - Using access_token: {self.access_token[:10]}...")
 
             # Make request using httpx
             response = client.get(url, headers=headers)
@@ -79,7 +79,7 @@ class BrokerData:
 
             if response.status_code == 200:
                 response_data = json.loads(response.text)
-                logger.info(f"QUOTES API - Raw response: {response.text[:200]}...")  # Log first 200 chars
+                logger.debug(f"QUOTES API - Raw response: {response.text[:200]}...")  # Log first 200 chars
                 return response_data
             else:
                 logger.warning(f"QUOTES API - HTTP {response.status_code}: {response.text}")
@@ -168,7 +168,7 @@ class BrokerData:
                 kotak_exchange = self._get_kotak_exchange(exchange)
                 neo_symbol = self._get_index_symbol(symbol)
                 query = f"{kotak_exchange}|{neo_symbol}"
-                logger.info(f"DEPTH API - Index query: {symbol} → {neo_symbol} → {query}")
+                logger.debug(f"DEPTH API - Index query: {symbol} → {neo_symbol} → {query}")
             else:
                 # For regular stocks/F&O, get both pSymbol and brexchange from database
                 # In Kotak DB: token = pSymbol, brexchange = nse_cm/nse_fo/bse_cm etc.
@@ -182,7 +182,7 @@ class BrokerData:
 
                 # Build query using brexchange from database: brexchange|pSymbol
                 query = f"{brexchange}|{psymbol}"
-                logger.info(f"DEPTH API - Query: {query}")
+                logger.debug(f"DEPTH API - Query: {query}")
             
             # Make API request with depth filter
             response = self._make_quotes_request(query, "depth")

@@ -135,7 +135,7 @@ def authenticate_broker(mobile_number, totp, mpin):
             logger.warning("baseUrl not found in MPIN validation response, API calls may fail")
 
         logger.info("Kotak TOTP authentication completed successfully")
-        logger.info(f"Base URL for API calls: {base_url}")
+        logger.debug(f"Base URL for API calls: {base_url}")
 
         # Create auth string: trading_token:::trading_sid:::base_url:::access_token
         # This format allows extracting all components needed for subsequent API calls

@@ -234,9 +234,9 @@ def close_all_positions(current_api_key, auth_token):
             # Place the order to close the position
             res, response, orderid =   place_order_api(place_order_payload, auth_token)
 
-            logger.info(f"{res}")
+            #logger.info(f"{res}")
             logger.info(f"{response}")
-            logger.info(f"{orderid}")
+            #logger.info(f"{orderid}")
 
             # Note: Ensure place_order_api handles any errors and logs accordingly
 
