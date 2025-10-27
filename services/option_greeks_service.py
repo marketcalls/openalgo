@@ -175,10 +175,13 @@ def get_underlying_exchange(base_symbol: str, options_exchange: str) -> str:
 
 def calculate_time_to_expiry(expiry: datetime) -> float:
     """
-    Calculate time to expiry in years
+    Calculate time to expiry in days (for mibian library)
+
+    mibian.BS expects time to expiry in DAYS, not years.
+    Preserves fractional days (e.g., 0.59 days = ~14 hours).
 
     Returns:
-        Time to expiry in years (fraction)
+        Time to expiry in days (float)
     """
     current_time = datetime.now()
 
@@ -186,14 +189,18 @@ def calculate_time_to_expiry(expiry: datetime) -> float:
         logger.warning(f"Option has already expired: {expiry}")
         return 0.0
 
-    # Calculate in days first, then convert to years
+    # Calculate days to expiry - mibian expects DAYS not years
     time_delta = expiry - current_time
     days_to_expiry = time_delta.total_seconds() / (60 * 60 * 24)
-    years_to_expiry = days_to_expiry / 365.0
 
-    logger.info(f"Time to expiry: {days_to_expiry:.2f} days ({years_to_expiry:.4f} years)")
+    # Ensure minimum value to avoid numerical issues
+    if days_to_expiry < 0.01:  # Less than ~15 minutes
+        days_to_expiry = 0.01
+        logger.info(f"Very close to expiry - using minimum 0.01 days")
 
-    return years_to_expiry
+    logger.info(f"Time to expiry: {days_to_expiry:.4f} days")
+
+    return days_to_expiry
 
 
 def calculate_greeks(
@@ -317,7 +324,7 @@ def calculate_greeks(
             'strike': round(strike, 2),  # Round for cleaner output
             'option_type': opt_type,
             'expiry_date': expiry.strftime('%d-%b-%Y'),
-            'days_to_expiry': round(time_to_expiry * 365, 2),
+            'days_to_expiry': round(time_to_expiry, 4),  # Already in days
             'spot_price': round(spot_price, 2),
             'option_price': round(option_price, 2),
             'interest_rate': round(interest_rate, 2),
