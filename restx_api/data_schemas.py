@@ -85,3 +85,12 @@ class OptionSymbolSchema(Schema):
     strike_int = fields.Int(required=True, validate=validate.Range(min=1))  # Strike interval/difference (e.g., 50 for NIFTY, 100 for BANKNIFTY)
     offset = fields.Str(required=True, validate=validate_option_offset)      # Strike offset from ATM (ATM, ITM1-ITM50, OTM1-OTM50)
     option_type = fields.Str(required=True, validate=validate.OneOf(["CE", "PE", "ce", "pe"]))  # Call or Put option
+
+class OptionGreeksSchema(Schema):
+    apikey = fields.Str(required=True)      # API Key for authentication
+    symbol = fields.Str(required=True)      # Option symbol (e.g., NIFTY28NOV2424000CE)
+    exchange = fields.Str(required=True, validate=validate.OneOf(["NFO", "BFO", "CDS", "MCX"]))  # Exchange (NFO, BFO, CDS, MCX)
+    interest_rate = fields.Float(required=False, validate=validate.Range(min=0, max=100))  # Risk-free interest rate (annualized %). Optional, defaults per exchange
+    underlying_symbol = fields.Str(required=False)   # Optional: Specify underlying symbol (e.g., NIFTY or NIFTY28NOV24FUT)
+    underlying_exchange = fields.Str(required=False)  # Optional: Specify underlying exchange (NSE_INDEX, NFO, etc.)
+    expiry_time = fields.Str(required=False)  # Optional: Custom expiry time in HH:MM format (e.g., "15:30", "19:00"). If not provided, uses exchange defaults
