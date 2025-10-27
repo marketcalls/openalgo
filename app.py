@@ -298,18 +298,40 @@ def setup_environment(app):
     with app.app_context():
         #load broker plugins
         app.broker_auth_functions = load_broker_auth_functions()
-        # Ensure all the tables exist
-        ensure_auth_tables_exists()
-        ensure_user_tables_exists()
-        ensure_master_contract_tables_exists()
-        ensure_api_log_tables_exists()
-        ensure_analyzer_tables_exists()
-        ensure_settings_tables_exists()
-        ensure_chartink_tables_exists()
-        ensure_traffic_logs_exists()
-        ensure_latency_tables_exists()
-        ensure_strategy_tables_exists()
-        ensure_sandbox_tables_exists()
+
+        # Initialize all databases in parallel for faster startup
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import time
+
+        db_init_functions = [
+            ('Auth DB', ensure_auth_tables_exists),
+            ('User DB', ensure_user_tables_exists),
+            ('Master Contract DB', ensure_master_contract_tables_exists),
+            ('API Log DB', ensure_api_log_tables_exists),
+            ('Analyzer DB', ensure_analyzer_tables_exists),
+            ('Settings DB', ensure_settings_tables_exists),
+            ('Chartink DB', ensure_chartink_tables_exists),
+            ('Traffic Logs DB', ensure_traffic_logs_exists),
+            ('Latency DB', ensure_latency_tables_exists),
+            ('Strategy DB', ensure_strategy_tables_exists),
+            ('Sandbox DB', ensure_sandbox_tables_exists),
+        ]
+
+        db_init_start = time.time()
+        with ThreadPoolExecutor(max_workers=11) as executor:
+            # Submit all database initialization tasks
+            futures = {executor.submit(func): name for name, func in db_init_functions}
+
+            # Wait for all to complete
+            for future in as_completed(futures):
+                db_name = futures[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(f"Failed to initialize {db_name}: {e}")
+
+        db_init_time = (time.time() - db_init_start) * 1000
+        logger.info(f"All databases initialized in parallel ({db_init_time:.0f}ms)")
 
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':
@@ -322,35 +344,61 @@ app = create_app()
 # Explicitly call the setup environment function
 setup_environment(app)
 
-# Auto-start execution engine and squareoff scheduler if in analyzer mode
+# Auto-start execution engine and squareoff scheduler if in analyzer mode (parallel startup)
 with app.app_context():
     try:
         from database.settings_db import get_analyze_mode
         from sandbox.execution_thread import start_execution_engine
         from sandbox.squareoff_thread import start_squareoff_scheduler
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import time
 
         if get_analyze_mode():
-            # Start execution engine for order processing
-            success, message = start_execution_engine()
-            if success:
-                logger.info("Execution engine auto-started (Analyzer mode is ON)")
-            else:
-                logger.warning(f"Failed to auto-start execution engine: {message}")
+            # Define service startup functions for parallel execution
+            def start_engine():
+                success, message = start_execution_engine()
+                return ('execution_engine', success, message)
 
-            # Start squareoff scheduler for MIS auto-squareoff
-            success, message = start_squareoff_scheduler()
-            if success:
-                logger.info("Square-off scheduler auto-started (Analyzer mode is ON)")
-            else:
-                logger.warning(f"Failed to auto-start square-off scheduler: {message}")
+            def start_scheduler():
+                success, message = start_squareoff_scheduler()
+                return ('squareoff_scheduler', success, message)
 
-            # Run catch-up settlement for any CNC positions that should have been settled while app was stopped
-            from sandbox.position_manager import catchup_missed_settlements
-            try:
+            def run_catchup():
+                from sandbox.position_manager import catchup_missed_settlements
                 catchup_missed_settlements()
-                logger.info("Catch-up settlement check completed on startup")
-            except Exception as e:
-                logger.error(f"Error in startup catch-up settlement: {e}")
+                return ('catchup_settlement', True, 'Completed')
+
+            # Start all services in parallel
+            startup_start = time.time()
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                # Submit all tasks
+                futures = [
+                    executor.submit(start_engine),
+                    executor.submit(start_scheduler),
+                    executor.submit(run_catchup)
+                ]
+
+                # Collect results as they complete
+                for future in as_completed(futures):
+                    try:
+                        service_name, success, message = future.result()
+                        if service_name == 'execution_engine':
+                            if success:
+                                logger.info("Execution engine auto-started (Analyzer mode is ON)")
+                            else:
+                                logger.warning(f"Failed to auto-start execution engine: {message}")
+                        elif service_name == 'squareoff_scheduler':
+                            if success:
+                                logger.info("Square-off scheduler auto-started (Analyzer mode is ON)")
+                            else:
+                                logger.warning(f"Failed to auto-start square-off scheduler: {message}")
+                        elif service_name == 'catchup_settlement':
+                            logger.info("Catch-up settlement check completed on startup")
+                    except Exception as e:
+                        logger.error(f"Error starting service: {e}")
+
+            startup_time = (time.time() - startup_start) * 1000
+            logger.info(f"Services started in parallel ({startup_time:.0f}ms)")
     except Exception as e:
         logger.error(f"Error checking analyzer mode on startup: {e}")
 

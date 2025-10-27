@@ -200,9 +200,8 @@ class SandboxConfig(Base):
 
 def init_db():
     """Initialize sandbox database and tables"""
-    logger.info("Initializing Sandbox DB")
-    Base.metadata.create_all(bind=engine)
-    logger.info("Sandbox DB initialized successfully")
+    from database.db_init_helper import init_db_with_logging
+    init_db_with_logging(Base, engine, "Sandbox DB", logger)
 
     # Initialize default configuration
     init_default_config()

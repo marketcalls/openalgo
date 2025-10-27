@@ -442,7 +442,5 @@ def init_logs_db():
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
 
-    logger.info(f"Initializing Traffic Logs DB at: {LOGS_DATABASE_URL}")
-
-    # Create all tables
-    LogBase.metadata.create_all(bind=logs_engine)
+    from database.db_init_helper import init_db_with_logging
+    init_db_with_logging(LogBase, logs_engine, "Traffic Logs DB", logger)

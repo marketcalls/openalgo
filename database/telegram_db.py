@@ -163,18 +163,18 @@ class UserPreference(Base):
 def init_db():
     """Initialize the database with required tables"""
     try:
-        Base.metadata.create_all(bind=engine)
+        from database.db_init_helper import init_db_with_logging
+        init_db_with_logging(Base, engine, "Telegram DB", logger)
 
         # Create default bot config if not exists
         config = db_session.query(BotConfig).filter_by(id=1).first()
         if not config:
+            logger.info("Telegram DB: Creating default bot configuration")
             default_config = BotConfig(id=1)
             db_session.add(default_config)
             db_session.commit()
-
-        logger.info("Telegram database initialized successfully")
     except Exception as e:
-        logger.error(f"Failed to initialize database: {str(e)}")
+        logger.error(f"Telegram DB: Failed to initialize: {str(e)}")
         db_session.rollback()
     finally:
         db_session.remove()

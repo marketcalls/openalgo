@@ -70,8 +70,8 @@ class StrategySymbolMapping(Base):
 
 def init_db():
     """Initialize the database"""
-    logger.info("Initializing Strategy DB")
-    Base.metadata.create_all(bind=engine)
+    from database.db_init_helper import init_db_with_logging
+    init_db_with_logging(Base, engine, "Strategy DB", logger)
 
 def create_strategy(name, webhook_id, user_id, is_intraday=True, trading_mode='LONG', start_time=None, end_time=None, squareoff_time=None, platform='tradingview'):
     """Create a new strategy"""

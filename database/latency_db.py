@@ -170,6 +170,6 @@ def init_latency_db():
     db_dir = os.path.dirname(db_path)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
-    
-    logger.info(f"Initializing Latency DB at: {LATENCY_DATABASE_URL}")
-    LatencyBase.metadata.create_all(bind=latency_engine)
+
+    from database.db_init_helper import init_db_with_logging
+    init_db_with_logging(LatencyBase, latency_engine, "Latency DB", logger)

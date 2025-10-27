@@ -47,8 +47,8 @@ class OrderLog(Base):
     created_at = Column(DateTime(timezone=True), default=func.now())
 
 def init_db():
-    logger.info("Initializing API Log DB")
-    Base.metadata.create_all(bind=engine)
+    from database.db_init_helper import init_db_with_logging
+    init_db_with_logging(Base, engine, "API Log DB", logger)
 
 
 

@@ -112,5 +112,5 @@ def enhanced_search_symbols(query: str, exchange: str = None) -> List[SymToken]:
 
 def init_db():
     """Initialize the database"""
-    logger.info("Initializing Master Contract DB")
-    Base.metadata.create_all(bind=engine)
+    from database.db_init_helper import init_db_with_logging
+    init_db_with_logging(Base, engine, "Master Contract DB", logger)

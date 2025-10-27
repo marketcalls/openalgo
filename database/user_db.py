@@ -87,8 +87,8 @@ class User(Base):
         return totp.verify(token)
 
 def init_db():
-    logger.info("Initializing User DB")
-    Base.metadata.create_all(bind=engine)
+    from database.db_init_helper import init_db_with_logging
+    init_db_with_logging(Base, engine, "User DB", logger)
 
 def add_user(username, email, password, is_admin=False):
     try:

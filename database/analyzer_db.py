@@ -64,8 +64,8 @@ class AnalyzerLog(Base):
 
 def init_db():
     """Initialize the analyzer table"""
-    logger.info("Initializing Analyzer Table")
-    Base.metadata.create_all(bind=engine)
+    from database.db_init_helper import init_db_with_logging
+    init_db_with_logging(Base, engine, "Analyzer DB", logger)
 
 # Executor for asynchronous tasks
 executor = ThreadPoolExecutor(10)  # Increased from 2 to 10 for better concurrency

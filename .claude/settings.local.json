@@ -21,7 +21,10 @@
       "Bash(sqlite3:*)",
       "Bash(python:*)",
       "Bash(uv run:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Read(//d/**)",
+      "Bash(timeout 15 uv run:*)",
+      "Bash(timeout 10 uv run:*)"
     ],
     "deny": [],
     "ask": []

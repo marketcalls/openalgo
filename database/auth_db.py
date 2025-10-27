@@ -125,8 +125,8 @@ class ApiKeys(Base):
     created_at = Column(DateTime(timezone=True), default=func.now())
 
 def init_db():
-    logger.info("Initializing Auth DB")
-    Base.metadata.create_all(bind=engine)
+    from database.db_init_helper import init_db_with_logging
+    init_db_with_logging(Base, engine, "Auth DB", logger)
 
 def encrypt_token(token):
     """Encrypt auth token"""
