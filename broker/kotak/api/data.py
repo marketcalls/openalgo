@@ -1,8 +1,10 @@
-import http.client
+import httpx
 import json
 import pandas as pd
-from database.token_db import get_token, get_br_symbol
+import urllib.parse
+from database.token_db import get_token, get_br_symbol, get_brexchange
 from utils.logging import get_logger
+from utils.httpx_client import get_httpx_client
 
 logger = get_logger(__name__)
 
@@ -48,77 +50,74 @@ class BrokerData:
         return index_map.get(symbol.upper(), symbol)
 
     def _make_quotes_request(self, query, filter_name="all"):
-        """Make HTTP request to Neo API v2 quotes endpoint"""
+        """Make HTTP request to Neo API v2 quotes endpoint using httpx connection pooling"""
         try:
-            # Use the working quotes baseUrl
-            if self.quotes_base_url.startswith('https://'):
-                hostname = self.quotes_base_url.replace('https://', '')
-            else:
-                hostname = self.quotes_base_url
-            
-            conn = http.client.HTTPSConnection(hostname)
-            
-            # URL encode the query part to handle spaces and special characters
-            import urllib.parse
-            encoded_query = urllib.parse.quote(query, safe='')
+            # Get the shared httpx client with connection pooling
+            client = get_httpx_client()
+
+            # URL encode only spaces, keep pipe character (|) as is
+            # The query format is: exchange_segment|symbol (e.g., nse_cm|INFY-EQ)
+            encoded_query = urllib.parse.quote(query, safe='|')
             endpoint = f"/script-details/1.0/quotes/neosymbol/{encoded_query}/{filter_name}"
-            
+
             # Neo API v2 quotes headers - only Authorization (access token), no Auth/Sid
             headers = {
                 'Authorization': self.access_token,
                 'Content-Type': 'application/json'
             }
-            
-            logger.info(f"QUOTES API - Making request to: {self.quotes_base_url}{endpoint}")
-            logger.info(f"QUOTES API - Using access_token: {self.access_token[:10]}...")
-            
-            conn.request("GET", endpoint, "", headers)
-            res = conn.getresponse()
-            data = res.read().decode("utf-8")
-            
-            logger.info(f"QUOTES API - Response status: {res.status}")
-            
-            if res.status == 200:
-                response_data = json.loads(data)
-                logger.info(f"QUOTES API - Raw response: {data[:200]}...")  # Log first 200 chars
+
+            # Construct full URL
+            url = f"{self.quotes_base_url}{endpoint}"
+
+            logger.info(f"QUOTES API - Making request to: {url}")
+            logger.debug(f"QUOTES API - Using access_token: {self.access_token[:10]}...")
+
+            # Make request using httpx
+            response = client.get(url, headers=headers)
+
+            logger.info(f"QUOTES API - Response status: {response.status_code}")
+
+            if response.status_code == 200:
+                response_data = json.loads(response.text)
+                logger.debug(f"QUOTES API - Raw response: {response.text[:200]}...")  # Log first 200 chars
                 return response_data
             else:
-                logger.warning(f"QUOTES API - HTTP {res.status}: {data}")
+                logger.warning(f"QUOTES API - HTTP {response.status_code}: {response.text}")
                 return None
-                
+
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error in _make_quotes_request: {e}")
+            return None
         except Exception as e:
             logger.error(f"Error in _make_quotes_request: {e}")
             return None
 
     def get_quotes(self, symbol, exchange):
-        """Get live quotes using Neo API v2 quotes endpoint with token-based queries"""
+        """Get live quotes using Neo API v2 quotes endpoint with pSymbol-based queries"""
         try:
             logger.info(f"QUOTES API - Symbol: {symbol}, Exchange: {exchange}")
-            
-            # Get Kotak exchange segment
-            kotak_exchange = self._get_kotak_exchange(exchange)
-            if not kotak_exchange:
-                logger.error(f"Unsupported exchange: {exchange}")
-                return self._get_default_quote()
 
-            # Check if this is an index - use symbol name instead of token
+            # Check if this is an index - use symbol name instead of pSymbol
             if 'INDEX' in exchange.upper():
-                # For indices, map to correct Neo API format
+                # For indices, map to correct Neo API format and use static exchange mapping
+                kotak_exchange = self._get_kotak_exchange(exchange)
                 neo_symbol = self._get_index_symbol(symbol)
                 query = f"{kotak_exchange}|{neo_symbol}"
                 logger.info(f"QUOTES API - Index query: {symbol} → {neo_symbol} → {query}")
             else:
-                # For regular stocks, use token from database
-                token = get_token(symbol, exchange)
-                logger.info(f"QUOTES API - Token from DB: {token}")
-                
-                if not token:
-                    logger.error(f"Token not found for {symbol} on {exchange}")
+                # For regular stocks/F&O, get both pSymbol and brexchange from database
+                # In Kotak DB: token = pSymbol, brexchange = nse_cm/nse_fo/bse_cm etc.
+                psymbol = get_token(symbol, exchange)
+                brexchange = get_brexchange(symbol, exchange)
+                logger.info(f"QUOTES API - pSymbol: {psymbol}, brexchange: {brexchange}")
+
+                if not psymbol or not brexchange:
+                    logger.error(f"pSymbol or brexchange not found for {symbol} on {exchange}")
                     return self._get_default_quote()
 
-                # Build token-based query: exchange_segment|token
-                query = f"{kotak_exchange}|{token}"
-                logger.info(f"QUOTES API - Token-based query: {query}")
+                # Build query using brexchange from database: brexchange|pSymbol
+                query = f"{brexchange}|{psymbol}"
+                logger.info(f"QUOTES API - Query: {query}")
             
             # Make API request
             response = self._make_quotes_request(query, "all")
@@ -162,31 +161,28 @@ class BrokerData:
         """Get market depth using Neo API v2 quotes endpoint with depth filter"""
         try:
             logger.info(f"DEPTH API - Symbol: {symbol}, Exchange: {exchange}")
-            
-            # Get Kotak exchange segment
-            kotak_exchange = self._get_kotak_exchange(exchange)
-            if not kotak_exchange:
-                logger.error(f"Unsupported exchange: {exchange}")
-                return self._get_default_depth()
 
-            # Check if this is an index - use symbol name instead of token
+            # Check if this is an index - use symbol name instead of pSymbol
             if 'INDEX' in exchange.upper():
-                # For indices, map to correct Neo API format
+                # For indices, map to correct Neo API format and use static exchange mapping
+                kotak_exchange = self._get_kotak_exchange(exchange)
                 neo_symbol = self._get_index_symbol(symbol)
                 query = f"{kotak_exchange}|{neo_symbol}"
-                logger.info(f"DEPTH API - Index query: {symbol} → {neo_symbol} → {query}")
+                logger.debug(f"DEPTH API - Index query: {symbol} → {neo_symbol} → {query}")
             else:
-                # For regular stocks, use token from database
-                token = get_token(symbol, exchange)
-                logger.info(f"DEPTH API - Token from DB: {token}")
-                
-                if not token:
-                    logger.error(f"Token not found for {symbol} on {exchange}")
+                # For regular stocks/F&O, get both pSymbol and brexchange from database
+                # In Kotak DB: token = pSymbol, brexchange = nse_cm/nse_fo/bse_cm etc.
+                psymbol = get_token(symbol, exchange)
+                brexchange = get_brexchange(symbol, exchange)
+                logger.info(f"DEPTH API - pSymbol: {psymbol}, brexchange: {brexchange}")
+
+                if not psymbol or not brexchange:
+                    logger.error(f"pSymbol or brexchange not found for {symbol} on {exchange}")
                     return self._get_default_depth()
 
-                # Build token-based query
-                query = f"{kotak_exchange}|{token}"
-                logger.info(f"DEPTH API - Token-based query: {query}")
+                # Build query using brexchange from database: brexchange|pSymbol
+                query = f"{brexchange}|{psymbol}"
+                logger.debug(f"DEPTH API - Query: {query}")
             
             # Make API request with depth filter
             response = self._make_quotes_request(query, "depth")

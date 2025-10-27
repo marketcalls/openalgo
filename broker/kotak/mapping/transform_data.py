@@ -6,46 +6,47 @@ from database.token_db import get_br_symbol
 def transform_data(data,token):
     """
     Transforms the new API request structure to the current expected structure.
+    ALL values must be strings for Kotak API.
     """
     symbol = get_br_symbol(data["symbol"],data["exchange"])
-    # Basic mapping
+    # Basic mapping - ALL values must be strings for Kotak API
     transformed = {
-        "am":"NO",
-        "dq":data.get("disclosed_quantity", "0"),
-        "bc":"1",
-        "es":reverse_map_exchange(data["exchange"]),
-        "mp":"0",
-        "pc":data.get("product", "MIS"),
-        "pf":"N",
-        "pr":data.get("price", "0"),
-        "pt":map_order_type(data["pricetype"]),
-        "qt":data["quantity"],
-        "rt":"DAY",
-        "tp":data.get("trigger_price", "0"),
-        "ts":symbol,
-        "tt":'B' if data['action'] == 'BUY' else ('S' if data['action'] == 'SELL' else 'None')
+        "am": "NO",
+        "dq": str(data.get("disclosed_quantity", "0")),
+        "bc": "1",
+        "es": reverse_map_exchange(data["exchange"]),
+        "mp": "0",
+        "pc": data.get("product", "MIS"),
+        "pf": "N",
+        "pr": str(data.get("price", "0")),
+        "pt": map_order_type(data["pricetype"]),
+        "qt": str(data["quantity"]),
+        "rt": "DAY",
+        "tp": str(data.get("trigger_price", "0")),
+        "ts": symbol,
+        "tt": 'B' if data['action'] == 'BUY' else ('S' if data['action'] == 'SELL' else 'None')
     }
     return transformed
 
 
 def transform_modify_order_data(data, token):
     symbol = get_br_symbol(data["symbol"],data["exchange"])
-    # Basic mapping
+    # Basic mapping - ALL values must be strings for Kotak API
     transformed = {
-        "tk":token,
-        "dq":data.get("disclosed_quantity", "0"),
-        "es":reverse_map_exchange(data["exchange"]),
-        "mp":"0",
-        "dd":"NA",
-        "vd":"DAY",
-        "pc":data.get("product", "MIS"),
-        "pr":data.get("price", "0"),
-        "pt":map_order_type(data["pricetype"]),
-        "qt":data["quantity"],
-        "tp":data.get("trigger_price", "0"),
-        "ts":symbol,
-        "no":data["orderid"],
-        "tt":'B' if data['action'] == 'BUY' else ('S' if data['action'] == 'SELL' else 'None')
+        "tk": str(token),
+        "dq": str(data.get("disclosed_quantity", "0")),
+        "es": reverse_map_exchange(data["exchange"]),
+        "mp": "0",
+        "dd": "NA",
+        "vd": "DAY",
+        "pc": data.get("product", "MIS"),
+        "pr": str(data.get("price", "0")),
+        "pt": map_order_type(data["pricetype"]),
+        "qt": str(data["quantity"]),
+        "tp": str(data.get("trigger_price", "0")),
+        "ts": symbol,
+        "no": str(data["orderid"]),
+        "tt": 'B' if data['action'] == 'BUY' else ('S' if data['action'] == 'SELL' else 'None')
     }
     return transformed
 
