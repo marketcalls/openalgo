@@ -429,19 +429,31 @@ def broker_callback(broker,para=None):
         forward_url = 'broker.html'
 
     elif broker=='kotak':
-        logger.debug(f"Kotak broker - The Broker is {broker}")
+        logger.debug(f"Kotak Neo API v2 - The Broker is {broker}")
         if request.method == 'GET':
             return render_template('kotak.html')
         
         elif request.method == 'POST':
-            otp = request.form.get('otp')
-            token = request.form.get('token')
-            sid = request.form.get('sid')
-            userid = request.form.get('userid')
-            access_token = request.form.get('access_token')
-            hsServerId = request.form.get('hsServerId')
+            mobile_number = request.form.get('mobilenumber')
+            totp = request.form.get('totp')
+            mpin = request.form.get('mpin')
             
-            auth_token, error_message = auth_function(otp,token,sid,userid,access_token,hsServerId)
+            # Get UCC and access token from environment
+            # BROKER_API_KEY = UCC (client code)
+            # BROKER_API_SECRET = access token
+            ucc = get_broker_api_key()
+            access_token = get_broker_api_secret()
+            
+            if not ucc:
+                error_message = "UCC not configured. Please set BROKER_API_KEY (UCC) in .env file."
+                return render_template('kotak.html', error_message=error_message)
+                
+            if not access_token:
+                error_message = "Access token not configured. Please set BROKER_API_SECRET (access token) in .env file."
+                return render_template('kotak.html', error_message=error_message)
+            
+            # Call the updated auth function with new parameters
+            auth_token, user_id, error_message = auth_function(mobile_number, ucc, totp, mpin, access_token)
             forward_url = 'kotak.html'
 
     elif broker == 'paytm':
@@ -669,97 +681,6 @@ def broker_loginflow(broker):
     if 'user' not in session:
         return redirect(url_for('auth.login'))
 
-    if broker == 'kotak':
-        # Get form data
-        mobile_number = request.form.get('mobilenumber', '')
-        password = request.form.get('password')
-
-        # Strip any existing prefix and add +91
-        mobile_number = mobile_number.replace('+91', '').strip()
-        if not mobile_number.startswith('+91'):
-            mobile_number = f'+91{mobile_number}'
-        
-        # First get the access token
-        api_secret = get_broker_api_secret()
-        auth_string = base64.b64encode(f"{BROKER_API_KEY}:{api_secret}".encode()).decode('utf-8')
-        # Define the connection
-        conn = http.client.HTTPSConnection("napi.kotaksecurities.com")
-
-        # Define the payload
-        payload = json.dumps({
-            'grant_type': 'client_credentials'
-        })
-
-        # Define the headers with Basic Auth
-        headers = {
-            'accept': '*/*',
-            'Content-Type': 'application/json',
-            'Authorization': f'Basic {auth_string}'
-        }
-
-        # Make API request
-        conn.request("POST", "/oauth2/token", payload, headers)
-
-        # Get the response
-        res = conn.getresponse()
-        data = json.loads(res.read().decode("utf-8"))
-
-        if 'access_token' in data:
-            access_token = data['access_token']
-            # Login with mobile number and password
-            conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
-            payload = json.dumps({
-                "mobileNumber": mobile_number,
-                "password": password
-            })
-            headers = {
-                'accept': '*/*',
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {access_token}'
-            }
-            conn.request("POST", "/login/1.0/login/v2/validate", payload, headers)
-            res = conn.getresponse()
-            data = res.read().decode("utf-8")
-
-            data_dict = json.loads(data)
-
-            if 'data' in data_dict:
-                token = data_dict['data']['token']
-                sid = data_dict['data']['sid']
-                hsServerId = data_dict['data']['hsServerId']
-                decode_jwt = jwt.decode(token, options={"verify_signature": False})
-                userid = decode_jwt.get("sub")
-
-                para = {
-                    "access_token": access_token,
-                    "token": token,
-                    "sid": sid,
-                    "hsServerId": hsServerId,
-                    "userid": userid
-                }
-                getKotakOTP(userid, access_token)
-                return render_template('kotakotp.html', para=para)
-            else:
-                error_message = data_dict.get('message', 'Unknown error occurred')
-                return render_template('kotak.html', error_message=error_message)
-        
+    # Kotak Neo API v2 no longer uses the old loginflow
+    # Authentication is now handled directly in the callback
     return
-
-
-def getKotakOTP(userid,access_token):
-    conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
-    payload = json.dumps({
-    "userId": userid,
-    "sendEmail": True,
-    "isWhitelisted": True
-    })
-    headers = {
-    'accept': '*/*',
-    'Content-Type': 'application/json',
-    'Authorization': f'Bearer {access_token}'
-    }
-    conn.request("POST", "/login/1.0/login/otp/generate", payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    
-    return 'success'
