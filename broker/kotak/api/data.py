@@ -1,8 +1,10 @@
-import http.client
+import httpx
 import json
 import pandas as pd
+import urllib.parse
 from database.token_db import get_token, get_br_symbol
 from utils.logging import get_logger
+from utils.httpx_client import get_httpx_client
 
 logger = get_logger(__name__)
 
@@ -48,44 +50,43 @@ class BrokerData:
         return index_map.get(symbol.upper(), symbol)
 
     def _make_quotes_request(self, query, filter_name="all"):
-        """Make HTTP request to Neo API v2 quotes endpoint"""
+        """Make HTTP request to Neo API v2 quotes endpoint using httpx connection pooling"""
         try:
-            # Use the working quotes baseUrl
-            if self.quotes_base_url.startswith('https://'):
-                hostname = self.quotes_base_url.replace('https://', '')
-            else:
-                hostname = self.quotes_base_url
-            
-            conn = http.client.HTTPSConnection(hostname)
-            
+            # Get the shared httpx client with connection pooling
+            client = get_httpx_client()
+
             # URL encode the query part to handle spaces and special characters
-            import urllib.parse
             encoded_query = urllib.parse.quote(query, safe='')
             endpoint = f"/script-details/1.0/quotes/neosymbol/{encoded_query}/{filter_name}"
-            
+
             # Neo API v2 quotes headers - only Authorization (access token), no Auth/Sid
             headers = {
                 'Authorization': self.access_token,
                 'Content-Type': 'application/json'
             }
-            
-            logger.info(f"QUOTES API - Making request to: {self.quotes_base_url}{endpoint}")
+
+            # Construct full URL
+            url = f"{self.quotes_base_url}{endpoint}"
+
+            logger.info(f"QUOTES API - Making request to: {url}")
             logger.info(f"QUOTES API - Using access_token: {self.access_token[:10]}...")
-            
-            conn.request("GET", endpoint, "", headers)
-            res = conn.getresponse()
-            data = res.read().decode("utf-8")
-            
-            logger.info(f"QUOTES API - Response status: {res.status}")
-            
-            if res.status == 200:
-                response_data = json.loads(data)
-                logger.info(f"QUOTES API - Raw response: {data[:200]}...")  # Log first 200 chars
+
+            # Make request using httpx
+            response = client.get(url, headers=headers)
+
+            logger.info(f"QUOTES API - Response status: {response.status_code}")
+
+            if response.status_code == 200:
+                response_data = json.loads(response.text)
+                logger.info(f"QUOTES API - Raw response: {response.text[:200]}...")  # Log first 200 chars
                 return response_data
             else:
-                logger.warning(f"QUOTES API - HTTP {res.status}: {data}")
+                logger.warning(f"QUOTES API - HTTP {response.status_code}: {response.text}")
                 return None
-                
+
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error in _make_quotes_request: {e}")
+            return None
         except Exception as e:
             logger.error(f"Error in _make_quotes_request: {e}")
             return None

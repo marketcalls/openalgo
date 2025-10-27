@@ -3,13 +3,10 @@
 import os
 import pandas as pd
 import numpy as np
-import requests
+import httpx
 import gzip
 import shutil
-import http.client
 import json
-import pandas as pd
-import gzip
 import io
 
 
@@ -20,6 +17,7 @@ from database.auth_db import get_auth_token
 from database.user_db import find_user_by_username
 from extensions import socketio  # Import SocketIO
 from utils.logging import get_logger
+from utils.httpx_client import get_httpx_client
 
 logger = get_logger(__name__)
 
@@ -85,15 +83,18 @@ def copy_from_dataframe(df):
 
 def download_csv_kotak_data(output_path):
     logger.info("Downloading Master Contract CSV Files")
-    
+
     # URLs of the CSV files to be downloaded
     csv_urls = get_kotak_master_filepaths()
     logger.info(f"Master contract URLs: {csv_urls}")
-    
+
     if not csv_urls:
         logger.error("No master contract URLs found - scripmaster API failed")
         raise Exception("Scripmaster API failed - unable to get master contract URLs")
-    
+
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+
     # Create a list to hold the paths of the downloaded files
     downloaded_files = []
 
@@ -101,8 +102,8 @@ def download_csv_kotak_data(output_path):
     for key, url in csv_urls.items():
         try:
             logger.info(f"Downloading {key} from {url}")
-            # Send GET request
-            response = requests.get(url, timeout=30)
+            # Send GET request using httpx
+            response = client.get(url, timeout=30)
             # Check if the request was successful
             if response.status_code == 200:
                 # Construct the full output path for the file
@@ -114,12 +115,14 @@ def download_csv_kotak_data(output_path):
                 logger.info(f"Successfully downloaded {key} ({len(response.content)} bytes)")
             else:
                 logger.error(f"Failed to download {key} from {url}. Status code: {response.status_code}")
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error downloading {key}: {e}")
         except Exception as e:
             logger.error(f"Error downloading {key}: {e}")
-    
+
     if not downloaded_files:
         raise Exception("No master contract files were downloaded successfully")
-    
+
     logger.info(f"Downloaded {len(downloaded_files)} files successfully")
     return downloaded_files
 
@@ -288,51 +291,49 @@ def get_kotak_master_filepaths():
         "https://neo-gw.kotaksecurities.com"  # Another alternative
     ]
     
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+
     for base_url_attempt in base_urls_to_try:
         try:
             logger.info(f"Trying scripmaster API with baseUrl: {base_url_attempt}")
-            
-            # Extract hostname from base_url
-            if base_url_attempt.startswith('https://'):
-                hostname = base_url_attempt.replace('https://', '')
-            else:
-                hostname = base_url_attempt
-            
-            conn = http.client.HTTPSConnection(hostname)
+
             endpoint = "/script-details/1.0/masterscrip/file-paths"
-            
+
             # According to Neo API v2 docs and PowerShell test: use only Authorization header
             headers = {
                 'Authorization': access_token,
                 'Content-Type': 'application/json'
             }
-            
+
+            # Construct full URL
+            url = f"{base_url_attempt}{endpoint}"
+
             logger.info(f"SCRIPMASTER API - Using access_token: {access_token[:10]}...")
-            logger.info(f"Making request to: {base_url_attempt}{endpoint}")
-            conn.request("GET", endpoint, "", headers)
-            res = conn.getresponse()
-            
-            data = res.read().decode("utf-8")
-            logger.info(f"Response status: {res.status} from {base_url_attempt}")
-            
-            if res.status != 200:
-                logger.warning(f"HTTP {res.status} from {base_url_attempt}: {data}")
-            
-            if res.status == 200:
+            logger.info(f"Making request to: {url}")
+
+            response = client.get(url, headers=headers, timeout=30)
+
+            logger.info(f"Response status: {response.status_code} from {base_url_attempt}")
+
+            if response.status_code != 200:
+                logger.warning(f"HTTP {response.status_code} from {base_url_attempt}: {response.text}")
+
+            if response.status_code == 200:
                 try:
-                    data_dict = json.loads(data)
+                    data_dict = json.loads(response.text)
                     logger.debug(f"Response data: {data_dict}")
-                    
+
                     # Check for the expected response structure
                     if 'data' in data_dict and 'filesPaths' in data_dict['data']:
                         filepaths_list = data_dict['data']['filesPaths']
                         file_dict = {}
-                        
+
                         # Process each file path
                         for url in filepaths_list:
                             # Extract file name and create mapping
                             filename = url.split('/')[-1]
-                            
+
                             # Map to our expected format
                             if 'nse_cm' in filename.lower():
                                 file_dict['NSE_CM'] = url
@@ -348,19 +349,20 @@ def get_kotak_master_filepaths():
                                 file_dict['MCX_FO'] = url
                             elif 'nse_com' in filename.lower():
                                 file_dict['NSE_COM'] = url
-                        
+
                         logger.info(f"✅ Successfully retrieved {len(file_dict)} master contract files from {base_url_attempt}")
                         logger.info(f"Available files: {list(file_dict.keys())}")
                         return file_dict
                     else:
                         logger.warning(f"Unexpected response structure from {base_url_attempt}: {data_dict}")
-                        
+
                 except json.JSONDecodeError as e:
                     logger.error(f"Failed to parse JSON from {base_url_attempt}: {e}")
-                    logger.debug(f"Raw response: {data}")
-            else:
-                logger.warning(f"HTTP {res.status} from {base_url_attempt}: {data}")
-                
+                    logger.debug(f"Raw response: {response.text}")
+
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error with {base_url_attempt}: {e}")
+            continue
         except Exception as e:
             logger.error(f"Error with {base_url_attempt}: {e}")
             continue
@@ -371,7 +373,7 @@ def get_kotak_master_filepaths():
     logger.warning("API failed, using direct URLs from PowerShell test")
     from datetime import datetime
     today = datetime.now().strftime('%Y-%m-%d')
-    
+
     fallback_urls = {
         'CDE_FO': f'https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/{today}/transformed/cde_fo.csv',
         'MCX_FO': f'https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/{today}/transformed/mcx_fo.csv',
@@ -381,19 +383,20 @@ def get_kotak_master_filepaths():
         'BSE_CM': f'https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/{today}/transformed-v1/bse_cm-v1.csv',
         'NSE_CM': f'https://lapi.kotaksecurities.com/wso2-scripmaster/v1/prod/{today}/transformed-v1/nse_cm-v1.csv'
     }
-    
-    # Test accessibility of fallback URLs
-    import requests
+
+    # Test accessibility of fallback URLs using httpx
     accessible_urls = {}
     for key, url in fallback_urls.items():
         try:
             logger.info(f"Testing direct URL: {url}")
-            response = requests.head(url, timeout=10, allow_redirects=True)
+            response = client.head(url, timeout=10, follow_redirects=True)
             if response.status_code == 200:
                 accessible_urls[key] = url
                 logger.info(f"✅ Direct URL accessible: {key}")
             else:
                 logger.warning(f"❌ Direct URL returned {response.status_code}: {key}")
+        except httpx.HTTPError as e:
+            logger.warning(f"❌ Direct URL HTTP error: {key} - {e}")
         except Exception as e:
             logger.warning(f"❌ Direct URL failed: {key} - {e}")
     
