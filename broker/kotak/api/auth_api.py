@@ -49,9 +49,14 @@ def authenticate_broker(mobile_number, totp, mpin):
         logger.debug(f"Parsed UCC: {ucc}, Access Token length: {len(access_token)}")
 
         # Ensure mobile number has +91 prefix
-        mobile_number = mobile_number.strip().replace('+91', '')
-        if not mobile_number.startswith('+91'):
-            mobile_number = f'+91{mobile_number}'
+        # Handle all cases: +919876543210, 919876543210, 9876543210
+        mobile_number = mobile_number.strip()
+        # Remove any existing +91 or 91 prefix
+        mobile_number = mobile_number.replace('+91', '').replace(' ', '')
+        if mobile_number.startswith('91') and len(mobile_number) == 12:
+            mobile_number = mobile_number[2:]  # Remove leading 91
+        # Add +91 prefix
+        mobile_number = f'+91{mobile_number}'
 
         # Get the shared httpx client with connection pooling
         client = get_httpx_client()
