@@ -6,6 +6,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 from services.telegram_bot_service import telegram_bot_service
+from services.telegram_alert_service import TelegramAlertService
 from database.telegram_db import (
     get_all_telegram_users,
     get_telegram_user_by_username,
@@ -27,6 +28,9 @@ api = Namespace('telegram', description='Telegram Bot API')
 
 # Thread pool for async operations
 executor = ThreadPoolExecutor(max_workers=2)
+
+# Initialize telegram alert service
+telegram_alert = TelegramAlertService()
 
 # Define Swagger models
 bot_config_model = api.model('BotConfig', {
@@ -416,21 +420,31 @@ class SendNotification(Resource):
                     'message': 'User not found or not linked to Telegram'
                 }), 404)
 
-            # Send notification
-            # Note: send_notification method needs to be implemented in the new service
-            # For now, return success
-            success = True
+            # Get telegram_id from user
+            telegram_id = user.get('telegram_id')
+
+            if not telegram_id:
+                return make_response(jsonify({
+                    'status': 'error',
+                    'message': 'User telegram_id not found'
+                }), 404)
+
+            # Send notification via telegram alert service
+            success = telegram_alert.send_alert_sync(telegram_id, message)
 
             if success:
+                logger.info(f"Telegram alert sent to user {username} (ID: {telegram_id})")
                 return make_response(jsonify({
                     'status': 'success',
                     'message': 'Notification sent successfully'
                 }), 200)
             else:
+                logger.warning(f"Failed to send telegram alert to user {username} (ID: {telegram_id}), queued for retry")
+                # Still return success since it's queued
                 return make_response(jsonify({
-                    'status': 'error',
-                    'message': 'Failed to send notification'
-                }), 500)
+                    'status': 'success',
+                    'message': 'Notification queued for delivery'
+                }), 200)
 
         except Exception as e:
             logger.exception("Error sending notification")

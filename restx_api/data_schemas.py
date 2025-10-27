@@ -11,6 +11,24 @@ def validate_date_or_timestamp(data):
     if not (isinstance(data, str) and (date_pattern.match(data) or timestamp_pattern.match(data))):
         raise ValidationError("Field must be a string in 'YYYY-MM-DD' format or a numeric timestamp.")
 
+# Custom validator for option offset
+def validate_option_offset(data):
+    """
+    Validates option offset: ATM, ITM1-ITM50, OTM1-OTM50
+    """
+    data_upper = data.upper()
+    if data_upper == "ATM":
+        return True
+
+    # Check for ITM pattern: ITM followed by 1-50
+    itm_pattern = re.compile(r'^ITM([1-9]|[1-4][0-9]|50)$')
+    otm_pattern = re.compile(r'^OTM([1-9]|[1-4][0-9]|50)$')
+
+    if not (itm_pattern.match(data_upper) or otm_pattern.match(data_upper)):
+        raise ValidationError("Offset must be ATM, ITM1-ITM50, or OTM1-OTM50")
+
+    return True
+
 class QuotesSchema(Schema):
     apikey = fields.Str(required=True)
     symbol = fields.Str(required=True)  # Single symbol
@@ -57,3 +75,13 @@ class ExpirySchema(Schema):
     symbol = fields.Str(required=True)      # Underlying symbol (e.g., NIFTY, BANKNIFTY)
     exchange = fields.Str(required=True, validate=validate.OneOf(["NFO", "BFO", "MCX", "CDS"]))    # Exchange (e.g., NFO, BFO, MCX, CDS)
     instrumenttype = fields.Str(required=True, validate=validate.OneOf(["futures", "options"]))  # futures or options
+
+class OptionSymbolSchema(Schema):
+    apikey = fields.Str(required=True)      # API Key for authentication
+    strategy = fields.Str(required=True)    # Strategy name
+    underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, RELIANCE, NIFTY28OCT25FUT)
+    exchange = fields.Str(required=True)    # Exchange (NSE_INDEX, NSE, NFO)
+    expiry_date = fields.Str(required=False)  # Expiry date in DDMMMYY format (e.g., 28OCT25). Optional if underlying includes expiry
+    strike_int = fields.Int(required=True, validate=validate.Range(min=1))  # Strike interval/difference (e.g., 50 for NIFTY, 100 for BANKNIFTY)
+    offset = fields.Str(required=True, validate=validate_option_offset)      # Strike offset from ATM (ATM, ITM1-ITM50, OTM1-OTM50)
+    option_type = fields.Str(required=True, validate=validate.OneOf(["CE", "PE", "ce", "pe"]))  # Call or Put option
