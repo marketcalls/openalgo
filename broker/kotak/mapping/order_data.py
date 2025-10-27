@@ -122,12 +122,20 @@ def transform_order_data(orders):
         elif order.get('prcTp') == 'SL-M':
             order['prcTp'] = 'SL-M'
         
+        # For limit orders, show the order price (prc) instead of average price (avgPrc)
+        # avgPrc is only relevant for executed orders
+        order_price = order.get("avgPrc", 0.0)
+        if order.get("prcTp") in ["LIMIT", "SL"]:
+            # If order is not executed/complete, use the limit price
+            if order.get("ordSt") != "complete":
+                order_price = order.get("prc", 0.0)
+
         transformed_order = {
             "symbol": order.get("trdSym", ""),
             "exchange": order.get("exSeg", ""),
             "action": order.get("trnsTp", ""),
             "quantity": order.get("qty", 0),
-            "price": order.get("avgPrc", 0.0),
+            "price": order_price,
             "trigger_price": order.get("trgPrc", 0.0),
             "pricetype": order.get("prcTp", ""),
             "product": order.get("prod", ""),

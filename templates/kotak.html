@@ -13,7 +13,7 @@
                         <img class="h-20 w-auto" src="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}" alt="OpenAlgo">
                     </div>
 
-                    <form action="/kotak/loginflow" method="POST" class="space-y-6" id="kotakForm">
+                    <form action="/kotak/callback" method="POST" class="space-y-6" id="kotakForm">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                         <div class="form-control w-full">
                             <label class="label">
@@ -44,16 +44,47 @@
 
                         <div class="form-control w-full">
                             <label class="label">
-                                <span class="label-text">Password</span>
+                                <span class="label-text">TOTP Code</span>
+                                <span class="label-text-alt">
+                                    <div class="tooltip" data-tip="6-digit code from Google/Microsoft Authenticator">
+                                        <button class="btn btn-circle btn-xs btn-ghost">?</button>
+                                    </div>
+                                </span>
                             </label>
-                            <input type="password"
-                                   id="password"
-                                   name="password"
+                            <input type="text"
+                                   id="totp"
+                                   name="totp"
                                    required
                                    class="input input-bordered w-full"
-                                   placeholder="Enter your password" />
+                                   placeholder="123456"
+                                   pattern="[0-9]{6}"
+                                   maxlength="6"
+                                   title="Enter 6-digit TOTP from your authenticator app" />
                             <label class="label pt-2">
-                                <span class="label-text-alt text-info">Your Kotak Securities trading password</span>
+                                <span class="label-text-alt text-info">From Google or Microsoft Authenticator app</span>
+                            </label>
+                        </div>
+
+                        <div class="form-control w-full">
+                            <label class="label">
+                                <span class="label-text">MPIN</span>
+                                <span class="label-text-alt">
+                                    <div class="tooltip" data-tip="Your 6-digit trading MPIN">
+                                        <button class="btn btn-circle btn-xs btn-ghost">?</button>
+                                    </div>
+                                </span>
+                            </label>
+                            <input type="password"
+                                   id="mpin"
+                                   name="mpin"
+                                   required
+                                   class="input input-bordered w-full"
+                                   placeholder="******"
+                                   pattern="[0-9]{6}"
+                                   maxlength="6"
+                                   title="Enter your 6-digit trading MPIN" />
+                            <label class="label pt-2">
+                                <span class="label-text-alt text-info">Your 6-digit trading PIN</span>
                             </label>
                         </div>
 
@@ -91,16 +122,29 @@
             <div class="flex-1 max-w-xl text-center lg:text-left order-2 lg:order-1">
                 <h1 class="text-4xl lg:text-5xl font-bold mb-6">Connect <span class="text-primary">Kotak</span></h1>
                 <p class="text-lg lg:text-xl mb-8 opacity-80">
-                    Enter your Kotak Securities credentials to connect your trading account with OpenAlgo. Your credentials are securely encrypted and stored.
+                    Authenticate using TOTP-based login to connect your Kotak Securities trading account with OpenAlgo. Your credentials are securely encrypted and stored.
                 </p>
                 <div class="flex flex-col gap-4">
+                    <div class="alert alert-warning shadow-lg">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                        </svg>
+                        <div>
+                            <h3 class="font-bold">TOTP Registration Required</h3>
+                            <div class="text-sm">You must register for TOTP in the NEO app before logging in. Go to: Invest → Trade API → API Dashboard → TOTP Registration</div>
+                        </div>
+                    </div>
                     <div class="alert alert-info shadow-lg">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                         </svg>
                         <div>
-                            <h3 class="font-bold">Mobile Number Format</h3>
-                            <div class="text-sm">Enter your 10-digit mobile number registered with Kotak Securities.</div>
+                            <h3 class="font-bold">What You Need</h3>
+                            <div class="text-sm">
+                                • Mobile number (registered with Kotak)<br>
+                                • TOTP code (from Google/Microsoft Authenticator)<br>
+                                • MPIN (6-digit trading PIN)
+                            </div>
                         </div>
                     </div>
                     <div class="flex justify-center lg:justify-start gap-4">
@@ -127,10 +171,12 @@
 document.addEventListener('DOMContentLoaded', function() {
     const form = document.getElementById('kotakForm');
     const mobileInput = document.getElementById('mobilenumber');
+    const totpInput = document.getElementById('totp');
+    const mpinInput = document.getElementById('mpin');
 
     form.addEventListener('submit', function(e) {
         e.preventDefault();
-        
+
         // Validate mobile number
         const mobileNumber = mobileInput.value.replace(/\D/g, '');
         if (mobileNumber.length !== 10) {
@@ -138,10 +184,24 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        // Add +91 prefix
+        // Validate TOTP
+        const totp = totpInput.value.replace(/\D/g, '');
+        if (totp.length !== 6) {
+            alert('Please enter a valid 6-digit TOTP code');
+            return;
+        }
+
+        // Validate MPIN
+        const mpin = mpinInput.value.replace(/\D/g, '');
+        if (mpin.length !== 6) {
+            alert('Please enter a valid 6-digit MPIN');
+            return;
+        }
+
+        // Add +91 prefix to mobile number
         const formattedNumber = '+91' + mobileNumber;
         mobileInput.value = formattedNumber;
-        
+
         // Submit form
         this.submit();
     });
@@ -149,6 +209,16 @@ document.addEventListener('DOMContentLoaded', function() {
     // Clean up mobile number input - remove any non-digits
     mobileInput.addEventListener('input', function() {
         this.value = this.value.replace(/\D/g, '');
+    });
+
+    // Clean up TOTP input - remove any non-digits and limit to 6
+    totpInput.addEventListener('input', function() {
+        this.value = this.value.replace(/\D/g, '').substring(0, 6);
+    });
+
+    // Clean up MPIN input - remove any non-digits and limit to 6
+    mpinInput.addEventListener('input', function() {
+        this.value = this.value.replace(/\D/g, '').substring(0, 6);
     });
 });
 </script>

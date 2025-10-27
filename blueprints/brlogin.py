@@ -432,17 +432,28 @@ def broker_callback(broker,para=None):
         logger.debug(f"Kotak broker - The Broker is {broker}")
         if request.method == 'GET':
             return render_template('kotak.html')
-        
+
         elif request.method == 'POST':
-            otp = request.form.get('otp')
-            token = request.form.get('token')
-            sid = request.form.get('sid')
-            userid = request.form.get('userid')
-            access_token = request.form.get('access_token')
-            hsServerId = request.form.get('hsServerId')
-            
-            auth_token, error_message = auth_function(otp,token,sid,userid,access_token,hsServerId)
+            # New TOTP authentication flow
+            mobile_number = request.form.get('mobilenumber')
+            totp = request.form.get('totp')
+            mpin = request.form.get('mpin')
+
+            # Validate inputs
+            if not mobile_number or not totp or not mpin:
+                error_message = "Please provide Mobile Number, TOTP, and MPIN"
+                return render_template('kotak.html', error_message=error_message)
+
+            logger.info(f"Kotak TOTP authentication initiated for mobile: {mobile_number[:5]}***")
+
+            # Call the new authenticate_broker function
+            auth_token, error_message = auth_function(mobile_number, totp, mpin)
             forward_url = 'kotak.html'
+
+            if auth_token:
+                logger.info(f"Kotak authentication successful, auth_token received")
+            else:
+                logger.error(f"Kotak authentication failed: {error_message}")
 
     elif broker == 'paytm':
          request_token = request.args.get('requestToken')
@@ -661,105 +672,11 @@ def dhan_initiate_oauth():
         logger.error(error_message)
         return handle_auth_failure(error_message, forward_url='broker.html')
 
-@brlogin_bp.route('/<broker>/loginflow', methods=['POST','GET'])
-@limiter.limit(LOGIN_RATE_LIMIT_MIN)
-@limiter.limit(LOGIN_RATE_LIMIT_HOUR)
-def broker_loginflow(broker):
-    # Check if user is not in session first
-    if 'user' not in session:
-        return redirect(url_for('auth.login'))
-
-    if broker == 'kotak':
-        # Get form data
-        mobile_number = request.form.get('mobilenumber', '')
-        password = request.form.get('password')
-
-        # Strip any existing prefix and add +91
-        mobile_number = mobile_number.replace('+91', '').strip()
-        if not mobile_number.startswith('+91'):
-            mobile_number = f'+91{mobile_number}'
-        
-        # First get the access token
-        api_secret = get_broker_api_secret()
-        auth_string = base64.b64encode(f"{BROKER_API_KEY}:{api_secret}".encode()).decode('utf-8')
-        # Define the connection
-        conn = http.client.HTTPSConnection("napi.kotaksecurities.com")
-
-        # Define the payload
-        payload = json.dumps({
-            'grant_type': 'client_credentials'
-        })
-
-        # Define the headers with Basic Auth
-        headers = {
-            'accept': '*/*',
-            'Content-Type': 'application/json',
-            'Authorization': f'Basic {auth_string}'
-        }
-
-        # Make API request
-        conn.request("POST", "/oauth2/token", payload, headers)
-
-        # Get the response
-        res = conn.getresponse()
-        data = json.loads(res.read().decode("utf-8"))
-
-        if 'access_token' in data:
-            access_token = data['access_token']
-            # Login with mobile number and password
-            conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
-            payload = json.dumps({
-                "mobileNumber": mobile_number,
-                "password": password
-            })
-            headers = {
-                'accept': '*/*',
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {access_token}'
-            }
-            conn.request("POST", "/login/1.0/login/v2/validate", payload, headers)
-            res = conn.getresponse()
-            data = res.read().decode("utf-8")
-
-            data_dict = json.loads(data)
-
-            if 'data' in data_dict:
-                token = data_dict['data']['token']
-                sid = data_dict['data']['sid']
-                hsServerId = data_dict['data']['hsServerId']
-                decode_jwt = jwt.decode(token, options={"verify_signature": False})
-                userid = decode_jwt.get("sub")
-
-                para = {
-                    "access_token": access_token,
-                    "token": token,
-                    "sid": sid,
-                    "hsServerId": hsServerId,
-                    "userid": userid
-                }
-                getKotakOTP(userid, access_token)
-                return render_template('kotakotp.html', para=para)
-            else:
-                error_message = data_dict.get('message', 'Unknown error occurred')
-                return render_template('kotak.html', error_message=error_message)
-        
-    return
-
-
-def getKotakOTP(userid,access_token):
-    conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
-    payload = json.dumps({
-    "userId": userid,
-    "sendEmail": True,
-    "isWhitelisted": True
-    })
-    headers = {
-    'accept': '*/*',
-    'Content-Type': 'application/json',
-    'Authorization': f'Bearer {access_token}'
-    }
-    conn.request("POST", "/login/1.0/login/otp/generate", payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    
-    return 'success'
+# Old Kotak SMS OTP flow - deprecated in favor of TOTP authentication
+# Keeping this commented for reference if needed
+# @brlogin_bp.route('/<broker>/loginflow', methods=['POST','GET'])
+# @limiter.limit(LOGIN_RATE_LIMIT_MIN)
+# @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
+# def broker_loginflow(broker):
+#     # This function is no longer used for Kotak TOTP authentication
+#     pass
