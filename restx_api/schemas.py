@@ -78,8 +78,20 @@ class SplitOrderSchema(Schema):
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
     quantity = fields.Int(required=True, validate=validate.Range(min=1, error="Total quantity must be a positive integer."))  # Total quantity to split
     splitsize = fields.Int(required=True, validate=validate.Range(min=1, error="Split size must be a positive integer."))  # Size of each split
+
+class OptionsOrderSchema(Schema):
+    apikey = fields.Str(required=True)
+    strategy = fields.Str(required=True)
+    underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE, or NIFTY28NOV24FUT)
+    exchange = fields.Str(required=True)  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE, NFO, BFO)
+    expiry_date = fields.Str(required=False)  # Optional if underlying includes expiry (DDMMMYY format)
+    strike_int = fields.Int(required=True, validate=validate.Range(min=1))  # Strike interval
+    offset = fields.Str(required=True)  # ATM, ITM1-ITM50, OTM1-OTM50
+    option_type = fields.Str(required=True, validate=validate.OneOf(["CE", "PE", "ce", "pe"]))  # Call or Put
+    action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
+    quantity = fields.Int(required=True, validate=validate.Range(min=1, error="Quantity must be a positive integer."))
     pricetype = fields.Str(missing='MARKET', validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"]))
-    product = fields.Str(missing='MIS', validate=validate.OneOf(["MIS", "NRML", "CNC"]))
+    product = fields.Str(missing='MIS', validate=validate.OneOf(["MIS", "NRML"]))  # Options only support MIS and NRML
     price = fields.Float(missing=0.0, validate=validate.Range(min=0, error="Price must be a non-negative number."))
     trigger_price = fields.Float(missing=0.0, validate=validate.Range(min=0, error="Trigger price must be a non-negative number."))
     disclosed_quantity = fields.Int(missing=0, validate=validate.Range(min=0, error="Disclosed quantity must be a non-negative integer."))
