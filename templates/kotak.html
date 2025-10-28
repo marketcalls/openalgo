@@ -15,6 +15,8 @@
 
                     <form action="/kotak/callback" method="POST" class="space-y-6" id="kotakForm">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                        
+                        <!-- Mobile Number Field -->
                         <div class="form-control w-full">
                             <label class="label">
                                 <span class="label-text">Mobile Number</span>
@@ -42,29 +44,7 @@
                             </label>
                         </div>
 
-                        <div class="form-control w-full">
-                            <label class="label">
-                                <span class="label-text">TOTP Code</span>
-                                <span class="label-text-alt">
-                                    <div class="tooltip" data-tip="6-digit code from Google/Microsoft Authenticator">
-                                        <button class="btn btn-circle btn-xs btn-ghost">?</button>
-                                    </div>
-                                </span>
-                            </label>
-                            <input type="text"
-                                   id="totp"
-                                   name="totp"
-                                   required
-                                   class="input input-bordered w-full"
-                                   placeholder="123456"
-                                   pattern="[0-9]{6}"
-                                   maxlength="6"
-                                   title="Enter 6-digit TOTP from your authenticator app" />
-                            <label class="label pt-2">
-                                <span class="label-text-alt text-info">From Google or Microsoft Authenticator app</span>
-                            </label>
-                        </div>
-
+                        <!-- MPIN Field -->
                         <div class="form-control w-full">
                             <label class="label">
                                 <span class="label-text">MPIN</span>
@@ -85,6 +65,30 @@
                                    title="Enter your 6-digit trading MPIN" />
                             <label class="label pt-2">
                                 <span class="label-text-alt text-info">Your 6-digit trading PIN</span>
+                            </label>
+                        </div>
+
+                        <!-- TOTP Code Field -->
+                        <div class="form-control w-full">
+                            <label class="label">
+                                <span class="label-text">TOTP Code</span>
+                                <span class="label-text-alt">
+                                    <div class="tooltip" data-tip="6-digit code from Google/Microsoft Authenticator">
+                                        <button class="btn btn-circle btn-xs btn-ghost">?</button>
+                                    </div>
+                                </span>
+                            </label>
+                            <input type="text"
+                                   id="totp"
+                                   name="totp"
+                                   required
+                                   class="input input-bordered w-full"
+                                   placeholder="123456"
+                                   pattern="[0-9]{6}"
+                                   maxlength="6"
+                                   title="Enter 6-digit TOTP from your authenticator app" />
+                            <label class="label pt-2">
+                                <span class="label-text-alt text-info">From Google or Microsoft Authenticator app</span>
                             </label>
                         </div>
 
@@ -142,8 +146,8 @@
                             <h3 class="font-bold">What You Need</h3>
                             <div class="text-sm">
                                 • Mobile number (registered with Kotak)<br>
-                                • TOTP code (from Google/Microsoft Authenticator)<br>
-                                • MPIN (6-digit trading PIN)
+                                • MPIN (6-digit trading PIN)<br>
+                                • TOTP code (from Google/Microsoft Authenticator)
                             </div>
                         </div>
                     </div>
@@ -184,17 +188,17 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
 
-        // Validate TOTP
-        const totp = totpInput.value.replace(/\D/g, '');
-        if (totp.length !== 6) {
-            alert('Please enter a valid 6-digit TOTP code');
-            return;
-        }
-
         // Validate MPIN
         const mpin = mpinInput.value.replace(/\D/g, '');
         if (mpin.length !== 6) {
             alert('Please enter a valid 6-digit MPIN');
+            return;
+        }
+
+        // Validate TOTP
+        const totp = totpInput.value.replace(/\D/g, '');
+        if (totp.length !== 6) {
+            alert('Please enter a valid 6-digit TOTP code');
             return;
         }
 
