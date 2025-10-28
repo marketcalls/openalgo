@@ -90,21 +90,28 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.logger.error(f"No authentication tokens found for user {user_id}")
                     raise ValueError(f"No authentication tokens found for user {user_id}")
                 
-                # Read BROKER_API_KEY from environment for client_id
+                # Read both BROKER_API_KEY and BROKER_API_SECRET from environment
                 load_dotenv()
-                broker_api_key = os.getenv('BROKER_API_KEY')
+                broker_api_key = os.getenv('BROKER_API_KEY')  # User ID (e.g., '1412368')
+                broker_api_secret = os.getenv('BROKER_API_SECRET')  # API Secret key
+
                 if not broker_api_key:
                     self.logger.error("BROKER_API_KEY not found in environment variables")
                     raise ValueError("BROKER_API_KEY not found in environment variables")
-                    
-                api_key = broker_api_key  # Use BROKER_API_KEY for api_key
+
+                if not broker_api_secret:
+                    self.logger.error("BROKER_API_SECRET not found in environment variables")
+                    raise ValueError("BROKER_API_SECRET not found in environment variables")
+
+                api_key = broker_api_secret  # Use BROKER_API_SECRET for X-API-KEY header
                 # For AliceBlue, session_id is the auth_token (JWT)
                 session_id = auth_token
-                # For WebSocket auth, client_id should be the BROKER_API_KEY value
+                # For WebSocket auth, client_id should be the BROKER_API_KEY value (user ID)
                 self.client_id = broker_api_key
                 # Store session_id (JWT) for WebSocket authentication
                 self.session_id = session_id
-                self.logger.info(f"Using BROKER_API_KEY as client_id: {self.client_id}")
+                self.logger.info(f"Using BROKER_API_KEY as client_id (user_id): {self.client_id}")
+                self.logger.info(f"Using BROKER_API_SECRET for X-API-KEY header")
                 self.logger.info(f"Using auth_token as session_id for auth")
             
             self.logger.info(f"Final values: client_id={self.client_id}, session_id={self.session_id}")
@@ -125,7 +132,7 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def connect(self):
         """
         Establish WebSocket connection
-        
+
         Returns:
             None: If successful, or dict with error info if failed
         """
@@ -134,19 +141,63 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if self.running:
                     self.logger.warning("WebSocket already running")
                     return None
-                
+
                 self.running = True
                 self.reconnect_attempts = 0
-            
-            # AliceBlue WebSocket session flow:
-            # Note: The WebSocket session creation is not required for authentication
-            # The official client invalidates and creates session but doesn't use it for auth
-            # We'll skip this step as it's not necessary for WebSocket authentication
-            self.logger.info("Skipping WebSocket session creation - not required for authentication")
-            
+
+            # AliceBlue WebSocket session flow (matching official SDK):
+            # STAGE 1: Invalidate any previous WebSocket session
+            # STAGE 2: Create new WebSocket session
+            # This registers the API credentials with AliceBlue's server
+            self.logger.info("STAGE 1: Invalidating previous WebSocket session")
+            try:
+                session_data = {"loginType": "API"}
+                # Invalidate previous session
+                invalid_response = self.aliceblue_client._request("ws/invalidateSocketSess", "A", session_data)
+
+                if invalid_response and invalid_response.get('stat') == 'Ok':
+                    self.logger.info(f"Previous session invalidated successfully")
+                else:
+                    self.logger.warning(f"Session invalidation response: {invalid_response}")
+                    # Continue anyway - might be first time connection
+
+                # STAGE 2: Create new WebSocket session
+                self.logger.info("STAGE 2: Creating new WebSocket session")
+                session_response = self.aliceblue_client._request("ws/createSocketSess", "A", session_data)
+
+                self.logger.info(f"createSocketSess response: {session_response}")
+
+                if session_response is None:
+                    self.logger.error("createSocketSess returned None - API call may have failed")
+                    with self.lock:
+                        self.running = False
+                    return {'success': False, 'error': 'WebSocket session creation returned None'}
+
+                if session_response.get('stat') == 'Ok':
+                    # Try to get wsSess from response - handle different response formats
+                    if 'result' in session_response:
+                        if isinstance(session_response['result'], dict):
+                            self.ws_session = session_response['result'].get('wsSess')
+                        else:
+                            self.ws_session = session_response.get('wsSess')
+                    else:
+                        self.ws_session = session_response.get('wsSess')
+
+                    self.logger.info(f"WebSocket session created successfully: {self.ws_session}")
+                else:
+                    self.logger.error(f"WebSocket session creation failed: {session_response}")
+                    with self.lock:
+                        self.running = False
+                    return {'success': False, 'error': f'WebSocket session creation failed: {session_response}'}
+            except Exception as e:
+                self.logger.error(f"Error in WebSocket session setup: {e}")
+                with self.lock:
+                    self.running = False
+                return {'success': False, 'error': f'Error in WebSocket session setup: {e}'}
+
             # Start WebSocket connection
             success = self._start_websocket()
-            
+
             if success:
                 self.logger.info("AliceBlue WebSocket connected successfully")
                 self.connected = True
@@ -156,7 +207,7 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 with self.lock:
                     self.running = False
                 return {'success': False, 'error': 'Failed to connect to AliceBlue WebSocket'}
-                
+
         except Exception as e:
             self.logger.error(f"Error connecting to AliceBlue WebSocket: {e}")
             with self.lock:
@@ -212,19 +263,20 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if not self.session_id:
                 self.logger.warning("No session_id (JWT) available, skipping authentication")
                 return
-                
+
             # Create authentication message - use JWT session_id for susertoken generation
             # This matches the official AliceBlue client implementation
             # First SHA256 hash of session_id
             sha256_encryption1 = hashlib.sha256(self.session_id.encode('utf-8')).hexdigest()
             # Second SHA256 hash of the first hash
             susertoken = hashlib.sha256(sha256_encryption1.encode('utf-8')).hexdigest()
-            
+
             self.logger.info(f"Generating susertoken from session_id (JWT)")
-            self.logger.debug(f"Session ID length: {len(self.session_id)}")
-            self.logger.debug(f"First SHA256: {sha256_encryption1}")
-            self.logger.debug(f"Final susertoken: {susertoken}")
-            
+            self.logger.info(f"Session ID (first 50 chars): {self.session_id[:50]}...")
+            self.logger.info(f"Session ID length: {len(self.session_id)}")
+            self.logger.info(f"First SHA256: {sha256_encryption1}")
+            self.logger.info(f"Final susertoken: {susertoken}")
+
             auth_msg = {
                 "susertoken": susertoken,
                 "t": "c",
@@ -232,11 +284,11 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "uid": f"{self.client_id}_API",
                 "source": "API"
             }
-            
+
             self.logger.info(f"Sending authentication message: {auth_msg}")
             ws.send(json.dumps(auth_msg))
             self.logger.info("Authentication message sent to AliceBlue WebSocket")
-            
+
         except Exception as e:
             self.logger.error(f"Error authenticating WebSocket: {e}")
     
