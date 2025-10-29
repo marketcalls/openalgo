@@ -325,3 +325,11 @@ AND ALL AFFILIATES ASSUME NO RESPONSIBILITY FOR YOUR TRADING RESULTS.
 ## Support
 
 For any questions not covered by the documentation or for further information about OpenAlgo, join our [Discord server](https://discord.com/invite/UPh7QPsNhP).
+
+#### AI Agent Marketplace Index And Router | [API Doc](https://www.deepnlp.org/doc/ai_agent_marketplace)
+[![AI Agent Marketplace and Router Badge](https://www.deepnlp.org/api/ai_agent_marketplace/svg?name=marketcalls/openalgo&badge_type=review)](https://www.deepnlp.org/store/ai-agent/ai-operations-agent/pub-marketcalls/openalgo)
+
+```
+curl 'https://www.deepnlp.org/api/ai_agent_marketplace/v2?id=marketcalls/openalgo'
+```
+    
