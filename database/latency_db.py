@@ -114,39 +114,70 @@ class OrderLatency(LatencyBase):
             avg_overhead = latency_session.query(func.avg(OrderLatency.overhead_ms)).scalar() or 0
             avg_total = latency_session.query(func.avg(OrderLatency.total_latency_ms)).scalar() or 0
             
-            # Get p50, p90, p99 latencies for RTT
+            # Get p50, p90, p95, p99 latencies for RTT using numpy for accurate percentile calculation
+            import numpy as np
             rtt_latencies = [l[0] for l in OrderLatency.query.with_entities(OrderLatency.rtt_ms).all()]
-            rtt_latencies.sort()
-            
-            p50_rtt = p90_rtt = p99_rtt = 0
+
+            p50_rtt = p90_rtt = p95_rtt = p99_rtt = 0
             if rtt_latencies:
-                p50_rtt = rtt_latencies[int(len(rtt_latencies) * 0.5)]
-                p90_rtt = rtt_latencies[int(len(rtt_latencies) * 0.9)]
-                p99_rtt = rtt_latencies[int(len(rtt_latencies) * 0.99)]
+                p50_rtt = float(np.percentile(rtt_latencies, 50))
+                p90_rtt = float(np.percentile(rtt_latencies, 90))
+                p95_rtt = float(np.percentile(rtt_latencies, 95))
+                p99_rtt = float(np.percentile(rtt_latencies, 99))
             
+            # Calculate SLA compliance (orders under various thresholds)
+            orders_under_100ms = OrderLatency.query.filter(OrderLatency.rtt_ms < 100).count()
+            orders_under_150ms = OrderLatency.query.filter(OrderLatency.rtt_ms < 150).count()
+            orders_under_200ms = OrderLatency.query.filter(OrderLatency.rtt_ms < 200).count()
+
+            sla_100ms = (orders_under_100ms / total_orders * 100) if total_orders else 0
+            sla_150ms = (orders_under_150ms / total_orders * 100) if total_orders else 0
+            sla_200ms = (orders_under_200ms / total_orders * 100) if total_orders else 0
+
             # Breakdown by broker
             broker_stats = {}
             brokers = [b[0] for b in OrderLatency.query.with_entities(OrderLatency.broker).distinct().all()]
             for broker in brokers:
                 if broker:  # Skip None values
                     broker_orders = OrderLatency.query.filter_by(broker=broker)
+                    broker_total = broker_orders.count()
+                    broker_rtt_values = [r[0] for r in broker_orders.with_entities(OrderLatency.rtt_ms).all()]
+
+                    # Calculate broker percentiles
+                    broker_p50 = broker_p99 = 0
+                    if broker_rtt_values:
+                        broker_p50 = float(np.percentile(broker_rtt_values, 50))
+                        broker_p99 = float(np.percentile(broker_rtt_values, 99))
+
+                    # Calculate broker SLA
+                    broker_under_150 = broker_orders.filter(OrderLatency.rtt_ms < 150).count()
+                    broker_sla = (broker_under_150 / broker_total * 100) if broker_total else 0
+
                     broker_stats[broker] = {
-                        'total_orders': broker_orders.count(),
+                        'total_orders': broker_total,
                         'failed_orders': broker_orders.filter_by(status='FAILED').count(),
                         'avg_rtt': float(broker_orders.with_entities(func.avg(OrderLatency.rtt_ms)).scalar() or 0),
                         'avg_overhead': float(broker_orders.with_entities(func.avg(OrderLatency.overhead_ms)).scalar() or 0),
-                        'avg_total': float(broker_orders.with_entities(func.avg(OrderLatency.total_latency_ms)).scalar() or 0)
+                        'avg_total': float(broker_orders.with_entities(func.avg(OrderLatency.total_latency_ms)).scalar() or 0),
+                        'p50_rtt': broker_p50,
+                        'p99_rtt': broker_p99,
+                        'sla_150ms': broker_sla
                     }
-            
+
             return {
                 'total_orders': total_orders,
                 'failed_orders': failed_orders,
+                'success_rate': ((total_orders - failed_orders) / total_orders * 100) if total_orders else 0,
                 'avg_rtt': float(avg_rtt),
                 'avg_overhead': float(avg_overhead),
                 'avg_total': float(avg_total),
                 'p50_rtt': float(p50_rtt),
                 'p90_rtt': float(p90_rtt),
+                'p95_rtt': float(p95_rtt),
                 'p99_rtt': float(p99_rtt),
+                'sla_100ms': float(sla_100ms),
+                'sla_150ms': float(sla_150ms),
+                'sla_200ms': float(sla_200ms),
                 'broker_stats': broker_stats
             }
         except Exception as e:
@@ -154,12 +185,17 @@ class OrderLatency(LatencyBase):
             return {
                 'total_orders': 0,
                 'failed_orders': 0,
+                'success_rate': 0,
                 'avg_rtt': 0,
                 'avg_overhead': 0,
                 'avg_total': 0,
                 'p50_rtt': 0,
                 'p90_rtt': 0,
+                'p95_rtt': 0,
                 'p99_rtt': 0,
+                'sla_100ms': 0,
+                'sla_150ms': 0,
+                'sla_200ms': 0,
                 'broker_stats': {}
             }
 

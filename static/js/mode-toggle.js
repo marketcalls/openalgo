@@ -35,8 +35,11 @@ document.addEventListener('DOMContentLoaded', function() {
             themeSwitcher.style.opacity = '0';
         }
 
+        // Check if mobile (screen width < 640px)
+        const isMobile = window.innerWidth < 640;
+
         if (isAnalyzeMode) {
-            modeBadge.textContent = 'Analyze Mode';
+            modeBadge.textContent = isMobile ? 'Analyze' : 'Analyze Mode';
             modeBadge.classList.add('badge-warning');
             modeBadge.style.opacity = '1';
 
@@ -50,7 +53,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 window.themeManager.setTheme('dracula');
             }
         } else {
-            modeBadge.textContent = 'Live Mode';
+            modeBadge.textContent = isMobile ? 'Live' : 'Live Mode';
             modeBadge.classList.add('badge-success');
             modeBadge.style.opacity = '1';
 
@@ -169,5 +172,21 @@ document.addEventListener('DOMContentLoaded', function() {
             const isAnalyzeMode = e.newValue === 'true';
             updateBadge(isAnalyzeMode, true); // Skip theme change for storage events
         }
+    });
+
+    // Handle window resize to update badge text for mobile/desktop
+    let resizeTimer;
+    window.addEventListener('resize', function() {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function() {
+            if (isInitialized && modeBadge) {
+                const isMobile = window.innerWidth < 640;
+                if (currentMode) {
+                    modeBadge.textContent = isMobile ? 'Analyze' : 'Analyze Mode';
+                } else {
+                    modeBadge.textContent = isMobile ? 'Live' : 'Live Mode';
+                }
+            }
+        }, 100); // Debounce resize events
     });
 });
