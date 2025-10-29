@@ -111,14 +111,27 @@
 
                 // Set mode badge
                 if (modeBadge) {
+                    // Check if mobile (screen width < 640px)
+                    const isMobile = window.innerWidth < 640;
+
                     if (isAnalyze) {
-                        modeBadge.textContent = 'Analyze Mode';
+                        modeBadge.textContent = isMobile ? 'Analyze' : 'Analyze Mode';
                         modeBadge.classList.add('badge-warning');
                     } else {
-                        modeBadge.textContent = 'Live Mode';
+                        modeBadge.textContent = isMobile ? 'Live' : 'Live Mode';
                         modeBadge.classList.add('badge-success');
                     }
                     modeBadge.style.opacity = '1';
+
+                    // Update text on resize
+                    window.addEventListener('resize', function() {
+                        const isMobileNow = window.innerWidth < 640;
+                        if (isAnalyze) {
+                            modeBadge.textContent = isMobileNow ? 'Analyze' : 'Analyze Mode';
+                        } else {
+                            modeBadge.textContent = isMobileNow ? 'Live' : 'Live Mode';
+                        }
+                    });
                 }
             })();
         </script>

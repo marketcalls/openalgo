@@ -1,94 +1,242 @@
 {% extends "base.html" %}
 
+{% block head %}
+<!-- Chart.js for visualizations -->
+<script src="{{ url_for('static', filename='js/chart.min.js') }}"></script>
+{% endblock %}
+
 {% block content %}
-<div class="w-full">
-    <!-- Stats Cards -->
-    <div class="stats shadow w-full mb-8">
-        <div class="stat">
-            <div class="stat-title">Total Orders</div>
-            <div class="stat-value" id="total-orders">{{ stats.total_orders }}</div>
+<div class="container mx-auto p-4 space-y-6">
+
+    <!-- Page Header -->
+    <div class="mb-6 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
+        <div>
+            <h1 class="text-2xl sm:text-3xl font-bold">Order Latency Monitor</h1>
+            <p class="text-base-content/60 text-sm">Track how fast brokers confirm your orders</p>
         </div>
-        
-        <div class="stat">
-            <div class="stat-title">Failed Orders</div>
-            <div class="stat-value text-error" id="failed-orders">{{ stats.failed_orders }}</div>
-            <div class="stat-desc" id="failure-rate">
-                {{ "%.1f"|format(stats.failed_orders / stats.total_orders * 100 if stats.total_orders else 0) }}% Failure Rate
-            </div>
-        </div>
-        
-        <div class="stat">
-            <div class="stat-title">Avg Round-Trip Time</div>
-            <div class="stat-value" id="avg-rtt">{{ "%.2f"|format(stats.avg_rtt) }}ms</div>
-            <div class="stat-desc">Comparable to Postman/Bruno</div>
-        </div>
-        
-        <div class="stat">
-            <div class="stat-title">P99 Round-Trip Time</div>
-            <div class="stat-value" id="p99-rtt">{{ "%.2f"|format(stats.p99_rtt) }}ms</div>
-            <div class="stat-desc">99th percentile</div>
+        <div class="flex gap-2 flex-wrap sm:flex-nowrap">
+            <button onclick="refreshData()" class="btn btn-outline btn-sm sm:btn-md">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 sm:h-5 sm:w-5 sm:mr-2" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd" />
+                </svg>
+                <span class="hidden sm:inline">Refresh</span>
+            </button>
+            <a href="{{ url_for('latency_bp.export_logs') }}" class="btn btn-primary btn-sm sm:btn-md">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 sm:h-5 sm:w-5 sm:mr-2" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
+                </svg>
+                <span class="hidden sm:inline">Export to CSV</span>
+            </a>
         </div>
     </div>
+
+    <!-- Key Performance Stats -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <!-- Total Orders -->
+        <div class="stats shadow">
+            <div class="stat">
+                <div class="stat-figure text-primary">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="inline-block w-8 h-8 stroke-current">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+                    </svg>
+                </div>
+                <div class="stat-title">Total Orders Tracked</div>
+                <div class="stat-value text-primary" id="total-orders">{{ stats.total_orders }}</div>
+                <div class="stat-desc">All time</div>
+            </div>
+        </div>
+
+        <!-- Success Rate -->
+        <div class="stats shadow">
+            <div class="stat">
+                <div class="stat-figure text-success">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="inline-block w-8 h-8 stroke-current">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                </div>
+                <div class="stat-title">Success Rate</div>
+                <div class="stat-value text-success" id="success-rate">{{ "%.1f"|format(stats.success_rate) }}%</div>
+                <div class="stat-desc" id="failed-orders-desc">{{ stats.failed_orders }} failed</div>
+            </div>
+        </div>
+
+        <!-- Average Speed -->
+        <div class="stats shadow">
+            <div class="stat">
+                <div class="stat-figure {% if stats.avg_rtt < 100 %}text-success{% elif stats.avg_rtt < 200 %}text-warning{% else %}text-error{% endif %}">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="inline-block w-8 h-8 stroke-current">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                    </svg>
+                </div>
+                <div class="stat-title">Average Confirmation Time</div>
+                <div class="stat-value {% if stats.avg_rtt < 100 %}text-success{% elif stats.avg_rtt < 200 %}text-warning{% else %}text-error{% endif %}" id="avg-speed">{{ "%.0f"|format(stats.avg_rtt) }}ms</div>
+                <div class="stat-desc">Broker response + network</div>
+            </div>
+        </div>
+
+        <!-- Fast Orders (SLA) -->
+        <div class="stats shadow">
+            <div class="stat">
+                <div class="stat-figure">
+                    <div class="radial-progress {% if stats.sla_150ms >= 95 %}text-success{% elif stats.sla_150ms >= 85 %}text-warning{% else %}text-error{% endif %}"
+                         style="--value:{{ "%.0f"|format(stats.sla_150ms) }}; --size:4rem;"
+                         role="progressbar" id="sla-radial">
+                        {{ "%.0f"|format(stats.sla_150ms) }}%
+                    </div>
+                </div>
+                <div class="stat-title">Fast Orders</div>
+                <div class="stat-value" id="sla-value">{{ "%.1f"|format(stats.sla_150ms) }}%</div>
+                <div class="stat-desc">Under 150ms (Target: 95%)</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Speed Performance Levels -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title">Performance Levels</h2>
+            <p class="text-sm opacity-70 mb-4">Time from order submission to broker confirmation (includes network + broker processing)</p>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div class="flex items-center gap-3">
+                    <div class="badge badge-success badge-lg">Excellent</div>
+                    <div>
+                        <div class="text-sm opacity-70">Under 100ms</div>
+                    </div>
+                </div>
+                <div class="flex items-center gap-3">
+                    <div class="badge badge-warning badge-lg">Good</div>
+                    <div>
+                        <div class="text-sm opacity-70">100-200ms</div>
+                    </div>
+                </div>
+                <div class="flex items-center gap-3">
+                    <div class="badge badge-warning badge-lg opacity-75">Acceptable</div>
+                    <div>
+                        <div class="text-sm opacity-70">200-300ms</div>
+                    </div>
+                </div>
+                <div class="flex items-center gap-3">
+                    <div class="badge badge-error badge-lg">Slow</div>
+                    <div>
+                        <div class="text-sm opacity-70">Over 300ms</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Speed Distribution Chart -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title mb-4">Latency Distribution</h2>
+            <div class="h-64">
+                <canvas id="speedChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Broker Performance Comparison -->
+    {% if stats.broker_stats %}
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title mb-4">Broker Performance Comparison</h2>
+            <div class="overflow-x-auto">
+                <table class="table table-zebra">
+                    <thead>
+                        <tr>
+                            <th>Broker</th>
+                            <th>Avg Latency</th>
+                            <th>Median (P50)</th>
+                            <th>Worst 1% (P99)</th>
+                            <th>Fast Orders %</th>
+                            <th>Total Orders</th>
+                            <th>Performance</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for broker, data in stats.broker_stats.items() %}
+                        <tr>
+                            <td class="font-semibold">{{ broker }}</td>
+                            <td>
+                                <div class="badge {% if data.avg_rtt < 100 %}badge-success{% elif data.avg_rtt < 200 %}badge-warning{% else %}badge-error{% endif %}">
+                                    {{ "%.0f"|format(data.avg_rtt) }}ms
+                                </div>
+                            </td>
+                            <td>{{ "%.0f"|format(data.p50_rtt) }}ms</td>
+                            <td>{{ "%.0f"|format(data.p99_rtt) }}ms</td>
+                            <td>{{ "%.1f"|format(data.sla_150ms) }}%</td>
+                            <td>{{ data.total_orders }}</td>
+                            <td>
+                                <progress class="progress {% if data.avg_rtt < 100 %}progress-success{% elif data.avg_rtt < 200 %}progress-warning{% else %}progress-error{% endif %}"
+                                          value="{{ 300 - data.avg_rtt if data.avg_rtt < 300 else 0 }}" max="300"></progress>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
 
     <!-- Recent Orders Table -->
     <div class="card bg-base-100 shadow-xl">
         <div class="card-body">
-            <div class="flex justify-between items-center mb-4">
-                <h2 class="card-title">Recent Orders</h2>
-                <div class="flex gap-2">
-                    <a href="{{ url_for('latency_bp.export_logs') }}" class="btn btn-sm btn-primary gap-2">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                        </svg>
-                        Export to CSV
-                    </a>
-                    <button class="btn btn-sm" onclick="refreshData()">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                        </svg>
-                        Refresh
-                    </button>
-                </div>
-            </div>
+            <h2 class="card-title mb-4">Recent Orders</h2>
             <div class="overflow-x-auto">
-                <table class="table table-zebra w-full">
+                <table class="table table-zebra">
                     <thead>
                         <tr>
-                            <th>Timestamp</th>
+                            <th>Time</th>
                             <th>Order ID</th>
                             <th>Broker</th>
                             <th>Symbol</th>
                             <th>Type</th>
-                            <th>RTT</th>
-                            <th>Total</th>
+                            <th>Latency</th>
                             <th>Status</th>
-                            <th>Details</th>
+                            <th></th>
                         </tr>
                     </thead>
                     <tbody id="orders-table-body">
                     {% for log in logs %}
                         <tr class="hover" data-id="{{ log.id }}">
-                            <td>{{ log.formatted_timestamp }}</td>
-                            <td>{{ log.order_id }}</td>
-                            <td>{{ log.broker }}</td>
-                            <td>{{ log.symbol }}</td>
+                            <td class="text-sm">{{ log.formatted_timestamp }}</td>
+                            <td class="font-mono text-sm">{{ log.order_id }}</td>
+                            <td>{{ log.broker or 'N/A' }}</td>
+                            <td class="font-semibold">{{ log.symbol or 'N/A' }}</td>
                             <td>
-                                <span class="badge badge-sm 
-                                    {% if log.order_type == 'MARKET' %}badge-info
-                                    {% elif log.order_type == 'LIMIT' %}badge-success
-                                    {% else %}badge-warning{% endif %}">
+                                <span class="badge badge-sm badge-outline">
                                     {{ log.order_type }}
                                 </span>
                             </td>
-                            <td>{{ "%.2f"|format(log.rtt_ms) }}ms</td>
-                            <td>{{ "%.2f"|format(log.total_latency_ms) }}ms</td>
+                            <td>
+                                <div class="flex items-center gap-2">
+                                    {% if log.rtt_ms < 100 %}
+                                        <div class="badge badge-success">
+                                            {{ "%.0f"|format(log.rtt_ms) }}ms
+                                        </div>
+                                    {% elif log.rtt_ms < 200 %}
+                                        <div class="badge badge-warning">
+                                            {{ "%.0f"|format(log.rtt_ms) }}ms
+                                        </div>
+                                    {% elif log.rtt_ms < 300 %}
+                                        <div class="badge badge-warning opacity-75">
+                                            {{ "%.0f"|format(log.rtt_ms) }}ms
+                                        </div>
+                                    {% else %}
+                                        <div class="badge badge-error">
+                                            {{ "%.0f"|format(log.rtt_ms) }}ms
+                                        </div>
+                                    {% endif %}
+                                </div>
+                            </td>
                             <td>
                                 <span class="badge badge-sm {% if log.status == 'SUCCESS' %}badge-success{% else %}badge-error{% endif %}">
                                     {{ log.status }}
                                 </span>
                             </td>
                             <td>
-                                <button class="btn btn-xs view-details">View</button>
+                                <button class="btn btn-xs btn-ghost view-details">Details</button>
                             </td>
                         </tr>
                     {% endfor %}
@@ -99,37 +247,49 @@
     </div>
 
     <!-- Details Modal -->
-    <div id="details-modal" class="modal">
-        <div class="modal-box">
-            <h3 class="font-bold text-lg mb-4">Order Details</h3>
+    <dialog id="details-modal" class="modal">
+        <div class="modal-box max-w-2xl">
+            <form method="dialog">
+                <button class="btn btn-sm btn-circle btn-ghost absolute right-2 top-2">✕</button>
+            </form>
+            <h3 class="font-bold text-lg mb-4">Order Latency Breakdown</h3>
             <div id="modal-content"></div>
-            <div class="modal-action">
-                <button class="btn" onclick="closeModal()">Close</button>
-            </div>
         </div>
-    </div>
+        <form method="dialog" class="modal-backdrop">
+            <button>close</button>
+        </form>
+    </dialog>
+
 </div>
 
 <script>
 // Modal functions
 function showModal() {
-    document.getElementById('details-modal').classList.add('modal-open');
+    document.getElementById('details-modal').showModal();
 }
 
 function closeModal() {
-    document.getElementById('details-modal').classList.remove('modal-open');
+    document.getElementById('details-modal').close();
 }
 
 // Update functions
 function updateStats(stats) {
     document.getElementById('total-orders').textContent = stats.total_orders;
-    document.getElementById('failed-orders').textContent = stats.failed_orders;
-    document.getElementById('avg-rtt').textContent = stats.avg_rtt.toFixed(2) + 'ms';
-    document.getElementById('p99-rtt').textContent = stats.p99_rtt.toFixed(2) + 'ms';
-    
-    const failureRate = stats.total_orders ? 
-        ((stats.failed_orders / stats.total_orders) * 100).toFixed(1) : '0.0';
-    document.getElementById('failure-rate').textContent = `${failureRate}% Failure Rate`;
+    document.getElementById('success-rate').textContent = stats.success_rate.toFixed(1) + '%';
+    document.getElementById('failed-orders-desc').textContent = `${stats.failed_orders} failed`;
+    document.getElementById('avg-speed').textContent = Math.round(stats.avg_rtt) + 'ms';
+    document.getElementById('sla-value').textContent = stats.sla_150ms.toFixed(1) + '%';
+
+    // Update radial progress
+    const radial = document.getElementById('sla-radial');
+    radial.style.setProperty('--value', Math.round(stats.sla_150ms));
+    radial.textContent = Math.round(stats.sla_150ms) + '%';
+
+    // Update color classes
+    const avgSpeed = document.getElementById('avg-speed');
+    avgSpeed.className = stats.avg_rtt < 100 ? 'stat-value text-success' :
+                         stats.avg_rtt < 200 ? 'stat-value text-warning' :
+                         'stat-value text-error';
 }
 
 function formatDate(timestamp) {
@@ -150,27 +310,34 @@ function formatDate(timestamp) {
 function updateTable(logs) {
     const tbody = document.getElementById('orders-table-body');
     tbody.innerHTML = logs.map(log => {
-        const orderTypeClass = log.order_type === 'MARKET' ? 'badge-info' : 
-                             log.order_type === 'LIMIT' ? 'badge-success' : 
-                             'badge-warning';
-        
         const statusClass = log.status === 'SUCCESS' ? 'badge-success' : 'badge-error';
-        
+
+        // Speed badge with color
+        let speedBadge = '';
+        if (log.rtt_ms < 100) {
+            speedBadge = `<div class="badge badge-success">${Math.round(log.rtt_ms)}ms</div>`;
+        } else if (log.rtt_ms < 200) {
+            speedBadge = `<div class="badge badge-warning">${Math.round(log.rtt_ms)}ms</div>`;
+        } else if (log.rtt_ms < 300) {
+            speedBadge = `<div class="badge badge-warning opacity-75">${Math.round(log.rtt_ms)}ms</div>`;
+        } else {
+            speedBadge = `<div class="badge badge-error">${Math.round(log.rtt_ms)}ms</div>`;
+        }
+
         return `
             <tr class="hover" data-id="${log.id}">
-                <td>${formatDate(log.timestamp)}</td>
-                <td>${log.order_id}</td>
-                <td>${log.broker || ''}</td>
-                <td>${log.symbol || ''}</td>
-                <td><span class="badge badge-sm ${orderTypeClass}">${log.order_type}</span></td>
-                <td>${log.rtt_ms.toFixed(2)}ms</td>
-                <td>${log.total_latency_ms.toFixed(2)}ms</td>
+                <td class="text-sm">${formatDate(log.timestamp)}</td>
+                <td class="font-mono text-sm">${log.order_id}</td>
+                <td>${log.broker || 'N/A'}</td>
+                <td class="font-semibold">${log.symbol || 'N/A'}</td>
+                <td><span class="badge badge-sm badge-outline">${log.order_type}</span></td>
+                <td><div class="flex items-center gap-2">${speedBadge}</div></td>
                 <td><span class="badge badge-sm ${statusClass}">${log.status}</span></td>
-                <td><button class="btn btn-xs view-details">View</button></td>
+                <td><button class="btn btn-xs btn-ghost view-details">Details</button></td>
             </tr>
         `;
     }).join('');
-    
+
     // Attach click handlers
     document.querySelectorAll('.view-details').forEach(button => {
         button.addEventListener('click', function() {
@@ -183,61 +350,81 @@ function updateTable(logs) {
 // API functions
 async function showOrderDetails(orderId) {
     try {
-        const response = await fetch(`/latency/api/logs?order_id=${orderId}`);
+        const response = await fetch(`/latency/api/logs`);
         const logs = await response.json();
-        const order = logs[0];
-        
+        const order = logs.find(l => l.id == orderId);
+
         if (order) {
             const modalContent = document.getElementById('modal-content');
+
+            // Speed rating
+            let speedRating = '';
+            let speedColor = '';
+            if (order.rtt_ms < 100) {
+                speedRating = 'Excellent';
+                speedColor = 'text-success';
+            } else if (order.rtt_ms < 200) {
+                speedRating = 'Good';
+                speedColor = 'text-warning';
+            } else if (order.rtt_ms < 300) {
+                speedRating = 'Acceptable';
+                speedColor = 'text-warning';
+            } else {
+                speedRating = 'Slow';
+                speedColor = 'text-error';
+            }
+
             modalContent.innerHTML = `
-                <div class="grid grid-cols-2 gap-4 mb-4">
-                    <div>
-                        <div class="text-sm opacity-70">Order ID</div>
-                        <div>${order.order_id}</div>
+                <div class="grid grid-cols-2 gap-4 mb-6">
+                    <div class="stat shadow bg-base-200 rounded-lg">
+                        <div class="stat-title">Order ID</div>
+                        <div class="stat-value text-sm font-mono">${order.order_id}</div>
                     </div>
-                    <div>
-                        <div class="text-sm opacity-70">Round-Trip Time</div>
-                        <div>${order.rtt_ms.toFixed(2)}ms</div>
+                    <div class="stat shadow bg-base-200 rounded-lg">
+                        <div class="stat-title">Performance</div>
+                        <div class="stat-value text-lg ${speedColor}">${speedRating}</div>
                     </div>
                 </div>
-                
+
                 <div class="divider">Latency Breakdown</div>
-                
+
                 <div class="space-y-4">
-                    <div>
-                        <div class="flex justify-between mb-1">
-                            <span>Round-Trip Time</span>
-                            <span>${order.rtt_ms.toFixed(2)}ms</span>
+                    <div class="bg-base-200 p-4 rounded-lg">
+                        <div class="flex justify-between mb-2">
+                            <div>
+                                <span class="font-semibold">Broker Confirmation Time</span>
+                                <p class="text-xs opacity-70">Network latency + broker processing + response</p>
+                            </div>
+                            <span class="text-lg font-bold">${Math.round(order.rtt_ms)}ms</span>
                         </div>
-                        <progress class="progress progress-info" value="${order.rtt_ms}" max="${order.total_latency_ms}"></progress>
+                        <progress class="progress progress-primary" value="${order.rtt_ms}" max="${order.total_latency_ms}"></progress>
                     </div>
-                    <div>
-                        <div class="flex justify-between mb-1">
-                            <span>Validation</span>
-                            <span>${order.validation_latency_ms.toFixed(2)}ms</span>
+
+                    <div class="bg-base-200 p-4 rounded-lg">
+                        <div class="flex justify-between mb-2">
+                            <div>
+                                <span class="font-semibold">Platform Overhead</span>
+                                <p class="text-xs opacity-70">OpenAlgo validation and processing</p>
+                            </div>
+                            <span class="text-lg font-bold">${Math.round(order.overhead_ms)}ms</span>
                         </div>
-                        <progress class="progress progress-success" value="${order.validation_latency_ms}" max="${order.total_latency_ms}"></progress>
+                        <progress class="progress progress-accent" value="${order.overhead_ms}" max="${order.total_latency_ms}"></progress>
                     </div>
-                    <div>
-                        <div class="flex justify-between mb-1">
-                            <span>Response Processing</span>
-                            <span>${order.response_latency_ms.toFixed(2)}ms</span>
+
+                    <div class="bg-base-200 p-4 rounded-lg border-2 border-primary">
+                        <div class="flex justify-between">
+                            <span class="font-bold">Total Latency</span>
+                            <span class="text-xl font-bold text-primary">${Math.round(order.total_latency_ms)}ms</span>
                         </div>
-                        <progress class="progress progress-warning" value="${order.response_latency_ms}" max="${order.total_latency_ms}"></progress>
-                    </div>
-                    <div>
-                        <div class="flex justify-between mb-1">
-                            <span>Total Overhead</span>
-                            <span>${order.overhead_ms.toFixed(2)}ms</span>
-                        </div>
-                        <progress class="progress progress-error" value="${order.overhead_ms}" max="${order.total_latency_ms}"></progress>
                     </div>
                 </div>
-                
+
                 ${order.error ? `
-                    <div class="mt-4">
-                        <div class="text-sm opacity-70">Error</div>
-                        <div class="text-error">${order.error}</div>
+                    <div class="alert alert-error mt-4">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <span>${order.error}</span>
                     </div>
                 ` : ''}
             `;
@@ -254,15 +441,123 @@ async function refreshData() {
             fetch('/latency/api/logs'),
             fetch('/latency/api/stats')
         ]);
-        
+
         const logs = await logsResponse.json();
         const stats = await statsResponse.json();
-        
+
         updateStats(stats);
         updateTable(logs);
+        updateChart(logs);
     } catch (error) {
         console.error('Error refreshing data:', error);
     }
+}
+
+function updateChart(logs) {
+    if (!speedChart) return;
+
+    // Count orders in each speed category
+    const excellent = logs.filter(l => l.rtt_ms < 100).length;
+    const good = logs.filter(l => l.rtt_ms >= 100 && l.rtt_ms < 200).length;
+    const acceptable = logs.filter(l => l.rtt_ms >= 200 && l.rtt_ms < 300).length;
+    const slow = logs.filter(l => l.rtt_ms >= 300).length;
+
+    // Update chart data
+    speedChart.data.datasets[0].data = [excellent, good, acceptable, slow];
+    speedChart.update();
+}
+
+// Chart.js initialization
+let speedChart = null;
+
+function initSpeedChart() {
+    const ctx = document.getElementById('speedChart');
+    if (!ctx) return;
+
+    // Prepare data from logs (categorize by speed)
+    const logs = {{ logs_json | tojson | safe }};
+
+    // Check if logs exist and is an array
+    if (!logs || !Array.isArray(logs) || logs.length === 0) {
+        // Display message when no data
+        ctx.getContext('2d').font = '16px sans-serif';
+        ctx.getContext('2d').textAlign = 'center';
+        ctx.getContext('2d').fillText('No order data available yet', ctx.width / 2, ctx.height / 2);
+        return;
+    }
+
+    // Count orders in each speed category
+    const excellent = logs.filter(l => l.rtt_ms < 100).length;
+    const good = logs.filter(l => l.rtt_ms >= 100 && l.rtt_ms < 200).length;
+    const acceptable = logs.filter(l => l.rtt_ms >= 200 && l.rtt_ms < 300).length;
+    const slow = logs.filter(l => l.rtt_ms >= 300).length;
+
+    if (speedChart) {
+        speedChart.destroy();
+    }
+
+    speedChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: ['Excellent\n(<100ms)', 'Good\n(100-200ms)', 'Acceptable\n(200-300ms)', 'Slow\n(>300ms)'],
+            datasets: [{
+                label: 'Number of Orders',
+                data: [excellent, good, acceptable, slow],
+                backgroundColor: [
+                    'rgba(34, 197, 94, 0.7)',   // green
+                    'rgba(234, 179, 8, 0.7)',    // yellow
+                    'rgba(249, 115, 22, 0.7)',   // orange
+                    'rgba(239, 68, 68, 0.7)'     // red
+                ],
+                borderColor: [
+                    'rgba(34, 197, 94, 1)',
+                    'rgba(234, 179, 8, 1)',
+                    'rgba(249, 115, 22, 1)',
+                    'rgba(239, 68, 68, 1)'
+                ],
+                borderWidth: 2
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    display: false
+                },
+                title: {
+                    display: false
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            const total = excellent + good + acceptable + slow;
+                            const percentage = ((context.parsed.y / total) * 100).toFixed(1);
+                            return `${context.parsed.y} orders (${percentage}%)`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        precision: 0
+                    },
+                    title: {
+                        display: true,
+                        text: 'Number of Orders'
+                    }
+                },
+                x: {
+                    title: {
+                        display: true,
+                        text: 'Speed Category'
+                    }
+                }
+            }
+        }
+    });
 }
 
 // Initialize
@@ -274,7 +569,10 @@ document.addEventListener('DOMContentLoaded', function() {
             showOrderDetails(orderId);
         });
     });
-    
+
+    // Initialize chart
+    initSpeedChart();
+
     // Auto-refresh every 30 seconds
     setInterval(refreshData, 30000);
 });

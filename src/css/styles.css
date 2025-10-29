@@ -215,23 +215,23 @@
         }
 
         #mode-badge {
-            @apply text-xs py-1.5 px-2 min-h-6 leading-none;
+            @apply text-xs py-1 px-1.5 min-h-5 leading-none;
         }
 
         .navbar-end {
-            @apply gap-2;
-        }
-
-        .mode-controller-container {
             @apply gap-1;
         }
 
+        .mode-controller-container {
+            @apply gap-0.5;
+        }
+
         .navbar-end .btn-circle {
-            @apply w-10 h-10 min-h-10;
+            @apply w-9 h-9 min-h-9;
         }
 
         .navbar-end .btn-circle svg {
-            @apply w-5 h-5;
+            @apply w-4 h-4;
         }
     }
 

@@ -35,25 +35,38 @@ def request(
 ) -> httpx.Response:
     """
     Make an HTTP request using the shared client with automatic protocol negotiation.
-    
+
     Args:
         method: HTTP method (GET, POST, etc.)
         url: URL to request
         **kwargs: Additional arguments to pass to the request
-        
+
     Returns:
         httpx.Response: The HTTP response
-        
+
     Raises:
         httpx.HTTPError: If the request fails
     """
+    import time
+    from flask import g
+
     client = get_httpx_client()
+
+    # Track actual broker API call time for latency monitoring
+    broker_api_start = time.time()
     response = client.request(method, url, **kwargs)
-    
+    broker_api_end = time.time()
+
+    # Store broker API time in Flask's g object for latency tracking
+    if hasattr(g, 'latency_tracker'):
+        broker_api_time_ms = (broker_api_end - broker_api_start) * 1000
+        g.broker_api_time = broker_api_time_ms
+        logger.debug(f"Broker API call took {broker_api_time_ms:.2f}ms")
+
     # Log the actual HTTP version used (info level for visibility)
     if response.http_version:
         logger.info(f"Request used {response.http_version} - URL: {url[:50]}...")
-    
+
     return response
 
 # Shortcut methods for common HTTP methods
@@ -72,14 +85,43 @@ def delete(url: str, **kwargs) -> httpx.Response:
 
 def _create_http_client() -> httpx.Client:
     """
-    Create a new HTTP client with automatic protocol negotiation.
+    Create a new HTTP client with automatic protocol negotiation and latency tracking.
     Enables both HTTP/2 and HTTP/1.1, letting httpx choose the best protocol.
-    
+
     Returns:
-        httpx.Client: A configured HTTP client with protocol auto-negotiation
+        httpx.Client: A configured HTTP client with protocol auto-negotiation and timing hooks
     """
     import os
-    
+    import time
+    from flask import g
+
+    # Event hooks for tracking broker API timing
+    def log_request(request):
+        """Hook called before request is sent"""
+        request.extensions['start_time'] = time.time()
+        logger.debug(f"Starting request to {request.url}")
+
+    def log_response(response):
+        """Hook called after response is received"""
+        try:
+            start_time = response.request.extensions.get('start_time')
+            if start_time:
+                duration_ms = (time.time() - start_time) * 1000
+
+                # Store broker API time in Flask's g object for latency tracking
+                try:
+                    from flask import has_request_context
+                    if has_request_context() and hasattr(g, 'latency_tracker'):
+                        g.broker_api_time = duration_ms
+                        logger.debug(f"Broker API call took {duration_ms:.2f}ms")
+                except (RuntimeError, AttributeError):
+                    # Not in Flask request context or g not available
+                    pass
+
+                logger.debug(f"Request completed in {duration_ms:.2f}ms")
+        except Exception as e:
+            logger.error(f"Error in response hook: {e}")
+
     try:
         # Detect if running in standalone mode (Docker/production) vs integrated mode (local dev)
         # In standalone mode, disable HTTP/2 to avoid protocol negotiation issues
@@ -88,7 +130,7 @@ def _create_http_client() -> httpx.Client:
 
         # Disable HTTP/2 in standalone/Docker environments to avoid protocol negotiation issues
         http2_enabled = not is_standalone
-        
+
         client = httpx.Client(
             http2=http2_enabled,  # Disable HTTP/2 in standalone mode, enable in integrated mode
             http1=True,  # Always enable HTTP/1.1 for compatibility
@@ -99,16 +141,21 @@ def _create_http_client() -> httpx.Client:
                 keepalive_expiry=120.0  # 2 minutes - good balance
             ),
             # Add verify parameter to handle SSL/TLS issues in standalone mode
-            verify=True  # Can be set to False for debugging SSL issues (not recommended for production)
+            verify=True,  # Can be set to False for debugging SSL issues (not recommended for production)
+            # Add event hooks for latency tracking
+            event_hooks={
+                'request': [log_request],
+                'response': [log_response]
+            }
         )
-        
+
         if is_standalone:
             logger.info("Running in standalone mode - HTTP/2 disabled for compatibility")
         else:
             logger.info("Running in integrated mode - HTTP/2 enabled for optimal performance")
-            
+
         return client
-        
+
     except Exception as e:
         logger.error(f"Failed to create HTTP client: {e}")
         raise

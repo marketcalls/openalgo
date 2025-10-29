@@ -60,20 +60,25 @@ def track_latency(api_type):
             # Initialize latency tracker
             tracker = LatencyTracker()
             g.latency_tracker = tracker
-            
+
             try:
+                # Record the actual start time for overhead calculation
+                # (after Flask routing/middleware has completed)
+                endpoint_start_time = time.time()
+                g.endpoint_start_time = endpoint_start_time
+
                 # Start validation stage
                 tracker.start_stage('validation')
-                
+
                 # Get request data for logging
                 request_data = request.get_json() if request.is_json else {}
-                
+
                 # End validation stage after getting request data
                 tracker.end_stage()
-                
+
                 # Start broker request stage
                 tracker.start_stage('broker_request')
-                
+
                 # Execute the actual endpoint
                 response = f(*args, **kwargs)
                 
@@ -100,10 +105,30 @@ def track_latency(api_type):
                 else:
                     status_code = getattr(response, 'status_code', 200)
                 
-                # Calculate latencies
-                rtt = tracker.get_rtt()
-                overhead = tracker.get_overhead()
-                total = rtt + overhead
+                # Calculate latencies using actual broker API time
+                # Get actual broker API call time (if available from httpx_client)
+                broker_api_time = getattr(g, 'broker_api_time', None)
+                endpoint_start_time = getattr(g, 'endpoint_start_time', None)
+
+                if broker_api_time is not None and endpoint_start_time is not None:
+                    # Calculate total time from when endpoint actually started executing
+                    # (excludes Flask routing/middleware overhead)
+                    current_time = time.time()
+                    total_time = (current_time - endpoint_start_time) * 1000  # ms
+
+                    # Broker API time is what the httpx hook captured
+                    rtt = broker_api_time
+
+                    # Platform overhead is everything except the broker API call
+                    overhead = total_time - broker_api_time
+
+                    # Total is the sum
+                    total = total_time
+                else:
+                    # Fallback to old calculation if broker API time not available
+                    rtt = tracker.get_rtt()
+                    overhead = tracker.get_overhead()
+                    total = rtt + overhead
                 
                 # Log the latency data
                 # Handle the case where orderid might be null in the response
@@ -138,10 +163,19 @@ def track_latency(api_type):
                 return response
                 
             except Exception as e:
-                # Log error latency
-                total_time = tracker.get_total_time()
-                rtt = tracker.get_rtt()
-                overhead = tracker.get_overhead()
+                # Log error latency using actual broker API time if available
+                broker_api_time = getattr(g, 'broker_api_time', None)
+                endpoint_start_time = getattr(g, 'endpoint_start_time', None)
+
+                if broker_api_time is not None and endpoint_start_time is not None:
+                    current_time = time.time()
+                    total_time = (current_time - endpoint_start_time) * 1000
+                    rtt = broker_api_time
+                    overhead = total_time - broker_api_time
+                else:
+                    total_time = tracker.get_total_time()
+                    rtt = tracker.get_rtt()
+                    overhead = tracker.get_overhead()
                 
                 # Get broker name from auth_db using API key if available
                 broker_name = None
