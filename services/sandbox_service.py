@@ -99,11 +99,15 @@ def sandbox_place_order(
         # Log to analyzer database
         executor.submit(async_log_analyzer, log_request, response, 'placeorder')
 
-        # Emit socket event
-        socketio.emit('analyzer_update', {
+        # Emit socket event asynchronously (non-blocking)
+        socketio.start_background_task(
+            socketio.emit,
+            'analyzer_update',
+            {
             'request': log_request,
             'response': response
-        })
+        }
+        )
 
         # Send Telegram alert
         telegram_alert_service.send_order_alert('placeorder', order_data, response, api_key)
@@ -155,7 +159,12 @@ def sandbox_modify_order(
         log_request['api_type'] = 'modifyorder'
 
         executor.submit(async_log_analyzer, log_request, response, 'modifyorder')
-        socketio.emit('analyzer_update', {'request': log_request, 'response': response})
+        # Emit SocketIO event asynchronously (non-blocking)
+        socketio.start_background_task(
+            socketio.emit,
+            'analyzer_update',
+            {'request': log_request, 'response': response}
+        )
 
         return success, response, status_code
 
@@ -195,7 +204,12 @@ def sandbox_cancel_order(
         log_request['api_type'] = 'cancelorder'
 
         executor.submit(async_log_analyzer, log_request, response, 'cancelorder')
-        socketio.emit('analyzer_update', {'request': log_request, 'response': response})
+        # Emit SocketIO event asynchronously (non-blocking)
+        socketio.start_background_task(
+            socketio.emit,
+            'analyzer_update',
+            {'request': log_request, 'response': response}
+        )
 
         return success, response, status_code
 

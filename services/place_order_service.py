@@ -68,13 +68,17 @@ def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dic
     
     # Log to analyzer database
     executor.submit(async_log_analyzer, analyzer_request, error_response, 'placeorder')
-    
-    # Emit socket event
-    socketio.emit('analyzer_update', {
-        'request': analyzer_request,
-        'response': error_response
-    })
-    
+
+    # Emit socket event asynchronously (non-blocking)
+    socketio.start_background_task(
+        socketio.emit,
+        'analyzer_update',
+        {
+            'request': analyzer_request,
+            'response': error_response
+        }
+    )
+
     return error_response
 
 def validate_order_data(data: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
@@ -186,15 +190,20 @@ def place_order_with_auth(
         return False, error_response, 500
 
     if res.status == 200:
-        socketio.emit('order_event', {
-            'symbol': order_data['symbol'],
-            'action': order_data['action'],
-            'orderid': order_id,
-            'exchange': order_data.get('exchange', 'Unknown'),
-            'price_type': order_data.get('price_type', 'Unknown'),
-            'product_type': order_data.get('product_type', 'Unknown'),
-            'mode': 'live'
-        })
+        # Emit SocketIO event asynchronously (non-blocking)
+        socketio.start_background_task(
+            socketio.emit,
+            'order_event',
+            {
+                'symbol': order_data['symbol'],
+                'action': order_data['action'],
+                'orderid': order_id,
+                'exchange': order_data.get('exchange', 'Unknown'),
+                'price_type': order_data.get('price_type', 'Unknown'),
+                'product_type': order_data.get('product_type', 'Unknown'),
+                'mode': 'live'
+            }
+        )
         order_response_data = {'status': 'success', 'orderid': order_id}
         executor.submit(async_log_order, 'placeorder', order_request_data, order_response_data)
         # Send Telegram alert asynchronously

@@ -39,11 +39,15 @@ def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dic
     # Log to analyzer database
     log_executor.submit(async_log_analyzer, analyzer_request, error_response, 'orderstatus')
     
-    # Emit socket event
-    socketio.emit('analyzer_update', {
+    # Emit socket event asynchronously (non-blocking)
+    socketio.start_background_task(
+        socketio.emit,
+        'analyzer_update',
+        {
         'request': analyzer_request,
         'response': error_response
-    })
+    }
+    )
     
     return error_response
 
@@ -119,11 +123,15 @@ def get_order_status_with_auth(
             error_response['mode'] = 'analyze'
             # Log to analyzer database
             log_executor.submit(async_log_analyzer, request_data, error_response, 'orderstatus')
-            # Emit socket event
-            socketio.emit('analyzer_update', {
+            # Emit socket event asynchronously (non-blocking)
+            socketio.start_background_task(
+                socketio.emit,
+                'analyzer_update',
+                {
                 'request': request_data,
                 'response': error_response
-            })
+            }
+            )
         else:
             log_executor.submit(async_log_order, 'orderstatus', original_data, error_response)
         return False, error_response, status_code
@@ -162,11 +170,15 @@ def get_order_status_with_auth(
             error_response['mode'] = 'analyze'
             # Log to analyzer database
             log_executor.submit(async_log_analyzer, request_data, error_response, 'orderstatus')
-            # Emit socket event
-            socketio.emit('analyzer_update', {
+            # Emit socket event asynchronously (non-blocking)
+            socketio.start_background_task(
+                socketio.emit,
+                'analyzer_update',
+                {
                 'request': request_data,
                 'response': error_response
-            })
+            }
+            )
         else:
             log_executor.submit(async_log_order, 'orderstatus', original_data, error_response)
         return False, error_response, 404
@@ -241,11 +253,15 @@ def get_order_status_with_auth(
         log_executor.submit(async_log_analyzer, analyzer_request, response_data, 'orderstatus')
         logger.debug(f"[OrderStatus] Logged to analyzer database")
         
-        # Emit socket event for toast notification
-        socketio.emit('analyzer_update', {
+        # Emit socket event for toast notification asynchronously (non-blocking)
+        socketio.start_background_task(
+            socketio.emit,
+            'analyzer_update',
+            {
             'request': analyzer_request,
             'response': response_data
-        })
+        }
+        )
         logger.debug(f"[OrderStatus] Emitted socket event for analyzer update")
     else:
         logger.info(f"[OrderStatus] LIVE mode - Preparing response for OrderID {orderid} with status: {order_found.get('order_status')}")

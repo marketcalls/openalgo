@@ -52,11 +52,15 @@ def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dic
     # Log to analyzer database
     log_executor.submit(async_log_analyzer, analyzer_request, error_response, 'splitorder')
     
-    # Emit socket event
-    socketio.emit('analyzer_update', {
+    # Emit socket event asynchronously (non-blocking)
+    socketio.start_background_task(
+        socketio.emit,
+        'analyzer_update',
+        {
         'request': analyzer_request,
         'response': error_response
-    })
+    }
+    )
     
     return error_response
 
@@ -103,14 +107,17 @@ def place_single_order(
         res, response_data, order_id = broker_module.place_order_api(order_data, auth_token)
 
         if res.status == 200:
-            # Emit order event for toast notification with batch info
-            socketio.emit('order_event', {
-                'symbol': order_data['symbol'],
-                'action': order_data['action'],
-                'orderid': order_id,
-                'exchange': order_data.get('exchange', 'Unknown'),
-                'price_type': order_data.get('pricetype', 'Unknown'),
-                'product_type': order_data.get('product', 'Unknown'),
+            # Emit order event for toast notification with batch info asynchronously (non-blocking)
+            socketio.start_background_task(
+                socketio.emit,
+                'order_event',
+                {
+                    'symbol': order_data['symbol'],
+                    'action': order_data['action'],
+                    'orderid': order_id,
+                    'exchange': order_data.get('exchange', 'Unknown'),
+                    'price_type': order_data.get('pricetype', 'Unknown'),
+                    'product_type': order_data.get('product', 'Unknown'),
                 'mode': 'live',
                 'order_num': order_num,
                 'quantity': int(order_data['quantity']),
@@ -282,11 +289,15 @@ def split_order_with_auth(
         # Log to analyzer database
         log_executor.submit(async_log_analyzer, analyzer_request, response_data, 'splitorder')
 
-        # Emit socket event for toast notification
-        socketio.emit('analyzer_update', {
+        # Emit socket event for toast notification asynchronously (non-blocking)
+        socketio.start_background_task(
+            socketio.emit,
+            'analyzer_update',
+            {
             'request': analyzer_request,
             'response': response_data
-        })
+        }
+        )
 
         # Send Telegram alert for analyze mode
         telegram_alert_service.send_order_alert('splitorder', split_data, response_data, split_data.get('apikey'))

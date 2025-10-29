@@ -39,13 +39,17 @@ def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dic
     
     # Log to analyzer database
     executor.submit(async_log_analyzer, analyzer_request, error_response, 'cancelorder')
-    
-    # Emit socket event
-    socketio.emit('analyzer_update', {
-        'request': analyzer_request,
-        'response': error_response
-    })
-    
+
+    # Emit socket event asynchronously (non-blocking)
+    socketio.start_background_task(
+        socketio.emit,
+        'analyzer_update',
+        {
+            'request': analyzer_request,
+            'response': error_response
+        }
+    )
+
     return error_response
 
 def import_broker_module(broker_name: str) -> Optional[Any]:
@@ -132,11 +136,16 @@ def cancel_order_with_auth(
         return False, error_response, 500
 
     if status_code == 200:
-        socketio.emit('cancel_order_event', {
-            'status': response_message.get('status'),
-            'orderid': orderid,
-            'mode': 'live'
-        })
+        # Emit SocketIO event asynchronously (non-blocking)
+        socketio.start_background_task(
+            socketio.emit,
+            'cancel_order_event',
+            {
+                'status': response_message.get('status'),
+                'orderid': orderid,
+                'mode': 'live'
+            }
+        )
         order_response_data = {
             'status': 'success',
             'orderid': orderid

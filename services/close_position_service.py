@@ -41,11 +41,15 @@ def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dic
     # Log to analyzer database
     executor.submit(async_log_analyzer, analyzer_request, error_response, 'closeposition')
     
-    # Emit socket event
-    socketio.emit('analyzer_update', {
+    # Emit socket event asynchronously (non-blocking)
+    socketio.start_background_task(
+        socketio.emit,
+        'analyzer_update',
+        {
         'request': analyzer_request,
         'response': error_response
-    })
+    }
+    )
     
     return error_response
 
@@ -152,11 +156,16 @@ def close_position_with_auth(
             'status': 'success',
             'message': 'All Open Positions Squared Off'
         }
-        socketio.emit('close_position_event', {
-            'status': 'success',
-            'message': 'All Open Positions Squared Off',
-            'mode': 'live'
-        })
+        # Emit SocketIO event asynchronously (non-blocking)
+        socketio.start_background_task(
+            socketio.emit,
+            'close_position_event',
+            {
+                'status': 'success',
+                'message': 'All Open Positions Squared Off',
+                'mode': 'live'
+            }
+        )
         executor.submit(async_log_order, 'closeposition', position_request_data, response_data)
         # Send Telegram alert for live mode
         telegram_alert_service.send_order_alert('closeposition', position_data, response_data, position_data.get('apikey'))

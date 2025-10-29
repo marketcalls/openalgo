@@ -51,13 +51,17 @@ def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dic
     
     # Log to analyzer database
     executor.submit(async_log_analyzer, analyzer_request, error_response, 'placesmartorder')
-    
-    # Emit socket event
-    socketio.emit('analyzer_update', {
-        'request': analyzer_request,
-        'response': error_response
-    })
-    
+
+    # Emit socket event asynchronously (non-blocking)
+    socketio.start_background_task(
+        socketio.emit,
+        'analyzer_update',
+        {
+            'request': analyzer_request,
+            'response': error_response
+        }
+    )
+
     return error_response
 
 def import_broker_module(broker_name: str) -> Optional[Any]:
@@ -173,11 +177,15 @@ def place_smart_order_with_auth(
         # Log to analyzer database with complete request and response
         executor.submit(async_log_analyzer, analyzer_request, response_data, 'placesmartorder')
 
-        # Emit socket event for toast notification
-        socketio.emit('analyzer_update', {
-            'request': analyzer_request,
-            'response': response_data
-        })
+        # Emit socket event for toast notification asynchronously (non-blocking)
+        socketio.start_background_task(
+            socketio.emit,
+            'analyzer_update',
+            {
+                'request': analyzer_request,
+                'response': response_data
+            }
+        )
 
         # Send Telegram alert for analyze mode
         telegram_alert_service.send_order_alert('placesmartorder', order_data, response_data, order_data.get('apikey'))
@@ -204,13 +212,17 @@ def place_smart_order_with_auth(
                 'message': 'Positions Already Matched. No Action needed.'
             }
             executor.submit(async_log_order, 'placesmartorder', order_request_data, order_response_data)
-            
-            # Emit notification for matched positions
-            socketio.emit('order_notification', {
-                'symbol': order_data.get('symbol'),
-                'status': 'info',
-                'message': ' Positions Already Matched. No Action needed.'
-            })
+
+            # Emit notification for matched positions asynchronously (non-blocking)
+            socketio.start_background_task(
+                socketio.emit,
+                'order_notification',
+                {
+                    'symbol': order_data.get('symbol'),
+                    'status': 'info',
+                    'message': ' Positions Already Matched. No Action needed.'
+                }
+            )
             # Send Telegram alert
             telegram_alert_service.send_order_alert('placesmartorder', order_data, order_response_data, order_data.get('apikey'))
             return True, order_response_data, 200
@@ -221,12 +233,17 @@ def place_smart_order_with_auth(
             executor.submit(async_log_order, 'placesmartorder', order_request_data, order_response_data)
             # Send Telegram alert
             telegram_alert_service.send_order_alert('placesmartorder', order_data, order_response_data, order_data.get('apikey'))
-            socketio.emit('order_event', {
-                'symbol': order_data.get('symbol'),
-                'action': order_data.get('action'),
-                'orderid': order_id,
-                'mode': 'live'
-            })
+            # Emit SocketIO event asynchronously (non-blocking)
+            socketio.start_background_task(
+                socketio.emit,
+                'order_event',
+                {
+                    'symbol': order_data.get('symbol'),
+                    'action': order_data.get('action'),
+                    'orderid': order_id,
+                    'mode': 'live'
+                }
+            )
         
     except Exception as e:
         logger.error(f"Error in broker_module.place_smartorder_api: {e}")

@@ -40,13 +40,17 @@ def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dic
     
     # Log to analyzer database
     executor.submit(async_log_analyzer, analyzer_request, error_response, 'cancelallorder')
-    
-    # Emit socket event
-    socketio.emit('analyzer_update', {
-        'request': analyzer_request,
-        'response': error_response
-    })
-    
+
+    # Emit socket event asynchronously (non-blocking)
+    socketio.start_background_task(
+        socketio.emit,
+        'analyzer_update',
+        {
+            'request': analyzer_request,
+            'response': error_response
+        }
+    )
+
     return error_response
 
 def import_broker_module(broker_name: str) -> Optional[Any]:
@@ -114,11 +118,15 @@ def cancel_all_orders_with_auth(
         # Log to analyzer database with complete request and response
         executor.submit(async_log_analyzer, analyzer_request, response_data, 'cancelallorder')
 
-        # Emit socket event for toast notification
-        socketio.emit('analyzer_update', {
-            'request': analyzer_request,
-            'response': response_data
-        })
+        # Emit socket event for toast notification asynchronously (non-blocking)
+        socketio.start_background_task(
+            socketio.emit,
+            'analyzer_update',
+            {
+                'request': analyzer_request,
+                'response': response_data
+            }
+        )
 
         # Send Telegram alert for analyze mode
         telegram_alert_service.send_order_alert('cancelallorder', order_data, response_data, order_data.get('apikey'))
@@ -146,13 +154,17 @@ def cancel_all_orders_with_auth(
         executor.submit(async_log_order, 'cancelallorder', original_data, error_response)
         return False, error_response, 500
 
-    # Emit events for each canceled order
+    # Emit events for each canceled order asynchronously (non-blocking)
     for orderid in canceled_orders:
-        socketio.emit('cancel_order_event', {
-            'status': 'success', 
-            'orderid': orderid,
-            'mode': 'live'
-        })
+        socketio.start_background_task(
+            socketio.emit,
+            'cancel_order_event',
+            {
+                'status': 'success',
+                'orderid': orderid,
+                'mode': 'live'
+            }
+        )
 
     # Prepare response data
     response_data = {

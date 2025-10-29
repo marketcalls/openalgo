@@ -40,11 +40,15 @@ def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dic
     # Log to analyzer database
     log_executor.submit(async_log_analyzer, analyzer_request, error_response, 'openposition')
     
-    # Emit socket event
-    socketio.emit('analyzer_update', {
+    # Emit socket event asynchronously (non-blocking)
+    socketio.start_background_task(
+        socketio.emit,
+        'analyzer_update',
+        {
         'request': analyzer_request,
         'response': error_response
-    })
+    }
+    )
     
     return error_response
 
@@ -116,7 +120,12 @@ def get_open_position_with_auth(
         analyzer_request = request_data.copy()
         analyzer_request['api_type'] = 'openposition'
         log_executor.submit(async_log_analyzer, analyzer_request, response_data, 'openposition')
-        socketio.emit('analyzer_update', {'request': analyzer_request, 'response': response_data})
+        # Emit SocketIO event asynchronously (non-blocking)
+        socketio.start_background_task(
+            socketio.emit,
+            'analyzer_update',
+            {'request': analyzer_request, 'response': response_data}
+        )
 
         return True, response_data, 200
 

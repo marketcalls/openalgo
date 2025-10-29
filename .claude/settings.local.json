@@ -29,7 +29,8 @@
       "Bash(move test_option_symbol_api.py test )",
       "Bash(move test_options_order_api.py test)",
       "Bash(xargs:*)",
-      "Bash(test:*)"
+      "Bash(test:*)",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []
