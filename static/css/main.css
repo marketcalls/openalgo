@@ -4754,6 +4754,11 @@
     font-size: 0.75rem;
     padding-inline: calc(0.25rem * 2.5 - var(--border));
   }
+  .badge-xs {
+    --size: calc(var(--size-selector, 0.25rem) * 4);
+    font-size: 0.625rem;
+    padding-inline: calc(0.25rem * 2 - var(--border));
+  }
   .px-1 {
     padding-inline: calc(var(--spacing) * 1);
   }
@@ -4922,9 +4927,6 @@
         }
       }
     }
-  }
-  .progress-accent {
-    color: var(--color-accent);
   }
   .progress-error {
     color: var(--color-error);
@@ -5131,6 +5133,9 @@
   }
   .opacity-50 {
     opacity: 50%;
+  }
+  .opacity-60 {
+    opacity: 60%;
   }
   .opacity-70 {
     opacity: 70%;
