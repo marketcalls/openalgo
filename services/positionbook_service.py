@@ -14,11 +14,15 @@ def format_decimal(value):
     return value
 
 def format_position_data(position_data):
-    """Format all numeric values in position data to 2 decimal places"""
+    """Format all numeric values in position data to 2 decimal places, except quantity fields"""
+    # Fields that should remain as integers
+    quantity_fields = {'quantity', 'qty', 'netqty', 'net_qty', 'buyqty', 'buy_quantity', 'sellqty', 'sell_quantity', 'daybuyqty', 'daysellqty'}
+
     if isinstance(position_data, list):
         return [
             {
-                key: format_decimal(value) if isinstance(value, (int, float)) else value
+                key: int(value) if (key.lower() in quantity_fields and isinstance(value, (int, float)))
+                     else (format_decimal(value) if isinstance(value, (int, float)) else value)
                 for key, value in item.items()
             }
             for item in position_data
