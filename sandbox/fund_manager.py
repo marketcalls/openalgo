@@ -28,6 +28,7 @@ from database.sandbox_db import (
     SandboxFunds, SandboxPositions, SandboxHoldings,
     db_session, get_config
 )
+from database.token_db import get_symbol_info
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -334,13 +335,11 @@ class FundManager:
     def calculate_margin_required(self, symbol, exchange, product, quantity, price, action=None):
         """Calculate margin required for a trade based on leverage rules"""
         try:
-            from database.symbol import SymToken
-
             quantity = abs(int(quantity))
             price = Decimal(str(price))
 
-            # Get symbol info to determine instrument type
-            symbol_obj = SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()
+            # Get symbol info to determine instrument type (from cache)
+            symbol_obj = get_symbol_info(symbol, exchange)
 
             if not symbol_obj:
                 logger.error(f"Symbol {symbol} not found on {exchange}")

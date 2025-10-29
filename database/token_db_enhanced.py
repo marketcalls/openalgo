@@ -243,11 +243,22 @@ class BrokerSymbolCache:
         key = (symbol, exchange)
         if key in self.by_symbol_exchange:
             return self.by_symbol_exchange[key].brexchange
-        
+
         self.stats.hits -= 1
         self.stats.misses += 1
         return None
-    
+
+    def get_symbol_info(self, symbol: str, exchange: str) -> Optional[SymbolData]:
+        """Get full symbol data for symbol and exchange - O(1) lookup"""
+        self.stats.hits += 1
+        key = (symbol, exchange)
+        if key in self.by_symbol_exchange:
+            return self.by_symbol_exchange[key]
+
+        self.stats.hits -= 1
+        self.stats.misses += 1
+        return None
+
     def get_symbol_data(self, token: str) -> Optional[SymbolData]:
         """Get complete symbol data by token - O(1) lookup"""
         self.stats.hits += 1
@@ -417,14 +428,30 @@ def get_brexchange(symbol: str, exchange: str) -> Optional[str]:
     Get broker exchange for a given symbol and exchange
     """
     cache = get_cache()
-    
+
     if cache.cache_loaded and cache.is_cache_valid():
         result = cache.get_brexchange(symbol, exchange)
         if result is not None:
             return result
-    
+
     cache.stats.db_queries += 1
     return get_brexchange_dbquery(symbol, exchange)
+
+def get_symbol_info(symbol: str, exchange: str) -> Optional[SymbolData]:
+    """
+    Get full symbol information (SymbolData object) for a given symbol and exchange
+    Returns SymbolData with all fields: token, lotsize, strike, expiry, etc.
+    First checks cache, falls back to database if needed
+    """
+    cache = get_cache()
+
+    if cache.cache_loaded and cache.is_cache_valid():
+        result = cache.get_symbol_info(symbol, exchange)
+        if result is not None:
+            return result
+
+    cache.stats.db_queries += 1
+    return get_symbol_info_dbquery(symbol, exchange)
 
 # Database fallback functions (imported from original token_db)
 def get_token_dbquery(symbol: str, exchange: str) -> Optional[str]:
@@ -486,6 +513,32 @@ def get_brexchange_dbquery(symbol: str, exchange: str) -> Optional[str]:
         sym_token = SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()
         if sym_token:
             return sym_token.brexchange
+        else:
+            return None
+    except Exception as e:
+        logger.error(f"Error while querying the database: {e}")
+        return None
+
+def get_symbol_info_dbquery(symbol: str, exchange: str) -> Optional[SymbolData]:
+    """Query database for full symbol information, returns SymbolData object"""
+    try:
+        from database.symbol import SymToken
+        sym_token = SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()
+        if sym_token:
+            # Convert SymToken database object to SymbolData
+            return SymbolData(
+                symbol=sym_token.symbol,
+                brsymbol=sym_token.brsymbol,
+                name=sym_token.name,
+                exchange=sym_token.exchange,
+                brexchange=sym_token.brexchange,
+                token=sym_token.token,
+                expiry=sym_token.expiry,
+                strike=sym_token.strike,
+                lotsize=sym_token.lotsize,
+                instrumenttype=sym_token.instrumenttype,
+                tick_size=sym_token.tick_size
+            )
         else:
             return None
     except Exception as e:

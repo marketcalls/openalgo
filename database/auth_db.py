@@ -83,9 +83,10 @@ auth_cache = TTLCache(maxsize=1024, ttl=get_session_based_cache_ttl())
 feed_token_cache = TTLCache(maxsize=1024, ttl=get_session_based_cache_ttl())
 # Define a cache for broker names with a 5-minute TTL (longer since broker rarely changes)
 broker_cache = TTLCache(maxsize=1024, ttl=3000)
-# Define a cache for verified API keys with 1-hour TTL
+# Define a cache for verified API keys with 24-hour TTL
 # Security: Only caches user_id (not sensitive), invalidated on key regeneration
-verified_api_key_cache = TTLCache(maxsize=1024, ttl=3600)  # 1 hour
+# Long TTL is safe because cache is invalidated when keys are regenerated
+verified_api_key_cache = TTLCache(maxsize=1024, ttl=36000)  # 10 hours
 # Define a cache for invalid API keys with shorter 5-minute TTL (prevent cache poisoning)
 invalid_api_key_cache = TTLCache(maxsize=512, ttl=300)  # 5 minutes
 

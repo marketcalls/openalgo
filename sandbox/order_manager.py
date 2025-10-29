@@ -25,6 +25,7 @@ from database.sandbox_db import (
 )
 from sandbox.fund_manager import FundManager
 from database.symbol import SymToken
+from database.token_db import get_symbol_info
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -91,8 +92,8 @@ class OrderManager:
             product = order_data['product'].upper()
             strategy = order_data.get('strategy', '')
 
-            # Get symbol info for lot size validation
-            symbol_obj = SymToken.query.filter_by(symbol=symbol, exchange=exchange).first()
+            # Get symbol info for lot size validation (from cache)
+            symbol_obj = get_symbol_info(symbol, exchange)
             if not symbol_obj:
                 return False, {
                     'status': 'error',
@@ -500,11 +501,8 @@ class OrderManager:
             # Update order parameters
             if 'quantity' in new_data:
                 new_quantity = int(new_data['quantity'])
-                # Validate lot size
-                symbol_obj = SymToken.query.filter_by(
-                    symbol=order.symbol,
-                    exchange=order.exchange
-                ).first()
+                # Validate lot size (from cache)
+                symbol_obj = get_symbol_info(order.symbol, order.exchange)
                 if symbol_obj and order.exchange in ['NFO', 'BFO', 'CDS', 'BCD', 'MCX', 'NCDEX']:
                     lot_size = symbol_obj.lotsize or 1
                     if new_quantity % lot_size != 0:
@@ -589,11 +587,8 @@ class OrderManager:
             else:
                 # Fallback for old orders without margin_blocked field
                 # Need to recalculate margin that was blocked based on order parameters
-                # Get symbol info to determine if margin was blocked for this order
-                symbol_obj = SymToken.query.filter_by(
-                    symbol=order.symbol,
-                    exchange=order.exchange
-                ).first()
+                # Get symbol info to determine if margin was blocked for this order (from cache)
+                symbol_obj = get_symbol_info(order.symbol, order.exchange)
 
                 if symbol_obj:
                     # Determine if this order would have had margin blocked
