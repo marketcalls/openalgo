@@ -14,22 +14,29 @@ def format_decimal(value):
     return value
 
 def format_order_data(order_data):
-    """Format all numeric values in order data to 2 decimal places and adjust price for market orders"""
+    """Format all numeric values in order data to 2 decimal places and adjust price for market orders, except quantity fields"""
+    # Fields that should remain as integers
+    quantity_fields = {'quantity', 'qty', 'filledqty', 'filled_quantity', 'tradedqty', 'traded_quantity', 'pendingqty', 'pending_quantity', 'unfilledqty', 'unfilled_quantity'}
+
     if isinstance(order_data, list):
         formatted_orders = []
         for item in order_data:
             formatted_item = {}
             for key, value in item.items():
                 if isinstance(value, (int, float)):
-                    formatted_item[key] = format_decimal(value)
+                    # Keep quantity fields as integers
+                    if key.lower() in quantity_fields:
+                        formatted_item[key] = int(value)
+                    else:
+                        formatted_item[key] = format_decimal(value)
                 else:
                     formatted_item[key] = value
-            
+
             # Set price to 0 for market orders, keep actual price for limit orders
             pricetype = formatted_item.get('pricetype', '').upper()
             if pricetype == 'MARKET':
                 formatted_item['price'] = 0.0
-            
+
             formatted_orders.append(formatted_item)
         return formatted_orders
     return order_data
