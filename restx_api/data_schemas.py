@@ -40,13 +40,13 @@ class HistorySchema(Schema):
     exchange = fields.Str(required=True)  # Exchange (e.g., NSE, BSE)
     interval = fields.Str(required=True, validate=validate.OneOf([
         # Seconds intervals
-        "5s", "10s", "15s", "30s", "45s",
+        "1s", "5s", "10s", "15s", "30s", "45s",
         # Minutes intervals
-        "1m", "2m", "3m", "5m", "10m", "15m", "20m", "30m",
+        "1m", "2m", "3m", "5m", "10m", "15m", "20m", "30m", "60m",
         # Hours intervals
-        "1h", "2h", "4h",
-        # Daily interval
-        "D"
+        "1h", "2h", "3h", "4h",
+        # Daily, Weekly, Monthly intervals
+        "D", "W", "M"
     ]))
     start_date = fields.Date(required=True, format='%Y-%m-%d')  # YYYY-MM-DD
     end_date = fields.Date(required=True, format='%Y-%m-%d')    # YYYY-MM-DD
