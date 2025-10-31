@@ -111,7 +111,7 @@ dependencies = [
   "python-dotenv==1.0.1",
   "python-engineio==4.9.1",
   "python-multipart==0.0.20",
-  "python-socketio==5.11.3",
+  "python-socketio==5.14.0",
   "python-telegram-bot==22.4",
   "pytz==2024.1",
   "PyYAML==6.0.1",
