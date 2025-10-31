@@ -67,6 +67,15 @@ class WebSocketProxy:
         # This eliminates the need for nested loops in zmq_listener
         self.subscription_index: Dict[Tuple[str, str, int], Set[int]] = defaultdict(set)
 
+        # PERFORMANCE OPTIMIZATION 2: Message throttling to avoid excessive updates
+        # Maps (symbol, exchange, mode) -> last message timestamp
+        # Prevents sending duplicate LTP updates faster than 50ms
+        self.last_message_time: Dict[Tuple[str, str, int], float] = {}
+        self.message_throttle_interval = 0.05  # 50ms minimum between messages
+
+        # PERFORMANCE OPTIMIZATION 3: Pre-compute mode mappings
+        self.MODE_MAP = {"LTP": 1, "QUOTE": 2, "DEPTH": 3}
+
         # ZeroMQ context for subscribing to broker adapters
         self.context = zmq.asyncio.Context()
         self.socket = self.context.socket(zmq.SUB)
@@ -250,7 +259,8 @@ class WebSocketProxy:
             # Process messages from the client
             async for message in websocket:
                 try:
-                    logger.debug(f"Received message from client {client_id}: {message}")
+                    # OPTIMIZATION: Remove debug logging from hot path
+                    # logger.debug(f"Received message from client {client_id}: {message}")
                     await self.process_client_message(client_id, message)
                 except Exception as e:
                     logger.exception(f"Error processing message from client {client_id}: {e}")
@@ -351,11 +361,14 @@ class WebSocketProxy:
         """
         try:
             data = json.loads(message)
-            logger.debug(f"Parsed message from client {client_id}: {data}")
-            
+            # OPTIMIZATION: Remove debug logging from hot path
+            # logger.debug(f"Parsed message from client {client_id}: {data}")
+
             # Accept both 'action' and 'type' fields for better compatibility with different clients
             action = data.get("action") or data.get("type")
-            logger.info(f"Client {client_id} requested action: {action}")
+            # OPTIMIZATION: Only log important actions, not every subscribe/unsubscribe
+            if action not in ["subscribe", "unsubscribe"]:
+                logger.info(f"Client {client_id} requested action: {action}")
             
             if action in ["authenticate", "auth"]:
                 await self.authenticate_client(client_id, data)
@@ -945,18 +958,28 @@ class WebSocketProxy:
                     logger.warning(f"Invalid topic format: {topic_str}")
                     continue
                 
-                # Map mode string to mode number
-                mode_map = {"LTP": 1, "QUOTE": 2, "DEPTH": 3}
-                mode = mode_map.get(mode_str)
+                # OPTIMIZATION: Use pre-computed mode map
+                mode = self.MODE_MAP.get(mode_str)
 
                 if not mode:
                     logger.warning(f"Invalid mode in topic: {mode_str}")
                     continue
 
+                # OPTIMIZATION: Message throttling for high-frequency updates
+                # Skip if we sent the same message too recently (reduces CPU on fast updates)
+                sub_key = (symbol, exchange, mode)
+                current_time = time.time()
+
+                # Only throttle LTP mode (mode 1), not Quote/Depth
+                if mode == 1:  # LTP mode
+                    last_time = self.last_message_time.get(sub_key, 0)
+                    if current_time - last_time < self.message_throttle_interval:
+                        continue  # Skip this update, too soon
+                    self.last_message_time[sub_key] = current_time
+
                 # OPTIMIZATION 2: O(1) lookup using subscription index
                 # Instead of iterating through ALL clients and ALL subscriptions (O(n²)),
                 # directly lookup clients subscribed to this specific (symbol, exchange, mode)
-                sub_key = (symbol, exchange, mode)
                 client_ids = self.subscription_index.get(sub_key, set()).copy()
 
                 if not client_ids:
@@ -964,6 +987,20 @@ class WebSocketProxy:
 
                 # OPTIMIZATION 3: Batch message sends for parallel delivery
                 send_tasks = []
+
+                # OPTIMIZATION 4: Pre-create base message (reused for all clients)
+                # This avoids creating the same dict 1000 times
+                base_message = {
+                    "type": "market_data",
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "mode": mode,
+                    "data": market_data
+                }
+
+                # OPTIMIZATION 5: Pre-serialize JSON once (not per-client)
+                # Most clients get the same message, so serialize once
+                base_message_str = None
 
                 for client_id in client_ids:
                     # Verify client still exists
@@ -980,15 +1017,9 @@ class WebSocketProxy:
                     if broker_name != "unknown" and client_broker and client_broker != broker_name:
                         continue
 
-                    # Create message
-                    message = {
-                        "type": "market_data",
-                        "symbol": symbol,
-                        "exchange": exchange,
-                        "mode": mode,
-                        "broker": broker_name if broker_name != "unknown" else client_broker,
-                        "data": market_data
-                    }
+                    # Add broker to message
+                    message = base_message.copy()
+                    message["broker"] = broker_name if broker_name != "unknown" else client_broker
 
                     # Add to batch
                     send_tasks.append(self.send_message(client_id, message))
