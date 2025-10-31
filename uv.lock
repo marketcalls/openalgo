@@ -1367,9 +1367,9 @@ requires-dist = [
     { name = "pytest-timeout", specifier = "==2.4.0" },
     { name = "python-dateutil", specifier = "==2.9.0.post0" },
     { name = "python-dotenv", specifier = "==1.0.1" },
-    { name = "python-engineio", specifier = "==4.9.1" },
+    { name = "python-engineio", specifier = "==4.11.0" },
     { name = "python-multipart", specifier = "==0.0.20" },
-    { name = "python-socketio", specifier = "==5.11.3" },
+    { name = "python-socketio", specifier = "==5.14.0" },
     { name = "python-telegram-bot", specifier = "==22.4" },
     { name = "pytz", specifier = "==2024.1" },
     { name = "pyyaml", specifier = "==6.0.1" },
@@ -1388,7 +1388,7 @@ requires-dist = [
     { name = "sqlalchemy", specifier = "==2.0.31" },
     { name = "sse-starlette", specifier = "==2.4.1" },
     { name = "stack-data", specifier = "==0.6.3" },
-    { name = "starlette", specifier = "==0.47.2" },
+    { name = "starlette", specifier = "==0.49.1" },
     { name = "tornado", specifier = "==6.5.0" },
     { name = "traitlets", specifier = "==5.14.3" },
     { name = "typing-extensions", specifier = "==4.12.2" },
@@ -1829,14 +1829,14 @@ wheels = [
 
 [[package]]
 name = "python-engineio"
-version = "4.9.1"
+version = "4.11.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "simple-websocket" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/50/01/94faf505820f1fb94133a456dad87a76df589f6999de563229a342e412fa/python_engineio-4.9.1.tar.gz", hash = "sha256:7631cf5563086076611e494c643b3fa93dd3a854634b5488be0bba0ef9b99709", size = 89549, upload-time = "2024-05-18T16:09:53.041Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/35/5f/dd3c7105bf87e88358f87d5e73f194928e803196512d73c9f5cf92f11f90/python_engineio-4.11.0.tar.gz", hash = "sha256:0ad65a743e49b55e333243b95d9b073f2b977a9703e2ce9c6580dab2b4c18cc8", size = 91332, upload-time = "2024-12-17T16:13:04.066Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ad/38/4642c75241686c9cf05d23c50b9ffbd760507292f12fdfb04adc2ab5d34a/python_engineio-4.9.1-py3-none-any.whl", hash = "sha256:f995e702b21f6b9ebde4e2000cd2ad0112ba0e5116ec8d22fe3515e76ba9dddd", size = 57686, upload-time = "2024-05-18T16:09:50.225Z" },
+    { url = "https://files.pythonhosted.org/packages/46/3a/703cb5404f702074a6bb4cab321bfb57825be0f506cf2b97578c46674c3d/python_engineio-4.11.0-py3-none-any.whl", hash = "sha256:079a61a7dc3c96c963568cca154824101a984eab475b8a501848663b668328b4", size = 59258, upload-time = "2024-12-17T16:13:02.184Z" },
 ]
 
 [[package]]
@@ -1850,15 +1850,15 @@ wheels = [
 
 [[package]]
 name = "python-socketio"
-version = "5.11.3"
+version = "5.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bidict" },
     { name = "python-engineio" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1e/74/b1e8787cea757e1f533a7878e94f929679ef7e07a2aaf44de6b71065b1f2/python_socketio-5.11.3.tar.gz", hash = "sha256:194af8cdbb7b0768c2e807ba76c7abc288eb5bb85559b7cddee51a6bc7a65737", size = 117702, upload-time = "2024-06-19T19:12:07.256Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ec/bf/bbc41facdb33a7f440a39f213e59202032106b42df4667a32ef4c9ffe604/python_socketio-5.14.0.tar.gz", hash = "sha256:d057737f658b3948392ff452a5c865c5ccc969859c37cf095a73393ce755f98e", size = 122099, upload-time = "2025-09-30T19:30:40.902Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e9/59/5ee858d5736594d75385b9a8c0f65af6eca5da2b359ed3fb6a7486526399/python_socketio-5.11.3-py3-none-any.whl", hash = "sha256:2a923a831ff70664b7c502df093c423eb6aa93c1ce68b8319e840227a26d8b69", size = 76180, upload-time = "2024-06-19T19:12:04.709Z" },
+    { url = "https://files.pythonhosted.org/packages/ee/8d/f41abde5846c456b33f25e7fa71d8b8ad78785bb812ef0f2393cda2caaf2/python_socketio-5.14.0-py3-none-any.whl", hash = "sha256:7de5ad8a55efc33e17897f6cf91d20168d3d259f98c38d38e2940af83136d6f8", size = 78438, upload-time = "2025-09-30T19:30:39.134Z" },
 ]
 
 [[package]]
@@ -2225,15 +2225,15 @@ wheels = [
 
 [[package]]
 name = "starlette"
-version = "0.47.2"
+version = "0.49.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/04/57/d062573f391d062710d4088fa1369428c38d51460ab6fedff920efef932e/starlette-0.47.2.tar.gz", hash = "sha256:6ae9aa5db235e4846decc1e7b79c4f346adf41e9777aebeb49dfd09bbd7023d8", size = 2583948, upload-time = "2025-07-20T17:31:58.522Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1b/3f/507c21db33b66fb027a332f2cb3abbbe924cc3a79ced12f01ed8645955c9/starlette-0.49.1.tar.gz", hash = "sha256:481a43b71e24ed8c43b11ea02f5353d77840e01480881b8cb5a26b8cae64a8cb", size = 2654703, upload-time = "2025-10-28T17:34:10.928Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f7/1f/b876b1f83aef204198a42dc101613fefccb32258e5428b5f9259677864b4/starlette-0.47.2-py3-none-any.whl", hash = "sha256:c5847e96134e5c5371ee9fac6fdf1a67336d5815e09eb2a01fdb57a351ef915b", size = 72984, upload-time = "2025-07-20T17:31:56.738Z" },
+    { url = "https://files.pythonhosted.org/packages/51/da/545b75d420bb23b5d494b0517757b351963e974e79933f01e05c929f20a6/starlette-0.49.1-py3-none-any.whl", hash = "sha256:d92ce9f07e4a3caa3ac13a79523bd18e3bc0042bb8ff2d759a8e7dd0e1859875", size = 74175, upload-time = "2025-10-28T17:34:09.13Z" },
 ]
 
 [[package]]
