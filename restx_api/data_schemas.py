@@ -42,7 +42,7 @@ class HistorySchema(Schema):
         # Seconds intervals
         "1s", "5s", "10s", "15s", "30s", "45s",
         # Minutes intervals
-        "1m", "2m", "3m", "5m", "10m", "15m", "20m", "30m", "60m",
+        "1m", "2m", "3m", "5m", "10m", "15m", "20m", "30m",
         # Hours intervals
         "1h", "2h", "3h", "4h",
         # Daily, Weekly, Monthly intervals
