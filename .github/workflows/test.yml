@@ -9,6 +9,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
@@ -43,11 +45,10 @@ jobs:
     - name: Run tests with coverage
       run: |
         pytest test/test_env_check.py -v --cov=utils --cov-report=xml --cov-report=term-missing
-    
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v4
+    - name: Upload coverage artifact
+      uses: actions/upload-artifact@v4
       with:
-        file: ./coverage.xml
-        flags: unittests
-        name: codecov-umbrella
-        fail_ci_if_error: false
+        name: coverage-xml
+        path: coverage.xml
+    # Note: Codecov upload removed to avoid requiring CODECOV_TOKEN on forks.
+    # Coverage XML is still uploaded as an artifact coverage-xml for reviewers to download.
