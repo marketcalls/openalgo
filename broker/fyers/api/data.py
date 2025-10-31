@@ -181,15 +181,25 @@ class BrokerData:
             # Validate date range
             if start_dt > end_dt:
                 raise Exception(f"Start date {start_dt.date()} cannot be after end date {end_dt.date()}")
-            
+
+            # Special validation for seconds data (only available for last 30 trading days)
+            if resolution.endswith('S'):
+                max_days_ago = current_dt - pd.Timedelta(days=30)
+                if start_dt < max_days_ago:
+                    logger.warning(f"Warning: Seconds data is only available for the last 30 trading days. "
+                                 f"Adjusting start date from {start_dt.date()} to {max_days_ago.date()}")
+                    start_dt = max_days_ago
+
             # Initialize empty list to store DataFrames
             dfs = []
             
             # Determine chunk size based on resolution
             if resolution == '1D':
-                chunk_days = 300  # Reduced from 200 to be safer
+                chunk_days = 300  # For daily data
+            elif resolution.endswith('S'):
+                chunk_days = 25   # For seconds data - max 30 trading days, use 25 to be safe
             else:
-                chunk_days = 60   # Reduced from 60 to be safer
+                chunk_days = 60   # For minute/hour data
             
             # Process data in chunks
             current_start = start_dt
