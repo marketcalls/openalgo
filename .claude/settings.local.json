@@ -34,7 +34,8 @@
       "Bash(copy:*)",
       "Bash(del /F \"D:\\openalgo-sandbox-test\\openalgo\\websocket_proxy\\server_optimized.py\")",
       "Bash(move \"D:\\openalgo-sandbox-test\\openalgo\\websocket_proxy\\OPTIMIZATION_SUMMARY.md\" \"D:\\openalgo-sandbox-test\\openalgo\\docs\\WEBSOCKET_OPTIMIZATION.md\")",
-      "WebFetch(domain:docs.openalgo.in)"
+      "WebFetch(domain:docs.openalgo.in)",
+      "WebFetch(domain:kite.trade)"
     ],
     "deny": [],
     "ask": []
