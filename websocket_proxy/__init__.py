@@ -56,9 +56,13 @@ from broker.definedge.streaming.definedge_adapter import DefinedgeWebSocketAdapt
 # Import the paytm_adapter
 from broker.paytm.streaming.paytm_adapter import PaytmWebSocketAdapter
 
+# Import the mstock_adapter
+from broker.mstock.streaming.mstock_adapter import MstockWebSocketAdapter
+
 # AliceBlue adapter will be loaded dynamically
 
 # Register adapters
+register_adapter("mstock", MstockWebSocketAdapter)
 register_adapter("angel", AngelWebSocketAdapter)
 register_adapter("zerodha", ZerodhaWebSocketAdapter)
 register_adapter("dhan", DhanWebSocketAdapter)

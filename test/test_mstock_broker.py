@@ -11,7 +11,7 @@ colorama_init(autoreset=True)
 
 # Assuming openalgo SDK is installed
 try:
-    from broker.mstock.streaming.mstock_adapter import MstockWebSocketAdapter
+    from websocket_proxy import create_broker_adapter
     from broker.mstock.api.auth_api import authenticate_broker_mstock
 except ImportError as e:
     print(f"{Fore.RED}Failed to import mstock components: {e}")
@@ -101,7 +101,7 @@ class MstockTester:
                 return
 
             try:
-                adapter = MstockWebSocketAdapter()
+                adapter = create_broker_adapter("mstock")
                 adapter.initialize("mstock", "test_user", {"api_key": self.api_key, "access_token": self.access_token})
                 adapter.connect()
                 time.sleep(5)  # Wait for connection

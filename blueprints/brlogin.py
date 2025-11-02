@@ -680,3 +680,15 @@ def dhan_initiate_oauth():
 # def broker_loginflow(broker):
 #     # This function is no longer used for Kotak TOTP authentication
 #     pass
+
+    elif broker == 'mstock':
+        if request.method == 'GET':
+            return render_template('mstock.html')
+
+        elif request.method == 'POST':
+            username = request.form.get('username')
+            password = request.form.get('password')
+            totp_code = request.form.get('totp')
+
+            auth_token, error_message = auth_function(username, password, totp_code)
+            forward_url = 'mstock.html'
