@@ -22,6 +22,8 @@ import websockets.exceptions
 from datetime import datetime
 from collections import deque
 
+from utils.websocket_ssl import get_ssl_context_for_websockets
+
 class ZerodhaWebSocket:
     """
     Enhanced WebSocket client for Zerodha's market data streaming API.
@@ -486,6 +488,10 @@ class ZerodhaWebSocket:
             # Create new connection following Zerodha API specifications
             # URL format: wss://ws.kite.trade?api_key=xxx&access_token=xxx
             
+            # Get SSL context from centralized utility
+            # This handles SSL certificate verification based on WS_SSL_VERIFY environment variable
+            ssl_context = get_ssl_context_for_websockets()
+            
             self.websocket = await asyncio.wait_for(
                 websockets.client.connect(
                     self.ws_url,
@@ -494,6 +500,7 @@ class ZerodhaWebSocket:
                     close_timeout=5,
                     max_size=self.MAX_MESSAGE_SIZE,
                     compression=None,  # Disable compression for binary data
+                    ssl=ssl_context,  # Use centralized SSL context utility
                     extra_headers={
                         'User-Agent': 'OpenAlgo-ZerodhaClient/1.0'
                     }
