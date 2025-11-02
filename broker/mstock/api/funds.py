@@ -6,14 +6,12 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 def get_margin_data(auth_token):
-    """
-    Fetch margin (fund) data from MStock API using Type A authentication.
-    Returns:
-        (dict, str): Tuple of (margin_data, error_message)
-    """
+    """Fetch margin (fund) data from MStock API using Type A authentication."""
     api_key = os.getenv('BROKER_API_KEY')
+    
     if not api_key:
-        return None, "Missing environment variable: BROKER_API_KEY"
+        logger.error("Missing environment variable: BROKER_API_KEY")
+        return {}
 
     headers = {
         'X-Mirae-Version': '1',
@@ -30,12 +28,8 @@ def get_margin_data(auth_token):
         response.raise_for_status()
         margin_data = response.json()
 
-
-        # Validate response
         if margin_data.get('status') == 'success' and margin_data.get('data'):
             data = margin_data['data'][0]
-
-            # Mapping between MStock keys and OpenAlgo internal keys
             key_mapping = {
                 "AVAILABLE_BALANCE": "availablecash",
                 "COLLATERALS": "collateral",
@@ -55,28 +49,18 @@ def get_margin_data(auth_token):
                     formatted_value = "0.00"
                 filtered_data[openalgo_key] = formatted_value
 
-            # Include optional balance summary fields if available
-            filtered_data["totalbalance"] = "{:.2f}".format(
-                float(data.get("SUM_OF_ALL", filtered_data.get("availablecash", 0)))
-            )
-
             logger.info(f"filteredMargin Data: {filtered_data}")
-            
-            return filtered_data, None
+            return filtered_data
 
-        # If status is not success
-        error_message = margin_data.get('message', 'Failed to fetch margin data')
-        logger.error(f"Margin API failed: {error_message}")
-        return None, error_message
+        logger.error(f"Margin API failed: {margin_data.get('message', 'No data')}")
+        return {}
 
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP Error while fetching margin data: {e}")
-        return None, f"HTTP error occurred: {e.response.status_code} - {e.response.text}"
-
+        return {}
     except httpx.RequestError as e:
         logger.error(f"Network Error while fetching margin data: {e}")
-        return None, f"Network error: {str(e)}"
-
+        return {}
     except Exception as e:
         logger.exception("Unexpected error while fetching margin data.")
-        return None, str(e)
+        return {}
