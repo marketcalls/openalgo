@@ -26,6 +26,32 @@ client = api(api_key='your_api_key_here', host='http://127.0.0.1:5000')
 
 ```
 
+### Using a Specific Broker (e.g., mstock)
+
+To use a specific broker like mstock, you need to pass the `broker` parameter during client initialization. You also need to ensure that the required environment variables for that broker are set.
+
+For mstock, the following environment variables are required:
+
+- `MSTOCK_BROKER_API_KEY`
+- `MSTOCK_USERNAME`
+- `MSTOCK_PASSWORD`
+- `MSTOCK_TOTP_SECRET`
+
+```python
+from openalgo import api
+
+# Initialize the client for the mstock broker
+client = api(
+    api_key='your_api_key_here',
+    host='http://127.0.0.1:5000',
+    broker='mstock'
+)
+
+# Now you can use the client to interact with the mstock broker
+response = client.funds()
+print(response)
+```
+
 ### Check OpenAlgo Version
 
 ```python

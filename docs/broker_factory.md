@@ -584,6 +584,7 @@ def initialize_broker_registry():
     register_adapter("upstox", UpstoxWebSocketAdapter)
     register_adapter("fyers", FyersWebSocketAdapter)
     # Register more adapters here
+    register_adapter("mstock", MstockWebSocketAdapter)
 ```
 
 This broker factory design allows OpenAlgo to support all 20+ brokers while maintaining a clean, common interface for the WebSocket proxy system.
