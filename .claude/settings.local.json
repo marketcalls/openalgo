@@ -30,7 +30,11 @@
       "Bash(move test_options_order_api.py test)",
       "Bash(xargs:*)",
       "Bash(test:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(copy:*)",
+      "Bash(del /F \"D:\\openalgo-sandbox-test\\openalgo\\websocket_proxy\\server_optimized.py\")",
+      "Bash(move \"D:\\openalgo-sandbox-test\\openalgo\\websocket_proxy\\OPTIMIZATION_SUMMARY.md\" \"D:\\openalgo-sandbox-test\\openalgo\\docs\\WEBSOCKET_OPTIMIZATION.md\")",
+      "WebFetch(domain:docs.openalgo.in)"
     ],
     "deny": [],
     "ask": []

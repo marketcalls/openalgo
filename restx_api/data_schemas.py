@@ -38,7 +38,16 @@ class HistorySchema(Schema):
     apikey = fields.Str(required=True)
     symbol = fields.Str(required=True)
     exchange = fields.Str(required=True)  # Exchange (e.g., NSE, BSE)
-    interval = fields.Str(required=True, validate=validate.OneOf(["1m", "5m", "15m", "30m", "1h", "D"]))  # 1m, 5m, 15m, 30m, 1h, D
+    interval = fields.Str(required=True, validate=validate.OneOf([
+        # Seconds intervals
+        "1s", "5s", "10s", "15s", "30s", "45s",
+        # Minutes intervals
+        "1m", "2m", "3m", "5m", "10m", "15m", "20m", "30m",
+        # Hours intervals
+        "1h", "2h", "3h", "4h",
+        # Daily, Weekly, Monthly intervals
+        "D", "W", "M"
+    ]))
     start_date = fields.Date(required=True, format='%Y-%m-%d')  # YYYY-MM-DD
     end_date = fields.Date(required=True, format='%Y-%m-%d')    # YYYY-MM-DD
     # OI is now always included by default for F&O exchanges
