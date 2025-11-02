@@ -81,6 +81,16 @@ def broker_callback(broker,para=None):
             user_id = clientcode
             auth_token, feed_token, error_message = auth_function(clientcode, broker_pin, totp_code)
             forward_url = 'angel.html'
+
+    elif broker == 'mstock':
+        if request.method == 'GET':
+            return render_template('mstock.html')
+
+        elif request.method == 'POST':
+            totp_code = request.form.get('totp')
+            api_key = get_broker_api_key()
+            auth_token, feed_token, error_message = auth_function(api_key, totp_code)
+            forward_url = 'mstock.html'
     
     elif broker == 'aliceblue':
         if request.method == 'GET':

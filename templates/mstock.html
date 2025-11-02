@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>mstock Login</title>
+</head>
+<body>
+    <h1>mstock Login</h1>
+    <form method="POST">
+        <label for="totp">TOTP:</label><br>
+        <input type="text" id="totp" name="totp"><br><br>
+        <input type="submit" value="Login">
+    </form>
+    {% if error %}
+        <p style="color:red;">{{ error }}</p>
+    {% endif %}
+</body>
+</html>
