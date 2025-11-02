@@ -1,9 +1,8 @@
-import httpx
-import json
-import os
 from utils.httpx_client import get_httpx_client
+from broker.mstock.mapping.order_data import transform_positions_data, transform_holdings_data
 
-def get_positions(api_key, auth_token):
+def get_positions(auth_token):
+    api_key = os.getenv('BROKER_API_KEY')
     """
     Retrieves the user's positions.
     """
@@ -11,7 +10,7 @@ def get_positions(api_key, auth_token):
         'X-Mirae-Version': '1',
         'Authorization': f'token {api_key}:{auth_token}',
     }
-
+    
     try:
         client = get_httpx_client()
         response = client.get(
@@ -19,13 +18,13 @@ def get_positions(api_key, auth_token):
             headers=headers,
         )
         response.raise_for_status()
-        return response.json(), None
-    except httpx.HTTPStatusError as e:
-        return None, f"HTTP error occurred: {e.response.status_code} - {e.response.text}"
+        positions = response.json()
+        return transform_positions_data(positions), None
     except Exception as e:
         return None, str(e)
 
-def get_holdings(api_key, auth_token):
+def get_holdings(auth_token):
+    api_key = os.getenv('BROKER_API_KEY')
     """
     Retrieves the user's holdings.
     """
@@ -33,7 +32,7 @@ def get_holdings(api_key, auth_token):
         'X-Mirae-Version': '1',
         'Authorization': f'token {api_key}:{auth_token}',
     }
-
+    
     try:
         client = get_httpx_client()
         response = client.get(
@@ -41,30 +40,7 @@ def get_holdings(api_key, auth_token):
             headers=headers,
         )
         response.raise_for_status()
-        return response.json(), None
-    except httpx.HTTPStatusError as e:
-        return None, f"HTTP error occurred: {e.response.status_code} - {e.response.text}"
-    except Exception as e:
-        return None, str(e)
-
-def get_funds(api_key, auth_token):
-    """
-    Retrieves the user's funds.
-    """
-    headers = {
-        'X-Mirae-Version': '1',
-        'Authorization': f'token {api_key}:{auth_token}',
-    }
-
-    try:
-        client = get_httpx_client()
-        response = client.get(
-            'https://api.mstock.trade/openapi/typea/user/fundsummary',
-            headers=headers,
-        )
-        response.raise_for_status()
-        return response.json(), None
-    except httpx.HTTPStatusError as e:
-        return None, f"HTTP error occurred: {e.response.status_code} - {e.response.text}"
+        holdings = response.json()
+        return transform_holdings_data(holdings), None
     except Exception as e:
         return None, str(e)
