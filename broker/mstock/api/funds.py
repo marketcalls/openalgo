@@ -2,13 +2,14 @@ import os
 import httpx
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from broker.mstock.database import master_contract_db
 
 logger = get_logger(__name__)
 
 def get_margin_data(auth_token):
     """Fetch margin (fund) data from MStock API using Type A authentication."""
     api_key = os.getenv('BROKER_API_KEY')
-    
+
     if not api_key:
         logger.error("Missing environment variable: BROKER_API_KEY")
         return {}

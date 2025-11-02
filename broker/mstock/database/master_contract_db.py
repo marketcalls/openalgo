@@ -85,7 +85,7 @@ def copy_from_dataframe(df):
 # -------------------------------------------------------------------
 # MStock Master Contract Fetch
 # -------------------------------------------------------------------
-async def download_mstock_csv(auth_token):
+def download_mstock_csv(auth_token):
     """
     Download the MStock master contract CSV from the API.
     """
@@ -100,7 +100,7 @@ async def download_mstock_csv(auth_token):
     logger.info(f"Fetching MStock master contract from {url}")
 
     try:
-        response = await requests.get(url, headers=headers, timeout=60)
+        response = requests.get(url, headers=headers, timeout=60)
         logger.info(f"MStock master contract download status: {response.status_code}")
 
         if response.status_code != 200:
@@ -130,10 +130,7 @@ def process_mstock_csv(csv_text):
     # Normalize column names
     df.columns = [col.strip().lower() for col in df.columns]
 
-    expected_cols = {
-        'instrument_token', 'exchange_token', 'tradingsymbol', 'name', 'last_price',
-        'expiry', 'strike', 'tick_size', 'lot_size', 'instrument_type', 'segment', 'exchange'
-    }
+    expected_cols = {'instrument_token','exchange_token','tradingsymbol','name','last_price','expiry','strike','tick_size','lot_size','instrument_type','segment','exchange'    }
 
     if not expected_cols.issubset(df.columns):
         logger.error(f"Unexpected MStock CSV columns: {list(df.columns)}")
@@ -169,13 +166,13 @@ def process_mstock_csv(csv_text):
 # -------------------------------------------------------------------
 # MASTER CONTRACT PIPELINE
 # -------------------------------------------------------------------
-async def master_contract_download():
+def master_contract_download():
     """
     Main async download pipeline for MStock master contract.
     """
     try:
         login_username = os.getenv('LOGIN_USERNAME')
-        auth_token = await get_auth_token(login_username)
+        auth_token = get_auth_token(login_username)
 
         safe_token = f"{auth_token[:6]}..." if auth_token else "None"
         logger.info(f"Downloading MStock Master Contract (token={safe_token})")
