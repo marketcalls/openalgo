@@ -2,7 +2,7 @@
 
 ## Missing Files
 
-- `broker/mstock/api/__init__.py`
+- `broker/mstock/api/__init__.py` ok
 - `broker/mstock/streaming/mstock_mapping.py`
 - `broker/mstock/streaming/smartWebSocketV2.py` (or equivalent)
 
@@ -16,8 +16,8 @@
 
 ### `broker/mstock/api/order_api.py`
 
-- `get_positions(auth)`
-- `get_holdings(auth)`
+- `get_positions(auth)`  ok
+- `get_holdings(auth)`  ok
 - `get_open_position(tradingsymbol, exchange, producttype,auth)`
 - `place_smartorder_api(data,auth)`
 - `close_all_positions(current_api_key,auth)`
