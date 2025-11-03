@@ -43,10 +43,11 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
         logger.error(f"Failed to parse JSON response from {endpoint}: {response.text}")
         return {}
 
-def place_order(api_key, auth_token, data):
+def place_order(auth_token, data):
     """
     Places an order with the broker.
     """
+    api_key = os.getenv('BROKER_API_KEY')
     order_params = transform_data(data)
     headers = {
         'X-Mirae-Version': '1',
@@ -68,10 +69,11 @@ def place_order(api_key, auth_token, data):
     except Exception as e:
         return None, str(e)
 
-def modify_order(api_key, auth_token, data):
+def modify_order(auth_token, data):
     """
     Modifies an existing order.
     """
+    api_key = os.getenv('BROKER_API_KEY')
     order_params = transform_modify_order_data(data)
     headers = {
         'X-Mirae-Version': '1',
@@ -93,10 +95,11 @@ def modify_order(api_key, auth_token, data):
     except Exception as e:
         return None, str(e)
 
-def cancel_order(api_key, auth_token, order_id, variety):
+def cancel_order(auth_token, order_id, variety):
     """
     Cancels an existing order.
     """
+    api_key = os.getenv('BROKER_API_KEY')
     headers = {
         'X-Mirae-Version': '1',
         'Authorization': f'token {api_key}:{auth_token}',
@@ -116,33 +119,86 @@ def cancel_order(api_key, auth_token, order_id, variety):
         return None, str(e)
 
 def get_order_book(auth):
-    return get_api_response("/orders",auth)
+    order_data = get_api_response("/orders", auth)
+    if (
+        order_data
+        and isinstance(order_data, dict)
+        and "status" in order_data
+        and "data" in order_data
+        and isinstance(order_data["data"], list)
+    ):
+        for order in order_data["data"]:
+            tradingsymbol = str(order.get("tradingsymbol", "")).upper()
+            if tradingsymbol.endswith("CE") or tradingsymbol.endswith("PE"):
+                if order.get("exchange", "").upper() == "NSE":
+                    order["exchange"] = "NFO"
 
-def get_trade_book(api_key, auth_token):
-    """
-    Retrieves the trade book.
-    """
-    headers = {
-        'X-Mirae-Version': '1',
-        'Authorization': f'token {api_key}:{auth_token}',
+        return {
+            "status": order_data["status"],
+            "data": order_data["data"]
+        }
+
+    # fallback if structure invalid
+    return {
+        "status": order_data.get("status", "error") if isinstance(order_data, dict) else "error",
+        "data": []
+    }
+
+def get_trade_book(auth):
+    trades_data = get_api_response("/typea/tradebook", auth)
+
+    if (
+        trades_data
+        and isinstance(trades_data, dict)
+        and "status" in trades_data
+        and "data" in trades_data
+        and isinstance(trades_data["data"], list)
+    ):
+        for trade in trades_data["data"]:
+            tradingsymbol = str(trade.get("tradingsymbol", "")).upper()
+            if tradingsymbol.endswith("CE") or tradingsymbol.endswith("PE"):
+                if trade.get("exchange", "").upper() == "NSE":
+                    trade["exchange"] = "NFO"
+
+        return {
+            "status": trades_data["status"],
+            "data": trades_data["data"]
+        }
+
+    # fallback if structure invalid
+    return {
+        "status": trades_data.get("status", "error") if isinstance(trades_data, dict) else "error",
+        "data": []
     }
     
-    try:
-        client = get_httpx_client()
-        response = client.get(
-            'https://api.mstock.trade/openapi/typea/trades',
-            headers=headers,
-        )
-        response.raise_for_status()
-        trade_book = response.json()
-        return transform_tradebook_data(trade_book), None
-    except httpx.HTTPStatusError as e:
-        return None, f"HTTP error occurred: {e.response.status_code} - {e.response.text}"
-    except Exception as e:
-        return None, str(e)
-    
 def get_positions(auth):
-    return get_api_response("/portfolio/positions",auth)
+    positions_data = get_api_response("/portfolio/positions", auth)
+    
+    if (
+        positions_data
+        and isinstance(positions_data, dict)
+        and "status" in positions_data
+        and "data" in positions_data
+        and isinstance(positions_data["data"], dict)
+        and "net" in positions_data["data"]
+    ):
+
+        for position in positions_data["data"]["net"]:
+            tradingsymbol = str(position.get("tradingsymbol", "")).upper()
+            if tradingsymbol.endswith("CE") or tradingsymbol.endswith("PE"):
+                if position.get("exchange", "").upper() == "NSE":
+                    position["exchange"] = "NFO"
+
+        return {
+            "status": positions_data["status"],
+            "data": positions_data["data"]["net"]
+        }
+    
+    # If data missing or malformed, still preserve status if possible
+    return {
+        "status": positions_data.get("status", "error") if isinstance(positions_data, dict) else "error",
+        "data": []
+    }
 
 def get_holdings(auth):
     return get_api_response("/portfolio/holdings",auth)
