@@ -432,7 +432,7 @@ class TradejiniWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 })
 
                 # Log the market data we're sending
-                self.logger.info(f"Publishing to topic '{topic}': {market_data}")
+                self.logger.debug(f"Publishing to topic '{topic}': {market_data}")
 
                 # Publish to ZeroMQ
                 try:

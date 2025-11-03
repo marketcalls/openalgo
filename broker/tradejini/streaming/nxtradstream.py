@@ -401,7 +401,7 @@ class NxtradStream:
         pktType = struct.unpack("b", data[2:3])[0]
         pktSpec = DEFAULT_PKT_INFO["PKT_SPEC"]
         if pktType not in pktSpec:
-            logger.info(f"Unknown PktType : {pktType}")
+            logger.debug(f"Unknown PktType : {pktType}")
             return
 
         packetType = PKT_TYPE[pktType]
@@ -625,7 +625,7 @@ class NxtradStream:
         totalRecivedLen = struct.unpack("i", message[:4])[0]
         version = struct.unpack("b", message[4:5])[0]
         if version != CURRENT_VERSION:
-            logger.info("Kindly download and use the updated SDK.")
+            logger.debug("Kindly download and use the updated SDK.")
             return
 
         compressionAlgo = struct.unpack("b", message[5:6])[0]
