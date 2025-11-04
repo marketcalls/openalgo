@@ -74,16 +74,6 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/margin
             "quantity": "75",
             "price": "125.50",
             "trigger_price": "0"
-        },
-        {
-            "symbol": "RELIANCE",
-            "exchange": "NSE",
-            "action": "BUY",
-            "product": "CNC",
-            "pricetype": "MARKET",
-            "quantity": "5",
-            "price": "0",
-            "trigger_price": "0"
         }
     ]
 }
@@ -98,10 +88,8 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/margin
         "total_margin_required": 328482.00,
         "span_margin": 258482.00,
         "exposure_margin": 70000.00,
-        "available_balance": 500000.00,
-        "insufficient_balance": 0.00,
-        "brokerage": 150.00
-    }
+        "margin_benefit": 500000.00
+        }
 }
 ```
 
