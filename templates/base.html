@@ -171,15 +171,9 @@
                         </a>
                     </li>
                     <li>
-                        <a href="{{ url_for('tv_json_bp.tradingview_json') }}" 
-                           class="{{ 'active' if request.endpoint == 'tv_json_bp.tradingview_json' }}">
-                            Tradingview
-                        </a>
-                    </li>
-                    <li>
-                        <a href="{{ url_for('chartink_bp.index') }}"
-                           class="{{ 'active' if request.endpoint.startswith('chartink_bp.') }}">
-                            Chartink
+                        <a href="{{ url_for('platforms_bp.index') }}"
+                           class="{{ 'active' if request.endpoint == 'platforms_bp.index' or request.endpoint == 'tv_json_bp.tradingview_json' or request.endpoint == 'gc_json_bp.gocharting_json' or request.endpoint.startswith('chartink_bp.') }}">
+                            Platforms
                         </a>
                     </li>
                     <li>
