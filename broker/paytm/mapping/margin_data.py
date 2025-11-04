@@ -4,24 +4,54 @@
 from database.token_db import get_token
 from broker.paytm.mapping.transform_data import (
     map_exchange,
-    reverse_map_product_type,
-    get_segment_from_exchange
+    reverse_map_product_type
 )
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+def get_segment_from_exchange(exchange):
+    """
+    Determines the segment type based on exchange.
+    E → Equity Cash (NSE, BSE)
+    D → Equity Derivative (NFO, BFO)
+    """
+    if exchange in ['NSE', 'BSE']:
+        return 'E'
+    elif exchange in ['NFO', 'BFO']:
+        return 'D'
+    return 'E'  # Default to equity
+
+def get_instrument_type(exchange):
+    """
+    Determines the instrument type based on exchange.
+    EQUITY → Equity Cash (NSE, BSE)
+    FUTSTK → Futures Stock (NFO, BFO)
+    OPTSTK → Options Stock (NFO, BFO)
+
+    Note: For derivatives, we default to OPTSTK as most margin calculations
+    are for options. If needed, this can be enhanced to detect from symbol.
+    """
+    if exchange in ['NSE', 'BSE']:
+        return 'EQUITY'
+    elif exchange in ['NFO', 'BFO']:
+        # Default to OPTSTK for derivatives
+        return 'OPTSTK'
+    return 'EQUITY'
+
 def transform_margin_position(position):
     """
-    Transform a single OpenAlgo margin position to Paytm query parameters format.
+    Transform a single OpenAlgo margin position to Paytm request body format.
 
-    Note: Paytm margin calculator API accepts only one order at a time via GET request.
+    According to Paytm API docs, the margin calculator accepts POST requests with:
+    - source, exchange, segment, security_id, txn_type, quantity,
+      strike_price, trigger_price, instrument
 
     Args:
         position: Position in OpenAlgo format
 
     Returns:
-        Dict of query parameters for Paytm margin API or None if transformation fails
+        Dict of request body for Paytm margin API or None if transformation fails
     """
     try:
         # Get the security token for the symbol
@@ -37,27 +67,27 @@ def transform_margin_position(position):
             logger.warning(f"Invalid exchange: {position['exchange']}")
             return None
 
-        # Get segment
+        # Get segment (E for equity, D for derivative)
         segment = get_segment_from_exchange(position['exchange'])
 
-        # Prepare query parameters
-        params = {
-            "source": "M",  # mWeb
+        # Get instrument type (EQUITY, FUTSTK, OPTSTK)
+        instrument = get_instrument_type(position['exchange'])
+
+        # Prepare request body according to API docs
+        body = {
+            "source": "M",  # mWeb - can be W, M, N, I, R, O
             "exchange": exchange,
             "segment": segment,
             "security_id": str(security_id),
             "txn_type": position['action'].upper(),  # BUY or SELL
             "quantity": str(int(position['quantity'])),
-            "product": reverse_map_product_type(position['product']),
-            "price": str(float(position.get('price', 0)))
+            "strike_price": "0",  # Default to 0 for non-options
+            "trigger_price": str(float(position.get('trigger_price', 0))),
+            "instrument": instrument
         }
 
-        # Add trigger price if present
-        trigger_price = position.get('trigger_price', 0)
-        if trigger_price and float(trigger_price) > 0:
-            params['trigger_price'] = str(float(trigger_price))
-
-        return params
+        logger.debug(f"Transformed position for {position['symbol']}: {body}")
+        return body
 
     except Exception as e:
         logger.error(f"Error transforming position: {position}, Error: {e}")
@@ -67,11 +97,17 @@ def parse_margin_response(response_data):
     """
     Parse Paytm margin response to OpenAlgo standard format.
 
+    According to Paytm API docs, response includes:
+    - span_margin: SPAN margin as per exchange
+    - exposure_margin: Exposure margin required
+    - option_premium: Option premium value
+    - total_margin: Total margin required for execution
+
     Args:
         response_data: Raw response from Paytm API
 
     Returns:
-        Standardized margin response
+        Standardized margin response matching OpenAlgo format
     """
     try:
         if not response_data or not isinstance(response_data, dict):
@@ -80,10 +116,9 @@ def parse_margin_response(response_data):
                 'message': 'Invalid response from broker'
             }
 
-        # Check for errors in meta
-        meta = response_data.get('meta', {})
-        if 'error' in meta:
-            error_message = meta.get('error', {}).get('message', 'Failed to calculate margin')
+        # Check for errors in the response
+        if response_data.get('status') == 'error' or 'error' in response_data:
+            error_message = response_data.get('message', 'Failed to calculate margin')
             return {
                 'status': 'error',
                 'message': error_message
@@ -98,18 +133,19 @@ def parse_margin_response(response_data):
                 'message': 'No data in response'
             }
 
-        # Return standardized format
+        # Extract margin components according to API docs
+        span_margin = float(data.get('span_margin', 0))
+        exposure_margin = float(data.get('exposure_margin', 0))
+        option_premium = float(data.get('option_premium', 0))
+        total_margin = float(data.get('total_margin', 0))
+
+        # Return standardized format (without margin_benefit and option_premium)
         return {
             'status': 'success',
             'data': {
-                'total_margin_required': float(data.get('t_total_margin', 0)),
-                'span_margin': float(data.get('t_span_margin', 0)),
-                'exposure_margin': float(data.get('t_exposure_margin', 0)),
-                'available_balance': float(data.get('available_bal', 0)),
-                'variable_margin': float(data.get('t_var_margin', 0)),
-                'insufficient_balance': float(data.get('insufficient_bal', 0)),
-                'brokerage': float(data.get('brokerage', 0)),
-                'raw_response': data  # Include raw response for debugging
+                'total_margin_required': total_margin,
+                'span_margin': span_margin,
+                'exposure_margin': exposure_margin
             }
         }
 
@@ -128,17 +164,12 @@ def parse_batch_margin_response(responses):
         responses: List of individual margin responses
 
     Returns:
-        Aggregated margin response
+        Aggregated margin response matching OpenAlgo format
     """
     try:
         total_margin = 0
         total_span = 0
         total_exposure = 0
-        total_var_margin = 0
-        total_brokerage = 0
-        available_balance = 0
-        insufficient_balance = 0
-        all_responses = []
 
         for response in responses:
             if response.get('status') == 'success':
@@ -146,27 +177,13 @@ def parse_batch_margin_response(responses):
                 total_margin += data.get('total_margin_required', 0)
                 total_span += data.get('span_margin', 0)
                 total_exposure += data.get('exposure_margin', 0)
-                total_var_margin += data.get('variable_margin', 0)
-                total_brokerage += data.get('brokerage', 0)
-                # Take the max available balance (it should be same for all)
-                available_balance = max(available_balance, data.get('available_balance', 0))
-                all_responses.append(data.get('raw_response', {}))
-
-        # Calculate total insufficient balance
-        insufficient_balance = max(0, total_margin - available_balance)
 
         return {
             'status': 'success',
             'data': {
                 'total_margin_required': total_margin,
                 'span_margin': total_span,
-                'exposure_margin': total_exposure,
-                'variable_margin': total_var_margin,
-                'available_balance': available_balance,
-                'total_brokerage': total_brokerage,
-                'insufficient_balance': insufficient_balance,
-                'total_positions': len(responses),
-                'individual_margins': all_responses
+                'exposure_margin': total_exposure
             }
         }
 

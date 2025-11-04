@@ -11,14 +11,18 @@ logger = get_logger(__name__)
 
 # Paytm API constants
 PAYTM_BASE_URL = 'https://developer.paytmmoney.com'
-PAYTM_MARGIN_URL = f'{PAYTM_BASE_URL}/margin/v1/order/calculator'
+PAYTM_MARGIN_URL = f'{PAYTM_BASE_URL}/margin/v1/scrips/calculator'
 
-def calculate_single_margin(params, auth):
+def calculate_single_margin(body, auth):
     """
     Calculate margin for a single position using Paytm API.
 
+    According to API docs: POST request to /margin/v1/scrips/calculator
+    with JSON body containing: source, exchange, segment, security_id,
+    txn_type, quantity, strike_price, trigger_price, instrument
+
     Args:
-        params: Query parameters for Paytm margin API
+        body: Request body dict for Paytm margin API
         auth: Authentication token (JWT token)
 
     Returns:
@@ -32,17 +36,17 @@ def calculate_single_margin(params, auth):
         'Content-Type': 'application/json'
     }
 
-    logger.info(f"Paytm margin calculation params: {params}")
+    logger.info(f"Paytm margin calculation body: {body}")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
     try:
-        # Make the GET request with query parameters
-        response = client.get(
+        # Make the POST request with JSON body
+        response = client.post(
             PAYTM_MARGIN_URL,
             headers=headers,
-            params=params
+            json=body
         )
 
         # Add status attribute for compatibility
@@ -82,8 +86,9 @@ def calculate_margin_api(positions, auth):
     """
     Calculate margin requirement for a basket of positions using Paytm API.
 
-    Note: Paytm's margin calculator accepts only one order at a time via GET request,
-    so we make multiple API calls and aggregate the results.
+    According to API docs, the margin calculator accepts POST requests to
+    /margin/v1/scrips/calculator. We make one API call per position and
+    aggregate the results.
 
     Args:
         positions: List of positions in OpenAlgo format
@@ -92,14 +97,14 @@ def calculate_margin_api(positions, auth):
     Returns:
         Tuple of (response, response_data)
     """
-    # Transform all positions
-    transformed_params_list = []
+    # Transform all positions to request bodies
+    transformed_bodies = []
     for position in positions:
-        params = transform_margin_position(position)
-        if params:
-            transformed_params_list.append(params)
+        body = transform_margin_position(position)
+        if body:
+            transformed_bodies.append(body)
 
-    if not transformed_params_list:
+    if not transformed_bodies:
         error_response = {
             'status': 'error',
             'message': 'No valid positions to calculate margin. Check if symbols are valid.'
@@ -109,19 +114,21 @@ def calculate_margin_api(positions, auth):
             status = 400
         return MockResponse(), error_response
 
+    logger.info(f"Calculating margin for {len(transformed_bodies)} position(s)")
+
     # Calculate margin for each position
     margin_responses = []
     last_response = None
 
-    for params in transformed_params_list:
-        response, parsed_response = calculate_single_margin(params, auth)
+    for body in transformed_bodies:
+        response, parsed_response = calculate_single_margin(body, auth)
         last_response = response
         margin_responses.append(parsed_response)
 
         # If any single margin calculation fails, we might want to continue
         # but log the error
         if parsed_response.get('status') == 'error':
-            logger.warning(f"Margin calculation failed for params: {params}, Error: {parsed_response.get('message')}")
+            logger.warning(f"Margin calculation failed for body: {body}, Error: {parsed_response.get('message')}")
 
     # Aggregate the responses
     if len(margin_responses) == 1:
@@ -130,6 +137,9 @@ def calculate_margin_api(positions, auth):
     else:
         # Multiple positions - aggregate
         final_response = parse_batch_margin_response(margin_responses)
+
+    # Log the final aggregated response
+    logger.info(f"Final margin calculation result: {final_response}")
 
     # Return the last HTTP response object and the aggregated data
     return last_response, final_response

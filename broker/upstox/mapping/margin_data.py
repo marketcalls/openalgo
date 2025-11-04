@@ -128,8 +128,7 @@ def parse_margin_response(response_data):
             'data': {
                 'total_margin_required': required_margin,
                 'span_margin': total_span,
-                'exposure_margin': total_exposure,
-                'margin_benefit': margin_benefit
+                'exposure_margin': total_exposure
             }
         }
 
