@@ -74,11 +74,21 @@ def parse_margin_response(response_data):
     """
     Parse Dhan margin response to OpenAlgo standard format.
 
+    According to Dhan API docs, response includes:
+    - totalMargin: Total margin required for placing the order
+    - spanMargin: SPAN margin required
+    - exposureMargin: Exposure margin required
+    - availableBalance: Available amount in trading account
+    - variableMargin: VAR or variable margin required
+    - insufficientBalance: Insufficient amount in account
+    - brokerage: Brokerage charges
+    - leverage: Margin leverage based on product type
+
     Args:
         response_data: Raw response from Dhan API
 
     Returns:
-        Standardized margin response
+        Standardized margin response matching OpenAlgo format
     """
     try:
         if not response_data or not isinstance(response_data, dict):
@@ -95,19 +105,18 @@ def parse_margin_response(response_data):
                 'message': error_message
             }
 
-        # Return standardized format with Dhan-specific fields
+        # Extract margin values from response
+        total_margin = float(response_data.get('totalMargin', 0))
+        span_margin = float(response_data.get('spanMargin', 0))
+        exposure_margin = float(response_data.get('exposureMargin', 0))
+
+        # Return standardized format (only essential fields)
         return {
             'status': 'success',
             'data': {
-                'total_margin_required': response_data.get('totalMargin', 0),
-                'span_margin': response_data.get('spanMargin', 0),
-                'exposure_margin': response_data.get('exposureMargin', 0),
-                'available_balance': response_data.get('availableBalance', 0),
-                'variable_margin': response_data.get('variableMargin', 0),
-                'insufficient_balance': response_data.get('insufficientBalance', 0),
-                'brokerage': response_data.get('brokerage', 0),
-                'leverage': response_data.get('leverage', '1.00'),
-                'raw_response': response_data  # Include raw response for debugging
+                'total_margin_required': total_margin,
+                'span_margin': span_margin,
+                'exposure_margin': exposure_margin
             }
         }
 
@@ -120,48 +129,63 @@ def parse_margin_response(response_data):
 
 def parse_batch_margin_response(responses):
     """
-    Parse multiple Dhan margin responses and aggregate them.
+    Parse multiple Dhan margin responses and aggregate them by simple summation.
+
+    IMPORTANT - Limitation:
+    Since Dhan API only supports single-leg margin calculation, we calculate
+    each leg individually and SUM the results. This approach:
+
+    ✓ Works correctly for independent positions
+    ✗ Does NOT account for spread/hedge benefits in combo strategies
+    ✗ Does NOT provide portfolio-level margin optimization
+
+    Example:
+    - Short Straddle (CE + PE): Sum of individual margins (no hedge benefit)
+    - Iron Condor: Sum of 4 individual leg margins (no spread benefit)
+
+    This is a limitation of the Dhan API, not OpenAlgo.
 
     Args:
-        responses: List of individual margin responses
+        responses: List of individual margin responses (one per leg)
 
     Returns:
-        Aggregated margin response
+        Aggregated margin response matching OpenAlgo format
     """
     try:
         total_margin = 0
         total_span = 0
         total_exposure = 0
-        total_brokerage = 0
-        available_balance = 0
-        insufficient_balance = 0
-        all_responses = []
+        successful_legs = 0
 
-        for response in responses:
+        logger.info("AGGREGATING INDIVIDUAL LEG MARGINS")
+        logger.info("-"*80)
+
+        for idx, response in enumerate(responses, 1):
             if response.get('status') == 'success':
                 data = response.get('data', {})
-                total_margin += data.get('total_margin_required', 0)
-                total_span += data.get('span_margin', 0)
-                total_exposure += data.get('exposure_margin', 0)
-                total_brokerage += data.get('brokerage', 0)
-                # Take the max available balance (it should be same for all)
-                available_balance = max(available_balance, data.get('available_balance', 0))
-                all_responses.append(data.get('raw_response', {}))
+                leg_margin = data.get('total_margin_required', 0)
+                leg_span = data.get('span_margin', 0)
+                leg_exposure = data.get('exposure_margin', 0)
 
-        # Calculate total insufficient balance
-        insufficient_balance = max(0, total_margin - available_balance)
+                total_margin += leg_margin
+                total_span += leg_span
+                total_exposure += leg_exposure
+                successful_legs += 1
+
+                logger.debug(f"Leg {idx}: Total={leg_margin:,.2f}, SPAN={leg_span:,.2f}, Exposure={leg_exposure:,.2f}")
+
+        logger.info(f"Successfully aggregated {successful_legs} legs")
+        logger.info(f"Total Margin (Sum):      Rs. {total_margin:,.2f}")
+        logger.info(f"Total SPAN (Sum):        Rs. {total_span:,.2f}")
+        logger.info(f"Total Exposure (Sum):    Rs. {total_exposure:,.2f}")
+        logger.info("-"*80)
 
         return {
             'status': 'success',
             'data': {
                 'total_margin_required': total_margin,
                 'span_margin': total_span,
-                'exposure_margin': total_exposure,
-                'available_balance': available_balance,
-                'total_brokerage': total_brokerage,
-                'insufficient_balance': insufficient_balance,
-                'total_positions': len(responses),
-                'individual_margins': all_responses
+                'exposure_margin': total_exposure
             }
         }
 
