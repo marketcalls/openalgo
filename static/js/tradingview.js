@@ -3,17 +3,26 @@ document.addEventListener('DOMContentLoaded', function() {
     const symbolInput = document.getElementById('symbol');
     const exchangeSelect = document.getElementById('exchange');
     const productSelect = document.getElementById('product');
+    const actionSelect = document.getElementById('action');
+    const quantityInput = document.getElementById('quantity');
+    const actionField = document.getElementById('action-field');
+    const quantityField = document.getElementById('quantity-field');
+    const webhookDisplay = document.getElementById('webhook-display');
     const searchResults = document.getElementById('searchResults');
     const loadingIndicator = document.querySelector('.loading-indicator');
     const tradingviewForm = document.getElementById('tradingview-form');
     let debounceTimeout;
+    let currentMode = 'strategy'; // Default mode
+
+    // Host URL from template
+    const hostURL = '{{ host }}' || window.location.origin;
 
     // Set default values and generate JSON
     if (symbolInput && exchangeSelect && productSelect) {
-        symbolInput.value = 'ETERNAL';
+        symbolInput.value = 'SAIL';
         exchangeSelect.value = 'NSE';
         productSelect.value = 'MIS';
-        
+
         // Auto-generate JSON on load
         generateJSON();
     }
@@ -52,6 +61,16 @@ document.addEventListener('DOMContentLoaded', function() {
     // Product type change handler
     if (productSelect) {
         productSelect.addEventListener('change', generateJSON);
+    }
+
+    // Action change handler (Line Mode)
+    if (actionSelect) {
+        actionSelect.addEventListener('change', generateJSON);
+    }
+
+    // Quantity change handler (Line Mode)
+    if (quantityInput) {
+        quantityInput.addEventListener('input', generateJSON);
     }
 
     // Click outside search results handler
@@ -121,8 +140,16 @@ document.addEventListener('DOMContentLoaded', function() {
         const formData = {
             symbol: symbolInput.value,
             exchange: exchangeSelect.value,
-            product: productSelect.value
+            product: productSelect.value,
+            mode: currentMode
         };
+
+        // Add action and quantity for Line mode
+        if (currentMode === 'line') {
+            if (!actionSelect || !quantityInput) return;
+            formData.action = actionSelect.value;
+            formData.quantity = quantityInput.value;
+        }
 
         fetch('/tradingview/', {
             method: 'POST',
@@ -141,20 +168,34 @@ document.addEventListener('DOMContentLoaded', function() {
             if (status !== 200) {
                 throw new Error(data.error || 'Network response was not ok');
             }
-            
-            // Reconstruct the JSON object in the correct order with exact symbol
-            let orderedData = {
-                "apikey": data.apikey,
-                "strategy": data.strategy,
-                "symbol": symbolInput.value,
-                "action": data.action,
-                "exchange": exchangeSelect.value,
-                "pricetype": data.pricetype,
-                "product": productSelect.value,
-                "quantity": data.quantity,
-                "position_size": data.position_size
-            };
-            
+
+            // Reconstruct the JSON object in the correct order
+            let orderedData;
+            if (currentMode === 'line') {
+                orderedData = {
+                    "apikey": data.apikey,
+                    "strategy": data.strategy,
+                    "symbol": symbolInput.value,
+                    "action": data.action,
+                    "exchange": exchangeSelect.value,
+                    "pricetype": data.pricetype,
+                    "product": productSelect.value,
+                    "quantity": data.quantity
+                };
+            } else {
+                orderedData = {
+                    "apikey": data.apikey,
+                    "strategy": data.strategy,
+                    "symbol": symbolInput.value,
+                    "action": data.action,
+                    "exchange": exchangeSelect.value,
+                    "pricetype": data.pricetype,
+                    "product": productSelect.value,
+                    "quantity": data.quantity,
+                    "position_size": data.position_size
+                };
+            }
+
             const jsonOutput = document.getElementById('json-output');
             if (jsonOutput) {
                 const formattedJson = JSON.stringify(orderedData, null, 2);
@@ -216,24 +257,68 @@ document.addEventListener('DOMContentLoaded', function() {
     function showToast(message, type = 'error', withLink = false) {
         const toast = document.createElement('div');
         toast.className = 'toast toast-end';
-        
+
         let alertClass = type === 'warning' ? 'alert-warning' : 'alert-error';
         let content = message;
-        
+
         if (withLink) {
             content = `
                 ${message}
                 <a href="/apikey" class="btn btn-sm btn-primary ml-2">Go to API Key Setup</a>
             `;
         }
-        
+
         toast.innerHTML = `
             <div class="alert ${alertClass} flex items-center">
                 <span>${content}</span>
             </div>
         `;
-        
+
         document.body.appendChild(toast);
         setTimeout(() => toast.remove(), 5000);
     }
+
+    // Mode switching function (globally accessible for onclick)
+    window.switchMode = function(mode) {
+        currentMode = mode;
+
+        // Update tab states
+        const strategyTab = document.getElementById('strategy-tab');
+        const lineTab = document.getElementById('line-tab');
+
+        if (mode === 'strategy') {
+            strategyTab.classList.add('tab-active');
+            lineTab.classList.remove('tab-active');
+
+            // Hide line mode fields
+            if (actionField) actionField.classList.add('hidden');
+            if (quantityField) quantityField.classList.add('hidden');
+
+            // Update webhook URL
+            if (webhookDisplay) {
+                webhookDisplay.textContent = '.../api/v1/placesmartorder';
+                webhookDisplay.setAttribute('data-tip', `${window.location.origin}/api/v1/placesmartorder`);
+            }
+        } else {
+            lineTab.classList.add('tab-active');
+            strategyTab.classList.remove('tab-active');
+
+            // Show line mode fields
+            if (actionField) actionField.classList.remove('hidden');
+            if (quantityField) quantityField.classList.remove('hidden');
+
+            // Set default values for line mode
+            if (actionSelect) actionSelect.value = 'BUY';
+            if (quantityInput) quantityInput.value = '1';
+
+            // Update webhook URL
+            if (webhookDisplay) {
+                webhookDisplay.textContent = '.../api/v1/placeorder';
+                webhookDisplay.setAttribute('data-tip', `${window.location.origin}/api/v1/placeorder`);
+            }
+        }
+
+        // Regenerate JSON
+        generateJSON();
+    };
 });
