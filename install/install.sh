@@ -629,6 +629,8 @@ if [ -d "$OPENALGO_PATH" ] && [ -d "$OPENALGO_PATH/.git" ]; then
                 log_message "Error: Could not stash changes. Please commit or discard changes manually." "$RED"
                 exit 1
             }
+            # Capture the specific stash ref we just created to avoid popping unrelated entries
+            STASH_REF=$(sudo -u $WEB_USER git stash list | grep -m1 "Auto-stash before install update" | awk -F: '{print $1}')
         fi
         
         # Pull latest changes
@@ -637,9 +639,9 @@ if [ -d "$OPENALGO_PATH" ] && [ -d "$OPENALGO_PATH/.git" ]; then
         check_status "Failed to pull latest changes"
         
         # Restore stashed changes if any
-        if sudo -u $WEB_USER git stash list | grep -q "Auto-stash before install update"; then
+        if [ -n "$STASH_REF" ]; then
             log_message "Restoring stashed changes..." "$YELLOW"
-            sudo -u $WEB_USER git stash pop 2>/dev/null || log_message "Warning: Could not restore stashed changes" "$YELLOW"
+            sudo -u $WEB_USER git stash pop "$STASH_REF" 2>/dev/null || log_message "Warning: Could not restore stashed changes" "$YELLOW"
         fi
         
         NEW_COMMIT=$(sudo -u $WEB_USER git rev-parse HEAD)
@@ -1150,7 +1152,7 @@ CURRENT_COMMIT=\$(sudo -u $WEB_USER git rev-parse HEAD)
 REMOTE_COMMIT=\$(sudo -u $WEB_USER git rev-parse origin/\${CURRENT_BRANCH})
 
 if [ "\$CURRENT_COMMIT" != "\$REMOTE_COMMIT" ]; then
-    echo "[$(date)] Updating $DEPLOY_NAME from \${CURRENT_COMMIT:0:8} to \${REMOTE_COMMIT:0:8}..."
+    echo "[\$(date)] Updating $DEPLOY_NAME from \${CURRENT_COMMIT:0:8} to \${REMOTE_COMMIT:0:8}..."
     
     # Stash any local changes
     sudo -u $WEB_USER git stash push -m "Auto-stash before scheduled update \$(date +%Y%m%d_%H%M%S)" 2>/dev/null
@@ -1180,14 +1182,14 @@ if [ "\$CURRENT_COMMIT" != "\$REMOTE_COMMIT" ]; then
         
         # Restart service
         systemctl restart $SERVICE_NAME > /dev/null 2>&1
-        echo "[$(date)] Update completed successfully for $DEPLOY_NAME"
+        echo "[\$(date)] Update completed successfully for $DEPLOY_NAME"
     else
-        echo "[$(date)] Error: Failed to update $DEPLOY_NAME"
+        echo "[\$(date)] Error: Failed to update $DEPLOY_NAME"
         # Restore stashed changes on failure
         sudo -u $WEB_USER git stash pop 2>/dev/null
     fi
 else
-    echo "[$(date)] $DEPLOY_NAME is already up to date"
+    echo "[\$(date)] $DEPLOY_NAME is already up to date"
 fi
 EOUPDATESCRIPT
     

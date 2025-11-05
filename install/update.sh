@@ -259,7 +259,7 @@ else
     # Multiple installations
     log_message "\nFound ${#INSTALLATIONS[@]} OpenAlgo installation(s):" "$BLUE"
     for i in "${!INSTALLATIONS[@]}"; do
-        local deploy_name=$(basename "${INSTALLATIONS[$i]}")
+        deploy_name=$(basename "${INSTALLATIONS[$i]}")
         log_message "  [$((i+1))] $deploy_name (${INSTALLATIONS[$i]})" "$BLUE"
     done
     

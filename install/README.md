@@ -376,11 +376,11 @@ OpenAlgo can be updated to the latest version using multiple methods:
 The update script provides a safe and comprehensive update process:
 
 ```bash
-# Update all installations interactively
-sudo bash /var/python/openalgo-flask/*/openalgo/install/update.sh
+# Update all installations interactively (run the script once; choose "all")
+sudo bash /var/python/openalgo-flask/yourdomain-broker/openalgo/install/update.sh
 
 # Update a specific installation
-sudo bash /var/python/openalgo-flask/*/openalgo/install/update.sh /var/python/openalgo-flask/yourdomain-broker
+sudo bash /var/python/openalgo-flask/yourdomain-broker/openalgo/install/update.sh /var/python/openalgo-flask/yourdomain-broker
 ```
 
 The update script will:
