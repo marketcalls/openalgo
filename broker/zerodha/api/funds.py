@@ -1,8 +1,6 @@
 # api/funds.py
 
-import os
-import json
-from utils.httpx_client import get_httpx_client
+from broker.zerodha.api.api_response import get_api_response
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -11,37 +9,7 @@ logger = get_logger(__name__)
 
 def get_margin_data(auth_token):
     """Fetch margin data from Zerodha's API using the provided auth token."""
-    api_key = os.getenv('BROKER_API_KEY')
-    
-    # Get the shared httpx client with connection pooling
-    client = get_httpx_client()
-    
-    headers = {
-        'X-Kite-Version': '3',
-        'Authorization': f'token {auth_token}'
-    }
-    
-    try:
-        # Make the GET request using the shared client
-        response = client.get(
-            'https://api.kite.trade/user/margins',
-            headers=headers
-        )
-        response.raise_for_status()  # Raises an exception for 4XX/5XX responses
-        
-        # Parse the response
-        margin_data = response.json()
-    except Exception as e:
-        error_message = str(e)
-        try:
-            if hasattr(e, 'response') and e.response is not None:
-                error_detail = e.response.json()
-                error_message = error_detail.get('message', str(e))
-        except:
-            pass
-            
-        logger.error(f"Error fetching margin data: {error_message}")
-        return {}
+    margin_data = get_api_response("/user/margins",auth_token)
 
     logger.info(f"Funds Details: {margin_data}")
 
