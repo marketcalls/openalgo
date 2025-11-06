@@ -80,6 +80,11 @@ class BrokerData:
             if response.status_code == 200:
                 response_data = json.loads(response.text)
                 logger.debug(f"QUOTES API - Raw response: {response.text[:200]}...")  # Log first 200 chars
+                
+                # Log the complete structure for debugging (only for depth requests)
+                if "depth" in endpoint and response_data and isinstance(response_data, list) and len(response_data) > 0:
+                    logger.debug(f"DEPTH API - Complete raw response structure: {json.dumps(response_data[0], indent=2)}")
+                
                 return response_data
             else:
                 logger.warning(f"QUOTES API - HTTP {response.status_code}: {response.text}")
@@ -141,13 +146,35 @@ class BrokerData:
                 
                 # Parse Neo API v2 response format (based on actual API response)
                 ohlc_data = quote_data.get('ohlc', {})
+                ltp_parsed = float(quote_data.get('ltp', 0))
+                
+                # Get depth data for actual bid/ask prices
+                depth_data = quote_data.get('depth', {})
+                buy_orders = depth_data.get('buy', [])
+                sell_orders = depth_data.get('sell', [])
+                
+                # Extract best bid and ask prices from depth
+                bid_price = float(buy_orders[0].get('price', 0)) if buy_orders else ltp_parsed
+                ask_price = float(sell_orders[0].get('price', 0)) if sell_orders else ltp_parsed
+                
+                # Get total quantities (for reference)
+                total_buy_qty = quote_data.get('total_buy', 0)
+                total_sell_qty = quote_data.get('total_sell', 0)
+                
+                logger.debug(f"QUOTES API - Parsing for {quote_data.get('display_symbol', 'unknown')}:")
+                logger.debug(f"  - ltp: {ltp_parsed}")
+                logger.debug(f"  - total_buy_qty: {total_buy_qty} (quantity, not price)")
+                logger.debug(f"  - total_sell_qty: {total_sell_qty} (quantity, not price)")
+                logger.debug(f"  - best_bid_price: {bid_price}")
+                logger.debug(f"  - best_ask_price: {ask_price}")
+                
                 return {
-                    'bid': float(quote_data.get('total_buy', 0)),
-                    'ask': float(quote_data.get('total_sell', 0)),
+                    'bid': bid_price,
+                    'ask': ask_price,
                     'open': float(ohlc_data.get('open', 0)),
                     'high': float(ohlc_data.get('high', 0)),
                     'low': float(ohlc_data.get('low', 0)),
-                    'ltp': float(quote_data.get('ltp', 0)),
+                    'ltp': ltp_parsed,
                     'prev_close': float(ohlc_data.get('close', 0)),
                     'volume': float(quote_data.get('last_volume', 0)),
                     'oi': int(quote_data.get('open_int', 0))  # Available in response
@@ -205,14 +232,19 @@ class BrokerData:
                 target_quote = response[0]
                 depth_data = target_quote.get('depth', {})
                 
+                logger.debug(f"DEPTH API - Raw depth data: {depth_data}")
+                
                 # Parse Neo API v2 depth format (based on actual API response)
                 bids = []
                 asks = []
                 
                 # Process buy orders (bids) - handle both array and object formats
                 buy_data = depth_data.get('buy', [])
+                logger.debug(f"DEPTH API - Buy data: {buy_data}")
+                
                 if isinstance(buy_data, list):
-                    for bid in buy_data[:5]:  # Top 5 bids
+                    for i, bid in enumerate(buy_data[:5]):  # Top 5 bids
+                        logger.debug(f"DEPTH API - Processing bid {i}: {bid}")
                         bids.append({
                             'price': float(bid.get('price', 0)),
                             'quantity': int(bid.get('quantity', 0))
@@ -220,12 +252,18 @@ class BrokerData:
                 
                 # Process sell orders (asks) - handle both array and object formats  
                 sell_data = depth_data.get('sell', [])
+                logger.debug(f"DEPTH API - Sell data: {sell_data}")
+                
                 if isinstance(sell_data, list):
-                    for ask in sell_data[:5]:  # Top 5 asks
+                    for i, ask in enumerate(sell_data[:5]):  # Top 5 asks
+                        logger.debug(f"DEPTH API - Processing ask {i}: {ask}")
                         asks.append({
                             'price': float(ask.get('price', 0)),
                             'quantity': int(ask.get('quantity', 0))
                         })
+                
+                logger.debug(f"DEPTH API - Parsed bids: {bids}")
+                logger.debug(f"DEPTH API - Parsed asks: {asks}")
                 
                 # Ensure we have 5 levels
                 while len(bids) < 5:
@@ -233,12 +271,18 @@ class BrokerData:
                 while len(asks) < 5:
                     asks.append({'price': 0, 'quantity': 0})
                 
-                return {
+                total_buy_qty = sum(bid['quantity'] for bid in bids if bid['quantity'] > 0)
+                total_sell_qty = sum(ask['quantity'] for ask in asks if ask['quantity'] > 0)
+                
+                result = {
                     'bids': bids,
                     'asks': asks,
-                    'totalbuyqty': sum(bid['quantity'] for bid in bids),
-                    'totalsellqty': sum(ask['quantity'] for ask in asks)
+                    'totalbuyqty': total_buy_qty,
+                    'totalsellqty': total_sell_qty
                 }
+                
+                logger.debug(f"DEPTH API - Final result: {result}")
+                return result
             else:
                 logger.warning(f"No depth data received for {symbol}")
                 return self._get_default_depth()
