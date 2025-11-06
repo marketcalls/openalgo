@@ -100,3 +100,23 @@ class OptionsOrderSchema(Schema):
     price = fields.Float(missing=0.0, validate=validate.Range(min=0, error="Price must be a non-negative number."))
     trigger_price = fields.Float(missing=0.0, validate=validate.Range(min=0, error="Trigger price must be a non-negative number."))
     disclosed_quantity = fields.Int(missing=0, validate=validate.Range(min=0, error="Disclosed quantity must be a non-negative integer."))
+
+class MarginPositionSchema(Schema):
+    """Schema for a single position in margin calculation"""
+    symbol = fields.Str(required=True, validate=validate.Length(min=1, max=50, error="Symbol must be between 1 and 50 characters."))
+    exchange = fields.Str(required=True, validate=validate.OneOf(["NSE", "BSE", "NFO", "BFO", "CDS", "MCX"]))
+    action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
+    quantity = fields.Str(required=True)  # String to match API contract, validated in service layer
+    product = fields.Str(required=True, validate=validate.OneOf(["MIS", "NRML", "CNC"]))
+    pricetype = fields.Str(required=True, validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"]))
+    price = fields.Str(missing='0')  # String to match API contract
+    trigger_price = fields.Str(missing='0')  # String to match API contract
+
+class MarginCalculatorSchema(Schema):
+    """Schema for margin calculator request"""
+    apikey = fields.Str(required=True, validate=validate.Length(min=1, error="API key is required."))
+    positions = fields.List(
+        fields.Nested(MarginPositionSchema),
+        required=True,
+        validate=validate.Length(min=1, max=50, error="Positions must contain 1 to 50 items.")
+    )
