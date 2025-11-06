@@ -103,3 +103,9 @@ class OptionGreeksSchema(Schema):
     underlying_symbol = fields.Str(required=False)   # Optional: Specify underlying symbol (e.g., NIFTY or NIFTY28NOV24FUT)
     underlying_exchange = fields.Str(required=False)  # Optional: Specify underlying exchange (NSE_INDEX, NFO, etc.)
     expiry_time = fields.Str(required=False)  # Optional: Custom expiry time in HH:MM format (e.g., "15:30", "19:00"). If not provided, uses exchange defaults
+
+class CustomBrokerSchema(Schema):
+    apikey = fields.Str(required=True)
+    endpoint = fields.Str(required=True)
+    method = fields.Str(required=False, default="GET")
+    payload = fields.Raw(required=False, default=None)
