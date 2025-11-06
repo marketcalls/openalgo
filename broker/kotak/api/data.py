@@ -115,8 +115,15 @@ class BrokerData:
                     logger.error(f"pSymbol or brexchange not found for {symbol} on {exchange}")
                     return self._get_default_quote()
 
-                # Build query using brexchange from database: brexchange|pSymbol
-                query = f"{brexchange}|{psymbol}"
+                # Map brexchange to correct Kotak format if needed
+                if brexchange in ['NSE', 'BSE', 'NFO', 'BFO', 'CDS', 'MCX']:
+                    kotak_exchange = self._get_kotak_exchange(brexchange)
+                    logger.info(f"QUOTES API - Mapped {brexchange} to {kotak_exchange}")
+                else:
+                    kotak_exchange = brexchange  # Already in correct format
+                
+                # Build query using mapped exchange: kotak_exchange|pSymbol
+                query = f"{kotak_exchange}|{psymbol}"
                 logger.info(f"QUOTES API - Query: {query}")
             
             # Make API request
@@ -176,12 +183,19 @@ class BrokerData:
                 brexchange = get_brexchange(symbol, exchange)
                 logger.info(f"DEPTH API - pSymbol: {psymbol}, brexchange: {brexchange}")
 
-                if not psymbol or not brexchange:
+                if not psymbol or brexchange is None:
                     logger.error(f"pSymbol or brexchange not found for {symbol} on {exchange}")
                     return self._get_default_depth()
 
-                # Build query using brexchange from database: brexchange|pSymbol
-                query = f"{brexchange}|{psymbol}"
+                # Map brexchange to correct Kotak format if needed
+                if brexchange in ['NSE', 'BSE', 'NFO', 'BFO', 'CDS', 'MCX']:
+                    kotak_exchange = self._get_kotak_exchange(brexchange)
+                    logger.info(f"DEPTH API - Mapped {brexchange} to {kotak_exchange}")
+                else:
+                    kotak_exchange = brexchange  # Already in correct format
+                
+                # Build query using mapped exchange: kotak_exchange|pSymbol
+                query = f"{kotak_exchange}|{psymbol}"
                 logger.debug(f"DEPTH API - Query: {query}")
             
             # Make API request with depth filter
