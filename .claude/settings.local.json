@@ -36,6 +36,8 @@
       "Bash(move \"D:\\openalgo-sandbox-test\\openalgo\\websocket_proxy\\OPTIMIZATION_SUMMARY.md\" \"D:\\openalgo-sandbox-test\\openalgo\\docs\\WEBSOCKET_OPTIMIZATION.md\")",
       "WebFetch(domain:docs.openalgo.in)",
       "WebFetch(domain:kite.trade)"
+      "Bash(move docsgocharting_webhook_setup.md staticdocsgocharting_webhook_setup.md)",
+      "Bash(npx update-browserslist-db@latest:*)"
     ],
     "deny": [],
     "ask": []

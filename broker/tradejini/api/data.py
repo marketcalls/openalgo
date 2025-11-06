@@ -40,16 +40,16 @@ class TradejiniWebSocket:
             # Format the auth token exactly as per TradeJini requirements
             if ':' not in auth_token and api_key:
                 auth_header = f"{api_key}:{auth_token}"
-                logger.info("Using API key from BROKER_API_SECRET environment variable")
+                logger.debug("Using API key from BROKER_API_SECRET environment variable")
             elif ':' in auth_token:
                 auth_header = auth_token
-                logger.info("Using provided API key and access token")
+                logger.debug("Using provided API key and access token")
             else:
                 error_msg = "Invalid auth token format. Expected 'api_key:access_token' or set BROKER_API_SECRET"
                 logger.error(error_msg)
                 raise ValueError(error_msg)
             
-            logger.info(f"Connecting to Tradejini WebSocket using official SDK")
+            logger.debug(f"Connecting to Tradejini WebSocket using official SDK")
             
             # Create NxtradStream instance with callbacks using official SDK
             self.nx_stream = NxtradStream(
@@ -59,7 +59,7 @@ class TradejiniWebSocket:
             )
             
             # Connect with formatted auth token
-            logger.info(f"Connecting with auth token format: {auth_header.split(':')[0][:4]}***:{auth_header.split(':')[1][:4]}***")
+            logger.debug(f"Connecting with auth token format: {auth_header.split(':')[0][:4]}***:{auth_header.split(':')[1][:4]}***")
             self.nx_stream.connect(auth_header)
             
             # Wait for connection
@@ -72,7 +72,7 @@ class TradejiniWebSocket:
                     logger.info(f"Still waiting for connection... ({wait_count}/{max_wait})")
             
             if self.connected:
-                logger.info("Successfully connected to Tradejini WebSocket")
+                logger.debug("Successfully connected to Tradejini WebSocket")
                 return True
             else:
                 logger.error("Failed to connect to Tradejini WebSocket within timeout")
@@ -85,7 +85,7 @@ class TradejiniWebSocket:
     def _on_connection(self, nx_stream, event):
         """Handle connection events from official SDK"""
         try:
-            logger.info(f"Connection event: {event}")
+            logger.debug(f"Connection event: {event}")
             
             if event.get('s') == "connected":
                 self.connected = True
@@ -129,13 +129,13 @@ class TradejiniWebSocket:
                     # Store quote data exactly like original SDK
                     self.L1_dict[symbol] = data
                     self.last_quote = data
-                    logger.info(f"Updated L1 data for {symbol}: LTP={data.get('ltp', 0)}")
+                    logger.debug(f"Updated L1 data for {symbol}: LTP={data.get('ltp', 0)}")
                     
                 elif msg_type == 'L5':
                     # Store depth data
                     self.L5_dict[symbol] = data
                     self.last_depth = data
-                    logger.info(f"Updated L5 data for {symbol}")
+                    logger.debug(f"Updated L5 data for {symbol}")
                     
         except Exception as e:
             logger.error(f"Error processing data: {str(e)}", exc_info=True)
@@ -323,18 +323,18 @@ class BrokerData:
                     raise ConnectionError(error_msg)
 
             # Wait a moment for any initial setup messages to be processed
-            logger.info("Waiting for initial setup to complete...")
+            logger.debug("Waiting for initial setup to complete...")
             time.sleep(3)
 
             # Clear existing quote data
             with self.ws.lock:
                 self.ws.last_quote = None
                 self.ws.L1_dict.clear()  # Clear all cached data
-                logger.info("Cleared all cached quote data")
+                logger.debug("Cleared all cached quote data")
 
             # Subscribe to quotes - format as per Tradejini requirements
             symbol_key = f"{token}_{exchange}"
-            logger.info(f"Subscribing to quotes for: {symbol_key}")
+            logger.debug(f"Subscribing to quotes for: {symbol_key}")
             subscription_success = self.ws.subscribe_quotes([symbol_key])
             
             if not subscription_success:
@@ -342,7 +342,7 @@ class BrokerData:
                 logger.error(error_msg)
                 raise ConnectionError(error_msg)
             
-            logger.info("Quote subscription sent successfully, waiting for data...")
+            logger.debug("Quote subscription sent successfully, waiting for data...")
             
             # Wait for quote data with retries
             max_retries = 40
@@ -358,7 +358,7 @@ class BrokerData:
                 f"NSE_{token}",
             ]
             
-            logger.info(f"Will look for data with these symbol keys: {symbol_keys}")
+            logger.debug(f"Will look for data with these symbol keys: {symbol_keys}")
             
             while retry_count < max_retries:
                 time.sleep(1.0)
@@ -368,33 +368,33 @@ class BrokerData:
                     for check_key in symbol_keys:
                         if check_key in self.ws.L1_dict:
                             quote_data = self.ws.L1_dict[check_key]
-                            logger.info(f"Found quote in L1 cache with key '{check_key}': LTP={quote_data.get('ltp', 0)}")
+                            logger.debug(f"Found quote in L1 cache with key '{check_key}': LTP={quote_data.get('ltp', 0)}")
                             return self._format_quote(quote_data, symbol, exchange)
                     
                     # Check last_quote as fallback
                     if self.ws.last_quote is not None:
                         quote_data = self.ws.last_quote
                         quote_symbol = quote_data.get('symbol', '')
-                        logger.info(f"Found quote in last_quote with symbol: '{quote_symbol}'")
+                        logger.debug(f"Found quote in last_quote with symbol: '{quote_symbol}'")
                         # Check if it matches any of our expected keys
                         if any(quote_symbol == key for key in symbol_keys):
-                            logger.info(f"Quote matches expected symbol, LTP={quote_data.get('ltp', 0)}")
+                            logger.debug(f"Quote matches expected symbol, LTP={quote_data.get('ltp', 0)}")
                             return self._format_quote(quote_data, symbol, exchange)
                         else:
                             logger.debug(f"Quote symbol '{quote_symbol}' doesn't match expected keys: {symbol_keys}")
                 
                 retry_count += 1
                 if retry_count % 10 == 0:  # Log every 10 attempts
-                    logger.info(f"Still waiting for quote data... (attempt {retry_count}/{max_retries})")
-                    logger.info(f"L1 cache keys: {list(self.ws.L1_dict.keys())}")
+                    logger.debug(f"Still waiting for quote data... (attempt {retry_count}/{max_retries})")
+                    logger.debug(f"L1 cache keys: {list(self.ws.L1_dict.keys())}")
                     if self.ws.last_quote:
-                        logger.info(f"Last quote symbol: '{self.ws.last_quote.get('symbol', 'None')}'")
+                        logger.debug(f"Last quote symbol: '{self.ws.last_quote.get('symbol', 'None')}'")
                     else:
-                        logger.info(f"Last quote: None")
+                        logger.debug(f"Last quote: None")
 
             # If no data received, return default quote in OpenAlgo format
             logger.warning(f"No quote data received for {symbol} after {max_retries} attempts")
-            logger.info(f"Final L1 cache keys: {list(self.ws.L1_dict.keys())}")
+            logger.debug(f"Final L1 cache keys: {list(self.ws.L1_dict.keys())}")
             
             return {
                 'ask': 0.0,
@@ -441,7 +441,7 @@ class BrokerData:
                 self.ws.L5_dict.clear()
             
             # Subscribe to market depth
-            logger.info(f"Subscribing to depth for {symbol} (token: {token})")
+            logger.debug(f"Subscribing to depth for {symbol} (token: {token})")
             success = self.ws.subscribe_depth(symbol, exchange, token)
             
             if not success:
@@ -461,17 +461,17 @@ class BrokerData:
                     # Check L5 cache
                     if symbol_key in self.ws.L5_dict:
                         depth_data = self.ws.L5_dict[symbol_key]
-                        logger.info(f"Found depth data for {symbol}")
+                        logger.debug(f"Found depth data for {symbol}")
                         return self._format_depth(depth_data, symbol, exchange)
                     
                     # Check last_depth as fallback
                     if self.ws.last_depth is not None:
-                        logger.info(f"Found depth data in last_depth for {symbol}")
+                        logger.debug(f"Found depth data in last_depth for {symbol}")
                         return self._format_depth(self.ws.last_depth, symbol, exchange)
                 
                 retry_count += 1
                 if retry_count % 5 == 0:
-                    logger.info(f"Still waiting for depth data... (attempt {retry_count}/{max_retries})")
+                    logger.debug(f"Still waiting for depth data... (attempt {retry_count}/{max_retries})")
 
             # Return default depth structure if no data received
             logger.warning(f"No depth data received for {symbol}")

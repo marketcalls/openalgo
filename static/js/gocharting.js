@@ -5,23 +5,18 @@ document.addEventListener('DOMContentLoaded', function() {
     const productSelect = document.getElementById('product');
     const actionSelect = document.getElementById('action');
     const quantityInput = document.getElementById('quantity');
-    const actionField = document.getElementById('action-field');
-    const quantityField = document.getElementById('quantity-field');
-    const webhookDisplay = document.getElementById('webhook-display');
     const searchResults = document.getElementById('searchResults');
     const loadingIndicator = document.querySelector('.loading-indicator');
-    const tradingviewForm = document.getElementById('tradingview-form');
+    const gochartingForm = document.getElementById('gocharting-form');
     let debounceTimeout;
-    let currentMode = 'strategy'; // Default mode
-
-    // Host URL from template
-    const hostURL = '{{ host }}' || window.location.origin;
 
     // Set default values and generate JSON
-    if (symbolInput && exchangeSelect && productSelect) {
+    if (symbolInput && exchangeSelect && productSelect && actionSelect && quantityInput) {
         symbolInput.value = 'SAIL';
         exchangeSelect.value = 'NSE';
         productSelect.value = 'MIS';
+        actionSelect.value = 'BUY';
+        quantityInput.value = '1';
 
         // Auto-generate JSON on load
         generateJSON();
@@ -33,14 +28,14 @@ document.addEventListener('DOMContentLoaded', function() {
             clearTimeout(debounceTimeout);
             const query = e.target.value.trim();
             const exchange = exchangeSelect ? exchangeSelect.value : '';
-            
+
             if (query.length < 2) {
                 if (searchResults) {
                     searchResults.classList.add('hidden');
                 }
                 return;
             }
-            
+
             debounceTimeout = setTimeout(() => {
                 fetchSearchResults(query, exchange);
             }, 300);
@@ -63,28 +58,28 @@ document.addEventListener('DOMContentLoaded', function() {
         productSelect.addEventListener('change', generateJSON);
     }
 
-    // Action change handler (Line Mode)
+    // Action change handler
     if (actionSelect) {
         actionSelect.addEventListener('change', generateJSON);
     }
 
-    // Quantity change handler (Line Mode)
+    // Quantity change handler
     if (quantityInput) {
         quantityInput.addEventListener('input', generateJSON);
     }
 
     // Click outside search results handler
     document.addEventListener('click', function(e) {
-        if (searchResults && symbolInput && 
-            !symbolInput.contains(e.target) && 
+        if (searchResults && symbolInput &&
+            !symbolInput.contains(e.target) &&
             !searchResults.contains(e.target)) {
             searchResults.classList.add('hidden');
         }
     });
 
     // Form submit handler
-    if (tradingviewForm) {
-        tradingviewForm.addEventListener('submit', function(e) {
+    if (gochartingForm) {
+        gochartingForm.addEventListener('submit', function(e) {
             e.preventDefault();
             generateJSON();
         });
@@ -97,9 +92,9 @@ document.addEventListener('DOMContentLoaded', function() {
             loadingIndicator.style.display = 'block';
             const response = await fetch(`/search/api/search?q=${encodeURIComponent(query)}&exchange=${encodeURIComponent(exchange)}`);
             const data = await response.json();
-            
+
             searchResults.innerHTML = '';
-            
+
             if (data.results && data.results.length > 0) {
                 data.results.forEach(result => {
                     const div = document.createElement('div');
@@ -135,23 +130,17 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function generateJSON() {
-        if (!symbolInput || !exchangeSelect || !productSelect) return;
+        if (!symbolInput || !exchangeSelect || !productSelect || !actionSelect || !quantityInput) return;
 
         const formData = {
             symbol: symbolInput.value,
             exchange: exchangeSelect.value,
             product: productSelect.value,
-            mode: currentMode
+            action: actionSelect.value,
+            quantity: quantityInput.value
         };
 
-        // Add action and quantity for Line mode
-        if (currentMode === 'line') {
-            if (!actionSelect || !quantityInput) return;
-            formData.action = actionSelect.value;
-            formData.quantity = quantityInput.value;
-        }
-
-        fetch('/tradingview/', {
+        fetch('/gocharting/', {
             method: 'POST',
             body: JSON.stringify(formData),
             headers: {
@@ -169,32 +158,17 @@ document.addEventListener('DOMContentLoaded', function() {
                 throw new Error(data.error || 'Network response was not ok');
             }
 
-            // Reconstruct the JSON object in the correct order
-            let orderedData;
-            if (currentMode === 'line') {
-                orderedData = {
-                    "apikey": data.apikey,
-                    "strategy": data.strategy,
-                    "symbol": symbolInput.value,
-                    "action": data.action,
-                    "exchange": exchangeSelect.value,
-                    "pricetype": data.pricetype,
-                    "product": productSelect.value,
-                    "quantity": data.quantity
-                };
-            } else {
-                orderedData = {
-                    "apikey": data.apikey,
-                    "strategy": data.strategy,
-                    "symbol": symbolInput.value,
-                    "action": data.action,
-                    "exchange": exchangeSelect.value,
-                    "pricetype": data.pricetype,
-                    "product": productSelect.value,
-                    "quantity": data.quantity,
-                    "position_size": data.position_size
-                };
-            }
+            // Reconstruct the JSON object in the correct order with exact values
+            let orderedData = {
+                "apikey": data.apikey,
+                "strategy": data.strategy,
+                "symbol": symbolInput.value,
+                "action": actionSelect.value.toUpperCase(),
+                "exchange": exchangeSelect.value,
+                "pricetype": data.pricetype,
+                "product": productSelect.value,
+                "quantity": quantityInput.value
+            };
 
             const jsonOutput = document.getElementById('json-output');
             if (jsonOutput) {
@@ -235,7 +209,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function copyText(text, button, alert) {
         const originalText = button.innerHTML;
-        
+
         navigator.clipboard.writeText(text).then(() => {
             alert.classList.remove('hidden');
             button.innerHTML = `
@@ -244,7 +218,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 </svg>
                 Copied!
             `;
-            
+
             setTimeout(() => {
                 alert.classList.add('hidden');
                 button.innerHTML = originalText;
@@ -277,48 +251,4 @@ document.addEventListener('DOMContentLoaded', function() {
         document.body.appendChild(toast);
         setTimeout(() => toast.remove(), 5000);
     }
-
-    // Mode switching function (globally accessible for onclick)
-    window.switchMode = function(mode) {
-        currentMode = mode;
-
-        // Update tab states
-        const strategyTab = document.getElementById('strategy-tab');
-        const lineTab = document.getElementById('line-tab');
-
-        if (mode === 'strategy') {
-            strategyTab.classList.add('tab-active');
-            lineTab.classList.remove('tab-active');
-
-            // Hide line mode fields
-            if (actionField) actionField.classList.add('hidden');
-            if (quantityField) quantityField.classList.add('hidden');
-
-            // Update webhook URL
-            if (webhookDisplay) {
-                webhookDisplay.textContent = '.../api/v1/placesmartorder';
-                webhookDisplay.setAttribute('data-tip', `${window.location.origin}/api/v1/placesmartorder`);
-            }
-        } else {
-            lineTab.classList.add('tab-active');
-            strategyTab.classList.remove('tab-active');
-
-            // Show line mode fields
-            if (actionField) actionField.classList.remove('hidden');
-            if (quantityField) quantityField.classList.remove('hidden');
-
-            // Set default values for line mode
-            if (actionSelect) actionSelect.value = 'BUY';
-            if (quantityInput) quantityInput.value = '1';
-
-            // Update webhook URL
-            if (webhookDisplay) {
-                webhookDisplay.textContent = '.../api/v1/placeorder';
-                webhookDisplay.setAttribute('data-tip', `${window.location.origin}/api/v1/placeorder`);
-            }
-        }
-
-        // Regenerate JSON
-        generateJSON();
-    };
 });

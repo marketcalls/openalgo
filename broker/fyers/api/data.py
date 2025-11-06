@@ -331,7 +331,7 @@ class BrokerData:
             encoded_symbol = urllib.parse.quote(br_symbol)
             
             response = get_api_response(f"/data/depth?symbol={encoded_symbol}&ohlcv_flag=1", self.auth_token)
-            logger.debug(f"Fyers depth API response: {response}")
+            logger.debug(f"Fyers depth API FULL response: {json.dumps(response, indent=2)}")
 
             if response.get('s') != 'ok':
                 error_msg = f"Error from Fyers API: {response.get('message', 'Unknown error')}"
@@ -344,11 +344,16 @@ class BrokerData:
                 return {}
 
             bids = depth_data.get('bids', [])
-            asks = depth_data.get('asks', [])
-            
+            asks = depth_data.get('ask', [])  # Note: Fyers uses 'ask' (singular) not 'asks'
+
+            # Debug: Log the raw bids and asks structure
+            logger.debug(f"Raw bids data: {bids}")
+            logger.debug(f"Raw asks data: {asks}")
+
             empty_entry = {'price': 0, 'quantity': 0}
-            bids_formatted = [{'price': b['price'], 'quantity': b['volume']} for b in bids[:5]]
-            asks_formatted = [{'price': a['price'], 'quantity': a['volume']} for a in asks[:5]]
+            # Handle potential missing 'volume' key by using .get() with default 0
+            bids_formatted = [{'price': b.get('price', 0), 'quantity': b.get('volume', 0)} for b in bids[:5]]
+            asks_formatted = [{'price': a.get('price', 0), 'quantity': a.get('volume', 0)} for a in asks[:5]]
             
             while len(bids_formatted) < 5:
                 bids_formatted.append(empty_entry)
