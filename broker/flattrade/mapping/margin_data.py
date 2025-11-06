@@ -21,26 +21,43 @@ def transform_margin_positions(positions, account_id):
 
     for position in positions:
         try:
-            # Get the broker symbol for Flattrade
-            symbol = get_br_symbol(position['symbol'], position['exchange'])
+            # Use the original OpenAlgo symbol for parsing derivative details
+            oa_symbol = position['symbol']
 
-            if not symbol:
-                logger.warning(f"Symbol not found for: {position['symbol']} on exchange: {position['exchange']}")
+            # Log the incoming position data
+            logger.info(f"Processing position: symbol='{oa_symbol}', exchange='{position['exchange']}'")
+
+            # Get the broker symbol for validation only
+            br_symbol = get_br_symbol(oa_symbol, position['exchange'])
+            logger.info(f"Broker symbol for '{oa_symbol}': '{br_symbol}'")
+
+            if not br_symbol:
+                logger.warning(f"Symbol not found for: {oa_symbol} on exchange: {position['exchange']}")
                 continue
 
-            # Handle special characters in symbol (like &)
-            if symbol and '&' in symbol:
-                symbol = symbol.replace('&', '%26')
-
+            # Parse the OpenAlgo symbol (not broker symbol) to extract details
             # Determine instrument name based on symbol pattern
             # This is a simplified mapping - may need enhancement based on actual symbol patterns
-            instname = determine_instrument_name(symbol, position['exchange'])
+            instname = determine_instrument_name(oa_symbol, position['exchange'])
 
             # Extract symbol name (without suffix for options/futures)
-            symname = extract_symbol_name(symbol)
+            symname = extract_symbol_name(oa_symbol)
 
             # Extract expiry date, option type, and strike price if applicable
-            expd, optt, strprc = extract_derivative_details(symbol, position['exchange'])
+            exd, optt, strprc = extract_derivative_details(oa_symbol, position['exchange'])
+
+            # Log the parsed details for debugging
+            logger.info(f"Parsed symbol '{oa_symbol}': instname={instname}, symname={symname}, exd={exd}, optt={optt}, strprc={strprc}")
+
+            # Map product type from OpenAlgo to Flattrade format
+            # Official SDK: C = CNC, M = NRML/Margin, H = MIS (Intraday)
+            product_map = {
+                'CNC': 'C',
+                'MIS': 'H',  # H = MIS (same as Shoonya)
+                'NRML': 'M'
+            }
+            product = position.get('product', 'NRML')  # Default to NRML for F&O
+            prd = product_map.get(product, 'M')  # Default to 'M' if not found
 
             # Calculate quantities based on action
             quantity = int(position['quantity'])
@@ -51,19 +68,21 @@ def transform_margin_positions(positions, account_id):
             else:
                 buyqty = 0
                 sellqty = quantity
-                netqty = -quantity
+                netqty = -quantity  # Negative for sell positions (same as Shoonya)
 
-            # Transform the position
+            # Transform the position - ALL VALUES MUST BE STRINGS (same as Shoonya)
+            # Official SDK requires prd field: C=CNC, M=NRML, H=MIS
             transformed_position = {
+                "prd": prd,  # Required: C=CNC, M=NRML/Margin, H=MIS
                 "exch": position['exchange'],
                 "instname": instname,
                 "symname": symname,
-                "expd": expd,
-                "optt": optt,
-                "strprc": strprc,
-                "buyqty": buyqty,
-                "sellqty": sellqty,
-                "netqty": netqty
+                "exd": exd,  # DD-MMM-YYYY format
+                "optt": optt,  # 'CE', 'PE', or 'XX' for futures
+                "strprc": str(strprc) if strprc else '-1',  # String! '-1' for futures
+                "buyqty": str(buyqty),  # String!
+                "sellqty": str(sellqty),  # String!
+                "netqty": str(netqty)  # String!
             }
 
             transformed_positions.append(transformed_position)
@@ -94,7 +113,8 @@ def determine_instrument_name(symbol, exchange):
                 return 'FUTIDX'
             else:
                 return 'FUTSTK'
-        elif 'CE' in symbol or 'PE' in symbol:
+        elif 'CE' in symbol or 'PE' in symbol or symbol.endswith('C') or symbol.endswith('P'):
+            # Check if it's an index option or stock option
             if any(idx in symbol for idx in ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY']):
                 return 'OPTIDX'
             else:
@@ -121,23 +141,39 @@ def extract_symbol_name(symbol):
     """
     Extract base symbol name from trading symbol.
     E.g., NIFTY25NOV25FUT -> NIFTY
+    E.g., NIFTY30DEC2524500CE -> NIFTY
     """
-    # Common patterns to remove
-    patterns = ['FUT', 'CE', 'PE', '-EQ']
+    import re
 
     # Start with the full symbol
     base = symbol
 
-    # Remove common suffixes
-    for pattern in patterns:
-        if pattern in base:
-            base = base.split(pattern)[0]
+    # First remove option type suffixes (CE, PE, C, P)
+    # Check for CE/PE first (longer pattern)
+    if 'CE' in base:
+        base = base.split('CE')[0]
+    elif 'PE' in base:
+        base = base.split('PE')[0]
+    # Then check for single character suffix
+    elif base.endswith('C') and not base.endswith('DEC'):
+        base = base[:-1]  # Remove last character 'C'
+    elif base.endswith('P'):
+        base = base[:-1]  # Remove last character 'P'
 
-    # Remove date patterns (e.g., 25NOV25, 2025-11-28, etc.)
-    import re
+    # Remove FUT suffix
+    if 'FUT' in base:
+        base = base.split('FUT')[0]
+
+    # Remove -EQ suffix
+    if '-EQ' in base:
+        base = base.split('-EQ')[0]
+
+    # Remove date patterns (e.g., 30DEC25, 2025-11-28, etc.)
     base = re.sub(r'\d{2}[A-Z]{3}\d{2}', '', base)
     base = re.sub(r'\d{4}-\d{2}-\d{2}', '', base)
-    base = re.sub(r'\d{5,}', '', base)  # Remove strike prices
+
+    # Remove strike prices (3 or more consecutive digits)
+    base = re.sub(r'\d{3,}', '', base)
 
     return base.strip()
 
@@ -145,49 +181,63 @@ def extract_derivative_details(symbol, exchange):
     """
     Extract expiry date, option type, and strike price from symbol.
 
-    Returns: (expd, optt, strprc)
+    Returns: (exd, optt, strprc)
     """
-    expd = ""
+    exd = ""
     optt = ""
     strprc = ""
 
     # For equity exchanges, no derivatives
     if exchange in ['NSE', 'BSE']:
-        return expd, optt, strprc
+        return exd, optt, strprc
 
     import re
 
-    # Extract expiry date (format: DDMMMYY to YYYY-MM-DD)
+    # Extract expiry date (format: DDMMMYY to DD-MMM-YYYY for Flattrade)
     date_match = re.search(r'(\d{2})([A-Z]{3})(\d{2})', symbol)
     if date_match:
         day = date_match.group(1)
         month_str = date_match.group(2)
-        year = '20' + date_match.group(3)
+        year_2digit = date_match.group(3)
+        year_4digit = '20' + year_2digit
 
-        # Map month abbreviation to number
-        month_map = {
-            'JAN': '01', 'FEB': '02', 'MAR': '03', 'APR': '04',
-            'MAY': '05', 'JUN': '06', 'JUL': '07', 'AUG': '08',
-            'SEP': '09', 'OCT': '10', 'NOV': '11', 'DEC': '12'
-        }
-        month = month_map.get(month_str, '01')
-        expd = f"{year}-{month}-{day}"
+        # Working test uses DD-MMM-YYYY format (e.g., 29-DEC-2022)
+        exd = f"{day}-{month_str}-{year_4digit}"
 
-    # Extract option type (CE or PE)
-    if 'CE' in symbol:
+    # Check if it's a future or option
+    is_option = 'CE' in symbol or 'PE' in symbol or symbol.endswith('C') or symbol.endswith('P')
+    is_future = 'FUT' in symbol and not is_option
+
+    if is_future:
+        # For futures: optt='XX' and strprc='-1' as per working test
+        optt = 'XX'
+        strprc = '-1'
+    elif 'CE' in symbol:
         optt = 'CE'
-        # Extract strike price before CE
-        strike_match = re.search(r'(\d+\.?\d*)CE', symbol)
+        # Extract strike price: digits after date pattern and before CE
+        # Pattern: date(DDMMMYY) followed by digits (strike) followed by CE
+        strike_match = re.search(r'\d{2}[A-Z]{3}\d{2}(\d+\.?\d*)CE', symbol)
         if strike_match:
             strprc = strike_match.group(1)
     elif 'PE' in symbol:
         optt = 'PE'
-        # Extract strike price before PE
-        strike_match = re.search(r'(\d+\.?\d*)PE', symbol)
+        # Extract strike price: digits after date pattern and before PE
+        strike_match = re.search(r'\d{2}[A-Z]{3}\d{2}(\d+\.?\d*)PE', symbol)
+        if strike_match:
+            strprc = strike_match.group(1)
+    # Also handle single character suffix (C/P) in case that's the format
+    elif symbol.endswith('C') and not symbol.endswith('DEC'):
+        optt = 'CE'
+        strike_match = re.search(r'\d{2}[A-Z]{3}\d{2}(\d+\.?\d*)C$', symbol)
+        if strike_match:
+            strprc = strike_match.group(1)
+    elif symbol.endswith('P') and not is_future:
+        optt = 'PE'
+        strike_match = re.search(r'\d{2}[A-Z]{3}\d{2}(\d+\.?\d*)P$', symbol)
         if strike_match:
             strprc = strike_match.group(1)
 
-    return expd, optt, strprc
+    return exd, optt, strprc
 
 def parse_margin_response(response_data):
     """
@@ -197,7 +247,7 @@ def parse_margin_response(response_data):
         response_data: Raw response from Flattrade API
 
     Returns:
-        Standardized margin response
+        Standardized margin response matching OpenAlgo format
     """
     try:
         if not response_data or not isinstance(response_data, dict):
@@ -216,21 +266,17 @@ def parse_margin_response(response_data):
 
         # Extract margin data
         # Flattrade returns: span, expo, span_trade, expo_trade
-
         span = float(response_data.get('span', 0))
         expo = float(response_data.get('expo', 0))
         total_margin = span + expo
 
-        # Return standardized format
+        # Return standardized format matching OpenAlgo API specification
         return {
             'status': 'success',
             'data': {
                 'total_margin_required': total_margin,
                 'span_margin': span,
-                'exposure_margin': expo,
-                'span_trade': float(response_data.get('span_trade', 0)),
-                'expo_trade': float(response_data.get('expo_trade', 0)),
-                'raw_response': response_data  # Include raw response for debugging
+                'exposure_margin': expo
             }
         }
 

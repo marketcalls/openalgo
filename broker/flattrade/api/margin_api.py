@@ -49,7 +49,7 @@ def calculate_margin_api(positions, auth):
 
     # Prepare headers
     headers = {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/x-www-form-urlencoded'
     }
 
     # Prepare payload in Flattrade format: jData={...}&jKey={token}
