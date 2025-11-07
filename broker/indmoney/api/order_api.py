@@ -98,11 +98,24 @@ def get_order_book(auth):
         return []
 
 def get_trade_book(auth):
-    return get_api_response("/tradebook",auth)
+    """
+    Fetch all trades for the current trading day.
+    """
+    try:
+        result = get_api_response("/tradebook", auth)
+        # Ensure we never return None
+        if result is None:
+            logger.warning("get_api_response returned None for tradebook, returning empty list")
+            return []
+        return result
+    except Exception as e:
+        logger.error(f"Exception in get_trade_book: {e}")
+        return []
 
 def get_positions(auth):
     try:
         result = get_api_response("/portfolio/positions", auth)
+        logger.info(f"Positions fetched: {result}")
         # Ensure we never return None
         if result is None:
             logger.warning("get_api_response returned None for positions, returning empty list")
@@ -110,7 +123,7 @@ def get_positions(auth):
         return result
     except Exception as e:
         logger.error(f"Exception in get_positions: {e}")
-        return []
+        return []   
 
 def get_holdings(auth):
     try:
