@@ -115,7 +115,7 @@ def get_trade_book(auth):
 def get_positions(auth):
     try:
         result = get_api_response("/portfolio/positions", auth)
-        logger.info(f"Positions fetched: {result}")
+        logger.info(f"Positions fetched successfully")
         # Ensure we never return None
         if result is None:
             logger.warning("get_api_response returned None for positions, returning empty list")
