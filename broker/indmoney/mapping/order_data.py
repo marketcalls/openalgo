@@ -312,9 +312,27 @@ def map_position_data(position_data):
             position['tradingSymbol'] = position.get('symbol', '')
             position['netQty'] = position.get('net_qty', 0)
             position['avgCostPrice'] = position.get('avg_price', 0.0)
-            position['lastTradedPrice'] = position.get('avg_price', 0.0)  # Using avg_price as placeholder
-            position['marketValue'] = position.get('net_qty', 0) * position.get('avg_price', 0.0)
-            position['pnlAbsolute'] = position.get('realized_profit', 0.0)
+
+            # Extract LTP and P&L from INDmoney API response
+            # INDmoney may provide these as 'ltp', 'current_price', or 'market_price'
+            ltp = position.get('ltp', position.get('current_price', position.get('market_price', 0.0)))
+            position['lastTradedPrice'] = float(ltp) if ltp else 0.0
+
+            # Calculate market value using LTP if available, otherwise use avg_price
+            net_qty = position.get('net_qty', 0)
+            avg_price = position.get('avg_price', 0.0)
+            market_price = position['lastTradedPrice'] if position['lastTradedPrice'] > 0 else avg_price
+            position['marketValue'] = net_qty * market_price
+
+            # Calculate P&L: (LTP - Avg Price) * Quantity
+            # INDmoney may also provide realized_profit, unrealized_profit, or pnl fields
+            pnl_from_api = position.get('pnl', position.get('unrealized_profit', position.get('realized_profit', None)))
+            if pnl_from_api is not None:
+                position['pnlAbsolute'] = float(pnl_from_api)
+            else:
+                # Calculate P&L if not provided by API
+                position['pnlAbsolute'] = (market_price - avg_price) * net_qty
+
             position['multiplier'] = 1  # Default multiplier
             position['positionType'] = 'open' if position.get('net_qty', 0) != 0 else 'closed'
             
@@ -350,29 +368,45 @@ def map_position_data(position_data):
 
 
 def transform_positions_data(positions_data):
+    """
+    Transform positions data to OpenAlgo standard format.
+    Matches the structure used by Angel broker for consistency.
+
+    OpenAlgo Standard Fields:
+    - symbol: Trading symbol
+    - exchange: Exchange name
+    - product: Product type (MIS/CNC/NRML)
+    - quantity: Net quantity
+    - average_price: Average cost price (float)
+    - ltp: Last traded price (float)
+    - pnl: Profit and loss (float)
+    """
     try:
         # Handle None input
         if positions_data is None:
             return []
-            
+
         # Handle non-list inputs
         if not isinstance(positions_data, list):
             logger.warning(f"Expected list but got {type(positions_data)}")
             return []
-            
+
         transformed_data = []
         for position in positions_data:
             # Ensure each position is a dictionary
             if not isinstance(position, dict):
                 logger.warning(f"Skipping non-dictionary position: {type(position)}")
                 continue
-                
+
+            # OpenAlgo standard format (matching Angel broker structure)
             transformed_position = {
                 "symbol": position.get('tradingSymbol', ''),
                 "exchange": position.get('exchangeSegment', ''),
                 "product": position.get('productType', ''),
                 "quantity": position.get('netQty', 0),
-                "average_price": str(position.get('avgCostPrice', 0.0))  # OpenAlgo expects string format
+                "average_price": float(position.get('avgCostPrice', 0.0)),  # Float as per OpenAlgo standard
+                "ltp": float(position.get('lastTradedPrice', 0.0)),  # Last traded price
+                "pnl": float(position.get('pnlAbsolute', 0.0))  # Profit and loss
             }
             transformed_data.append(transformed_position)
         return transformed_data

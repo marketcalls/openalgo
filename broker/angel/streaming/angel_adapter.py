@@ -515,40 +515,7 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         'quantity': level.get('quantity', 0),
                         'orders': level.get('no of orders', 0)
                     })
-        
-        # For MCX, the data might be in a different format, check for best_five_buy/sell_market_data
-        elif 'best_five_buy_market_data' in message and is_buy:
-            depth_data = message.get('best_five_buy_market_data', [])
-            self.logger.debug(f"Found {side_label} depth data using best_five_buy_market_data: {len(depth_data)} levels")
-            
-            for level in depth_data:
-                if isinstance(level, dict):
-                    price = level.get('price', 0)
-                    if price > 0:
-                        price = price / 100
-                        
-                    depth.append({
-                        'price': price,
-                        'quantity': level.get('quantity', 0),
-                        'orders': level.get('no of orders', 0)
-                    })
-                    
-        elif 'best_five_sell_market_data' in message and not is_buy:
-            depth_data = message.get('best_five_sell_market_data', [])
-            self.logger.debug(f"Found {side_label} depth data using best_five_sell_market_data: {len(depth_data)} levels")
-            
-            for level in depth_data:
-                if isinstance(level, dict):
-                    price = level.get('price', 0)
-                    if price > 0:
-                        price = price / 100
-                        
-                    depth.append({
-                        'price': price,
-                        'quantity': level.get('quantity', 0),
-                        'orders': level.get('no of orders', 0)
-                    })
-        
+
         # If no depth data found, return empty levels as fallback
         if not depth:
             self.logger.warning(f"No {side_label} depth data found in message. Available keys: {message.keys()}")

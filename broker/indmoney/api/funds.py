@@ -8,12 +8,12 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Default response format for margin data
+# Default response format for margin data (OpenAlgo standard format)
 DEFAULT_MARGIN_RESPONSE = {
     "availablecash": "0.00",
     "collateral": "0.00",
-    "m2munrealized": "0.00",
     "m2mrealized": "0.00",
+    "m2munrealized": "0.00",
     "utiliseddebits": "0.00"
 }
 
@@ -58,25 +58,6 @@ def get_margin_data(auth_token):
             if response.status_code == 403 and ('cloudflare' in response.text.lower() or 'just a moment' in response.text.lower()):
                 logger.warning("Cloudflare protection detected - API requires browser-based access")
                 logger.warning("Consider using a headless browser solution or contacting Indmoney for API whitelisting")
-                
-                # Return a message indicating the limitation
-                return {
-                    "availablecash": "0.00",
-                    "collateral": "0.00", 
-                    "m2munrealized": "0.00",
-                    "m2mrealized": "0.00",
-                    "utiliseddebits": "0.00",
-                    "sod_balance": "0.00",
-                    "funds_added": "0.00",
-                    "funds_withdrawn": "0.00",
-                    "option_sell_balance": "0.00",
-                    "future_balance": "0.00",
-                    "option_buy_balance": "0.00",
-                    "eq_mis_balance": "0.00",
-                    "eq_cnc_balance": "0.00",
-                    "eq_mtf_balance": "0.00",
-                    "_error": "Cloudflare protection - requires browser access"
-                }
             
             return DEFAULT_MARGIN_RESPONSE
         
@@ -97,50 +78,46 @@ def get_margin_data(auth_token):
                 logger.error("No data in API response")
                 return DEFAULT_MARGIN_RESPONSE
             
-            # Extract required fields from the response
+            # Extract values from the response and convert to float
             sod_balance = float(data.get('sod_balance', 0.0))
             withdrawal_balance = float(data.get('withdrawal_balance', 0.0))
             pledge_received = float(data.get('pledge_received', 0.0))
             realized_pnl = float(data.get('realized_pnl', 0.0))
             unrealized_pnl = float(data.get('unrealized_pnl', 0.0))
-            
+
             # Calculate utilized debits (SOD balance minus withdrawal balance)
             utilised_debits = max(0, sod_balance - withdrawal_balance)
-            
-            # Get detailed available balances if needed
-            detailed_balance = data.get('detailed_avl_balance', {})
-            
-            # Prepare the response in the standard format
-            processed_data = {
-                # Available cash is the withdrawal balance
-                "availablecash": f"{withdrawal_balance:.2f}",
-                
-                # Collateral is the pledge received
-                "collateral": f"{pledge_received:.2f}",
-                
-                # Unrealized P&L from the API
-                "m2munrealized": f"{unrealized_pnl:.2f}",
-                
-                # Realized P&L from the API
-                "m2mrealized": f"{realized_pnl:.2f}",
-                
-                # Utilized debits (SOD - withdrawal balance)
-                "utiliseddebits": f"{utilised_debits:.2f}",
-                
-                # Additional fields that might be useful
-                "sod_balance": f"{sod_balance:.2f}",
-                "funds_added": f"{float(data.get('funds_added', 0.0)):.2f}",
-                "funds_withdrawn": f"{float(data.get('funds_withdrawn', 0.0)):.2f}",
-                
-                # Detailed available balances
-                "option_sell_balance": f"{float(detailed_balance.get('option_sell', 0.0)):.2f}",
-                "future_balance": f"{float(detailed_balance.get('future', 0.0)):.2f}",
-                "option_buy_balance": f"{float(detailed_balance.get('option_buy', 0.0)):.2f}",
-                "eq_mis_balance": f"{float(detailed_balance.get('eq_mis', 0.0)):.2f}",
-                "eq_cnc_balance": f"{float(detailed_balance.get('eq_cnc', 0.0)):.2f}",
-                "eq_mtf_balance": f"{float(detailed_balance.get('eq_mtf', 0.0)):.2f}"
+
+            # OpenAlgo standard required keys (matching Angel broker format)
+            required_keys = [
+                "availablecash",
+                "collateral",
+                "m2mrealized",
+                "m2munrealized",
+                "utiliseddebits"
+            ]
+
+            # Prepare the response in OpenAlgo standard format
+            processed_data = {}
+
+            # Map INDmoney fields to OpenAlgo standard fields
+            field_mapping = {
+                "availablecash": withdrawal_balance,      # Available cash is the withdrawal balance
+                "collateral": pledge_received,             # Collateral is the pledge received
+                "m2mrealized": realized_pnl,              # Realized P&L
+                "m2munrealized": unrealized_pnl,          # Unrealized P&L
+                "utiliseddebits": utilised_debits         # Utilized debits (SOD - withdrawal)
             }
-            
+
+            # Format each value to 2 decimal places
+            for key in required_keys:
+                value = field_mapping.get(key, 0)
+                try:
+                    formatted_value = "{:.2f}".format(float(value))
+                except (ValueError, TypeError):
+                    formatted_value = "0.00"
+                processed_data[key] = formatted_value
+
             logger.info("Successfully processed margin data from Indmoney API")
             return processed_data
             
