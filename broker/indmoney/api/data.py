@@ -78,13 +78,25 @@ def get_api_response(endpoint, auth, method="GET", params=None):
         logger.info(f"Status field repr: {repr(response.get('status'))}")
         
         # Check if this is a successful data response even without explicit status
-        if 'data' in response and isinstance(response['data'], list) and len(response['data']) > 0:
-            logger.info("Response contains data array, treating as successful")
+        has_valid_data = False
+
+        if 'data' in response:
+            data = response['data']
+            # Check for direct array (alternative format)
+            if isinstance(data, list) and len(data) > 0:
+                has_valid_data = True
+                logger.info("Response contains direct data array, treating as successful")
+            # Check for nested structure with 'candles' (documented format for historical API)
+            elif isinstance(data, dict) and 'candles' in data and isinstance(data['candles'], list) and len(data['candles']) > 0:
+                has_valid_data = True
+                logger.info("Response contains nested candles array, treating as successful")
+
+        if has_valid_data:
             # For historical data responses that don't have explicit status, add it
             if 'status' not in response:
                 response['status'] = 'success'
                 logger.info("Added missing status field to successful data response")
-        
+
         # Log full response only for smaller responses to avoid spam
         if len(res.text) < 5000:
             logger.info(f"Full JSON response: {json.dumps(response, indent=2)}")
@@ -94,28 +106,53 @@ def get_api_response(endpoint, auth, method="GET", params=None):
         logger.error(f"JSON decode error: {str(e)}")
         logger.error(f"Response text that failed to parse: {res.text}")
         raise Exception(f"Indmoney API returned invalid JSON: {str(e)}")
-    
+
     # Handle Indmoney API error responses
     response_status = response.get('status')
-    
-    # Check if this is a successful data response even without explicit status
-    if 'data' in response and isinstance(response['data'], list) and len(response['data']) > 0:
-        logger.info("Response contains valid data array, treating as successful")
-        # For historical data responses that don't have explicit status, add it
+    response_success = response.get('success')
+
+    # Check if this is a successful data response - return early
+    has_valid_data = False
+
+    if 'data' in response:
+        data = response['data']
+        # Check for direct array (alternative format)
+        if isinstance(data, list) and len(data) > 0:
+            has_valid_data = True
+            logger.info("Response contains valid direct data array")
+        # Check for nested structure with 'candles' (documented format: data.candles)
+        elif isinstance(data, dict) and 'candles' in data and isinstance(data['candles'], list) and len(data['candles']) > 0:
+            has_valid_data = True
+            logger.info("Response contains valid nested candles array")
+        # Check for scrip-code nested structure (actual format: data[scrip_code].candles)
+        elif isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, dict) and 'candles' in value and isinstance(value['candles'], list) and len(value['candles']) > 0:
+                    has_valid_data = True
+                    logger.info(f"Response contains valid scrip-nested candles array under key: {key}")
+                    break
+
+    # Also check for success field (actual API uses this instead of status)
+    if response_success is True:
+        logger.info("Response has success=true field")
+        return response
+
+    if has_valid_data:
+        # For data responses that don't have explicit status, add it
         if 'status' not in response or response_status != 'success':
             response['status'] = 'success'
-            logger.info("Added/corrected missing status field to successful data response")
+            logger.info("Added/corrected status field to successful data response")
         return response
-    
+
     # Only check status if there's no valid data
-    if response_status != 'success':
+    if response_status != 'success' and response_success is not True:
         error_message = response.get('message', response.get('error', 'Unknown error'))
         error_code = response.get('code', 'unknown')
         logger.error(f"API Error - Status: '{response_status}' (code: {error_code}): {error_message}")
         logger.error(f"Full error response: {json.dumps(response, indent=2)}")
         raise Exception(f"Indmoney API Error ({error_code}): {error_message}")
     else:
-        logger.info(f"API response successful with status: '{response_status}'")
+        logger.info(f"API response successful with status: '{response_status}' or success: {response_success}")
     
     return response
 
@@ -123,16 +160,31 @@ class BrokerData:
     def __init__(self, auth_token):
         """Initialize Indmoney data handler with authentication token"""
         self.auth_token = auth_token
-        # Map common timeframe format to Indmoney resolutions
+        # Map common timeframe format to Indmoney intervals
         self.timeframe_map = {
-            # Minutes
-            '1m': '1',    # 1 minute
-            '5m': '5',    # 5 minutes
-            '15m': '15',  # 15 minutes
-            '25m': '25',  # 25 minutes
-            '1h': '60',   # 1 hour (60 minutes)
-            # Daily
-            'D': 'D'      # Daily data
+            # Seconds (max 1 day range)
+            '1s': '1second',
+            '5s': '5second',
+            '10s': '10second',
+            '15s': '15second',
+            # Minutes (max 7 days range for 1-30m)
+            '1m': '1minute',
+            '2m': '2minute',
+            '3m': '3minute',
+            '4m': '4minute',
+            '5m': '5minute',
+            '10m': '10minute',
+            '15m': '15minute',
+            '30m': '30minute',
+            # Hours (max 14 days range)
+            '1h': '60minute',
+            '2h': '120minute',
+            '3h': '180minute',
+            '4h': '240minute',
+            # Daily (max 1 year range)
+            'D': '1day',
+            'W': '1week',
+            'M': '1month'
         }
 
     def _get_scrip_code(self, symbol, exchange):
@@ -468,28 +520,18 @@ class BrokerData:
             pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume, oi]
         """
         try:
-            # Map OpenAlgo intervals to Indmoney intervals
-            interval_map = {
-                '1m': '1minute',
-                '2m': '2minute', 
-                '3m': '3minute',
-                '4m': '4minute',
-                '5m': '5minute',
-                '10m': '10minute',
-                '15m': '15minute',
-                '30m': '30minute',
-                '1h': '60minute',
-                '2h': '120minute',
-                '3h': '180minute', 
-                '4h': '240minute',
-                'D': '1day'
-            }
-            
-            if interval not in interval_map:
-                supported = list(interval_map.keys())
+            # Convert date objects to strings if needed
+            if not isinstance(start_date, str):
+                start_date = start_date.strftime("%Y-%m-%d")
+            if not isinstance(end_date, str):
+                end_date = end_date.strftime("%Y-%m-%d")
+
+            # Map OpenAlgo intervals to Indmoney intervals using timeframe_map
+            if interval not in self.timeframe_map:
+                supported = list(self.timeframe_map.keys())
                 raise Exception(f"Unsupported interval '{interval}'. Supported intervals are: {', '.join(supported)}")
-            
-            indmoney_interval = interval_map[interval]
+
+            indmoney_interval = self.timeframe_map[interval]
             scrip_code = self._get_scrip_code(symbol, exchange)
             
             logger.info(f"Getting history for symbol: {symbol}, exchange: {exchange}")
@@ -535,9 +577,31 @@ class BrokerData:
                     logger.info(f"Request params: {params}")
                     
                     response = get_api_response(endpoint, self.auth_token, "GET", params)
-                    
+
                     # Extract candles from response - handle actual Indmoney format
-                    candles_data = response.get('data', [])
+                    # Actual format: {"data": {"NSE_1594": {"candles": [...]}}}
+                    data_obj = response.get('data', {})
+                    candles_data = []
+
+                    # Try scrip-code nested structure first (actual format)
+                    if isinstance(data_obj, dict) and scrip_code in data_obj:
+                        scrip_data = data_obj[scrip_code]
+                        if isinstance(scrip_data, dict) and 'candles' in scrip_data:
+                            candles_data = scrip_data['candles'] or []  # Handle None/null
+                            logger.info(f"Extracted candles from scrip-nested structure: {scrip_code}")
+                    # Try direct nested structure (documented format: data.candles)
+                    elif isinstance(data_obj, dict) and 'candles' in data_obj:
+                        candles_data = data_obj.get('candles') or []  # Handle None/null
+                        logger.info("Extracted candles from direct nested structure")
+                    # Fallback to direct array (alternative format)
+                    elif isinstance(data_obj, list):
+                        candles_data = data_obj
+                        logger.info("Extracted candles from direct array")
+
+                    # Ensure candles_data is always a list (handle None/null from API)
+                    if candles_data is None:
+                        candles_data = []
+
                     logger.info(f"Received {len(candles_data)} candles for chunk")
                     
                     # Transform Indmoney candle format to OpenAlgo format
@@ -546,13 +610,13 @@ class BrokerData:
                         try:
                             # Handle the actual format: {"ts": timestamp, "o": open, "h": high, "l": low, "c": close, "v": volume}
                             if isinstance(candle, dict) and 'ts' in candle:
-                                # Indmoney returns timestamp in seconds already
+                                # Note: API doc says milliseconds, but actual data is in seconds
                                 timestamp_seconds = int(candle.get('ts', 0))
-                                
+
                                 chunk_candles.append({
                                     'timestamp': timestamp_seconds,
                                     'open': float(candle.get('o', 0)),
-                                    'high': float(candle.get('h', 0)), 
+                                    'high': float(candle.get('h', 0)),
                                     'low': float(candle.get('l', 0)),
                                     'close': float(candle.get('c', 0)),
                                     'volume': int(candle.get('v', 0)),
@@ -637,5 +701,14 @@ class BrokerData:
                 chunk_end.strftime("%Y-%m-%d")
             ))
             current = chunk_end + timedelta(days=1)
-        
+
         return chunks
+
+    def get_intervals(self) -> list:
+        """
+        Get list of supported timeframes/intervals for historical data.
+
+        Returns:
+            list: List of supported interval strings like ['1s', '5s', '1m', '5m', '15m', '1h', 'D', etc.]
+        """
+        return list(self.timeframe_map.keys())
