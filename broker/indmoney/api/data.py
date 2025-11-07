@@ -195,6 +195,7 @@ class BrokerData:
             raise Exception(f"Could not find security ID for {symbol} on {exchange}")
         
         # Map exchange to Indmoney segment
+        # Note: Index segments use NIDX/BIDX for API calls, not NSE/BSE
         exchange_segment_map = {
             'NSE': 'NSE',
             'BSE': 'BSE',
@@ -203,8 +204,8 @@ class BrokerData:
             'MCX': 'MCX',
             'CDS': 'CDS',
             'BCD': 'BCD',
-            'NSE_INDEX': 'NSE',
-            'BSE_INDEX': 'BSE'
+            'NSE_INDEX': 'NIDX',  # NSE Index segment
+            'BSE_INDEX': 'BIDX'   # BSE Index segment
         }
         
         segment = exchange_segment_map.get(exchange)
@@ -381,32 +382,61 @@ class BrokerData:
                 'scrip-codes': scrip_code
             }
             
+            # For index symbols or to get OHLC data, try full quotes first
+            full_quotes_data = {}
+            try:
+                full_response = get_api_response("/market/quotes/full", self.auth_token, "GET", params)
+                full_quotes_data = full_response.get('data', {}).get(scrip_code, {})
+                logger.info(f"Full quotes data retrieved for OHLC: {bool(full_quotes_data)}")
+            except Exception as full_error:
+                logger.warning(f"Could not fetch full quotes for OHLC: {str(full_error)}")
+
             try:
                 # Get market depth from Indmoney API
                 depth_response = get_api_response("/market/quotes/mkt", self.auth_token, "GET", params)
                 depth_data = depth_response.get('data', {}).get(scrip_code, {})
-                
-                # Try to get LTP data (since /market/quotes doesn't work, try /market/quotes/ltp)
+
+                # Try to get LTP data as fallback
                 quotes_data = {}
                 try:
                     ltp_response = get_api_response("/market/quotes/ltp", self.auth_token, "GET", params)
                     quotes_data = ltp_response.get('data', {}).get(scrip_code, {})
                 except Exception as ltp_error:
                     logger.warning(f"Could not fetch LTP data: {str(ltp_error)}")
-                    # If LTP also fails, we'll use default values
                 
                 if not depth_data:
+                    # No depth data available (common for indices)
+                    # But we may have OHLC data from full quotes
+                    ltp = 0
+                    open_p = 0
+                    high = 0
+                    low = 0
+                    prev_close_p = 0
+                    vol = 0
+                    oi_val = 0
+
+                    if full_quotes_data:
+                        ltp = self._clean_number(full_quotes_data.get('live_price', full_quotes_data.get('ltp', 0)))
+                        open_p = self._clean_number(full_quotes_data.get('day_open', 0))
+                        high = self._clean_number(full_quotes_data.get('day_high', 0))
+                        low = self._clean_number(full_quotes_data.get('day_low', 0))
+                        prev_close_p = self._clean_number(full_quotes_data.get('prev_close', full_quotes_data.get('close', 0)))
+                        vol = self._clean_number(full_quotes_data.get('volume', 0))
+                        oi_val = self._clean_number(full_quotes_data.get('oi', full_quotes_data.get('open_interest', 0)))
+                    elif quotes_data and 'live_price' in quotes_data:
+                        ltp = self._clean_number(quotes_data.get('live_price', 0))
+
                     return {
                         'bids': [{'price': 0, 'quantity': 0} for _ in range(5)],
                         'asks': [{'price': 0, 'quantity': 0} for _ in range(5)],
-                        'ltp': 0,
+                        'ltp': ltp,
                         'ltq': 0,
-                        'volume': 0,
-                        'open': 0,
-                        'high': 0,
-                        'low': 0,
-                        'prev_close': 0,
-                        'oi': 0,
+                        'volume': vol,
+                        'open': open_p,
+                        'high': high,
+                        'low': low,
+                        'prev_close': prev_close_p,
+                        'oi': oi_val,
                         'totalbuyqty': 0,
                         'totalsellqty': 0
                     }
@@ -457,25 +487,42 @@ class BrokerData:
                     totalbuyqty = sum(bid['quantity'] for bid in bids)
                     totalsellqty = sum(ask['quantity'] for ask in asks)
                 
-                # Build final result - use LTP data if available, otherwise use bid/ask prices
+                # Build final result - prioritize full quotes for OHLC, then LTP data
                 ltp_price = 0
-                if quotes_data and 'live_price' in quotes_data:
+                open_price = 0
+                high_price = 0
+                low_price = 0
+                prev_close = 0
+                volume = 0
+                oi = 0
+
+                # Try to get data from full quotes first (has OHLC)
+                if full_quotes_data:
+                    ltp_price = self._clean_number(full_quotes_data.get('live_price', full_quotes_data.get('ltp', 0)))
+                    open_price = self._clean_number(full_quotes_data.get('day_open', 0))
+                    high_price = self._clean_number(full_quotes_data.get('day_high', 0))
+                    low_price = self._clean_number(full_quotes_data.get('day_low', 0))
+                    prev_close = self._clean_number(full_quotes_data.get('prev_close', full_quotes_data.get('close', 0)))
+                    volume = self._clean_number(full_quotes_data.get('volume', 0))
+                    oi = self._clean_number(full_quotes_data.get('oi', full_quotes_data.get('open_interest', 0)))
+                # Fallback to LTP data if full quotes not available
+                elif quotes_data and 'live_price' in quotes_data:
                     ltp_price = self._clean_number(quotes_data.get('live_price', 0))
+                # Last resort: use best bid price as approximation
                 elif bids and bids[0]['price'] > 0:
-                    # If no LTP available, use best bid price as approximation
                     ltp_price = bids[0]['price']
-                
+
                 result = {
                     'bids': bids,
                     'asks': asks,
                     'ltp': ltp_price,
                     'ltq': 0,  # Last traded quantity not available in Indmoney API
-                    'volume': 0,  # Volume not available in market depth endpoint
-                    'open': 0,  # OHLC data not available in market depth endpoint
-                    'high': 0,
-                    'low': 0,
-                    'prev_close': 0,
-                    'oi': 0,  # Open interest not available
+                    'volume': volume,
+                    'open': open_price,
+                    'high': high_price,
+                    'low': low_price,
+                    'prev_close': prev_close,
+                    'oi': oi,
                     'totalbuyqty': totalbuyqty,
                     'totalsellqty': totalsellqty
                 }
