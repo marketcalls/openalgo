@@ -21,7 +21,7 @@ def get_api_response(endpoint, auth, method="GET", params=None):
     
     # Log token info for debugging (mask the actual token)
     token_preview = AUTH_TOKEN[:20] + "..." + AUTH_TOKEN[-10:] if len(AUTH_TOKEN) > 30 else AUTH_TOKEN
-    logger.info(f"Using auth token: {token_preview}")
+    logger.debug(f"Using auth token: {token_preview}")
     
     headers = {
         'Authorization': AUTH_TOKEN,
@@ -31,16 +31,16 @@ def get_api_response(endpoint, auth, method="GET", params=None):
     
     url = get_url(endpoint)
     
-    logger.info(f"Making request to {url}")
-    logger.info(f"Method: {method}")
-    logger.info(f"Headers: {headers}")
-    logger.info(f"Params: {params}")
+    logger.debug(f"Making request to {url}")
+    logger.debug(f"Method: {method}")
+    logger.debug(f"Headers: {headers}")
+    logger.debug(f"Params: {params}")
     # Build query string for debugging
     if params:
         query_string = "&".join([f"{k}={v}" for k, v in params.items()])
-        logger.info(f"Full URL with params: {url}?{query_string}")
+        logger.debug(f"Full URL with params: {url}?{query_string}")
     else:
-        logger.info(f"Full URL: {url}")
+        logger.debug(f"Full URL: {url}")
     
     try:
         if method == "GET":
@@ -50,7 +50,7 @@ def get_api_response(endpoint, auth, method="GET", params=None):
         else:
             res = client.request(method, url, headers=headers, params=params)
         
-        logger.info(f"Request completed. Status code: {res.status_code}")
+        logger.debug(f"Request completed. Status code: {res.status_code}")
         logger.info(f"Actual request URL: {res.url}")
         
     except Exception as req_error:
@@ -60,8 +60,8 @@ def get_api_response(endpoint, auth, method="GET", params=None):
     # Add status attribute for compatibility with existing codebase
     res.status = res.status_code
     
-    logger.info(f"Response status: {res.status}")
-    logger.info(f"Raw response text: {res.text}")
+    logger.debug(f"Response status: {res.status}")
+    logger.debug(f"Raw response text: {res.text}")
     
     # Check if response is successful
     if res.status_code != 200:
@@ -71,11 +71,11 @@ def get_api_response(endpoint, auth, method="GET", params=None):
     # Try to parse JSON response
     try:
         response = json.loads(res.text)
-        logger.info(f"Parsed JSON response keys: {list(response.keys())}")
-        logger.info(f"Response status field: '{response.get('status')}'")
-        logger.info(f"Status field type: {type(response.get('status'))}")
-        logger.info(f"Status field length: {len(str(response.get('status')))}")
-        logger.info(f"Status field repr: {repr(response.get('status'))}")
+        logger.debug(f"Parsed JSON response keys: {list(response.keys())}")
+        logger.debug(f"Response status field: '{response.get('status')}'")
+        logger.debug(f"Status field type: {type(response.get('status'))}")
+        logger.debug(f"Status field length: {len(str(response.get('status')))}")
+        logger.debug(f"Status field repr: {repr(response.get('status'))}")
         
         # Check if this is a successful data response even without explicit status
         has_valid_data = False
@@ -85,7 +85,7 @@ def get_api_response(endpoint, auth, method="GET", params=None):
             # Check for direct array (alternative format)
             if isinstance(data, list) and len(data) > 0:
                 has_valid_data = True
-                logger.info("Response contains direct data array, treating as successful")
+                logger.debug("Response contains direct data array, treating as successful")
             # Check for nested structure with 'candles' (documented format for historical API)
             elif isinstance(data, dict) and 'candles' in data and isinstance(data['candles'], list) and len(data['candles']) > 0:
                 has_valid_data = True
@@ -95,13 +95,13 @@ def get_api_response(endpoint, auth, method="GET", params=None):
             # For historical data responses that don't have explicit status, add it
             if 'status' not in response:
                 response['status'] = 'success'
-                logger.info("Added missing status field to successful data response")
+                logger.debug("Added missing status field to successful data response")
 
         # Log full response only for smaller responses to avoid spam
         if len(res.text) < 5000:
-            logger.info(f"Full JSON response: {json.dumps(response, indent=2)}")
+            logger.debug(f"Full JSON response: {json.dumps(response, indent=2)}")
         else:
-            logger.info(f"Large response received ({len(res.text)} chars), logging summary only")
+            logger.debug(f"Large response received ({len(res.text)} chars), logging summary only")
     except json.JSONDecodeError as e:
         logger.error(f"JSON decode error: {str(e)}")
         logger.error(f"Response text that failed to parse: {res.text}")
@@ -119,11 +119,11 @@ def get_api_response(endpoint, auth, method="GET", params=None):
         # Check for direct array (alternative format)
         if isinstance(data, list) and len(data) > 0:
             has_valid_data = True
-            logger.info("Response contains valid direct data array")
+            logger.debug("Response contains valid direct data array")
         # Check for nested structure with 'candles' (documented format: data.candles)
         elif isinstance(data, dict) and 'candles' in data and isinstance(data['candles'], list) and len(data['candles']) > 0:
             has_valid_data = True
-            logger.info("Response contains valid nested candles array")
+            logger.debug("Response contains valid nested candles array")
         # Check for scrip-code nested structure (actual format: data[scrip_code].candles)
         elif isinstance(data, dict):
             for key, value in data.items():
@@ -134,14 +134,14 @@ def get_api_response(endpoint, auth, method="GET", params=None):
 
     # Also check for success field (actual API uses this instead of status)
     if response_success is True:
-        logger.info("Response has success=true field")
+        logger.debug("Response has success=true field")
         return response
 
     if has_valid_data:
         # For data responses that don't have explicit status, add it
         if 'status' not in response or response_status != 'success':
             response['status'] = 'success'
-            logger.info("Added/corrected status field to successful data response")
+            logger.debug("Added/corrected status field to successful data response")
         return response
 
     # Only check status if there's no valid data
@@ -152,7 +152,7 @@ def get_api_response(endpoint, auth, method="GET", params=None):
         logger.error(f"Full error response: {json.dumps(response, indent=2)}")
         raise Exception(f"Indmoney API Error ({error_code}): {error_message}")
     else:
-        logger.info(f"API response successful with status: '{response_status}' or success: {response_success}")
+        logger.debug(f"API response successful with status: '{response_status}' or success: {response_success}")
     
     return response
 
@@ -214,7 +214,7 @@ class BrokerData:
         
         # Format: SEGMENT_INSTRUMENTTOKEN
         scrip_code = f"{segment}_{security_id}"
-        logger.info(f"Generated scrip code: {scrip_code} for symbol: {symbol}, exchange: {exchange}")
+        logger.debug(f"Generated scrip code: {scrip_code} for symbol: {symbol}, exchange: {exchange}")
         
         return scrip_code
 
@@ -252,7 +252,7 @@ class BrokerData:
             scrip_code = self._get_scrip_code(symbol, exchange)
             
             logger.info(f"Getting quotes for symbol: {symbol}, exchange: {exchange}")
-            logger.info(f"Using scrip code: {scrip_code}")
+            logger.debug(f"Using scrip code: {scrip_code}")
             
             params = {
                 'scrip-codes': scrip_code
@@ -261,7 +261,7 @@ class BrokerData:
             try:
                 # Try the /full endpoint first for comprehensive quote data
                 full_response = get_api_response("/market/quotes/full", self.auth_token, "GET", params)
-                logger.info(f"Full quotes response: {full_response}")
+                logger.debug(f"Full quotes response: {full_response}")
                 full_data = full_response.get('data', {}).get(scrip_code, {})
                 
                 if full_data and any(key in full_data for key in ['ltp', 'live_price', 'open', 'high', 'low']):
@@ -290,7 +290,7 @@ class BrokerData:
                         if 'sell' in first_level:
                             result['ask'] = self._clean_number(first_level['sell'].get('price', 0))
                     
-                    logger.info(f"Successfully fetched full quotes: {result}")
+                    logger.debug(f"Successfully fetched full quotes: {result}")
                     return result
                 
             except Exception as full_error:
@@ -304,7 +304,7 @@ class BrokerData:
             # Get LTP data
             try:
                 ltp_response = get_api_response("/market/quotes/ltp", self.auth_token, "GET", params)
-                logger.info(f"LTP Response: {ltp_response}")
+                logger.debug(f"LTP Response: {ltp_response}")
                 ltp_data = ltp_response.get('data', {}).get(scrip_code, {})
             except Exception as ltp_error:
                 logger.warning(f"Could not fetch LTP data: {str(ltp_error)}")
@@ -326,7 +326,7 @@ class BrokerData:
                     if 'sell' in first_level and 'price' in first_level['sell']:
                         ask_price = self._clean_number(first_level['sell']['price'])
                         
-                logger.info(f"Extracted bid: {bid_price}, ask: {ask_price}")
+                logger.debug(f"Extracted bid: {bid_price}, ask: {ask_price}")
                         
             except Exception as depth_error:
                 logger.warning(f"Could not fetch depth data for quotes: {str(depth_error)}")
@@ -344,7 +344,7 @@ class BrokerData:
                 'prev_close': 0  # Previous close not available from LTP endpoint
             }
             
-            logger.info(f"Final quotes result: {result}")
+            logger.debug(f"Final quotes result: {result}")
             return result
                 
         except Exception as e:
@@ -376,7 +376,7 @@ class BrokerData:
             scrip_code = self._get_scrip_code(symbol, exchange)
             
             logger.info(f"Getting depth for symbol: {symbol}, exchange: {exchange}")
-            logger.info(f"Using scrip code: {scrip_code}")
+            logger.debug(f"Using scrip code: {scrip_code}")
             
             params = {
                 'scrip-codes': scrip_code
@@ -387,7 +387,7 @@ class BrokerData:
             try:
                 full_response = get_api_response("/market/quotes/full", self.auth_token, "GET", params)
                 full_quotes_data = full_response.get('data', {}).get(scrip_code, {})
-                logger.info(f"Full quotes data retrieved for OHLC: {bool(full_quotes_data)}")
+                logger.debug(f"Full quotes data retrieved for OHLC: {bool(full_quotes_data)}")
             except Exception as full_error:
                 logger.warning(f"Could not fetch full quotes for OHLC: {str(full_error)}")
 
@@ -582,15 +582,15 @@ class BrokerData:
             scrip_code = self._get_scrip_code(symbol, exchange)
             
             logger.info(f"Getting history for symbol: {symbol}, exchange: {exchange}")
-            logger.info(f"Interval: {interval} -> {indmoney_interval}")
-            logger.info(f"Date range: {start_date} to {end_date}")
-            logger.info(f"Using scrip code: {scrip_code}")
+            logger.debug(f"Interval: {interval} -> {indmoney_interval}")
+            logger.debug(f"Date range: {start_date} to {end_date}")
+            logger.debug(f"Using scrip code: {scrip_code}")
             
             # Convert dates to Unix timestamps (milliseconds) in IST
             start_timestamp = self._date_to_timestamp_ms(start_date)
             end_timestamp = self._date_to_timestamp_ms(end_date, end_of_day=True)
             
-            logger.info(f"Timestamp range: {start_timestamp} to {end_timestamp}")
+            logger.debug(f"Timestamp range: {start_timestamp} to {end_timestamp}")
             
             # Check if date range exceeds Indmoney limits
             max_ranges = {
@@ -604,7 +604,7 @@ class BrokerData:
             max_days = max_ranges.get(indmoney_interval, 7)
             date_chunks = self._split_date_range(start_date, end_date, max_days)
             
-            logger.info(f"Split into {len(date_chunks)} chunks: {date_chunks}")
+            logger.debug(f"Split into {len(date_chunks)} chunks: {date_chunks}")
             
             all_candles = []
             
@@ -620,7 +620,7 @@ class BrokerData:
                     }
                     
                     endpoint = f"/market/historical/{indmoney_interval}"
-                    logger.info(f"Fetching chunk {chunk_start} to {chunk_end}")
+                    logger.debug(f"Fetching chunk {chunk_start} to {chunk_end}")
                     logger.info(f"Request params: {params}")
                     
                     response = get_api_response(endpoint, self.auth_token, "GET", params)
@@ -635,21 +635,21 @@ class BrokerData:
                         scrip_data = data_obj[scrip_code]
                         if isinstance(scrip_data, dict) and 'candles' in scrip_data:
                             candles_data = scrip_data['candles'] or []  # Handle None/null
-                            logger.info(f"Extracted candles from scrip-nested structure: {scrip_code}")
+                            logger.debug(f"Extracted candles from scrip-nested structure: {scrip_code}")
                     # Try direct nested structure (documented format: data.candles)
                     elif isinstance(data_obj, dict) and 'candles' in data_obj:
                         candles_data = data_obj.get('candles') or []  # Handle None/null
-                        logger.info("Extracted candles from direct nested structure")
+                        logger.debug("Extracted candles from direct nested structure")
                     # Fallback to direct array (alternative format)
                     elif isinstance(data_obj, list):
                         candles_data = data_obj
-                        logger.info("Extracted candles from direct array")
+                        logger.debug("Extracted candles from direct array")
 
                     # Ensure candles_data is always a list (handle None/null from API)
                     if candles_data is None:
                         candles_data = []
 
-                    logger.info(f"Received {len(candles_data)} candles for chunk")
+                    logger.debug(f"Received {len(candles_data)} candles for chunk")
                     
                     # Transform Indmoney candle format to OpenAlgo format
                     chunk_candles = []
@@ -687,7 +687,7 @@ class BrokerData:
                             logger.error(f"Error processing individual candle {candle}: {str(candle_error)}")
                             continue
                     
-                    logger.info(f"Successfully processed {len(chunk_candles)} candles from chunk")
+                    logger.debug(f"Successfully processed {len(chunk_candles)} candles from chunk")
                     all_candles.extend(chunk_candles)
                     
                 except Exception as chunk_error:
@@ -705,8 +705,8 @@ class BrokerData:
                 df = pd.DataFrame(all_candles)
                 # Sort by timestamp and remove duplicates
                 df = df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
-                logger.info(f"Successfully fetched {len(df)} candles after deduplication")
-                logger.info(f"Sample data: {df.head(3).to_dict('records') if len(df) > 0 else 'No data'}")
+                logger.debug(f"Successfully fetched {len(df)} candles after deduplication")
+                logger.debug(f"Sample data: {df.head(3).to_dict('records') if len(df) > 0 else 'No data'}")
             else:
                 df = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
                 logger.warning("No historical data received from any chunks")
