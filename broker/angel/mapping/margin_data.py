@@ -128,17 +128,9 @@ def parse_margin_response(response_data):
         # Extract values from Angel's response
         total_margin_required = data.get('totalMarginRequired', 0)
         span_margin = margin_components.get('spanMargin', 0)
-        net_premium = margin_components.get('netPremium', 0)
-        margin_benefit = margin_components.get('marginBenefit', 0)
 
-        # Calculate exposure margin
-        # Formula: Exposure Margin = Total Margin - SPAN Margin - Premium + Margin Benefit
-        # This is derived since Angel doesn't provide exposure margin explicitly
-        exposure_margin = total_margin_required - span_margin - net_premium + margin_benefit
-
-        # Ensure exposure margin is not negative
-        if exposure_margin < 0:
-            exposure_margin = 0
+        # Angel API doesn't provide exposure margin explicitly, so set it to 0
+        exposure_margin = 0
 
         # Return standardized format matching OpenAlgo API specification
         return {
