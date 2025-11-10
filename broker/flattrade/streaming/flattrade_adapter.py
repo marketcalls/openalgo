@@ -375,29 +375,32 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             import uuid
             unique_id = str(uuid.uuid4())[:8]
             correlation_id = f"{symbol}_{exchange}_{mode}_{unique_id}"
-
-            # Check if we need to subscribe to WebSocket
             base_correlation_id = f"{symbol}_{exchange}_{mode}"
-            already_ws_subscribed = any(
-                cid.startswith(base_correlation_id)
-                for cid in self.subscriptions.keys()
-            )
 
-            if already_ws_subscribed:
-                self.logger.info(f"[SUBSCRIBE] WebSocket already subscribed for {base_correlation_id}, adding client subscription {correlation_id}")
-            else:
-                self.logger.info(f"[SUBSCRIBE] New WebSocket subscription needed for {correlation_id}")
+            # CRITICAL: Entire check-store-subscribe operation must be atomic to prevent race conditions
+            # with unsubscribe_all() or other concurrent operations
+            with self.lock:
+                # Check if we need to subscribe to WebSocket
+                already_ws_subscribed = any(
+                    cid.startswith(base_correlation_id)
+                    for cid in self.subscriptions.keys()
+                )
 
-            # Always store the subscription (each client gets their own entry)
-            self._store_subscription(correlation_id, subscription)
+                if already_ws_subscribed:
+                    self.logger.info(f"[SUBSCRIBE] WebSocket already subscribed for {base_correlation_id}, adding client subscription {correlation_id}")
+                else:
+                    self.logger.info(f"[SUBSCRIBE] New WebSocket subscription needed for {correlation_id}")
 
-            # Subscribe via WebSocket (reference counting will handle duplicates)
-            if self.connected:
-                self._websocket_subscribe(subscription)
-                if not already_ws_subscribed:
+                # Store the subscription (inline to avoid nested locks)
+                self.subscriptions[correlation_id] = subscription
+                self.token_to_symbol[subscription['token']] = (subscription['symbol'], subscription['exchange'])
+
+                # Subscribe via WebSocket if needed (reference counting will handle duplicates)
+                if self.connected and not already_ws_subscribed:
+                    self._websocket_subscribe(subscription)
                     self.logger.info(f"[SUBSCRIBE] WebSocket subscription sent for {subscription['scrip']}")
-            else:
-                self.logger.warning(f"[SUBSCRIBE] Not connected, cannot subscribe to {subscription['scrip']}")
+                elif not self.connected:
+                    self.logger.warning(f"[SUBSCRIBE] Not connected, cannot subscribe to {subscription['scrip']}")
 
             # Log current ZMQ port and subscription state
             self.logger.info(f"[SUBSCRIBE] Publishing to ZMQ port: {self.zmq_port}")
