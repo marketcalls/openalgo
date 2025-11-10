@@ -819,6 +819,69 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Clear market data cache"""
         self.market_cache.clear(token)
 
+    def unsubscribe_all(self) -> Dict[str, Any]:
+        """
+        Unsubscribe from all active data streams without disconnecting WebSocket.
+        This implements the persistent session model for Flattrade to avoid
+        server-side session cooldown issues.
+        
+        Returns:
+            Dict: Response indicating success/failure
+        """
+        try:
+            with self.lock:
+                if not self.connected or not self.ws_client:
+                    self.logger.warning("Cannot unsubscribe_all: WebSocket not connected")
+                    return self._create_error_response("NOT_CONNECTED", "WebSocket not connected")
+
+                # Collect all unique scrips for batch unsubscription
+                touchline_scrips = set()
+                depth_scrips = set()
+
+                # Group subscriptions by type
+                for subscription in self.subscriptions.values():
+                    scrip = subscription['scrip']
+                    mode = subscription['mode']
+
+                    if mode in [Config.MODE_LTP, Config.MODE_QUOTE]:
+                        touchline_scrips.add(scrip)
+                    elif mode == Config.MODE_DEPTH:
+                        depth_scrips.add(scrip)
+
+                # Unsubscribe from touchline data
+                if touchline_scrips:
+                    scrip_list = '#'.join(touchline_scrips)
+                    self.logger.info(f"Unsubscribing from {len(touchline_scrips)} touchline scrips")
+                    self.ws_client.unsubscribe_touchline(scrip_list)
+
+                # Unsubscribe from depth data
+                if depth_scrips:
+                    scrip_list = '#'.join(depth_scrips)
+                    self.logger.info(f"Unsubscribing from {len(depth_scrips)} depth scrips")
+                    self.ws_client.unsubscribe_depth(scrip_list)
+
+                # Clear all subscription tracking but keep WebSocket connection alive
+                subscription_count = len(self.subscriptions)
+                self.subscriptions.clear()
+                self.token_to_symbol.clear()
+                self.ws_subscription_refs.clear()
+                
+                # Clear market data cache
+                self.market_cache.clear()
+
+                self.logger.info(f"Unsubscribed from all {subscription_count} subscriptions. "
+                               f"WebSocket connection remains active for fast reconnection.")
+
+                return self._create_success_response(
+                    f"Unsubscribed from all {subscription_count} subscriptions. Connection kept alive.",
+                    unsubscribed_count=subscription_count,
+                    connection_status="active"
+                )
+
+        except Exception as e:
+            self.logger.error(f"Error in unsubscribe_all: {e}")
+            return self._create_error_response("UNSUBSCRIBE_ALL_ERROR", str(e))
+
 
 # Utility functions
 def safe_float(value: Any, default: float = 0.0) -> float:
