@@ -41,7 +41,9 @@
                 case 'angel':
                     loginUrl = '/angel/callback';
                     break;
-                
+                case 'mstock':
+                    loginUrl = '/mstock/callback';
+                    break;
                 case 'dhan':
                     // Directly initiate OAuth flow (client_id from .env)
                     loginUrl = '/dhan/initiate-oauth';
@@ -159,6 +161,7 @@
                             </label>
                             <select id="platform-select" name="platform" class="select select-bordered w-full">
                                 <option value="" disabled selected>Select a Broker</option>
+								<option value="mstock" {{ 'disabled' if broker_name != 'mstock' }}>mStock by Mirae Asset {{ '(Disabled)' if broker_name != 'mstock' }}</option>
                                 <option value="fivepaisa" {{ 'disabled' if broker_name != 'fivepaisa' }}>5 Paisa {{ '(Disabled)' if broker_name != 'fivepaisa' }}</option>
                                 <option value="fivepaisaxts" {{ 'disabled' if broker_name != 'fivepaisaxts' }}>5 Paisa (XTS) {{ '(Disabled)' if broker_name != 'fivepaisaxts' }}</option>
                                 <option value="aliceblue" {{ 'disabled' if broker_name != 'aliceblue' }}>Alice Blue {{ '(Disabled)' if broker_name != 'aliceblue' }}</option>
