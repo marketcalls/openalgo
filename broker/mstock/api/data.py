@@ -1,8 +1,9 @@
+import os
 from utils.httpx_client import get_httpx_client
 from broker.mstock.mapping.order_data import transform_positions_data, transform_holdings_data
 
 def get_positions(auth_token):
-    api_key = os.getenv('BROKER_API_KEY')
+    api_key = os.getenv('BROKER_API_SECRET')
     """
     Retrieves the user's positions.
     """
@@ -24,7 +25,7 @@ def get_positions(auth_token):
         return None, str(e)
 
 def get_holdings(auth_token):
-    api_key = os.getenv('BROKER_API_KEY')
+    api_key = os.getenv('BROKER_API_SECRET')
     """
     Retrieves the user's holdings.
     """

@@ -9,7 +9,7 @@ logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     auth_token = auth
-    api_key = os.getenv('BROKER_API_KEY')
+    api_key = os.getenv('BROKER_API_SECRET')
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -47,7 +47,7 @@ def place_order(auth_token, data):
     """
     Places an order with the broker.
     """
-    api_key = os.getenv('BROKER_API_KEY')
+    api_key = os.getenv('BROKER_API_SECRET')
     order_params = transform_data(data)
     headers = {
         'X-Mirae-Version': '1',
@@ -73,7 +73,7 @@ def modify_order(auth_token, data):
     """
     Modifies an existing order.
     """
-    api_key = os.getenv('BROKER_API_KEY')
+    api_key = os.getenv('BROKER_API_SECRET')
     order_params = transform_modify_order_data(data)
     headers = {
         'X-Mirae-Version': '1',
@@ -99,7 +99,7 @@ def cancel_order(auth_token, order_id, variety):
     """
     Cancels an existing order.
     """
-    api_key = os.getenv('BROKER_API_KEY')
+    api_key = os.getenv('BROKER_API_SECRET')
     headers = {
         'X-Mirae-Version': '1',
         'Authorization': f'token {api_key}:{auth_token}',

@@ -3,14 +3,26 @@ import json
 import os
 from utils.httpx_client import get_httpx_client
 
-def authenticate_broker(api_key, totp_code):
+def authenticate_broker(totp_code):
     """
-    Authenticate with mstock and return the auth token.
+    Authenticate with mstock using TOTP and return the auth token.
+
+    Args:
+        totp_code (str): The 6-digit TOTP code from the authenticator app
+
+    Returns:
+        tuple: (auth_token, feed_token, error_message)
     """
+    # Get API key from BROKER_API_SECRET (mstock stores API key in SECRET, client code in KEY)
+    api_key = os.getenv('BROKER_API_SECRET')
+
+    if not api_key:
+        return None, None, "BROKER_API_SECRET not found in environment variables."
+
     try:
         client = get_httpx_client()
 
-        # If TOTP is enabled, we can directly verify it without a prior login call
+        # TOTP authentication flow - directly verify TOTP to get access token
         headers = {
             'X-Mirae-Version': '1',
             'Content-Type': 'application/x-www-form-urlencoded',

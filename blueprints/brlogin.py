@@ -37,6 +37,10 @@ def broker_callback(broker,para=None):
         # For Compositedge OAuth callback, we'll handle authentication differently
         # The session will be established after successful auth token validation
         logger.info("Compositedge callback without session - will establish session after auth")
+    # Special handling for mstock POST - check session but provide better error instead of redirect
+    elif broker == 'mstock' and request.method == 'POST' and 'user' not in session:
+        # Redirect to broker selection page with error message instead of login
+        return redirect(url_for('auth.broker_login'))
     else:
         # Check if user is not in session first for other brokers
         if 'user' not in session:
@@ -87,10 +91,17 @@ def broker_callback(broker,para=None):
             return render_template('mstock.html')
 
         elif request.method == 'POST':
+            # Check if user session is lost
+            if 'user' not in session:
+                logger.error(f'mstock POST - Session lost! Cookies: {request.cookies}')
+                return render_template('mstock.html', error_message="Session expired. Please login again.")
+
             totp_code = request.form.get('totp')
-            api_key = get_broker_api_key()
-            auth_token, feed_token, error_message = auth_function(api_key, totp_code)
+            # API key is retrieved from environment inside authenticate_broker
+            auth_token, feed_token, error_message = auth_function(totp_code)
             forward_url = 'mstock.html'
+            # Initialize user_id as None (mstock doesn't use it)
+            user_id = None
     
     elif broker == 'aliceblue':
         if request.method == 'GET':

@@ -89,7 +89,7 @@ def download_mstock_csv(auth_token):
     """
     Download the MStock master contract CSV from the API.
     """
-    api_key = os.getenv('BROKER_API_KEY')
+    api_key = os.getenv('BROKER_API_SECRET')
     url = 'https://api.mstock.trade/openapi/typea/instruments/scriptmaster'
 
     headers = {

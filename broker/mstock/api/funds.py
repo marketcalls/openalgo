@@ -8,10 +8,11 @@ logger = get_logger(__name__)
 
 def get_margin_data(auth_token):
     """Fetch margin (fund) data from MStock API using Type A authentication."""
-    api_key = os.getenv('BROKER_API_KEY')
+    # Use BROKER_API_SECRET which contains the mStock API key (same as used in auth)
+    api_key = os.getenv('BROKER_API_SECRET')
 
     if not api_key:
-        logger.error("Missing environment variable: BROKER_API_KEY")
+        logger.error("Missing environment variable: BROKER_API_SECRET")
         return {}
 
     headers = {
