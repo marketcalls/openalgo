@@ -139,7 +139,7 @@ def transform_order_data(orders):
             order_status = "open"
         elif status == "Rejected" or status == "rejected":
             order_status = "rejected"
-        elif status == "Cancelled" or status == "cancelled":
+        elif status in ["Cancelled", "cancelled", "O-Cancelled", "o-cancelled"]:
             order_status = "cancelled"
         elif "trigger pending" in status.lower():
             order_status = "trigger pending"

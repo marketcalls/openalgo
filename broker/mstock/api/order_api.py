@@ -312,7 +312,7 @@ def close_all_positions(current_api_key, auth):
 
 def cancel_order(orderid, auth):
     """
-    Cancel a pending order.
+    Cancel a pending order on mStock Type B API.
 
     Args:
         orderid: Order ID to cancel
@@ -333,33 +333,54 @@ def cancel_order(orderid, auth):
         'Content-Type': 'application/json',
     }
 
-    # Prepare payload for Type B
-    payload = json.dumps({
+    # Prepare payload for Type B (variety and orderid in body)
+    payload_data = {
         "variety": "NORMAL",
         "orderid": orderid
-    })
+    }
 
-    response = client.delete(
-        f"https://api.mstock.trade/openapi/typeb/orders/regular/{orderid}",
+    logger.info(f"Cancelling order {orderid}")
+    logger.info(f"Cancel order payload: {json.dumps(payload_data)}")
+
+    # DELETE request with orderid in both URL path and body
+    # Using json parameter instead of content/data for httpx compatibility
+    response = client.request(
+        method="DELETE",
+        url=f"https://api.mstock.trade/openapi/typeb/orders/regular/{orderid}",
         headers=headers,
-        content=payload
+        json=payload_data
     )
 
     # Add status attribute for compatibility
     response.status = response.status_code
 
-    data = json.loads(response.text)
+    logger.info(f"Cancel order response status code: {response.status_code}")
+    logger.info(f"Cancel order response: {response.text}")
+
+    try:
+        data = json.loads(response.text)
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse cancel order response: {response.text}")
+        return {"status": "error", "message": "Invalid response from broker"}, 500
+
+    # Handle list response (like place order)
+    if isinstance(data, list) and len(data) > 0:
+        logger.info("API returned list, extracting first element")
+        data = data[0]
 
     # Check if the request was successful
-    if data.get("status") in [True, "true"]:
+    if data.get("status") in [True, "true"] or data.get("message") == "SUCCESS":
+        logger.info(f"Order {orderid} cancelled successfully")
         return {"status": "success", "orderid": orderid}, 200
     else:
-        return {"status": "error", "message": data.get("message", "Failed to cancel order")}, response.status
+        error_message = data.get("message", "Failed to cancel order")
+        logger.error(f"Failed to cancel order {orderid}: {error_message}")
+        return {"status": "error", "message": error_message}, response.status
 
 
 def modify_order(data, auth):
     """
-    Modify an existing order.
+    Modify an existing order on mStock Type B API.
 
     Args:
         data: OpenAlgo modify order data
@@ -384,62 +405,123 @@ def modify_order(data, auth):
         'Content-Type': 'application/json',
     }
 
-    payload = json.dumps(transformed_data)
-    logger.info(f"Modify order payload: {payload}")
-
     orderid = data['orderid']
 
-    response = client.put(
-        f"https://api.mstock.trade/openapi/typeb/orders/regular/{orderid}",
+    logger.info(f"Modifying order {orderid}")
+    logger.info(f"Modify order payload: {json.dumps(transformed_data)}")
+
+    # PUT request with orderid in URL path
+    # Using json parameter instead of content/data for httpx compatibility
+    response = client.request(
+        method="PUT",
+        url=f"https://api.mstock.trade/openapi/typeb/orders/regular/{orderid}",
         headers=headers,
-        content=payload
+        json=transformed_data
     )
 
     # Add status attribute for compatibility
     response.status = response.status_code
 
-    data = json.loads(response.text)
+    logger.info(f"Modify order response status code: {response.status_code}")
+    logger.info(f"Modify order response: {response.text}")
 
-    if data.get("status") in [True, "true"] or data.get("message") == "SUCCESS":
-        return {"status": "success", "orderid": data["data"]["orderid"]}, 200
+    try:
+        response_data = json.loads(response.text)
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse modify order response: {response.text}")
+        return {"status": "error", "message": "Invalid response from broker"}, 500
+
+    # Handle list response (like place order)
+    if isinstance(response_data, list) and len(response_data) > 0:
+        logger.info("API returned list, extracting first element")
+        response_data = response_data[0]
+
+    # Check if the request was successful
+    if response_data.get("status") in [True, "true"] or response_data.get("message") == "SUCCESS":
+        modified_orderid = response_data.get("data", {}).get("orderid", orderid)
+        logger.info(f"Order {orderid} modified successfully")
+        return {"status": "success", "orderid": modified_orderid}, 200
     else:
-        return {"status": "error", "message": data.get("message", "Failed to modify order")}, response.status
+        error_message = response_data.get("message", "Failed to modify order")
+        logger.error(f"Failed to modify order {orderid}: {error_message}")
+        return {"status": "error", "message": error_message}, response.status
 
 
 def cancel_all_orders_api(data, auth):
     """
-    Cancel all pending orders.
+    Cancel all pending orders using mStock Type B cancelall endpoint.
 
     Args:
-        data: Request data (may contain filters)
+        data: Request data (not used for mStock Type B)
         auth: Authentication token
 
     Returns:
         tuple: (canceled_orders_list, failed_cancellations_list)
     """
     auth_token = auth
+    api_key = os.getenv('BROKER_API_SECRET')
 
+    # First, get the list of pending orders to return their IDs
+    logger.info("Fetching order book to identify pending orders")
     order_book_response = get_order_book(auth_token)
 
-    if order_book_response.get('status') not in [True, "true"]:
+    pending_order_ids = []
+    if order_book_response.get('status') in [True, "true"] and order_book_response.get('data'):
+        # Filter orders that are in 'open', 'pending', 'o-pending' or 'trigger pending' state
+        pending_orders = [
+            order for order in order_book_response.get('data', [])
+            if order.get('status', '').lower() in ['open', 'pending', 'o-pending', 'trigger pending']
+        ]
+        pending_order_ids = [order.get('orderid') for order in pending_orders if order.get('orderid')]
+        logger.info(f"Found {len(pending_order_ids)} pending orders to cancel: {pending_order_ids}")
+    else:
+        logger.warning("Failed to fetch order book or no data available")
+
+    # If no pending orders, return early
+    if not pending_order_ids:
+        logger.info("No pending orders to cancel")
         return [], []
 
-    # Filter orders that are in 'open', 'pending' or 'trigger pending' state
-    orders_to_cancel = [
-        order for order in order_book_response.get('data', [])
-        if order.get('status', '').lower() in ['open', 'pending', 'trigger pending']
-    ]
+    # Now call the cancelall endpoint
+    client = get_httpx_client()
 
-    canceled_orders = []
-    failed_cancellations = []
+    headers = {
+        'X-Mirae-Version': '1',
+        'Authorization': f'Bearer {auth_token}',
+        'X-PrivateKey': api_key,
+        'Content-Type': 'application/json',
+    }
 
-    # Cancel the filtered orders
-    for order in orders_to_cancel:
-        orderid = order['orderid']
-        cancel_response, status_code = cancel_order(orderid, auth)
-        if status_code == 200:
-            canceled_orders.append(orderid)
-        else:
-            failed_cancellations.append(orderid)
+    logger.info("Calling mStock Type B cancelall endpoint")
 
-    return canceled_orders, failed_cancellations
+    # POST request to cancel all orders at once
+    response = client.post(
+        'https://api.mstock.trade/openapi/typeb/orders/cancelall',
+        headers=headers
+    )
+
+    # Add status attribute for compatibility
+    response.status = response.status_code
+
+    logger.info(f"Cancel all response status code: {response.status_code}")
+    logger.info(f"Cancel all response: {response.text}")
+
+    try:
+        response_data = json.loads(response.text)
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse cancel all response: {response.text}")
+        return [], pending_order_ids  # Return as failed
+
+    # Handle list response (like place order)
+    if isinstance(response_data, list) and len(response_data) > 0:
+        logger.info("API returned list, extracting first element")
+        response_data = response_data[0]
+
+    # Check if the request was successful
+    if response_data.get("status") in [True, "true", "success"] or response_data.get("message") == "SUCCESS":
+        logger.info(f"Cancel all orders successful - cancelled {len(pending_order_ids)} orders")
+        return pending_order_ids, []
+    else:
+        error_message = response_data.get("message", "Failed to cancel all orders")
+        logger.error(f"Cancel all failed: {error_message}")
+        return [], pending_order_ids  # Return as failed
