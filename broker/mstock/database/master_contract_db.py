@@ -197,325 +197,225 @@ def convert_date(date_str):
 # -------------------------------------------------------------------
 # PROCESS JSON
 # -------------------------------------------------------------------
-def process_mstock_csv(json_data):
+def process_mstock_json(json_data):
     """
-    Convert JSON array from MStock Type B API to DataFrame in OpenAlgo schema.
-    Processes instrument data and applies necessary transformations.
+    Processes the MStock JSON data to fit the OpenAlgo database schema.
 
-    Input JSON format:
-    [
-        {
-            "token": "877966",
-            "symbol": "SENSEX",
-            "name": "SENSEX25O2382700CE",
-            "expiry": "23Oct2025",
-            "strike": "82700",
-            "lotsize": "20",
-            "instrumenttype": "OPTIDX",
-            "exch_seg": "BFO",
-            "tick_size": "0.05"
-        },
-        ...
-    ]
+    Args:
+        json_data: JSON array from MStock Type B API
+
+    Returns:
+        DataFrame: The processed DataFrame ready to be inserted into the database.
     """
-    try:
-        # Convert JSON array to DataFrame
-        df = pd.DataFrame(json_data)
-    except Exception as e:
-        logger.error(f"Error reading MStock JSON: {e}")
-        return pd.DataFrame()
+    # Convert JSON array to DataFrame
+    df = pd.DataFrame(json_data)
 
-    # Normalize column names
-    df.columns = [col.strip().lower() for col in df.columns]
+    # Map columns to database schema
+    # API 'name' field (e.g., "SENSEX25O2382700CE", "RVNL-EQ") → brsymbol (broker's full symbol)
+    # API 'symbol' field (e.g., "SENSEX", "RVNL") → name (base symbol name)
+    df = df.rename(columns={
+        'token': 'token',
+        'symbol': 'name',           # API symbol → name (base symbol)
+        'name': 'brsymbol',         # API name → brsymbol (broker's full symbol)
+        'lotsize': 'lotsize',
+        'instrumenttype': 'instrumenttype',
+        'exch_seg': 'exchange',
+        'expiry': 'expiry',
+        'strike': 'strike',
+        'tick_size': 'tick_size'
+    })
 
-    expected_cols = {
-        'instrument_token', 'exchange_token', 'tradingsymbol', 'name',
-        'last_price', 'expiry', 'strike', 'tick_size', 'lot_size',
-        'instrument_type', 'segment', 'exchange'
-    }
+    # Create symbol column (will be cleaned version of brsymbol)
+    df['symbol'] = df['brsymbol']
 
-    if not expected_cols.issubset(df.columns):
-        logger.error(f"Unexpected MStock CSV columns. Expected: {expected_cols}, Got: {set(df.columns)}")
-        return pd.DataFrame()
+    # Keep original broker exchange
+    df['brexchange'] = df['exchange']
 
-    # Map to OpenAlgo schema
-    df['symbol'] = df['tradingsymbol'].astype(str)
-    df['brsymbol'] = df['symbol']  # Keep original broker symbol
-    df['name'] = df['name'].astype(str)
+    # Clean up equity symbols (remove -EQ, -BE suffixes)
+    df['symbol'] = df['symbol'].str.replace(r'-EQ$|-BE$|-BZ$', '', regex=True)
 
-    # For F&O instruments where name might be empty/NaN, extract base from tradingsymbol
-    def extract_base_symbol(row):
-        """Extract base symbol from tradingsymbol for F&O instruments when name is missing."""
-        import re
-        name = str(row['name'])
-        symbol = str(row['tradingsymbol'])
-        instrument_type = str(row['instrument_type'])
+    # Convert expiry dates to OpenAlgo format (DD-MMM-YY)
+    df['expiry'] = df['expiry'].apply(lambda x: convert_date(x) if pd.notnull(x) and str(x).strip() != '' else '')
+    df['expiry'] = df['expiry'].str.upper()
 
-        # If name is valid and not 'nan', use it
-        if name and name.lower() not in ['nan', 'none', '']:
-            return name
+    # Convert numeric fields, handling empty strings
+    # Replace empty strings with NaN, then convert to numeric, then fill with defaults
+    df['strike'] = pd.to_numeric(df['strike'].replace('', None), errors='coerce').fillna(0).astype(float)
+    df['lotsize'] = pd.to_numeric(df['lotsize'].replace('', None), errors='coerce').fillna(1).astype(int)
+    df['tick_size'] = pd.to_numeric(df['tick_size'].replace('', None), errors='coerce').fillna(0.05).astype(float)
 
-        # For F&O instruments, extract base from tradingsymbol
-        if instrument_type in ['FUTIDX', 'OPTIDX', 'FUTSTK', 'OPTSTK', 'FUTCUR', 'OPTCUR', 'FUTIRC', 'OPTIRC', 'FUTCOM', 'OPTFUT']:
-            # Common index patterns
-            if symbol.startswith('NIFTY'):
-                if 'BANK' in symbol[:12]:
-                    return 'Nifty Bank'
-                elif 'FIN' in symbol[:12] or 'FINNIFTY' in symbol[:12]:
-                    return 'Nifty Fin Service'
-                elif 'MIDCAP' in symbol[:15] or 'MIDCP' in symbol[:15]:
-                    return 'NIFTY MID SELECT'
-                elif 'NEXT' in symbol[:15] or 'NXT' in symbol[:15]:
-                    return 'Nifty Next 50'
-                else:
-                    return 'Nifty 50'
-            elif symbol.startswith('SENSEX'):
-                return 'SENSEX'
-            elif symbol.startswith('BANKEX'):
-                return 'BANKEX'
-            elif symbol.startswith('INDIA') and 'VIX' in symbol[:10]:
-                return 'India VIX'
-            elif symbol.startswith('USDINR') or symbol.startswith('EURINR') or symbol.startswith('GBPINR') or symbol.startswith('JPYINR'):
-                # Currency - extract first 6 chars
-                return symbol[:6]
-            elif 'CRUDEOIL' in symbol[:10]:
-                return 'CRUDEOILM'
-            else:
-                # For stock F&O, extract the base by removing date and option parts
-                # Pattern: Remove DDMMMYY and numbers+CE/PE from end
-                match = re.match(r'^([A-Z]+)', symbol)
-                if match:
-                    return match.group(1)
+    # -------------------------------------------------------------------
+    # Identify Index Instruments (tokens starting with 10000)
+    # Conditions: token starts with "10000", has 8+ digits, instrumenttype is EQ/Equity
+    # -------------------------------------------------------------------
+    df['token'] = df['token'].astype(str)
 
-        return name
+    # NSE Index: token starts with "10000", 8+ digits, instrumenttype EQ/Equity
+    mask_nse_index = (
+        (df['exchange'] == 'NSE') &
+        (df['token'].str.startswith('10000')) &
+        (df['token'].str.len() >= 8) &
+        (df['instrumenttype'].isin(['EQ', 'Equity']))
+    )
+    df.loc[mask_nse_index, 'exchange'] = 'NSE_INDEX'
 
-    df['name'] = df.apply(extract_base_symbol, axis=1)
+    # BSE Index: token starts with "10000", 8+ digits, instrumenttype EQ/Equity
+    mask_bse_index = (
+        (df['exchange'] == 'BSE') &
+        (df['token'].str.startswith('10000')) &
+        (df['token'].str.len() >= 8) &
+        (df['instrumenttype'].isin(['EQ', 'Equity']))
+    )
+    df.loc[mask_bse_index, 'exchange'] = 'BSE_INDEX'
 
-    df['exchange'] = df['exchange'].astype(str)
-    df['brexchange'] = df['exchange']  # Keep original broker exchange
-    df['token'] = df['instrument_token'].astype(str)
+    # -------------------------------------------------------------------
+    # Format F&O Symbols (OpenAlgo Standard)
+    # Format: [Base][DDMMMYY]FUT/CE/PE
+    # -------------------------------------------------------------------
 
-    # Process expiry date with proper formatting
-    # Log sample expiry dates before conversion for debugging
-    if len(df) > 0:
-        sample_expiry = df['expiry'].head(5).tolist()
-        logger.info(f"Sample expiry dates from CSV (before conversion): {sample_expiry}")
+    # NSE Index Futures: BANKNIFTY28MAR24FUT
+    mask = (df['instrumenttype'] == 'FUTIDX') & (df['exchange'] == 'NFO') & (df['expiry'].str.len() > 0)
+    df.loc[mask, 'symbol'] = df.loc[mask, 'name'] + df.loc[mask, 'expiry'].str.replace('-', '', regex=False) + 'FUT'
 
-    df['expiry'] = df['expiry'].apply(convert_date)
+    # NSE Stock Futures: ADANIGREEN25DEC25FUT
+    mask = (df['instrumenttype'] == 'FUTSTK') & (df['exchange'] == 'NFO') & (df['expiry'].str.len() > 0)
+    df.loc[mask, 'symbol'] = df.loc[mask, 'name'] + df.loc[mask, 'expiry'].str.replace('-', '', regex=False) + 'FUT'
 
-    # Log sample expiry dates after conversion
-    if len(df) > 0:
-        sample_expiry_after = df['expiry'].head(5).tolist()
-        logger.info(f"Sample expiry dates after conversion: {sample_expiry_after}")
+    # BSE Index Futures: SENSEX28MAR24FUT
+    mask = (df['instrumenttype'] == 'FUTIDX') & (df['exchange'] == 'BFO') & (df['expiry'].str.len() > 0)
+    df.loc[mask, 'symbol'] = df.loc[mask, 'name'] + df.loc[mask, 'expiry'].str.replace('-', '', regex=False) + 'FUT'
 
-    # Process strike price (convert to float)
-    df['strike'] = pd.to_numeric(df['strike'], errors='coerce').fillna(0)
+    # BSE Stock Futures: RELIANCE30OCT25FUT
+    mask = (df['instrumenttype'] == 'FUTSTK') & (df['exchange'] == 'BFO') & (df['expiry'].str.len() > 0)
+    df.loc[mask, 'symbol'] = df.loc[mask, 'name'] + df.loc[mask, 'expiry'].str.replace('-', '', regex=False) + 'FUT'
 
-    # Process lot size
-    df['lotsize'] = pd.to_numeric(df['lot_size'], errors='coerce').fillna(1).astype(int)
+    # NSE Index Options: NIFTY28MAR2420800CE
+    mask_ce = (df['instrumenttype'] == 'OPTIDX') & (df['exchange'] == 'NFO') & (df['brsymbol'].str.endswith('CE', na=False))
+    mask_pe = (df['instrumenttype'] == 'OPTIDX') & (df['exchange'] == 'NFO') & (df['brsymbol'].str.endswith('PE', na=False))
 
-    # Instrument type
-    df['instrumenttype'] = df['instrument_type'].astype(str)
+    df.loc[mask_ce, 'symbol'] = (
+        df.loc[mask_ce, 'name'] +
+        df.loc[mask_ce, 'expiry'].str.replace('-', '', regex=False) +
+        df.loc[mask_ce, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
+        'CE'
+    )
+    df.loc[mask_pe, 'symbol'] = (
+        df.loc[mask_pe, 'name'] +
+        df.loc[mask_pe, 'expiry'].str.replace('-', '', regex=False) +
+        df.loc[mask_pe, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
+        'PE'
+    )
 
-    # Process tick size
-    df['tick_size'] = pd.to_numeric(df['tick_size'], errors='coerce').fillna(0.05)
+    # NSE Stock Options: ADANIGREEN25DEC251380CE
+    mask_ce = (df['instrumenttype'] == 'OPTSTK') & (df['exchange'] == 'NFO') & (df['brsymbol'].str.endswith('CE', na=False))
+    mask_pe = (df['instrumenttype'] == 'OPTSTK') & (df['exchange'] == 'NFO') & (df['brsymbol'].str.endswith('PE', na=False))
 
-    # Standardize common index names for consistency with OpenAlgo
-    # Apply this mapping to ensure consistent naming
-    df['name'] = df['name'].replace({
+    df.loc[mask_ce, 'symbol'] = (
+        df.loc[mask_ce, 'name'] +
+        df.loc[mask_ce, 'expiry'].str.replace('-', '', regex=False) +
+        df.loc[mask_ce, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
+        'CE'
+    )
+    df.loc[mask_pe, 'symbol'] = (
+        df.loc[mask_pe, 'name'] +
+        df.loc[mask_pe, 'expiry'].str.replace('-', '', regex=False) +
+        df.loc[mask_pe, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
+        'PE'
+    )
+
+    # BSE Index Options: SENSEX28MAR2475000CE
+    mask_ce = (df['instrumenttype'] == 'OPTIDX') & (df['exchange'] == 'BFO') & (df['brsymbol'].str.endswith('CE', na=False))
+    mask_pe = (df['instrumenttype'] == 'OPTIDX') & (df['exchange'] == 'BFO') & (df['brsymbol'].str.endswith('PE', na=False))
+
+    df.loc[mask_ce, 'symbol'] = (
+        df.loc[mask_ce, 'name'] +
+        df.loc[mask_ce, 'expiry'].str.replace('-', '', regex=False) +
+        df.loc[mask_ce, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
+        'CE'
+    )
+    df.loc[mask_pe, 'symbol'] = (
+        df.loc[mask_pe, 'name'] +
+        df.loc[mask_pe, 'expiry'].str.replace('-', '', regex=False) +
+        df.loc[mask_pe, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
+        'PE'
+    )
+
+    # BSE Stock Options: RELIANCE30OCT251330PE
+    mask_ce = (df['instrumenttype'] == 'OPTSTK') & (df['exchange'] == 'BFO') & (df['brsymbol'].str.endswith('CE', na=False))
+    mask_pe = (df['instrumenttype'] == 'OPTSTK') & (df['exchange'] == 'BFO') & (df['brsymbol'].str.endswith('PE', na=False))
+
+    df.loc[mask_ce, 'symbol'] = (
+        df.loc[mask_ce, 'name'] +
+        df.loc[mask_ce, 'expiry'].str.replace('-', '', regex=False) +
+        df.loc[mask_ce, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
+        'CE'
+    )
+    df.loc[mask_pe, 'symbol'] = (
+        df.loc[mask_pe, 'name'] +
+        df.loc[mask_pe, 'expiry'].str.replace('-', '', regex=False) +
+        df.loc[mask_pe, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
+        'PE'
+    )
+
+    # Currency Futures: USDINR10MAY24FUT
+    mask = (df['instrumenttype'].isin(['FUTCUR', 'FUTIRC'])) & (df['exchange'] == 'CDS') & (df['expiry'].str.len() > 0)
+    df.loc[mask, 'symbol'] = df.loc[mask, 'name'] + df.loc[mask, 'expiry'].str.replace('-', '', regex=False) + 'FUT'
+
+    # Currency Options: USDINR19APR2482CE
+    mask_ce = (df['instrumenttype'].isin(['OPTCUR', 'OPTIRC'])) & (df['exchange'] == 'CDS') & (df['brsymbol'].str.endswith('CE', na=False))
+    mask_pe = (df['instrumenttype'].isin(['OPTCUR', 'OPTIRC'])) & (df['exchange'] == 'CDS') & (df['brsymbol'].str.endswith('PE', na=False))
+
+    df.loc[mask_ce, 'symbol'] = (
+        df.loc[mask_ce, 'name'] +
+        df.loc[mask_ce, 'expiry'].str.replace('-', '', regex=False) +
+        df.loc[mask_ce, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
+        'CE'
+    )
+    df.loc[mask_pe, 'symbol'] = (
+        df.loc[mask_pe, 'name'] +
+        df.loc[mask_pe, 'expiry'].str.replace('-', '', regex=False) +
+        df.loc[mask_pe, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
+        'PE'
+    )
+
+    # MCX Futures: CRUDEOILM20MAY24FUT
+    mask = (df['instrumenttype'] == 'FUTCOM') & (df['exchange'] == 'MCX') & (df['expiry'].str.len() > 0)
+    df.loc[mask, 'symbol'] = df.loc[mask, 'name'] + df.loc[mask, 'expiry'].str.replace('-', '', regex=False) + 'FUT'
+
+    # MCX Options: CRUDEOIL17APR246750CE
+    mask_ce = (df['instrumenttype'] == 'OPTFUT') & (df['exchange'] == 'MCX') & (df['brsymbol'].str.endswith('CE', na=False))
+    mask_pe = (df['instrumenttype'] == 'OPTFUT') & (df['exchange'] == 'MCX') & (df['brsymbol'].str.endswith('PE', na=False))
+
+    df.loc[mask_ce, 'symbol'] = (
+        df.loc[mask_ce, 'name'] +
+        df.loc[mask_ce, 'expiry'].str.replace('-', '', regex=False) +
+        df.loc[mask_ce, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
+        'CE'
+    )
+    df.loc[mask_pe, 'symbol'] = (
+        df.loc[mask_pe, 'name'] +
+        df.loc[mask_pe, 'expiry'].str.replace('-', '', regex=False) +
+        df.loc[mask_pe, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
+        'PE'
+    )
+
+    # -------------------------------------------------------------------
+    # Common Index Symbol Formatting
+    # Standardize index symbol names for NSE_INDEX and BSE_INDEX exchanges
+    # -------------------------------------------------------------------
+    df['symbol'] = df['symbol'].replace({
         'Nifty 50': 'NIFTY',
         'Nifty Next 50': 'NIFTYNXT50',
         'Nifty Fin Service': 'FINNIFTY',
         'Nifty Bank': 'BANKNIFTY',
         'NIFTY MID SELECT': 'MIDCPNIFTY',
         'India VIX': 'INDIAVIX',
-        'SENSEX': 'SENSEX',
-        'BANKEX': 'BANKEX',
-        'Nifty Midcap Select': 'MIDCPNIFTY',
-        'NIFTY MIDCAP SELECT': 'MIDCPNIFTY',
-        'Nifty Financial Services': 'FINNIFTY',
-        'NIFTY FINANCIAL SERVICES': 'FINNIFTY'
+        'SNSX50': 'SENSEX50',
+        'S&P BSE SENSEX': 'SENSEX',
+        'BSE BANKEX': 'BANKEX'
     })
 
-    # Log sample name standardization
-    if len(df) > 0:
-        sample_names = df[df['instrumenttype'].isin(['FUTIDX', 'OPTIDX'])]['name'].unique()[:5]
-        logger.info(f"Sample standardized index names: {sample_names.tolist()}")
-
-    # Remove any suffix like -EQ from equity symbols for standardization
-    df['symbol'] = df['symbol'].str.replace(r'-EQ$|-BE$|-BZ$', '', regex=True)
-
-    # -------------------------------------------------------------------
-    # F&O Symbol Construction (OpenAlgo Format)
-    #
-    # Expiry Column Format: DD-MMM-YY (with hyphens, e.g., 25-NOV-25)
-    # Symbol Format: [Base][DDMMMYY]FUT/CE/PE (no hyphens, e.g., ABCAPITAL25NOV25FUT)
-    #
-    # Example:
-    #   - Name: ABCAPITAL
-    #   - Expiry Column: 25-NOV-25
-    #   - Symbol: ABCAPITAL25NOV25FUT (ABCAPITAL + 25 + NOV + 25 + FUT)
-    # -------------------------------------------------------------------
-
-    # NSE Index Futures: BANKNIFTY28MAR24FUT (expiry: 28-MAR-24)
-    mask = (df['instrumenttype'].isin(['FUTIDX'])) & (df['exchange'].isin(['NFO'])) & (df['expiry'].str.len() > 0)
-    df.loc[mask, 'symbol'] = df.loc[mask, 'name'] + df.loc[mask, 'expiry'].str.replace('-', '', regex=False) + 'FUT'
-
-    # NSE Stock Futures: ABCAPITAL25NOV25FUT (expiry: 25-NOV-25)
-    mask = (df['instrumenttype'].isin(['FUTSTK'])) & (df['exchange'].isin(['NFO'])) & (df['expiry'].str.len() > 0)
-    df.loc[mask, 'symbol'] = df.loc[mask, 'name'] + df.loc[mask, 'expiry'].str.replace('-', '', regex=False) + 'FUT'
-
-    # Log sample NSE futures symbols to verify format
-    nse_futures = df[(df['instrumenttype'].isin(['FUTIDX', 'FUTSTK'])) & (df['exchange'] == 'NFO')].head(3)
-    if len(nse_futures) > 0:
-        for _, row in nse_futures.iterrows():
-            logger.info(f"NSE Future: name={row['name']}, expiry={row['expiry']}, symbol={row['symbol']}")
-
-    # BSE Index Futures: SENSEX28MAR24FUT
-    mask = (df['instrumenttype'].isin(['FUTIDX'])) & (df['exchange'].isin(['BFO']))
-    df.loc[mask, 'symbol'] = df.loc[mask, 'name'] + df.loc[mask, 'expiry'].str.replace('-', '', regex=False) + 'FUT'
-
-    # BSE Stock Futures: RELIANCE30OCT25FUT
-    mask = (df['instrumenttype'].isin(['FUTSTK'])) & (df['exchange'].isin(['BFO']))
-    df.loc[mask, 'symbol'] = df.loc[mask, 'name'] + df.loc[mask, 'expiry'].str.replace('-', '', regex=False) + 'FUT'
-
-    # NSE Index Options: NIFTY28MAR2420800CE / NIFTY28MAR2420800PE
-    mask_ce = (df['instrumenttype'] == 'OPTIDX') & (df['exchange'] == 'NFO') & (df['symbol'].str.endswith('CE', na=False))
-    mask_pe = (df['instrumenttype'] == 'OPTIDX') & (df['exchange'] == 'NFO') & (df['symbol'].str.endswith('PE', na=False))
-
-    df.loc[mask_ce, 'symbol'] = (
-        df.loc[mask_ce, 'name'] +
-        df.loc[mask_ce, 'expiry'].str.replace('-', '', regex=False) +
-        df.loc[mask_ce, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
-        'CE'
-    )
-    df.loc[mask_pe, 'symbol'] = (
-        df.loc[mask_pe, 'name'] +
-        df.loc[mask_pe, 'expiry'].str.replace('-', '', regex=False) +
-        df.loc[mask_pe, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
-        'PE'
-    )
-
-    # Log sample NSE index options symbols to verify format
-    nse_index_options = df[(df['instrumenttype'] == 'OPTIDX') & (df['exchange'] == 'NFO')].head(3)
-    if len(nse_index_options) > 0:
-        for _, row in nse_index_options.iterrows():
-            logger.info(f"NSE Index Option: name={row['name']}, expiry={row['expiry']}, strike={row['strike']}, symbol={row['symbol']}, brsymbol={row['brsymbol']}")
-
-    # NSE Stock Options: VEDL25APR24292.5CE, ABCAPITAL25DEC24450CE
-    mask_ce = (df['instrumenttype'] == 'OPTSTK') & (df['exchange'] == 'NFO') & (df['symbol'].str.endswith('CE', na=False))
-    mask_pe = (df['instrumenttype'] == 'OPTSTK') & (df['exchange'] == 'NFO') & (df['symbol'].str.endswith('PE', na=False))
-
-    df.loc[mask_ce, 'symbol'] = (
-        df.loc[mask_ce, 'name'] +
-        df.loc[mask_ce, 'expiry'].str.replace('-', '', regex=False) +
-        df.loc[mask_ce, 'strike'].astype(str) +
-        'CE'
-    )
-    df.loc[mask_pe, 'symbol'] = (
-        df.loc[mask_pe, 'name'] +
-        df.loc[mask_pe, 'expiry'].str.replace('-', '', regex=False) +
-        df.loc[mask_pe, 'strike'].astype(str) +
-        'PE'
-    )
-
-    # Log sample NSE stock options symbols to verify format
-    nse_options = df[(df['instrumenttype'] == 'OPTSTK') & (df['exchange'] == 'NFO')].head(3)
-    if len(nse_options) > 0:
-        for _, row in nse_options.iterrows():
-            logger.info(f"NSE Option: name={row['name']}, expiry={row['expiry']}, strike={row['strike']}, symbol={row['symbol']}")
-
-    # BSE Index Options: SENSEX28MAR2475000CE
-    mask_ce = (df['instrumenttype'] == 'OPTIDX') & (df['exchange'] == 'BFO') & (df['symbol'].str.endswith('CE', na=False))
-    mask_pe = (df['instrumenttype'] == 'OPTIDX') & (df['exchange'] == 'BFO') & (df['symbol'].str.endswith('PE', na=False))
-
-    df.loc[mask_ce, 'symbol'] = (
-        df.loc[mask_ce, 'name'] +
-        df.loc[mask_ce, 'expiry'].str.replace('-', '', regex=False) +
-        df.loc[mask_ce, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
-        'CE'
-    )
-    df.loc[mask_pe, 'symbol'] = (
-        df.loc[mask_pe, 'name'] +
-        df.loc[mask_pe, 'expiry'].str.replace('-', '', regex=False) +
-        df.loc[mask_pe, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
-        'PE'
-    )
-
-    # BSE Stock Options: RELIANCE30OCT251330CE/PE
-    mask_ce = (df['instrumenttype'] == 'OPTSTK') & (df['exchange'] == 'BFO') & (df['symbol'].str.endswith('CE', na=False))
-    mask_pe = (df['instrumenttype'] == 'OPTSTK') & (df['exchange'] == 'BFO') & (df['symbol'].str.endswith('PE', na=False))
-
-    df.loc[mask_ce, 'symbol'] = (
-        df.loc[mask_ce, 'name'] +
-        df.loc[mask_ce, 'expiry'].str.replace('-', '', regex=False) +
-        df.loc[mask_ce, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
-        'CE'
-    )
-    df.loc[mask_pe, 'symbol'] = (
-        df.loc[mask_pe, 'name'] +
-        df.loc[mask_pe, 'expiry'].str.replace('-', '', regex=False) +
-        df.loc[mask_pe, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
-        'PE'
-    )
-
-    # Currency Futures (CDS): USDINR10MAY24FUT
-    mask = (df['instrumenttype'].isin(['FUTCUR', 'FUTIRC'])) & (df['exchange'] == 'CDS')
-    df.loc[mask, 'symbol'] = df.loc[mask, 'name'] + df.loc[mask, 'expiry'].str.replace('-', '', regex=False) + 'FUT'
-
-    # Currency Options (CDS): USDINR19APR2482CE/PE
-    mask_ce = (df['instrumenttype'].isin(['OPTCUR', 'OPTIRC'])) & (df['exchange'] == 'CDS') & (df['symbol'].str.endswith('CE', na=False))
-    mask_pe = (df['instrumenttype'].isin(['OPTCUR', 'OPTIRC'])) & (df['exchange'] == 'CDS') & (df['symbol'].str.endswith('PE', na=False))
-
-    df.loc[mask_ce, 'symbol'] = (
-        df.loc[mask_ce, 'name'] +
-        df.loc[mask_ce, 'expiry'].str.replace('-', '', regex=False) +
-        df.loc[mask_ce, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
-        'CE'
-    )
-    df.loc[mask_pe, 'symbol'] = (
-        df.loc[mask_pe, 'name'] +
-        df.loc[mask_pe, 'expiry'].str.replace('-', '', regex=False) +
-        df.loc[mask_pe, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
-        'PE'
-    )
-
-    # Commodity Futures (MCX): CRUDEOILM20MAY24FUT
-    mask = (df['instrumenttype'].isin(['FUTCOM'])) & (df['exchange'] == 'MCX')
-    df.loc[mask, 'symbol'] = df.loc[mask, 'name'] + df.loc[mask, 'expiry'].str.replace('-', '', regex=False) + 'FUT'
-
-    # Commodity Options (MCX): CRUDEOILM20MAY245000CE/PE
-    mask_ce = (df['instrumenttype'] == 'OPTFUT') & (df['exchange'] == 'MCX') & (df['symbol'].str.endswith('CE', na=False))
-    mask_pe = (df['instrumenttype'] == 'OPTFUT') & (df['exchange'] == 'MCX') & (df['symbol'].str.endswith('PE', na=False))
-
-    df.loc[mask_ce, 'symbol'] = (
-        df.loc[mask_ce, 'name'] +
-        df.loc[mask_ce, 'expiry'].str.replace('-', '', regex=False) +
-        df.loc[mask_ce, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
-        'CE'
-    )
-    df.loc[mask_pe, 'symbol'] = (
-        df.loc[mask_pe, 'name'] +
-        df.loc[mask_pe, 'expiry'].str.replace('-', '', regex=False) +
-        df.loc[mask_pe, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
-        'PE'
-    )
-
-    # Clean up any remaining symbol issues
-    df['symbol'] = df['symbol'].str.replace(r'\s+', '', regex=True)  # Remove extra spaces
-    df['symbol'] = df['symbol'].str.upper()  # Ensure uppercase
-
-    # Remove duplicates based on symbol and exchange
-    df = df.drop_duplicates(subset=['symbol', 'exchange'], keep='first')
-
-    # Keep only relevant columns in correct order
-    final_cols = [
-        'symbol', 'brsymbol', 'name', 'exchange', 'brexchange',
-        'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size'
-    ]
-    df = df[final_cols]
-
-    logger.info(f"MStock Master Contract Processed: {len(df)} records ready")
+    # Return the processed DataFrame
     return df
 
 
@@ -533,8 +433,8 @@ def master_contract_download():
         safe_token = f"{auth_token[:6]}..." if auth_token else "None"
         logger.info(f"Downloading MStock Master Contract (token={safe_token})")
 
-        csv_data = download_mstock_csv(auth_token)
-        if not csv_data:
+        json_data = download_mstock_csv(auth_token)
+        if not json_data:
             logger.error("No data received from MStock API.")
             socketio.emit('master_contract_download', {
                 'status': 'error',
@@ -542,7 +442,7 @@ def master_contract_download():
             })
             return
 
-        token_df = process_mstock_csv(csv_data)
+        token_df = process_mstock_json(json_data)
 
         if token_df is None or token_df.empty:
             socketio.emit('master_contract_download', {
