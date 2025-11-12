@@ -317,27 +317,31 @@ for ((i=1; i<=INSTANCES; i++)); do
     sudo sed -i "s|WEBSOCKET_PORT='[0-9]*'|WEBSOCKET_PORT='$WS_PORT'|g" "$ENV_FILE"
     sudo sed -i "s|ZMQ_PORT='[0-9]*'|ZMQ_PORT='$ZMQ_PORT'|g" "$ENV_FILE"
 
-    # 4. Update WebSocket URL with correct port (internal connection)
-    sudo sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='ws://127.0.0.1:$WS_PORT'|g" "$ENV_FILE"
+    # 4. Update WebSocket URL for production (secure WebSocket through nginx)
+    sudo sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" "$ENV_FILE"
 
-    # 5. Update API credentials
+    # 5. Update host bindings to allow external connections
+    sudo sed -i "s|WEBSOCKET_HOST='127.0.0.1'|WEBSOCKET_HOST='0.0.0.0'|g" "$ENV_FILE"
+    sudo sed -i "s|ZMQ_HOST='127.0.0.1'|ZMQ_HOST='0.0.0.0'|g" "$ENV_FILE"
+
+    # 6. Update API credentials
     sudo sed -i "s|YOUR_BROKER_API_KEY|$API_KEY|g" "$ENV_FILE"
     sudo sed -i "s|YOUR_BROKER_API_SECRET|$API_SECRET|g" "$ENV_FILE"
 
-    # 6. Update security keys
+    # 7. Update security keys
     sudo sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" "$ENV_FILE"
     sudo sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$API_KEY_PEPPER|g" "$ENV_FILE"
 
-    # 7. Update database paths (unique per instance)
+    # 8. Update database paths (unique per instance)
     sudo sed -i "s|DATABASE_URL = '.*'|DATABASE_URL = '$DB_PATH'|g" "$ENV_FILE"
     sudo sed -i "s|LATENCY_DATABASE_URL = '.*'|LATENCY_DATABASE_URL = '$LATENCY_DB'|g" "$ENV_FILE"
     sudo sed -i "s|LOGS_DATABASE_URL = '.*'|LOGS_DATABASE_URL = '$LOGS_DB'|g" "$ENV_FILE"
 
-    # 8. Update session/CSRF cookies (CRITICAL for instance isolation)
+    # 9. Update session/CSRF cookies (CRITICAL for instance isolation)
     sudo sed -i "s|SESSION_COOKIE_NAME = '.*'|SESSION_COOKIE_NAME = '$SESSION_COOKIE'|g" "$ENV_FILE"
     sudo sed -i "s|CSRF_COOKIE_NAME = '.*'|CSRF_COOKIE_NAME = '$CSRF_COOKIE'|g" "$ENV_FILE"
 
-    # 9. Update Flask host IP binding (internal only)
+    # 10. Update Flask host IP binding (internal only)
     sudo sed -i "s|FLASK_HOST_IP='.*'|FLASK_HOST_IP='127.0.0.1'|g" "$ENV_FILE"
 
     # XTS broker credentials
@@ -420,8 +424,12 @@ server {
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers on;
     ssl_ciphers EECDH+AESGCM:EDH+AESGCM;
+    ssl_ecdh_curve secp384r1;
     ssl_session_timeout 10m;
     ssl_session_cache shared:SSL:10m;
+    ssl_session_tickets off;
+    ssl_stapling on;
+    ssl_stapling_verify on;
 
     # Security headers
     add_header X-Frame-Options DENY;
@@ -462,6 +470,12 @@ server {
     location / {
         proxy_pass http://unix:$SOCKET_FILE;
         proxy_http_version 1.1;
+
+        # Extended timeouts for broker authentication (cold start can take 60-90s)
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
