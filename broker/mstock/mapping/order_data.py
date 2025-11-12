@@ -200,27 +200,48 @@ def map_trade_data(trade_data):
         return []
 
     trade_data = trade_data['data']
+    logger.info(f"Processing {len(trade_data)} trades")
 
     for trade in trade_data:
-        # Get trading symbol from Type B response
-        symbol = trade.get('SYMBOL') or trade.get('tradingsymbol')
-        exchange = trade.get('EXCHANGE') or trade.get('exchange')
+        # Type B tradebook API returns uppercase field names
+        # Get trading symbol from Type B response (SYMBOL is the base symbol)
+        symbol = trade.get('SYMBOL', '')
+        exchange = trade.get('EXCHANGE', '')
 
         if symbol and exchange:
-            oa_symbol = get_oa_symbol(symbol, exchange)
+            # For mStock, construct the full broker symbol
+            # NSE/BSE equity: SYMBOL-EQ (e.g., YESBANK-EQ)
+            # NFO/MCX/BFO/CDS: Use symbol as-is
+            if exchange in ['NSE', 'BSE']:
+                instrument_name = trade.get('INSTRUMENT_NAME', '')
+                if instrument_name == 'EQUITY':
+                    brsymbol = f"{symbol}-EQ"
+                else:
+                    brsymbol = symbol
+            else:
+                brsymbol = symbol
+
+            # Convert broker symbol to OpenAlgo symbol
+            oa_symbol = get_oa_symbol(brsymbol, exchange)
             if oa_symbol:
                 trade['tradingsymbol'] = oa_symbol
             else:
-                logger.info(f"Unable to find the OA symbol for {symbol} and exchange {exchange}.")
+                logger.info(f"Unable to find the OA symbol for {brsymbol} (base: {symbol}) and exchange {exchange}. Using base symbol.")
+                trade['tradingsymbol'] = symbol
+        else:
+            trade['tradingsymbol'] = symbol
 
         # Map product types to OpenAlgo format
-        producttype = trade.get('PRODUCT') or trade.get('producttype', '')
-        if producttype == 'DELIVERY' or producttype == 'CNC':
+        # Type B API returns: CNC, INTRADAY (some might return DELIVERY)
+        producttype = trade.get('PRODUCT', '')
+        if producttype == 'CNC' or producttype == 'DELIVERY':
             trade['producttype'] = 'CNC'
         elif producttype == 'INTRADAY':
             trade['producttype'] = 'MIS'
         elif producttype == 'CARRYFORWARD':
             trade['producttype'] = 'NRML'
+        else:
+            trade['producttype'] = producttype
 
     return trade_data
 
@@ -230,33 +251,98 @@ def transform_tradebook_data(tradebook_data):
     Transforms mStock Type B tradebook data to OpenAlgo format.
 
     Parameters:
-    - tradebook_data: List of trade dictionaries
+    - tradebook_data: List of trade dictionaries from mStock Type B API
 
     Returns:
     - List of trades in OpenAlgo format
     """
     transformed_data = []
     for trade in tradebook_data:
+        # Type B tradebook API uses uppercase field names
+        # After map_trade_data, we have 'tradingsymbol' and 'producttype' added
+
+        # Convert PRICE to float, handle potential string values
+        try:
+            average_price = float(trade.get('PRICE', 0.0))
+        except (ValueError, TypeError):
+            average_price = 0.0
+
+        # Convert TRADE_VALUE to float
+        try:
+            trade_value = float(trade.get('TRADE_VALUE', 0))
+        except (ValueError, TypeError):
+            trade_value = 0
+
+        # Convert QUANTITY to int
+        try:
+            quantity = int(trade.get('QUANTITY', 0))
+        except (ValueError, TypeError):
+            quantity = 0
+
+        # Normalize action to uppercase for consistency with orderbook
+        action = trade.get('BUY_SELL', '')
+        if action:
+            action = action.upper()  # Convert "Buy" to "BUY", "Sell" to "SELL"
+
         transformed_trade = {
-            "symbol": trade.get('tradingsymbol', ''),
-            "exchange": trade.get('EXCHANGE') or trade.get('exchange', ''),
-            "product": trade.get('producttype') or trade.get('PRODUCT', ''),
-            "action": trade.get('BUY_SELL') or trade.get('transactiontype', ''),
-            "quantity": trade.get('QUANTITY') or trade.get('quantity', 0),
-            "average_price": trade.get('PRICE') or trade.get('fillprice', 0.0),
-            "trade_value": trade.get('TRADE_VALUE') or trade.get('tradevalue', 0),
-            "orderid": trade.get('ORDER_NUMBER') or trade.get('orderid', ''),
-            "timestamp": trade.get('ORDER_DATE_TIME') or trade.get('filltime', '')
+            "symbol": trade.get('tradingsymbol', ''),  # Mapped by map_trade_data
+            "exchange": trade.get('EXCHANGE', ''),
+            "product": trade.get('producttype', ''),  # Mapped by map_trade_data
+            "action": action,  # BUY_SELL field from Type B API (normalized to uppercase)
+            "quantity": quantity,
+            "average_price": average_price,
+            "trade_value": trade_value,
+            "orderid": trade.get('ORDER_NUMBER', ''),  # ORDER_NUMBER field from Type B API
+            "timestamp": trade.get('ORDER_DATE_TIME', '')  # ORDER_DATE_TIME field from Type B API
         }
         transformed_data.append(transformed_trade)
+
     return transformed_data
 
 
 def map_position_data(position_data):
     """
     Processes and modifies position data from mStock Type B API.
+
+    Parameters:
+    - position_data: Response from mStock Type B positions API
+
+    Returns:
+    - List of processed position dictionaries
     """
-    return map_order_data(position_data)
+    if not position_data or 'data' not in position_data or position_data['data'] is None:
+        logger.info("No position data available.")
+        return []
+
+    position_data = position_data['data']
+    logger.info(f"Processing {len(position_data)} positions")
+
+    if position_data:
+        for position in position_data:
+            # Extract symboltoken and exchange for symbol lookup
+            symboltoken = position.get('symboltoken')
+            exchange = position.get('exchange')
+
+            # Get OpenAlgo symbol from database using symboltoken
+            if symboltoken and exchange:
+                symbol_from_db = get_symbol(symboltoken, exchange)
+                if symbol_from_db:
+                    position['tradingsymbol'] = symbol_from_db
+                else:
+                    logger.info(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping symbolname.")
+                    # Fallback to symbolname if available
+                    position['tradingsymbol'] = position.get('symbolname', '')
+
+            # Map product types to OpenAlgo format
+            producttype = position.get('producttype', '')
+            if (exchange in ['NSE', 'BSE']) and producttype == 'DELIVERY':
+                position['producttype'] = 'CNC'
+            elif producttype == 'INTRADAY':
+                position['producttype'] = 'MIS'
+            elif exchange in ['NFO', 'MCX', 'BFO', 'CDS'] and producttype == 'CARRYFORWARD':
+                position['producttype'] = 'NRML'
+
+    return position_data
 
 
 def transform_positions_data(positions_data):
@@ -264,41 +350,56 @@ def transform_positions_data(positions_data):
     Transforms mStock Type B positions data to OpenAlgo format.
 
     Parameters:
-    - positions_data: List of position dictionaries or response dict
+    - positions_data: List of position dictionaries (already mapped by map_position_data)
 
     Returns:
     - List of positions in OpenAlgo format
     """
     transformed_data = []
 
-    # Handle both list and dict with 'data' key
-    if isinstance(positions_data, dict):
-        if 'data' in positions_data and positions_data['data']:
-            positions_data = positions_data['data']
-        else:
-            return transformed_data
+    # positions_data should already be a list after map_position_data
+    if not positions_data or not isinstance(positions_data, list):
+        return transformed_data
 
-    if positions_data:
-        for position in positions_data:
-            # Map product type
-            producttype = position.get('producttype', '')
-            if producttype == 'DELIVERY':
-                producttype = 'CNC'
-            elif producttype == 'INTRADAY':
-                producttype = 'MIS'
-            elif producttype == 'CARRYFORWARD':
-                producttype = 'NRML'
+    for position in positions_data:
+        # Convert netqty to int, handle string values
+        try:
+            quantity = int(position.get('netqty', 0))
+        except (ValueError, TypeError):
+            quantity = 0
 
-            transformed_position = {
-                "symbol": position.get('tradingsymbol', ''),
-                "exchange": position.get('exchange', ''),
-                "product": producttype,
-                "quantity": position.get('netqty') or position.get('net_quantity', 0),
-                "average_price": position.get('avgnetprice') or position.get('average_price', 0.0),
-                "ltp": position.get('ltp') or position.get('last_traded_price', 0.0),
-                "pnl": position.get('pnl', 0.0),
-            }
-            transformed_data.append(transformed_position)
+        # Convert avgnetprice to float
+        try:
+            average_price = float(position.get('avgnetprice', 0.0))
+        except (ValueError, TypeError):
+            average_price = 0.0
+
+        # mStock Type B API doesn't provide ltp directly in positions
+        # Setting to 0.0 as it requires separate market data API call
+        ltp = 0.0
+
+        # mStock Type B API doesn't provide pnl directly in positions
+        # Can be calculated from netvalue if needed, but setting to 0.0 for now
+        pnl = 0.0
+
+        # Try to parse netvalue for pnl if available
+        try:
+            netvalue = float(position.get('netvalue', 0))
+            # netvalue is the unrealized P&L
+            pnl = netvalue
+        except (ValueError, TypeError):
+            pnl = 0.0
+
+        transformed_position = {
+            "symbol": position.get('tradingsymbol', ''),
+            "exchange": position.get('exchange', ''),
+            "product": position.get('producttype', ''),  # Already mapped by map_position_data
+            "quantity": quantity,
+            "average_price": average_price,
+            "ltp": ltp,  # Not available in Type B positions API
+            "pnl": pnl,  # Using netvalue as pnl
+        }
+        transformed_data.append(transformed_position)
 
     return transformed_data
 
