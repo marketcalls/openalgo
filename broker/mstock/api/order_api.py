@@ -383,7 +383,16 @@ def modify_order(data, auth):
     Modify an existing order on mStock Type B API.
 
     Args:
-        data: OpenAlgo modify order data
+        data: OpenAlgo modify order data with fields:
+            - orderid: Order ID to modify
+            - symbol: OpenAlgo symbol
+            - exchange: Exchange code
+            - action: BUY/SELL
+            - quantity: Order quantity
+            - price: Order price
+            - trigger_price: Trigger price (for SL orders)
+            - pricetype: MARKET/LIMIT/SL/SL-M
+            - product: CNC/MIS/NRML
         auth: Authentication token
 
     Returns:
@@ -394,8 +403,17 @@ def modify_order(data, auth):
 
     client = get_httpx_client()
 
-    # Get token and transform data
-    token = get_token(data['symbol'], data['exchange'])
+    # Get token for the symbol
+    try:
+        token = get_token(data['symbol'], data['exchange'])
+        if not token:
+            logger.error(f"Token not found for symbol {data['symbol']}, exchange {data['exchange']}")
+            return {"status": "error", "message": "Symbol token not found in database"}, 400
+    except Exception as e:
+        logger.error(f"Error getting token: {e}")
+        return {"status": "error", "message": f"Failed to get symbol token: {str(e)}"}, 400
+
+    # Transform data to mStock Type B format
     transformed_data = transform_modify_order_data(data, token)
 
     headers = {
@@ -407,11 +425,11 @@ def modify_order(data, auth):
 
     orderid = data['orderid']
 
-    logger.info(f"Modifying order {orderid}")
+    logger.info(f"Modifying order {orderid} for symbol {data['symbol']}")
     logger.info(f"Modify order payload: {json.dumps(transformed_data)}")
 
     # PUT request with orderid in URL path
-    # Using json parameter instead of content/data for httpx compatibility
+    # Using json parameter for httpx compatibility
     response = client.request(
         method="PUT",
         url=f"https://api.mstock.trade/openapi/typeb/orders/regular/{orderid}",
@@ -431,19 +449,26 @@ def modify_order(data, auth):
         logger.error(f"Failed to parse modify order response: {response.text}")
         return {"status": "error", "message": "Invalid response from broker"}, 500
 
-    # Handle list response (like place order)
+    # Handle list response (like place order/cancel order)
     if isinstance(response_data, list) and len(response_data) > 0:
         logger.info("API returned list, extracting first element")
         response_data = response_data[0]
 
     # Check if the request was successful
+    # mStock Type B returns status as boolean True or string "true"
     if response_data.get("status") in [True, "true"] or response_data.get("message") == "SUCCESS":
-        modified_orderid = response_data.get("data", {}).get("orderid", orderid)
-        logger.info(f"Order {orderid} modified successfully")
+        # Extract orderid from response data
+        if response_data.get("data") and isinstance(response_data["data"], dict):
+            modified_orderid = response_data["data"].get("orderid", orderid).strip()
+        else:
+            modified_orderid = orderid
+
+        logger.info(f"Order {orderid} modified successfully to {modified_orderid}")
         return {"status": "success", "orderid": modified_orderid}, 200
     else:
         error_message = response_data.get("message", "Failed to modify order")
-        logger.error(f"Failed to modify order {orderid}: {error_message}")
+        errorcode = response_data.get("errorcode", "")
+        logger.error(f"Failed to modify order {orderid}: {error_message} (errorcode: {errorcode})")
         return {"status": "error", "message": error_message}, response.status
 
 

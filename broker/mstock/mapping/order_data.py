@@ -135,7 +135,7 @@ def transform_order_data(orders):
         status = order.get("status", "")
         if status == "Traded" or "TRADE CONFIRMED" in status:
             order_status = "complete"
-        elif status in ["O-Pending", "Pending", "pending"]:
+        elif status in ["O-Pending", "Pending", "pending", "O-Modified", "o-modified"]:
             order_status = "open"
         elif status == "Rejected" or status == "rejected":
             order_status = "rejected"
@@ -146,12 +146,32 @@ def transform_order_data(orders):
         else:
             order_status = status.lower() if status else ""
 
+        # Determine price based on order type
+        # For LIMIT orders: show order price
+        # For completed orders: show average price
+        # For MARKET/SL-M orders: show average price (0 if pending)
+        if ordertype == "LIMIT" and order_status in ["open", "trigger pending"]:
+            # For pending limit orders, show the order price
+            order_price = order.get("price", 0.0)
+        elif ordertype in ["SL"] and order_status in ["open", "trigger pending"]:
+            # For pending stop loss limit orders, show the order price
+            order_price = order.get("price", 0.0)
+        else:
+            # For completed orders or market orders, show average price
+            order_price = order.get("averageprice", 0.0)
+
+        # Convert to float and handle string/numeric values
+        try:
+            order_price = float(order_price) if order_price else 0.0
+        except (ValueError, TypeError):
+            order_price = 0.0
+
         transformed_order = {
             "symbol": order.get("tradingsymbol", ""),
             "exchange": order.get("exchange", ""),
             "action": order.get("transactiontype", ""),
             "quantity": order.get("quantity", 0),
-            "price": order.get("averageprice", 0.0),
+            "price": order_price,
             "trigger_price": order.get("triggerprice", 0.0),
             "pricetype": ordertype,
             "product": order.get("producttype", ""),
