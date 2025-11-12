@@ -41,6 +41,7 @@ from blueprints.python_strategy import python_strategy_bp  # Import the python s
 from blueprints.telegram import telegram_bp  # Import the telegram blueprint
 from blueprints.security import security_bp  # Import the security blueprint
 from blueprints.sandbox import sandbox_bp  # Import the sandbox blueprint
+from blueprints.health import health_bp  # Import the health check blueprint
 from services.telegram_bot_service import telegram_bot_service
 from database.telegram_db import get_bot_config
 
@@ -181,6 +182,7 @@ def create_app():
     app.register_blueprint(telegram_bp)  # Register Telegram blueprint
     app.register_blueprint(security_bp)  # Register Security blueprint
     app.register_blueprint(sandbox_bp)  # Register Sandbox blueprint
+    app.register_blueprint(health_bp)  # Register Health check blueprint
 
 
     # Exempt webhook endpoints from CSRF protection after app initialization
@@ -188,9 +190,12 @@ def create_app():
         # Exempt webhook endpoints from CSRF protection
         csrf.exempt(app.view_functions['chartink_bp.webhook'])
         csrf.exempt(app.view_functions['strategy_bp.webhook'])
-        
+
         # Exempt broker callback endpoints from CSRF protection (OAuth callbacks from external providers)
         csrf.exempt(app.view_functions['brlogin.broker_callback'])
+
+        # Exempt health check endpoints from CSRF protection (used by monitoring systems)
+        csrf.exempt(health_bp)
         
         # Initialize latency monitoring (after registering API blueprint)
         init_latency_monitoring(app)
@@ -254,8 +259,9 @@ def create_app():
         from utils.session import is_session_valid, revoke_user_tokens
         
         # Skip session check for static files, API endpoints, and public routes
-        if (request.path.startswith('/static/') or 
-            request.path.startswith('/api/') or 
+        if (request.path.startswith('/static/') or
+            request.path.startswith('/api/') or
+            request.path.startswith('/health/') or  # Health check endpoints
             request.path in ['/', '/auth/login', '/auth/reset-password', '/setup', '/download', '/faq'] or
             request.path.startswith('/auth/broker/') or  # OAuth callbacks
             request.path.startswith('/_reload-ws')):  # WebSocket reload endpoint

@@ -154,3 +154,128 @@ dependencies = [
 [build-system]
 requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
+
+# Black configuration
+[tool.black]
+line-length = 100
+target-version = ['py312']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | venv
+  | env
+  | _build
+  | buck-out
+  | build
+  | dist
+  | node_modules
+  | migrations
+  | static/vendor
+)/
+'''
+
+# isort configuration
+[tool.isort]
+profile = "black"
+line_length = 100
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+skip_glob = [
+    "*/migrations/*",
+    "*/static/vendor/*",
+    "venv/*",
+    "env/*",
+    ".venv/*"
+]
+known_first_party = ["blueprints", "database", "broker", "utils", "restx_api"]
+
+# mypy configuration
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = false
+ignore_missing_imports = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+exclude = [
+    "venv",
+    "env",
+    ".venv",
+    "migrations",
+    "test",
+    "static"
+]
+
+# Bandit security configuration
+[tool.bandit]
+exclude_dirs = [
+    "test",
+    "tests",
+    ".venv",
+    "venv",
+    "env",
+    "migrations"
+]
+skips = [
+    "B101",  # assert_used - we use assertions in tests
+    "B601",  # paramiko_calls - if you use paramiko
+]
+
+# pytest configuration (additional settings)
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["test"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--verbose --cov=. --cov-report=html --cov-report=term-missing"
+
+# Coverage configuration
+[tool.coverage.run]
+source = ["."]
+omit = [
+    "*/test/*",
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/site-packages/*",
+    "*/venv/*",
+    "*/env/*",
+    ".venv/*",
+    "setup.py",
+    "*/migrations/*",
+    "*/static/*",
+    "*/templates/*"
+]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "def __str__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+    "@abc.abstractmethod"
+]

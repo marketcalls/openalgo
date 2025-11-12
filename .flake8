@@ -1,0 +1,58 @@
+[flake8]
+# Maximum line length
+max-line-length = 127
+
+# Increase complexity threshold
+max-complexity = 15
+
+# Exclude directories
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    env,
+    .env,
+    build,
+    dist,
+    *.egg-info,
+    .pytest_cache,
+    .mypy_cache,
+    htmlcov,
+    node_modules,
+    migrations,
+    static/vendor
+
+# Ignore specific errors
+# E203: whitespace before ':' (conflicts with Black)
+# W503: line break before binary operator (conflicts with Black)
+# E501: line too long (handled by Black)
+extend-ignore = E203, W503, E501
+
+# Error codes to always check
+select =
+    E,  # pycodestyle errors
+    W,  # pycodestyle warnings
+    F,  # pyflakes
+    C,  # mccabe complexity
+    B,  # flake8-bugbear
+    N,  # pep8-naming
+
+# Show source code for each error
+show-source = True
+
+# Show statistics
+statistics = True
+
+# Count errors
+count = True
+
+# Per-file ignores
+per-file-ignores =
+    __init__.py: F401, F403
+    test_*.py: D100, D101, D102, D103
+    conftest.py: E402
+
+# Inline with Black
+max-doc-length = 127
+docstring-convention = google
