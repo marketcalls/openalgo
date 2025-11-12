@@ -3,19 +3,20 @@ from utils.httpx_client import get_httpx_client
 from broker.mstock.mapping.order_data import transform_positions_data, transform_holdings_data
 
 def get_positions(auth_token):
+    """
+    Retrieves the user's positions using Type B authentication.
+    """
     api_key = os.getenv('BROKER_API_SECRET')
-    """
-    Retrieves the user's positions.
-    """
     headers = {
         'X-Mirae-Version': '1',
-        'Authorization': f'token {api_key}:{auth_token}',
+        'Authorization': f'Bearer {auth_token}',
+        'X-PrivateKey': api_key,
     }
-    
+
     try:
         client = get_httpx_client()
         response = client.get(
-            'https://api.mstock.trade/openapi/typea/portfolio/positions',
+            'https://api.mstock.trade/openapi/typeb/portfolio/positions',
             headers=headers,
         )
         response.raise_for_status()
@@ -25,19 +26,20 @@ def get_positions(auth_token):
         return None, str(e)
 
 def get_holdings(auth_token):
+    """
+    Retrieves the user's holdings using Type B authentication.
+    """
     api_key = os.getenv('BROKER_API_SECRET')
-    """
-    Retrieves the user's holdings.
-    """
     headers = {
         'X-Mirae-Version': '1',
-        'Authorization': f'token {api_key}:{auth_token}',
+        'Authorization': f'Bearer {auth_token}',
+        'X-PrivateKey': api_key,
     }
-    
+
     try:
         client = get_httpx_client()
         response = client.get(
-            'https://api.mstock.trade/openapi/typea/portfolio/holdings',
+            'https://api.mstock.trade/openapi/typeb/portfolio/holdings',
             headers=headers,
         )
         response.raise_for_status()

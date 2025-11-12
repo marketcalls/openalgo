@@ -96,12 +96,27 @@ def broker_callback(broker,para=None):
                 logger.error(f'mstock POST - Session lost! Cookies: {request.cookies}')
                 return render_template('mstock.html', error_message="Session expired. Please login again.")
 
+            # Import mstock TOTP authentication function
+            from broker.mstock.api.auth_api import authenticate_with_totp
+
+            # Get password and TOTP from form
+            password = request.form.get('password')
             totp_code = request.form.get('totp')
-            # API key is retrieved from environment inside authenticate_broker
-            auth_token, feed_token, error_message = auth_function(totp_code)
-            forward_url = 'mstock.html'
-            # Initialize user_id as None (mstock doesn't use it)
-            user_id = None
+
+            if not password:
+                return render_template('mstock.html', error_message="Password is required.")
+            if not totp_code:
+                return render_template('mstock.html', error_message="TOTP code is required.")
+
+            # Single-step authentication with password + TOTP
+            auth_token, feed_token, error_message = authenticate_with_totp(password, totp_code)
+
+            if error_message:
+                return render_template('mstock.html', error_message=error_message)
+
+            # Authentication successful, redirect to dashboard
+            logger.info("mStock TOTP authentication successful, redirecting to dashboard")
+            return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token, user_id=None)
     
     elif broker == 'aliceblue':
         if request.method == 'GET':
