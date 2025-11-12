@@ -227,7 +227,7 @@ pip install -r requirements-dev.txt
 **Solution:**
 ```bash
 # Check if database is initialized
-ls openalgo.db
+ls db/openalgo.db
 
 # Check application logs
 # Look for error messages

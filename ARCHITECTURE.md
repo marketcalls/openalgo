@@ -102,7 +102,7 @@ OpenAlgo is a broker-agnostic algorithmic trading platform built with Flask (Pyt
 ### 1. Application Layer (`app.py`)
 **Responsibilities:**
 - Flask application initialization
-- Blueprint registration (23 blueprints)
+- Blueprint registration (26 blueprints)
 - Middleware configuration (CSRF, CORS, CSP, Rate Limiting)
 - Security middleware initialization
 - Database initialization (11 database modules)
@@ -117,8 +117,10 @@ OpenAlgo is a broker-agnostic algorithmic trading platform built with Flask (Pyt
 - CSRF protection with webhook exemptions
 - Auto-start Telegram bot on startup
 
-### 2. Blueprint Layer (23 Blueprints)
+### 2. Blueprint Layer (26 Blueprints)
 Modular route handlers organized by functionality:
+
+**Note:** Includes 1 RESTx API blueprint (`api_v1`) and 25 regular blueprints:
 
 | Blueprint | Purpose |
 |-----------|---------|

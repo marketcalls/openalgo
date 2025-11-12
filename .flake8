@@ -37,6 +37,7 @@ select =
     C,  # mccabe complexity
     B,  # flake8-bugbear
     N,  # pep8-naming
+    D,  # flake8-docstrings
 
 # Show source code for each error
 show-source = True
