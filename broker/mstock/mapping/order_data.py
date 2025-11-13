@@ -146,18 +146,17 @@ def transform_order_data(orders):
         else:
             order_status = status.lower() if status else ""
 
-        # Determine price based on order type
-        # For LIMIT orders: show order price
-        # For completed orders: show average price
-        # For MARKET/SL-M orders: show average price (0 if pending)
-        if ordertype == "LIMIT" and order_status in ["open", "trigger pending"]:
-            # For pending limit orders, show the order price
-            order_price = order.get("price", 0.0)
-        elif ordertype in ["SL"] and order_status in ["open", "trigger pending"]:
-            # For pending stop loss limit orders, show the order price
+        # Determine price based on order type and status
+        # For LIMIT/SL orders: always show order price (unless completed, then show average)
+        # For MARKET/SL-M orders: show average price
+        if order_status == "complete":
+            # For completed orders, show average execution price
+            order_price = order.get("averageprice", 0.0)
+        elif ordertype in ["LIMIT", "SL"]:
+            # For LIMIT and SL orders (pending, open, rejected, cancelled), show order price
             order_price = order.get("price", 0.0)
         else:
-            # For completed orders or market orders, show average price
+            # For MARKET/SL-M orders, show average price (0 if pending)
             order_price = order.get("averageprice", 0.0)
 
         # Convert to float and handle string/numeric values
@@ -375,20 +374,13 @@ def transform_positions_data(positions_data):
             average_price = 0.0
 
         # mStock Type B API doesn't provide ltp directly in positions
-        # Setting to 0.0 as it requires separate market data API call
-        ltp = 0.0
+        # Setting to "NA" as it requires separate market data API call
+        ltp = "NA"
 
         # mStock Type B API doesn't provide pnl directly in positions
-        # Can be calculated from netvalue if needed, but setting to 0.0 for now
+        # netvalue is position value (qty × price), not P&L
+        # P&L requires LTP which is not available, so keeping as 0.0
         pnl = 0.0
-
-        # Try to parse netvalue for pnl if available
-        try:
-            netvalue = float(position.get('netvalue', 0))
-            # netvalue is the unrealized P&L
-            pnl = netvalue
-        except (ValueError, TypeError):
-            pnl = 0.0
 
         transformed_position = {
             "symbol": position.get('tradingsymbol', ''),

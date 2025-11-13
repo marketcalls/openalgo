@@ -2,8 +2,8 @@ import json
 import os
 import httpx
 from database.auth_db import get_auth_token
-from database.token_db import get_token, get_br_symbol, get_symbol
-from broker.mstock.mapping.transform_data import transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data
+from database.token_db import get_token, get_symbol
+from broker.mstock.mapping.transform_data import transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data, get_mstock_symbol
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -91,20 +91,27 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
     Returns:
         str: Net quantity as string
     """
-    # Convert Trading Symbol from OpenAlgo Format to Broker Format
-    tradingsymbol = get_br_symbol(tradingsymbol, exchange)
+    # Get symboltoken for the tradingsymbol
+    token = get_token(tradingsymbol, exchange)
+    if not token:
+        logger.warning(f"Token not found for {tradingsymbol} on {exchange}")
+        return '0'
+
     positions_data = get_positions(auth)
 
+    logger.info(f"Looking for position: symboltoken={token}, exchange={exchange}, producttype={producttype}")
     logger.info(f"Positions data: {positions_data}")
 
     net_qty = '0'
 
     if positions_data and positions_data.get('status') and positions_data.get('data'):
         for position in positions_data['data']:
-            if (position.get('tradingsymbol') == tradingsymbol and
+            # Match using symboltoken instead of tradingsymbol (which is empty in mStock API)
+            if (position.get('symboltoken') == token and
                 position.get('exchange') == exchange and
                 position.get('producttype') == producttype):
                 net_qty = position.get('netqty', '0')
+                logger.info(f"Found matching position: netqty={net_qty}")
                 break
 
     return net_qty
@@ -273,22 +280,39 @@ def close_all_positions(current_api_key, auth):
 
     # Check if the positions data is null or empty
     if positions_response.get('data') is None or not positions_response.get('data'):
+        logger.info("No open positions to close")
         return {"message": "No Open Positions Found"}, 200
 
-    if positions_response.get('status'):
+    # Check status explicitly (mStock Type B returns "true" string or True boolean)
+    if positions_response.get('status') in [True, "true"]:
+        logger.info(f"Closing {len(positions_response['data'])} positions")
+
         # Loop through each position to close
         for position in positions_response['data']:
+            # Convert netqty to int (API returns string like "-500")
+            try:
+                netqty = int(position.get('netqty', 0))
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid netqty for position: {position.get('symboltoken')}")
+                continue
+
             # Skip if net quantity is zero
-            if int(position.get('netqty', 0)) == 0:
+            if netqty == 0:
                 continue
 
             # Determine action based on net quantity
-            action = 'SELL' if int(position['netqty']) > 0 else 'BUY'
-            quantity = abs(int(position['netqty']))
+            action = 'SELL' if netqty > 0 else 'BUY'
+            quantity = abs(netqty)
 
             # Get OpenAlgo symbol to send to placeorder function
             symbol = get_symbol(position['symboltoken'], position['exchange'])
-            logger.info(f"Closing position for symbol: {symbol}")
+
+            # Skip if symbol not found
+            if not symbol:
+                logger.warning(f"Symbol not found for token {position['symboltoken']}, exchange {position['exchange']}. Skipping position.")
+                continue
+
+            logger.info(f"Closing position for symbol: {symbol}, quantity: {quantity}, action: {action}")
 
             # Prepare the order payload
             place_order_payload = {
@@ -305,7 +329,12 @@ def close_all_positions(current_api_key, auth):
             logger.info(f"Square off payload: {place_order_payload}")
 
             # Place the order to close the position
-            res, response, orderid = place_order_api(place_order_payload, auth)
+            try:
+                res, response, orderid = place_order_api(place_order_payload, auth)
+                logger.info(f"Position closed - OrderID: {orderid}, Response: {response}")
+            except Exception as e:
+                logger.error(f"Error closing position for {symbol}: {e}")
+                continue
 
     return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
 

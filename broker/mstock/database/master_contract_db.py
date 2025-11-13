@@ -232,7 +232,7 @@ def process_mstock_json(json_data):
     df['brexchange'] = df['exchange']
 
     # Clean up equity symbols (remove -EQ, -BE suffixes)
-    df['symbol'] = df['symbol'].str.replace(r'-EQ$|-BE$|-BZ$', '', regex=True)
+    df['symbol'] = df['symbol'].str.replace(r'-EQ$|-BZ$', '', regex=True)
 
     # Convert expiry dates to OpenAlgo format (DD-MMM-YY)
     df['expiry'] = df['expiry'].apply(lambda x: convert_date(x) if pd.notnull(x) and str(x).strip() != '' else '')

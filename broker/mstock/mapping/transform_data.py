@@ -2,6 +2,61 @@
 #Mapping MStock Type B Parameters https://tradingapi.mstock.com/docs/v1/typeB/Orders/
 
 from database.token_db import get_br_symbol
+from database.symbol import SymToken
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+
+def get_mstock_symbol(symbol: str, exchange: str) -> str:
+    """
+    Get mStock broker symbol with priority for -EQ (regular equity) over -BE (book entry).
+
+    Args:
+        symbol: OpenAlgo format symbol (e.g., "NHPC")
+        exchange: Exchange code (e.g., "NSE")
+
+    Returns:
+        str: Broker symbol with -EQ preferred (e.g., "NHPC-EQ" instead of "NHPC-BE")
+    """
+    try:
+        # Query all matching symbols from database
+        matches = SymToken.query.filter_by(symbol=symbol, exchange=exchange).all()
+
+        if not matches:
+            logger.warning(f"No symbol found for {symbol} on {exchange}")
+            return get_br_symbol(symbol, exchange)  # Fallback to default
+
+        # If only one match, return it
+        if len(matches) == 1:
+            return matches[0].brsymbol
+
+        # Multiple matches - prioritize -EQ over -BE and other suffixes
+        # Priority order: -EQ > -BZ > -BE > others
+        priority_order = {
+            'EQ': 1,   # Regular equity - highest priority
+            'BZ': 2,   # Z category
+            'BE': 3,   # Book entry - lower priority
+        }
+
+        def get_priority(brsymbol):
+            """Extract suffix and return priority (lower number = higher priority)"""
+            if '-' in brsymbol:
+                suffix = brsymbol.split('-')[-1]
+                return priority_order.get(suffix, 999)  # Unknown suffixes get lowest priority
+            return 999  # No suffix gets lowest priority
+
+        # Sort by priority and return the highest priority match
+        sorted_matches = sorted(matches, key=lambda x: get_priority(x.brsymbol))
+        selected = sorted_matches[0].brsymbol
+
+        logger.debug(f"Selected {selected} from {len(matches)} matches for {symbol}-{exchange}")
+        return selected
+
+    except Exception as e:
+        logger.error(f"Error in get_mstock_symbol for {symbol}-{exchange}: {e}")
+        # Fallback to default behavior
+        return get_br_symbol(symbol, exchange)
 
 def transform_data(data, token):
     """
@@ -14,7 +69,12 @@ def transform_data(data, token):
     Returns:
         dict: mStock Type B order parameters
     """
-    symbol = get_br_symbol(data["symbol"], data["exchange"])
+    symbol = get_mstock_symbol(data["symbol"], data["exchange"])
+
+    # Get disclosed quantity, default to "0" if not provided or empty
+    disclosed_qty = data.get("disclosed_quantity", "")
+    if not disclosed_qty or disclosed_qty == "":
+        disclosed_qty = "0"
 
     transformed = {
         "variety": map_variety(data["pricetype"]),
@@ -30,7 +90,7 @@ def transform_data(data, token):
         "squareoff": "0",
         "stoploss": "0",
         "trailingStopLoss": "",
-        "disclosedquantity": str(data.get("disclosed_quantity", "")),
+        "disclosedquantity": str(disclosed_qty),
         "duration": "DAY",
         "ordertag": ""
     }
@@ -49,7 +109,12 @@ def transform_modify_order_data(data, token):
     Returns:
         dict: mStock Type B modify order parameters
     """
-    symbol = get_br_symbol(data["symbol"], data["exchange"])
+    symbol = get_mstock_symbol(data["symbol"], data["exchange"])
+
+    # Get disclosed quantity, default to "0" if not provided or empty
+    disclosed_qty = data.get("disclosed_quantity", "")
+    if not disclosed_qty or disclosed_qty == "":
+        disclosed_qty = "0"
 
     return {
         "variety": map_variety(data["pricetype"]),
@@ -64,7 +129,7 @@ def transform_modify_order_data(data, token):
         "duration": "DAY",
         "price": str(data.get("price", "0")),
         "triggerprice": str(data.get("trigger_price", "0")),
-        "disclosedquantity": str(data.get("disclosed_quantity", "")),
+        "disclosedquantity": str(disclosed_qty),
         "modqty_remng": "0"
     }
 

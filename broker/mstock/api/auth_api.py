@@ -115,6 +115,7 @@ def authenticate_with_totp(password, totp_code):
         final_data = verify_result["data"]
         auth_token = final_data.get("jwtToken")
         feed_token = final_data.get("feedToken")
+        logger.info(f"Feed token received: {auth_token}")
 
         if not auth_token:
             logger.error("No jwtToken in verification response")
