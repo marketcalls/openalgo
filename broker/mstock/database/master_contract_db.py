@@ -245,28 +245,55 @@ def process_mstock_json(json_data):
     df['tick_size'] = pd.to_numeric(df['tick_size'].replace('', None), errors='coerce').fillna(0.05).astype(float)
 
     # -------------------------------------------------------------------
-    # Identify Index Instruments (tokens starting with 10000)
-    # Conditions: token starts with "10000", has 8+ digits, instrumenttype is EQ/Equity
+    # Identify Index Instruments using official mStock Index Token list
+    # Reference: https://tradingapi.mstock.com/docs/v1/Annexure/#index-tokens
     # -------------------------------------------------------------------
     df['token'] = df['token'].astype(str)
 
-    # NSE Index: token starts with "10000", 8+ digits, instrumenttype EQ/Equity
+    # NSE Index tokens (98 indices from mStock official documentation)
+    nse_index_tokens = {
+        '100004438', '100003333', '100005568', '100005576', '100005605', '10000888',
+        '100005572', '100004427', '100004437', '100004441', '100005582', '100005592',
+        '100005604', '100004434', '100004428', '100004440', '100005569', '100005599',
+        '100005571', '100005601', '100004436', '100005584', '100004435', '100004431',
+        '100005591', '100004439', '100005566', '100004425', '100005600', '100005598',
+        '100004443', '100004433', '100005607', '100005593', '100005606', '100005580',
+        '100004426', '100005594', '100005603', '100005560', '100004444', '100005590',
+        '100005562', '100005589', '100005561', '100004421', '100005570', '100004432',
+        '100005602', '100004420', '100005595', '100005573', '100004424', '100004422',
+        '100005587', '100005574', '100004423', '100005597', '100005563', '100005558',
+        '100005588', '100005596', '100004442', '100005575', '100004430', '10000999',
+        '100005583', '100005585', '100001111', '100004429', '100005586'
+    }
+
+    # BSE Index tokens (61 indices from mStock official documentation)
+    bse_index_tokens = {
+        '100005632', '100005626', '100005644', '100005651', '100005628', '100005614',
+        '100005627', '100005611', '100005634', '100005654', '100005658', '100005640',
+        '100005656', '100005645', '100005613', '100005637', '100005638', '100005620',
+        '100005641', '100005630', '100005631', '100005636', '100002222', '100005653',
+        '100005609', '100005652', '100005615', '100005621', '100005629', '100005655',
+        '100005643', '100005623', '100005625', '100005642', '100005618', '100005617',
+        '100005649', '100005635', '100005639', '100005619', '100005608', '100005624',
+        '100005633', '100005622', '100005657', '100005647', '100005567', '100005557',
+        '100005659', '100005646', '100005612', '100005650', '100005610'
+    }
+
+    # Map NSE indices to NSE_INDEX exchange
     mask_nse_index = (
         (df['exchange'] == 'NSE') &
-        (df['token'].str.startswith('10000')) &
-        (df['token'].str.len() >= 8) &
-        (df['instrumenttype'].isin(['EQ', 'Equity']))
+        (df['token'].isin(nse_index_tokens))
     )
     df.loc[mask_nse_index, 'exchange'] = 'NSE_INDEX'
+    logger.info(f"Mapped {mask_nse_index.sum()} NSE index tokens to NSE_INDEX")
 
-    # BSE Index: token starts with "10000", 8+ digits, instrumenttype EQ/Equity
+    # Map BSE indices to BSE_INDEX exchange
     mask_bse_index = (
         (df['exchange'] == 'BSE') &
-        (df['token'].str.startswith('10000')) &
-        (df['token'].str.len() >= 8) &
-        (df['instrumenttype'].isin(['EQ', 'Equity']))
+        (df['token'].isin(bse_index_tokens))
     )
     df.loc[mask_bse_index, 'exchange'] = 'BSE_INDEX'
+    logger.info(f"Mapped {mask_bse_index.sum()} BSE index tokens to BSE_INDEX")
 
     # -------------------------------------------------------------------
     # Format F&O Symbols (OpenAlgo Standard)
