@@ -7,29 +7,39 @@ from broker.mstock.database import master_contract_db
 logger = get_logger(__name__)
 
 def get_margin_data(auth_token):
-    """Fetch margin (fund) data from MStock API using Type A authentication."""
-    api_key = os.getenv('BROKER_API_KEY')
+    """Fetch margin (fund) data from MStock API using Type B authentication."""
+    # Use BROKER_API_SECRET which contains the mStock API key
+    api_key = os.getenv('BROKER_API_SECRET')
 
     if not api_key:
-        logger.error("Missing environment variable: BROKER_API_KEY")
+        logger.error("Missing environment variable: BROKER_API_SECRET")
         return {}
+
+    logger.info(f"Fetching margin data with auth_token length: {len(auth_token) if auth_token else 0}")
+    logger.debug(f"Auth token (first 30 chars): {auth_token[:30] if auth_token else 'None'}...")
+    logger.debug(f"API key length: {len(api_key) if api_key else 0}")
 
     headers = {
         'X-Mirae-Version': '1',
-        'Authorization': f'token {api_key}:{auth_token}',
+        'Authorization': f'Bearer {auth_token}',
+        'X-PrivateKey': api_key,
     }
 
     try:
         client = get_httpx_client()
         response = client.get(
-            'https://api.mstock.trade/openapi/typea/user/fundsummary',
+            'https://api.mstock.trade/openapi/typeb/user/fundsummary',
             headers=headers,
             timeout=10.0
         )
+        logger.info(f"Fund summary API response status: {response.status_code}")
+
         response.raise_for_status()
         margin_data = response.json()
 
-        if margin_data.get('status') == 'success' and margin_data.get('data'):
+        logger.info(f"Fund summary response: status={margin_data.get('status')}, has_data={bool(margin_data.get('data'))}")
+        logger.info(f"Full margin data response: {margin_data}")
+        if margin_data.get('status') == True and margin_data.get('data'):
             data = margin_data['data'][0]
             key_mapping = {
                 "AVAILABLE_BALANCE": "availablecash",
@@ -58,6 +68,13 @@ def get_margin_data(auth_token):
 
     except httpx.HTTPStatusError as e:
         logger.error(f"HTTP Error while fetching margin data: {e}")
+        logger.error(f"Response status code: {e.response.status_code}")
+        logger.error(f"Response body: {e.response.text}")
+        try:
+            error_detail = e.response.json()
+            logger.error(f"Error details: {error_detail}")
+        except:
+            pass
         return {}
     except httpx.RequestError as e:
         logger.error(f"Network Error while fetching margin data: {e}")
