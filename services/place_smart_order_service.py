@@ -305,12 +305,19 @@ def place_smart_order(
     # Use default delay if not provided
     if smart_order_delay is None:
         smart_order_delay = SMART_ORDER_DELAY
-    
+
+    # Add API key to order data if provided (needed for validation)
+    if api_key:
+        order_data['apikey'] = api_key
+
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
-        # Add API key to order data
-        order_data['apikey'] = api_key
-        
+        # Check if order should be routed to Action Center (semi-auto mode)
+        from services.order_router_service import should_route_to_pending, queue_order
+
+        if should_route_to_pending(api_key, 'smartorder'):
+            return queue_order(api_key, original_data, 'smartorder')
+
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
             error_response = {
@@ -319,7 +326,7 @@ def place_smart_order(
             }
             # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
-        
+
         return place_smart_order_with_auth(order_data, AUTH_TOKEN, broker_name, original_data, smart_order_delay)
     
     # Case 2: Direct internal call with auth_token and broker

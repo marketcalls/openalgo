@@ -248,6 +248,12 @@
     <!-- Toast notification function -->
     <script>
         function showToast(message, type = 'info', duration = 3000) {
+            // Play sound
+            const alertSound = document.getElementById('alert-sound');
+            if (alertSound) {
+                alertSound.play().catch(() => {});
+            }
+
             const toast = document.createElement('div');
             toast.className = `alert alert-${type} shadow-lg mb-4`;
 

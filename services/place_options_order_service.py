@@ -57,6 +57,21 @@ def place_options_order(
         - HTTP status code (int)
     """
     try:
+        # Store original data for potential queuing
+        original_data = copy.deepcopy(options_data)
+        if api_key:
+            original_data['apikey'] = api_key
+
+        # Add API key to options data if provided (needed for validation and symbol resolution)
+        if api_key:
+            options_data['apikey'] = api_key
+
+        # Check if order should be routed to Action Center (semi-auto mode)
+        if api_key and not (auth_token and broker):
+            from services.order_router_service import should_route_to_pending, queue_order
+            if should_route_to_pending(api_key, 'optionsorder'):
+                return queue_order(api_key, original_data, 'optionsorder')
+
         # Extract option-specific parameters
         underlying = options_data.get('underlying')
         exchange = options_data.get('exchange')
