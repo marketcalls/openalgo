@@ -220,13 +220,7 @@
                         <td class="numeric-cell">{{ order.quantity }}</td>
 
                         <!-- Price -->
-                        <td class="numeric-cell">
-                            {% if order.price_type|upper == 'MARKET' %}
-                                MARKET
-                            {% else %}
-                                {{ order.price }}
-                            {% endif %}
-                        </td>
+                        <td class="numeric-cell">{{ order.price if order.price else 0 }}</td>
 
                         <!-- Order Type -->
                         <td>
