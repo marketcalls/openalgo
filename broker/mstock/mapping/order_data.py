@@ -25,17 +25,36 @@ def map_order_data(order_data):
 
     if order_data:
         for order in order_data:
-            # Extract symboltoken and exchange
+            # Extract symboltoken, exchange, and instrumenttype
             symboltoken = order.get('symboltoken')
             exchange = order.get('exchange')
+            instrumenttype = order.get('instrumenttype', '')
+            broker_tradingsymbol = order.get('tradingsymbol', '')
 
-            # Get OpenAlgo symbol from database
+            # Determine correct exchange for derivatives
+            # For options/futures, use NFO instead of NSE for symbol lookup
+            lookup_exchange = exchange
+            if instrumenttype in ['OPTIDX', 'OPTSTK', 'FUTIDX', 'FUTSTK']:
+                if exchange == 'NSE':
+                    lookup_exchange = 'NFO'
+                elif exchange == 'BSE':
+                    lookup_exchange = 'BFO'
+
+            # Get OpenAlgo symbol from database using symboltoken
             if symboltoken and exchange:
-                symbol_from_db = get_symbol(symboltoken, exchange)
+                symbol_from_db = get_symbol(symboltoken, lookup_exchange)
                 if symbol_from_db:
                     order['tradingsymbol'] = symbol_from_db
+                    logger.debug(f"Found symbol via token: {symbol_from_db}")
                 else:
-                    logger.info(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
+                    # Fallback: Try converting broker symbol to OA format
+                    if broker_tradingsymbol:
+                        oa_symbol = get_oa_symbol(broker_tradingsymbol, lookup_exchange)
+                        if oa_symbol:
+                            order['tradingsymbol'] = oa_symbol
+                            logger.debug(f"Converted broker symbol {broker_tradingsymbol} to OA format: {oa_symbol}")
+                        else:
+                            logger.info(f"Symbol not found for token {symboltoken} or brsymbol {broker_tradingsymbol} on {lookup_exchange}. Keeping original.")
 
             # Map product types to OpenAlgo format
             producttype = order.get('producttype', '')
@@ -203,30 +222,47 @@ def map_trade_data(trade_data):
 
     for trade in trade_data:
         # Type B tradebook API returns uppercase field names
-        # Get trading symbol from Type B response (SYMBOL is the base symbol)
+        symboltoken = trade.get('SEC_ID', '')  # SEC_ID is the symboltoken in tradebook
         symbol = trade.get('SYMBOL', '')
         exchange = trade.get('EXCHANGE', '')
+        instrument_name = trade.get('INSTRUMENT_NAME', '')
 
-        if symbol and exchange:
-            # For mStock, construct the full broker symbol
-            # NSE/BSE equity: SYMBOL-EQ (e.g., YESBANK-EQ)
-            # NFO/MCX/BFO/CDS: Use symbol as-is
-            if exchange in ['NSE', 'BSE']:
-                instrument_name = trade.get('INSTRUMENT_NAME', '')
-                if instrument_name == 'EQUITY':
+        if exchange:
+            # Determine correct exchange for derivatives
+            lookup_exchange = exchange
+            if instrument_name in ['OPTIDX', 'OPTSTK', 'FUTIDX', 'FUTSTK']:
+                if exchange == 'NSE':
+                    lookup_exchange = 'NFO'
+                elif exchange == 'BSE':
+                    lookup_exchange = 'BFO'
+
+            # First try: Get OpenAlgo symbol using symboltoken
+            if symboltoken:
+                symbol_from_db = get_symbol(symboltoken, lookup_exchange)
+                if symbol_from_db:
+                    trade['tradingsymbol'] = symbol_from_db
+                    logger.debug(f"Found tradebook symbol via token: {symbol_from_db}")
+                    continue
+
+            # Second try: Convert broker symbol to OA format
+            if symbol:
+                # For mStock, construct the full broker symbol
+                # NSE/BSE equity: SYMBOL-EQ (e.g., YESBANK-EQ)
+                # NFO/MCX/BFO/CDS: Use symbol as-is
+                if exchange in ['NSE', 'BSE'] and instrument_name == 'EQUITY':
                     brsymbol = f"{symbol}-EQ"
                 else:
                     brsymbol = symbol
-            else:
-                brsymbol = symbol
 
-            # Convert broker symbol to OpenAlgo symbol
-            oa_symbol = get_oa_symbol(brsymbol, exchange)
-            if oa_symbol:
-                trade['tradingsymbol'] = oa_symbol
+                oa_symbol = get_oa_symbol(brsymbol, lookup_exchange)
+                if oa_symbol:
+                    trade['tradingsymbol'] = oa_symbol
+                    logger.debug(f"Converted tradebook symbol {brsymbol} to OA format: {oa_symbol}")
+                else:
+                    logger.info(f"Unable to find OA symbol for token {symboltoken} or brsymbol {brsymbol} on {lookup_exchange}. Using base symbol.")
+                    trade['tradingsymbol'] = symbol
             else:
-                logger.info(f"Unable to find the OA symbol for {brsymbol} (base: {symbol}) and exchange {exchange}. Using base symbol.")
-                trade['tradingsymbol'] = symbol
+                trade['tradingsymbol'] = ''
         else:
             trade['tradingsymbol'] = symbol
 
@@ -318,19 +354,38 @@ def map_position_data(position_data):
 
     if position_data:
         for position in position_data:
-            # Extract symboltoken and exchange for symbol lookup
+            # Extract symboltoken, exchange, and instrumenttype for symbol lookup
             symboltoken = position.get('symboltoken')
             exchange = position.get('exchange')
+            instrumenttype = position.get('instrumenttype', '')
+            symbolname = position.get('symbolname', '')
+
+            # Determine correct exchange for derivatives
+            lookup_exchange = exchange
+            if instrumenttype in ['OPTIDX', 'OPTSTK', 'FUTIDX', 'FUTSTK']:
+                if exchange == 'NSE':
+                    lookup_exchange = 'NFO'
+                elif exchange == 'BSE':
+                    lookup_exchange = 'BFO'
 
             # Get OpenAlgo symbol from database using symboltoken
             if symboltoken and exchange:
-                symbol_from_db = get_symbol(symboltoken, exchange)
+                symbol_from_db = get_symbol(symboltoken, lookup_exchange)
                 if symbol_from_db:
                     position['tradingsymbol'] = symbol_from_db
+                    logger.debug(f"Found position symbol via token: {symbol_from_db}")
                 else:
-                    logger.info(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping symbolname.")
-                    # Fallback to symbolname if available
-                    position['tradingsymbol'] = position.get('symbolname', '')
+                    # Fallback: Try converting broker symbolname to OA format
+                    if symbolname:
+                        oa_symbol = get_oa_symbol(symbolname, lookup_exchange)
+                        if oa_symbol:
+                            position['tradingsymbol'] = oa_symbol
+                            logger.debug(f"Converted position symbol {symbolname} to OA format: {oa_symbol}")
+                        else:
+                            logger.info(f"Symbol not found for token {symboltoken} or symbolname {symbolname} on {lookup_exchange}. Keeping symbolname.")
+                            position['tradingsymbol'] = symbolname
+                    else:
+                        position['tradingsymbol'] = ''
 
             # Map product types to OpenAlgo format
             producttype = position.get('producttype', '')
