@@ -207,13 +207,13 @@ def toggle_analyzer_mode(
     """
     Toggle analyzer mode on/off.
     Supports both API-based authentication and direct internal calls.
-    
+
     Args:
         analyzer_data: Analyzer data containing mode
         api_key: OpenAlgo API key (for API-based calls)
         auth_token: Direct broker authentication token (for internal calls)
         broker: Direct broker name (for internal calls)
-        
+
     Returns:
         Tuple containing:
         - Success status (bool)
@@ -223,12 +223,12 @@ def toggle_analyzer_mode(
     original_data = copy.deepcopy(analyzer_data)
     if api_key:
         original_data['apikey'] = api_key
-    
+
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
         # Add API key to analyzer data
         analyzer_data['apikey'] = api_key
-        
+
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
             error_response = {
@@ -237,7 +237,19 @@ def toggle_analyzer_mode(
             }
             # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
-        
+
+        # Check if in semi-auto mode - block analyzer toggle for RA compliance
+        from database.auth_db import get_order_mode
+        order_mode = get_order_mode(api_key)
+
+        if order_mode == 'semi_auto':
+            error_response = {
+                'status': 'error',
+                'message': 'Operation analyzer/toggle is not allowed in Semi-Auto mode. This operation can only be performed by the client via the UI. This restriction ensures SEBI Research Analyst compliance where mode switching is a client-only decision.'
+            }
+            log_executor.submit(async_log_order, 'analyzer_toggle', original_data, error_response)
+            return False, error_response, 403
+
         return toggle_analyzer_mode_with_auth(analyzer_data, AUTH_TOKEN, broker_name, original_data)
     
     # Case 2: Direct internal call with auth_token and broker

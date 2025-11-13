@@ -246,11 +246,32 @@ window.refreshCurrentPageContent = function() {
         refreshTradebook();
     } else if (path.includes('/positions')) {
         refreshPositions();
+    } else if (path.includes('/action-center')) {
+        refreshActionCenter();
     } else if (path === '/dashboard' || path === '/') {
         refreshDashboard();
     } else if (path.includes('/analyzer')) {
         refreshAnalyzer();
     }
+}
+
+// Refresh action center
+function refreshActionCenter() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const status = urlParams.get('status') || 'pending';
+    fetch(`/action-center?status=${status}`)
+        .then(response => response.text())
+        .then(html => {
+            // Parse the HTML and extract the main content
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const newContent = doc.querySelector('#action-center-content');
+            const currentContent = document.querySelector('#action-center-content');
+            if (newContent && currentContent) {
+                currentContent.innerHTML = newContent.innerHTML;
+            }
+        })
+        .catch(error => console.error('Error refreshing action center:', error));
 }
 
 document.addEventListener('DOMContentLoaded', function() {

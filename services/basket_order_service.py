@@ -383,12 +383,21 @@ def place_basket_order(
         - HTTP status code (int)
     """
     original_data = copy.deepcopy(basket_data)
-    
+    if api_key:
+        original_data['apikey'] = api_key
+
+    # Add API key to basket data if provided (needed for validation)
+    if api_key:
+        basket_data['apikey'] = api_key
+
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
-        # Add API key to basket data
-        basket_data['apikey'] = api_key
-        
+        # Check if order should be routed to Action Center (semi-auto mode)
+        from services.order_router_service import should_route_to_pending, queue_order
+
+        if should_route_to_pending(api_key, 'basketorder'):
+            return queue_order(api_key, original_data, 'basketorder')
+
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
             error_response = {
@@ -397,7 +406,7 @@ def place_basket_order(
             }
             # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
-        
+
         return process_basket_order_with_auth(basket_data, AUTH_TOKEN, broker_name, original_data)
     
     # Case 2: Direct internal call with auth_token and broker

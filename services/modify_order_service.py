@@ -191,9 +191,28 @@ def modify_order(
     
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
+        # Check if user is in semi-auto mode (modifyorder is blocked in semi-auto)
+        # BUT allow execution in analyze/sandbox mode (virtual trading should always work)
+        from database.auth_db import verify_api_key, get_order_mode
+        from database.settings_db import get_analyze_mode
+
+        # Check analyze mode first - if in analyze mode, allow execution
+        if not get_analyze_mode():
+            user_id = verify_api_key(api_key)
+            if user_id:
+                order_mode = get_order_mode(user_id)
+                if order_mode == 'semi_auto':
+                    error_response = {
+                        'status': 'error',
+                        'message': 'Modify order operation is not allowed in Semi-Auto mode. Please switch to Auto mode to modify orders.'
+                    }
+                    logger.warning(f"Modify order blocked for user {user_id} (semi-auto mode)")
+                    executor.submit(async_log_order, 'modifyorder', original_data, error_response)
+                    return False, error_response, 403
+
         # Add API key to order data
         order_data['apikey'] = api_key
-        
+
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
             error_response = {
@@ -202,7 +221,7 @@ def modify_order(
             }
             # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
-        
+
         return modify_order_with_auth(order_data, AUTH_TOKEN, broker_name, original_data)
     
     # Case 2: Direct internal call with auth_token and broker
