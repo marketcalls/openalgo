@@ -304,23 +304,36 @@ def close_all_positions(current_api_key, auth):
             action = 'SELL' if netqty > 0 else 'BUY'
             quantity = abs(netqty)
 
+            # Determine correct exchange for symbol lookup
+            exchange = position['exchange']
+            instrumenttype = position.get('instrumenttype', '')
+            lookup_exchange = exchange
+
+            # For derivatives, use NFO/BFO instead of NSE/BSE for symbol lookup
+            if instrumenttype in ['OPTIDX', 'OPTSTK', 'FUTIDX', 'FUTSTK']:
+                if exchange == 'NSE':
+                    lookup_exchange = 'NFO'
+                elif exchange == 'BSE':
+                    lookup_exchange = 'BFO'
+
             # Get OpenAlgo symbol to send to placeorder function
-            symbol = get_symbol(position['symboltoken'], position['exchange'])
+            symbol = get_symbol(position['symboltoken'], lookup_exchange)
 
             # Skip if symbol not found
             if not symbol:
-                logger.warning(f"Symbol not found for token {position['symboltoken']}, exchange {position['exchange']}. Skipping position.")
+                logger.warning(f"Symbol not found for token {position['symboltoken']}, exchange {lookup_exchange} (original: {exchange}). Skipping position.")
                 continue
 
             logger.info(f"Closing position for symbol: {symbol}, quantity: {quantity}, action: {action}")
 
             # Prepare the order payload
+            # Use lookup_exchange (NFO/BFO for derivatives) instead of position exchange (NSE/BSE)
             place_order_payload = {
                 "apikey": current_api_key,
                 "strategy": "Squareoff",
                 "symbol": symbol,
                 "action": action,
-                "exchange": position['exchange'],
+                "exchange": lookup_exchange,  # Use NFO/BFO for derivatives, not NSE/BSE
                 "pricetype": "MARKET",
                 "product": reverse_map_product_type(position['producttype']),
                 "quantity": str(quantity)
