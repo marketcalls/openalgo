@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from utils.httpx_client import get_httpx_client
 from broker.mstock.mapping.order_data import transform_positions_data, transform_holdings_data
+from broker.mstock.api.mstockwebsocket import MstockWebSocket
 from database.token_db import get_br_symbol, get_token, get_oa_symbol
 from utils.logging import get_logger
 
@@ -104,6 +105,7 @@ class BrokerData:
     def __init__(self, auth_token):
         """Initialize mstock data handler with authentication token"""
         self.auth_token = auth_token
+        self.websocket = MstockWebSocket(auth_token)
         # Map common timeframe format to mstock intervals
         self.timeframe_map = {
             # Minutes
@@ -157,9 +159,22 @@ class BrokerData:
             'D': 'ONE_DAY'
         }
 
+        # Exchange type mapping for WebSocket
+        # 1=NSECM, 2=NSEFO, 3=BSECM, 4=BSEFO, 13=NSECD
+        self.ws_exchange_map = {
+            'NSE': 1,
+            'NFO': 2,
+            'BSE': 3,
+            'BFO': 4,
+            'CDS': 13,
+            'MCX': 5,  # Assuming MCX
+            'NSE_INDEX': 1,
+            'BSE_INDEX': 3
+        }
+
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
-        Get real-time quotes for given symbol
+        Get real-time quotes for given symbol using WebSocket
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX)
@@ -167,40 +182,36 @@ class BrokerData:
             dict: Quote data with required fields
         """
         try:
-            # Convert symbol to broker format and get token
-            br_symbol = get_br_symbol(symbol, exchange)
+            # Get token and exchange type
             token = get_token(symbol, exchange)
+            exchange_type = self.ws_exchange_map.get(exchange)
 
-            # Map exchange
-            mapped_exchange = self.exchange_map.get(exchange, exchange)
+            if not exchange_type:
+                raise Exception(f"Exchange '{exchange}' not supported for quotes")
 
-            # Prepare payload for mstock quote API
-            payload = {
-                "exchange": mapped_exchange,
-                "symboltoken": token
-            }
+            logger.debug(f"Fetching quotes for {symbol} (token: {token}, exchange: {exchange_type})")
 
-            response = get_api_response("/instruments/quote",
-                                      self.auth_token,
-                                      "POST",
-                                      payload)
+            # Fetch quote using WebSocket (mode 3 = Snap Quote for full data)
+            quote_data = self.websocket.fetch_quote(token, exchange_type, mode=3)
 
-            if not response.get('status'):
-                raise Exception(f"Error from mstock API: {response.get('message', 'Unknown error')}")
+            if not quote_data:
+                raise Exception("Failed to fetch quote data from WebSocket")
 
-            # Extract quote data from response
-            data = response.get('data', {})
+            # Extract bid/ask from market depth
+            bid_price = quote_data['bids'][0]['price'] if quote_data['bids'] else 0
+            ask_price = quote_data['asks'][0]['price'] if quote_data['asks'] else 0
 
+            # Return in OpenAlgo standard format
             return {
-                'bid': float(data.get('bid', 0)),
-                'ask': float(data.get('ask', 0)),
-                'open': float(data.get('open', 0)),
-                'high': float(data.get('high', 0)),
-                'low': float(data.get('low', 0)),
-                'ltp': float(data.get('ltp', 0)),
-                'prev_close': float(data.get('close', 0)),
-                'volume': int(data.get('volume', 0)),
-                'oi': int(data.get('oi', 0))
+                'bid': float(bid_price),
+                'ask': float(ask_price),
+                'open': float(quote_data.get('open', 0)),
+                'high': float(quote_data.get('high', 0)),
+                'low': float(quote_data.get('low', 0)),
+                'ltp': float(quote_data.get('ltp', 0)),
+                'prev_close': float(quote_data.get('close', 0)),
+                'volume': int(quote_data.get('volume', 0)),
+                'oi': int(quote_data.get('oi', 0))
             }
 
         except Exception as e:
@@ -544,7 +555,7 @@ class BrokerData:
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
-        Get market depth for given symbol
+        Get market depth for given symbol using WebSocket
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX)
@@ -552,40 +563,29 @@ class BrokerData:
             dict: Market depth data with bids, asks and other details
         """
         try:
-            # Convert symbol to broker format and get token
-            br_symbol = get_br_symbol(symbol, exchange)
+            # Get token and exchange type
             token = get_token(symbol, exchange)
+            exchange_type = self.ws_exchange_map.get(exchange)
 
-            # Map exchange
-            mapped_exchange = self.exchange_map.get(exchange, exchange)
+            if not exchange_type:
+                raise Exception(f"Exchange '{exchange}' not supported for depth")
 
-            # Prepare payload for market depth API
-            payload = {
-                "exchange": mapped_exchange,
-                "symboltoken": token
-            }
+            logger.debug(f"Fetching depth for {symbol} (token: {token}, exchange: {exchange_type})")
 
-            response = get_api_response("/instruments/depth",
-                                      self.auth_token,
-                                      "POST",
-                                      payload)
+            # Fetch quote using WebSocket (mode 3 = Snap Quote for full data including depth)
+            quote_data = self.websocket.fetch_quote(token, exchange_type, mode=3)
 
-            if not response.get('status'):
-                raise Exception(f"Error from mstock API: {response.get('message', 'Unknown error')}")
+            if not quote_data:
+                raise Exception("Failed to fetch depth data from WebSocket")
 
-            # Extract depth data
-            data = response.get('data', {})
-            depth = data.get('depth', {})
-
-            # Format bids and asks with exactly 5 entries each
+            # Format bids and asks - ensure exactly 5 entries each
             bids = []
             asks = []
 
-            # Process buy orders (top 5)
-            buy_orders = depth.get('buy', [])
+            # Process top 5 bids
             for i in range(5):
-                if i < len(buy_orders):
-                    bid = buy_orders[i]
+                if i < len(quote_data['bids']):
+                    bid = quote_data['bids'][i]
                     bids.append({
                         'price': bid.get('price', 0),
                         'quantity': bid.get('quantity', 0)
@@ -593,11 +593,10 @@ class BrokerData:
                 else:
                     bids.append({'price': 0, 'quantity': 0})
 
-            # Process sell orders (top 5)
-            sell_orders = depth.get('sell', [])
+            # Process top 5 asks
             for i in range(5):
-                if i < len(sell_orders):
-                    ask = sell_orders[i]
+                if i < len(quote_data['asks']):
+                    ask = quote_data['asks'][i]
                     asks.append({
                         'price': ask.get('price', 0),
                         'quantity': ask.get('quantity', 0)
@@ -605,20 +604,20 @@ class BrokerData:
                 else:
                     asks.append({'price': 0, 'quantity': 0})
 
-            # Return depth data in common format
+            # Return depth data in OpenAlgo standard format
             return {
                 'bids': bids,
                 'asks': asks,
-                'high': data.get('high', 0),
-                'low': data.get('low', 0),
-                'ltp': data.get('ltp', 0),
-                'ltq': data.get('ltq', 0),
-                'open': data.get('open', 0),
-                'prev_close': data.get('close', 0),
-                'volume': data.get('volume', 0),
-                'oi': data.get('oi', 0),
-                'totalbuyqty': data.get('totalbuyqty', 0),
-                'totalsellqty': data.get('totalsellqty', 0)
+                'high': quote_data.get('high', 0),
+                'low': quote_data.get('low', 0),
+                'ltp': quote_data.get('ltp', 0),
+                'ltq': quote_data.get('last_traded_qty', 0),
+                'open': quote_data.get('open', 0),
+                'prev_close': quote_data.get('close', 0),
+                'volume': quote_data.get('volume', 0),
+                'oi': quote_data.get('oi', 0),
+                'totalbuyqty': int(quote_data.get('total_buy_qty', 0)),
+                'totalsellqty': int(quote_data.get('total_sell_qty', 0))
             }
 
         except Exception as e:
