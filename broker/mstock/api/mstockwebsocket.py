@@ -368,7 +368,8 @@ class MstockWebSocket:
                 # Start receiving messages
                 while self.running:
                     try:
-                        message = await websocket.recv()
+                        # Use timeout to make shutdown more responsive
+                        message = await asyncio.wait_for(websocket.recv(), timeout=5.0)
 
                         if isinstance(message, bytes):
                             # Parse binary packet
@@ -382,7 +383,7 @@ class MstockWebSocket:
                             logger.debug(f"Received string message: {message}")
 
                     except asyncio.TimeoutError:
-                        logger.debug("Receive timeout, continuing...")
+                        # Check running flag on timeout to allow responsive shutdown
                         continue
                     except websockets.exceptions.ConnectionClosed:
                         logger.warning("WebSocket connection closed")
@@ -494,9 +495,6 @@ class MstockWebSocket:
     def disconnect_stream(self):
         """Disconnect the persistent WebSocket connection"""
         self.running = False
-        if self.websocket:
-            try:
-                asyncio.create_task(self.websocket.close())
-            except:
-                pass
+        # Don't try to close websocket from different thread/event loop
+        # Setting running=False will cause the streaming loop to exit cleanly
         logger.info("Streaming mode disconnected")
