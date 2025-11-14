@@ -129,6 +129,7 @@ class ApiKeys(Base):
     api_key_hash = Column(Text, nullable=False)  # For verification
     api_key_encrypted = Column(Text, nullable=False)  # For retrieval
     created_at = Column(DateTime(timezone=True), default=func.now())
+    order_mode = Column(String(20), default='auto')  # 'auto' or 'semi_auto'
 
 def init_db():
     from database.db_init_helper import init_db_with_logging
@@ -502,3 +503,56 @@ def get_auth_token_broker(provided_api_key, include_feed_token=False):
             return (None, None, None) if include_feed_token else (None, None)
     else:
         return (None, None, None) if include_feed_token else (None, None)
+
+def get_order_mode(user_id):
+    """
+    Get the order mode for a user (auto or semi_auto)
+
+    Args:
+        user_id: User identifier
+
+    Returns:
+        str: 'auto' or 'semi_auto', defaults to 'auto' if not set
+    """
+    try:
+        api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
+        if api_key_obj and api_key_obj.order_mode:
+            return api_key_obj.order_mode
+        return 'auto'  # Default to auto mode
+    except Exception as e:
+        logger.error(f"Error getting order mode for user {user_id}: {e}")
+        return 'auto'  # Default to auto on error
+
+def update_order_mode(user_id, mode):
+    """
+    Update the order mode for a user
+
+    Args:
+        user_id: User identifier
+        mode: 'auto' or 'semi_auto'
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        if mode not in ['auto', 'semi_auto']:
+            logger.error(f"Invalid order mode: {mode}")
+            return False
+
+        api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
+        if api_key_obj:
+            api_key_obj.order_mode = mode
+            db_session.commit()
+
+            # Clear caches when mode changes
+            invalidate_user_cache(user_id)
+
+            logger.info(f"Order mode updated to '{mode}' for user: {user_id}")
+            return True
+        else:
+            logger.error(f"No API key found for user: {user_id}")
+            return False
+    except Exception as e:
+        logger.error(f"Error updating order mode: {e}")
+        db_session.rollback()
+        return False

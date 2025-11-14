@@ -57,6 +57,85 @@
                         </button>
                     </div>
 
+                    <!-- Order Mode Toggle Section -->
+                    <div class="mt-8 border-t pt-6">
+                        <h3 class="font-bold text-lg mb-2">Order Execution Mode</h3>
+                        <p class="text-sm text-base-content/70 mb-4">
+                            Control how orders are executed when received via API. Switch between automatic execution and manual approval workflow.
+                        </p>
+
+                        <div class="form-control">
+                            <label class="label cursor-pointer justify-start gap-4 bg-base-200 p-4 rounded-box">
+                                <div class="flex-1">
+                                    <span class="label-text font-medium text-success text-base">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+                                        </svg>
+                                        Auto Mode (Default)
+                                    </span>
+                                    <div class="text-xs text-base-content/60 ml-7 mt-1">Orders execute immediately without manual approval</div>
+                                </div>
+
+                                <input type="checkbox" id="orderModeToggle" class="toggle toggle-primary toggle-lg"
+                                       {% if order_mode == 'semi_auto' %}checked{% endif %}
+                                       onchange="toggleOrderMode()" />
+
+                                <div class="flex-1">
+                                    <span class="label-text font-medium text-warning text-base">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" />
+                                        </svg>
+                                        Semi-Auto Mode
+                                    </span>
+                                    <div class="text-xs text-base-content/60 ml-7 mt-1">Orders queued in Action Center for manual approval</div>
+                                </div>
+                            </label>
+                        </div>
+
+                        <!-- Current Mode Status -->
+                        <div id="currentModeStatus" class="alert mt-4 {% if order_mode == 'semi_auto' %}alert-warning{% else %}alert-success{% endif %}">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            <span>
+                                Current mode: <strong id="modeLabel">{% if order_mode == 'semi_auto' %}Semi-Auto{% else %}Auto{% endif %}</strong>
+                                {% if order_mode == 'semi_auto' %}
+                                - All orders will be queued in <a href="{{ url_for('orders_bp.action_center') }}" class="link link-hover font-bold">Action Center</a> for approval
+                                {% else %}
+                                - All orders will execute immediately
+                                {% endif %}
+                            </span>
+                        </div>
+
+                        <!-- Loading Indicator for Mode Change -->
+                        <div id="modeLoadingIndicator" class="hidden mt-4">
+                            <span class="loading loading-spinner loading-md"></span>
+                            <span class="ml-2">Updating order mode...</span>
+                        </div>
+
+                        <!-- Success Alert for Mode Change -->
+                        <div id="modeSuccessAlert" class="alert alert-success mt-4 hidden">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <div>
+                                <h3 class="font-bold">Success!</h3>
+                                <div class="text-sm" id="modeSuccessMessage">Order mode updated successfully.</div>
+                            </div>
+                        </div>
+
+                        <!-- Error Alert for Mode Change -->
+                        <div id="modeErrorAlert" class="alert alert-error mt-4 hidden">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <div>
+                                <h3 class="font-bold">Error!</h3>
+                                <div class="text-sm" id="modeErrorMessage">Failed to update order mode. Please try again.</div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Loading Indicator -->
                     <div id="loadingIndicator" class="hidden mt-4">
                         <span class="loading loading-spinner loading-md"></span>
@@ -170,10 +249,10 @@
     function regenerateApiKey() {
         // Close the modal
         document.getElementById('confirm-modal').close();
-        
+
         // Show loading indicator
         showLoading(true);
-        
+
         fetch('/apikey', {
             method: 'POST',
             headers: {
@@ -198,6 +277,78 @@
             showLoading(false);
             console.error('Error:', error);
             showError('Failed to regenerate API key. Please try again.');
+        });
+    }
+
+    function showModeLoading(show) {
+        document.getElementById('modeLoadingIndicator').classList.toggle('hidden', !show);
+    }
+
+    function showModeAlert(alertId, duration = 3000) {
+        const alert = document.getElementById(alertId);
+        alert.classList.remove('hidden');
+        setTimeout(() => { alert.classList.add('hidden'); }, duration);
+    }
+
+    function showModeError(message) {
+        const errorMessage = document.getElementById("modeErrorMessage");
+        errorMessage.textContent = message;
+        showModeAlert('modeErrorAlert');
+    }
+
+    function updateModeDisplay(mode) {
+        const currentModeStatus = document.getElementById('currentModeStatus');
+        const spanElement = currentModeStatus.querySelector('span');
+
+        if (mode === 'semi_auto') {
+            currentModeStatus.classList.remove('alert-success');
+            currentModeStatus.classList.add('alert-warning');
+            spanElement.innerHTML = 'Current mode: <strong id="modeLabel">Semi-Auto</strong> - All orders will be queued in <a href="{{ url_for("orders_bp.action_center") }}" class="link link-hover font-bold">Action Center</a> for approval';
+        } else {
+            currentModeStatus.classList.remove('alert-warning');
+            currentModeStatus.classList.add('alert-success');
+            spanElement.innerHTML = 'Current mode: <strong id="modeLabel">Auto</strong> - All orders will execute immediately';
+        }
+    }
+
+    function toggleOrderMode() {
+        const toggle = document.getElementById('orderModeToggle');
+        const newMode = toggle.checked ? 'semi_auto' : 'auto';
+
+        // Show loading indicator
+        showModeLoading(true);
+
+        fetch('/apikey/mode', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({
+                user_id: "{{ login_username }}",
+                mode: newMode
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            showModeLoading(false);
+            if (data.mode) {
+                updateModeDisplay(data.mode);
+                const successMessage = document.getElementById('modeSuccessMessage');
+                successMessage.textContent = `Order mode updated to ${data.mode === 'semi_auto' ? 'Semi-Auto' : 'Auto'} successfully.`;
+                showModeAlert('modeSuccessAlert');
+            } else {
+                // Revert toggle on error
+                toggle.checked = !toggle.checked;
+                showModeError(data.error || 'Failed to update order mode');
+            }
+        })
+        .catch(error => {
+            showModeLoading(false);
+            console.error('Error:', error);
+            // Revert toggle on error
+            toggle.checked = !toggle.checked;
+            showModeError('Failed to update order mode. Please try again.');
         });
     }
 </script>

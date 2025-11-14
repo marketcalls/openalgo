@@ -73,7 +73,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 themeSwitcher.style.opacity = '1';
             }, 10);
         }
-        
+
         // Update session storage
         sessionStorage.setItem('analyzeMode', isAnalyzeMode.toString());
         localStorage.setItem('analyzeMode', isAnalyzeMode.toString()); // For cross-tab sync

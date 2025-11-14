@@ -34,9 +34,16 @@
                 </a>
             </li>
             <li>
-                <a href="{{ url_for('orders_bp.positions') }}" 
+                <a href="{{ url_for('orders_bp.positions') }}"
                    class="text-base hover:bg-base-200 {{ 'active' if request.endpoint == 'orders_bp.positions' }}">
                     Positions
+                </a>
+            </li>
+            <li>
+                <a href="{{ url_for('orders_bp.action_center') }}"
+                   class="text-base hover:bg-base-200 {{ 'active' if request.endpoint == 'orders_bp.action_center' }}">
+                    Action Center
+                    <span id="action-center-badge" class="badge badge-warning badge-sm" style="display: none;"></span>
                 </a>
             </li>
             <li>
@@ -297,3 +304,29 @@
         </div>
     </div>
 </div>
+
+<script>
+// Update Action Center badge with pending order count
+function updateActionCenterBadge() {
+    fetch('/action-center/count')
+        .then(res => res.json())
+        .then(data => {
+            const badge = document.getElementById('action-center-badge');
+            if (badge && data.count > 0) {
+                badge.textContent = data.count;
+                badge.style.display = 'inline-block';
+            } else if (badge) {
+                badge.style.display = 'none';
+            }
+        })
+        .catch(error => {
+            console.error('Error fetching action center count:', error);
+        });
+}
+
+// Update badge on page load
+document.addEventListener('DOMContentLoaded', updateActionCenterBadge);
+
+// Update badge every 30 seconds
+setInterval(updateActionCenterBadge, 30000);
+</script>

@@ -227,13 +227,13 @@ def place_order(
     """
     Place an order with the broker.
     Supports both API-based authentication and direct internal calls.
-    
+
     Args:
         order_data: Order data containing all required fields
         api_key: OpenAlgo API key (for API-based calls)
         auth_token: Direct broker authentication token (for internal calls)
         broker: Direct broker name (for internal calls)
-        
+
     Returns:
         Tuple containing:
         - Success status (bool)
@@ -245,7 +245,15 @@ def place_order(
         original_data['apikey'] = api_key
         # Also add apikey to order_data for validation
         order_data['apikey'] = api_key
-    
+
+    # Check if order should be routed to Action Center (semi-auto mode)
+    # Only check for API-based calls, not internal calls
+    if api_key and not (auth_token and broker):
+        from services.order_router_service import should_route_to_pending, queue_order
+
+        if should_route_to_pending(api_key, 'placeorder'):
+            return queue_order(api_key, original_data, 'placeorder')
+
     # Validate the order data
     is_valid, _, error_message = validate_order_data(order_data)
     if not is_valid:
@@ -254,7 +262,7 @@ def place_order(
         error_response = {'status': 'error', 'message': error_message}
         executor.submit(async_log_order, 'placeorder', original_data, error_response)
         return False, error_response, 400
-    
+
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
@@ -265,7 +273,7 @@ def place_order(
             }
             # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
-        
+
         return place_order_with_auth(order_data, AUTH_TOKEN, broker_name, original_data)
     
     # Case 2: Direct internal call with auth_token and broker

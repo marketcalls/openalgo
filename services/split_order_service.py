@@ -398,12 +398,19 @@ def split_order(
     original_data = copy.deepcopy(split_data)
     if api_key:
         original_data['apikey'] = api_key
-    
+
+    # Add API key to split data if provided (needed for validation)
+    if api_key:
+        split_data['apikey'] = api_key
+
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
-        # Add API key to split data
-        split_data['apikey'] = api_key
-        
+        # Check if order should be routed to Action Center (semi-auto mode)
+        from services.order_router_service import should_route_to_pending, queue_order
+
+        if should_route_to_pending(api_key, 'splitorder'):
+            return queue_order(api_key, original_data, 'splitorder')
+
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
             error_response = {
@@ -412,7 +419,7 @@ def split_order(
             }
             # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
-        
+
         return split_order_with_auth(split_data, AUTH_TOKEN, broker_name, original_data)
     
     # Case 2: Direct internal call with auth_token and broker
