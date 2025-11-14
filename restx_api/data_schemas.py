@@ -103,3 +103,10 @@ class OptionGreeksSchema(Schema):
     underlying_symbol = fields.Str(required=False)   # Optional: Specify underlying symbol (e.g., NIFTY or NIFTY28NOV24FUT)
     underlying_exchange = fields.Str(required=False)  # Optional: Specify underlying exchange (NSE_INDEX, NFO, etc.)
     expiry_time = fields.Str(required=False)  # Optional: Custom expiry time in HH:MM format (e.g., "15:30", "19:00"). If not provided, uses exchange defaults
+
+class InstrumentsSchema(Schema):
+    apikey = fields.Str(required=True)      # API Key for authentication
+    exchange = fields.Str(required=False, validate=validate.OneOf([
+        "NSE", "BSE", "NFO", "BFO", "BCD", "CDS", "MCX", "NSE_INDEX", "BSE_INDEX"
+    ]))  # Optional exchange filter
+    format = fields.Str(required=False, validate=validate.OneOf(["json", "csv"]))  # Output format (json or csv), defaults to json
