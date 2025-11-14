@@ -6,8 +6,7 @@ import base64
 from typing import Dict, Any, Optional, List
 
 from broker.compositedge.streaming.compositedge_websocket import CompositedgeWebSocketClient
-from database.auth_db import get_auth_token
-from broker.compositedge.api.auth_api import get_feed_token
+from database.auth_db import get_auth_token, get_feed_token
 from database.token_db import get_token
 
 import sys
@@ -36,8 +35,6 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.reconnect_attempts = 0
         self.max_reconnect_attempts = 10
         self.running = False
-        self.connecting = False  # Track if connection attempt is in progress
-        self.initial_connection_done = False  # Track if initial connection was completed
         self.lock = threading.Lock()
         
         # Log the ZMQ port being used
@@ -62,29 +59,20 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if not auth_data:
             # Fetch authentication tokens from database
             auth_token = get_auth_token(user_id)
-
-            # Get feed token using broker-specific function (returns tuple)
-            feed_token, feed_user_id, feed_error = get_feed_token()
-
+            feed_token = get_feed_token(user_id)
+            
             if not auth_token or not feed_token:
-                error_msg = f"No authentication tokens found for user {user_id}"
-                if feed_error:
-                    error_msg += f". Feed token error: {feed_error}"
-                self.logger.error(error_msg)
-                raise ValueError(error_msg)
-
+                self.logger.error(f"No authentication tokens found for user {user_id}")
+                raise ValueError(f"No authentication tokens found for user {user_id}")
+                
             # For XTS, we need API key and secret, not just tokens
             # These should be stored in environment variables or config
             api_key = os.getenv('BROKER_API_KEY_MARKET')
             api_secret = os.getenv('BROKER_API_SECRET_MARKET')
-
+            
             if not api_key or not api_secret:
                 self.logger.error("Missing BROKER_API_KEY_MARKET or BROKER_API_SECRET_MARKET environment variables")
                 raise ValueError("Missing Compositedge XTS API credentials in environment variables")
-
-            # Use the feed_user_id if available
-            if feed_user_id:
-                self.logger.info(f"Using feed user ID: {feed_user_id}")
                 
         else:
             # Use provided tokens
@@ -97,7 +85,7 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error("Missing required authentication data")
                 raise ValueError("Missing required authentication data")
         
-        self.logger.info(f"Using API Key: {api_key[:10]}... for Compositedge XTS connection")
+        self.logger.debug(f"Using API Key: {api_key[:10]}... for Compositedge XTS connection")
         
         # Create Compositedge WebSocket client with API credentials
         self.ws_client = CompositedgeWebSocketClient(
@@ -182,7 +170,7 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # From the log, it looks like: "userID": "1048131_856F2F2AF32542B762129"
             actual_user_id = payload_json.get('userID')
             if actual_user_id:
-                self.logger.info(f"Extracted client ID from token: {actual_user_id}")
+                self.logger.debug(f"Extracted client ID from token: {actual_user_id}")
                 return actual_user_id
             else:
                 self.logger.warning("userID not found in token payload, using fallback")
@@ -190,7 +178,7 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 
         except Exception as e:
             self.logger.error(f"Error extracting client ID from token: {e}")
-            self.logger.info(f"Using fallback user ID: {fallback_user_id}")
+            self.logger.debug(f"Using fallback user ID: {fallback_user_id}")
             return fallback_user_id
     
     def connect(self) -> None:
@@ -203,89 +191,50 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         
     def _connect_with_retry(self) -> None:
         """Connect to Compositedge XTS WebSocket with retry logic"""
-        # Prevent multiple simultaneous connection attempts
-        if self.connecting:
-            self.logger.warning("Connection attempt already in progress, skipping duplicate attempt")
-            return
-
-        if self.connected:
-            self.logger.warning("Already connected, skipping connection attempt")
-            return
-
-        self.connecting = True
-        try:
-            self.logger.info("=== STARTING COMPOSITEDGE WEBSOCKET CONNECTION ===")
-            while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
-                try:
-                    self.logger.info(f"[ATTEMPT {self.reconnect_attempts + 1}] Connecting to Compositedge XTS WebSocket...")
-                    self.logger.info(f"WebSocket client state - Initialized: {self.ws_client is not None}")
-
-                    if not self.ws_client:
-                        self.logger.error("WebSocket client is None! Cannot connect.")
-                        break
-
-                    self.ws_client.connect()
-                    self.logger.info("=== COMPOSITEDGE WEBSOCKET CONNECTION SUCCESSFUL ===")
-                    self.reconnect_attempts = 0  # Reset attempts on successful connection
-                    break
-
-                except Exception as e:
-                    self.reconnect_attempts += 1
-                    delay = min(self.reconnect_delay * (2 ** self.reconnect_attempts), self.max_reconnect_delay)
-                    self.logger.error(f"[ATTEMPT {self.reconnect_attempts}] Connection failed: {e}")
-                    self.logger.exception("Full traceback:")
-                    if self.reconnect_attempts < self.max_reconnect_attempts:
-                        self.logger.info(f"Retrying in {delay} seconds...")
-                        time.sleep(delay)
-
-                        # Check if connection succeeded asynchronously during sleep
-                        if self.connected:
-                            self.logger.info("Connection established asynchronously while waiting to retry - canceling retry")
-                            self.reconnect_attempts = 0
-                            break
-
-            if self.reconnect_attempts >= self.max_reconnect_attempts:
-                self.logger.error("=== MAX RECONNECTION ATTEMPTS REACHED - GIVING UP ===")
-                self.logger.error("Compositedge WebSocket connection failed permanently")
-        finally:
-            self.connecting = False
+        while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
+            try:
+                self.logger.info(f"Connecting to Compositedge XTS WebSocket (attempt {self.reconnect_attempts + 1})")
+                self.ws_client.connect()
+                self.reconnect_attempts = 0  # Reset attempts on successful connection
+                break
+                
+            except Exception as e:
+                self.reconnect_attempts += 1
+                delay = min(self.reconnect_delay * (2 ** self.reconnect_attempts), self.max_reconnect_delay)
+                self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
+                time.sleep(delay)
+        
+        if self.reconnect_attempts >= self.max_reconnect_attempts:
+            self.logger.error("Max reconnection attempts reached. Giving up.")
     
     def disconnect(self) -> None:
         """Disconnect from Compositedge XTS WebSocket"""
-        self.logger.info("*** DISCONNECT CALLED - Starting Compositedge disconnect process ***")
-
+        self.logger.debug("*** DISCONNECT CALLED - Starting Compositedge disconnect process ***")
+        
         # Set running to False to prevent reconnection attempts
         self.running = False
-        self.connecting = False  # Reset connecting flag
-        self.initial_connection_done = False  # Reset connection tracking
         self.reconnect_attempts = self.max_reconnect_attempts  # Prevent reconnection attempts
-        self.logger.info("Set running=False and max reconnect attempts to prevent auto-reconnection")
-
-        # Clear all subscriptions from the adapter's registry
-        with self.lock:
-            subscription_count = len(self.subscriptions)
-            self.subscriptions.clear()
-            self.logger.info(f"Cleared {subscription_count} subscription(s) from adapter registry")
-
+        self.logger.debug("Set running=False and max reconnect attempts to prevent auto-reconnection")
+        
         # Disconnect Socket.IO client
         if hasattr(self, 'ws_client') and self.ws_client:
             try:
-                self.logger.info("Disconnecting Socket.IO client...")
+                self.logger.debug("Disconnecting Socket.IO client...")
                 self.ws_client.disconnect()
-                self.logger.info("Socket.IO client disconnect call completed")
+                self.logger.debug("Socket.IO client disconnect call completed")
             except Exception as e:
                 self.logger.error(f"Error during Socket.IO disconnect: {e}")
         else:
             self.logger.warning("No WebSocket client to disconnect")
-
+            
         # Set connected flag to False
         self.connected = False
         self.logger.info("Set connected flag to False")
-
+            
         # Clean up ZeroMQ resources
         self.logger.info("Starting cleanup of ZeroMQ resources...")
         self.cleanup_zmq()
-
+        
         self.logger.info("*** DISCONNECT PROCESS COMPLETED ***")
         
     def cleanup_zmq(self) -> None:
@@ -296,12 +245,11 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 with BaseBrokerWebSocketAdapter._port_lock:
                     if self.zmq_port in BaseBrokerWebSocketAdapter._bound_ports:
                         BaseBrokerWebSocketAdapter._bound_ports.remove(self.zmq_port)
-                        self.logger.info(f"Released port {self.zmq_port} from bound ports registry")
+                        self.logger.debug(f"Released port {self.zmq_port} from bound ports registry")
             
             # Close the socket
             if hasattr(self, 'socket') and self.socket:
                 self.socket.close(linger=0)  # Don't linger on close
-                self.socket = None  # Set to None to prevent "not a socket" errors
                 self.logger.info("ZeroMQ socket closed")
                 
             # DO NOT terminate shared context - other instances may still need it
@@ -343,7 +291,7 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         token = token_info['token']
         brexchange = token_info['brexchange']
         
-        self.logger.info(f"Token mapping result: symbol={symbol}, exchange={exchange} -> token={token}, brexchange={brexchange}")
+        self.logger.debug(f"Token mapping result: symbol={symbol}, exchange={exchange} -> token={token}, brexchange={brexchange}")
         
         # Check if the requested depth level is supported for this exchange
         is_fallback = False
@@ -363,17 +311,17 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 )
         
         # Log the input values for debugging
-        self.logger.info(f"Subscription input - symbol: {symbol}, exchange: {exchange}, brexchange: {brexchange}")
+        self.logger.debug(f"Subscription input - symbol: {symbol}, exchange: {exchange}, brexchange: {brexchange}")
         
         # Create instrument list for Compositedge XTS API
         exchange_type = CompositedgeExchangeMapper.get_exchange_type(brexchange)
         
         # Log the full mapping for debugging
-        self.logger.info(f"Exchange mapping details:")
-        self.logger.info(f"  - Input exchange: {exchange}")
-        self.logger.info(f"  - Brexchange from DB: {brexchange}")
-        self.logger.info(f"  - Mapped exchange type: {exchange_type}")
-        self.logger.info(f"  - Symbol: {symbol}")
+        self.logger.debug(f"Exchange mapping details:")
+        self.logger.debug(f"  - Input exchange: {exchange}")
+        self.logger.debug(f"  - Brexchange from DB: {brexchange}")
+        self.logger.debug(f"  - Mapped exchange type: {exchange_type}")
+        self.logger.debug(f"  - Symbol: {symbol}")
         
         # Ensure token is a string as expected by the API
         token_str = str(token) if token is not None else ""
@@ -383,10 +331,10 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             "exchangeInstrumentID": token_str
         }]
         
-        self.logger.info(f"Final subscription request for {symbol}.{exchange}:")
-        self.logger.info(f"  - Exchange Segment: {exchange_type} (type: {type(exchange_type)})")
-        self.logger.info(f"  - Instrument ID: {token_str}")
-        self.logger.info(f"  - Full request: {instruments}")
+        self.logger.debug(f"Final subscription request for {symbol}.{exchange}:")
+        self.logger.debug(f"  - Exchange Segment: {exchange_type} (type: {type(exchange_type)})")
+        self.logger.debug(f"  - Instrument ID: {token_str}")
+        self.logger.debug(f"  - Full request: {instruments}")
         
         # Generate unique correlation ID that includes mode to prevent overwriting
         correlation_id = f"{symbol}_{exchange}_{mode}"
@@ -408,19 +356,9 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             }
             # Don't log the actual token value for security, but log its type and length
             token_info = f"type={type(token)}, len={len(str(token))}, value={str(token)[:4]}...{str(token)[-4:]}" if token else "None"
-            self.logger.info(f"Stored subscription [{correlation_id}]: symbol={symbol}, exchange={exchange}, brexchange={brexchange}, token_info={token_info}, mode={mode}")
-
-        # If not connected and not running, trigger connection
-        # Check connecting flag to prevent multiple simultaneous connection attempts
-        if not self.connected and not self.running and not self.connecting:
-            self.logger.info(f"Not connected when subscribing to {symbol}.{exchange}. Triggering connection...")
-            self.running = True
-            self.reconnect_attempts = 0
-            self.connect()
-        elif self.connecting:
-            self.logger.info(f"Connection attempt already in progress for {symbol}.{exchange}, subscription will be sent once connected")
-
-        # Subscribe if connected (subscription will be auto-resubscribed on connect via _on_open callback)
+            self.logger.debug(f"Stored subscription [{correlation_id}]: symbol={symbol}, exchange={exchange}, brexchange={brexchange}, token_info={token_info}, mode={mode}")
+        
+        # Subscribe if connected
         if self.connected and self.ws_client:
             try:
                 self.ws_client.subscribe(correlation_id, mode, instruments)
@@ -502,7 +440,7 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         with self.lock:
             if correlation_id in self.subscriptions:
                 del self.subscriptions[correlation_id]
-                self.logger.info(f"Removed {symbol}.{exchange} from subscription registry")
+                self.logger.debug(f"Removed {symbol}.{exchange} from subscription registry")
         
         # Unsubscribe if connected
         if self.connected and self.ws_client:
@@ -538,45 +476,17 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Callback when connection is established"""
         self.logger.info("Connected to Compositedge XTS WebSocket")
         self.connected = True
-        self.connecting = False  # Reset connecting flag
-
-        # Reinitialize ZMQ socket if it was closed during disconnect
-        if not hasattr(self, 'socket') or self.socket is None:
-            self.logger.info("Reinitializing ZMQ socket after reconnection")
-            try:
-                self.socket = self._create_socket()
-                self.zmq_port = self._bind_to_available_port()
-                os.environ["ZMQ_PORT"] = str(self.zmq_port)
-                self.logger.info(f"ZMQ socket reinitialized on port {self.zmq_port}")
-            except Exception as e:
-                self.logger.error(f"Error reinitializing ZMQ socket: {e}")
-
-        # Only resubscribe on actual reconnection (not initial connection)
-        if self.initial_connection_done:
-            self.logger.info("Reconnection detected - resubscribing to stored subscriptions")
-            # On reconnection, we need to resubscribe because the server session may be new
-            self._resubscribe_all()
-        else:
-            self.logger.info("Initial connection established")
-            self.initial_connection_done = True
+        
+        # Resubscribe to existing subscriptions if reconnecting
+        self._resubscribe_all()
     
     def _resubscribe_all(self):
         """Resubscribe to all stored subscriptions"""
         with self.lock:
-            subscription_count = len(self.subscriptions)
-            if subscription_count == 0:
-                self.logger.info("No subscriptions to resubscribe")
-                return
-
-            self.logger.info(f"Resubscribing to {subscription_count} stored subscription(s)")
-            for i, (correlation_id, sub) in enumerate(self.subscriptions.items(), 1):
+            for correlation_id, sub in self.subscriptions.items():
                 try:
                     self.ws_client.subscribe(correlation_id, sub["mode"], sub["instruments"])
-                    self.logger.info(f"[{i}/{subscription_count}] Resubscribed to {sub['symbol']}.{sub['exchange']} (mode {sub['mode']})")
-
-                    # Small delay between subscriptions to avoid overwhelming the server
-                    if i < subscription_count:
-                        time.sleep(0.1)
+                    self.logger.debug(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
                 except Exception as e:
                     self.logger.error(f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}")
     
@@ -588,16 +498,10 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Callback when connection is closed"""
         self.logger.info("Compositedge XTS WebSocket connection closed")
         self.connected = False
-
-        # Attempt to reconnect if we're still running and not already connecting
-        # Prevent multiple concurrent reconnection threads
-        if self.running and not self.connecting:
-            self.logger.info("Initiating reconnection after disconnect")
+        
+        # Attempt to reconnect if we're still running
+        if self.running:
             threading.Thread(target=self._connect_with_retry, daemon=True).start()
-        elif self.connecting:
-            self.logger.info("Reconnection already in progress, skipping new attempt")
-        else:
-            self.logger.info("Not running, skipping reconnection")
     
     def _on_message(self, wsapp, message) -> None:
         """Callback for text messages from the WebSocket"""
@@ -606,23 +510,23 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_data(self, wsapp, message) -> None:
         """Callback for market data from the WebSocket"""
         try:
-            self.logger.info(f"RAW COMPOSITEDGE DATA: Type: {type(message)}, Data: {message}")
-            self.logger.info(f"Adapter state - Connected: {self.connected}, Subscriptions count: {len(self.subscriptions)}")
+            self.logger.debug(f"RAW COMPOSITEDGE DATA: Type: {type(message)}, Data: {message}")
+            self.logger.debug(f"Adapter state - Connected: {self.connected}, Subscriptions count: {len(self.subscriptions)}")
             
             # Handle different message types
             if isinstance(message, bytes):
                 # Binary data - parse according to XTS protocol
-                self.logger.info("Processing as binary data")
+                self.logger.debug("Processing as binary data")
                 self._process_binary_data(message)
                 return
             elif isinstance(message, dict):
                 # JSON data
-                self.logger.info("Processing as JSON dict data")
+                self.logger.debug("Processing as JSON dict data")
                 self._process_json_data(message)
                 return
             elif isinstance(message, str):
                 # String data - try to parse as JSON
-                self.logger.info("Processing as string data")
+                self.logger.debug("Processing as string data")
                 try:
                     data = json.loads(message)
                     self._process_json_data(data)
@@ -669,7 +573,7 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.warning(f"Unknown ExchangeSegment: {exchange_segment}")
                 return
                 
-            self.logger.info(f"Mapped ExchangeSegment {exchange_segment} to exchange: {exchange}")
+            self.logger.debug(f"Mapped ExchangeSegment {exchange_segment} to exchange: {exchange}")
             
             # Check if this is an index token first
             token_str = str(exchange_instrument_id)
@@ -681,12 +585,12 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     symbol = get_symbol(token_str, 'NSE_INDEX')
                     if symbol:
                         exchange = 'NSE_INDEX'
-                        self.logger.info(f"Found index symbol {symbol} in NSE_INDEX for token {exchange_instrument_id}")
+                        self.logger.debug(f"Found index symbol {symbol} in NSE_INDEX for token {exchange_instrument_id}")
                 elif exchange_segment == 11:  # BSE segment
                     symbol = get_symbol(token_str, 'BSE_INDEX')
                     if symbol:
                         exchange = 'BSE_INDEX'
-                        self.logger.info(f"Found index symbol {symbol} in BSE_INDEX for token {exchange_instrument_id}")
+                        self.logger.debug(f"Found index symbol {symbol} in BSE_INDEX for token {exchange_instrument_id}")
             
             # If not found as index or not an index token, try regular exchange
             if not symbol:
@@ -699,19 +603,19 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     symbol = get_symbol(token_str, 'NSE_INDEX')
                     if symbol:
                         exchange = 'NSE_INDEX'
-                        self.logger.info(f"Found symbol {symbol} in NSE_INDEX for token {exchange_instrument_id}")
+                        self.logger.debug(f"Found symbol {symbol} in NSE_INDEX for token {exchange_instrument_id}")
                 elif exchange == 'BSE' and not self._is_index_token(token_str, exchange_segment):
                     # Try BSE_INDEX for BSE segment as fallback
                     symbol = get_symbol(token_str, 'BSE_INDEX')
                     if symbol:
                         exchange = 'BSE_INDEX'
-                        self.logger.info(f"Found symbol {symbol} in BSE_INDEX for token {exchange_instrument_id}")
+                        self.logger.debug(f"Found symbol {symbol} in BSE_INDEX for token {exchange_instrument_id}")
             
             if not symbol:
                 self.logger.warning(f"Could not find symbol for token {exchange_instrument_id} on exchange {exchange}")
                 return
                 
-            self.logger.info(f"Found symbol: {symbol} for token {exchange_instrument_id} on exchange {exchange}")
+            self.logger.debug(f"Found symbol: {symbol} for token {exchange_instrument_id} on exchange {exchange}")
             
             # Determine mode based on MessageCode
             message_code = data.get('MessageCode')
@@ -728,7 +632,7 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.warning(f"Unknown MessageCode: {message_code}")
                 return
                 
-            self.logger.info(f"Determined mode {mode} ({mode_str}) from MessageCode {message_code}")
+            self.logger.debug(f"Determined mode {mode} ({mode_str}) from MessageCode {message_code}")
             
             # Check if we have an active subscription for this symbol and mode (optional check)
             check_correlation_id = f"{symbol}_{exchange}_{mode}"
@@ -751,16 +655,16 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 'timestamp': int(time.time() * 1000)
             })
             
-            self.logger.info(f"Publishing market data: {market_data}")
-            self.logger.info(f"Publishing to topic: {topic} on ZMQ port: {self.zmq_port}")
+            self.logger.debug(f"Publishing market data: {market_data}")
+            self.logger.debug(f"Publishing to topic: {topic} on ZMQ port: {self.zmq_port}")
             
             # Log the socket state before publishing
-            self.logger.info(f"ZMQ Socket State - Port: {getattr(self, 'zmq_port', 'Unknown')}, Connected: {getattr(self, 'connected', False)}")
-            self.logger.info(f"Environment ZMQ_PORT: {os.environ.get('ZMQ_PORT', 'Not Set')}")
+            self.logger.debug(f"ZMQ Socket State - Port: {getattr(self, 'zmq_port', 'Unknown')}, Connected: {getattr(self, 'connected', False)}")
+            self.logger.debug(f"Environment ZMQ_PORT: {os.environ.get('ZMQ_PORT', 'Not Set')}")
             
             # Publish to ZeroMQ
             self.publish_market_data(topic, market_data)
-            self.logger.info(f"Published data successfully to ZMQ - Topic: {topic}, Data: {market_data}")
+            self.logger.debug(f"Published data successfully to ZMQ - Topic: {topic}, Data: {market_data}")
             
         except Exception as e:
             self.logger.error(f"Error processing JSON data: {e}", exc_info=True)
@@ -795,7 +699,7 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             total_sell_qty = touchline.get('TotalSellQuantity', 0)
             
             # Log touchline data for debugging
-            self.logger.info(f"Extracted from Touchline - LTP: {ltp}, Volume: {volume}, Open: {open_price}")
+            self.logger.debug(f"Extracted from Touchline - LTP: {ltp}, Volume: {volume}, Open: {open_price}")
         else:
             # For other message codes (1512, 1501), data is at root level
             ltp = message.get('LastTradedPrice', 0)
@@ -849,7 +753,7 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 bids = message.get('Bids', [])
                 asks = message.get('Asks', [])
                 
-                self.logger.info(f"Processing depth data - Bids count: {len(bids)}, Asks count: {len(asks)}")
+                self.logger.debug(f"Processing depth data - Bids count: {len(bids)}, Asks count: {len(asks)}")
                 
                 result['depth'] = {
                     'buy': self._extract_depth_data(bids, is_buy=True),
@@ -858,9 +762,9 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 
                 # Log first bid and ask for debugging
                 if bids and len(bids) > 0:
-                    self.logger.info(f"First bid: Price={bids[0].get('Price')}, Size={bids[0].get('Size')}")
+                    self.logger.debug(f"First bid: Price={bids[0].get('Price')}, Size={bids[0].get('Size')}")
                 if asks and len(asks) > 0:
-                    self.logger.info(f"First ask: Price={asks[0].get('Price')}, Size={asks[0].get('Size')}")
+                    self.logger.debug(f"First ask: Price={asks[0].get('Price')}, Size={asks[0].get('Size')}")
             else:
                 self.logger.warning(f"No depth data found in message. Keys present: {list(message.keys())}")
                 
