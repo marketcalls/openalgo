@@ -159,9 +159,9 @@ def place_order_api(data, auth):
     # Parse JSON response
     response_data = response.json()
 
-    logger.info(f"Place order response status code: {response.status_code}")
-    logger.info(f"Place order response data type: {type(response_data)}")
-    logger.info(f"Place order response data: {response_data}")
+    logger.debug(f"Place order response status code: {response.status_code}")
+    logger.debug(f"Place order response data type: {type(response_data)}")
+    logger.debug(f"Place order response data: {response_data}")
 
     # Handle both dict and list responses
     orderid = None
@@ -174,7 +174,7 @@ def place_order_api(data, auth):
         # Extract orderid from the dict
         if response_dict.get('status') in [True, "true"] and response_dict.get('data'):
             orderid = response_dict['data'].get('orderid')
-            logger.info(f"Extracted orderid: {orderid}")
+            logger.debug(f"Extracted orderid: {orderid}")
 
         # Keep the dict format for response_data for compatibility
         response_data = response_dict
@@ -183,7 +183,7 @@ def place_order_api(data, auth):
         # Standard dict response format
         if response_data.get('status') in [True, "true"] and response_data.get('data'):
             orderid = response_data['data'].get('orderid')
-            logger.info(f"Extracted orderid: {orderid}")
+            logger.debug(f"Extracted orderid: {orderid}")
 
     return response, response_data, orderid
 
@@ -257,8 +257,8 @@ def place_smartorder_api(data, auth):
 
         # Place the order
         res, response, orderid = place_order_api(order_data, auth)
-        logger.info(f"Smart order response: {response}")
-        logger.info(f"Smart order ID: {orderid}")
+        logger.debug(f"Smart order response: {response}")
+        logger.debug(f"Smart order ID: {orderid}")
 
         return res, response, orderid
 

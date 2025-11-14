@@ -168,7 +168,7 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             packet_mode = quote_data.get('subscription_mode', 1)
 
             # DEBUG: Log what mode packet was received and what data is in it
-            self.logger.info(f"📦 Received packet for token {token}: mode={packet_mode}, "
+            self.logger.debug(f"📦 Received packet for token {token}: mode={packet_mode}, "
                            f"ltp={quote_data.get('ltp', 0)}, "
                            f"volume={quote_data.get('volume', 0)}, "
                            f"open={quote_data.get('open', 0)}, "
@@ -290,9 +290,9 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 needs_ws_subscribe = True
                 subscribe_mode = max_mode_for_token
                 self.token_modes[token] = max_mode_for_token
-                self.logger.info(f"🔼 Upgrading subscription for token {token} from mode {current_mstock_mode} to mode {max_mode_for_token}")
+                self.logger.debug(f"🔼 Upgrading subscription for token {token} from mode {current_mstock_mode} to mode {max_mode_for_token}")
             else:
-                self.logger.info(f"📌 Token {token} already subscribed at mode {current_mstock_mode}, requested mode {mode}")
+                self.logger.debug(f"📌 Token {token} already subscribed at mode {current_mstock_mode}, requested mode {mode}")
 
         # Subscribe on the persistent WebSocket connection if needed
         if needs_ws_subscribe and self.ws_client and self.running and self.event_loop:
@@ -309,7 +309,7 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             self.event_loop
                         )
                         unsubscribe_future.result(timeout=5.0)
-                        self.logger.info(f"✅ Unsubscribed from old mode {current_mstock_mode}")
+                        self.logger.debug(f"✅ Unsubscribed from old mode {current_mstock_mode}")
                         # Small delay to ensure unsubscribe is processed
                         import time
                         time.sleep(0.2)
@@ -334,7 +334,7 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             except Exception as e:
                 self.logger.error(f"Error subscribing: {str(e)}")
         else:
-            self.logger.info(f"Added subscription for {symbol} mode {mode} (using existing mstock subscription with mode {current_mstock_mode})")
+            self.logger.debug(f"Added subscription for {symbol} mode {mode} (using existing mstock subscription with mode {current_mstock_mode})")
 
         return {
             'status': 'success',
@@ -519,11 +519,11 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     )
                     future.result(timeout=5.0)
                     self.token_correlation_ids[token] = new_correlation_id
-                    self.logger.info(f"Downgraded subscription for token {token} to mode {new_mode}")
+                    self.logger.debug(f"Downgraded subscription for token {token} to mode {new_mode}")
             except Exception as e:
                 self.logger.error(f"Error updating WebSocket subscription: {str(e)}")
 
-        self.logger.info(f"Removed local subscription for {symbol} on {exchange} mode {mode}")
+        self.logger.debug(f"Removed local subscription for {symbol} on {exchange} mode {mode}")
         return {
             'status': 'success',
             'message': f'Unsubscribed from {symbol} on {exchange} mode {mode}'

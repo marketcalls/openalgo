@@ -47,7 +47,7 @@ def calculate_margin_api(positions, auth):
         "orders": transformed_positions
     })
 
-    logger.info(f"Margin calculation payload: {payload}")
+    logger.debug(f"Margin calculation payload: {payload}")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -74,7 +74,7 @@ def calculate_margin_api(positions, auth):
             }
             return response, error_response
 
-        logger.info(f"Margin calculation response: {response_data}")
+        logger.debug(f"Margin calculation response: {response_data}")
 
         # Parse and standardize the response
         standardized_response = parse_margin_response(response_data)

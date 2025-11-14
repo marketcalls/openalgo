@@ -115,11 +115,11 @@ def authenticate_with_totp(password, totp_code):
         final_data = verify_result["data"]
         auth_token = final_data.get("jwtToken")
         feed_token = final_data.get("feedToken")
-        logger.info(f"Feed token received: {auth_token}")
+        logger.debug(f"Feed token received: {auth_token}")
 
         if not auth_token:
             logger.error("No jwtToken in verification response")
-            logger.info(f"Available fields in data: {final_data}")
+            logger.debug(f"Available fields in data: {final_data}")
             return None, None, "Failed to get authentication token from verification response."
 
         logger.info("TOTP authentication successful, got final jwtToken")
@@ -160,7 +160,7 @@ def send_otp(password):
     if not password:
         return None, None, "Password is required."
 
-    logger.info(f"Using clientcode: {clientcode}")
+    logger.debug(f"Using clientcode: {clientcode}")
 
     try:
         client = get_httpx_client()
@@ -187,8 +187,8 @@ def send_otp(password):
         login_result = login_response.json()
 
         logger.info(f"Login response status: {login_result.get('status')}")
-        logger.info(f"Login response message: {login_result.get('message')}")
-        logger.info(f"Login response data keys: {list(login_result.get('data', {}).keys())}")
+        logger.debug(f"Login response message: {login_result.get('message')}")
+        logger.debug(f"Login response data keys: {list(login_result.get('data', {}).keys())}")
 
         # Check if login was successful (status can be boolean True or string "true")
         status = login_result.get("status")
@@ -203,13 +203,13 @@ def send_otp(password):
 
         if not refresh_token:
             logger.error("No refreshToken or jwtToken in login response")
-            logger.info(f"Available fields in data: {data}")
+            logger.debug(f"Available fields in data: {data}")
             return None, None, "Failed to get refreshToken from login response."
 
-        logger.info(f"Using token as refreshToken: {refresh_token[:30]}... (length: {len(refresh_token)})")
+        logger.debug(f"Using token as refreshToken: {refresh_token[:30]}... (length: {len(refresh_token)})")
 
         success_message = login_result.get("message", "OTP sent successfully")
-        logger.info(f"Login successful, OTP sent. Message: {success_message}")
+        logger.debug(f"Login successful, OTP sent. Message: {success_message}")
 
         return refresh_token, success_message, None
 
@@ -264,12 +264,12 @@ def verify_otp(otp_code, refresh_token):
             'otp': otp_code
         }
 
-        logger.info(f"Sending OTP verification request with OTP length: {len(otp_code)}")
-        logger.info(f"RefreshToken length: {len(refresh_token) if refresh_token else 0}")
-        logger.info(f"API Key (X-PrivateKey) length: {len(api_key) if api_key else 0}")
-        logger.info(f"Request URL: https://api.mstock.trade/openapi/typeb/session/token")
-        logger.info(f"Request headers: {token_headers}")
-        logger.info(f"Request body: refreshToken=[{refresh_token[:20]}...], otp={otp_code}")
+        logger.debug(f"Sending OTP verification request with OTP length: {len(otp_code)}")
+        logger.debug(f"RefreshToken length: {len(refresh_token) if refresh_token else 0}")
+        logger.debug(f"API Key (X-PrivateKey) length: {len(api_key) if api_key else 0}")
+        logger.debug(f"Request URL: https://api.mstock.trade/openapi/typeb/session/token")
+        logger.debug(f"Request headers: {token_headers}")
+        logger.debug(f"Request body: refreshToken=[{refresh_token[:20]}...], otp={otp_code}")
 
         token_response = client.post(
             'https://api.mstock.trade/openapi/typeb/session/token',
@@ -277,15 +277,15 @@ def verify_otp(otp_code, refresh_token):
             json=token_data
         )
 
-        logger.info(f"OTP verification HTTP status: {token_response.status_code}")
-        logger.info(f"OTP verification response headers: {dict(token_response.headers)}")
-        logger.info(f"OTP verification raw response text: [{token_response.text}]")
+        logger.debug(f"OTP verification HTTP status: {token_response.status_code}")
+        logger.debug(f"OTP verification response headers: {dict(token_response.headers)}")
+        logger.debug(f"OTP verification raw response text: [{token_response.text}]")
 
         token_response.raise_for_status()
         token_result = token_response.json()
 
-        logger.info(f"OTP verification response status: {token_result.get('status')}")
-        logger.info(f"OTP verification response message: {token_result.get('message')}")
+        logger.debug(f"OTP verification response status: {token_result.get('status')}")
+        logger.debug(f"OTP verification response message: {token_result.get('message')}")
 
         # Check if OTP verification was successful (status can be boolean True or string "true")
         status = token_result.get("status")
