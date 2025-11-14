@@ -35,6 +35,7 @@ from .analyzer import api as analyzer_ns
 from .ping import api as ping_ns
 from .telegram_bot import api as telegram_ns
 from .margin import api as margin_ns
+from .instruments import api as instruments_ns
 
 # Add namespaces
 api.add_namespace(place_order_ns, path='/placeorder')
@@ -67,3 +68,4 @@ api.add_namespace(analyzer_ns, path='/analyzer')
 api.add_namespace(ping_ns, path='/ping')
 api.add_namespace(telegram_ns, path='/telegram')
 api.add_namespace(margin_ns, path='/margin')
+api.add_namespace(instruments_ns, path='/instruments')
