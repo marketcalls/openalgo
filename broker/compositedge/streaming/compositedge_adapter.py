@@ -6,7 +6,8 @@ import base64
 from typing import Dict, Any, Optional, List
 
 from broker.compositedge.streaming.compositedge_websocket import CompositedgeWebSocketClient
-from database.auth_db import get_auth_token, get_feed_token
+from database.auth_db import get_auth_token
+from broker.compositedge.api.auth_api import get_feed_token
 from database.token_db import get_token
 
 import sys
@@ -35,6 +36,8 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.reconnect_attempts = 0
         self.max_reconnect_attempts = 10
         self.running = False
+        self.connecting = False  # Track if connection attempt is in progress
+        self.initial_connection_done = False  # Track if initial connection was completed
         self.lock = threading.Lock()
         
         # Log the ZMQ port being used
@@ -59,20 +62,29 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         if not auth_data:
             # Fetch authentication tokens from database
             auth_token = get_auth_token(user_id)
-            feed_token = get_feed_token(user_id)
-            
+
+            # Get feed token using broker-specific function (returns tuple)
+            feed_token, feed_user_id, feed_error = get_feed_token()
+
             if not auth_token or not feed_token:
-                self.logger.error(f"No authentication tokens found for user {user_id}")
-                raise ValueError(f"No authentication tokens found for user {user_id}")
-                
+                error_msg = f"No authentication tokens found for user {user_id}"
+                if feed_error:
+                    error_msg += f". Feed token error: {feed_error}"
+                self.logger.error(error_msg)
+                raise ValueError(error_msg)
+
             # For XTS, we need API key and secret, not just tokens
             # These should be stored in environment variables or config
             api_key = os.getenv('BROKER_API_KEY_MARKET')
             api_secret = os.getenv('BROKER_API_SECRET_MARKET')
-            
+
             if not api_key or not api_secret:
                 self.logger.error("Missing BROKER_API_KEY_MARKET or BROKER_API_SECRET_MARKET environment variables")
                 raise ValueError("Missing Compositedge XTS API credentials in environment variables")
+
+            # Use the feed_user_id if available
+            if feed_user_id:
+                self.logger.info(f"Using feed user ID: {feed_user_id}")
                 
         else:
             # Use provided tokens
@@ -191,31 +203,70 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         
     def _connect_with_retry(self) -> None:
         """Connect to Compositedge XTS WebSocket with retry logic"""
-        while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
-            try:
-                self.logger.info(f"Connecting to Compositedge XTS WebSocket (attempt {self.reconnect_attempts + 1})")
-                self.ws_client.connect()
-                self.reconnect_attempts = 0  # Reset attempts on successful connection
-                break
-                
-            except Exception as e:
-                self.reconnect_attempts += 1
-                delay = min(self.reconnect_delay * (2 ** self.reconnect_attempts), self.max_reconnect_delay)
-                self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
-                time.sleep(delay)
-        
-        if self.reconnect_attempts >= self.max_reconnect_attempts:
-            self.logger.error("Max reconnection attempts reached. Giving up.")
+        # Prevent multiple simultaneous connection attempts
+        if self.connecting:
+            self.logger.warning("Connection attempt already in progress, skipping duplicate attempt")
+            return
+
+        if self.connected:
+            self.logger.warning("Already connected, skipping connection attempt")
+            return
+
+        self.connecting = True
+        try:
+            self.logger.info("=== STARTING COMPOSITEDGE WEBSOCKET CONNECTION ===")
+            while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
+                try:
+                    self.logger.info(f"[ATTEMPT {self.reconnect_attempts + 1}] Connecting to Compositedge XTS WebSocket...")
+                    self.logger.info(f"WebSocket client state - Initialized: {self.ws_client is not None}")
+
+                    if not self.ws_client:
+                        self.logger.error("WebSocket client is None! Cannot connect.")
+                        break
+
+                    self.ws_client.connect()
+                    self.logger.info("=== COMPOSITEDGE WEBSOCKET CONNECTION SUCCESSFUL ===")
+                    self.reconnect_attempts = 0  # Reset attempts on successful connection
+                    break
+
+                except Exception as e:
+                    self.reconnect_attempts += 1
+                    delay = min(self.reconnect_delay * (2 ** self.reconnect_attempts), self.max_reconnect_delay)
+                    self.logger.error(f"[ATTEMPT {self.reconnect_attempts}] Connection failed: {e}")
+                    self.logger.exception("Full traceback:")
+                    if self.reconnect_attempts < self.max_reconnect_attempts:
+                        self.logger.info(f"Retrying in {delay} seconds...")
+                        time.sleep(delay)
+
+                        # Check if connection succeeded asynchronously during sleep
+                        if self.connected:
+                            self.logger.info("Connection established asynchronously while waiting to retry - canceling retry")
+                            self.reconnect_attempts = 0
+                            break
+
+            if self.reconnect_attempts >= self.max_reconnect_attempts:
+                self.logger.error("=== MAX RECONNECTION ATTEMPTS REACHED - GIVING UP ===")
+                self.logger.error("Compositedge WebSocket connection failed permanently")
+        finally:
+            self.connecting = False
     
     def disconnect(self) -> None:
         """Disconnect from Compositedge XTS WebSocket"""
         self.logger.info("*** DISCONNECT CALLED - Starting Compositedge disconnect process ***")
-        
+
         # Set running to False to prevent reconnection attempts
         self.running = False
+        self.connecting = False  # Reset connecting flag
+        self.initial_connection_done = False  # Reset connection tracking
         self.reconnect_attempts = self.max_reconnect_attempts  # Prevent reconnection attempts
         self.logger.info("Set running=False and max reconnect attempts to prevent auto-reconnection")
-        
+
+        # Clear all subscriptions from the adapter's registry
+        with self.lock:
+            subscription_count = len(self.subscriptions)
+            self.subscriptions.clear()
+            self.logger.info(f"Cleared {subscription_count} subscription(s) from adapter registry")
+
         # Disconnect Socket.IO client
         if hasattr(self, 'ws_client') and self.ws_client:
             try:
@@ -226,15 +277,15 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error(f"Error during Socket.IO disconnect: {e}")
         else:
             self.logger.warning("No WebSocket client to disconnect")
-            
+
         # Set connected flag to False
         self.connected = False
         self.logger.info("Set connected flag to False")
-            
+
         # Clean up ZeroMQ resources
         self.logger.info("Starting cleanup of ZeroMQ resources...")
         self.cleanup_zmq()
-        
+
         self.logger.info("*** DISCONNECT PROCESS COMPLETED ***")
         
     def cleanup_zmq(self) -> None:
@@ -250,6 +301,7 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Close the socket
             if hasattr(self, 'socket') and self.socket:
                 self.socket.close(linger=0)  # Don't linger on close
+                self.socket = None  # Set to None to prevent "not a socket" errors
                 self.logger.info("ZeroMQ socket closed")
                 
             # DO NOT terminate shared context - other instances may still need it
@@ -357,8 +409,18 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Don't log the actual token value for security, but log its type and length
             token_info = f"type={type(token)}, len={len(str(token))}, value={str(token)[:4]}...{str(token)[-4:]}" if token else "None"
             self.logger.info(f"Stored subscription [{correlation_id}]: symbol={symbol}, exchange={exchange}, brexchange={brexchange}, token_info={token_info}, mode={mode}")
-        
-        # Subscribe if connected
+
+        # If not connected and not running, trigger connection
+        # Check connecting flag to prevent multiple simultaneous connection attempts
+        if not self.connected and not self.running and not self.connecting:
+            self.logger.info(f"Not connected when subscribing to {symbol}.{exchange}. Triggering connection...")
+            self.running = True
+            self.reconnect_attempts = 0
+            self.connect()
+        elif self.connecting:
+            self.logger.info(f"Connection attempt already in progress for {symbol}.{exchange}, subscription will be sent once connected")
+
+        # Subscribe if connected (subscription will be auto-resubscribed on connect via _on_open callback)
         if self.connected and self.ws_client:
             try:
                 self.ws_client.subscribe(correlation_id, mode, instruments)
@@ -476,17 +538,45 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Callback when connection is established"""
         self.logger.info("Connected to Compositedge XTS WebSocket")
         self.connected = True
-        
-        # Resubscribe to existing subscriptions if reconnecting
-        self._resubscribe_all()
+        self.connecting = False  # Reset connecting flag
+
+        # Reinitialize ZMQ socket if it was closed during disconnect
+        if not hasattr(self, 'socket') or self.socket is None:
+            self.logger.info("Reinitializing ZMQ socket after reconnection")
+            try:
+                self.socket = self._create_socket()
+                self.zmq_port = self._bind_to_available_port()
+                os.environ["ZMQ_PORT"] = str(self.zmq_port)
+                self.logger.info(f"ZMQ socket reinitialized on port {self.zmq_port}")
+            except Exception as e:
+                self.logger.error(f"Error reinitializing ZMQ socket: {e}")
+
+        # Only resubscribe on actual reconnection (not initial connection)
+        if self.initial_connection_done:
+            self.logger.info("Reconnection detected - resubscribing to stored subscriptions")
+            # On reconnection, we need to resubscribe because the server session may be new
+            self._resubscribe_all()
+        else:
+            self.logger.info("Initial connection established")
+            self.initial_connection_done = True
     
     def _resubscribe_all(self):
         """Resubscribe to all stored subscriptions"""
         with self.lock:
-            for correlation_id, sub in self.subscriptions.items():
+            subscription_count = len(self.subscriptions)
+            if subscription_count == 0:
+                self.logger.info("No subscriptions to resubscribe")
+                return
+
+            self.logger.info(f"Resubscribing to {subscription_count} stored subscription(s)")
+            for i, (correlation_id, sub) in enumerate(self.subscriptions.items(), 1):
                 try:
                     self.ws_client.subscribe(correlation_id, sub["mode"], sub["instruments"])
-                    self.logger.info(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
+                    self.logger.info(f"[{i}/{subscription_count}] Resubscribed to {sub['symbol']}.{sub['exchange']} (mode {sub['mode']})")
+
+                    # Small delay between subscriptions to avoid overwhelming the server
+                    if i < subscription_count:
+                        time.sleep(0.1)
                 except Exception as e:
                     self.logger.error(f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}")
     
@@ -498,10 +588,16 @@ class CompositedgeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Callback when connection is closed"""
         self.logger.info("Compositedge XTS WebSocket connection closed")
         self.connected = False
-        
-        # Attempt to reconnect if we're still running
-        if self.running:
+
+        # Attempt to reconnect if we're still running and not already connecting
+        # Prevent multiple concurrent reconnection threads
+        if self.running and not self.connecting:
+            self.logger.info("Initiating reconnection after disconnect")
             threading.Thread(target=self._connect_with_retry, daemon=True).start()
+        elif self.connecting:
+            self.logger.info("Reconnection already in progress, skipping new attempt")
+        else:
+            self.logger.info("Not running, skipping reconnection")
     
     def _on_message(self, wsapp, message) -> None:
         """Callback for text messages from the WebSocket"""

@@ -111,12 +111,13 @@ class CompositedgeWebSocketClient:
     def marketdata_login(self):
         """
         Login to XTS market data API to get authentication tokens
-        
+
         Returns:
             bool: True if login successful, False otherwise
         """
         try:
-            login_url = f"{self.base_url}/apibinarymarketdata/auth/login"
+            # Use the correct market data API login endpoint
+            login_url = f"{self.base_url}/apimarketdata/auth/login"
             
             login_payload = {
                 "appKey": self.api_key,
@@ -166,32 +167,48 @@ class CompositedgeWebSocketClient:
     def connect(self):
         """Establish Socket.IO connection with proper authentication"""
         try:
+            # Check if already connected - if so, disconnect first
+            if self.sio and self.sio.connected:
+                self.logger.warning("Socket.IO already connected, disconnecting first...")
+                try:
+                    self.sio.disconnect()
+                    time.sleep(0.5)  # Give it time to disconnect
+                except Exception as e:
+                    self.logger.warning(f"Error during pre-connection disconnect: {e}")
+
             # First, login to market data API to get proper tokens
             if not self.marketdata_login():
                 raise Exception("Market data login failed")
-            
+
+            # Small delay after login to allow server to process the session
+            # This helps prevent immediate connection failures
+            time.sleep(0.5)
+
             # Build connection URL with proper market data token and user ID
             publish_format = 'JSON'
             broadcast_mode = 'FULL'  # or 'PARTIAL'
-            
+
             # Use the market data token and actual user ID from login response
             connection_url = f"{self.base_url}/?token={self.market_data_token}&userID={self.actual_user_id}&publishFormat={publish_format}&broadcastMode={broadcast_mode}"
-            
+
             self.logger.info(f"Connecting to Compositedge XTS Socket.IO: {connection_url}")
-            
-            # Connect to Socket.IO server
+
+            # Connect to Socket.IO server with timeout
             self.sio.connect(
                 connection_url,
                 headers={},
                 transports=['websocket'],
                 namespaces=None,
-                socketio_path=self.SOCKET_PATH
+                socketio_path=self.SOCKET_PATH,
+                wait_timeout=10  # Add timeout to prevent hanging
             )
-            
+
             self.running = True
-            
+            self.logger.info("Socket.IO connection established successfully")
+
         except Exception as e:
             self.logger.error(f"Failed to connect to Compositedge XTS Socket.IO: {e}")
+            self.logger.exception("Connection error details:")
             if self.on_error:
                 self.on_error(self, e)
             raise
@@ -270,7 +287,7 @@ class CompositedgeWebSocketClient:
             if response.status_code == 200:
                 result = response.json()
                 self.logger.info(f"[SUBSCRIPTION SUCCESS] Code: {xts_message_code}, Instruments: {len(instruments)}, Response: {result}")
-                
+
                 # Process initial quote data from listQuotes if available
                 if result.get('type') == 'success' and 'result' in result:
                     list_quotes = result['result'].get('listQuotes', [])
@@ -282,6 +299,20 @@ class CompositedgeWebSocketClient:
                                 self.on_data(self, quote_data)
                         except json.JSONDecodeError as e:
                             self.logger.error(f"Error parsing initial quote: {e}")
+            elif response.status_code == 400:
+                # Handle 400 errors (which include "Already Subscribed")
+                try:
+                    result = response.json()
+                    error_code = result.get('code', '')
+                    error_desc = result.get('description', '')
+
+                    # If already subscribed, log as info/warning instead of error
+                    if 'Already Subscribed' in error_desc or error_code == 'e-session-0002':
+                        self.logger.info(f"[SUBSCRIPTION INFO] Instrument already subscribed (Code: {xts_message_code}): {error_desc}")
+                    else:
+                        self.logger.error(f"[SUBSCRIPTION ERROR] Status: {response.status_code}, Response: {response.text}")
+                except:
+                    self.logger.error(f"[SUBSCRIPTION ERROR] Status: {response.status_code}, Response: {response.text}")
             else:
                 self.logger.error(f"[SUBSCRIPTION ERROR] Status: {response.status_code}, Response: {response.text}")
                 
@@ -533,6 +564,14 @@ class CompositedgeWebSocketClient:
         """Catch-all handler for any unhandled Socket.IO events"""
         # Don't log connect/disconnect/joined events as they are handled separately
         if event not in ['connect', 'disconnect', 'joined', 'message']:
+            # Check for "logged out by another user" message
+            if args and len(args) > 0:
+                message = str(args[0])
+                if 'logged out by another user' in message.lower():
+                    self.logger.warning(f"[SESSION CONFLICT] {message} - Server is terminating this connection")
+                    # Don't attempt to reconnect immediately, let the disconnect handler manage it
+                    return
+
             self.logger.info(f"[CATCH-ALL] Unhandled event: {event}")
             if args:
                 for i, arg in enumerate(args):
