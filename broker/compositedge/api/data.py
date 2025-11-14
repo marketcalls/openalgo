@@ -284,12 +284,12 @@ class BrokerData:
             # Convert dates to datetime objects with IST timezone
             start_date = pd.to_datetime(from_date).tz_localize('Asia/Kolkata')
             end_date = pd.to_datetime(to_date).tz_localize('Asia/Kolkata')
-            
-            # Set start time to market open (9:15 AM IST)
-            from_date = start_date.replace(hour=9, minute=15, second=0, microsecond=0)
-            
-            # Set end time to market close (3:30 PM IST)
-            to_date = end_date.replace(hour=15, minute=30, second=0, microsecond=0)
+
+            # Use start of day for from_date
+            from_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            # Use end of day for to_date
+            to_date = end_date.replace(hour=23, minute=59, second=59, microsecond=0)
 
             dfs = []
             current_start = from_date
@@ -431,15 +431,13 @@ class BrokerData:
                     lambda x: x.replace(hour=0, minute=0, second=0)
                 )
             else:
-                # For intraday data
-                # First subtract 5:30 hours to get to IST
+                # For intraday data, subtract 5:30 hours to get to IST
                 final_df['timestamp'] = final_df['timestamp'] - pd.Timedelta(hours=5, minutes=30)
-                
-                # Round to the proper interval based on market open (9:15 AM)
+
+                # Round timestamps down to the start of each candle interval
                 interval_minutes = int(compression_value) // 60 if compression_value != 'D' else 0
                 if interval_minutes > 0:
-                    # Shift by 15 minutes to align with market open, round, then shift back
-                    final_df['timestamp'] = (final_df['timestamp'] - pd.Timedelta(minutes=15)).dt.ceil(f'{interval_minutes}min') + pd.Timedelta(minutes=15)
+                    final_df['timestamp'] = final_df['timestamp'].dt.floor(f'{interval_minutes}min')
             
             # Convert back to Unix timestamp
             final_df['timestamp'] = final_df['timestamp'].astype('int64') // 10**9
