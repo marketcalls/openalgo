@@ -809,24 +809,7 @@
     </div>
 </div>
 
-<!-- Reject Modal -->
-<input type="checkbox" id="reject-modal" class="modal-toggle" />
-<div class="modal" role="dialog">
-    <div class="modal-box">
-        <h3 class="font-bold text-lg text-error">Reject Order</h3>
-        <p class="py-4">Please provide a reason for rejecting this order:</p>
-        <textarea id="reject-reason" class="textarea textarea-bordered w-full"
-                  placeholder="Enter rejection reason..."></textarea>
-        <div class="modal-action">
-            <label for="reject-modal" class="btn">Cancel</label>
-            <button id="reject-confirm-btn" onclick="confirmReject()" class="btn btn-error">Reject Order</button>
-        </div>
-    </div>
-    <label class="modal-backdrop" for="reject-modal"></label>
-</div>
-
 <script>
-let currentOrderIdForReject = null;
 
 // Calculate relative time
 function getRelativeTime(istTimestamp) {
@@ -889,7 +872,7 @@ document.addEventListener('DOMContentLoaded', function() {
         if (e.target.closest('.btn-reject-order')) {
             const btn = e.target.closest('.btn-reject-order');
             const orderId = btn.getAttribute('data-order-id');
-            if (orderId) showRejectModal(orderId);
+            if (orderId) rejectOrder(orderId);
         }
 
         // Delete order button
@@ -933,36 +916,20 @@ function approveOrder(orderId) {
     });
 }
 
-// Show reject modal
-function showRejectModal(orderId) {
-    currentOrderIdForReject = orderId;
-    document.getElementById('reject-reason').value = '';
-    document.getElementById('reject-modal').checked = true;
-}
-
-// Confirm reject
-function confirmReject() {
-    const reason = document.getElementById('reject-reason').value;
-
-    if (!reason.trim()) {
-        showToast('Please provide a rejection reason', 'warning');
-        return;
-    }
-
-    document.getElementById('reject-modal').checked = false;
-
-    fetch(`/action-center/reject/${currentOrderIdForReject}`, {
+// Reject order
+function rejectOrder(orderId) {
+    fetch(`/action-center/reject/${orderId}`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             'X-CSRFToken': getCSRFToken()
         },
-        body: JSON.stringify({ reason: reason })
+        body: JSON.stringify({ reason: 'Rejected by user' })
     })
     .then(response => response.json())
     .then(data => {
         if (data.status === 'success') {
-            showToast('Order rejected', 'success');
+            showToast('Order rejected', 'error');
             // Socket event will handle the refresh
         } else {
             showToast(data.message, 'error');
