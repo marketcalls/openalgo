@@ -70,7 +70,7 @@ def get_margin_data(auth_token):
         # Process and return the margin data
         # Note: Based on the API docs, the response fields are at root level
         processed_margin_data = {
-            "availablecash": f"{float(margin_data.get('CollateralValue', 0)):.2f}",
+            "availablecash": f"{float(margin_data.get('CollateralValue', 0)) + float(margin_data.get('RmsPayInAmt', 0)) - float(margin_data.get('RmsPayOutAmt', 0)):.2f}",
             "collateral": f"{float(margin_data.get('Collateral', 0)):.2f}",
             "m2munrealized": f"{float(margin_data.get('UnrealizedMtomPrsnt', 0)):.2f}",
             "m2mrealized": f"{float(margin_data.get('RealizedMtomPrsnt', 0)):.2f}",
