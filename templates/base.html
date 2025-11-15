@@ -226,6 +226,18 @@
                         </a>
                     </li>
                     <li>
+                        <a href="{{ url_for('analyzer_bp.analyzer') }}" 
+                           class="{{ 'active' if request.endpoint == 'analyzer_bp.analyzer' }}">
+                            API Analyzer
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('api_tester.index') }}" 
+                           class="{{ 'active' if request.endpoint == 'api_tester.index' }}">
+                            API Tester
+                        </a>
+                    </li>
+                    <li>
                         <a href="https://docs.openalgo.in" target="_blank">
                             Docs
                         </a>
