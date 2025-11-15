@@ -504,7 +504,7 @@ def sandbox_place_smart_order(
 
         symbol = order_data.get('symbol')
         exchange = order_data.get('exchange')
-        product = order_data.get('product_type', 'MIS')
+        product = order_data.get('product') or order_data.get('product_type', 'MIS')
         target_quantity = int(order_data.get('position_size', 0))
         original_quantity = int(order_data.get('quantity', 0))
         original_action = order_data.get('action')
