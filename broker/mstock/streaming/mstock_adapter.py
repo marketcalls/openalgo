@@ -4,6 +4,7 @@ import logging
 import time
 import os
 import asyncio
+import copy
 from typing import Dict, Any, Optional, List
 
 from broker.mstock.api.data import BrokerData
@@ -36,6 +37,8 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.stream_thread = None  # Thread for streaming connection
         self.auth_token = None
         self.event_loop = None  # Event loop for async operations
+        self.token_modes = {}  # Track the active mode for each token on mstock: {token: mode}
+        self.token_correlation_ids = {}  # Track correlation_id used for mstock subscription: {token: correlation_id}
 
     def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> None:
         """
@@ -145,8 +148,9 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Log received token for debugging
             self.logger.debug(f"Received data for token: {token}")
 
-            # Find the subscription that matches this token
-            subscription = None
+            # Find ALL subscriptions that match this token
+            # (same symbol can have multiple mode subscriptions: LTP, Quote, Depth)
+            matching_subscriptions = []
             with self.lock:
                 # Log all subscribed tokens for debugging
                 subscribed_tokens = {cid: sub['token'] for cid, sub in self.subscriptions.items()}
@@ -154,34 +158,49 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                 for correlation_id, sub in self.subscriptions.items():
                     if sub['token'] == token:
-                        subscription = sub
-                        break
+                        matching_subscriptions.append(sub)
 
-            if not subscription:
+            if not matching_subscriptions:
                 self.logger.warning(f"Received data for unsubscribed token: '{token}' (subscriptions: {list(self.subscriptions.keys())})")
                 return
 
-            # Create topic for ZeroMQ
-            symbol = subscription['symbol']
-            exchange = subscription['exchange']
-            mode = subscription['mode']
-            mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[mode]
-            topic = f"{exchange}_{symbol}_{mode_str}"
+            # Get the actual mode from the packet data
+            packet_mode = quote_data.get('subscription_mode', 1)
 
-            # Normalize the data
-            market_data = self._normalize_market_data(quote_data, mode)
+            # DEBUG: Log what mode packet was received and what data is in it
+            self.logger.debug(f"📦 Received packet for token {token}: mode={packet_mode}, "
+                           f"ltp={quote_data.get('ltp', 0)}, "
+                           f"volume={quote_data.get('volume', 0)}, "
+                           f"open={quote_data.get('open', 0)}, "
+                           f"bids_count={len(quote_data.get('bids', []))}, "
+                           f"asks_count={len(quote_data.get('asks', []))}")
 
-            # Add metadata
-            market_data.update({
-                'symbol': symbol,
-                'exchange': exchange,
-                'mode': mode,
-                'timestamp': int(time.time() * 1000)
-            })
+            # Normalize the data once using the packet's actual mode
+            market_data_base = self._normalize_market_data(quote_data, packet_mode)
 
-            # Publish to ZeroMQ
-            self.publish_market_data(topic, market_data)
-            self.logger.debug(f"Published data for {symbol} on {exchange} mode {mode}")
+            # Publish data for each matching subscription
+            for subscription in matching_subscriptions:
+                # Create topic for ZeroMQ
+                symbol = subscription['symbol']
+                exchange = subscription['exchange']
+                mode = subscription['mode']
+                mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}[mode]
+                topic = f"{exchange}_{symbol}_{mode_str}"
+
+                # Deep copy the normalized data to avoid mutation
+                market_data = copy.deepcopy(market_data_base)
+
+                # Add metadata
+                market_data.update({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'mode': mode,
+                    'timestamp': int(time.time() * 1000)
+                })
+
+                # Publish to ZeroMQ
+                self.publish_market_data(topic, market_data)
+                self.logger.debug(f"Published data for {symbol} on {exchange} mode {mode}")
 
         except Exception as e:
             self.logger.error(f"Error processing data: {str(e)}", exc_info=True)
@@ -192,6 +211,13 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         if self.ws_client:
             self.ws_client.disconnect_stream()
+
+        # Wait for the stream thread to finish
+        if self.stream_thread and self.stream_thread.is_alive():
+            self.logger.info("Waiting for stream thread to finish...")
+            self.stream_thread.join(timeout=5.0)
+            if self.stream_thread.is_alive():
+                self.logger.warning("Stream thread did not finish in time")
 
         self.logger.info("mstock WebSocket adapter disconnected")
 
@@ -236,8 +262,12 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Generate unique correlation ID
         correlation_id = f"{symbol}_{exchange}_{mode}"
 
-        # Store subscription
+        # Determine if we need to send a subscription to mstock
+        needs_ws_subscribe = False
+        subscribe_mode = mode
+
         with self.lock:
+            # Store subscription locally
             self.subscriptions[correlation_id] = {
                 'symbol': symbol,
                 'exchange': exchange,
@@ -248,24 +278,63 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 'exchange_type': exchange_type
             }
 
-        # Subscribe on the persistent WebSocket connection
-        if self.ws_client and self.running and self.event_loop:
+            # Find the highest mode among all subscriptions for this token
+            max_mode_for_token = mode
+            for sub in self.subscriptions.values():
+                if sub['token'] == token:
+                    max_mode_for_token = max(max_mode_for_token, sub['mode'])
+
+            # Check if we need to upgrade the subscription on mstock
+            current_mstock_mode = self.token_modes.get(token, 0)
+            if max_mode_for_token > current_mstock_mode:
+                needs_ws_subscribe = True
+                subscribe_mode = max_mode_for_token
+                self.token_modes[token] = max_mode_for_token
+                self.logger.debug(f"🔼 Upgrading subscription for token {token} from mode {current_mstock_mode} to mode {max_mode_for_token}")
+            else:
+                self.logger.debug(f"📌 Token {token} already subscribed at mode {current_mstock_mode}, requested mode {mode}")
+
+        # Subscribe on the persistent WebSocket connection if needed
+        if needs_ws_subscribe and self.ws_client and self.running and self.event_loop:
             # Schedule coroutine in the background event loop thread
             try:
+                # If upgrading from a lower mode, first unsubscribe the old subscription
+                if current_mstock_mode > 0 and token in self.token_correlation_ids:
+                    old_correlation_id = self.token_correlation_ids[token]
+                    self.logger.info(f"🔄 Unsubscribing from mode {current_mstock_mode} (correlation: {old_correlation_id}) before upgrading to mode {subscribe_mode}")
+
+                    if old_correlation_id in self.ws_client.subscriptions:
+                        unsubscribe_future = asyncio.run_coroutine_threadsafe(
+                            self.ws_client.unsubscribe_stream_async(old_correlation_id),
+                            self.event_loop
+                        )
+                        unsubscribe_future.result(timeout=5.0)
+                        self.logger.debug(f"✅ Unsubscribed from old mode {current_mstock_mode}")
+                        # Small delay to ensure unsubscribe is processed
+                        import time
+                        time.sleep(0.2)
+
+                # Now subscribe with the new higher mode
+                # Use a special correlation_id for mstock that includes the mode
+                mstock_correlation_id = f"mstock_{token}_{subscribe_mode}"
                 future = asyncio.run_coroutine_threadsafe(
-                    self.ws_client.subscribe_stream_async(correlation_id, token, exchange_type, mode),
+                    self.ws_client.subscribe_stream_async(mstock_correlation_id, token, exchange_type, subscribe_mode),
                     self.event_loop
                 )
                 # Wait for result with timeout
                 result = future.result(timeout=5.0)
 
                 if result:
-                    self.logger.info(f"Subscribed to {symbol} on {exchange} mode {mode}")
+                    # Track this correlation_id for future upgrades
+                    self.token_correlation_ids[token] = mstock_correlation_id
+                    self.logger.info(f"✅ Subscribed to {symbol} (token: {token}) on {exchange} with mode {subscribe_mode}")
                 else:
                     self.logger.warning(f"Failed to subscribe to {symbol} on {exchange}")
 
             except Exception as e:
                 self.logger.error(f"Error subscribing: {str(e)}")
+        else:
+            self.logger.debug(f"Added subscription for {symbol} mode {mode} (using existing mstock subscription with mode {current_mstock_mode})")
 
         return {
             'status': 'success',
@@ -301,22 +370,58 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     'prev_close': float(quote_data.get('close', 0)),
                     'volume': int(quote_data.get('volume', 0)),
                     'oi': int(quote_data.get('oi', 0)),
-                    'last_traded_qty': int(quote_data.get('last_traded_qty', 0))
+                    'last_trade_quantity': int(quote_data.get('last_traded_qty', 0)),
+                    'average_price': float(quote_data.get('avg_price', 0)),
+                    'total_buy_quantity': int(quote_data.get('total_buy_qty', 0)),
+                    'total_sell_quantity': int(quote_data.get('total_sell_qty', 0))
                 })
 
             if mode == 3:  # Depth mode - add market depth
-                # Format bids and asks
+                # Format bids and asks to match frontend expectations
                 bids = quote_data.get('bids', [])[:5]  # Top 5 bids
                 asks = quote_data.get('asks', [])[:5]  # Top 5 asks
 
+                # Convert depth data to expected format
+                formatted_bids = []
+                for bid in bids:
+                    if isinstance(bid, dict):
+                        formatted_bids.append({
+                            'price': float(bid.get('price', 0)),
+                            'quantity': int(bid.get('quantity', 0)),
+                            'orders': int(bid.get('orders', 0))
+                        })
+                    elif isinstance(bid, (list, tuple)) and len(bid) >= 2:
+                        # Handle if bids come as [price, quantity, orders]
+                        formatted_bids.append({
+                            'price': float(bid[0]),
+                            'quantity': int(bid[1]),
+                            'orders': int(bid[2]) if len(bid) > 2 else 0
+                        })
+
+                formatted_asks = []
+                for ask in asks:
+                    if isinstance(ask, dict):
+                        formatted_asks.append({
+                            'price': float(ask.get('price', 0)),
+                            'quantity': int(ask.get('quantity', 0)),
+                            'orders': int(ask.get('orders', 0))
+                        })
+                    elif isinstance(ask, (list, tuple)) and len(ask) >= 2:
+                        # Handle if asks come as [price, quantity, orders]
+                        formatted_asks.append({
+                            'price': float(ask[0]),
+                            'quantity': int(ask[1]),
+                            'orders': int(ask[2]) if len(ask) > 2 else 0
+                        })
+
                 normalized['depth'] = {
-                    'buy': bids,
-                    'sell': asks
+                    'buy': formatted_bids,
+                    'sell': formatted_asks
                 }
 
                 normalized.update({
-                    'total_buy_qty': int(quote_data.get('total_buy_qty', 0)),
-                    'total_sell_qty': int(quote_data.get('total_sell_qty', 0)),
+                    'total_buy_quantity': int(quote_data.get('total_buy_qty', 0)),
+                    'total_sell_quantity': int(quote_data.get('total_sell_qty', 0)),
                     'upper_circuit': float(quote_data.get('upper_circuit', 0)),
                     'lower_circuit': float(quote_data.get('lower_circuit', 0))
                 })
@@ -341,28 +446,88 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         correlation_id = f"{symbol}_{exchange}_{mode}"
 
+        needs_ws_update = False
+        new_mode = 0
+        token = None
+        exchange_type = None
+
         with self.lock:
-            if correlation_id in self.subscriptions:
-                # Unsubscribe from WebSocket
-                if self.ws_client and self.running and self.event_loop:
-                    try:
+            if correlation_id not in self.subscriptions:
+                return self._create_error_response("NOT_SUBSCRIBED",
+                                                  f"{symbol} on {exchange} mode {mode} is not subscribed")
+
+            # Get token before removing subscription
+            subscription = self.subscriptions[correlation_id]
+            token = subscription['token']
+            exchange_type = subscription['exchange_type']
+
+            # Remove the subscription
+            del self.subscriptions[correlation_id]
+
+            # Find the highest remaining mode for this token
+            max_mode_for_token = 0
+            for sub in self.subscriptions.values():
+                if sub['token'] == token:
+                    max_mode_for_token = max(max_mode_for_token, sub['mode'])
+
+            # Check if we need to update the mstock subscription
+            current_mstock_mode = self.token_modes.get(token, 0)
+            if max_mode_for_token < current_mstock_mode:
+                # Need to downgrade or completely unsubscribe
+                needs_ws_update = True
+                new_mode = max_mode_for_token
+                if new_mode > 0:
+                    self.token_modes[token] = new_mode
+                else:
+                    # No more subscriptions for this token
+                    if token in self.token_modes:
+                        del self.token_modes[token]
+                    if token in self.token_correlation_ids:
+                        del self.token_correlation_ids[token]
+
+        # Update WebSocket subscription if needed
+        if needs_ws_update and self.ws_client and self.running and self.event_loop:
+            try:
+                # Get the current mstock correlation_id
+                current_correlation_id = self.token_correlation_ids.get(token)
+
+                if new_mode == 0:
+                    # Completely unsubscribe from mstock
+                    if current_correlation_id:
                         future = asyncio.run_coroutine_threadsafe(
-                            self.ws_client.unsubscribe_stream_async(correlation_id),
+                            self.ws_client.unsubscribe_stream_async(current_correlation_id),
                             self.event_loop
                         )
                         future.result(timeout=5.0)
-                    except Exception as e:
-                        self.logger.error(f"Error unsubscribing: {str(e)}")
+                        self.logger.info(f"Unsubscribed token {token} from mstock")
+                else:
+                    # First unsubscribe the old mode
+                    if current_correlation_id and current_correlation_id in self.ws_client.subscriptions:
+                        unsubscribe_future = asyncio.run_coroutine_threadsafe(
+                            self.ws_client.unsubscribe_stream_async(current_correlation_id),
+                            self.event_loop
+                        )
+                        unsubscribe_future.result(timeout=5.0)
+                        import time
+                        time.sleep(0.2)
 
-                del self.subscriptions[correlation_id]
-                self.logger.info(f"Unsubscribed from {symbol} on {exchange} mode {mode}")
-                return {
-                    'status': 'success',
-                    'message': f'Unsubscribed from {symbol} on {exchange}'
-                }
-            else:
-                return self._create_error_response("NOT_SUBSCRIBED",
-                                                  f"{symbol} on {exchange} is not subscribed")
+                    # Resubscribe with lower mode
+                    new_correlation_id = f"mstock_{token}_{new_mode}"
+                    future = asyncio.run_coroutine_threadsafe(
+                        self.ws_client.subscribe_stream_async(new_correlation_id, token, exchange_type, new_mode),
+                        self.event_loop
+                    )
+                    future.result(timeout=5.0)
+                    self.token_correlation_ids[token] = new_correlation_id
+                    self.logger.debug(f"Downgraded subscription for token {token} to mode {new_mode}")
+            except Exception as e:
+                self.logger.error(f"Error updating WebSocket subscription: {str(e)}")
+
+        self.logger.debug(f"Removed local subscription for {symbol} on {exchange} mode {mode}")
+        return {
+            'status': 'success',
+            'message': f'Unsubscribed from {symbol} on {exchange} mode {mode}'
+        }
 
     def _create_error_response(self, error_code: str, message: str) -> Dict[str, Any]:
         """Create standardized error response"""

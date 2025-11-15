@@ -37,8 +37,8 @@ def get_margin_data(auth_token):
         response.raise_for_status()
         margin_data = response.json()
 
-        logger.info(f"Fund summary response: status={margin_data.get('status')}, has_data={bool(margin_data.get('data'))}")
-        logger.info(f"Full margin data response: {margin_data}")
+        logger.debug(f"Fund summary response: status={margin_data.get('status')}, has_data={bool(margin_data.get('data'))}")
+        logger.debug(f"Full margin data response: {margin_data}")
         if margin_data.get('status') == True and margin_data.get('data'):
             data = margin_data['data'][0]
             key_mapping = {
@@ -60,7 +60,7 @@ def get_margin_data(auth_token):
                     formatted_value = "0.00"
                 filtered_data[openalgo_key] = formatted_value
 
-            logger.info(f"filteredMargin Data: {filtered_data}")
+            logger.debug(f"filteredMargin Data: {filtered_data}")
             return filtered_data
 
         logger.error(f"Margin API failed: {margin_data.get('message', 'No data')}")
