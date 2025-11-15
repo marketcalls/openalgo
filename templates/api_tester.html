@@ -407,21 +407,7 @@ function escapeHtml(unsafe) {
     .replace(/'/g, "&#039;");
 }
 
-const STATE_STORAGE_PREFIX = 'apiTester:state';
-const LAST_BODY_TYPE_KEY = 'apiTester:lastBodyType';
-const LAST_STATE_KEY = 'apiTester:lastStateKey';
 const INVALID_JSON_CODE = 'INVALID_JSON';
-const COLLAPSED_CATEGORIES_KEY = 'apiTester:collapsedCategories';
-
-function debounce(fn, delay = 200) {
-  let timeout;
-  return function(...args) {
-    clearTimeout(timeout);
-    timeout = setTimeout(() => fn.apply(this, args), delay);
-  };
-}
-
-const saveStateDebounced = debounce(() => saveCurrentState(), 300);
 
 function buildAbsoluteUrl(url) {
   try {
@@ -460,75 +446,7 @@ function prepareRequestBody(bodyText = '', bodyType = 'json') {
   };
 }
 
-function applyLastBodyTypePreference() {
-  if (!bodyTypeSelect) return;
-  const saved = localStorage.getItem(LAST_BODY_TYPE_KEY);
-  if (saved) bodyTypeSelect.value = saved;
-}
 
-function saveCurrentState() {
-  if (!bodyTypeSelect || !requestBodyTextarea) return;
-  if (!currentStateKey) currentStateKey = `${STATE_STORAGE_PREFIX}:custom`;
-  const state = {
-    body: requestBodyTextarea.value,
-    bodyType: bodyTypeSelect.value
-  };
-  try {
-    localStorage.setItem(currentStateKey, JSON.stringify(state));
-    localStorage.setItem(LAST_BODY_TYPE_KEY, state.bodyType);
-    localStorage.setItem(LAST_STATE_KEY, currentStateKey);
-  } catch (err) {
-    console.warn('Failed to save state', err);
-  }
-}
-
-function readState(key) {
-  if (!key) return null;
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : null;
-  } catch (err) {
-    console.warn('Failed to parse saved state', err);
-    return null;
-  }
-}
-
-function readAndApplyState(key) {
-  const state = readState(key);
-  if (!state) return null;
-  if (bodyTypeSelect && state.bodyType) {
-    bodyTypeSelect.value = state.bodyType;
-  }
-  if (requestBodyTextarea && state.body) {
-    requestBodyTextarea.value = state.body;
-  }
-  return state;
-}
-
-function getStateKey(endpoint) {
-  const method = (endpoint?.method || requestMethodSelect?.value || 'GET').toUpperCase();
-  const path = endpoint?.path || requestUrlInput?.value?.trim() || 'custom';
-  return `${STATE_STORAGE_PREFIX}:${method}:${path}`;
-}
-
-function initStatePersistence() {
-  applyLastBodyTypePreference();
-  if (requestBodyTextarea) {
-    requestBodyTextarea.addEventListener('input', saveStateDebounced);
-  }
-  if (bodyTypeSelect) {
-    bodyTypeSelect.addEventListener('change', () => {
-      localStorage.setItem(LAST_BODY_TYPE_KEY, bodyTypeSelect.value);
-      saveCurrentState();
-    });
-  }
-
-  const lastKey = localStorage.getItem(LAST_STATE_KEY);
-  if (lastKey) {
-    currentStateKey = lastKey;
-    readAndApplyState(lastKey);
-  }
-}
 
 function showToast(message, type='info') {
   const toast = document.createElement('div');
@@ -579,8 +497,8 @@ const errorDot = document.getElementById('errorDot');
 /* ---------- State ---------- */
 let endpoints = {};
 let currentEndpoint = null;
-let currentStateKey = null;
 let isDark = false;
+let collapsedCategories = {};
 
 /* ---------- Init ---------- */
 document.addEventListener('DOMContentLoaded', () => {
@@ -588,9 +506,6 @@ document.addEventListener('DOMContentLoaded', () => {
   loadApiKey();
   loadEndpoints();
   setupShortcuts();
-  loadSidebarWidth();
-  loadRequestSectionHeight();
-  initStatePersistence();
 });
 
 /* ---------- Theme ---------- */
@@ -599,20 +514,18 @@ function setTheme(theme) {
     document.documentElement.setAttribute('data-theme', 'dark');
     document.getElementById('sunIcon').classList.remove('hidden');
     document.getElementById('moonIcon').classList.add('hidden');
-    localStorage.setItem('theme', 'dark');
     isDark = true;
   } else {
     document.documentElement.removeAttribute('data-theme');
     document.getElementById('sunIcon').classList.add('hidden');
     document.getElementById('moonIcon').classList.remove('hidden');
-    localStorage.setItem('theme', 'light');
     isDark = false;
   }
 }
 
 function initTheme() {
-  const saved = localStorage.getItem('theme');
-  if (saved === 'dark' || (!saved && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+  // Use system preference only, no localStorage
+  if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
     setTheme('dark');
   } else {
     setTheme('light');
@@ -657,22 +570,6 @@ sidebarOverlay.addEventListener('click', toggleSidebar);
 /* Close sidebar on mobile when an endpoint clicked - delegated after rendering endpoints */
 
 /* ---------- Collapsed categories state ---------- */
-function getCollapsedCategories() {
-  try {
-    const saved = localStorage.getItem(COLLAPSED_CATEGORIES_KEY);
-    if (saved) {
-      return JSON.parse(saved);
-    }
-    // Default: all collapsed except "Account"
-    const defaultCollapsed = {};
-    // We'll set all categories to collapsed by default when rendering
-    // Account will be explicitly set to false (expanded)
-    return defaultCollapsed;
-  } catch (err) {
-    return {};
-  }
-}
-
 function getDefaultCollapsedState(categories) {
   const collapsed = {};
   Object.keys(categories).forEach(category => {
@@ -682,20 +579,10 @@ function getDefaultCollapsedState(categories) {
   return collapsed;
 }
 
-function saveCollapsedCategories(collapsed) {
-  try {
-    localStorage.setItem(COLLAPSED_CATEGORIES_KEY, JSON.stringify(collapsed));
-  } catch (err) {
-    console.warn('Failed to save collapsed categories', err);
-  }
-}
-
 function toggleCategory(categoryName, headerElement, contentElement) {
-  const collapsed = getCollapsedCategories();
-  const isCollapsed = !collapsed[categoryName];
+  const isCollapsed = !headerElement.classList.contains('collapsed');
   
-  collapsed[categoryName] = isCollapsed;
-  saveCollapsedCategories(collapsed);
+  collapsedCategories[categoryName] = isCollapsed;
   
   if (isCollapsed) {
     headerElement.classList.add('collapsed');
@@ -732,25 +619,12 @@ function renderEndpoints(data, forceExpand = false) {
   if (forceExpand) {
     collapsed = {};
   } else {
-    const saved = getCollapsedCategories();
-    const defaultState = getDefaultCollapsedState(data);
-    
-    // If no saved preferences, use default state (Account expanded, others collapsed)
-    if (Object.keys(saved).length === 0) {
-      collapsed = defaultState;
-      saveCollapsedCategories(defaultState);
+    // Use in-memory state or default
+    if (Object.keys(collapsedCategories).length === 0) {
+      collapsed = getDefaultCollapsedState(data);
+      collapsedCategories = { ...collapsed };
     } else {
-      // User has preferences - merge: use saved for existing categories,
-      // use default for any new categories that weren't in saved state
-      collapsed = {};
-      Object.keys(data).forEach(category => {
-        if (saved.hasOwnProperty(category)) {
-          collapsed[category] = saved[category];
-        } else {
-          // New category - use default (collapsed unless it's Account)
-          collapsed[category] = category.toLowerCase() !== 'account';
-        }
-      });
+      collapsed = { ...collapsedCategories };
     }
   }
   
@@ -826,7 +700,6 @@ function selectEndpoint(endpoint, element) {
   if (element) element.classList.add('active');
 
   currentEndpoint = endpoint;
-  currentStateKey = getStateKey(endpoint);
   const bodyTextarea = document.getElementById('requestBody');
   const apiKey = document.getElementById("globalApiKey").value;
 
@@ -836,48 +709,28 @@ function selectEndpoint(endpoint, element) {
   // Update GET hint visibility
   updateGetHintVisibility();
 
-  // Try to restore saved state first
-  const restoredState = readAndApplyState(currentStateKey);
-  
-  // If no saved state, populate from endpoint
-  if (!restoredState || !restoredState.body) {
-    // For GET requests with params, show them in the body as reference
-    if (endpoint.method === 'GET' && endpoint.params) {
-      const params = { ...endpoint.params };
-      // Always populate apikey if available
-      if (apiKey) {
-        params.apikey = apiKey;
-      }
-      bodyTextarea.value = JSON.stringify(params, null, 2);
-    } else if (endpoint.body) {
-      const body = { ...endpoint.body };
-      // Always populate apikey if available
-      if (apiKey) {
-        body.apikey = apiKey;
-      }
-      bodyTextarea.value = JSON.stringify(body, null, 2);
-    } else {
-      // If no body but we have API key, add it to an empty object
-      bodyTextarea.value = apiKey ? JSON.stringify({ apikey: apiKey }, null, 2) : '';
+  // Populate from endpoint
+  // For GET requests with params, show them in the body as reference
+  if (endpoint.method === 'GET' && endpoint.params) {
+    const params = { ...endpoint.params };
+    if (apiKey && !params.apikey) {
+      params.apikey = apiKey;
     }
+    bodyTextarea.value = JSON.stringify(params, null, 2);
+  } else if (endpoint.body) {
+    const body = { ...endpoint.body };
+    if (apiKey && !body.apikey) {
+      body.apikey = apiKey;
+    }
+    bodyTextarea.value = JSON.stringify(body, null, 2);
   } else {
-    // Even if we restored state, update the apikey if it's empty
-    try {
-      const currentBody = JSON.parse(bodyTextarea.value);
-      if (apiKey && (!currentBody.apikey || currentBody.apikey === '')) {
-        currentBody.apikey = apiKey;
-        bodyTextarea.value = JSON.stringify(currentBody, null, 2);
-      }
-    } catch (e) {
-      // If parsing fails, leave as is
-    }
+    // If no body but we have API key, add it to an empty object
+    bodyTextarea.value = apiKey ? JSON.stringify({ apikey: apiKey }, null, 2) : '';
   }
 
   // Make sure body textarea is always editable
   bodyTextarea.disabled = false;
   bodyTextarea.classList.remove('opacity-50');
-
-  saveCurrentState();
 }
 
 
@@ -1067,18 +920,7 @@ document.getElementById('copyCurlButton').addEventListener('click', async () => 
   }
 });
 
-/* ---------- Load saved sizes ---------- */
-function saveSidebarWidth() {
-  if (sidebar.style.width && window.innerWidth >= 1024) localStorage.setItem('sidebarWidth', sidebar.style.width);
-}
-function loadSidebarWidth() {
-  if (window.innerWidth >= 1024) {
-    const saved = localStorage.getItem('sidebarWidth');
-    if (saved) { sidebar.style.width = saved; sidebar.style.flex = '0 0 auto'; }
-  }
-}
-
-/* horizontal request/response resize */
+/* ---------- Resize handles (no persistence) ---------- */
 const horizontalResizeHandle = document.getElementById('horizontalResizeHandle');
 const sidebarResizeHandle = document.createElement('div');
 if (window.innerWidth >= 1024 && sidebar) {
@@ -1114,23 +956,13 @@ document.addEventListener('mousemove', (e) => {
     const deltaY = e.clientY - lastDownY;
     const newHeight = Math.max(200, requestSectionHeight + deltaY);
     requestSection.style.flex = '0 0 auto'; requestSection.style.height = `${newHeight}px`;
-    localStorage.setItem('requestSectionHeight', `${newHeight}px`);
   }
 });
 
 document.addEventListener('mouseup', () => {
-  if (isResizingSidebar) { isResizingSidebar = false; document.body.classList.remove('noselect'); document.body.style.cursor = ''; sidebarResizeHandle.classList.remove('active'); saveSidebarWidth(); }
+  if (isResizingSidebar) { isResizingSidebar = false; document.body.classList.remove('noselect'); document.body.style.cursor = ''; sidebarResizeHandle.classList.remove('active'); }
   if (isResizingHorizontal) { isResizingHorizontal = false; document.body.classList.remove('noselect'); document.body.style.cursor = ''; horizontalResizeHandle.classList.remove('active'); }
 });
-
-function loadRequestSectionHeight() {
-  if (window.innerWidth >= 1024) {
-    const saved = localStorage.getItem('requestSectionHeight');
-    if (saved) { requestSection.style.height = saved; requestSection.style.flex = '0 0 auto'; }
-  } else {
-    requestSection.style.height = ''; requestSection.style.flex = '';
-  }
-}
 
 /* ---------- Search endpoints with debounce ---------- */
 let searchTimeout;
@@ -1225,7 +1057,6 @@ document.getElementById('resetBodyBtn').addEventListener('click', () => {
     bodyTextarea.value = apiKey ? JSON.stringify({ apikey: apiKey }, null, 2) : '';
   }
   
-  saveCurrentState();
   showToast('Reset to default values', 'success');
 });
 

@@ -201,7 +201,9 @@ def get_endpoints():
                     'product': 'MIS',
                     'pricetype': 'LIMIT',
                     'price': '100',
-                    'quantity': '1'
+                    'quantity': '1',
+                    'disclosed_quantity': '0',
+                    'trigger_price': '0'
                 }
             },
             {
@@ -332,8 +334,13 @@ def get_endpoints():
                 'path': '/api/v1/optionsymbol',
                 'body': {
                     'apikey': '',
-                    'symbol': 'NIFTY',
-                    'exchange': 'NFO'
+                    'strategy': 'Test Strategy',
+                    'underlying': 'NIFTY',
+                    'exchange': 'NSE_INDEX',
+                    'expiry_date': '28NOV24',
+                    'strike_int': 50,
+                    'offset': 'ATM',
+                    'option_type': 'CE'
                 }
             },
             {
@@ -342,7 +349,8 @@ def get_endpoints():
                 'path': '/api/v1/optiongreeks',
                 'body': {
                     'apikey': '',
-                    'symbol': 'NIFTY',
+                    'strategy': 'Test Strategy',
+                    'symbol': 'NIFTY28NOV2426000CE',
                     'exchange': 'NFO'
                 }
             },
@@ -351,12 +359,13 @@ def get_endpoints():
                 'method': 'GET',
                 'path': '/api/v1/ticker/NSE:SBIN',
                 'params': {
+                    'apikey': '',
                     'interval': 'D',
                     'from': '2025-01-01',
                     'to': '2025-01-31',
-                    'apikey': ''
+                    'format': 'json'
                 },
-                'description': 'Historical OHLCV data with customizable intervals'
+                'description': 'Historical OHLCV data. Symbol in path as exchange:symbol (e.g., NSE:SBIN)'
             }
         ],
         'utilities': [
@@ -372,7 +381,7 @@ def get_endpoints():
                 'path': '/api/v1/instruments',
                 'params': {
                     'apikey': '',
-                    'exchange': '',
+                    'exchange': 'NSE',
                     'format': 'json'
                 },
                 'description': 'Download instruments. Leave exchange empty for all exchanges, or specify: NSE, BSE, NFO, BFO, MCX, etc.'
@@ -383,7 +392,18 @@ def get_endpoints():
                 'path': '/api/v1/margin',
                 'body': {
                     'apikey': '',
-                    'positions': []
+                    'positions': [
+                        {
+                            'symbol': 'SBIN',
+                            'exchange': 'NSE',
+                            'action': 'BUY',
+                            'product': 'MIS',
+                            'pricetype': 'LIMIT',
+                            'quantity': '10',
+                            'price': '750.50',
+                            'trigger_price': '0'
+                        }
+                    ]
                 }
             }
         ]
