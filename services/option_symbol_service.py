@@ -35,7 +35,7 @@ Example Usage (OLD METHOD - Legacy):
 
 import re
 import importlib
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any, Optional, List
 from datetime import datetime
 from database.auth_db import get_auth_token_broker
 from database.symbol import SymToken, db_session
@@ -43,6 +43,32 @@ from services.quotes_service import get_quotes
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# ============================================================================
+# STRIKES CACHE - In-Memory Cache for Ultra-Fast Lookups
+# ============================================================================
+# Cache structure: {(base_symbol, expiry, option_type, exchange): [sorted_strikes]}
+_STRIKES_CACHE: Dict[Tuple[str, str, str, str], List[float]] = {}
+_CACHE_STATS = {'hits': 0, 'misses': 0, 'total_queries': 0}
+
+def get_strikes_cache_stats() -> dict:
+    """Get cache statistics for monitoring"""
+    total = _CACHE_STATS['total_queries']
+    hit_rate = (_CACHE_STATS['hits'] / total * 100) if total > 0 else 0.0
+    return {
+        'hits': _CACHE_STATS['hits'],
+        'misses': _CACHE_STATS['misses'],
+        'total_queries': _CACHE_STATS['total_queries'],
+        'hit_rate': f"{hit_rate:.2f}%",
+        'cached_entries': len(_STRIKES_CACHE)
+    }
+
+def clear_strikes_cache():
+    """Clear the strikes cache (call when master contracts are updated)"""
+    global _STRIKES_CACHE, _CACHE_STATS
+    _STRIKES_CACHE.clear()
+    _CACHE_STATS = {'hits': 0, 'misses': 0, 'total_queries': 0}
+    logger.info("Strikes cache cleared")
 
 
 def parse_underlying_symbol(underlying: str) -> Tuple[str, Optional[str]]:
@@ -223,7 +249,8 @@ def find_option_in_database(option_symbol: str, exchange: str) -> Optional[Dict[
 
 def get_available_strikes(base_symbol: str, expiry_date: str, option_type: str, exchange: str) -> list:
     """
-    Fetch all available strikes from database for a given underlying, expiry, and option type.
+    Fetch all available strikes from cache or database for a given underlying, expiry, and option type.
+    Uses in-memory cache for ultra-fast lookups (O(1) instead of database query).
 
     Args:
         base_symbol: Base symbol like "NIFTY", "BANKNIFTY", "RELIANCE"
@@ -238,7 +265,26 @@ def get_available_strikes(base_symbol: str, expiry_date: str, option_type: str, 
         get_available_strikes("NIFTY", "28OCT25", "CE", "NFO")
         -> [23000, 23050, 23100, 23150, 23200, ...]
     """
+    global _STRIKES_CACHE, _CACHE_STATS
+
     try:
+        # Normalize inputs for cache key
+        cache_key = (base_symbol.upper(), expiry_date.upper(), option_type.upper(), exchange.upper())
+
+        # Update query stats
+        _CACHE_STATS['total_queries'] += 1
+
+        # Check cache first (O(1) lookup)
+        if cache_key in _STRIKES_CACHE:
+            _CACHE_STATS['hits'] += 1
+            strikes = _STRIKES_CACHE[cache_key]
+            logger.debug(f"Cache HIT: {len(strikes)} strikes for {base_symbol} {expiry_date} {option_type}")
+            return strikes
+
+        # Cache miss - query database
+        _CACHE_STATS['misses'] += 1
+        logger.debug(f"Cache MISS: Querying database for {base_symbol} {expiry_date} {option_type}")
+
         # Convert expiry from DDMMMYY to DD-MMM-YY format used in database
         # e.g., "28OCT25" -> "28-OCT-25"
         expiry_formatted = f"{expiry_date[:2]}-{expiry_date[2:5]}-{expiry_date[5:]}"
@@ -260,7 +306,10 @@ def get_available_strikes(base_symbol: str, expiry_date: str, option_type: str, 
         # Extract strike values and filter out None
         strikes = [result.strike for result in results if result.strike is not None]
 
-        logger.info(f"Found {len(strikes)} available strikes for {base_symbol} {expiry_date} {option_type} on {exchange}")
+        # Store in cache for future requests
+        _STRIKES_CACHE[cache_key] = strikes
+
+        logger.info(f"Cached {len(strikes)} strikes for {base_symbol} {expiry_date} {option_type} on {exchange}")
         if strikes:
             logger.info(f"Strike range: {strikes[0]} to {strikes[-1]}")
 
