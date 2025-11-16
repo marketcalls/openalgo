@@ -38,6 +38,7 @@ For detailed installation instructions, please refer to [INSTALL.md](https://doc
 - **Indmoney**
 - **Kotak** 
 - **Motilal Oswal**
+- **Mstock**
 - **Paytm**
 - **Pocketful**
 - **Shoonya**

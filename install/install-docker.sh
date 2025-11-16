@@ -42,7 +42,7 @@ generate_hex() {
 # Function to validate broker
 validate_broker() {
     local broker=$1
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,kotak,motilal,paytm,pocketful,shoonya,tradejini,upstox,wisdom,zebu,zerodha,mstock"
+    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,kotak,motilal,mstock,paytm,pocketful,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
     [[ $valid_brokers == *"$broker"* ]]
 }
 
