@@ -73,8 +73,6 @@
 .method-badge { font-size:11px; font-weight:700; padding:4px 8px; border-radius:6px; text-transform:uppercase; letter-spacing:0.6px; box-shadow:0 2px 4px rgba(0,0,0,0.06); }
 .method-get { background: rgba(59,130,246,0.08); color:#3b82f6; border:1px solid rgba(59,130,246,0.18); }
 .method-post { background: rgba(16,185,129,0.06); color:#10b981; border:1px solid rgba(16,185,129,0.12); }
-.method-put { background: rgba(245,158,11,0.06); color:#f59e0b; border:1px solid rgba(245,158,11,0.12); }
-.method-delete { background: rgba(239,68,68,0.06); color:#ef4444; border:1px solid rgba(239,68,68,0.12); }
 
 /* Dark theme tokens (kept minimal) */
 [data-theme="dark"] {
@@ -166,7 +164,7 @@
           </svg>
         </button>
 
-        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-secondary flex items-center justify-center shadow-lg">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-yellow-500 to-amber-600 flex items-center justify-center shadow-lg">
           <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
           </svg>
@@ -249,8 +247,6 @@
             <select id="requestMethod" class="select select-sm select-bordered w-32 font-semibold">
               <option value="GET">GET</option>
               <option value="POST" selected>POST</option>
-              <option value="PUT">PUT</option>
-              <option value="DELETE">DELETE</option>
             </select>
 
             <input type="text" id="requestUrl" placeholder="/api/v1/endpoint" class="input input-sm input-bordered flex-1 font-mono text-sm bg-base-200/50">
@@ -389,7 +385,7 @@
 <!-- Mobile toolbar -->
 <div class="lg:hidden mobile-toolbar fixed bottom-4 left-1/2 transform -translate-x-1/2 flex gap-2">
   <select id="mobileRequestMethod" class="request-method-select select select-sm select-bordered">
-    <option value="GET">GET</option><option value="POST">POST</option><option value="PUT">PUT</option><option value="DELETE">DELETE</option>
+    <option value="GET">GET</option><option value="POST">POST</option>
   </select>
   <button id="mobileSend" class="btn btn-sm btn-primary gap-1">Send</button>
 </div>
@@ -650,7 +646,7 @@ function renderEndpoints(data, forceExpand = false) {
     data[category].forEach(endpoint => {
       const endpointDiv = document.createElement('div');
       endpointDiv.className = 'endpoint-item rounded-lg px-4 py-3 mb-2 cursor-pointer hover:bg-base-200 transition-colors';
-      const methodClass = endpoint.method === 'GET' ? 'method-get' : endpoint.method === 'POST' ? 'method-post' : endpoint.method === 'PUT' ? 'method-put' : 'method-delete';
+      const methodClass = endpoint.method === 'GET' ? 'method-get' : 'method-post';
       endpointDiv.innerHTML = `
         <div class="flex items-center gap-2.5 mb-1.5">
           <span class="method-badge ${methodClass}">${escapeHtml(endpoint.method || '')}</span>
@@ -736,8 +732,17 @@ function selectEndpoint(endpoint, element) {
 
 /* ---------- Send request ---------- */
 
+// Maximum size for syntax highlighting (100KB)
+const MAX_HIGHLIGHT_SIZE = 100 * 1024;
+
 function syntaxHighlight(json) {
   if (typeof json !== 'string') json = JSON.stringify(json, null, 2);
+  
+  // Skip syntax highlighting for large responses to prevent browser hang
+  if (json.length > MAX_HIGHLIGHT_SIZE) {
+    return escapeHtml(json);
+  }
+  
   json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
     let cls = 'json-number';
@@ -850,10 +855,27 @@ function displayResponse(status, data, time, headers = {}) {
   // response content
   emptyState.classList.add('hidden');
   responseDataPre.classList.remove('hidden');
+  
+  let responseText;
   if (typeof data === 'string') {
-    responseDataPre.innerHTML = escapeHtml(data);
+    responseText = data;
   } else {
-    responseDataPre.innerHTML = syntaxHighlight(data);
+    responseText = JSON.stringify(data, null, 2);
+  }
+  
+  // Check size and show warning for large responses
+  const sizeInKB = (responseText.length / 1024).toFixed(2);
+  if (responseText.length > MAX_HIGHLIGHT_SIZE) {
+    // Show plain text for large responses
+    responseDataPre.innerHTML = escapeHtml(responseText);
+    showToast(`Large response (${sizeInKB} KB) - syntax highlighting disabled for performance`, 'info');
+  } else {
+    // Apply syntax highlighting for smaller responses
+    if (typeof data === 'string') {
+      responseDataPre.innerHTML = escapeHtml(data);
+    } else {
+      responseDataPre.innerHTML = syntaxHighlight(data);
+    }
   }
 }
 
