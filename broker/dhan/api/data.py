@@ -146,7 +146,7 @@ class BrokerData:
             return int(ist_dt.timestamp())
 
     def _get_intraday_chunks(self, start_date, end_date) -> list:
-        """Split date range into 5-day chunks for intraday data"""
+        """Split date range into 90-day chunks for intraday data (Dhan API limit)"""
         # Handle both string and datetime.date objects
         if isinstance(start_date, str):
             start = datetime.strptime(start_date, "%Y-%m-%d")
@@ -160,7 +160,7 @@ class BrokerData:
         chunks = []
         
         while start < end:
-            chunk_end = min(start + timedelta(days=5), end)
+            chunk_end = min(start + timedelta(days=90), end)
             chunks.append((
                 start.strftime("%Y-%m-%d"),
                 chunk_end.strftime("%Y-%m-%d")
