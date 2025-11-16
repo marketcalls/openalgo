@@ -101,6 +101,13 @@ class OptionsOrderSchema(Schema):
     trigger_price = fields.Float(missing=0.0, validate=validate.Range(min=0, error="Trigger price must be a non-negative number."))
     disclosed_quantity = fields.Int(missing=0, validate=validate.Range(min=0, error="Disclosed quantity must be a non-negative integer."))
 
+class SyntheticFutureSchema(Schema):
+    """Schema for synthetic future calculation"""
+    apikey = fields.Str(required=True)
+    underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE)
+    exchange = fields.Str(required=True)  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE)
+    expiry_date = fields.Str(required=True)  # Expiry date in DDMMMYY format (e.g., 28OCT25)
+
 class MarginPositionSchema(Schema):
     """Schema for a single position in margin calculation"""
     symbol = fields.Str(required=True, validate=validate.Length(min=1, max=50, error="Symbol must be between 1 and 50 characters."))
