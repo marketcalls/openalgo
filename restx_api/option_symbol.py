@@ -13,7 +13,7 @@ Request Body:
     "underlying": "NIFTY",  // or "NIFTY28OCT25FUT"
     "exchange": "NSE_INDEX",  // or "NSE", "NFO", "BSE_INDEX", "BSE", "BFO"
     "expiry_date": "28OCT25",  // Optional if underlying includes expiry
-    "strike_int": 50,  // Strike interval (50 for NIFTY, 100 for BANKNIFTY)
+    "strike_int": 50,  // Optional: Strike interval. If omitted, actual strikes from database are used (RECOMMENDED)
     "offset": "ITM2",  // ATM, ITM1-ITM50, OTM1-OTM50
     "option_type": "CE"  // CE or PE
 }
@@ -63,7 +63,7 @@ class OptionSymbol(Resource):
             underlying = data['underlying']
             exchange = data['exchange']
             expiry_date = data.get('expiry_date')  # Optional
-            strike_int = data['strike_int']
+            strike_int = data.get('strike_int')  # Optional - if not provided, actual strikes from database will be used
             offset = data['offset']
             option_type = data['option_type']
 

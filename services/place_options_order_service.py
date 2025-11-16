@@ -34,7 +34,7 @@ def place_options_order(
             - underlying: Underlying symbol
             - exchange: Exchange
             - expiry_date: Expiry date (optional if embedded in underlying)
-            - strike_int: Strike interval
+            - strike_int: Strike interval (OPTIONAL - if not provided, uses actual strikes from database)
             - offset: Strike offset (ATM, ITM1-ITM50, OTM1-OTM50)
             - option_type: CE or PE
             - action: BUY or SELL
@@ -76,15 +76,15 @@ def place_options_order(
         underlying = options_data.get('underlying')
         exchange = options_data.get('exchange')
         expiry_date = options_data.get('expiry_date')
-        strike_int = options_data.get('strike_int')
+        strike_int = options_data.get('strike_int')  # Optional - if not provided, actual strikes from database will be used
         offset = options_data.get('offset')
         option_type = options_data.get('option_type')
 
-        # Validate required option parameters
-        if not all([underlying, exchange, strike_int, offset, option_type]):
+        # Validate required option parameters (strike_int is now optional)
+        if not all([underlying, exchange, offset, option_type]):
             return False, {
                 'status': 'error',
-                'message': 'Missing required option parameters: underlying, exchange, strike_int, offset, option_type'
+                'message': 'Missing required option parameters: underlying, exchange, offset, option_type'
             }, 400
 
         # Log the option order request

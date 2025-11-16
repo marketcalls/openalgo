@@ -13,7 +13,7 @@ Request Body:
     "underlying": "NIFTY",  // or "NIFTY28NOV24FUT"
     "exchange": "NSE_INDEX",  // or "NSE", "NFO", "BSE_INDEX", "BSE", "BFO"
     "expiry_date": "28NOV24",  // Optional if underlying includes expiry
-    "strike_int": 50,  // Strike interval
+    "strike_int": 50,  // Optional: Strike interval. If omitted, actual strikes from database are used (RECOMMENDED)
     "offset": "ITM2",  // ATM, ITM1-ITM50, OTM1-OTM50
     "option_type": "CE",  // CE or PE
     "action": "BUY",  // or "SELL"

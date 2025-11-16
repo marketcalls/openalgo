@@ -91,7 +91,7 @@ class OptionSymbolSchema(Schema):
     underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, RELIANCE, NIFTY28OCT25FUT)
     exchange = fields.Str(required=True)    # Exchange (NSE_INDEX, NSE, NFO)
     expiry_date = fields.Str(required=False)  # Expiry date in DDMMMYY format (e.g., 28OCT25). Optional if underlying includes expiry
-    strike_int = fields.Int(required=True, validate=validate.Range(min=1))  # Strike interval/difference (e.g., 50 for NIFTY, 100 for BANKNIFTY)
+    strike_int = fields.Int(required=False, validate=validate.Range(min=1), allow_none=True)  # OPTIONAL: Strike interval. If not provided, actual strikes from database will be used (RECOMMENDED for accuracy)
     offset = fields.Str(required=True, validate=validate_option_offset)      # Strike offset from ATM (ATM, ITM1-ITM50, OTM1-OTM50)
     option_type = fields.Str(required=True, validate=validate.OneOf(["CE", "PE", "ce", "pe"]))  # Call or Put option
 
