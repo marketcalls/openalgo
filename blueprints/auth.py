@@ -85,8 +85,11 @@ def broker_login():
 def reset_password():
     if request.method == 'GET':
         return render_template('reset_password.html', email_sent=False)
-    
+
     step = request.form.get('step')
+
+    # Debug logging for CSRF issues
+    logger.debug(f"Password reset step: {step}, Session: {session.keys()}")
     
     if step == 'email':
         email = request.form.get('email')
@@ -181,24 +184,46 @@ def reset_password():
         email = request.form.get('email')
         token = request.form.get('token')
         password = request.form.get('password')
-        
+
         # Verify token from session (handles both TOTP and email reset tokens)
         valid_token = (token == session.get('reset_token') or token == session.get('email_reset_token'))
         if not valid_token or email != session.get('reset_email'):
             flash('Invalid or expired reset token.', 'error')
             return redirect(url_for('auth.reset_password'))
-        
+
+        # Validate password strength
+        from utils.auth_utils import validate_password_strength
+        is_valid, error_message = validate_password_strength(password)
+        if not is_valid:
+            flash(error_message, 'error')
+            # Re-render the password form with the same state
+            method = session.get('reset_method', 'totp')
+            if method == 'totp':
+                return render_template('reset_password.html',
+                                     email_sent=True,
+                                     method_selected='totp',
+                                     totp_verified=True,
+                                     email=email,
+                                     token=token)
+            else:  # email method
+                return render_template('reset_password.html',
+                                     email_sent=True,
+                                     method_selected='email',
+                                     email_verified=True,
+                                     email=email,
+                                     token=token)
+
         user = find_user_by_email(email)
         if user:
             user.set_password(password)
             db_session.commit()
-            
+
             # Clear reset session data for security
             session.pop('reset_token', None)
             session.pop('reset_email', None)
             session.pop('reset_method', None)
             session.pop('email_reset_token', None)
-            
+
             flash('Your password has been reset successfully.', 'success')
             return redirect(url_for('auth.login'))
         else:
@@ -261,7 +286,13 @@ def change_password():
 
         if user and user.check_password(old_password):
             if new_password == confirm_password:
-                # Here, you should also ensure the new password meets your policy before updating
+                # Validate password strength
+                from utils.auth_utils import validate_password_strength
+                is_valid, error_message = validate_password_strength(new_password)
+                if not is_valid:
+                    flash(error_message, 'error')
+                    return redirect(url_for('auth.change_password'))
+
                 user.set_password(new_password)
                 db_session.commit()
                 # Use flash to notify the user of success
