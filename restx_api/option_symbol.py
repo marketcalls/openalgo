@@ -9,7 +9,7 @@ Calculates ATM from current LTP and returns the appropriate option symbol.
 Request Body:
 {
     "apikey": "your_api_key",
-    "strategy": "strategy_name",
+    "strategy": "strategy_name",  // DEPRECATED: Optional, will be removed in future versions
     "underlying": "NIFTY",  // or "NIFTY28OCT25FUT"
     "exchange": "NSE_INDEX",  // or "NSE", "NFO", "BSE_INDEX", "BSE", "BFO"
     "expiry_date": "28OCT25",  // Optional if underlying includes expiry

@@ -87,7 +87,7 @@ class ExpirySchema(Schema):
 
 class OptionSymbolSchema(Schema):
     apikey = fields.Str(required=True)      # API Key for authentication
-    strategy = fields.Str(required=True)    # Strategy name
+    strategy = fields.Str(required=False, allow_none=True)    # DEPRECATED: Strategy name (optional, will be removed in future versions)
     underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, RELIANCE, NIFTY28OCT25FUT)
     exchange = fields.Str(required=True)    # Exchange (NSE_INDEX, NSE, NFO)
     expiry_date = fields.Str(required=False)  # Expiry date in DDMMMYY format (e.g., 28OCT25). Optional if underlying includes expiry
