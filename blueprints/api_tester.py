@@ -349,7 +349,6 @@ def get_endpoints():
                 'path': '/api/v1/optiongreeks',
                 'body': {
                     'apikey': '',
-                    'strategy': 'Test Strategy',
                     'symbol': 'NIFTY28NOV2426000CE',
                     'exchange': 'NFO'
                 }
