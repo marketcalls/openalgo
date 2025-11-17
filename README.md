@@ -1,4 +1,4 @@
-# OpenAlgo - Take Control of Your Algo Platform
+# OpenAlgo - Open Source Algorithmic Trading Platform
 
 <div align="center">
 
@@ -12,290 +12,286 @@
 
 ![OpenAlgo - Your Personal Algo Trading Platform](static/images/image.png)
 
-OpenAlgo is an open-source, Flask-based Python application designed to bridge the gap between traders and major trading platforms such as Amibroker, Tradingview, Python, Chartink, MetaTrader, Excel, and Google Spreadsheets. With a focus on simplifying algotrading, OpenAlgo facilitates easy integration, automation, and execution of trading strategies, providing a user-friendly interface to enhance trading performance.
+**OpenAlgo** is a production-ready, open-source algorithmic trading platform built with Flask and Python. It provides a unified API layer across 24+ Indian brokers, enabling seamless integration with popular platforms like TradingView, Amibroker, Excel, Python, and AI agents. Designed for traders and developers, OpenAlgo makes algo trading accessible, secure, and powerful.
 
-## Installation Guide
+## Quick Links
 
-For detailed installation instructions, please refer to [INSTALL.md](https://docs.openalgo.in/getting-started)
+- **Documentation**: [docs.openalgo.in](https://docs.openalgo.in)
+- **Installation Guide**: [Getting Started](https://docs.openalgo.in/installation-guidelines/getting-started)
+- **Upgrade Guide**: [Upgrade Instructions](https://docs.openalgo.in/installation-guidelines/getting-started/upgrade)
+- **Why OpenAlgo**: [Why Build with OpenAlgo](https://docs.openalgo.in/why-to-build-with-openalgo)
+- **Video Tutorial**: [![What is OpenAlgo](https://img.youtube.com/vi/kAS3jTb3OkI/0.jpg)](https://www.youtube.com/watch?v=kAS3jTb3OkI)
 
-## What is OpenAlgo?
-[![What is OpenAlgo](https://img.youtube.com/vi/kAS3jTb3OkI/0.jpg)](https://www.youtube.com/watch?v=kAS3jTb3OkI "Watch the OpenAlgo Tutorial Video")
+## Python Compatibility
 
-## Supported Brokers
+**Supports Python 3.11, 3.12, 3.13, and 3.14**
 
-- **5paisa**
-- **5paisa (XTS)**
-- **AliceBlue**
-- **AngelOne**
-- **Compositedge**
-- **Definedge**
-- **Dhan**
-- **Dhan (Sandbox)**
-- **Firstock**
-- **Flattrade**
-- **Fyers**
-- **IBulls**
-- **Indmoney**
-- **Kotak** 
-- **Motilal Oswal**
-- **Mstock**
-- **Paytm**
-- **Pocketful**
-- **Shoonya**
-- **Tradejini**
-- **Upstox**
-- **Wisdom Capital**
-- **Zebu**
-- **Zerodha**
+## Supported Brokers (24+)
 
-## Features
+<details>
+<summary>View All Supported Brokers</summary>
 
-### WebSocket Architecture with ZMQ Integration
-- **Unified WebSocket Proxy Server**: Central WebSocket server (port 8765) that handles client authentication and subscription management
-- **ZeroMQ (ZMQ) Message Bus**: High-performance message queue for real-time market data distribution
-  - Publisher-Subscriber pattern for efficient data broadcasting
-  - Dynamic port binding with automatic port management
-  - Broker adapters publish to ZMQ, proxy server subscribes and routes to clients
-- **Broker-Specific Adapters**: Each broker has a dedicated adapter implementing the base WebSocket interface
-  - Handles broker-specific WebSocket protocols and data formats
-  - Transforms broker data to unified OpenAlgo format
-  - Supports multiple subscription modes: LTP (Last Traded Price), Quote, and Market Depth
-- **Real-Time Market Data**: Live streaming of market data with support for:
-  - LTP updates
-  - Full quotes with OHLC data
-  - Market depth (5/20/30 levels based on broker support)
-  - Auto-reconnection and connection management
+- 5paisa (Standard + XTS)
+- AliceBlue
+- AngelOne
+- Compositedge
+- Definedge
+- Dhan (Live + Sandbox)
+- Firstock
+- Flattrade
+- Fyers
+- Groww
+- IBulls
+- IIFL
+- Indmoney
+- Kotak Neo
+- Motilal Oswal
+- Mstock
+- Paytm Money
+- Pocketful
+- Shoonya (Finvasia)
+- Tradejini
+- Upstox
+- Wisdom Capital
+- Zebu
+- Zerodha
 
-### Unified API Layer (`/api/v1/`)
-OpenAlgo provides a RESTful API with standardized endpoints across all supported brokers:
+</details>
 
-#### Order Management APIs
-- **`/api/v1/placeorder`**: Place regular orders with standard parameters
-- **`/api/v1/placesmartorder`**: Smart order routing with advanced logic
-- **`/api/v1/modifyorder`**: Modify existing orders
-- **`/api/v1/cancelorder`**: Cancel specific orders
-- **`/api/v1/cancelallorder`**: Cancel all pending orders
-- **`/api/v1/closeposition`**: Close open positions
-- **`/api/v1/basketorder`**: Execute multiple orders in a single request
-- **`/api/v1/splitorder`**: Split large orders into smaller chunks
+All brokers share a unified API interface, making it easy to switch between brokers without changing your code.
 
-#### Account & Portfolio APIs
-- **`/api/v1/funds`**: Get account funds and margins
-- **`/api/v1/orderbook`**: Retrieve all orders for the day
-- **`/api/v1/tradebook`**: Get executed trades
-- **`/api/v1/positionbook`**: View current open positions
-- **`/api/v1/holdings`**: Get demat holdings
-- **`/api/v1/openposition`**: Check specific position details
-- **`/api/v1/orderstatus`**: Get real-time order status
+## Core Features
 
-#### Market Data APIs
-- **`/api/v1/quotes`**: Get real-time quotes for symbols
-- **`/api/v1/history`**: Fetch historical OHLC data
-- **`/api/v1/depth`**: Get market depth/order book
-- **`/api/v1/ticker`**: Stream real-time price updates
+### Unified REST API Layer (`/api/v1/`)
+A single, standardized API across all brokers with 30+ endpoints:
+- **Order Management**: Place, modify, cancel orders, basket orders, smart orders with position sizing
+- **Portfolio**: Get positions, holdings, order book, trade book, funds
+- **Market Data**: Real-time quotes, historical data, market depth (Level 5), symbol search
+- **Advanced**: Option Greeks calculator, margin calculator, synthetic futures, auto-split orders
 
-#### Utility APIs
-- **`/api/v1/search`**: Search for symbols across exchanges
-- **`/api/v1/symbol`**: Get symbol details and mappings
-- **`/api/v1/expiry`**: Get option expiry dates
-- **`/api/v1/intervals`**: Get supported time intervals for historical data
-- **`/api/v1/analyzer`**: Test and analyze API requests without execution
-- **`/api/v1/ping`**: Test API connectivity and authentication
+### Real-Time WebSocket Streaming
+- Unified WebSocket proxy server for all brokers (port 8765)
+- Common WebSocket implementation using ZMQ for normalized data across brokers
+- Subscribe to LTP, Quote, or Market Depth for any symbol
+- ZeroMQ-based message bus for high-performance data distribution
+- Automatic reconnection and failover handling
 
-### Common Broker Integration Pattern
-Each broker integration follows a standardized structure:
-- **Authentication API** (`auth_api.py`): Handle login and session management
-- **Order API** (`order_api.py`): Place, modify, cancel orders and manage positions
-- **Data API** (`data.py`): Fetch quotes, historical data, and market information
-- **Funds API** (`funds.py`): Get account balance and margin details
-- **Symbol Mapping** (`transform_data.py`): Convert between OpenAlgo and broker formats
-- **WebSocket Streaming** (`broker_adapter.py`): Real-time data streaming
+### API Analyzer Mode
+Complete testing environment with ₹1 Crore virtual capital:
+- Test strategies with real market data without risking money
+- Pre-deployment testing for strategy validation
+- Supports all order types (Market, Limit, SL, SL-M)
+- Realistic margin system with leverage
+- Auto square-off at exchange timings
+- Separate database for complete isolation
 
-- **ChartInk Platform Integration**: 
-  - Direct integration with ChartInk for strategy execution
-  - Automated scanning and trading based on ChartInk signals
-  - Real-time strategy monitoring and management
-  - Custom strategy configuration and deployment
-  - Seamless execution of ChartInk strategies through your broker
+[API Analyzer Documentation](https://docs.openalgo.in/new-features/api-analyzer)
 
-- **Advanced Monitoring Tools**:
-  - **Latency Monitor**: Track and analyze order execution performance
-    - Real-time latency tracking across different brokers
-    - Detailed breakdown of execution times
-    - Performance comparison between brokers
-    - Order execution success rates and patterns
-  - **Traffic Monitor**: Monitor system performance and API usage
-    - Real-time API request tracking
-    - Endpoint-specific analytics
-    - Error rate monitoring
-    - System performance metrics
-  - **PnL Tracker**: Real-time profit and loss monitoring with advanced charting
-    - Intraday PnL curve visualization from 9 AM IST
-    - Current MTM, Max MTM with time, Min MTM with time
-    - Maximum drawdown tracking
-    - Interactive charts powered by TradingView Lightweight Charts
-    - Manual refresh control for performance optimization
-    - IST timezone support for accurate time display
-  For detailed information about monitoring tools, see [traffic.md](docs/traffic.md)
+### Action Center
+Order approval workflow for manual control:
+- **Auto Mode**: Immediate order execution (for personal trading)
+- **Semi-Auto Mode**: Manual approval required before broker execution
+- Complete audit trail with IST timestamps
+- Approve individual orders or bulk approve all
 
-- **Modern UI with DaisyUI**: 
-  - Sleek and responsive interface built with DaisyUI components
-  - Three distinct themes:
-    - Light theme for normal mode
-    - Dark theme for reduced eye strain
-    - Garden theme for analyzer mode
-  - Instant theme switching with state preservation
-  - Theme-aware syntax highlighting for code and JSON
-  - Mobile-friendly layout with drawer navigation
+[Action Center Documentation](https://docs.openalgo.in/new-features/action-center)
 
-- **Real-Time Trading Updates**:
-  - Instant order book updates via WebSocket
-  - Live trade book monitoring with automatic refresh
-  - Real-time position tracking
-  - Dynamic log updates for trade activities
-  - Contextual notifications with sound alerts
+### Python Strategy Manager
+Host and run Python strategies directly on OpenAlgo:
+- Built-in code editor with syntax highlighting
+- Run multiple strategies in parallel with process isolation
+- Automated scheduling with IST-based start/stop times
+- Secure environment variable management with encryption
+- Real-time logs and state persistence
+- No need for external servers or hosting
 
-- **API Analyzer**:
-  - Real-time request validation and testing
-  - Strategy testing without live execution
-  - Detailed request/response analysis
-  - Comprehensive error detection
-  - Dedicated garden theme for better focus
-  - See [Analyzer.md](docs/Analyzer.md) for detailed documentation
+### ChartInk Integration
+Direct webhook integration for scanner alerts:
+- Supports BUY, SELL, SHORT, COVER actions
+- Intraday with auto square-off and positional strategies
+- Bulk symbol configuration via CSV
+- Real-time strategy monitoring
 
-- **Comprehensive Integration**: Seamlessly connect with Amibroker, Tradingview, Excel, and Google Spreadsheets for smooth data and strategy transition.
+### AI-Powered Trading (MCP Server)
+Connect AI assistants for natural language trading:
+- Compatible with Claude Desktop, Cursor, Windsurf, ChatGPT
+- Execute trades using natural language commands
+- Full trading capabilities: orders, positions, market data
+- Local and secure integration with your OpenAlgo instance
 
-- **User-Friendly Interface**: A straightforward Flask-based application interface accessible to traders of all levels of expertise.
+### Telegram Bot Integration
+Real-time notifications and command execution:
+- Automatic order and trade alerts delivered to Telegram
+- Get orderbook, positions, holdings, funds on demand
+- Generate intraday and daily charts
+- Interactive button-based menu
+- Receive strategy alerts directly to Telegram
+- Secure API key encryption
 
-- **Real-Time Execution**: Implement your trading strategies in real time, ensuring immediate action to capitalize on market opportunities.
+### Advanced Monitoring Tools
+**Latency Monitor**: Track order execution performance and round-trip times across brokers
 
-- **Customizable Strategies**: Easily adapt and tailor your trading strategies to meet your specific needs, with extensive options for customization and automation.
+**Traffic Monitor**: API usage analytics, error tracking, and endpoint statistics
 
-- **Secure and Reliable**: With a focus on security and reliability, OpenAlgo provides a dependable platform for your algotrading activities, safeguarding your data and trades.
+**PnL Tracker**: Real-time profit/loss with interactive charts powered by TradingView Lightweight Charts
 
-### Rate Limiting Controls
-OpenAlgo implements comprehensive rate limiting to protect against abuse and ensure fair usage:
+[PnL Tracker Documentation](https://docs.openalgo.in/new-features/pnl-tracker)
 
-- **Configurable Rate Limits**: All rate limits are environment variable controlled
-  - `LOGIN_RATE_LIMIT_MIN`: Login attempts per minute (default: 5 per minute)
-  - `LOGIN_RATE_LIMIT_HOUR`: Login attempts per hour (default: 25 per hour)
-  - `API_RATE_LIMIT`: General API endpoints (default: 10 per second)
-  - `ORDER_RATE_LIMIT`: Order placement/modification/cancellation (default: 10 per second)
-  - `SMART_ORDER_RATE_LIMIT`: Smart order operations
-  - `WEBHOOK_RATE_LIMIT`: Webhook endpoint limits
-  - `STRATEGY_RATE_LIMIT`: Strategy operation limits
+[Traffic & Latency Monitor Documentation](https://docs.openalgo.in/new-features/traffic-latency-monitor)
 
-- **Moving Window Strategy**: Uses Flask-Limiter with moving-window strategy for accurate rate limiting
-- **IP-based Limiting**: Rate limits are applied per IP address
-- **Graceful Handling**: Clear error messages when rate limits are exceeded
+### Enterprise-Grade Security
+**Password Security**: Argon2 hashing (Password Hashing Competition winner)
 
-### Security Features
+**Token Encryption**: Fernet symmetric encryption with PBKDF2 key derivation
 
-#### Browser-Level Security
-- **Content Security Policy (CSP)**: Configurable CSP headers to prevent XSS attacks
-  - Customizable directives via environment variables
-  - Default restrictive policies for scripts, styles, and resources
-  - WebSocket support for real-time features
-- **CORS Protection**: Controlled Cross-Origin Resource Sharing
-  - Configurable allowed origins, methods, and headers
-  - Supports credentials for authenticated requests
-- **CSRF Protection**: Built-in CSRF token validation for state-changing operations
-- **Secure Headers**: X-Frame-Options, X-Content-Type-Options, and other security headers
-- **Session Security**: Secure session management with proper cookie settings
+**Rate Limiting**: Configurable limits for login, API, orders, webhooks
 
-#### Database-Level Security
-- **Password Hashing**: Uses Argon2 (winner of Password Hashing Competition) for secure password storage
-- **Token Encryption**: Auth tokens encrypted using Fernet symmetric encryption
-  - PBKDF2 key derivation for encryption keys
-  - Automatic encryption/decryption of sensitive tokens
-- **API Key Security**: 
-  - Hashed storage using Argon2 with pepper
-  - Encrypted storage for retrieval
-  - Time-based caching with TTL
-- **SQL Injection Protection**: Uses SQLAlchemy ORM with parameterized queries
-- **Connection Pooling**: Optimized database connections with proper pool management
+**Manual IP Ban System**: Monitor and ban suspicious IPs via `/security` dashboard
 
-### API Analyzer
-The API Analyzer is a comprehensive testing and validation tool that provides:
+**Browser Protection**: CSP headers, CORS rules, CSRF protection, secure headers, secure sessions
 
-#### For Traders
-- **Risk-Free Testing**: Test all trading operations without actual execution
-- **Real-Time Validation**: Instant feedback on order parameters and strategy logic
-- **Strategy Monitoring**: Track multiple strategies simultaneously
-- **Visual Feedback**: Garden theme UI with instant notifications and sound alerts
-- **Cost Savings**: Avoid trading errors and optimize parameters without financial risk
+**SQL Injection Prevention**: SQLAlchemy ORM with parameterized queries
 
-#### For Developers
-- **Complete API Testing**: Test all endpoints with detailed request/response analysis
-- **Validation Engine**: Automatic parameter validation, symbol checks, and range verification
-- **WebSocket Monitoring**: Real-time event tracking and debugging
-- **Performance Metrics**: Track API usage, latency, and error rates
-- **Debug Tools**: Complete request inspection and error analysis
+**Privacy First**: Zero data collection policy - your data stays on your server
 
-The analyzer supports all major operations: Place Order, Smart Orders, Modifications, Cancellations, and Position Management. See [Analyzer.md](docs/Analyzer.md) for detailed documentation.
+### Modern UI with DaisyUI
+- 30+ beautiful themes to choose from (Light, Dark, and more)
+- Real-time updates via WebSocket (orders, trades, positions, logs)
+- Mobile-friendly responsive design
+- Theme-aware syntax highlighting
+- Zero-config installation
 
-### OpenAlgo FOSS Universe
-OpenAlgo is part of a larger ecosystem of open-source trading tools. The Mini FOSS Universe includes:
+## Supported Platforms
 
-- **OpenAlgo Core**: Python Flask + Tailwind + DaisyUI (this repository)
-- **Historify**: Full Stack Stock Market Data Management Platform
-- **Python Library**: Native Python integration for algo trading
-- **Node.js Library**: JavaScript/TypeScript support for trading applications
-- **Excel Add-in**: Direct Excel integration for strategy development
-- **Model Context Protocol**: AI Agents integration for intelligent trading
-- **Chrome Plugin**: Browser-based trading tools
-- **Fast Scalper**: High-performance trading built with Rust + Tauri
-- **Web Portal**: Modern UI built with NextJS + ShadcnUI
-- **Documentation**: Comprehensive guides on Gitbook
+Connect your algo strategies and run from any platform:
 
-Built for traders, by traders - making algo trading more accessible, powerful, and open for everyone. Visit [docs.openalgo.in/mini-foss-universe](https://docs.openalgo.in/mini-foss-universe) for more details.
+- **Amibroker** - Direct integration with AFL scripts
+- **TradingView** - Webhook alerts for Pine Script strategies
+- **GoCharting** - Webhook integration
+- **N8N** - Workflow automation
+- **Python** - Official SDK with 100+ technical indicators
+- **GO** - REST API integration
+- **Node.js** - JavaScript/TypeScript library
+- **ChartInk** - Scanner webhook integration
+- **MetaTrader** - Compatible with MT4/MT5
+- **Excel** - REST API + upcoming Add-in
+- **Google Sheets** - REST API integration
 
-### Local MCP (Model Context Protocol) Integration
-OpenAlgo includes native MCP server capabilities, enabling AI assistants to execute trades and manage portfolios directly:
+Receive your strategy alerts directly to **Telegram** for all platforms.
 
-#### Key Features
-- **AI-Powered Trading**: Connect AI assistants like Claude Desktop, Cursor, or Windsurf to execute trades
-- **Full Trading Capabilities**: 
-  - Order Management: Place, modify, cancel orders (market/limit/stop-loss)
-  - Smart Orders: Automatic position sizing and basket orders
-  - Position Management: Close positions, track P&L
-  - Market Data: Real-time quotes, market depth, historical data
-- **Multi-Platform Support**: Works with any MCP-compatible AI client
-- **Local & Secure**: Runs locally with your OpenAlgo instance
+## Architecture Highlights
 
-#### Available MCP Tools
-- **Order Operations**: `place_order`, `place_smart_order`, `place_basket_order`, `modify_order`, `cancel_order`
-- **Position Tracking**: `get_open_position`, `get_position_book`, `close_all_positions`
-- **Market Data**: `get_quote`, `get_market_depth`, `get_historical_data`
-- **Account Info**: `get_funds`, `get_holdings`, `get_order_book`, `get_trade_book`
-- **Instrument Search**: `search_instruments`, `get_symbol_info`, `get_expiry_dates`
+- **Backend**: Flask 3.0 + SQLAlchemy 2.0
+- **Frontend**: Tailwind CSS 4.1 + DaisyUI 5.1
+- **Real-time**: Flask-SocketIO, WebSockets, ZeroMQ
+- **Security**: Argon2-CFFI, Cryptography (Fernet), Flask-WTF
+- **Databases**: SQLite (4 separate DBs: main, logs, latency, sandbox)
+- **Broker Pattern**: Standardized structure (auth, order, data, funds, streaming, mapping)
+- **Connection Pooling**: Optimized latency with efficient connection management
 
-#### Quick Setup
-1. Start your OpenAlgo server
-2. Generate an API key from Settings → API Keys
-3. Configure your AI assistant with the MCP server path and API key
-4. Start trading with natural language commands like "Buy 100 shares of RELIANCE"
+## OpenAlgo FOSS Ecosystem
 
-For detailed MCP setup instructions, see [mcp/README.md](mcp/README.md)
+OpenAlgo is part of a larger open-source trading ecosystem:
+
+- **OpenAlgo Core**: This repository (Python Flask)
+- **Historify**: Stock market data management platform
+- **Python Library**: Native Python SDK
+- **Node.js Library**: JavaScript/TypeScript SDK
+- **Excel Add-in**: Direct Excel integration
+- **MCP Server**: AI agents integration
+- **Chrome Plugin**: Browser-based tools
+- **Fast Scalper**: High-performance trading (Rust + Tauri)
+- **Web Portal**: Modern UI (NextJS + ShadcnUI)
+- **Documentation**: Comprehensive guides on [Gitbook](https://docs.openalgo.in/mini-foss-universe)
+
+## Installation
+
+### Minimum Requirements
+- **RAM**: 2GB (or 0.5GB + 2GB swap)
+- **Disk**: 1GB
+- **CPU**: 1 vCPU
+- **Python**: 3.11, 3.12, 3.13, or 3.14
+
+### Quick Start with UV
+
+OpenAlgo uses the modern `uv` package manager for faster, more reliable installations:
+
+```bash
+# Clone the repository
+git clone https://github.com/marketcalls/openalgo.git
+cd openalgo
+
+# Install UV package manager
+pip install uv
+
+# Configure environment
+cp .sample.env .env
+# Edit .env with your broker API credentials as per documentation
+
+# Run the application using UV
+uv run app.py
+```
+
+The application will be available at `http://127.0.0.1:5000`
+
+For detailed installation instructions, deployment options (Docker, AWS, etc.), and configuration guides, visit [docs.openalgo.in/installation-guidelines/getting-started](https://docs.openalgo.in/installation-guidelines/getting-started)
+
+## API Documentation
+
+Complete API reference and examples:
+- **API Documentation**: [docs.openalgo.in/api-documentation/v1](https://docs.openalgo.in/api-documentation/v1)
+- **Symbol Format**: [docs.openalgo.in/symbol-format](https://docs.openalgo.in/symbol-format)
+
+## Key Benefits
+
+- **Zero-Config Installation**: One-command setup with UV
+- **Single API, Multiple Brokers**: Switch brokers without code changes
+- **No Data Collection**: Complete privacy - your data stays on your server
+- **Host Python Strategies**: Run strategies directly without external servers
+- **Smart Order Execution**: Intelligent routing for complex strategies
+- **Order Splitting**: Automatically split large orders into smaller chunks
+- **Real-Time Analytics**: PnL tracking, latency monitoring, traffic analysis
+- **Strategy Templates**: Rapid prototyping with pre-built templates
+- **Plugin Architecture**: Extensible design for custom integrations
+- **Active Community**: Discord support, virtual meetups, open roadmap
 
 ## Documentation
 
-For detailed documentation on OpenAlgo, including setup guides, API references, and usage examples, refer to [https://docs.openalgo.in](https://docs.openalgo.in)
-
-### Minimum Hardware Requirements
-
-To run OpenAlgo we recommend:
-- 2GB RAM or 0.5GB RAM with 2GB of Swap Memory
-- 1GB disk space
-- 1vCPU
+Comprehensive documentation is available at [docs.openalgo.in](https://docs.openalgo.in):
+- API Reference with examples
+- Broker-specific guides
+- Security best practices
+- Deployment tutorials
+- Strategy development guides
+- Troubleshooting and FAQs
 
 ## Contributing
 
-We welcome contributions to OpenAlgo! If you're interested in improving the application or adding new features, please feel free to fork the repository, make your changes, and submit a pull request.
+We welcome contributions! To contribute:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## Community & Support
+
+- **Discord**: [Join our community](https://www.openalgo.in/discord)
+- **Twitter/X**: [@openalgoHQ](https://twitter.com/openalgoHQ)
+- **YouTube**: [@openalgoHQ](https://youtube.com/@openalgoHQ)
+- **GitHub Issues**: [Report bugs or request features](https://github.com/marketcalls/openalgo/issues)
 
 ## License
 
-OpenAlgo is released under the AGPL V3.0 License. See the `LICENSE` file for more details.
+OpenAlgo is released under the **AGPL V3.0 License**. See [LICENSE](LICENSE) for details.
+
+## Credits
+
+### Third-Party Libraries
+
+- **[DaisyUI](https://github.com/saadeghi/daisyui)** - MIT License - Modern UI component library for Tailwind CSS with 30+ themes
+- **[TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts)** - Apache 2.0 - Financial charting library for PnL visualization
 
 ## Repo Activity
 
@@ -303,26 +299,10 @@ OpenAlgo is released under the AGPL V3.0 License. See the `LICENSE` file for mor
 
 ## Disclaimer
 
-This software is for educational purposes only. Do not risk money which
-you are afraid to lose. USE THE SOFTWARE AT YOUR OWN RISK. THE AUTHORS
-AND ALL AFFILIATES ASSUME NO RESPONSIBILITY FOR YOUR TRADING RESULTS.
+**This software is for educational purposes only. Do not risk money which you are afraid to lose. USE THE SOFTWARE AT YOUR OWN RISK. THE AUTHORS AND ALL AFFILIATES ASSUME NO RESPONSIBILITY FOR YOUR TRADING RESULTS.**
 
-## Credits and Acknowledgements
+Always test your strategies in Analyzer Mode before deploying with real money. Past performance does not guarantee future results. Trading involves substantial risk of loss.
 
-### Third-Party Libraries
+---
 
-- **[DaisyUI](https://github.com/saadeghi/daisyui)** - The most popular component library for Tailwind CSS
-  - License: MIT
-  - Version: 4.12.21
-  - Used for modern, responsive UI components throughout the application
-  - Provides theming system (Light, Dark, Garden themes)
-  - Powers the entire user interface design
-
-- **[TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts)** - Advanced financial charting library
-  - License: Apache 2.0
-  - Version: 5.0.8
-  - Used for interactive intraday PnL and drawdown visualization in PnL Tracker
-
-## Support
-
-For any questions not covered by the documentation or for further information about OpenAlgo, join our [Discord server](https://discord.com/invite/UPh7QPsNhP).
+Built with ❤️ by traders, for traders. Making algorithmic trading accessible to everyone.
