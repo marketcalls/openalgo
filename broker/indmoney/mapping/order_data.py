@@ -223,24 +223,155 @@ def transform_order_data(orders):
         return []
 
 def map_trade_data(trade_data):
-    return map_order_data(trade_data)
+    """
+    Processes and modifies a list of trade dictionaries from IndMoney trade-book API.
+
+    IndMoney trade-book API returns:
+    - fill_id: Unique identifier for the trade fill
+    - exch_order_id: Exchange-generated order ID
+    - quantity: Quantity of shares/contracts traded
+    - price: Price at which the trade was executed
+    - trade_date: Timestamp of trade execution
+    - trade_serial_no: Unique serial number for the trade
+    - scrip_code: Security/instrument code
+    - segment: EQUITY or DERIVATIVE (added by get_trade_book)
+
+    Parameters:
+    - trade_data: A list of dictionaries, where each dictionary represents a trade.
+
+    Returns:
+    - The modified trade_data with mapped fields for transform_tradebook_data.
+    """
+    try:
+        # Check if 'data' is None
+        if trade_data is None:
+            logger.info("No trade data available.")
+            return []
+
+        # Check if trade_data is an error response (dict with status)
+        if isinstance(trade_data, dict) and 'status' in trade_data:
+            if trade_data.get('status') in ['error', 'failure']:
+                logger.error(f"Error in trade data: {trade_data.get('message', 'Unknown error')}")
+                return []
+
+        # Check if trade_data is a string (unexpected response)
+        if isinstance(trade_data, str):
+            logger.error(f"Received string response instead of trade data: {trade_data[:200]}...")
+            return []
+
+        # Ensure trade_data is a list
+        if not isinstance(trade_data, list):
+            logger.warning(f"Expected list but got {type(trade_data)}: {trade_data}")
+            return []
+
+        for trade in trade_data:
+            # Ensure each trade is a dictionary
+            if not isinstance(trade, dict):
+                logger.warning(f"Skipping non-dictionary trade: {type(trade)}")
+                continue
+
+            # Extract IndMoney trade-book fields
+            scrip_code = trade.get('scrip_code')
+            segment = trade.get('segment', 'EQUITY')
+
+            # Map segment to exchange
+            if segment == 'DERIVATIVE':
+                exchange = 'NFO'  # Default to NFO for derivatives
+            else:
+                exchange = 'NSE'  # Default to NSE for equity
+
+            # Map IndMoney trade format to expected format
+            trade['exchangeSegment'] = exchange
+            trade['securityId'] = scrip_code
+            trade['orderId'] = trade.get('exch_order_id', '')
+            trade['tradedQuantity'] = trade.get('quantity', 0)
+            trade['tradedPrice'] = trade.get('price', 0.0)
+            trade['updateTime'] = trade.get('trade_date', '')
+
+            # Get symbol from database using scrip_code
+            if scrip_code:
+                symbol_from_db = get_symbol(scrip_code, exchange)
+
+                if symbol_from_db:
+                    trade['tradingSymbol'] = symbol_from_db
+                else:
+                    # Fallback to scrip_code if symbol not found
+                    trade['tradingSymbol'] = scrip_code
+                    logger.warning(f"Symbol not found for scrip_code {scrip_code} and exchange {exchange}")
+            else:
+                trade['tradingSymbol'] = ''
+
+            # Map transaction type and product type from enriched order book data
+            txn_type = trade.get('txn_type', '').upper()
+            trade['transactionType'] = txn_type
+
+            # Map product type from IndMoney format to OpenAlgo format
+            product = trade.get('product', '')
+            if product == 'INTRADAY':
+                trade['productType'] = 'MIS'
+            elif product == 'CNC' or product == 'DELIVERY':
+                trade['productType'] = 'CNC'
+            elif product == 'MARGIN':
+                trade['productType'] = 'NRML'
+            else:
+                # Default based on exchange segment
+                if segment == 'DERIVATIVE':
+                    trade['productType'] = 'NRML'
+                else:
+                    trade['productType'] = 'MIS'
+
+            logger.debug(f"Mapped trade {scrip_code}: txn_type={txn_type}, product={product} -> {trade['productType']}")
+
+        return trade_data
+
+    except Exception as e:
+        logger.error(f"Exception in map_trade_data: {e}")
+        return []
 
 def transform_tradebook_data(tradebook_data):
-    transformed_data = []
-    for trade in tradebook_data:
-        transformed_trade = {
-            "symbol": trade.get('tradingSymbol', ''),
-            "exchange": trade.get('exchangeSegment', ''),
-            "product": trade.get('productType', ''),
-            "action": trade.get('transactionType', ''),
-            "quantity": trade.get('tradedQuantity', 0),
-            "average_price": trade.get('tradedPrice', 0.0),
-            "trade_value": trade.get('tradedQuantity', 0) * trade.get('tradedPrice', 0.0),
-            "orderid": trade.get('orderId', ''),
-            "timestamp": trade.get('updateTime', '')
-        }
-        transformed_data.append(transformed_trade)
-    return transformed_data
+    """
+    Transform trade book data to OpenAlgo standard format.
+
+    Note: IndMoney trade-book API is enriched with order book data to provide:
+    - transactionType (BUY/SELL) from order book
+    - productType (MIS/CNC/NRML) mapped from order book product field
+    """
+    try:
+        # Handle None input
+        if tradebook_data is None:
+            return []
+
+        # Handle non-list inputs
+        if not isinstance(tradebook_data, list):
+            logger.warning(f"Expected list but got {type(tradebook_data)}")
+            return []
+
+        transformed_data = []
+        for trade in tradebook_data:
+            # Ensure each trade is a dictionary
+            if not isinstance(trade, dict):
+                logger.warning(f"Skipping non-dictionary trade: {type(trade)}")
+                continue
+
+            quantity = trade.get('tradedQuantity', 0)
+            price = trade.get('tradedPrice', 0.0)
+
+            transformed_trade = {
+                "symbol": trade.get('tradingSymbol', ''),
+                "exchange": trade.get('exchangeSegment', ''),
+                "product": trade.get('productType', ''),
+                "action": trade.get('transactionType', ''),
+                "quantity": quantity,
+                "average_price": float(price) if price else 0.0,
+                "trade_value": quantity * (float(price) if price else 0.0),
+                "orderid": trade.get('orderId', ''),
+                "timestamp": trade.get('updateTime', '')
+            }
+            transformed_data.append(transformed_trade)
+        return transformed_data
+    except Exception as e:
+        logger.error(f"Exception in transform_tradebook_data: {e}")
+        return []
 
 def map_position_data(position_data):
     """
@@ -292,60 +423,91 @@ def map_position_data(position_data):
                 logger.warning(f"Skipping non-dictionary position: {type(position)}")
                 continue
 
-            # Extract fields from actual IndMoney API format
+            # Extract fields from actual IndMoney API format (new API response structure)
             instrument_token = position.get('security_id')
-            segment = position.get('segment', '')
-            
-            # Map segment to standard exchange format
-            if segment == 'F&O' or segment == 'FUTURES':
+
+            # Map exchange_segment from API to standard exchange format
+            exchange_segment = position.get('exchange_segment', '')
+            if 'FNO' in exchange_segment or 'F&O' in exchange_segment:
                 exchange = 'NFO'
-            elif segment == 'EQUITY':
-                exchange = 'NSE'  # Default for equity
-            elif segment == 'COMMODITY':
+            elif 'NSE' in exchange_segment:
+                # Check if it's equity or derivative
+                if position.get('query_segment') == 'derivative':
+                    exchange = 'NFO'
+                else:
+                    exchange = 'NSE'
+            elif 'BSE' in exchange_segment:
+                exchange = 'BSE'
+            elif 'MCX' in exchange_segment:
                 exchange = 'MCX'
             else:
-                exchange = segment
+                # Fallback to query_segment for mapping
+                query_segment = position.get('query_segment', 'equity')
+                if query_segment == 'derivative':
+                    exchange = 'NFO'
+                else:
+                    exchange = 'NSE'
 
-            # Map actual IndMoney format to expected format for consistency
+            # Map actual IndMoney API format to expected format for consistency
             position['exchangeSegment'] = exchange
             position['securityId'] = instrument_token
-            position['tradingSymbol'] = position.get('symbol', '')
-            position['netQty'] = position.get('net_qty', 0)
-            position['avgCostPrice'] = position.get('avg_price', 0.0)
+            position['tradingSymbol'] = position.get('trading_symbol', position.get('symbol', ''))
+            position['netQty'] = position.get('net_quantity', position.get('net_qty', 0))
+            position['avgCostPrice'] = position.get('average_price', position.get('avg_price', 0.0))
 
-            # Extract LTP and P&L from INDmoney API response
-            # INDmoney may provide these as 'ltp', 'current_price', or 'market_price'
-            ltp = position.get('ltp', position.get('current_price', position.get('market_price', 0.0)))
+            # Extract LTP from IndMoney API - try multiple field names (documented and legacy)
+            ltp = position.get('last_traded_price') or position.get('ltp') or position.get('current_price') or position.get('market_price') or 0.0
             position['lastTradedPrice'] = float(ltp) if ltp else 0.0
 
-            # Calculate market value using LTP if available, otherwise use avg_price
-            net_qty = position.get('net_qty', 0)
-            avg_price = position.get('avg_price', 0.0)
-            market_price = position['lastTradedPrice'] if position['lastTradedPrice'] > 0 else avg_price
-            position['marketValue'] = net_qty * market_price
+            logger.debug(f"Position {position.get('tradingSymbol', 'unknown')}: LTP={ltp}, raw position data: {position}")
 
-            # Calculate P&L: (LTP - Avg Price) * Quantity
-            # INDmoney may also provide realized_profit, unrealized_profit, or pnl fields
-            pnl_from_api = position.get('pnl', position.get('unrealized_profit', position.get('realized_profit', None)))
-            if pnl_from_api is not None:
-                position['pnlAbsolute'] = float(pnl_from_api)
+            # Extract market value from API or calculate if not provided
+            market_value = position.get('market_value') or position.get('marketValue') or 0.0
+            if market_value:
+                position['marketValue'] = float(market_value)
             else:
-                # Calculate P&L if not provided by API
-                position['pnlAbsolute'] = (market_price - avg_price) * net_qty
+                # Calculate if not provided
+                net_qty = position['netQty']
+                multiplier = position.get('multiplier', 1)
+                position['marketValue'] = net_qty * position['lastTradedPrice'] * multiplier
 
-            position['multiplier'] = 1  # Default multiplier
-            position['positionType'] = 'open' if position.get('net_qty', 0) != 0 else 'closed'
+            # Extract P&L directly from API - try multiple field names (documented and legacy)
+            pnl_absolute = position.get('pnl_absolute') or position.get('pnl') or position.get('unrealized_profit') or position.get('realized_profit')
+            if pnl_absolute is not None:
+                position['pnlAbsolute'] = float(pnl_absolute)
+            else:
+                # Calculate P&L if not provided: (LTP - Avg Price) * Quantity * Multiplier
+                avg_price = position['avgCostPrice']
+                net_qty = position['netQty']
+                multiplier = position.get('multiplier', 1)
+                position['pnlAbsolute'] = (position['lastTradedPrice'] - avg_price) * net_qty * multiplier
+
+            # Extract multiplier from API or default to 1
+            position['multiplier'] = position.get('multiplier', 1)
+
+            # Extract position type from API or determine from quantity
+            position['positionType'] = position.get('position_type',
+                'open' if position['netQty'] != 0 else 'closed')
             
-            # Determine product type based on actual API response
-            api_product = position.get('product', '')
-            if api_product == 'INTRADAY':
+            # Determine product type based on query_product parameter
+            query_product = position.get('query_product', '')
+            if query_product == 'intraday':
                 position['productType'] = 'MIS'
-            elif api_product == 'DELIVERY':
+            elif query_product == 'cnc':
                 position['productType'] = 'CNC'
-            elif exchange in ['NFO', 'MCX', 'BFO', 'CDS']:
-                position['productType'] = 'NRML'  # F&O positions are typically NRML
+            elif query_product == 'margin':
+                position['productType'] = 'NRML'
             else:
-                position['productType'] = 'MIS'  # Default to MIS
+                # Fallback to old logic if query_product not available
+                api_product = position.get('product', '')
+                if api_product == 'INTRADAY':
+                    position['productType'] = 'MIS'
+                elif api_product == 'DELIVERY' or api_product == 'CNC':
+                    position['productType'] = 'CNC'
+                elif api_product == 'MARGIN' or exchange in ['NFO', 'MCX', 'BFO', 'CDS']:
+                    position['productType'] = 'NRML'
+                else:
+                    position['productType'] = 'MIS'
 
             # Use the get_symbol function to fetch the symbol from the database
             if instrument_token and exchange:
