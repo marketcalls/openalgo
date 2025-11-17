@@ -6,7 +6,7 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 # Definedge API constants
-DEFINEDGE_MARGIN_URL = 'https://api.definedgesecurities.com/spancalculator'
+DEFINEDGE_MARGIN_URL = 'https://integrate.definedgesecurities.com/dart/v1/spancalculator'
 
 def calculate_margin_api(positions, auth):
     """
@@ -44,7 +44,7 @@ def calculate_margin_api(positions, auth):
             status_code = 400
             status = 400
         return MockResponse(), error_response
-
+    logger.info(f"API session key: {api_session_key}")
     # Prepare headers
     headers = {
         'Authorization': api_session_key,

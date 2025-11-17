@@ -35,11 +35,11 @@ def transform_margin_positions(positions):
                 logger.warning(f"Symbol info not found for: {position['symbol']} on {position['exchange']}")
                 continue
 
-            # Extract details from symbol info
-            expiry = symbol_info.get('expiry', '')
-            strike = symbol_info.get('strike', '')
-            option_type = symbol_info.get('instrumenttype', '')  # CE or PE
-            underlying_name = symbol_info.get('name', '')
+            # Extract details from symbol info (accessing object attributes, not dict)
+            expiry = getattr(symbol_info, 'expiry', '') or ''
+            strike = getattr(symbol_info, 'strike', '') or ''
+            option_type = getattr(symbol_info, 'instrumenttype', '') or ''  # CE or PE
+            underlying_name = getattr(symbol_info, 'name', '') or ''
 
             # Calculate open_buy_qty and open_sell_qty based on action
             action = position['action'].upper()
@@ -122,17 +122,18 @@ def parse_margin_response(response_data):
                 'message': response_data.get('message', 'Unknown error from broker')
             }
 
-        # Return standardized format
+        # Extract margin values from Definedge response
+        span_margin = float(response_data.get('span', 0))
+        exposure_margin = float(response_data.get('exposure', 0))
+        total_margin_required = span_margin + exposure_margin
+
+        # Return standardized OpenAlgo format
         return {
             'status': 'success',
             'data': {
-                'span_margin': float(response_data.get('span', 0)),
-                'exposure_margin': float(response_data.get('exposure', 0)),
-                'span_trade_margin': float(response_data.get('spanTrade', 0)),
-                'exposure_trade_margin': float(response_data.get('exposureTrade', 0)),
-                'total_margin_required': float(response_data.get('span', 0)) + float(response_data.get('exposure', 0)),
-                'request_time': response_data.get('request_time', ''),
-                'raw_response': response_data  # Include raw response for debugging
+                'total_margin_required': total_margin_required,
+                'span_margin': span_margin,
+                'exposure_margin': exposure_margin
             }
         }
 
