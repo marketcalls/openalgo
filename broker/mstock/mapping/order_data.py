@@ -474,10 +474,12 @@ def transform_positions_data(positions_data):
         # Setting to "NA" as it requires separate market data API call
         ltp = "NA"
 
-        # mStock Type B API doesn't provide pnl directly in positions
-        # netvalue is position value (qty × price), not P&L
-        # P&L requires LTP which is not available, so keeping as 0.0
-        pnl = 0.0
+        # Use netvalue as P&L
+        # netvalue represents the realized/unrealized profit/loss for the position
+        try:
+            pnl = float(position.get('netvalue', 0.0))
+        except (ValueError, TypeError):
+            pnl = 0.0
 
         transformed_position = {
             "symbol": position.get('tradingsymbol', ''),
