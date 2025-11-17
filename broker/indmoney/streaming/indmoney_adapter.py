@@ -177,16 +177,20 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             }
 
         # Subscribe if connected
+        self.logger.info(f"Checking connection status: connected={self.connected}, ws_client={self.ws_client is not None}")
         if self.connected and self.ws_client:
             try:
+                self.logger.info(f"ATTEMPTING SUBSCRIPTION: {symbol}.{exchange}, instrument_token={instrument_token}, mode={indmoney_mode}")
                 self.ws_client.subscribe(
                     instruments=[instrument_token],
                     mode=indmoney_mode
                 )
-                self.logger.info(f"Subscribed to {symbol}.{exchange} in {indmoney_mode} mode")
+                self.logger.info(f"SUBSCRIPTION SENT: {symbol}.{exchange} in {indmoney_mode} mode")
             except Exception as e:
-                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
+                self.logger.error(f"SUBSCRIPTION ERROR for {symbol}.{exchange}: {e}", exc_info=True)
                 return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
+        else:
+            self.logger.warning(f"NOT CONNECTED YET - subscription will be sent when connection opens")
 
         # Return success
         return self._create_success_response(
@@ -255,11 +259,14 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _on_open(self, wsapp) -> None:
         """Callback when connection is established"""
-        self.logger.info("Connected to INDmoney WebSocket")
+        self.logger.info("==================== WEBSOCKET OPENED ====================")
+        self.logger.info(f"Connection established to INDmoney WebSocket")
         self.connected = True
 
         # Resubscribe to existing subscriptions if reconnecting
         with self.lock:
+            self.logger.info(f"Number of stored subscriptions: {len(self.subscriptions)}")
+
             # Group subscriptions by mode for efficient resubscription
             ltp_instruments = []
             quote_instruments = []
@@ -267,6 +274,7 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             for correlation_id, sub in self.subscriptions.items():
                 instrument_token = sub['instrument_token']
                 mode = sub['indmoney_mode']
+                self.logger.info(f"  - {correlation_id}: instrument={instrument_token}, mode={mode}")
 
                 if mode == 'ltp':
                     ltp_instruments.append(instrument_token)
@@ -276,15 +284,22 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Resubscribe in batches
             try:
                 if ltp_instruments:
+                    self.logger.info(f"RESUBSCRIBING to {len(ltp_instruments)} LTP instruments: {ltp_instruments}")
                     self.ws_client.subscribe(instruments=ltp_instruments, mode='ltp')
-                    self.logger.info(f"Resubscribed to {len(ltp_instruments)} instruments in LTP mode")
+                    self.logger.info(f"✓ Resubscribed to {len(ltp_instruments)} instruments in LTP mode")
 
                 if quote_instruments:
+                    self.logger.info(f"RESUBSCRIBING to {len(quote_instruments)} QUOTE instruments: {quote_instruments}")
                     self.ws_client.subscribe(instruments=quote_instruments, mode='quote')
-                    self.logger.info(f"Resubscribed to {len(quote_instruments)} instruments in QUOTE mode")
+                    self.logger.info(f"✓ Resubscribed to {len(quote_instruments)} instruments in QUOTE mode")
+
+                if not ltp_instruments and not quote_instruments:
+                    self.logger.warning("No subscriptions to resubscribe (subscriptions list is empty)")
 
             except Exception as e:
-                self.logger.error(f"Error resubscribing: {e}")
+                self.logger.error(f"Error resubscribing: {e}", exc_info=True)
+
+        self.logger.info("==================== READY FOR DATA ====================")
 
     def _on_error(self, wsapp, error) -> None:
         """Callback for WebSocket errors"""
@@ -306,6 +321,11 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_data(self, wsapp, message) -> None:
         """Callback for market data from the WebSocket"""
         try:
+            # Parse JSON if message comes as string
+            if isinstance(message, str):
+                self.logger.debug(f"Parsing JSON string: {message[:100]}...")
+                message = json.loads(message)
+
             # Log all incoming messages for debugging
             self.logger.info(f">> RAW INDMONEY DATA: {message}")
 
@@ -319,7 +339,7 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # }
 
             if not isinstance(message, dict):
-                self.logger.warning(f"[WARN] Message is not a dictionary: {type(message)}")
+                self.logger.warning(f"[WARN] Message is not a dictionary after parsing: {type(message)}")
                 return
 
             # Extract instrument token and mode
