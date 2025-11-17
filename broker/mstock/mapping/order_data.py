@@ -5,6 +5,29 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def map_broker_exchange_to_openalgo(broker_exchange, instrumenttype=''):
+    """
+    Maps mStock broker exchange to OpenAlgo exchange format.
+    mStock returns NSE for both equity and derivatives,
+    but OpenAlgo uses NFO for derivatives.
+
+    Parameters:
+    - broker_exchange: Exchange from mStock API (e.g., 'NSE', 'BSE', 'MCX')
+    - instrumenttype: Instrument type (e.g., 'OPTIDX', 'OPTSTK', 'FUTIDX', 'FUTSTK')
+
+    Returns:
+    - OpenAlgo exchange format (e.g., 'NFO' for NSE derivatives)
+    """
+    if instrumenttype in ['OPTIDX', 'OPTSTK', 'FUTIDX', 'FUTSTK']:
+        if broker_exchange == 'NSE':
+            return 'NFO'
+        elif broker_exchange == 'BSE':
+            return 'BFO'
+
+    # For equity and other instruments, return as-is
+    return broker_exchange
+
+
 def map_order_data(order_data):
     """
     Processes and modifies order data from mStock Type B API.
@@ -186,7 +209,10 @@ def transform_order_data(orders):
 
         transformed_order = {
             "symbol": order.get("tradingsymbol", ""),
-            "exchange": order.get("exchange", ""),
+            "exchange": map_broker_exchange_to_openalgo(
+                order.get("exchange", ""),
+                order.get("instrumenttype", "")
+            ),
             "action": order.get("transactiontype", ""),
             "quantity": order.get("quantity", 0),
             "price": order_price,
@@ -227,53 +253,66 @@ def map_trade_data(trade_data):
         exchange = trade.get('EXCHANGE', '')
         instrument_name = trade.get('INSTRUMENT_NAME', '')
 
-        if exchange:
-            # Determine correct exchange for derivatives
-            lookup_exchange = exchange
-            if instrument_name in ['OPTIDX', 'OPTSTK', 'FUTIDX', 'FUTSTK']:
-                if exchange == 'NSE':
-                    lookup_exchange = 'NFO'
-                elif exchange == 'BSE':
-                    lookup_exchange = 'BFO'
+        # Determine correct exchange for derivatives
+        lookup_exchange = exchange
+        if instrument_name in ['OPTIDX', 'OPTSTK', 'FUTIDX', 'FUTSTK']:
+            if exchange == 'NSE':
+                lookup_exchange = 'NFO'
+            elif exchange == 'BSE':
+                lookup_exchange = 'BFO'
 
+        if exchange:
             # First try: Get OpenAlgo symbol using symboltoken
             if symboltoken:
                 symbol_from_db = get_symbol(symboltoken, lookup_exchange)
                 if symbol_from_db:
                     trade['tradingsymbol'] = symbol_from_db
                     logger.debug(f"Found tradebook symbol via token: {symbol_from_db}")
-                    continue
-
-            # Second try: Convert broker symbol to OA format
-            if symbol:
-                # For mStock, construct the full broker symbol
-                # NSE/BSE equity: SYMBOL-EQ (e.g., YESBANK-EQ)
-                # NFO/MCX/BFO/CDS: Use symbol as-is
-                if exchange in ['NSE', 'BSE'] and instrument_name == 'EQUITY':
-                    brsymbol = f"{symbol}-EQ"
                 else:
-                    brsymbol = symbol
-
-                oa_symbol = get_oa_symbol(brsymbol, lookup_exchange)
-                if oa_symbol:
-                    trade['tradingsymbol'] = oa_symbol
-                    logger.debug(f"Converted tradebook symbol {brsymbol} to OA format: {oa_symbol}")
-                else:
-                    logger.info(f"Unable to find OA symbol for token {symboltoken} or brsymbol {brsymbol} on {lookup_exchange}. Using base symbol.")
-                    trade['tradingsymbol'] = symbol
+                    # Symbol not found, try broker symbol conversion
+                    if symbol:
+                        if exchange in ['NSE', 'BSE'] and instrument_name == 'EQUITY':
+                            brsymbol = f"{symbol}-EQ"
+                        else:
+                            brsymbol = symbol
+                        oa_symbol = get_oa_symbol(brsymbol, lookup_exchange)
+                        if oa_symbol:
+                            trade['tradingsymbol'] = oa_symbol
+                            logger.debug(f"Converted tradebook symbol {brsymbol} to OA format: {oa_symbol}")
+                        else:
+                            logger.info(f"Unable to find OA symbol for token {symboltoken} or brsymbol {brsymbol} on {lookup_exchange}. Using base symbol.")
+                            trade['tradingsymbol'] = symbol
+                    else:
+                        trade['tradingsymbol'] = ''
             else:
-                trade['tradingsymbol'] = ''
+                # No symboltoken, try broker symbol conversion
+                if symbol:
+                    if exchange in ['NSE', 'BSE'] and instrument_name == 'EQUITY':
+                        brsymbol = f"{symbol}-EQ"
+                    else:
+                        brsymbol = symbol
+                    oa_symbol = get_oa_symbol(brsymbol, lookup_exchange)
+                    if oa_symbol:
+                        trade['tradingsymbol'] = oa_symbol
+                        logger.debug(f"Converted tradebook symbol {brsymbol} to OA format: {oa_symbol}")
+                    else:
+                        logger.info(f"Unable to find OA symbol for brsymbol {brsymbol} on {lookup_exchange}. Using base symbol.")
+                        trade['tradingsymbol'] = symbol
+                else:
+                    trade['tradingsymbol'] = ''
         else:
-            trade['tradingsymbol'] = symbol
+            trade['tradingsymbol'] = symbol if symbol else ''
 
         # Map product types to OpenAlgo format
         # Type B API returns: CNC, INTRADAY (some might return DELIVERY)
         producttype = trade.get('PRODUCT', '')
-        if producttype == 'CNC' or producttype == 'DELIVERY':
+        if (lookup_exchange in ['NSE', 'BSE']) and producttype == 'DELIVERY':
+            trade['producttype'] = 'CNC'
+        elif producttype == 'CNC':
             trade['producttype'] = 'CNC'
         elif producttype == 'INTRADAY':
             trade['producttype'] = 'MIS'
-        elif producttype == 'CARRYFORWARD':
+        elif lookup_exchange in ['NFO', 'MCX', 'BFO', 'CDS'] and producttype == 'CARRYFORWARD':
             trade['producttype'] = 'NRML'
         else:
             trade['producttype'] = producttype
@@ -321,7 +360,10 @@ def transform_tradebook_data(tradebook_data):
 
         transformed_trade = {
             "symbol": trade.get('tradingsymbol', ''),  # Mapped by map_trade_data
-            "exchange": trade.get('EXCHANGE', ''),
+            "exchange": map_broker_exchange_to_openalgo(
+                trade.get('EXCHANGE', ''),
+                trade.get('INSTRUMENT_NAME', '')
+            ),
             "product": trade.get('producttype', ''),  # Mapped by map_trade_data
             "action": action,  # BUY_SELL field from Type B API (normalized to uppercase)
             "quantity": quantity,
@@ -439,7 +481,10 @@ def transform_positions_data(positions_data):
 
         transformed_position = {
             "symbol": position.get('tradingsymbol', ''),
-            "exchange": position.get('exchange', ''),
+            "exchange": map_broker_exchange_to_openalgo(
+                position.get('exchange', ''),
+                position.get('instrumenttype', '')
+            ),
             "product": position.get('producttype', ''),  # Already mapped by map_position_data
             "quantity": quantity,
             "average_price": average_price,
