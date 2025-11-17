@@ -5,7 +5,7 @@
 [![PyPI Downloads](https://static.pepy.tech/badge/openalgo)](https://pepy.tech/projects/openalgo)
 [![PyPI Downloads](https://static.pepy.tech/badge/openalgo/month)](https://pepy.tech/projects/openalgo)
 [![X (formerly Twitter) Follow](https://img.shields.io/twitter/follow/openalgoHQ)](https://twitter.com/openalgoHQ)
-[![YouTube Channel Subscribers](https://img.shields.io/youtube/channel/subscribers/UCw7eVneIEyiTApy4RtxrJsQ)](https://youtube.com/@openalgoHQ)
+[![YouTube Channel Subscribers](https://img.shields.io/youtube/channel/subscribers/UCw7eVneIEyiTApy4RtxrJsQ)](https://www.youtube.com/@openalgo)
 [![Discord](https://img.shields.io/discord/1219847221055455263)](https://discord.com/invite/UPh7QPsNhP)
 
 </div>
@@ -20,7 +20,9 @@
 - **Installation Guide**: [Getting Started](https://docs.openalgo.in/installation-guidelines/getting-started)
 - **Upgrade Guide**: [Upgrade Instructions](https://docs.openalgo.in/installation-guidelines/getting-started/upgrade)
 - **Why OpenAlgo**: [Why Build with OpenAlgo](https://docs.openalgo.in/why-to-build-with-openalgo)
-- **Video Tutorial**: [![What is OpenAlgo](https://img.youtube.com/vi/kAS3jTb3OkI/0.jpg)](https://www.youtube.com/watch?v=kAS3jTb3OkI)
+- **Video Tutorial**: 
+
+[![What is OpenAlgo](https://img.youtube.com/vi/kAS3jTb3OkI/0.jpg)](https://www.youtube.com/watch?v=kAS3jTb3OkI)
 
 ## Python Compatibility
 
@@ -279,7 +281,7 @@ We welcome contributions! To contribute:
 
 - **Discord**: [Join our community](https://www.openalgo.in/discord)
 - **Twitter/X**: [@openalgoHQ](https://twitter.com/openalgoHQ)
-- **YouTube**: [@openalgoHQ](https://youtube.com/@openalgoHQ)
+- **YouTube**: [@openalgo](https://www.youtube.com/@openalgo)
 - **GitHub Issues**: [Report bugs or request features](https://github.com/marketcalls/openalgo/issues)
 
 ## License
