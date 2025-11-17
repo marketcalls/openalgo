@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import requests
+import re
 from io import StringIO
 from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, Index
@@ -194,6 +195,74 @@ def convert_date(date_str):
         return str(date_str)
 
 
+def fetch_and_process_mstock_indices():
+    """
+    Fetch NSE index data from mstock documentation and process it.
+    Note: BSE indices are already in the master contract API and are mapped there.
+    Only NSE indices need to be fetched separately as they're not in the API.
+
+    Similar to aliceblue's process_aliceblue_indices_csv() function.
+    Returns a DataFrame ready to be inserted into the database.
+
+    Reference: https://tradingapi.mstock.com/docs/v1/Annexure/#index-tokens
+    """
+    try:
+        url = 'https://tradingapi.mstock.com/docs/v1/Annexure/'
+        logger.info(f"Fetching NSE index data from {url}")
+
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        html_content = response.text
+
+        # Regex to extract NSE index rows only
+        row_pattern = r'<tr>\s*<td[^>]*>([^<]+)</td>\s*<td[^>]*>(\d+)</td>\s*<td[^>]*>([^<]+)</td>\s*<td[^>]*>NSE</td>\s*</tr>'
+        matches = re.findall(row_pattern, html_content, re.IGNORECASE)
+
+        if not matches:
+            logger.warning("No NSE index data found in web page")
+            return pd.DataFrame()
+
+        # Create DataFrame from matches
+        df = pd.DataFrame(matches, columns=['script', 'token', 'name'])
+
+        # Create token_df similar to aliceblue format
+        token_df = pd.DataFrame()
+        token_df['symbol'] = df['script'].str.strip()
+        token_df['brsymbol'] = df['name'].str.strip()
+        token_df['name'] = df['script'].str.strip()
+        token_df['token'] = df['token'].str.strip()
+        token_df['brexchange'] = 'NSE'
+        token_df['exchange'] = 'NSE_INDEX'
+
+        # Set index-specific fields
+        token_df['expiry'] = ''
+        token_df['strike'] = 0.0
+        token_df['lotsize'] = 1
+        token_df['instrumenttype'] = 'INDEX'
+        token_df['tick_size'] = 0.05
+
+        # Standardize common symbol names (similar to aliceblue)
+        token_df['symbol'] = token_df['symbol'].replace({
+            'NIFTY50': 'NIFTY',
+            'NIFTYNEXT50': 'NIFTYNXT50',
+            'NIFTYFINSERVICE': 'FINNIFTY',
+            'NIFTYBANK': 'BANKNIFTY',
+            'NIFTYMIDSELECT': 'MIDCPNIFTY',
+            'INDIAVIX': 'INDIAVIX'
+        })
+
+        # Filter out rows with NaN symbol values
+        token_df = token_df.dropna(subset=['symbol'])
+
+        logger.info(f"Processed {len(token_df)} NSE index symbols from web")
+
+        return token_df
+
+    except Exception as e:
+        logger.error(f"Error fetching and processing NSE indices: {e}")
+        return pd.DataFrame()
+
+
 # -------------------------------------------------------------------
 # PROCESS JSON
 # -------------------------------------------------------------------
@@ -245,55 +314,34 @@ def process_mstock_json(json_data):
     df['tick_size'] = pd.to_numeric(df['tick_size'].replace('', None), errors='coerce').fillna(0.05).astype(float)
 
     # -------------------------------------------------------------------
-    # Identify Index Instruments using official mStock Index Token list
-    # Reference: https://tradingapi.mstock.com/docs/v1/Annexure/#index-tokens
+    # Map BSE Indices (BSE indices ARE in master contract API)
+    # NSE indices are NOT in the API - they're fetched separately
     # -------------------------------------------------------------------
     df['token'] = df['token'].astype(str)
 
-    # NSE Index tokens (98 indices from mStock official documentation)
-    nse_index_tokens = {
-        '100004438', '100003333', '100005568', '100005576', '100005605', '10000888',
-        '100005572', '100004427', '100004437', '100004441', '100005582', '100005592',
-        '100005604', '100004434', '100004428', '100004440', '100005569', '100005599',
-        '100005571', '100005601', '100004436', '100005584', '100004435', '100004431',
-        '100005591', '100004439', '100005566', '100004425', '100005600', '100005598',
-        '100004443', '100004433', '100005607', '100005593', '100005606', '100005580',
-        '100004426', '100005594', '100005603', '100005560', '100004444', '100005590',
-        '100005562', '100005589', '100005561', '100004421', '100005570', '100004432',
-        '100005602', '100004420', '100005595', '100005573', '100004424', '100004422',
-        '100005587', '100005574', '100004423', '100005597', '100005563', '100005558',
-        '100005588', '100005596', '100004442', '100005575', '100004430', '10000999',
-        '100005583', '100005585', '100001111', '100004429', '100005586'
-    }
+    # Fetch BSE index tokens from documentation to map them
+    try:
+        url = 'https://tradingapi.mstock.com/docs/v1/Annexure/'
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()
+        html_content = response.text
 
-    # BSE Index tokens (61 indices from mStock official documentation)
-    bse_index_tokens = {
-        '100005632', '100005626', '100005644', '100005651', '100005628', '100005614',
-        '100005627', '100005611', '100005634', '100005654', '100005658', '100005640',
-        '100005656', '100005645', '100005613', '100005637', '100005638', '100005620',
-        '100005641', '100005630', '100005631', '100005636', '100002222', '100005653',
-        '100005609', '100005652', '100005615', '100005621', '100005629', '100005655',
-        '100005643', '100005623', '100005625', '100005642', '100005618', '100005617',
-        '100005649', '100005635', '100005639', '100005619', '100005608', '100005624',
-        '100005633', '100005622', '100005657', '100005647', '100005567', '100005557',
-        '100005659', '100005646', '100005612', '100005650', '100005610'
-    }
+        # Extract BSE index tokens only
+        row_pattern = r'<tr>\s*<td[^>]*>([^<]+)</td>\s*<td[^>]*>(\d+)</td>\s*<td[^>]*>([^<]+)</td>\s*<td[^>]*>BSE</td>\s*</tr>'
+        matches = re.findall(row_pattern, html_content, re.IGNORECASE)
 
-    # Map NSE indices to NSE_INDEX exchange
-    mask_nse_index = (
-        (df['exchange'] == 'NSE') &
-        (df['token'].isin(nse_index_tokens))
-    )
-    df.loc[mask_nse_index, 'exchange'] = 'NSE_INDEX'
-    logger.info(f"Mapped {mask_nse_index.sum()} NSE index tokens to NSE_INDEX")
+        bse_index_tokens = {match[1].strip() for match in matches}
 
-    # Map BSE indices to BSE_INDEX exchange
-    mask_bse_index = (
-        (df['exchange'] == 'BSE') &
-        (df['token'].isin(bse_index_tokens))
-    )
-    df.loc[mask_bse_index, 'exchange'] = 'BSE_INDEX'
-    logger.info(f"Mapped {mask_bse_index.sum()} BSE index tokens to BSE_INDEX")
+        if bse_index_tokens:
+            # Map BSE indices in master contract to BSE_INDEX exchange
+            mask_bse_index = (
+                (df['exchange'] == 'BSE') &
+                (df['token'].isin(bse_index_tokens))
+            )
+            df.loc[mask_bse_index, 'exchange'] = 'BSE_INDEX'
+            logger.info(f"Mapped {mask_bse_index.sum()} BSE index tokens to BSE_INDEX from master contract")
+    except Exception as e:
+        logger.warning(f"Could not fetch BSE index tokens for mapping: {e}")
 
     # -------------------------------------------------------------------
     # Format F&O Symbols (OpenAlgo Standard)
@@ -426,23 +474,8 @@ def process_mstock_json(json_data):
         'PE'
     )
 
-    # -------------------------------------------------------------------
-    # Common Index Symbol Formatting
-    # Standardize index symbol names for NSE_INDEX and BSE_INDEX exchanges
-    # -------------------------------------------------------------------
-    df['symbol'] = df['symbol'].replace({
-        'Nifty 50': 'NIFTY',
-        'Nifty Next 50': 'NIFTYNXT50',
-        'Nifty Fin Service': 'FINNIFTY',
-        'Nifty Bank': 'BANKNIFTY',
-        'NIFTY MID SELECT': 'MIDCPNIFTY',
-        'India VIX': 'INDIAVIX',
-        'SNSX50': 'SENSEX50',
-        'S&P BSE SENSEX': 'SENSEX',
-        'BSE BANKEX': 'BANKEX'
-    })
-
     # Return the processed DataFrame
+    # Note: Index symbol formatting is handled in fetch_and_process_mstock_indices()
     return df
 
 
@@ -480,6 +513,15 @@ def master_contract_download():
 
         delete_symtoken_table()
         copy_from_dataframe(token_df)
+
+        # Fetch and insert NSE index data separately (BSE indices are in master contract)
+        logger.info("Fetching and processing NSE index data from mstock documentation")
+        indices_df = fetch_and_process_mstock_indices()
+        if not indices_df.empty:
+            copy_from_dataframe(indices_df)
+            logger.info(f"Successfully added {len(indices_df)} NSE index symbols to database")
+        else:
+            logger.warning("No NSE index data fetched from web")
 
         socketio.emit('master_contract_download', {
             'status': 'success',

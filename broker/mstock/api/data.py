@@ -234,7 +234,11 @@ class BrokerData:
             # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
             token = get_token(symbol, exchange)
-            logger.debug(f"Debug - Broker Symbol: {br_symbol}, Token: {token}")
+            logger.debug(f"Debug - Symbol: {symbol}, Exchange: {exchange}, Broker Symbol: {br_symbol}, Token: {token}")
+
+            # Validate token
+            if not token or token == 'None' or str(token).strip() == '':
+                raise Exception(f"Invalid or missing token for symbol '{symbol}' on exchange '{exchange}'. Token: {token}")
 
             # Convert dates to datetime objects
             from_date = pd.to_datetime(start_date)
@@ -462,6 +466,14 @@ class BrokerData:
             pd.DataFrame: Intraday data
         """
         try:
+            # Get token for the symbol
+            token = get_token(symbol, exchange)
+            logger.debug(f"Debug - Intraday: Symbol: {symbol}, Exchange: {exchange}, Token: {token}")
+
+            # Validate token
+            if not token or token == 'None' or str(token).strip() == '':
+                raise Exception(f"Invalid or missing token for symbol '{symbol}' on exchange '{exchange}'. Token: {token}")
+
             # Map exchange to numeric code for intraday API
             exchange_code = self.intraday_exchange_map.get(exchange)
             if not exchange_code:
@@ -472,14 +484,11 @@ class BrokerData:
             if not intraday_interval:
                 raise Exception(f"Interval '{interval}' not supported for intraday data")
 
-            # For intraday API, use the trading symbol (e.g., "SBIN", "AUBANK")
-            # Not the broker symbol format
-            trading_symbol = symbol
-
             # Prepare payload for intraday API
+            # API requires symboltoken (not symbolname)
             payload = {
                 "exchange": exchange_code,
-                "symbolname": trading_symbol,
+                "symboltoken": token,
                 "interval": intraday_interval
             }
 
