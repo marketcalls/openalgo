@@ -8,7 +8,7 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-api_tester_bp = Blueprint('api_tester', __name__, url_prefix='/api-tester')
+playground_bp = Blueprint('playground', __name__, url_prefix='/playground')
 
 def login_required(f):
     @wraps(f)
@@ -18,19 +18,19 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-@api_tester_bp.route('/')
+@playground_bp.route('/')
 @check_session_validity
 def index():
     """Render the API tester page"""
     login_username = session.get('user')
     # Get the decrypted API key if it exists
     api_key = get_api_key_for_tradingview(login_username) if login_username else None
-    logger.info(f"API Tester accessed by user: {login_username}")
-    return render_template('api_tester.html', 
+    logger.info(f"Playground accessed by user: {login_username}")
+    return render_template('playground.html', 
                          login_username=login_username,
                          api_key=api_key or '')
 
-@api_tester_bp.route('/api-key')
+@playground_bp.route('/api-key')
 @check_session_validity
 def get_api_key():
     """Get the current user's API key"""
@@ -41,7 +41,7 @@ def get_api_key():
     api_key = get_api_key_for_tradingview(login_username)
     return jsonify({'api_key': api_key or ''})
 
-@api_tester_bp.route('/collections')
+@playground_bp.route('/collections')
 @check_session_validity
 def get_collections():
     """Get all available API collections"""
@@ -71,7 +71,7 @@ def get_collections():
     
     return jsonify(collections)
 
-@api_tester_bp.route('/endpoints')
+@playground_bp.route('/endpoints')
 @check_session_validity
 def get_endpoints():
     """Get structured list of all API endpoints"""

@@ -1,8 +1,8 @@
-# API Tester Documentation
+# API Playground Documentation
 
 ## Overview
 
-The API Tester is a web-based interface for testing OpenAlgo REST API endpoints. It provides an intuitive UI to explore, test, and debug all available API endpoints without needing external tools like Postman or Bruno.
+The API Playground is a web-based interface for testing OpenAlgo REST API endpoints. It provides an intuitive UI to explore, test, and debug all available API endpoints without needing external tools like Postman or Bruno.
 
 ## Features
 
@@ -17,16 +17,16 @@ The API Tester is a web-based interface for testing OpenAlgo REST API endpoints.
 
 ## Access
 
-Navigate to: `http://your-host:port/api-tester`
+Navigate to: `http://your-host:port/playground`
 
-**Note**: You must be logged in to access the API Tester.
+**Note**: You must be logged in to access the Playground.
 
 ## Usage
 
 ### 1. API Key (Automatic)
 
 Your API key is automatically loaded from your user session:
-- The API key is fetched when you open the API Tester
+- The API key is fetched when you open the Playground
 - It's displayed in a read-only field at the top
 - Click "Copy" to copy it to clipboard
 - Click "Manage" to generate or update your API key
@@ -131,7 +131,7 @@ The response panel shows:
 
 ## Integration with Collections
 
-The API Tester is built using the same endpoint definitions as:
+The API Playground is built using the same endpoint definitions as:
 - Postman Collection (`collections/postman/openalgo.postman_collection.json`)
 - Bruno Collection (`collections/openalgo/*.bru`)
 
@@ -141,7 +141,7 @@ This ensures consistency across all testing tools.
 
 ### "Authentication required" error
 - Make sure you're logged into OpenAlgo
-- Navigate to `/api-tester` while logged in
+- Navigate to `/playground` while logged in
 
 ### No API key shown
 - Click "Manage" to generate a new API key
@@ -162,7 +162,7 @@ This ensures consistency across all testing tools.
 - API keys are automatically fetched from your secure session
 - API keys are stored encrypted in the database
 - Never share your API key with others
-- The API Tester requires authentication (login) to access
+- The API Playground requires authentication (login) to access
 - API keys are displayed in read-only mode for security
 
 ## Future Enhancements

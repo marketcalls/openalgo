@@ -65,9 +65,9 @@
                 </a>
             </li>
             <li>
-                <a href="{{ url_for('api_tester.index') }}"
-                   class="text-base hover:bg-base-200 {{ 'active' if request.endpoint == 'api_tester.index' }}">
-                    API Tester
+                <a href="{{ url_for('playground.index') }}"
+                   class="text-base hover:bg-base-200 {{ 'active' if request.endpoint == 'playground.index' }}">
+                    Playground
                 </a>
             </li>
         </ul>
@@ -316,7 +316,7 @@
 function updateActionCenterBadge() {
     fetch('/action-center/count')
         .then(res => res.json())
-        .then(data => {
+        .then data => {
             const badge = document.getElementById('action-center-badge');
             if (badge && data.count > 0) {
                 badge.textContent = data.count;
