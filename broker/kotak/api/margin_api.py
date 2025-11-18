@@ -25,7 +25,7 @@ def calculate_single_margin(position_data, auth_token):
     session_token, session_sid, base_url, access_token = auth_token.split(":::")
 
     # Debug logging for baseUrl
-    logger.info(f"MARGIN API - Using baseUrl: {base_url}")
+    logger.debug(f"MARGIN API - Using baseUrl: {base_url}")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -43,7 +43,7 @@ def calculate_single_margin(position_data, auth_token):
     json_string = json.dumps(position_data)
     payload = f'jData={urllib.parse.quote(json_string)}'
 
-    logger.info(f"Kotak margin calculation payload: {payload}")
+    logger.debug(f"Kotak margin calculation payload: {payload}")
 
     # Construct full URL
     url = f"{base_url}/quick/user/check-margin"
@@ -66,7 +66,7 @@ def calculate_single_margin(position_data, auth_token):
             }
             return response, error_response
 
-        logger.info(f"Kotak margin response: {response_data}")
+        logger.debug(f"Kotak margin response: {response_data}")
 
         # Parse and standardize the response
         standardized_response = parse_margin_response(response_data)

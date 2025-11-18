@@ -82,20 +82,15 @@ def parse_margin_response(response_data):
 
         # Extract margin data
         # Kotak returns: avlMrgn, reqdMrgn, ordMrgn, mrgnUsd, rmsVldtd, etc.
+        total_margin_required = float(response_data.get('reqdMrgn', 0))
 
-        # Return standardized format
+        # Return standardized format matching OpenAlgo API specification
         return {
             'status': 'success',
             'data': {
-                'available_margin': float(response_data.get('avlMrgn', 0)),
-                'required_margin': float(response_data.get('reqdMrgn', 0)),
-                'order_margin': float(response_data.get('ordMrgn', 0)),
-                'margin_used': float(response_data.get('mrgnUsd', 0)),
-                'total_margin_used': float(response_data.get('totMrgnUsd', 0)),
-                'available_cash': float(response_data.get('avlCash', 0)),
-                'insufficient_fund': float(response_data.get('insufFund', 0)),
-                'rms_validated': response_data.get('rmsVldtd', ''),
-                'raw_response': response_data  # Include raw response for debugging
+                'total_margin_required': total_margin_required,
+                'span_margin': 0,  # Kotak doesn't provide separate span margin
+                'exposure_margin': 0  # Kotak doesn't provide separate exposure margin
             }
         }
 
@@ -118,44 +113,19 @@ def parse_batch_margin_response(responses):
     """
     try:
         total_required_margin = 0
-        total_order_margin = 0
-        total_margin_used = 0
-        available_margin = 0
-        available_cash = 0
-        total_insufficient = 0
-        all_rms_valid = True
-        all_responses = []
 
         for response in responses:
             if response.get('status') == 'success':
                 data = response.get('data', {})
-                total_required_margin += data.get('required_margin', 0)
-                total_order_margin += data.get('order_margin', 0)
-                total_margin_used += data.get('total_margin_used', 0)
-                # Take minimum available margin (most restrictive)
-                if available_margin == 0:
-                    available_margin = data.get('available_margin', 0)
-                else:
-                    available_margin = min(available_margin, data.get('available_margin', 0))
-                # Take max available cash (should be same for all)
-                available_cash = max(available_cash, data.get('available_cash', 0))
-                total_insufficient += data.get('insufficient_fund', 0)
-                if data.get('rms_validated', '') != 'OK':
-                    all_rms_valid = False
-                all_responses.append(data.get('raw_response', {}))
+                total_required_margin += data.get('total_margin_required', 0)
 
+        # Return standardized format matching OpenAlgo API specification
         return {
             'status': 'success',
             'data': {
-                'total_required_margin': total_required_margin,
-                'total_order_margin': total_order_margin,
-                'available_margin': available_margin,
-                'available_cash': available_cash,
-                'total_margin_used': total_margin_used,
-                'total_insufficient_fund': total_insufficient,
-                'rms_validated': 'OK' if all_rms_valid else 'NOT_OK',
-                'total_positions': len(responses),
-                'individual_margins': all_responses
+                'total_margin_required': total_required_margin,
+                'span_margin': 0,  # Kotak doesn't provide separate span margin
+                'exposure_margin': 0  # Kotak doesn't provide separate exposure margin
             }
         }
 
