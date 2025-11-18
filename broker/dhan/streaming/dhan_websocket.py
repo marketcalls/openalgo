@@ -179,11 +179,14 @@ class DhanWebSocket:
     
     def disconnect(self):
         """Disconnect from WebSocket"""
+        # Store connected state before clearing
+        was_connected = self.connected
+
         self.running = False
         self.connected = False
-        
-        # Send disconnect message if connected
-        if self.ws and self.connected:
+
+        # Send disconnect message if was connected
+        if self.ws and was_connected:
             try:
                 disconnect_msg = json.dumps({
                     "RequestCode": self.REQUEST_CODES['DISCONNECT']
@@ -191,11 +194,19 @@ class DhanWebSocket:
                 if hasattr(self.ws, 'send') and callable(self.ws.send):
                     self.ws.send(disconnect_msg)
             except Exception as e:
-                self.logger.error(f"Error sending disconnect message: {e}")
-        
+                self.logger.debug(f"Error sending disconnect message: {e}")
+
         # Close WebSocket
         if self.ws:
-            self.ws.close()
+            try:
+                self.ws.close()
+            except Exception as e:
+                self.logger.debug(f"Error closing WebSocket: {e}")
+
+        # Wait for WebSocket thread to finish
+        if self.ws_thread and self.ws_thread.is_alive():
+            self.ws_thread.join(timeout=2)
+            self.logger.debug(f"WebSocket thread {'stopped' if not self.ws_thread.is_alive() else 'timeout'}")
     
     def subscribe(self, instruments: List[Dict[str, str]], mode: str = 'FULL'):
         """
@@ -294,13 +305,15 @@ class DhanWebSocket:
         """Handle WebSocket connection close"""
         self.connected = False
 
-        # Check if this is an immediate disconnect (common with auth issues)
-        if close_status_code is None or close_status_code == 1000:
+        # Only log warning for unexpected disconnects (not during intentional shutdown)
+        if self.running and (close_status_code is None or close_status_code == 1000):
             self.logger.warning(
-                f"WebSocket closed immediately after connection: status={close_status_code}, "
+                f"WebSocket closed unexpectedly: status={close_status_code}, "
                 f"message='{close_msg}'. This may indicate: 1) Multiple concurrent connections "
                 f"with same credentials, 2) Invalid/expired token, or 3) Server-side rate limiting."
             )
+        elif not self.running:
+            self.logger.debug(f"WebSocket closed during shutdown: status={close_status_code}")
         else:
             self.logger.debug(f"WebSocket connection closed: {close_status_code} - {close_msg}")
 

@@ -132,9 +132,9 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.ws_client_20depth.on_close = self._on_close_20depth
         
         self.running = True
-        
-        # Start fallback monitoring thread - temporarily disabled for debugging
-        # self.start_fallback_monitor()
+
+        # Start fallback monitoring thread for 20-depth to 5-depth fallback
+        self.start_fallback_monitor()
     
     def connect(self) -> None:
         """Establish connections to Dhan WebSocket endpoints"""
@@ -203,16 +203,16 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return self._create_error_response("EXCHANGE_NOT_SUPPORTED", 
                                               f"Exchange {exchange} not supported")
         
-        # Check depth level support - use 5-level for all segments
+        # Check depth level support based on exchange capabilities
         is_fallback = False
         actual_depth = depth_level
-        
+
         if mode == 3:  # Depth mode
-            # Force 5-level depth for all exchanges (keeping 20-level code intact but not using it)
-            if depth_level == 20:
-                actual_depth = 5
-                is_fallback = True
-                self.logger.debug(f"Using 5-level depth for {exchange} instead of requested 20-level depth")
+            # For NSE and NFO, auto-upgrade to 20-level depth (Dhan's default for these exchanges)
+            if exchange in ['NSE', 'NFO'] and DhanCapabilityRegistry.is_depth_level_supported(exchange, 20):
+                actual_depth = 20
+                self.logger.debug(f"Auto-upgrading to 20-level depth for {exchange}")
+            # Check if requested depth level is supported for this exchange
             elif not DhanCapabilityRegistry.is_depth_level_supported(exchange, depth_level):
                 actual_depth = DhanCapabilityRegistry.get_fallback_depth_level(exchange, depth_level)
                 is_fallback = True
@@ -400,6 +400,9 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         unsubscribed_count = 0
 
+        # Stop fallback monitor first
+        self.stop_fallback_monitor()
+
         with self.lock:
             # Count total subscriptions before clearing
             unsubscribed_count = len(self.subscriptions_5depth) + len(self.subscriptions_20depth)
@@ -584,7 +587,8 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             break
                 
                 if not subscription:
-                    self.logger.warning(f"Received 20-depth data for unsubscribed token: {security_id}, segment: {exchange_segment}")
+                    # Debug level - this is expected during disconnect
+                    self.logger.debug(f"Received 20-depth data for unsubscribed token: {security_id}, segment: {exchange_segment}")
                     # Clear accumulator
                     del self.depth_20_accumulator[security_id]
                     return
