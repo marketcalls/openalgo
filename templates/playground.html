@@ -69,6 +69,77 @@
 .loading-spinner { border:3px solid rgba(255,255,255,0.1); border-top:3px solid currentColor; border-radius:50%; width:16px; height:16px; animation:spin .8s linear infinite; }
 @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
+/* Glass effect for modern UI */
+.glass-effect {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+[data-theme="light"] .glass-effect {
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+/* Top bar gradient */
+.top-bar-gradient {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.03) 0%, rgba(168, 85, 247, 0.03) 100%);
+}
+[data-theme="light"] .top-bar-gradient {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.05) 0%, rgba(168, 85, 247, 0.05) 100%);
+}
+
+/* Modern button style */
+.btn-modern {
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+.btn-modern:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+}
+.btn-modern:active {
+  transform: translateY(0);
+}
+
+/* Mobile FAB */
+.mobile-fab {
+  position: fixed;
+  bottom: 5rem;
+  right: 1rem;
+  z-index: 40;
+}
+
+/* Mobile toolbar */
+.mobile-toolbar {
+  background: rgba(30, 41, 59, 0.95);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  padding: 0.5rem 1rem;
+  border-radius: 1rem;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+[data-theme="light"] .mobile-toolbar {
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+}
+
+/* Pulse dot animation */
+.pulse-dot {
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Toast animation */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 /* Method badges */
 .method-badge { font-size:11px; font-weight:700; padding:4px 8px; border-radius:6px; text-transform:uppercase; letter-spacing:0.6px; box-shadow:0 2px 4px rgba(0,0,0,0.06); }
 .method-get { background: rgba(59,130,246,0.08); color:#3b82f6; border:1px solid rgba(59,130,246,0.18); }
@@ -153,7 +224,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="w-full h-screen flex flex-col bg-base-200">
+<div class="w-full flex flex-col bg-base-200" style="height: calc(100vh - 5.5rem);">
   <!-- Top Bar -->
   <div class="top-bar-gradient border-b border-base-300 px-6 py-4 shadow-lg">
     <div class="flex items-center justify-between">
@@ -187,7 +258,7 @@
       <div class="flex items-center gap-3">
         <div class="glass-effect rounded-xl px-4 py-2 flex items-center gap-3">
           <span class="text-xs text-base-content/60 font-medium">API Key:</span>
-          <input type="password" id="globalApiKey" value="{{ api_key }}" readonly class="input input-sm input-bordered w-64 font-mono text-xs bg-base-100/50">
+          <input type="password" id="globalApiKey" readonly class="input input-sm input-bordered w-64 font-mono text-xs bg-base-100/50" placeholder="Loading...">
           <button id="apiKeyToggle" class="btn btn-sm btn-ghost btn-circle" title="Toggle visibility" aria-label="Toggle API key visibility">
             <svg id="eyeIcon" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -210,14 +281,12 @@
       </div>
     </div>
 
-    {% if not api_key %}
-    <div class="alert alert-warning mt-3 shadow-lg">
+    <div id="apiKeyWarning" class="alert alert-warning mt-3 shadow-lg hidden">
       <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
       </svg>
       <span class="text-sm">No API key found. <a href="/apikey" class="link link-hover font-semibold underline">Generate one here</a>.</span>
     </div>
-    {% endif %}
   </div>
 
   <!-- Main Content Area -->
@@ -413,6 +482,59 @@ function buildAbsoluteUrl(url) {
   }
 }
 
+/* ---------- URL Validation (SSRF Prevention) ---------- */
+function isValidApiUrl(url) {
+  // Only allow relative URLs starting with /api/ or /playground/
+  if (url.startsWith('/api/') || url.startsWith('/playground/')) {
+    return { valid: true };
+  }
+
+  // Try to parse as absolute URL
+  try {
+    const parsed = new URL(url, window.location.origin);
+
+    // Only allow same origin
+    if (parsed.origin !== window.location.origin) {
+      return { valid: false, error: 'Only same-origin requests are allowed' };
+    }
+
+    // Block dangerous protocols
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { valid: false, error: 'Invalid protocol. Only HTTP/HTTPS allowed' };
+    }
+
+    // Block internal/private IP ranges
+    const hostname = parsed.hostname.toLowerCase();
+    const blockedPatterns = [
+      /^localhost$/i,
+      /^127\./,
+      /^10\./,
+      /^172\.(1[6-9]|2[0-9]|3[0-1])\./,
+      /^192\.168\./,
+      /^0\.0\.0\.0$/,
+      /^::1$/,
+      /^\[::1\]$/,
+      /^metadata\./i,
+      /^169\.254\./
+    ];
+
+    for (const pattern of blockedPatterns) {
+      if (pattern.test(hostname)) {
+        return { valid: false, error: 'Requests to internal addresses are not allowed' };
+      }
+    }
+
+    // Must be an API path
+    if (!parsed.pathname.startsWith('/api/') && !parsed.pathname.startsWith('/playground/')) {
+      return { valid: false, error: 'Only /api/ and /playground/ endpoints are allowed' };
+    }
+
+    return { valid: true };
+  } catch (err) {
+    return { valid: false, error: 'Invalid URL format' };
+  }
+}
+
 function prepareRequestBody(bodyText = '', bodyType = 'json') {
   const type = bodyType || 'json';
   const trimmed = bodyText.trim();
@@ -456,7 +578,9 @@ function showToast(message, type='info') {
   } else if (type === 'warning') {
     icon = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />';
   }
-  toast.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">${icon}</svg><span>${message}</span>`;
+  // Escape message to prevent XSS
+  const safeMessage = escapeHtml(message);
+  toast.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">${icon}</svg><span>${safeMessage}</span>`;
   document.body.appendChild(toast);
   setTimeout(() => {
     toast.style.opacity = '0';
@@ -763,6 +887,13 @@ async function sendRequest() {
     return;
   }
 
+  // Validate URL to prevent SSRF attacks
+  const urlValidation = isValidApiUrl(fetchUrl);
+  if (!urlValidation.valid) {
+    showToast(urlValidation.error, 'error');
+    return;
+  }
+
   // UI lock
   sendButton.disabled = true;
   buttonSpinner.classList.remove('hidden');
@@ -772,6 +903,15 @@ async function sendRequest() {
   const startTime = Date.now();
   try {
     const options = { method, headers: { 'Accept': 'application/json' } };
+
+    // Add CSRF token for non-GET requests
+    if (method !== 'GET') {
+      const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+      if (csrfToken) {
+        options.headers['X-CSRFToken'] = csrfToken;
+      }
+    }
+
     const bodyType = bodyTypeSelect ? bodyTypeSelect.value : 'json';
 
     if (method === 'GET') {
@@ -1033,8 +1173,16 @@ async function loadApiKey() {
     if (resp.ok) {
       const data = await resp.json();
       const apiKeyInput = document.getElementById('globalApiKey');
+      const apiKeyWarning = document.getElementById('apiKeyWarning');
       apiKeyInput.value = data.api_key || '';
       apiKeyInput.placeholder = data.api_key ? 'API key loaded' : 'No API key found';
+
+      // Show/hide warning based on API key presence
+      if (!data.api_key) {
+        apiKeyWarning.classList.remove('hidden');
+      } else {
+        apiKeyWarning.classList.add('hidden');
+      }
     } else {
       showToast('Failed to load API key', 'error');
     }
