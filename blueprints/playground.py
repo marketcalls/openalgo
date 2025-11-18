@@ -2,11 +2,163 @@ from flask import Blueprint, render_template, request, jsonify, session
 from functools import wraps
 import json
 import os
+import re
+import glob
 from database.auth_db import get_api_key_for_tradingview
 from utils.session import check_session_validity
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+def parse_bru_file(filepath):
+    """Parse a Bruno .bru file and extract endpoint information"""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        endpoint = {}
+
+        # Extract meta block
+        meta_match = re.search(r'meta\s*\{([^}]+)\}', content)
+        if meta_match:
+            meta_content = meta_match.group(1)
+            name_match = re.search(r'name:\s*(.+)', meta_content)
+            seq_match = re.search(r'seq:\s*(\d+)', meta_content)
+            if name_match:
+                endpoint['name'] = name_match.group(1).strip()
+            if seq_match:
+                endpoint['seq'] = int(seq_match.group(1).strip())
+
+        # Extract HTTP method and URL (post/get/put/delete block)
+        method_match = re.search(r'(get|post|put|delete|patch)\s*\{([^}]+)\}', content, re.IGNORECASE)
+        if method_match:
+            endpoint['method'] = method_match.group(1).upper()
+            method_content = method_match.group(2)
+            url_match = re.search(r'url:\s*(.+)', method_content)
+            if url_match:
+                full_url = url_match.group(1).strip()
+                # Extract path and query params from URL
+                path_match = re.search(r'(/api/v1/[^?]+)', full_url)
+                if path_match:
+                    endpoint['path'] = path_match.group(1)
+
+                # For GET requests, extract query params from URL
+                if endpoint.get('method') == 'GET':
+                    query_match = re.search(r'\?(.+)$', full_url)
+                    if query_match:
+                        query_string = query_match.group(1)
+                        params = {}
+                        for param in query_string.split('&'):
+                            if '=' in param:
+                                key, value = param.split('=', 1)
+                                # Clear apikey value for security
+                                if key == 'apikey':
+                                    params[key] = ''
+                                else:
+                                    params[key] = value
+                        if params:
+                            endpoint['params'] = params
+
+        # Extract body:json block
+        body_match = re.search(r'body:json\s*\{([\s\S]*)\}(?:\s*$|\s*\n)', content)
+        if body_match:
+            body_content = body_match.group(1).strip()
+            try:
+                body_json = json.loads(body_content)
+                # Clear the hardcoded API key
+                if isinstance(body_json, dict) and 'apikey' in body_json:
+                    body_json['apikey'] = ''
+                endpoint['body'] = body_json
+            except json.JSONDecodeError:
+                logger.warning(f"Failed to parse JSON body in {filepath}")
+
+        # Extract query params for GET requests
+        params_match = re.search(r'params:query\s*\{([^}]+)\}', content)
+        if params_match:
+            params = {}
+            params_content = params_match.group(1)
+            for line in params_content.split('\n'):
+                param_match = re.search(r'(\w+):\s*(.+)', line)
+                if param_match:
+                    key = param_match.group(1).strip()
+                    value = param_match.group(2).strip()
+                    params[key] = value
+            if params:
+                endpoint['params'] = params
+
+        return endpoint if 'name' in endpoint and 'path' in endpoint else None
+
+    except Exception as e:
+        logger.error(f"Error parsing Bruno file {filepath}: {e}")
+        return None
+
+def categorize_endpoint(path):
+    """Categorize an endpoint based on its path"""
+    path_lower = path.lower()
+
+    # Account endpoints
+    if any(x in path_lower for x in ['/funds', '/orderbook', '/tradebook', '/positionbook', '/holdings', '/analyzer', '/margin']):
+        return 'account'
+
+    # Order endpoints
+    if any(x in path_lower for x in ['/placeorder', '/placesmartorder', '/optionsorder', '/basketorder', '/splitorder',
+                                      '/modifyorder', '/cancelorder', '/cancelallorder', '/closeposition',
+                                      '/orderstatus', '/openposition', '/closeall']):
+        return 'orders'
+
+    # Data endpoints
+    if any(x in path_lower for x in ['/quotes', '/depth', '/history', '/intervals', '/symbol',
+                                      '/search', '/expiry', '/optionsymbol', '/optiongreeks', '/ticker',
+                                      '/syntheticfuture', '/instruments']):
+        return 'data'
+
+    # Default to utilities
+    return 'utilities'
+
+def load_bruno_endpoints():
+    """Load all endpoints from Bruno .bru files"""
+    endpoints = {
+        'account': [],
+        'orders': [],
+        'data': [],
+        'utilities': []
+    }
+
+    # Find all .bru files in collections directory
+    collections_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'collections')
+    bru_files = glob.glob(os.path.join(collections_path, '**', '*.bru'), recursive=True)
+
+    parsed_endpoints = []
+
+    for bru_file in bru_files:
+        # Skip collection.bru metadata files
+        if os.path.basename(bru_file) == 'collection.bru':
+            continue
+
+        endpoint = parse_bru_file(bru_file)
+        if endpoint:
+            parsed_endpoints.append(endpoint)
+
+    # Sort by sequence number if available
+    parsed_endpoints.sort(key=lambda x: x.get('seq', 999))
+
+    # Categorize endpoints
+    for endpoint in parsed_endpoints:
+        category = categorize_endpoint(endpoint.get('path', ''))
+        # Clean up endpoint for frontend (remove seq)
+        clean_endpoint = {
+            'name': endpoint.get('name', ''),
+            'method': endpoint.get('method', 'POST'),
+            'path': endpoint.get('path', '')
+        }
+        if 'body' in endpoint:
+            clean_endpoint['body'] = endpoint['body']
+        if 'params' in endpoint:
+            clean_endpoint['params'] = endpoint['params']
+
+        endpoints[category].append(clean_endpoint)
+
+    return endpoints
 
 playground_bp = Blueprint('playground', __name__, url_prefix='/playground')
 
@@ -74,338 +226,23 @@ def get_collections():
 @playground_bp.route('/endpoints')
 @check_session_validity
 def get_endpoints():
-    """Get structured list of all API endpoints"""
-    endpoints = {
-        'account': [
-            {
-                'name': 'Analyzer Status',
-                'method': 'POST',
-                'path': '/api/v1/analyzer',
-                'body': {'apikey': ''}
-            },
-            {
-                'name': 'Analyzer Toggle',
-                'method': 'POST',
-                'path': '/api/v1/analyzer/toggle',
-                'body': {'apikey': '', 'mode': False}
-            },
-            {
-                'name': 'Funds',
-                'method': 'POST',
-                'path': '/api/v1/funds',
-                'body': {'apikey': ''}
-            },
-            {
-                'name': 'Orderbook',
-                'method': 'POST',
-                'path': '/api/v1/orderbook',
-                'body': {'apikey': ''}
-            },
-            {
-                'name': 'Tradebook',
-                'method': 'POST',
-                'path': '/api/v1/tradebook',
-                'body': {'apikey': ''}
-            },
-            {
-                'name': 'Positionbook',
-                'method': 'POST',
-                'path': '/api/v1/positionbook',
-                'body': {'apikey': ''}
-            },
-            {
-                'name': 'Holdings',
-                'method': 'POST',
-                'path': '/api/v1/holdings',
-                'body': {'apikey': ''}
-            }
-        ],
-        'orders': [
-            {
-                'name': 'Place Order',
-                'method': 'POST',
-                'path': '/api/v1/placeorder',
-                'body': {
-                    'apikey': '',
-                    'strategy': 'Test Strategy',
-                    'symbol': 'SBIN',
-                    'action': 'BUY',
-                    'exchange': 'NSE',
-                    'pricetype': 'MARKET',
-                    'product': 'MIS',
-                    'quantity': '1'
-                }
-            },
-            {
-                'name': 'Place Smart Order',
-                'method': 'POST',
-                'path': '/api/v1/placesmartorder',
-                'body': {
-                    'apikey': '',
-                    'strategy': 'Test Strategy',
-                    'exchange': 'NSE',
-                    'symbol': 'SBIN',
-                    'action': 'BUY',
-                    'product': 'MIS',
-                    'pricetype': 'MARKET',
-                    'quantity': '1',
-                    'position_size': '5000'
-                }
-            },
-            {
-                'name': 'Basket Order',
-                'method': 'POST',
-                'path': '/api/v1/basketorder',
-                'body': {
-                    'apikey': '',
-                    'strategy': 'Test Strategy',
-                    'orders': [
-                        {
-                            'symbol': 'SBIN',
-                            'exchange': 'NSE',
-                            'action': 'BUY',
-                            'quantity': '1',
-                            'pricetype': 'MARKET',
-                            'product': 'MIS'
-                        }
-                    ]
-                }
-            },
-            {
-                'name': 'Split Order',
-                'method': 'POST',
-                'path': '/api/v1/splitorder',
-                'body': {
-                    'apikey': '',
-                    'strategy': 'Test Strategy',
-                    'exchange': 'NSE',
-                    'symbol': 'SBIN',
-                    'action': 'BUY',
-                    'quantity': '100',
-                    'splitsize': '20',
-                    'pricetype': 'MARKET',
-                    'product': 'MIS'
-                }
-            },
-            {
-                'name': 'Modify Order',
-                'method': 'POST',
-                'path': '/api/v1/modifyorder',
-                'body': {
-                    'apikey': '',
-                    'strategy': 'Test Strategy',
-                    'symbol': 'SBIN',
-                    'action': 'BUY',
-                    'exchange': 'NSE',
-                    'orderid': '',
-                    'product': 'MIS',
-                    'pricetype': 'LIMIT',
-                    'price': '100',
-                    'quantity': '1',
-                    'disclosed_quantity': '0',
-                    'trigger_price': '0'
-                }
-            },
-            {
-                'name': 'Cancel Order',
-                'method': 'POST',
-                'path': '/api/v1/cancelorder',
-                'body': {
-                    'apikey': '',
-                    'strategy': 'Test Strategy',
-                    'orderid': ''
-                }
-            },
-            {
-                'name': 'Cancel All Orders',
-                'method': 'POST',
-                'path': '/api/v1/cancelallorder',
-                'body': {
-                    'apikey': '',
-                    'strategy': 'Test Strategy'
-                }
-            },
-            {
-                'name': 'Close Position',
-                'method': 'POST',
-                'path': '/api/v1/closeposition',
-                'body': {
-                    'apikey': '',
-                    'strategy': 'Test Strategy'
-                }
-            },
-            {
-                'name': 'Order Status',
-                'method': 'POST',
-                'path': '/api/v1/orderstatus',
-                'body': {
-                    'apikey': '',
-                    'strategy': 'Test Strategy',
-                    'orderid': ''
-                }
-            },
-            {
-                'name': 'Open Position',
-                'method': 'POST',
-                'path': '/api/v1/openposition',
-                'body': {
-                    'apikey': '',
-                    'strategy': 'Test Strategy',
-                    'symbol': 'SBIN',
-                    'exchange': 'NSE',
-                    'product': 'MIS'
-                }
-            }
-        ],
-        'data': [
-            {
-                'name': 'Quotes',
-                'method': 'POST',
-                'path': '/api/v1/quotes',
-                'body': {
-                    'apikey': '',
-                    'symbol': 'SBIN',
-                    'exchange': 'NSE'
-                }
-            },
-            {
-                'name': 'Depth',
-                'method': 'POST',
-                'path': '/api/v1/depth',
-                'body': {
-                    'apikey': '',
-                    'symbol': 'SBIN',
-                    'exchange': 'NSE'
-                }
-            },
-            {
-                'name': 'History',
-                'method': 'POST',
-                'path': '/api/v1/history',
-                'body': {
-                    'apikey': '',
-                    'symbol': 'SBIN',
-                    'exchange': 'NSE',
-                    'interval': '1d',
-                    'start_date': '2025-01-01',
-                    'end_date': '2025-01-31'
-                }
-            },
-            {
-                'name': 'Intervals',
-                'method': 'POST',
-                'path': '/api/v1/intervals',
-                'body': {'apikey': ''}
-            },
-            {
-                'name': 'Symbol',
-                'method': 'POST',
-                'path': '/api/v1/symbol',
-                'body': {
-                    'apikey': '',
-                    'symbol': 'SBIN',
-                    'exchange': 'NSE'
-                }
-            },
-            {
-                'name': 'Search',
-                'method': 'POST',
-                'path': '/api/v1/search',
-                'body': {
-                    'apikey': '',
-                    'query': 'SBIN',
-                    'exchange': 'NSE'
-                }
-            },
-            {
-                'name': 'Expiry',
-                'method': 'POST',
-                'path': '/api/v1/expiry',
-                'body': {
-                    'apikey': '',
-                    'symbol': 'NIFTY',
-                    'exchange': 'NFO',
-                    'instrumenttype': 'options'
-                }
-            },
-            {
-                'name': 'Option Symbol',
-                'method': 'POST',
-                'path': '/api/v1/optionsymbol',
-                'body': {
-                    'apikey': '',
-                    'strategy': 'Test Strategy',
-                    'underlying': 'NIFTY',
-                    'exchange': 'NSE_INDEX',
-                    'expiry_date': '28NOV24',
-                    'strike_int': 50,
-                    'offset': 'ATM',
-                    'option_type': 'CE'
-                }
-            },
-            {
-                'name': 'Option Greeks',
-                'method': 'POST',
-                'path': '/api/v1/optiongreeks',
-                'body': {
-                    'apikey': '',
-                    'symbol': 'NIFTY28NOV2426000CE',
-                    'exchange': 'NFO'
-                }
-            },
-            {
-                'name': 'Ticker',
-                'method': 'GET',
-                'path': '/api/v1/ticker/NSE:SBIN',
-                'params': {
-                    'apikey': '',
-                    'interval': 'D',
-                    'from': '2025-01-01',
-                    'to': '2025-01-31',
-                    'format': 'json'
-                },
-                'description': 'Historical OHLCV data. Symbol in path as exchange:symbol (e.g., NSE:SBIN)'
-            }
-        ],
-        'utilities': [
-            {
-                'name': 'Ping',
-                'method': 'POST',
-                'path': '/api/v1/ping',
-                'body': {'apikey': ''}
-            },
-            {
-                'name': 'Instruments',
-                'method': 'GET',
-                'path': '/api/v1/instruments',
-                'params': {
-                    'apikey': '',
-                    'exchange': 'NSE',
-                    'format': 'json'
-                },
-                'description': 'Download instruments. Leave exchange empty for all exchanges, or specify: NSE, BSE, NFO, BFO, MCX, etc.'
-            },
-            {
-                'name': 'Margin Calculator',
-                'method': 'POST',
-                'path': '/api/v1/margin',
-                'body': {
-                    'apikey': '',
-                    'positions': [
-                        {
-                            'symbol': 'SBIN',
-                            'exchange': 'NSE',
-                            'action': 'BUY',
-                            'product': 'MIS',
-                            'pricetype': 'LIMIT',
-                            'quantity': '10',
-                            'price': '750.50',
-                            'trigger_price': '0'
-                        }
-                    ]
-                }
-            }
-        ]
-    }
-    
-    return jsonify(endpoints)
+    """Get structured list of all API endpoints from Bruno collections"""
+    try:
+        endpoints = load_bruno_endpoints()
+
+        # If no endpoints loaded from Bruno, return empty structure
+        if not any(endpoints.values()):
+            logger.warning("No endpoints loaded from Bruno collections")
+            return jsonify({
+                'account': [],
+                'orders': [],
+                'data': [],
+                'utilities': []
+            })
+
+        logger.info(f"Loaded {sum(len(v) for v in endpoints.values())} endpoints from Bruno collections")
+        return jsonify(endpoints)
+
+    except Exception as e:
+        logger.error(f"Error loading endpoints: {e}")
+        return jsonify({'error': 'Failed to load endpoints'}), 500
