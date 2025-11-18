@@ -169,49 +169,60 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
         """
         Subscribe to market data with Dhan-specific implementation
-        
+
         Args:
-            symbol: Trading symbol (e.g., 'RELIANCE')
+            symbol: Trading symbol (e.g., 'RELIANCE' or 'RELIANCE:20' for 20-level depth)
             exchange: Exchange code (e.g., 'NSE', 'BSE', 'NFO')
             mode: Subscription mode - 1:LTP, 2:Quote, 3:Depth
             depth_level: Market depth level (5 or 20)
-            
+
         Returns:
             Dict: Response with status and error message if applicable
         """
         # Validate mode
         if mode not in [1, 2, 3]:
-            return self._create_error_response("INVALID_MODE", 
+            return self._create_error_response("INVALID_MODE",
                                               f"Invalid mode {mode}. Must be 1 (LTP), 2 (Quote), or 3 (Depth)")
-        
-        # Map symbol to token
-        self.logger.debug(f"Looking up token for {symbol}.{exchange}")
-        token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
+
+        # Check for :20 suffix to determine depth level (allows differentiation without modifying feed.py)
+        original_symbol = symbol  # Keep original for ZeroMQ topic matching
+        actual_symbol = symbol
+        use_20_depth = False
+
+        if symbol.endswith(":20"):
+            # Strip the :20 suffix and use 20-level depth
+            actual_symbol = symbol[:-3]
+            use_20_depth = True
+            self.logger.debug(f"20-level depth requested via symbol suffix for {actual_symbol}")
+
+        # Map symbol to token (use actual symbol without suffix)
+        self.logger.debug(f"Looking up token for {actual_symbol}.{exchange}")
+        token_info = SymbolMapper.get_token_from_symbol(actual_symbol, exchange)
         if not token_info:
-            self.logger.error(f"Token lookup failed for {symbol}.{exchange}")
-            return self._create_error_response("SYMBOL_NOT_FOUND", 
-                                              f"Symbol {symbol} not found for exchange {exchange}")
-        
+            self.logger.error(f"Token lookup failed for {actual_symbol}.{exchange}")
+            return self._create_error_response("SYMBOL_NOT_FOUND",
+                                              f"Symbol {actual_symbol} not found for exchange {exchange}")
+
         token = token_info['token']
         brexchange = token_info['brexchange']
         self.logger.debug(f"Token found: {token}, brexchange: {brexchange}")
-        
+
         # Get Dhan exchange code
         dhan_exchange = DhanExchangeMapper.get_dhan_exchange(exchange)
         self.logger.debug(f"Dhan exchange mapping: {exchange} -> {dhan_exchange}")
         if not dhan_exchange:
-            return self._create_error_response("EXCHANGE_NOT_SUPPORTED", 
+            return self._create_error_response("EXCHANGE_NOT_SUPPORTED",
                                               f"Exchange {exchange} not supported")
-        
+
         # Check depth level support based on exchange capabilities
         is_fallback = False
         actual_depth = depth_level
 
         if mode == 3:  # Depth mode
-            # For NSE and NFO, auto-upgrade to 20-level depth (Dhan's default for these exchanges)
-            if exchange in ['NSE', 'NFO'] and DhanCapabilityRegistry.is_depth_level_supported(exchange, 20):
+            # Check if 20-level depth is requested via symbol suffix
+            if use_20_depth and exchange in ['NSE', 'NFO'] and DhanCapabilityRegistry.is_depth_level_supported(exchange, 20):
                 actual_depth = 20
-                self.logger.debug(f"Auto-upgrading to 20-level depth for {exchange}")
+                self.logger.debug(f"Using 20-level depth for {exchange}:{actual_symbol}")
             # Check if requested depth level is supported for this exchange
             elif not DhanCapabilityRegistry.is_depth_level_supported(exchange, depth_level):
                 actual_depth = DhanCapabilityRegistry.get_fallback_depth_level(exchange, depth_level)
@@ -220,6 +231,10 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     f"Depth level {depth_level} not supported for {exchange}, "
                     f"using {actual_depth} instead"
                 )
+            else:
+                # Default to 5-level depth (no auto-upgrade)
+                actual_depth = 5
+                self.logger.debug(f"Using 5-level depth for {exchange}:{actual_symbol}")
         
         # Prepare instrument info
         instrument = {
@@ -235,23 +250,23 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         }
         dhan_mode = dhan_mode_map.get(mode)
         
-        # Generate correlation ID
-        correlation_id = f"{symbol}_{exchange}_{mode}_{actual_depth}"
-        
-        self.logger.info(f"Subscribing to {symbol}.{exchange} in mode {mode} (requested depth {depth_level} -> actual depth {actual_depth}), token: {token}, dhan_exchange: {dhan_exchange}")
-        #self.logger.info(f"Will use {'20-depth' if actual_depth == 20 and mode == 3 else '5-depth'} connection")
-        
+        # Generate correlation ID (use original_symbol to match client's subscription)
+        correlation_id = f"{original_symbol}_{exchange}_{mode}_{actual_depth}"
+
+        self.logger.info(f"Subscribing to {actual_symbol}.{exchange} in mode {mode} (depth: {actual_depth}), token: {token}, dhan_exchange: {dhan_exchange}")
+
         # Subscribe based on depth level
         if actual_depth == 20 and mode == 3:
             # Use 20-depth connection
             with self.lock:
                 # Check subscription limit
                 if len(self.subscriptions_20depth) >= DhanCapabilityRegistry.MAX_SUBSCRIPTIONS_20_DEPTH:
-                    return self._create_error_response("SUBSCRIPTION_LIMIT", 
+                    return self._create_error_response("SUBSCRIPTION_LIMIT",
                                                       f"Maximum {DhanCapabilityRegistry.MAX_SUBSCRIPTIONS_20_DEPTH} subscriptions allowed for 20-depth")
-                
+
                 self.subscriptions_20depth[correlation_id] = {
-                    'symbol': symbol,
+                    'symbol': original_symbol,  # Keep original for ZeroMQ topic matching
+                    'actual_symbol': actual_symbol,  # Actual symbol for API calls
                     'exchange': exchange,
                     'dhan_exchange': dhan_exchange,
                     'token': token,
@@ -277,11 +292,12 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             with self.lock:
                 # Check subscription limit
                 if len(self.subscriptions_5depth) >= DhanCapabilityRegistry.MAX_SUBSCRIPTIONS_5_DEPTH:
-                    return self._create_error_response("SUBSCRIPTION_LIMIT", 
+                    return self._create_error_response("SUBSCRIPTION_LIMIT",
                                                       f"Maximum {DhanCapabilityRegistry.MAX_SUBSCRIPTIONS_5_DEPTH} subscriptions allowed")
-                
+
                 self.subscriptions_5depth[correlation_id] = {
-                    'symbol': symbol,
+                    'symbol': original_symbol,  # Keep original for ZeroMQ topic matching
+                    'actual_symbol': actual_symbol,  # Actual symbol for API calls
                     'exchange': exchange,
                     'dhan_exchange': dhan_exchange,
                     'token': token,
@@ -295,22 +311,23 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 try:
                     self.ws_client_5depth.subscribe([instrument], dhan_mode)
                 except Exception as e:
-                    self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
+                    self.logger.error(f"Error subscribing to {actual_symbol}.{exchange}: {e}")
                     return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
-        
+
         # Store in base class subscriptions for reconnection
         with self.lock:
             self.subscriptions[correlation_id] = {
-                'symbol': symbol,
+                'symbol': original_symbol,  # Keep original for topic matching
+                'actual_symbol': actual_symbol,
                 'exchange': exchange,
                 'mode': mode,
                 'depth_level': actual_depth,
                 'is_20_depth': (actual_depth == 20 and mode == 3)
             }
-        
+
         return self._create_success_response(
             'Subscription requested' if not is_fallback else f"Using depth level {actual_depth} instead of requested {depth_level}",
-            symbol=symbol,
+            symbol=actual_symbol,
             exchange=exchange,
             mode=mode,
             requested_depth=depth_level,
