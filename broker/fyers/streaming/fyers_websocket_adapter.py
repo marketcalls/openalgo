@@ -30,25 +30,37 @@ from database.auth_db import get_auth_token
 
 # Import our HSM implementation
 from .fyers_adapter import FyersAdapter
+from .fyers_tbt_websocket import FyersTbtWebSocket
+from .fyers_mapping import FyersDataMapper
 
 
 class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """Fyers-specific implementation of the WebSocket adapter for OpenAlgo proxy"""
-    
+
+    # Exchanges that support 50-level depth (Fyers TBT only supports NSE equity)
+    TBT_SUPPORTED_EXCHANGES = {'NSE'}
+
     def __init__(self):
         super().__init__()
         self.logger = logging.getLogger("fyers_websocket_adapter")
         self.fyers_adapter = None
+        self.tbt_client = None  # TBT WebSocket for 50-level depth
         self.user_id = None
         self.broker_name = "fyers"
         self.access_token = None
         self.running = False
         self.lock = threading.Lock()
         self.symbol_mapper = SymbolMapper()
-        
+        self.data_mapper = FyersDataMapper()
+
         # Add deduplication cache to prevent duplicate data publishing
         self.last_data_cache = {}  # Format: {symbol_exchange_mode: {ltp, timestamp}}
-        
+
+        # TBT subscription tracking
+        self.tbt_subscriptions = {}  # symbol -> {ticker, exchange, channel}
+        self.tbt_symbol_to_ticker = {}  # OpenAlgo symbol -> Fyers ticker
+        self.tbt_ticker_to_symbol = {}  # Fyers ticker -> OpenAlgo symbol
+
         self.logger.info("Fyers WebSocket Adapter initialized")
     
     def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> None:
@@ -159,6 +171,9 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if subscription_count > 0:
                     self.logger.debug(f"Cleared {subscription_count} active subscriptions")
             
+            # Disconnect from TBT WebSocket (50-level depth)
+            self._disconnect_tbt()
+
             # Disconnect from Fyers HSM WebSocket
             if self.fyers_adapter:
                 try:
@@ -268,7 +283,37 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 elif mode == 2:  # Quote
                     success = self.fyers_adapter.subscribe_quote(symbol_info, data_callback)
                 elif mode == 3:  # Depth
-                    success = self.fyers_adapter.subscribe_depth(symbol_info, data_callback)
+                    # Check if 50-level depth is requested via symbol suffix (e.g., "TCS:50")
+                    # This allows differentiation without modifying feed.py
+                    actual_symbol = symbol
+                    use_tbt = False
+
+                    if symbol.endswith(":50"):
+                        # Strip the :50 suffix and use TBT
+                        actual_symbol = symbol[:-3]
+                        use_tbt = True
+                        # Update symbol_info with actual symbol for broker API
+                        symbol_info = [{"exchange": exchange, "symbol": actual_symbol}]
+                        # Keep original_symbol as "TCS:50" for ZeroMQ topic matching
+                        # The client subscribed with "TCS:50", so we must publish with that
+
+                    if use_tbt and exchange in self.TBT_SUPPORTED_EXCHANGES:
+                        # Use 50-level TBT WebSocket
+                        # Pass both actual_symbol (for API) and original_symbol (for topic matching)
+                        success = self._subscribe_tbt_depth(actual_symbol, exchange, data_callback, original_symbol)
+                        if success:
+                            self.logger.info(f"Subscribed to 50-level depth (TBT) for {exchange}:{actual_symbol}")
+                        else:
+                            # Fallback to 5-level depth if TBT unavailable
+                            self.logger.warning(f"TBT unavailable, falling back to 5-level depth for {exchange}:{actual_symbol}")
+                            success = self.fyers_adapter.subscribe_depth(symbol_info, data_callback)
+                            if success:
+                                self.logger.info(f"Subscribed to 5-level depth (HSM) for {exchange}:{actual_symbol}")
+                    else:
+                        # Use 5-level depth (HSM WebSocket)
+                        success = self.fyers_adapter.subscribe_depth(symbol_info, data_callback)
+                        if success:
+                            self.logger.info(f"Subscribed to 5-level depth (HSM) for {exchange}:{actual_symbol}")
                 else:
                     self.logger.error(f"Unsupported subscription mode: {mode}")
                     return {
@@ -380,7 +425,186 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "status": "error",
                 "message": f"Unsubscription failed: {str(e)}"
             }
-    
+
+    def _subscribe_tbt_depth(self, symbol: str, exchange: str, callback, original_symbol: str = None) -> bool:
+        """
+        Subscribe to 50-level depth via TBT WebSocket
+
+        Args:
+            symbol: OpenAlgo symbol (actual symbol without suffix)
+            exchange: Exchange name
+            callback: Data callback function
+            original_symbol: Original symbol with :50 suffix for topic matching
+
+        Returns:
+            True if subscription successful
+        """
+        # Use original_symbol for topic matching, default to symbol if not provided
+        topic_symbol = original_symbol if original_symbol else symbol
+        try:
+            # Initialize TBT client if needed
+            if not self.tbt_client:
+                self.tbt_client = FyersTbtWebSocket(
+                    access_token=self.access_token,
+                    log_path=""
+                )
+
+                # Set up TBT callback
+                def tbt_depth_handler(ticker, depth_data):
+                    self._on_tbt_depth_update(ticker, depth_data)
+
+                self.tbt_client.set_callbacks(
+                    on_depth_update=tbt_depth_handler,
+                    on_error=lambda e: self.logger.error(f"TBT error: {e}"),
+                    on_open=lambda: self.logger.info("TBT WebSocket connected"),
+                    on_close=lambda msg: self.logger.debug(f"TBT WebSocket closed: {msg}")
+                )
+
+                # Connect to TBT
+                if not self.tbt_client.connect():
+                    self.logger.error("Failed to connect to TBT WebSocket")
+                    self.tbt_client = None
+                    return False
+
+            # Convert symbol to Fyers ticker format
+            fyers_ticker = self._convert_to_fyers_ticker(symbol, exchange)
+            if not fyers_ticker:
+                self.logger.error(f"Failed to convert {exchange}:{symbol} to Fyers ticker")
+                return False
+
+            # Store mappings - use topic_symbol for ZeroMQ topic matching
+            subscription_key = f"{exchange}:{topic_symbol}"
+            self.tbt_symbol_to_ticker[subscription_key] = fyers_ticker
+            self.tbt_ticker_to_symbol[fyers_ticker] = subscription_key
+            self.tbt_subscriptions[subscription_key] = {
+                'ticker': fyers_ticker,
+                'exchange': exchange,
+                'symbol': topic_symbol,  # Use topic_symbol (with :50) for topic matching
+                'actual_symbol': symbol,  # Actual symbol for display
+                'callback': callback,
+                'channel': '1'
+            }
+
+            # Subscribe via TBT client
+            success = self.tbt_client.subscribe([fyers_ticker], channel='1')
+            if success:
+                self.logger.info(f"TBT subscribed to {fyers_ticker} for {exchange}:{symbol}")
+                return True
+            else:
+                self.logger.error(f"TBT subscription failed for {fyers_ticker}")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"TBT subscription error: {e}")
+            return False
+
+    def _convert_to_fyers_ticker(self, symbol: str, exchange: str) -> Optional[str]:
+        """
+        Convert OpenAlgo symbol to Fyers ticker format
+
+        Args:
+            symbol: OpenAlgo symbol (e.g., 'RELIANCE', 'NIFTY24DEC25000CE')
+            exchange: Exchange name (e.g., 'NSE', 'NFO')
+
+        Returns:
+            Fyers ticker (e.g., 'NSE:RELIANCE-EQ', 'NSE:NIFTY24DECFUT')
+        """
+        try:
+            # For equity symbols, add -EQ suffix
+            if exchange == 'NSE':
+                # Check if it's a derivatives symbol (contains expiry info)
+                if any(c.isdigit() for c in symbol) and ('FUT' in symbol or 'CE' in symbol or 'PE' in symbol):
+                    # Derivatives symbol - use as-is with NSE prefix
+                    return f"NSE:{symbol}"
+                else:
+                    # Equity symbol - add -EQ suffix
+                    return f"NSE:{symbol}-EQ"
+
+            elif exchange == 'NFO':
+                # NFO symbols use NSE prefix in Fyers
+                return f"NSE:{symbol}"
+
+            else:
+                # Default format
+                return f"{exchange}:{symbol}"
+
+        except Exception as e:
+            self.logger.error(f"Error converting symbol: {e}")
+            return None
+
+    def _on_tbt_depth_update(self, ticker: str, depth_data: Dict[str, Any]):
+        """
+        Handle 50-level depth update from TBT WebSocket
+
+        Args:
+            ticker: Fyers ticker
+            depth_data: Raw depth data from TBT
+        """
+        try:
+            self.logger.debug(f"TBT depth update received for ticker: {ticker}")
+
+            # Find the subscription for this ticker
+            subscription_key = self.tbt_ticker_to_symbol.get(ticker)
+            if not subscription_key:
+                self.logger.warning(f"No subscription found for TBT ticker: {ticker}")
+                self.logger.debug(f"Available ticker mappings: {self.tbt_ticker_to_symbol}")
+                return
+
+            subscription = self.tbt_subscriptions.get(subscription_key)
+            if not subscription:
+                self.logger.warning(f"No subscription data for key: {subscription_key}")
+                return
+
+            # Map to OpenAlgo format
+            symbol = subscription['symbol']
+            exchange = subscription['exchange']
+
+            self.logger.debug(f"Mapping TBT depth for {exchange}:{symbol}")
+
+            mapped_data = self.data_mapper.map_tbt_depth_to_openalgo(
+                ticker, depth_data, symbol, exchange
+            )
+
+            if not mapped_data:
+                self.logger.warning(f"Failed to map TBT depth data for {ticker}")
+                return
+
+            # Add subscription mode for proper topic generation
+            mapped_data['subscription_mode'] = 3  # Depth mode
+
+            # Log mapped data summary
+            buy_levels = mapped_data.get('depth', {}).get('buy', [])
+            sell_levels = mapped_data.get('depth', {}).get('sell', [])
+            self.logger.debug(f"TBT mapped depth for {exchange}:{symbol}: {len(buy_levels)} buy levels, {len(sell_levels)} sell levels, ltp={mapped_data.get('ltp')}")
+
+            # Invoke callback
+            callback = subscription.get('callback')
+            if callback:
+                callback(mapped_data)
+                self.logger.debug(f"TBT callback invoked for {exchange}:{symbol}")
+            else:
+                self.logger.warning(f"No callback found for {subscription_key}")
+
+        except Exception as e:
+            self.logger.error(f"Error processing TBT depth update: {e}", exc_info=True)
+
+    def _disconnect_tbt(self):
+        """Disconnect from TBT WebSocket and cleanup"""
+        try:
+            if self.tbt_client:
+                self.tbt_client.disconnect()
+                self.tbt_client = None
+
+            # Clear TBT tracking
+            self.tbt_subscriptions.clear()
+            self.tbt_symbol_to_ticker.clear()
+            self.tbt_ticker_to_symbol.clear()
+
+            self.logger.debug("TBT WebSocket disconnected")
+
+        except Exception as e:
+            self.logger.error(f"Error disconnecting TBT: {e}")
+
     def _convert_price_to_rupees(self, price_value: float, fyers_data: Dict[str, Any]) -> float:
         """
         Convert Fyers price based on instrument type:
@@ -549,9 +773,10 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             "broker": self.broker_name,
             "user_id": self.user_id,
             "subscriptions": len(self.subscriptions),
+            "tbt_subscriptions": len(self.tbt_subscriptions),
             "zmq_port": getattr(self, 'zmq_port', None)
         }
-        
+
         if self.fyers_adapter:
             fyers_status = self.fyers_adapter.get_connection_status()
             status.update({
@@ -559,7 +784,15 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "fyers_authenticated": fyers_status.get("authenticated", False),
                 "protocol": fyers_status.get("protocol", "HSM Binary")
             })
-        
+
+        # Add TBT status
+        if self.tbt_client:
+            status.update({
+                "tbt_connected": self.tbt_client.is_connected(),
+                "tbt_protocol": "TBT Protobuf",
+                "depth_levels": 50
+            })
+
         return status
     
     def get_subscriptions(self) -> Dict[str, Any]:
@@ -588,15 +821,18 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         try:
             self.logger.debug("Starting comprehensive resource cleanup...")
-            
+
             # Stop all operations
             self.running = False
             self.connected = False
-            
+
             # Clear subscriptions
             with self.lock:
                 self.subscriptions.clear()
-            
+
+            # Cleanup TBT client
+            self._disconnect_tbt()
+
             # Cleanup Fyers adapter
             if self.fyers_adapter:
                 try:
@@ -605,19 +841,19 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.logger.error(f"Error cleaning up Fyers adapter: {e}")
                 finally:
                     self.fyers_adapter = None
-            
+
             # Cleanup ZMQ
             try:
                 self.cleanup_zmq()
             except Exception as e:
                 self.logger.error(f"Error in ZMQ cleanup: {e}")
-            
+
             # Reset all variables
             self.access_token = None
             self.user_id = None
-            
+
             self.logger.info("Comprehensive resource cleanup completed")
-            
+
         except Exception as e:
             self.logger.error(f"Error in comprehensive cleanup: {e}")
             
@@ -629,29 +865,44 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Force close everything without error checking
             self.running = False
             self.connected = False
-            
+
             if hasattr(self, 'subscriptions'):
                 self.subscriptions.clear()
-                
+
+            # Force cleanup TBT
+            if hasattr(self, 'tbt_client') and self.tbt_client:
+                try:
+                    self.tbt_client.disconnect()
+                except:
+                    pass
+                self.tbt_client = None
+
+            if hasattr(self, 'tbt_subscriptions'):
+                self.tbt_subscriptions.clear()
+            if hasattr(self, 'tbt_symbol_to_ticker'):
+                self.tbt_symbol_to_ticker.clear()
+            if hasattr(self, 'tbt_ticker_to_symbol'):
+                self.tbt_ticker_to_symbol.clear()
+
             if hasattr(self, 'fyers_adapter') and self.fyers_adapter:
                 try:
                     self.fyers_adapter.disconnect(clear_mappings=True)
                 except:
                     pass
                 self.fyers_adapter = None
-            
+
             # Force cleanup ZMQ
             try:
                 if hasattr(self, 'socket') and self.socket:
                     self.socket.close(linger=0)
-                    
+
                 if hasattr(self, 'zmq_port'):
                     with self._port_lock:
                         self._bound_ports.discard(self.zmq_port)
             except:
                 pass
-                
+
             #print("Force cleanup completed")
-            
+
         except:
             pass  # Suppress all errors in force cleanup

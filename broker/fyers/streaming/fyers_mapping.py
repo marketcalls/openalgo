@@ -165,20 +165,20 @@ class FyersDataMapper:
     def map_to_openalgo_depth(self, fyers_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Map Fyers depth data to OpenAlgo Depth format
-        
+
         Args:
             fyers_data: Raw depth data from Fyers HSM WebSocket
-            
+
         Returns:
             OpenAlgo Depth format dict or None if mapping fails
         """
         try:
             if not fyers_data or fyers_data.get("type") != "dp":
                 return None
-            
+
             # Get the symbol
             symbol = fyers_data.get("original_symbol") or fyers_data.get("symbol", "")
-            
+
             # Parse exchange and symbol
             if ":" in symbol:
                 exchange, symbol_name = symbol.split(":", 1)
@@ -188,11 +188,11 @@ class FyersDataMapper:
             else:
                 exchange = fyers_data.get("exchange", "")
                 symbol_name = symbol
-            
+
             # Apply multiplier and precision
             multiplier = fyers_data.get("multiplier", 100)
             precision = fyers_data.get("precision", 2)
-            
+
             # Apply segment-specific conversion based on exchange
             segment_divisor = 1
             if exchange == "BSE":
@@ -203,46 +203,46 @@ class FyersDataMapper:
                 segment_divisor = 100  # NSE prices also in paisa format
             elif exchange == "NFO":
                 segment_divisor = 100  # NFO prices also in paisa format
-            
+
             def convert_price(value):
                 if value and multiplier > 0:
                     # First apply the multiplier conversion, then segment-specific conversion
                     price = value / multiplier / segment_divisor
                     return round(price, precision)
                 return 0.0
-            
+
             # Build buy and sell arrays (matching other brokers' format)
             buy_levels = []
             sell_levels = []
-            
+
             for i in range(1, 6):  # 5 levels
                 bid_price = convert_price(fyers_data.get(f"bid_price{i}", 0))
                 bid_size = fyers_data.get(f"bid_size{i}", 0)
                 bid_orders = fyers_data.get(f"bid_order{i}", 0)
-                
+
                 ask_price = convert_price(fyers_data.get(f"ask_price{i}", 0))
                 ask_size = fyers_data.get(f"ask_size{i}", 0)
                 ask_orders = fyers_data.get(f"ask_order{i}", 0)
-                
+
                 if bid_price > 0:
                     buy_levels.append({
                         "price": bid_price,
                         "quantity": bid_size,  # Changed from "size" to "quantity"
                         "orders": bid_orders
                     })
-                
+
                 if ask_price > 0:
                     sell_levels.append({
                         "price": ask_price,
                         "quantity": ask_size,  # Changed from "size" to "quantity"
                         "orders": ask_orders
                     })
-            
+
             # Calculate LTP (average of best bid and ask if available)
             ltp = 0
             if buy_levels and sell_levels:
                 ltp = (buy_levels[0]["price"] + sell_levels[0]["price"]) / 2
-            
+
             # Map to OpenAlgo Depth format (matching other brokers)
             openalgo_data = {
                 "symbol": f"{exchange}:{symbol_name}",
@@ -256,11 +256,70 @@ class FyersDataMapper:
                 "timestamp": int(time.time()),
                 "data_type": "Depth"
             }
-            
+
             return openalgo_data
-            
+
         except Exception as e:
             print(f"Error mapping Depth data: {e}")
+            return None
+
+    def map_tbt_depth_to_openalgo(self, ticker: str, tbt_depth: Dict[str, Any],
+                                   symbol: str, exchange: str) -> Optional[Dict[str, Any]]:
+        """
+        Map Fyers TBT 50-level depth data to OpenAlgo Depth format
+
+        Args:
+            ticker: Original Fyers ticker (e.g., 'NSE:RELIANCE-EQ')
+            tbt_depth: Depth data from TBT WebSocket
+            symbol: OpenAlgo symbol name
+            exchange: OpenAlgo exchange name
+
+        Returns:
+            OpenAlgo Depth format dict or None if mapping fails
+        """
+        try:
+            if not tbt_depth:
+                return None
+
+            # Get buy and sell levels (already extracted by TBT client)
+            buy_levels = tbt_depth.get('buy', [])
+            sell_levels = tbt_depth.get('sell', [])
+
+            # Calculate LTP from best bid/ask
+            ltp = 0
+            if buy_levels and sell_levels:
+                best_bid = buy_levels[0]['price'] if buy_levels else 0
+                best_ask = sell_levels[0]['price'] if sell_levels else 0
+                if best_bid > 0 and best_ask > 0:
+                    ltp = (best_bid + best_ask) / 2
+                elif best_bid > 0:
+                    ltp = best_bid
+                elif best_ask > 0:
+                    ltp = best_ask
+
+            # Map to OpenAlgo Depth format
+            openalgo_data = {
+                "symbol": symbol,
+                "exchange": exchange,
+                "token": ticker,
+                "ltp": round(ltp, 2),
+                "depth": {
+                    "buy": buy_levels,
+                    "sell": sell_levels
+                },
+                "total_buy_qty": tbt_depth.get('total_buy_qty', 0),
+                "total_sell_qty": tbt_depth.get('total_sell_qty', 0),
+                "timestamp": int(time.time()),
+                "feed_time": tbt_depth.get('feed_time', 0),
+                "data_type": "Depth",
+                "depth_levels": tbt_depth.get('levels', 50),
+                "is_50_depth": True
+            }
+
+            return openalgo_data
+
+        except Exception as e:
+            print(f"Error mapping TBT Depth data: {e}")
             return None
     
     def map_index_to_synthetic_depth(self, fyers_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
