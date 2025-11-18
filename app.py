@@ -364,6 +364,10 @@ def setup_environment(app):
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':
         from pyngrok import ngrok
+        # Disconnect only the 'flask' tunnel if it exists (to avoid "tunnel already exists" error)
+        for tunnel in ngrok.get_tunnels():
+            if tunnel.name == 'flask':
+                ngrok.disconnect(tunnel.public_url)
         public_url = ngrok.connect(name='flask').public_url  # Assuming Flask runs on the default port 5000
         logger.info(f"ngrok URL: {public_url}")
 
