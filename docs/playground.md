@@ -6,14 +6,16 @@ The API Playground is a web-based interface for testing OpenAlgo REST API endpoi
 
 ## Features
 
-- **Comprehensive Endpoint Library**: Pre-configured with all OpenAlgo API endpoints
+- **Three-Panel Layout**: Sidebar, request editor, and response viewer side-by-side
+- **Comprehensive Endpoint Library**: Pre-configured with all OpenAlgo API endpoints loaded from Bruno collection
 - **Organized Categories**: Endpoints grouped by functionality (Account, Orders, Data, Utilities)
 - **Live Testing**: Send requests and view responses in real-time
-- **API Key Management**: Save and reuse your API key across sessions
-- **Request Customization**: Modify request body, parameters, and headers
-- **Response Viewer**: Formatted JSON response with status codes and timing
-- **Search Functionality**: Quickly find endpoints by name or path
-- **Copy to Clipboard**: Easy copying of responses for further analysis
+- **Auto-Populated API Key**: Your API key is automatically injected into request bodies
+- **Line Numbers**: Both request body and response display line numbers for easy reference
+- **Prettify JSON**: Format and beautify JSON request bodies with one click
+- **Response Metrics**: View status code, response time, and response size
+- **Copy Options**: Copy response or generate cURL command
+- **Search Functionality**: Quickly find endpoints by name
 
 ## Access
 
@@ -25,53 +27,51 @@ Navigate to: `http://your-host:port/playground`
 
 ### 1. API Key (Automatic)
 
-Your API key is automatically loaded from your user session:
+Your API key is automatically managed:
 - The API key is fetched when you open the Playground
-- It's displayed in a read-only field at the top
-- Click "Copy" to copy it to clipboard
-- Click "Manage" to generate or update your API key
-- The API key is automatically populated in all request bodies
+- It's automatically injected into all request bodies containing an `apikey` field
+- No manual copy/paste required
 
 ### 2. Select an Endpoint
 
 Browse the left sidebar to find the endpoint you want to test:
 
-- **Account**: Funds, orderbook, tradebook, positionbook, holdings, analyzer
+- **Account**: Funds, orderbook, tradebook, positionbook, holdings
 - **Orders**: Place, modify, cancel orders, basket orders, split orders
 - **Data**: Quotes, depth, history, search, symbols, expiry dates
 - **Utilities**: Ping, instruments, margin calculator
 
-Click on any endpoint to load its configuration.
+Click on any endpoint to load its configuration in the request panel.
 
 ### 3. Customize the Request
 
-#### Body Tab (POST/PUT requests)
-- Edit the JSON request body
-- API key is pre-filled if saved
+The middle panel contains two tabs:
+
+#### Body Tab
+- Edit the JSON request body with line numbers
+- API key is automatically populated
+- Click **Prettify** to format JSON
 - Modify parameters as needed
 
-#### Params Tab (GET requests)
-- Add/remove query parameters
-- Each parameter has a key-value pair
-- Click "+" to add new parameters
-
 #### Headers Tab
-- View request headers
-- Content-Type is set to application/json by default
+- Shows request headers
+- Content-Type: application/json (default)
 
 ### 4. Send the Request
 
-1. Click the "Send Request" button
-2. Wait for the response (loading indicator will show)
-3. View the response in the Response panel below
+1. Review the URL and method in the URL bar
+2. Click the **Send** button (or use the arrow icon)
+3. View the response in the right panel
 
 ### 5. Analyze the Response
 
-The response panel shows:
-- **Status Code**: Color-coded (green for success, red for errors)
+The right panel shows:
+- **Status Code**: Color-coded (green for 2xx, red for errors)
 - **Response Time**: Request duration in milliseconds
-- **Response Body**: Formatted JSON with syntax highlighting
-- **Copy Button**: Copy the entire response to clipboard
+- **Response Size**: Size of the response in bytes/KB
+- **Response Body**: Formatted JSON with line numbers
+- **Copy Response**: Copy the JSON response
+- **Copy cURL**: Generate and copy cURL command
 
 ## Endpoint Categories
 
@@ -119,12 +119,12 @@ The response panel shows:
 
 ## Tips
 
-1. **Automatic API Key**: Your API key is automatically loaded from your session - no manual entry needed!
-2. **Search Feature**: Use the search box to quickly find endpoints
-3. **Copy Responses**: Use the Copy button to save responses for documentation
-4. **Copy API Key**: Click the Copy button next to the API key to copy it to clipboard
-5. **Clear Button**: Reset the request panel to start fresh
-6. **Status Codes**: 
+1. **Automatic API Key**: Your API key is automatically injected into requests - no manual entry needed
+2. **Search Feature**: Use the search box to quickly find endpoints by name
+3. **Prettify JSON**: Click the Prettify button to format messy JSON in the request body
+4. **Line Numbers**: Use line numbers to reference specific parts of requests/responses
+5. **Copy cURL**: Generate cURL commands to replicate requests in terminal
+6. **Status Codes**:
    - 200-299: Success (green)
    - 400-499: Client errors (red)
    - 500-599: Server errors (red)
@@ -143,13 +143,13 @@ This ensures consistency across all testing tools.
 - Make sure you're logged into OpenAlgo
 - Navigate to `/playground` while logged in
 
-### No API key shown
-- Click "Manage" to generate a new API key
-- Navigate to `/apikey` to create your first API key
-- Refresh the page after generating a key
+### API key not being injected
+- Navigate to `/apikey` to generate your API key
+- Refresh the Playground page after generating a key
+- Ensure the request body contains an `apikey` field
 
 ### Invalid API key errors
-- Click "Manage" to verify or regenerate your API key
+- Navigate to `/apikey` to verify or regenerate your API key
 - Ensure your API key is active and not expired
 
 ### Network errors
@@ -168,8 +168,8 @@ This ensures consistency across all testing tools.
 ## Future Enhancements
 
 Planned features:
-- Request history
-- Save favorite endpoints
-- Export/import test collections
+- Request history and saved responses
+- Favorite/starred endpoints
 - Environment variables support
-- Bulk testing capabilities
+- WebSocket endpoint testing
+- Response diff comparison
