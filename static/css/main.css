@@ -3359,9 +3359,6 @@
   .mb-1 {
     margin-bottom: calc(var(--spacing) * 1);
   }
-  .mb-1\.5 {
-    margin-bottom: calc(var(--spacing) * 1.5);
-  }
   .mb-2 {
     margin-bottom: calc(var(--spacing) * 2);
   }
@@ -3370,9 +3367,6 @@
   }
   .mb-4 {
     margin-bottom: calc(var(--spacing) * 4);
-  }
-  .mb-5 {
-    margin-bottom: calc(var(--spacing) * 5);
   }
   .mb-6 {
     margin-bottom: calc(var(--spacing) * 6);
@@ -3870,9 +3864,6 @@
     width: var(--size);
     height: var(--size);
   }
-  .h-1 {
-    height: calc(var(--spacing) * 1);
-  }
   .h-2 {
     height: calc(var(--spacing) * 2);
   }
@@ -3881,9 +3872,6 @@
   }
   .h-3 {
     height: calc(var(--spacing) * 3);
-  }
-  .h-3\.5 {
-    height: calc(var(--spacing) * 3.5);
   }
   .h-4 {
     height: calc(var(--spacing) * 4);
@@ -3932,9 +3920,6 @@
   }
   .max-h-32 {
     max-height: calc(var(--spacing) * 32);
-  }
-  .max-h-40 {
-    max-height: calc(var(--spacing) * 40);
   }
   .max-h-60 {
     max-height: calc(var(--spacing) * 60);
@@ -3987,9 +3972,6 @@
   .w-3 {
     width: calc(var(--spacing) * 3);
   }
-  .w-3\.5 {
-    width: calc(var(--spacing) * 3.5);
-  }
   .w-4 {
     width: calc(var(--spacing) * 4);
   }
@@ -4016,6 +3998,9 @@
   }
   .w-20 {
     width: calc(var(--spacing) * 20);
+  }
+  .w-24 {
+    width: calc(var(--spacing) * 24);
   }
   .w-28 {
     width: calc(var(--spacing) * 28);
@@ -4066,8 +4051,8 @@
   .max-w-7xl {
     max-width: var(--container-7xl);
   }
-  .max-w-\[500px\] {
-    max-width: 500px;
+  .max-w-\[400px\] {
+    max-width: 400px;
   }
   .max-w-lg {
     max-width: var(--container-lg);
@@ -4093,8 +4078,8 @@
   .min-w-\[120px\] {
     min-width: 120px;
   }
-  .min-w-\[240px\] {
-    min-width: 240px;
+  .min-w-\[200px\] {
+    min-width: 200px;
   }
   .flex-1 {
     flex: 1;
@@ -4180,11 +4165,11 @@
   .cursor-pointer {
     cursor: pointer;
   }
-  .cursor-row-resize {
-    cursor: row-resize;
-  }
   .resize {
     resize: both;
+  }
+  .resize-none {
+    resize: none;
   }
   .list-inside {
     list-style-position: inside;
@@ -4256,9 +4241,6 @@
   }
   .gap-2 {
     gap: calc(var(--spacing) * 2);
-  }
-  .gap-2\.5 {
-    gap: calc(var(--spacing) * 2.5);
   }
   .gap-3 {
     gap: calc(var(--spacing) * 3);
@@ -4436,6 +4418,10 @@
     border-left-style: var(--tw-border-style);
     border-left-width: 2px;
   }
+  .border-none {
+    --tw-border-style: none;
+    border-style: none;
+  }
   .badge-ghost {
     border-color: var(--color-base-200);
     background-color: var(--color-base-200);
@@ -4491,12 +4477,6 @@
   }
   .border-error {
     border-color: var(--color-error);
-  }
-  .border-error\/20 {
-    border-color: var(--color-error);
-    @supports (color: color-mix(in lab, red, red)) {
-      border-color: color-mix(in oklab, var(--color-error) 20%, transparent);
-    }
   }
   .border-gray-700 {
     border-color: var(--color-gray-700);
@@ -4591,6 +4571,12 @@
   .bg-base-200 {
     background-color: var(--color-base-200);
   }
+  .bg-base-200\/20 {
+    background-color: var(--color-base-200);
+    @supports (color: color-mix(in lab, red, red)) {
+      background-color: color-mix(in oklab, var(--color-base-200) 20%, transparent);
+    }
+  }
   .bg-base-200\/30 {
     background-color: var(--color-base-200);
     @supports (color: color-mix(in lab, red, red)) {
@@ -4617,12 +4603,6 @@
   }
   .bg-error {
     background-color: var(--color-error);
-  }
-  .bg-error\/5 {
-    background-color: var(--color-error);
-    @supports (color: color-mix(in lab, red, red)) {
-      background-color: color-mix(in oklab, var(--color-error) 5%, transparent);
-    }
   }
   .bg-error\/10 {
     background-color: var(--color-error);
@@ -4714,11 +4694,8 @@
       background-color: color-mix(in oklab, var(--color-success) 20%, transparent);
     }
   }
-  .bg-success\/80 {
-    background-color: var(--color-success);
-    @supports (color: color-mix(in lab, red, red)) {
-      background-color: color-mix(in oklab, var(--color-success) 80%, transparent);
-    }
+  .bg-transparent {
+    background-color: transparent;
   }
   .bg-warning\/10 {
     background-color: var(--color-warning);
@@ -4888,9 +4865,6 @@
   .p-4 {
     padding: calc(var(--spacing) * 4);
   }
-  .p-5 {
-    padding: calc(var(--spacing) * 5);
-  }
   .p-6 {
     padding: calc(var(--spacing) * 6);
   }
@@ -4902,6 +4876,14 @@
     font-size: 0.75rem;
     option {
       padding-inline: calc(0.25rem * 2.5);
+      padding-block: calc(0.25rem * 1);
+    }
+  }
+  .select-xs {
+    --size: calc(var(--size-field, 0.25rem) * 6);
+    font-size: 0.6875rem;
+    option {
+      padding-inline: calc(0.25rem * 2);
       padding-block: calc(0.25rem * 1);
     }
   }
@@ -4941,9 +4923,6 @@
   .px-4 {
     padding-inline: calc(var(--spacing) * 4);
   }
-  .px-5 {
-    padding-inline: calc(var(--spacing) * 5);
-  }
   .px-6 {
     padding-inline: calc(var(--spacing) * 6);
   }
@@ -4955,6 +4934,9 @@
   }
   .py-1 {
     padding-block: calc(var(--spacing) * 1);
+  }
+  .py-1\.5 {
+    padding-block: calc(var(--spacing) * 1.5);
   }
   .py-2 {
     padding-block: calc(var(--spacing) * 2);
@@ -4998,11 +4980,11 @@
   .pb-3 {
     padding-bottom: calc(var(--spacing) * 3);
   }
-  .pl-0\.5 {
-    padding-left: calc(var(--spacing) * 0.5);
-  }
   .pl-3 {
     padding-left: calc(var(--spacing) * 3);
+  }
+  .pl-9 {
+    padding-left: calc(var(--spacing) * 9);
   }
   .pl-10 {
     padding-left: calc(var(--spacing) * 10);
@@ -5338,9 +5320,6 @@
   .underline {
     text-decoration-line: underline;
   }
-  .opacity-25 {
-    opacity: 25%;
-  }
   .opacity-30 {
     opacity: 30%;
   }
@@ -5545,10 +5524,19 @@
     --btn-color: var(--color-warning);
     --btn-fg: var(--color-warning-content);
   }
+  .outline-none {
+    --tw-outline-style: none;
+    outline-style: none;
+  }
   .select-all {
     -webkit-user-select: all;
     -moz-user-select: all;
          user-select: all;
+  }
+  .select-none {
+    -webkit-user-select: none;
+    -moz-user-select: none;
+         user-select: none;
   }
   .toggle-lg {
     &:is([type="checkbox"]), &:has([type="checkbox"]) {
@@ -6078,11 +6066,6 @@
   .lg\:hidden {
     @media (width >= 64rem) {
       display: none;
-    }
-  }
-  .lg\:inline {
-    @media (width >= 64rem) {
-      display: inline;
     }
   }
   .lg\:grid-cols-2 {

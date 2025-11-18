@@ -1,5 +1,230 @@
 {% extends "base.html" %}
 
+{% block main_class %}{% endblock %}
+
+{% block content_wrapper %}
+<div class="w-full flex flex-col bg-base-200" style="height: calc(100vh - 4rem);">
+  <!-- Top Bar -->
+  <div class="top-bar-gradient border-b border-base-300 px-6 py-4 shadow-lg">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-4">
+        <button id="sidebarToggle" class="btn btn-square btn-ghost btn-sm lg:hidden" aria-label="Toggle sidebar">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" />
+          </svg>
+        </button>
+
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-yellow-500 to-amber-600 flex items-center justify-center shadow-lg">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+        </div>
+
+        <div class="flex items-center gap-4">
+          <h1 class="text-2xl font-bold text-base-content bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">API Playground</h1>
+          <p class="text-xs text-base-content/60 mt-0.5">Interact with OpenAlgo REST APIs in the Playground</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <div class="glass-effect rounded-xl px-4 py-2 flex items-center gap-3">
+          <span class="text-xs text-base-content/60 font-medium">API Key:</span>
+          <input type="password" id="globalApiKey" readonly class="input input-sm input-bordered w-64 font-mono text-xs bg-base-100/50" placeholder="Loading...">
+          <button id="apiKeyToggle" class="btn btn-sm btn-ghost btn-circle" title="Toggle visibility" aria-label="Toggle API key visibility">
+            <svg id="eyeIcon" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+            </svg>
+          </button>
+          <button id="copyApiKeyBtn" class="btn btn-sm btn-ghost btn-circle" title="Copy API key" aria-label="Copy API key">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+          </button>
+        </div>
+
+        <a href="/apikey" class="btn btn-sm btn-primary btn-modern gap-2">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+          </svg>
+          Manage Keys
+        </a>
+      </div>
+    </div>
+
+    <div id="apiKeyWarning" class="alert alert-warning mt-3 shadow-lg hidden">
+      <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+      </svg>
+      <span class="text-sm">No API key found. <a href="/apikey" class="link link-hover font-semibold underline">Generate one here</a>.</span>
+    </div>
+  </div>
+
+  <!-- Main Content Area - Three Panel Layout -->
+  <div class="flex-1 flex overflow-hidden">
+    <!-- Left Sidebar - Endpoints -->
+    <div class="sidebar relative w-64 min-w-[200px] max-w-[400px] bg-base-100 border-r border-base-300 overflow-y-auto" style="flex:0 0 auto;">
+      <div class="p-3">
+        <div class="relative mb-3">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-base-content/40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          <input type="text" id="searchEndpoints" placeholder="Search requests..." class="input input-xs input-bordered w-full pl-9 bg-base-200/50">
+        </div>
+
+        <div id="endpointsList" class="space-y-3">
+          <!-- Endpoints will be loaded here -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Middle Panel - Request Body -->
+    <div class="flex-1 flex flex-col overflow-hidden border-r border-base-300 bg-base-100" id="requestSection">
+      <!-- URL Bar -->
+      <div class="flex items-center gap-2 p-3 border-b border-base-300 bg-base-200/30">
+        <select id="requestMethod" class="select select-xs select-bordered w-24 font-semibold">
+          <option value="GET">GET</option>
+          <option value="POST" selected>POST</option>
+        </select>
+        <input type="text" id="requestUrl" placeholder="http://127.0.0.1:5000/api/v1/endpoint" class="input input-xs input-bordered flex-1 font-mono text-xs bg-base-100">
+        <button id="sendButton" class="btn btn-xs btn-primary gap-1 px-3">
+          <span id="buttonText">Send</span>
+          <span id="buttonSpinner" class="hidden">
+            <span class="loading loading-spinner loading-xs"></span>
+          </span>
+          <svg id="buttonIcon" xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Request Tabs -->
+      <div class="flex items-center gap-1 px-3 py-2 border-b border-base-300 bg-base-200/20">
+        <button class="tab-btn text-xs px-3 py-1 rounded bg-base-300 font-semibold" data-tab="body">Body</button>
+        <button class="tab-btn text-xs px-3 py-1 rounded hover:bg-base-300" data-tab="headers">Headers</button>
+        <div class="flex-1"></div>
+        <select id="bodyType" class="select select-xs select-bordered w-20">
+          <option value="json">JSON</option>
+          <option value="text">Text</option>
+        </select>
+        <button id="prettifyBtn" class="btn btn-xs btn-ghost">Prettify</button>
+      </div>
+
+      <!-- Headers Content (hidden by default) -->
+      <div id="headersTab" class="hidden flex-1 p-3 bg-base-200/30 overflow-auto">
+        <div class="text-xs font-mono">
+          <div class="flex items-center gap-2 py-1">
+            <span class="text-base-content/60">Content-Type:</span>
+            <span class="text-base-content">application/json</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Body Editor with Line Numbers -->
+      <div id="bodyEditorWrapper" class="flex-1 flex overflow-hidden bg-base-200/30">
+        <div id="lineNumbers" class="line-numbers bg-base-200/50 text-base-content/40 text-xs font-mono py-3 px-2 text-right select-none overflow-hidden border-r border-base-300">
+          1
+        </div>
+        <textarea id="requestBody" class="flex-1 p-3 font-mono text-xs bg-transparent border-none outline-none resize-none leading-relaxed" placeholder='{"apikey": ""}'></textarea>
+      </div>
+
+      <!-- Reset Button -->
+      <div class="flex items-center justify-between px-3 py-2 border-t border-base-300 bg-base-200/20">
+        <div id="getRequestHint" class="text-xs text-info hidden items-center gap-1">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span>GET: JSON → query params</span>
+        </div>
+        <button id="resetBodyBtn" class="btn btn-xs btn-ghost gap-1" title="Reset to default">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          Reset
+        </button>
+      </div>
+    </div>
+
+    <!-- Right Panel - Response -->
+    <div class="flex-1 flex flex-col overflow-hidden bg-base-100" id="responseSection">
+      <!-- Response Header -->
+      <div class="flex items-center justify-between px-3 py-2 border-b border-base-300 bg-base-200/30">
+        <div class="flex items-center gap-3">
+          <span class="text-xs font-semibold">Response</span>
+          <div id="responseLoading" class="hidden items-center gap-1 text-xs text-info">
+            <span class="loading loading-spinner loading-xs"></span>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <span id="responseStatusText" class="text-xs font-mono"></span>
+          <span id="responseTimeText" class="text-xs text-base-content/60 font-mono"></span>
+          <span id="responseSizeText" class="text-xs text-base-content/60 font-mono"></span>
+        </div>
+      </div>
+
+      <!-- Response Tabs -->
+      <div class="flex items-center gap-1 px-3 py-2 border-b border-base-300 bg-base-200/20">
+        <button class="resp-tab-btn text-xs px-3 py-1 rounded bg-base-300 font-semibold" data-tab="response">Response</button>
+        <div class="flex-1"></div>
+        <button id="copyCurlButton" class="btn btn-xs btn-ghost gap-1" title="Copy as cURL">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+          </svg>
+        </button>
+        <button id="copyResponseButton" class="btn btn-xs btn-ghost gap-1" title="Copy response">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Response Content with Line Numbers -->
+      <div id="responseContainer" class="flex-1 flex overflow-hidden bg-base-200/30">
+        <div id="responseLineNumbers" class="line-numbers bg-base-200/50 text-base-content/40 text-xs font-mono py-3 px-2 text-right select-none overflow-hidden border-r border-base-300">
+          1
+        </div>
+        <div id="responseContent" class="flex-1 overflow-auto p-3">
+          <div id="emptyState" class="flex flex-col items-center justify-center h-full text-center">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 text-base-content/20 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            <p class="text-base-content/40 text-xs">No response yet</p>
+          </div>
+          <pre id="responseData" class="json-viewer hidden font-mono text-xs leading-relaxed"></pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden elements for compatibility -->
+  <div class="hidden">
+    <div id="successDot"></div>
+    <div id="errorDot"></div>
+    <div id="responseStatusBadge"><span id="responseStatus"></span></div>
+    <div id="horizontalResizeHandle"></div>
+  </div>
+</div>
+
+<!-- Mobile FAB -->
+<div class="lg:hidden">
+  <div id="mobileFab" class="mobile-fab btn btn-primary btn-circle shadow-lg" title="Quick send">
+    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+    </svg>
+  </div>
+</div>
+
+<!-- Mobile toolbar -->
+<div class="lg:hidden mobile-toolbar fixed bottom-4 left-1/2 transform -translate-x-1/2 flex gap-2">
+  <select id="mobileRequestMethod" class="request-method-select select select-sm select-bordered">
+    <option value="GET">GET</option><option value="POST">POST</option>
+  </select>
+  <button id="mobileSend" class="btn btn-sm btn-primary gap-1">Send</button>
+</div>
+
+<script src="{{ url_for('static', filename='js/playground.js') }}"></script>
+{% endblock %}
+
 {% block head %}
 <style>
 /* Cleaned & consolidated styles */
@@ -47,11 +272,31 @@
 .resize-handle::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: rgba(148,163,184,0.12); }
 .resize-handle.horizontal::after { width: 100%; height: 1px; left: 0; top: 2px; bottom: auto; }
 
-/* Request/Response sections */
-#requestSection { min-height: 200px; max-height: 70vh; overflow: hidden; display:flex; flex-direction:column; }
-#responseSection { min-height: 200px; flex:1; display:flex; flex-direction:column; overflow:hidden; }
-#responseContainer { flex:1; overflow:auto; }
-#requestBody { min-height:150px; max-height:40vh; resize:vertical; }
+/* Request/Response sections - Three panel layout */
+#requestSection { min-width: 300px; overflow: hidden; display:flex; flex-direction:column; }
+#responseSection { min-width: 300px; flex:1; display:flex; flex-direction:column; overflow:hidden; }
+#responseContainer { flex:1; overflow:hidden; display:flex; }
+#requestBody { min-height:100px; resize:none; }
+
+/* Line numbers */
+.line-numbers {
+  min-width: 40px;
+  line-height: 1.6;
+  font-size: 12px;
+  white-space: pre-line;
+  word-break: break-all;
+}
+#requestBody, #responseData {
+  line-height: 1.6;
+}
+
+/* Sync scroll for line numbers */
+#requestBody {
+  overflow-y: auto;
+}
+#lineNumbers, #responseLineNumbers {
+  overflow-y: hidden;
+}
 
 /* Prevent text selection during resize */
 .noselect { -webkit-touch-callout:none; -webkit-user-select:none; -khtml-user-select:none; -moz-user-select:none; -ms-user-select:none; user-select:none; }
@@ -141,9 +386,11 @@
 }
 
 /* Method badges */
-.method-badge { font-size:11px; font-weight:700; padding:4px 8px; border-radius:6px; text-transform:uppercase; letter-spacing:0.6px; box-shadow:0 2px 4px rgba(0,0,0,0.06); }
-.method-get { background: rgba(59,130,246,0.08); color:#3b82f6; border:1px solid rgba(59,130,246,0.18); }
-.method-post { background: rgba(16,185,129,0.06); color:#10b981; border:1px solid rgba(16,185,129,0.12); }
+.method-badge { font-size:9px; font-weight:700; padding:2px 6px; border-radius:4px; text-transform:uppercase; letter-spacing:0.5px; }
+.method-get { background: rgba(59,130,246,0.1); color:#3b82f6; }
+.method-post { background: rgba(16,185,129,0.1); color:#10b981; }
+.method-put { background: rgba(234,179,8,0.1); color:#eab308; }
+.method-delete { background: rgba(239,68,68,0.1); color:#ef4444; }
 
 /* Dark theme tokens (kept minimal) */
 [data-theme="dark"] {
@@ -166,27 +413,25 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.75rem 1rem;
-  margin-bottom: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.25rem;
   font-weight: 600;
-  font-size: 0.875rem;
+  font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--bc, #64748b);
   background: rgba(99, 102, 241, 0.05);
-  border-radius: 0.5rem;
+  border-radius: 0.375rem;
   cursor: pointer;
   user-select: none;
   transition: all 0.2s ease;
-  border: 1px solid rgba(99, 102, 241, 0.1);
 }
 .category-header:hover {
   background: rgba(99, 102, 241, 0.1);
-  border-color: rgba(99, 102, 241, 0.2);
 }
 .category-header .chevron {
-  width: 16px;
-  height: 16px;
+  width: 12px;
+  height: 12px;
   transition: transform 0.3s ease;
   color: var(--bc, #64748b);
   flex-shrink: 0;
@@ -206,7 +451,7 @@
   margin-bottom: 0;
 }
 .category-item {
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
 }
 
 /* Endpoint item active state */
@@ -221,978 +466,4 @@
 }
 
 </style>
-{% endblock %}
-
-{% block content %}
-<div class="w-full flex flex-col bg-base-200" style="height: calc(100vh - 5.5rem);">
-  <!-- Top Bar -->
-  <div class="top-bar-gradient border-b border-base-300 px-6 py-4 shadow-lg">
-    <div class="flex items-center justify-between">
-      <div class="flex items-center gap-4">
-        <button id="sidebarToggle" class="btn btn-square btn-ghost btn-sm lg:hidden" aria-label="Toggle sidebar">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-            <path fill-rule="evenodd" d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clip-rule="evenodd" />
-          </svg>
-        </button>
-
-        <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-yellow-500 to-amber-600 flex items-center justify-center shadow-lg">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-          </svg>
-        </div>
-
-        <div class="flex items-center gap-4">
-          <h1 class="text-2xl font-bold text-base-content bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">API Playground</h1>
-          <p class="text-xs text-base-content/60 mt-0.5">Interact with OpenAlgo REST APIs in the Playground</p>
-        </div>
-      </div>
-
-      <div class="flex items-center gap-3">
-        <div class="glass-effect rounded-xl px-4 py-2 flex items-center gap-3">
-          <span class="text-xs text-base-content/60 font-medium">API Key:</span>
-          <input type="password" id="globalApiKey" readonly class="input input-sm input-bordered w-64 font-mono text-xs bg-base-100/50" placeholder="Loading...">
-          <button id="apiKeyToggle" class="btn btn-sm btn-ghost btn-circle" title="Toggle visibility" aria-label="Toggle API key visibility">
-            <svg id="eyeIcon" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-            </svg>
-          </button>
-          <button id="copyApiKeyBtn" class="btn btn-sm btn-ghost btn-circle" title="Copy API key" aria-label="Copy API key">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-          </button>
-        </div>
-
-        <a href="/apikey" class="btn btn-sm btn-primary btn-modern gap-2">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-          </svg>
-          Manage Keys
-        </a>
-      </div>
-    </div>
-
-    <div id="apiKeyWarning" class="alert alert-warning mt-3 shadow-lg hidden">
-      <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-      </svg>
-      <span class="text-sm">No API key found. <a href="/apikey" class="link link-hover font-semibold underline">Generate one here</a>.</span>
-    </div>
-  </div>
-
-  <!-- Main Content Area -->
-  <div class="flex-1 flex overflow-hidden">
-    <!-- Left Sidebar - Endpoints -->
-    <div class="sidebar relative w-80 min-w-[240px] max-w-[500px] bg-base-100 border-r border-base-300 overflow-y-auto shadow-xl" style="flex:0 0 auto;">
-      <div class="p-5">
-        <div class="relative mb-5">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-base-content/40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-          <input type="text" id="searchEndpoints" placeholder="Search endpoints..." class="input input-sm input-bordered w-full pl-10 bg-base-200/50">
-        </div>
-
-        <div id="endpointsList" class="space-y-4">
-          <!-- Endpoints will be loaded here -->
-        </div>
-      </div>
-    </div>
-
-    <!-- Right Panel - Request/Response -->
-    <div class="flex-1 flex flex-col overflow-hidden">
-      <!-- Request Section -->
-      <div class="bg-base-100 shadow-md" id="requestSection">
-        <div class="p-5">
-          <div class="flex items-center gap-3 mb-4">
-            <select id="requestMethod" class="select select-sm select-bordered w-32 font-semibold">
-              <option value="GET">GET</option>
-              <option value="POST" selected>POST</option>
-            </select>
-
-            <input type="text" id="requestUrl" placeholder="/api/v1/endpoint" class="input input-sm input-bordered flex-1 font-mono text-sm bg-base-200/50">
-
-            <div class="flex items-center gap-2">
-              <button id="sendButton" class="btn btn-sm btn-success btn-modern gap-2 px-6 relative overflow-hidden">
-                <span id="buttonText">Send Request</span>
-                <span id="buttonSpinner" class="hidden absolute inset-0 flex items-center justify-center bg-success/80">
-                  <svg class="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" class="opacity-25"></circle>
-                    <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" class="opacity-75"></path>
-                  </svg>
-                </span>
-                <svg id="buttonIcon" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-                </svg>
-              </button>
-              <span class="kbd-hint hidden lg:inline">Ctrl+Enter</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Body Content -->
-        <div class="p-5 bg-base-200/30">
-          <div class="mb-3">
-            <div class="mb-2 flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <select id="bodyType" class="select select-sm select-bordered w-40">
-                  <option value="json">JSON</option>
-                  <option value="text">Raw Text</option>
-                </select>
-                <button id="resetBodyBtn" class="btn btn-xs btn-ghost gap-1" title="Reset to default values">
-                  <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                  </svg>
-                  Reset
-                </button>
-              </div>
-              <div id="getRequestHint" class="text-xs text-info hidden items-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <span>For GET: JSON will be converted to query parameters. Empty values are skipped.</span>
-              </div>
-            </div>
-            <textarea id="requestBody" rows="10" class="textarea textarea-bordered w-full font-mono text-xs bg-base-100 leading-relaxed" placeholder='{\n  "apikey": "your-api-key"\n}'></textarea>
-          </div>
-        </div>
-      </div>
-
-      <!-- Horizontal Resize Handle -->
-      <div class="relative h-3 bg-base-200 hover:bg-base-300 cursor-row-resize flex items-center justify-center" id="horizontalResizeHandle">
-        <div class="w-16 h-1 rounded-full bg-base-300"></div>
-      </div>
-
-      <!-- Response Section -->
-      <div class="flex-1 flex flex-col overflow-hidden bg-base-100" id="responseSection">
-        <div class="border-b border-base-300 px-5 py-3 flex items-center justify-between glass-effect">
-          <div class="flex items-center gap-4">
-            <div class="flex items-center gap-2">
-              <div class="pulse-dot bg-success hidden" id="successDot" style="width:8px;height:8px;border-radius:50%;"></div>
-              <div class="pulse-dot bg-error hidden" id="errorDot" style="width:8px;height:8px;border-radius:50%;"></div>
-              <span class="text-sm font-semibold">Response</span>
-            </div>
-            <span id="responseStatusText" class="text-xs"></span>
-            <span id="responseTimeText" class="text-xs text-base-content/60 font-mono"></span>
-          </div>
-
-          <div class="flex items-center gap-2">
-            <button id="copyCurlButton" class="btn btn-xs btn-ghost" title="Copy as cURL">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-              </svg>
-              <span class="hidden sm:inline">cURL</span>
-            </button>
-
-            <button id="copyResponseButton" class="btn btn-xs btn-ghost" title="Copy response">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
-              <span class="hidden sm:inline">Copy</span>
-            </button>
-          </div>
-        </div>
-
-        <div id="responseContainer" class="flex-1 flex flex-col overflow-hidden bg-base-200/30">
-          <div class="flex items-center justify-between px-5 py-2 bg-base-200/50 border-b border-base-300">
-            <div class="flex items-center gap-3">
-              <div id="responseStatusBadge" class="badge badge-ghost"><span id="responseStatus">Idle</span></div>
-              <div id="responseLoading" class="hidden items-center gap-2 text-sm text-info">
-                <div class="loading loading-spinner loading-xs"></div><span>Loading...</span>
-              </div>
-            </div>
-
-            <div class="flex items-center gap-2">
-              <!-- additional controls could go here -->
-            </div>
-          </div>
-
-          <div id="responseContent" class="flex-1 overflow-auto p-5">
-            <div id="emptyState" class="text-center py-16">
-              <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto text-base-content/20 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-              <p class="text-base-content/40 text-sm font-medium">No response yet</p>
-              <p class="text-base-content/30 text-xs mt-1">Send a request to see the response</p>
-            </div>
-            <pre id="responseData" class="json-viewer hidden"></pre>
-
-            <div id="errorDetails" class="hidden mt-4">
-              <div class="collapse collapse-arrow border border-error/20 rounded-lg overflow-hidden">
-                <input type="checkbox" class="peer" />
-                <div class="collapse-title bg-error/5 text-sm font-medium text-error px-4 py-2">Show error details</div>
-                <div class="collapse-content bg-error/5">
-                  <pre class="text-xs p-4 overflow-auto max-h-40"><code id="errorDetailsContent"></code></pre>
-                </div>
-              </div>
-            </div>
-
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Mobile FAB -->
-<div class="lg:hidden">
-  <div id="mobileFab" class="mobile-fab btn btn-primary btn-circle shadow-lg" title="Quick send">
-    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-    </svg>
-  </div>
-</div>
-
-<!-- Mobile toolbar -->
-<div class="lg:hidden mobile-toolbar fixed bottom-4 left-1/2 transform -translate-x-1/2 flex gap-2">
-  <select id="mobileRequestMethod" class="request-method-select select select-sm select-bordered">
-    <option value="GET">GET</option><option value="POST">POST</option>
-  </select>
-  <button id="mobileSend" class="btn btn-sm btn-primary gap-1">Send</button>
-</div>
-
-<script>
-/* ---------- Utilities ---------- */
-
-function escapeHtml(unsafe) {
-  if (unsafe === null || unsafe === undefined) return '';
-  return String(unsafe)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
-
-const INVALID_JSON_CODE = 'INVALID_JSON';
-
-function buildAbsoluteUrl(url) {
-  try {
-    return new URL(url, window.location.origin).href;
-  } catch (err) {
-    return url;
-  }
-}
-
-/* ---------- URL Validation (SSRF Prevention) ---------- */
-function isValidApiUrl(url) {
-  // Only allow relative URLs starting with /api/ or /playground/
-  if (url.startsWith('/api/') || url.startsWith('/playground/')) {
-    return { valid: true };
-  }
-
-  // Try to parse as absolute URL
-  try {
-    const parsed = new URL(url, window.location.origin);
-
-    // Only allow same origin
-    if (parsed.origin !== window.location.origin) {
-      return { valid: false, error: 'Only same-origin requests are allowed' };
-    }
-
-    // Block dangerous protocols
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return { valid: false, error: 'Invalid protocol. Only HTTP/HTTPS allowed' };
-    }
-
-    // Block internal/private IP ranges
-    const hostname = parsed.hostname.toLowerCase();
-    const blockedPatterns = [
-      /^localhost$/i,
-      /^127\./,
-      /^10\./,
-      /^172\.(1[6-9]|2[0-9]|3[0-1])\./,
-      /^192\.168\./,
-      /^0\.0\.0\.0$/,
-      /^::1$/,
-      /^\[::1\]$/,
-      /^metadata\./i,
-      /^169\.254\./
-    ];
-
-    for (const pattern of blockedPatterns) {
-      if (pattern.test(hostname)) {
-        return { valid: false, error: 'Requests to internal addresses are not allowed' };
-      }
-    }
-
-    // Must be an API path
-    if (!parsed.pathname.startsWith('/api/') && !parsed.pathname.startsWith('/playground/')) {
-      return { valid: false, error: 'Only /api/ and /playground/ endpoints are allowed' };
-    }
-
-    return { valid: true };
-  } catch (err) {
-    return { valid: false, error: 'Invalid URL format' };
-  }
-}
-
-function prepareRequestBody(bodyText = '', bodyType = 'json') {
-  const type = bodyType || 'json';
-  const trimmed = bodyText.trim();
-
-  if (type === 'json') {
-    if (!trimmed) {
-      return {
-        body: null,
-        contentType: 'application/json'
-      };
-    }
-    // Validate JSON
-    try {
-      JSON.parse(bodyText);
-      return {
-        body: bodyText,
-        contentType: 'application/json'
-      };
-    } catch (err) {
-      return { error: 'invalid-json' };
-    }
-  }
-
-  return {
-    body: trimmed ? bodyText : null,
-    contentType: 'text/plain;charset=UTF-8'
-  };
-}
-
-
-
-function showToast(message, type='info') {
-  const toast = document.createElement('div');
-  toast.className = `alert alert-${type} fixed bottom-4 right-4 w-auto shadow-lg z-50`;
-  toast.style.animation = 'fadeIn 0.3s ease-in-out';
-  let icon = '';
-  if (type === 'success') {
-    icon = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />';
-  } else if (type === 'error') {
-    icon = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />';
-  } else if (type === 'warning') {
-    icon = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />';
-  }
-  // Escape message to prevent XSS
-  const safeMessage = escapeHtml(message);
-  toast.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">${icon}</svg><span>${safeMessage}</span>`;
-  document.body.appendChild(toast);
-  setTimeout(() => {
-    toast.style.opacity = '0';
-    toast.style.transform = 'translateY(10px)';
-    toast.style.transition = 'all 0.3s ease-in-out';
-    setTimeout(() => toast.remove(), 300);
-  }, 2000);
-}
-
-/* ---------- DOM references ---------- */
-const sidebar = document.querySelector('.sidebar');
-const sidebarToggle = document.getElementById('sidebarToggle');
-const sidebarOverlay = document.createElement('div');
-sidebarOverlay.className = 'sidebar-overlay';
-document.body.appendChild(sidebarOverlay);
-
-const sendButton = document.getElementById('sendButton');
-const buttonSpinner = document.getElementById('buttonSpinner');
-const buttonText = document.getElementById('buttonText');
-
-const requestMethodSelect = document.getElementById('requestMethod');
-const requestUrlInput = document.getElementById('requestUrl');
-const requestBodyTextarea = document.getElementById('requestBody');
-const bodyTypeSelect = document.getElementById('bodyType');
-
-const responseContainer = document.getElementById('responseContainer');
-const responseDataPre = document.getElementById('responseData');
-const emptyState = document.getElementById('emptyState');
-const responseStatusText = document.getElementById('responseStatusText');
-const responseTimeText = document.getElementById('responseTimeText');
-const successDot = document.getElementById('successDot');
-const errorDot = document.getElementById('errorDot');
-
-/* ---------- State ---------- */
-let endpoints = {};
-let currentEndpoint = null;
-let collapsedCategories = {};
-
-/* ---------- Init ---------- */
-document.addEventListener('DOMContentLoaded', () => {
-  loadApiKey();
-  loadEndpoints();
-  setupShortcuts();
-});
-
-/* ---------- API key visibility & copy ---------- */
-document.getElementById('apiKeyToggle').addEventListener('click', () => {
-  const apiKeyInput = document.getElementById('globalApiKey');
-  const eyeIcon = document.getElementById('eyeIcon');
-  if (apiKeyInput.type === 'password') {
-    apiKeyInput.type = 'text';
-    eyeIcon.innerHTML = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242" />`;
-  } else {
-    apiKeyInput.type = 'password';
-    eyeIcon.innerHTML = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>`;
-  }
-});
-
-document.getElementById('copyApiKeyBtn').addEventListener('click', () => {
-  const apiKey = document.getElementById('globalApiKey').value;
-  if (apiKey) {
-    navigator.clipboard.writeText(apiKey);
-    showToast('API key copied!', 'success');
-  } else {
-    showToast('No API key to copy', 'error');
-  }
-});
-
-/* ---------- Sidebar toggle & overlay ---------- */
-function toggleSidebar() {
-  sidebar.classList.toggle('open');
-  sidebarOverlay.classList.toggle('open');
-  document.body.style.overflow = sidebar.classList.contains('open') ? 'hidden' : '';
-}
-
-sidebarToggle.addEventListener('click', toggleSidebar);
-sidebarOverlay.addEventListener('click', toggleSidebar);
-
-/* Close sidebar on mobile when an endpoint clicked - delegated after rendering endpoints */
-
-/* ---------- Collapsed categories state ---------- */
-function getDefaultCollapsedState(categories) {
-  const collapsed = {};
-  Object.keys(categories).forEach(category => {
-    // Account category is expanded by default, all others are collapsed
-    collapsed[category] = category.toLowerCase() !== 'account';
-  });
-  return collapsed;
-}
-
-function toggleCategory(categoryName, headerElement, contentElement) {
-  const isCollapsed = !headerElement.classList.contains('collapsed');
-  
-  collapsedCategories[categoryName] = isCollapsed;
-  
-  if (isCollapsed) {
-    headerElement.classList.add('collapsed');
-    contentElement.classList.add('collapsed');
-  } else {
-    headerElement.classList.remove('collapsed');
-    contentElement.classList.remove('collapsed');
-  }
-}
-
-/* ---------- Load endpoints ---------- */
-async function loadEndpoints() {
-  try {
-    const resp = await fetch('/playground/endpoints');
-    if (!resp.ok) throw new Error('Failed to load endpoints');
-    endpoints = await resp.json();
-    renderEndpoints(endpoints);
-    // Auto-select first endpoint if present
-    setTimeout(() => {
-      const first = document.querySelector('.endpoint-item');
-      if (first) first.click();
-    }, 100);
-  } catch (err) {
-    console.error(err);
-    showToast('Failed to load endpoints', 'error');
-  }
-}
-
-function renderEndpoints(data, forceExpand = false) {
-  const container = document.getElementById('endpointsList');
-  container.innerHTML = '';
-  
-  let collapsed;
-  if (forceExpand) {
-    collapsed = {};
-  } else {
-    // Use in-memory state or default
-    if (Object.keys(collapsedCategories).length === 0) {
-      collapsed = getDefaultCollapsedState(data);
-      collapsedCategories = { ...collapsed };
-    } else {
-      collapsed = { ...collapsedCategories };
-    }
-  }
-  
-  Object.keys(data).forEach(category => {
-    const categoryDiv = document.createElement('div');
-    categoryDiv.className = 'category-item mb-4';
-    
-    // Category header with chevron
-    const header = document.createElement('div');
-    header.className = `category-header ${collapsed[category] ? 'collapsed' : ''}`;
-    header.innerHTML = `
-      <span>${escapeHtml(category)}</span>
-      <svg class="chevron" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
-      </svg>
-    `;
-    
-    // Category content wrapper
-    const content = document.createElement('div');
-    content.className = `category-content ${collapsed[category] ? 'collapsed' : ''}`;
-    
-    // Add endpoints to content
-    data[category].forEach(endpoint => {
-      const endpointDiv = document.createElement('div');
-      endpointDiv.className = 'endpoint-item rounded-lg px-4 py-3 mb-2 cursor-pointer hover:bg-base-200 transition-colors';
-      const methodClass = endpoint.method === 'GET' ? 'method-get' : 'method-post';
-      endpointDiv.innerHTML = `
-        <div class="flex items-center gap-2.5 mb-1.5">
-          <span class="method-badge ${methodClass}">${escapeHtml(endpoint.method || '')}</span>
-          <span class="text-sm font-semibold flex-1">${escapeHtml(endpoint.name || '')}</span>
-        </div>
-        <div class="text-xs text-base-content/50 font-mono pl-0.5">${escapeHtml(endpoint.path || '')}</div>
-      `;
-      endpointDiv.addEventListener('click', (e) => {
-        e.stopPropagation();
-        document.querySelectorAll('.endpoint-item').forEach(el => el.classList.remove('active'));
-        endpointDiv.classList.add('active');
-        selectEndpoint(endpoint, endpointDiv);
-        if (window.innerWidth < 1024) toggleSidebar();
-      });
-      content.appendChild(endpointDiv);
-    });
-    
-    // Toggle category on header click
-    header.addEventListener('click', () => {
-      toggleCategory(category, header, content);
-    });
-    
-    categoryDiv.appendChild(header);
-    categoryDiv.appendChild(content);
-    container.appendChild(categoryDiv);
-  });
-}
-
-/* ---------- Update GET hint visibility ---------- */
-function updateGetHintVisibility() {
-  const getHint = document.getElementById('getRequestHint');
-  const method = requestMethodSelect?.value;
-  if (getHint) {
-    if (method === 'GET') {
-      getHint.classList.remove('hidden');
-      getHint.classList.add('flex');
-    } else {
-      getHint.classList.add('hidden');
-      getHint.classList.remove('flex');
-    }
-  }
-}
-
-/* ---------- Endpoint selection ---------- */
-function selectEndpoint(endpoint, element) {
-  document.querySelectorAll('.endpoint-item').forEach(el => el.classList.remove('active'));
-  if (element) element.classList.add('active');
-
-  currentEndpoint = endpoint;
-  const bodyTextarea = document.getElementById('requestBody');
-  const apiKey = document.getElementById("globalApiKey").value;
-
-  document.getElementById("requestMethod").value = endpoint.method || 'GET';
-  document.getElementById("requestUrl").value = endpoint.path || '';
-
-  // Update GET hint visibility
-  updateGetHintVisibility();
-
-  // Populate from endpoint
-  // For GET requests with params, show them in the body as reference
-  if (endpoint.method === 'GET' && endpoint.params) {
-    const params = { ...endpoint.params };
-    if (apiKey && !params.apikey) {
-      params.apikey = apiKey;
-    }
-    bodyTextarea.value = JSON.stringify(params, null, 2);
-  } else if (endpoint.body) {
-    const body = { ...endpoint.body };
-    if (apiKey && !body.apikey) {
-      body.apikey = apiKey;
-    }
-    bodyTextarea.value = JSON.stringify(body, null, 2);
-  } else {
-    // If no body but we have API key, add it to an empty object
-    bodyTextarea.value = apiKey ? JSON.stringify({ apikey: apiKey }, null, 2) : '';
-  }
-
-  // Make sure body textarea is always editable
-  bodyTextarea.disabled = false;
-  bodyTextarea.classList.remove('opacity-50');
-}
-
-
-/* ---------- Send request ---------- */
-
-// Maximum size for syntax highlighting (100KB)
-const MAX_HIGHLIGHT_SIZE = 100 * 1024;
-
-function syntaxHighlight(json) {
-  if (typeof json !== 'string') json = JSON.stringify(json, null, 2);
-  
-  // Skip syntax highlighting for large responses to prevent browser hang
-  if (json.length > MAX_HIGHLIGHT_SIZE) {
-    return escapeHtml(json);
-  }
-  
-  json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
-    let cls = 'json-number';
-    if (/^"/.test(match)) {
-      if (/:$/.test(match)) cls = 'json-key';
-      else cls = 'json-string';
-    } else if (/true|false/.test(match)) cls = 'json-boolean';
-    else if (/null/.test(match)) cls = 'json-null';
-    return '<span class="' + cls + '">' + match + '</span>';
-  });
-}
-
-async function sendRequest() {
-  const method = requestMethodSelect.value;
-  let fetchUrl = requestUrlInput.value.trim();
-  if (!fetchUrl) {
-    showToast('Please provide an endpoint URL', 'warning');
-    return;
-  }
-
-  // Validate URL to prevent SSRF attacks
-  const urlValidation = isValidApiUrl(fetchUrl);
-  if (!urlValidation.valid) {
-    showToast(urlValidation.error, 'error');
-    return;
-  }
-
-  // UI lock
-  sendButton.disabled = true;
-  buttonSpinner.classList.remove('hidden');
-  buttonText.textContent = 'Sending...';
-  document.getElementById('responseLoading').classList.remove('hidden');
-
-  const startTime = Date.now();
-  try {
-    const options = { method, headers: { 'Accept': 'application/json' } };
-
-    // Add CSRF token for non-GET requests
-    if (method !== 'GET') {
-      const csrfToken = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
-      if (csrfToken) {
-        options.headers['X-CSRFToken'] = csrfToken;
-      }
-    }
-
-    const bodyType = bodyTypeSelect ? bodyTypeSelect.value : 'json';
-
-    if (method === 'GET') {
-      // For GET requests, parse body as query params
-      const bodyText = requestBodyTextarea.value.trim();
-      if (bodyText) {
-        try {
-          const params = JSON.parse(bodyText);
-          const url = new URL(fetchUrl, window.location.origin);
-          Object.entries(params).forEach(([key, value]) => {
-            // Only add non-empty values (skip null, undefined, empty strings)
-            if (value !== null && value !== undefined && value !== '' && String(value).trim() !== '') {
-              url.searchParams.append(key, String(value));
-            }
-          });
-          fetchUrl = url.toString();
-        } catch (e) {
-          showToast('Invalid JSON for query parameters', 'error');
-          throw new Error(INVALID_JSON_CODE);
-        }
-      }
-    } else {
-      // For non-GET requests, use body
-      const bodyResult = prepareRequestBody(requestBodyTextarea.value || '', bodyType);
-      if (bodyResult?.error === 'invalid-json') {
-        showToast('Invalid JSON body. Please fix errors before sending.', 'error');
-        throw new Error(INVALID_JSON_CODE);
-      }
-      if (bodyResult.body !== null) {
-        options.body = bodyResult.body;
-        options.headers['Content-Type'] = bodyResult.contentType;
-      }
-    }
-
-    const resp = await fetch(fetchUrl, options);
-    const time = Date.now() - startTime;
-
-    let data;
-    const contentType = resp.headers.get('content-type');
-    try {
-      if (contentType && contentType.includes('application/json')) {
-        data = await resp.json();
-      } else {
-        const text = await resp.text();
-        data = { text: text, contentType: contentType };
-      }
-    } catch (e) {
-      data = { text: await resp.text(), error: 'Failed to parse response' };
-    }
-
-    // headers capture
-    const hdrs = {};
-    resp.headers.forEach((v,k) => hdrs[k] = v);
-    displayResponse(resp.status, data, time, hdrs);
-  } catch (err) {
-    const time = Date.now() - startTime;
-    if (err?.message === INVALID_JSON_CODE) return;
-    displayResponse(0, { error: err.message }, time);
-  } finally {
-    sendButton.disabled = false;
-    buttonSpinner.classList.add('hidden');
-    buttonText.textContent = 'Send Request';
-    document.getElementById('responseLoading').classList.add('hidden');
-  }
-}
-
-function displayResponse(status, data, time, headers = {}) {
-  // status / time updates
-  responseStatusText.textContent = status || 'Error';
-  responseTimeText.textContent = `⚡ ${time}ms`;
-
-  // badge / dots
-  if (status >= 200 && status < 300) {
-    successDot.classList.remove('hidden'); errorDot.classList.add('hidden');
-  } else if (status >= 400) {
-    errorDot.classList.remove('hidden'); successDot.classList.add('hidden');
-  } else {
-    successDot.classList.add('hidden'); errorDot.classList.add('hidden');
-  }
-
-  // response content
-  emptyState.classList.add('hidden');
-  responseDataPre.classList.remove('hidden');
-  
-  let responseText;
-  if (typeof data === 'string') {
-    responseText = data;
-  } else {
-    responseText = JSON.stringify(data, null, 2);
-  }
-  
-  // Check size and show warning for large responses
-  const sizeInKB = (responseText.length / 1024).toFixed(2);
-  if (responseText.length > MAX_HIGHLIGHT_SIZE) {
-    // Show plain text for large responses
-    responseDataPre.innerHTML = escapeHtml(responseText);
-    showToast(`Large response (${sizeInKB} KB) - syntax highlighting disabled for performance`, 'info');
-  } else {
-    // Apply syntax highlighting for smaller responses
-    if (typeof data === 'string') {
-      responseDataPre.innerHTML = escapeHtml(data);
-    } else {
-      responseDataPre.innerHTML = syntaxHighlight(data);
-    }
-  }
-}
-
-/* ---------- Copy response / cURL ---------- */
-document.getElementById('copyResponseButton').addEventListener('click', () => {
-  const text = responseDataPre?.textContent || '';
-  if (text) {
-    navigator.clipboard.writeText(text);
-    showToast('Response copied!', 'success');
-  } else showToast('No response to copy', 'warning');
-});
-
-document.getElementById('copyCurlButton').addEventListener('click', async () => {
-  const method = requestMethodSelect.value;
-  let url = requestUrlInput.value.trim();
-  if (!url) return showToast('No URL to copy', 'warning');
-
-  const headers = { 'Accept': 'application/json' };
-  const bodyType = bodyTypeSelect ? bodyTypeSelect.value : 'json';
-  let bodyText = '';
-
-  if (method === 'GET') {
-    // For GET, append query params to URL
-    const bodyContent = requestBodyTextarea.value.trim();
-    if (bodyContent) {
-      try {
-        const params = JSON.parse(bodyContent);
-        const urlObj = new URL(url, window.location.origin);
-        Object.entries(params).forEach(([key, value]) => {
-          if (value !== null && value !== undefined && value !== '') {
-            urlObj.searchParams.append(key, value);
-          }
-        });
-        url = urlObj.toString();
-      } catch (e) {
-        showToast('Invalid JSON for query parameters', 'error');
-        return;
-      }
-    }
-  } else {
-    const bodyResult = prepareRequestBody(requestBodyTextarea.value || '', bodyType);
-    if (bodyResult?.error === 'invalid-json') {
-      showToast('Invalid JSON body. Fix it before copying cURL.', 'error');
-      return;
-    }
-    if (bodyResult.body !== null) {
-      bodyText = bodyResult.body;
-      headers['Content-Type'] = bodyResult.contentType;
-    }
-  }
-
-  const absoluteUrl = buildAbsoluteUrl(url);
-  let curl = `curl -X ${method} "${absoluteUrl}"`;
-  Object.entries(headers).forEach(([k,v]) => {
-    if (v) curl += ` -H "${k}: ${v}"`;
-  });
-  if (bodyText) curl += ` -d '${bodyText.replace(/'/g, "'\\''")}'`;
-
-  try {
-    await navigator.clipboard.writeText(curl);
-    showToast('Copied as cURL', 'success');
-  } catch (e) {
-    showToast('Failed to copy cURL', 'error');
-  }
-});
-
-/* ---------- Resize handles (no persistence) ---------- */
-const horizontalResizeHandle = document.getElementById('horizontalResizeHandle');
-const sidebarResizeHandle = document.createElement('div');
-if (window.innerWidth >= 1024 && sidebar) {
-  sidebarResizeHandle.className = 'resize-handle';
-  sidebar.appendChild(sidebarResizeHandle);
-}
-
-let isResizingSidebar = false, isResizingHorizontal = false, lastDownX = 0, lastDownY = 0, sidebarWidth = 0, requestSectionHeight = 0;
-const requestSection = document.getElementById('requestSection');
-
-if (sidebarResizeHandle) {
-  sidebarResizeHandle.addEventListener('mousedown', (e) => {
-    isResizingSidebar = true; lastDownX = e.clientX; sidebarWidth = sidebar.offsetWidth;
-    document.body.classList.add('noselect'); document.body.style.cursor = 'col-resize';
-    sidebarResizeHandle.classList.add('active'); e.preventDefault();
-  });
-}
-
-if (horizontalResizeHandle) {
-  horizontalResizeHandle.addEventListener('mousedown', (e) => {
-    isResizingHorizontal = true; lastDownY = e.clientY; requestSectionHeight = requestSection.offsetHeight;
-    document.body.classList.add('noselect'); document.body.style.cursor = 'row-resize';
-    horizontalResizeHandle.classList.add('active'); e.preventDefault();
-  });
-}
-
-document.addEventListener('mousemove', (e) => {
-  if (isResizingSidebar) {
-    const deltaX = e.clientX - lastDownX;
-    const newWidth = Math.max(240, Math.min(500, sidebarWidth + deltaX));
-    sidebar.style.width = `${newWidth}px`; sidebar.style.flex = '0 0 auto';
-  } else if (isResizingHorizontal) {
-    const deltaY = e.clientY - lastDownY;
-    const newHeight = Math.max(200, requestSectionHeight + deltaY);
-    requestSection.style.flex = '0 0 auto'; requestSection.style.height = `${newHeight}px`;
-  }
-});
-
-document.addEventListener('mouseup', () => {
-  if (isResizingSidebar) { isResizingSidebar = false; document.body.classList.remove('noselect'); document.body.style.cursor = ''; sidebarResizeHandle.classList.remove('active'); }
-  if (isResizingHorizontal) { isResizingHorizontal = false; document.body.classList.remove('noselect'); document.body.style.cursor = ''; horizontalResizeHandle.classList.remove('active'); }
-});
-
-/* ---------- Search endpoints with debounce ---------- */
-let searchTimeout;
-document.getElementById('searchEndpoints').addEventListener('input', (e) => {
-  clearTimeout(searchTimeout);
-  searchTimeout = setTimeout(() => {
-    const term = e.target.value.toLowerCase();
-    if (!term) {
-      renderEndpoints(endpoints);
-      return;
-    }
-    const filtered = {};
-    Object.keys(endpoints).forEach(category => {
-      const matches = endpoints[category].filter(ep => (ep.name||'').toLowerCase().includes(term) || (ep.path||'').toLowerCase().includes(term));
-      if (matches.length) filtered[category] = matches;
-    });
-    // Force expand all categories when searching
-    renderEndpoints(filtered, true);
-  }, 250);
-});
-
-/* ---------- Keyboard shortcuts ---------- */
-function setupShortcuts() {
-  document.addEventListener('keydown', function(e) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-      e.preventDefault();
-      sendRequest();
-    }
-  });
-}
-
-/* ---------- Mobile / FAB ---------- */
-const mobileFab = document.getElementById('mobileFab');
-if (mobileFab) mobileFab.addEventListener('click', () => { showToast('Sending request...', 'info'); sendRequest(); });
-
-document.getElementById('mobileSend').addEventListener('click', () => {
-  const mobileMethod = document.getElementById('mobileRequestMethod').value;
-  requestMethodSelect.value = mobileMethod;
-  sendRequest();
-});
-
-/* ---------- API key load ---------- */
-async function loadApiKey() {
-  try {
-    const resp = await fetch('/playground/api-key');
-    if (resp.ok) {
-      const data = await resp.json();
-      const apiKeyInput = document.getElementById('globalApiKey');
-      const apiKeyWarning = document.getElementById('apiKeyWarning');
-      apiKeyInput.value = data.api_key || '';
-      apiKeyInput.placeholder = data.api_key ? 'API key loaded' : 'No API key found';
-
-      // Show/hide warning based on API key presence
-      if (!data.api_key) {
-        apiKeyWarning.classList.remove('hidden');
-      } else {
-        apiKeyWarning.classList.add('hidden');
-      }
-    } else {
-      showToast('Failed to load API key', 'error');
-    }
-  } catch (err) {
-    console.error('Error loading API key:', err);
-    showToast('Error loading API key', 'error');
-  }
-}
-
-/* ---------- Small helpers ---------- */
-document.getElementById('sendButton').addEventListener('click', sendRequest);
-
-// Update GET hint when method changes
-if (requestMethodSelect) {
-  requestMethodSelect.addEventListener('change', updateGetHintVisibility);
-}
-
-// Reset body button
-document.getElementById('resetBodyBtn').addEventListener('click', () => {
-  if (!currentEndpoint) {
-    showToast('No endpoint selected', 'warning');
-    return;
-  }
-  
-  const bodyTextarea = document.getElementById('requestBody');
-  const apiKey = document.getElementById("globalApiKey").value;
-  
-  // Reset to endpoint defaults
-  if (currentEndpoint.method === 'GET' && currentEndpoint.params) {
-    const params = { ...currentEndpoint.params };
-    if (apiKey) {
-      params.apikey = apiKey;
-    }
-    bodyTextarea.value = JSON.stringify(params, null, 2);
-  } else if (currentEndpoint.body) {
-    const body = { ...currentEndpoint.body };
-    if (apiKey) {
-      body.apikey = apiKey;
-    }
-    bodyTextarea.value = JSON.stringify(body, null, 2);
-  } else {
-    bodyTextarea.value = apiKey ? JSON.stringify({ apikey: apiKey }, null, 2) : '';
-  }
-  
-  showToast('Reset to default values', 'success');
-});
-
-</script>
 {% endblock %}
