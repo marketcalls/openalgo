@@ -2,12 +2,26 @@
 # Mapping Groww Margin API
 
 from broker.groww.mapping.transform_data import (
-    map_order_type, map_product_type, map_exchange_type,
+    map_order_type, map_product_type,
     map_segment_type, map_transaction_type
 )
+from database.token_db import get_br_symbol
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+def map_margin_exchange(exchange):
+    """
+    Maps the OpenAlgo Exchange to Groww Exchange values for margin API.
+    Groww only accepts NSE/BSE - segment (CASH/FNO) is passed separately.
+    """
+    exchange_mapping = {
+        "NSE": "NSE",
+        "BSE": "BSE",
+        "NFO": "NSE",  # F&O on NSE - segment=FNO handles the distinction
+        "BFO": "BSE"   # F&O on BSE - segment=FNO handles the distinction
+    }
+    return exchange_mapping.get(exchange.upper(), "NSE")
 
 def transform_margin_positions(positions):
     """
@@ -26,8 +40,11 @@ def transform_margin_positions(positions):
 
     for position in positions:
         try:
+            symbol = position['symbol']
+            exchange = position['exchange']
+
             # Determine segment from exchange
-            position_segment = map_segment_type(position['exchange'])
+            position_segment = map_segment_type(exchange)
 
             # All positions in a request must be from the same segment
             if segment is None:
@@ -36,14 +53,20 @@ def transform_margin_positions(positions):
                 logger.warning(f"Mixed segments detected. Groww only supports single segment per request. Using first segment: {segment}")
                 continue
 
+            # Get broker symbol from database (Groww uses different symbol format)
+            broker_symbol = get_br_symbol(symbol, exchange)
+            if not broker_symbol:
+                logger.warning(f"Broker symbol not found for {symbol} on {exchange}, using original symbol")
+                broker_symbol = symbol
+
             # Transform the position
             transformed_position = {
-                "trading_symbol": position['symbol'],
+                "trading_symbol": broker_symbol,
                 "transaction_type": map_transaction_type(position['action']),
                 "quantity": int(position['quantity']),
                 "order_type": map_order_type(position['pricetype']),
                 "product": map_product_type(position['product']),
-                "exchange": map_exchange_type(position['exchange'])
+                "exchange": map_margin_exchange(exchange)
             }
 
             # Add price if provided (for LIMIT orders)
@@ -97,19 +120,13 @@ def parse_margin_response(response_data):
         # Calculate total margin
         total_requirement = float(payload.get('total_requirement', 0))
 
-        # Return standardized format
+        # Return standardized format matching OpenAlgo API specification
         return {
             'status': 'success',
             'data': {
                 'total_margin_required': total_requirement,
-                'exposure_required': float(payload.get('exposure_required', 0)),
-                'span_required': float(payload.get('span_required', 0)),
-                'option_buy_premium': float(payload.get('option_buy_premium', 0)),
-                'brokerage_and_charges': float(payload.get('brokerage_and_charges', 0)),
-                'cash_cnc_margin_required': float(payload.get('cash_cnc_margin_required', 0)),
-                'cash_mis_margin_required': float(payload.get('cash_mis_margin_required', 0)),
-                'physical_delivery_margin_requirement': float(payload.get('physical_delivery_margin_requirement', 0)),
-                'raw_response': payload  # Include raw response for debugging
+                'span_margin': float(payload.get('span_required') or 0),
+                'exposure_margin': float(payload.get('exposure_required') or 0)
             }
         }
 
