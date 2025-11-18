@@ -400,6 +400,9 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         unsubscribed_count = 0
 
+        # Stop fallback monitor first
+        self.stop_fallback_monitor()
+
         with self.lock:
             # Count total subscriptions before clearing
             unsubscribed_count = len(self.subscriptions_5depth) + len(self.subscriptions_20depth)
@@ -584,7 +587,8 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             break
                 
                 if not subscription:
-                    self.logger.warning(f"Received 20-depth data for unsubscribed token: {security_id}, segment: {exchange_segment}")
+                    # Debug level - this is expected during disconnect
+                    self.logger.debug(f"Received 20-depth data for unsubscribed token: {security_id}, segment: {exchange_segment}")
                     # Clear accumulator
                     del self.depth_20_accumulator[security_id]
                     return
