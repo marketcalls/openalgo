@@ -316,7 +316,7 @@
 function updateActionCenterBadge() {
     fetch('/action-center/count')
         .then(res => res.json())
-        .then data => {
+        .then(data => {
             const badge = document.getElementById('action-center-badge');
             if (badge && data.count > 0) {
                 badge.textContent = data.count;
