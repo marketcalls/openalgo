@@ -1,5 +1,4 @@
 from flask import Blueprint, render_template, request, jsonify, session
-from functools import wraps
 import json
 import os
 import re
@@ -161,14 +160,6 @@ def load_bruno_endpoints():
     return endpoints
 
 playground_bp = Blueprint('playground', __name__, url_prefix='/playground')
-
-def login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not session.get('logged_in'):
-            return jsonify({'error': 'Authentication required'}), 401
-        return f(*args, **kwargs)
-    return decorated_function
 
 @playground_bp.route('/')
 @check_session_validity
