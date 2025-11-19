@@ -204,12 +204,12 @@ def process_motilal_csv(df, exchange_name):
         df['optiontype'] = 'XX'
 
     # Update instrumenttype to match Angel format (FUT, CE, PE, etc.)
-    # For Futures - set to 'FUT'
-    df.loc[df['instrumenttype'].str.contains('FUT', na=False), 'instrumenttype'] = 'FUT'
+    # For Futures - set to 'FUT' (only when optiontype is XX, i.e., not an option)
+    df.loc[(df['instrumenttype'].str.contains('FUT', na=False)) & (df['optiontype'] == 'XX'), 'instrumenttype'] = 'FUT'
 
-    # For Options - set to 'CE' or 'PE' based on optiontype
-    df.loc[(df['instrumenttype'].str.contains('OPT', na=False)) & (df['optiontype'] == 'CE'), 'instrumenttype'] = 'CE'
-    df.loc[(df['instrumenttype'].str.contains('OPT', na=False)) & (df['optiontype'] == 'PE'), 'instrumenttype'] = 'PE'
+    # For Options - set to 'CE' or 'PE' based on optiontype column directly
+    df.loc[df['optiontype'] == 'CE', 'instrumenttype'] = 'CE'
+    df.loc[df['optiontype'] == 'PE', 'instrumenttype'] = 'PE'
 
     # Format symbols according to OpenAlgo standards
 
