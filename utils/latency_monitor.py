@@ -154,8 +154,8 @@ def track_latency(api_type):
                         'overhead': overhead,
                         'total': total
                     },
-                    request_body=request_data,
-                    response_body=response_data,
+                    request_body=None,  # Not storing to save database space
+                    response_body=None,  # Not storing to save database space
                     status='SUCCESS' if status_code < 400 else 'FAILED',
                     error=response_data.get('message') if status_code >= 400 else None
                 )
@@ -195,8 +195,8 @@ def track_latency(api_type):
                         'overhead': overhead,
                         'total': total_time
                     },
-                    request_body=request_data if 'request_data' in locals() else None,
-                    response_body=None,
+                    request_body=None,  # Not storing to save database space
+                    response_body=None,  # Not storing to save database space
                     status='FAILED',
                     error=str(e)
                 )
