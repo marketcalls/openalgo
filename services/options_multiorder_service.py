@@ -132,25 +132,12 @@ def resolve_and_place_leg(
                 'option_type': leg_data.get('option_type', '').upper(),
                 'action': leg_data.get('action', '').upper(),
                 'status': 'success',
-                'orderid': order_response.get('orderid')
+                'orderid': order_response.get('orderid'),
+                'mode': order_response.get('mode', 'live')
             }
 
-            # Emit order event for toast notification
-            socketio.start_background_task(
-                socketio.emit,
-                'order_event',
-                {
-                    'symbol': resolved_symbol,
-                    'action': leg_data.get('action', '').upper(),
-                    'orderid': order_response.get('orderid'),
-                    'exchange': resolved_exchange,
-                    'price_type': leg_data.get('pricetype', 'MARKET'),
-                    'product_type': leg_data.get('product', 'MIS'),
-                    'mode': order_response.get('mode', 'live'),
-                    'batch_order': True,
-                    'is_last_order': leg_index == total_legs - 1
-                }
-            )
+            # Note: Toast notification is emitted once at the end of multiorder processing
+            # to avoid multiple toast messages for each leg
 
             return result
         else:
@@ -271,6 +258,31 @@ def process_multiorder_with_auth(
 
     # Sort results by leg number
     results.sort(key=lambda x: x.get('leg', 0))
+
+    # Count successful and failed legs
+    successful_legs = sum(1 for r in results if r.get('status') == 'success')
+    failed_legs = len(results) - successful_legs
+
+    # Emit single summary toast notification
+    mode = 'analyze' if get_analyze_mode() else 'live'
+    socketio.start_background_task(
+        socketio.emit,
+        'order_event',
+        {
+            'symbol': common_data.get('underlying'),
+            'action': f"{common_data.get('strategy', 'Multi-Order')}",
+            'orderid': f"{successful_legs}/{len(results)} legs",
+            'exchange': common_data.get('exchange'),
+            'price_type': 'MULTI',
+            'product_type': 'OPTIONS',
+            'mode': mode,
+            'batch_order': True,
+            'is_last_order': True,
+            'multiorder_summary': True,
+            'successful_legs': successful_legs,
+            'failed_legs': failed_legs
+        }
+    )
 
     # Build response
     response_data = {
