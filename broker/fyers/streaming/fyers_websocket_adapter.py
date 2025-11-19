@@ -370,13 +370,17 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if key in self.subscriptions:
                     # Remove from our subscription tracking
                     subscription_info = self.subscriptions.pop(key)
-                    
+
                     self.logger.info(f"Unsubscribe for {exchange}:{symbol} (mode: {mode})")
                     #self.logger.warning("Note: Fyers HSM doesn't support selective unsubscription - data will stop publishing but HSM will continue receiving in background")
-                    
+
                     # Remove the callback reference if it exists
                     if hasattr(self, 'active_callbacks') and key in self.active_callbacks:
                         del self.active_callbacks[key]
+
+                    # Clean up TBT subscriptions if this was a depth subscription
+                    if mode == 3:
+                        self._unsubscribe_tbt_depth(symbol, exchange)
                     
                     # If no more subscriptions, disconnect completely to stop background data
                     # This is needed for Fyers HSM which doesn't support selective unsubscription
@@ -496,6 +500,60 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         except Exception as e:
             self.logger.error(f"TBT subscription error: {e}")
+            return False
+
+    def _unsubscribe_tbt_depth(self, symbol: str, exchange: str) -> bool:
+        """
+        Unsubscribe from 50-level depth via TBT WebSocket and cleanup mappings
+
+        Args:
+            symbol: OpenAlgo symbol (may include :50 suffix)
+            exchange: Exchange name
+
+        Returns:
+            True if unsubscription successful
+        """
+        try:
+            # Build subscription key (symbol may already have :50 suffix)
+            subscription_key = f"{exchange}:{symbol}"
+
+            # Check if this symbol has a TBT subscription
+            if subscription_key not in self.tbt_subscriptions:
+                self.logger.debug(f"No TBT subscription found for {subscription_key}")
+                return False
+
+            subscription = self.tbt_subscriptions[subscription_key]
+            fyers_ticker = subscription.get('ticker')
+
+            # Unsubscribe from TBT client
+            if self.tbt_client and fyers_ticker:
+                try:
+                    self.tbt_client.unsubscribe([fyers_ticker])
+                    self.logger.info(f"TBT unsubscribed from {fyers_ticker}")
+                except Exception as e:
+                    self.logger.error(f"Error unsubscribing from TBT: {e}")
+
+            # Clean up mappings
+            if fyers_ticker and fyers_ticker in self.tbt_ticker_to_symbol:
+                del self.tbt_ticker_to_symbol[fyers_ticker]
+
+            if subscription_key in self.tbt_symbol_to_ticker:
+                del self.tbt_symbol_to_ticker[subscription_key]
+
+            if subscription_key in self.tbt_subscriptions:
+                del self.tbt_subscriptions[subscription_key]
+
+            self.logger.debug(f"Cleaned up TBT subscription for {subscription_key}")
+
+            # If no more TBT subscriptions, disconnect TBT client
+            if len(self.tbt_subscriptions) == 0 and self.tbt_client:
+                self.logger.debug("No more TBT subscriptions - disconnecting TBT client")
+                self._disconnect_tbt()
+
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error unsubscribing from TBT depth: {e}")
             return False
 
     def _convert_to_fyers_ticker(self, symbol: str, exchange: str) -> Optional[str]:
