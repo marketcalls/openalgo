@@ -209,3 +209,29 @@ def init_latency_db():
 
     from database.db_init_helper import init_db_with_logging
     init_db_with_logging(LatencyBase, latency_engine, "Latency DB", logger)
+
+def purge_old_data_logs(days=7):
+    """
+    Purge non-order endpoint latency logs older than specified days.
+    Order execution logs (PLACE, SMART, MODIFY, CANCEL, etc.) are kept forever.
+    """
+    # Order types to keep forever
+    ORDER_TYPES = {'PLACE', 'SMART', 'MODIFY', 'CANCEL', 'CLOSE', 'CANCEL_ALL', 'BASKET', 'SPLIT', 'OPTIONS', 'OPTIONS_MULTI'}
+
+    try:
+        from datetime import timedelta
+        cutoff = datetime.utcnow() - timedelta(days=days)
+
+        # Delete non-order logs older than cutoff
+        deleted = latency_session.query(OrderLatency).filter(
+            OrderLatency.timestamp < cutoff,
+            ~OrderLatency.order_type.in_(ORDER_TYPES)
+        ).delete(synchronize_session=False)
+
+        latency_session.commit()
+        logger.info(f"Purged {deleted} old data endpoint latency logs (older than {days} days)")
+        return deleted
+    except Exception as e:
+        logger.error(f"Error purging old latency logs: {str(e)}")
+        latency_session.rollback()
+        return 0

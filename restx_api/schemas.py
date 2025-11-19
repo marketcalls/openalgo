@@ -101,6 +101,32 @@ class OptionsOrderSchema(Schema):
     trigger_price = fields.Float(missing=0.0, validate=validate.Range(min=0, error="Trigger price must be a non-negative number."))
     disclosed_quantity = fields.Int(missing=0, validate=validate.Range(min=0, error="Disclosed quantity must be a non-negative integer."))
 
+class OptionsMultiOrderLegSchema(Schema):
+    """Schema for a single leg in options multi-order (no symbol - resolved from offset)"""
+    offset = fields.Str(required=True)  # ATM, ITM1-ITM50, OTM1-OTM50
+    option_type = fields.Str(required=True, validate=validate.OneOf(["CE", "PE", "ce", "pe"]))  # Call or Put
+    action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
+    quantity = fields.Int(required=True, validate=validate.Range(min=1, error="Quantity must be a positive integer."))
+    pricetype = fields.Str(missing='MARKET', validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"]))
+    product = fields.Str(missing='MIS', validate=validate.OneOf(["MIS", "NRML"]))  # Options only support MIS and NRML
+    price = fields.Float(missing=0.0, validate=validate.Range(min=0, error="Price must be a non-negative number."))
+    trigger_price = fields.Float(missing=0.0, validate=validate.Range(min=0, error="Trigger price must be a non-negative number."))
+    disclosed_quantity = fields.Int(missing=0, validate=validate.Range(min=0, error="Disclosed quantity must be a non-negative integer."))
+
+class OptionsMultiOrderSchema(Schema):
+    """Schema for options multi-order with multiple legs sharing common underlying"""
+    apikey = fields.Str(required=True)
+    strategy = fields.Str(required=True)
+    underlying = fields.Str(required=True)  # Underlying symbol (NIFTY, BANKNIFTY, RELIANCE)
+    exchange = fields.Str(required=True)  # Exchange (NSE_INDEX, NSE, BSE_INDEX, BSE)
+    expiry_date = fields.Str(required=False)  # Optional if underlying includes expiry (DDMMMYY format)
+    strike_int = fields.Int(required=False, validate=validate.Range(min=1), allow_none=True)  # Optional strike interval
+    legs = fields.List(
+        fields.Nested(OptionsMultiOrderLegSchema),
+        required=True,
+        validate=validate.Length(min=1, max=20, error="Legs must contain 1 to 20 items.")
+    )
+
 class SyntheticFutureSchema(Schema):
     """Schema for synthetic future calculation"""
     apikey = fields.Str(required=True)
