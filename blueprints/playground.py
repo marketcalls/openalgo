@@ -100,9 +100,9 @@ def categorize_endpoint(path):
         return 'account'
 
     # Order endpoints
-    if any(x in path_lower for x in ['/placeorder', '/placesmartorder', '/optionsorder', '/basketorder', '/splitorder',
-                                      '/modifyorder', '/cancelorder', '/cancelallorder', '/closeposition',
-                                      '/orderstatus', '/openposition', '/closeall']):
+    if any(x in path_lower for x in ['/placeorder', '/placesmartorder', '/optionsorder', '/optionsmultiorder',
+                                      '/basketorder', '/splitorder', '/modifyorder', '/cancelorder',
+                                      '/cancelallorder', '/closeposition', '/orderstatus', '/openposition', '/closeall']):
         return 'orders'
 
     # Data endpoints

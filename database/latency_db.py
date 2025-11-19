@@ -216,7 +216,7 @@ def purge_old_data_logs(days=7):
     Order execution logs (PLACE, SMART, MODIFY, CANCEL, etc.) are kept forever.
     """
     # Order types to keep forever
-    ORDER_TYPES = {'PLACE', 'SMART', 'MODIFY', 'CANCEL', 'CLOSE', 'CANCEL_ALL', 'BASKET', 'SPLIT', 'OPTIONS'}
+    ORDER_TYPES = {'PLACE', 'SMART', 'MODIFY', 'CANCEL', 'CLOSE', 'CANCEL_ALL', 'BASKET', 'SPLIT', 'OPTIONS', 'OPTIONS_MULTI'}
 
     try:
         from datetime import timedelta

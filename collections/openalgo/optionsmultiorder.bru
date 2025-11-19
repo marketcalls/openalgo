@@ -1,0 +1,47 @@
+meta {
+  name: Options Multi Order
+  type: http
+  seq: 6
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/optionsmultiorder
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "strategy": "Iron Condor",
+      "underlying": "NIFTY",
+      "exchange": "NSE_INDEX",
+      "expiry_date": "25NOV25",
+      "legs": [
+          {
+              "offset": "OTM10",
+              "option_type": "CE",
+              "action": "BUY",
+              "quantity": 75
+          },
+          {
+              "offset": "OTM10",
+              "option_type": "PE",
+              "action": "BUY",
+              "quantity": 75
+          },
+          {
+              "offset": "OTM5",
+              "option_type": "CE",
+              "action": "SELL",
+              "quantity": 75
+          },
+          {
+              "offset": "OTM5",
+              "option_type": "PE",
+              "action": "SELL",
+              "quantity": 75
+          }
+      ]
+  }
+}

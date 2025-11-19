@@ -242,6 +242,7 @@ def init_latency_monitoring(app):
         'basket_order': 'BASKET',
         'split_order': 'SPLIT',
         'options_order': 'OPTIONS',
+        'options_multiorder': 'OPTIONS_MULTI',
 
         # Data/Account endpoints (auto-purge after 7 days)
         'quotes': 'QUOTES',
@@ -269,7 +270,7 @@ def init_latency_monitoring(app):
     }
 
     # Order types that should be kept forever (not purged)
-    ORDER_TYPES = {'PLACE', 'SMART', 'MODIFY', 'CANCEL', 'CLOSE', 'CANCEL_ALL', 'BASKET', 'SPLIT', 'OPTIONS'}
+    ORDER_TYPES = {'PLACE', 'SMART', 'MODIFY', 'CANCEL', 'CLOSE', 'CANCEL_ALL', 'BASKET', 'SPLIT', 'OPTIONS', 'OPTIONS_MULTI'}
     
     # Wrap all API endpoints with latency tracking
     for namespace in api.namespaces:
