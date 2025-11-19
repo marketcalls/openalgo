@@ -468,7 +468,8 @@ def get_option_symbol(
     strike_int: Optional[int],
     offset: str,
     option_type: str,
-    api_key: str
+    api_key: str,
+    underlying_ltp: Optional[float] = None
 ) -> Tuple[bool, Dict[str, Any], int]:
     """
     Main function to get option symbol based on underlying and parameters.
@@ -481,6 +482,7 @@ def get_option_symbol(
         offset: Offset from ATM (e.g., "ATM", "ITM1", "OTM2")
         option_type: Option type ("CE" or "PE")
         api_key: OpenAlgo API key
+        underlying_ltp: Optional pre-fetched LTP to avoid redundant quote requests
 
     Returns:
         Tuple of (success, response_data, status_code)
@@ -519,32 +521,36 @@ def get_option_symbol(
         else:
             quote_symbol = underlying
 
-        logger.info(f"Fetching LTP for: {quote_symbol} on {quote_exchange}")
+        # Step 3: Get LTP of underlying (use provided LTP if available to avoid rate limits)
+        if underlying_ltp is not None:
+            ltp = underlying_ltp
+            logger.info(f"Using provided LTP: {ltp} for {quote_symbol}")
+        else:
+            logger.info(f"Fetching LTP for: {quote_symbol} on {quote_exchange}")
 
-        # Step 3: Get LTP of underlying
-        success, quote_response, status_code = get_quotes(
-            symbol=quote_symbol,
-            exchange=quote_exchange,
-            api_key=api_key
-        )
+            success, quote_response, status_code = get_quotes(
+                symbol=quote_symbol,
+                exchange=quote_exchange,
+                api_key=api_key
+            )
 
-        if not success:
-            logger.error(f"Failed to fetch quotes: {quote_response.get('message', 'Unknown error')}")
-            return False, {
-                'status': 'error',
-                'message': f"Failed to fetch LTP for {quote_symbol}. {quote_response.get('message', 'Unknown error')}"
-            }, status_code
+            if not success:
+                logger.error(f"Failed to fetch quotes: {quote_response.get('message', 'Unknown error')}")
+                return False, {
+                    'status': 'error',
+                    'message': f"Failed to fetch LTP for {quote_symbol}. {quote_response.get('message', 'Unknown error')}"
+                }, status_code
 
-        # Extract LTP from quote response
-        ltp = quote_response.get('data', {}).get('ltp')
-        if ltp is None:
-            logger.error(f"LTP not found in quote response for {quote_symbol}")
-            return False, {
-                'status': 'error',
-                'message': f'Could not determine LTP for {quote_symbol}.'
-            }, 500
+            # Extract LTP from quote response
+            ltp = quote_response.get('data', {}).get('ltp')
+            if ltp is None:
+                logger.error(f"LTP not found in quote response for {quote_symbol}")
+                return False, {
+                    'status': 'error',
+                    'message': f'Could not determine LTP for {quote_symbol}.'
+                }, 500
 
-        logger.info(f"Got LTP: {ltp} for {quote_symbol}")
+            logger.info(f"Got LTP: {ltp} for {quote_symbol}")
 
         # Step 4: Map to options exchange
         options_exchange = get_option_exchange(quote_exchange)

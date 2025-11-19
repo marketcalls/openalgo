@@ -703,7 +703,7 @@ def approve_pending_order_route(order_id):
     from extensions import socketio
 
     # Approve the order
-    success = approve_pending_order(order_id, approved_by=login_username)
+    success = approve_pending_order(order_id, approved_by=login_username, user_id=login_username)
 
     if success:
         # Execute the order
@@ -743,7 +743,7 @@ def reject_pending_order_route(order_id):
     from database.action_center_db import reject_pending_order
     from extensions import socketio
 
-    success = reject_pending_order(order_id, reason=reason, rejected_by=login_username)
+    success = reject_pending_order(order_id, reason=reason, rejected_by=login_username, user_id=login_username)
 
     if success:
         # Emit socket event to notify about order rejection
@@ -770,7 +770,7 @@ def delete_pending_order_route(order_id):
     from database.action_center_db import delete_pending_order
     from extensions import socketio
 
-    success = delete_pending_order(order_id)
+    success = delete_pending_order(order_id, user_id=login_username)
 
     if success:
         # Emit socket event to notify about order deletion

@@ -7,6 +7,7 @@ Note: Each strategy runs in a separate process for complete isolation
 """
 
 from flask import Blueprint, render_template, request, jsonify, flash, redirect, url_for, session
+from utils.session import check_session_validity
 import os
 import subprocess
 import psutil
@@ -84,6 +85,19 @@ def save_configs():
         logger.info("Configurations saved")
     except Exception as e:
         logger.error(f"Failed to save configs: {e}")
+
+def verify_strategy_ownership(strategy_id, user_id):
+    """Verify that a user owns a strategy. Returns (success, error_response)"""
+    if strategy_id not in STRATEGY_CONFIGS:
+        return False, (jsonify({'success': False, 'message': 'Strategy not found'}), 404)
+
+    config = STRATEGY_CONFIGS[strategy_id]
+    # Check ownership - allow access if user_id matches or if strategy has no owner (legacy)
+    strategy_owner = config.get('user_id')
+    if strategy_owner and strategy_owner != user_id:
+        return False, (jsonify({'success': False, 'message': 'Unauthorized access to strategy'}), 403)
+
+    return True, None
 
 def ensure_directories():
     """Ensure all required directories exist"""
@@ -688,6 +702,7 @@ def unschedule_strategy(strategy_id):
     logger.info(f"Unscheduled strategy {strategy_id}")
 
 @python_strategy_bp.route('/')
+@check_session_validity
 def index():
     """Main dashboard"""
     # Ensure initialization is done when first accessed
@@ -739,8 +754,14 @@ def index():
                          platform=OS_TYPE.capitalize())
 
 @python_strategy_bp.route('/new', methods=['GET', 'POST'])
+@check_session_validity
 def new_strategy():
     """Upload a new strategy"""
+    user_id = session.get('user')
+    if not user_id:
+        flash('Session expired', 'error')
+        return redirect(url_for('auth.login'))
+
     if request.method == 'POST':
         if 'strategy_file' not in request.files:
             flash('No file selected', 'error')
@@ -778,7 +799,8 @@ def new_strategy():
                 'file_path': str(file_path),
                 'is_running': False,
                 'is_scheduled': False,
-                'created_at': ist_now.isoformat()
+                'created_at': ist_now.isoformat(),
+                'user_id': user_id
             }
             save_configs()
             
@@ -790,41 +812,68 @@ def new_strategy():
     return render_template('python_strategy/new.html')
 
 @python_strategy_bp.route('/start/<strategy_id>', methods=['POST'])
+@check_session_validity
 def start_strategy(strategy_id):
     """Start a strategy"""
+    user_id = session.get('user')
+    if not user_id:
+        return jsonify({'success': False, 'message': 'Session expired'}), 401
+
+    # Verify ownership
+    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
+    if not is_owner:
+        return error_response
+
     # Ensure initialization is done when starting strategies
     initialize_with_app_context()
     success, message = start_strategy_process(strategy_id)
     return jsonify({'success': success, 'message': message})
 
 @python_strategy_bp.route('/stop/<strategy_id>', methods=['POST'])
+@check_session_validity
 def stop_strategy(strategy_id):
     """Stop a strategy"""
+    user_id = session.get('user')
+    if not user_id:
+        return jsonify({'success': False, 'message': 'Session expired'}), 401
+
+    # Verify ownership
+    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
+    if not is_owner:
+        return error_response
+
     success, message = stop_strategy_process(strategy_id)
     return jsonify({'success': success, 'message': message})
 
 @python_strategy_bp.route('/schedule/<strategy_id>', methods=['POST'])
+@check_session_validity
 def schedule_strategy_route(strategy_id):
     """Schedule a strategy"""
-    if strategy_id not in STRATEGY_CONFIGS:
-        return jsonify({'success': False, 'message': 'Strategy not found'}), 404
-    
+    user_id = session.get('user')
+    if not user_id:
+        return jsonify({'success': False, 'message': 'Session expired'}), 401
+
+    # Verify ownership
+    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
+    if not is_owner:
+        return error_response
+
     config = STRATEGY_CONFIGS[strategy_id]
     if config.get('is_running', False):
         return jsonify({
-            'success': False, 
+            'success': False,
             'message': 'Cannot modify schedule while strategy is running. Please stop the strategy first.',
             'error_code': 'STRATEGY_RUNNING'
         }), 400
-    
+
     data = request.json
     start_time = data.get('start_time')
     stop_time = data.get('stop_time')
     days = data.get('days', ['mon', 'tue', 'wed', 'thu', 'fri'])
-    
+
     if not start_time:
         return jsonify({'success': False, 'message': 'Start time is required'})
-    
+
     try:
         schedule_strategy(strategy_id, start_time, stop_time, days)
         schedule_info = f"Scheduled at {start_time} IST"
@@ -835,19 +884,26 @@ def schedule_strategy_route(strategy_id):
         return jsonify({'success': False, 'message': str(e)})
 
 @python_strategy_bp.route('/unschedule/<strategy_id>', methods=['POST'])
+@check_session_validity
 def unschedule_strategy_route(strategy_id):
     """Remove scheduling for a strategy"""
-    if strategy_id not in STRATEGY_CONFIGS:
-        return jsonify({'success': False, 'message': 'Strategy not found'}), 404
-    
+    user_id = session.get('user')
+    if not user_id:
+        return jsonify({'success': False, 'message': 'Session expired'}), 401
+
+    # Verify ownership
+    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
+    if not is_owner:
+        return error_response
+
     config = STRATEGY_CONFIGS[strategy_id]
     if config.get('is_running', False):
         return jsonify({
-            'success': False, 
+            'success': False,
             'message': 'Cannot modify schedule while strategy is running. Please stop the strategy first.',
             'error_code': 'STRATEGY_RUNNING'
         }), 400
-    
+
     try:
         unschedule_strategy(strategy_id)
         return jsonify({'success': True, 'message': 'Schedule removed successfully'})
@@ -855,17 +911,27 @@ def unschedule_strategy_route(strategy_id):
         return jsonify({'success': False, 'message': str(e)})
 
 @python_strategy_bp.route('/delete/<strategy_id>', methods=['POST'])
+@check_session_validity
 def delete_strategy(strategy_id):
     """Delete a strategy"""
+    user_id = session.get('user')
+    if not user_id:
+        return jsonify({'success': False, 'message': 'Session expired'}), 401
+
+    # Verify ownership
+    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
+    if not is_owner:
+        return error_response
+
     with PROCESS_LOCK:  # Thread-safe operation
         # Stop if running
         if strategy_id in RUNNING_STRATEGIES or (strategy_id in STRATEGY_CONFIGS and STRATEGY_CONFIGS[strategy_id].get('is_running')):
             stop_strategy_process(strategy_id)
-        
+
         # Unschedule if scheduled
         if STRATEGY_CONFIGS.get(strategy_id, {}).get('is_scheduled'):
             unschedule_strategy(strategy_id)
-        
+
         # Delete file
         if strategy_id in STRATEGY_CONFIGS:
             file_path = Path(STRATEGY_CONFIGS[strategy_id].get('file_path', ''))
@@ -874,20 +940,32 @@ def delete_strategy(strategy_id):
                     file_path.unlink()
                 except Exception as e:
                     logger.error(f"Failed to delete file {file_path}: {e}")
-            
+
             # Remove from configs
             del STRATEGY_CONFIGS[strategy_id]
             save_configs()
-            
+
             return jsonify({'success': True, 'message': 'Strategy deleted successfully'})
-        
+
         return jsonify({'success': False, 'message': 'Strategy not found'})
 
 @python_strategy_bp.route('/logs/<strategy_id>')
+@check_session_validity
 def view_logs(strategy_id):
     """View strategy logs"""
+    user_id = session.get('user')
+    if not user_id:
+        flash('Session expired', 'error')
+        return redirect(url_for('auth.login'))
+
+    # Verify ownership
+    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
+    if not is_owner:
+        flash('Unauthorized access to strategy', 'error')
+        return redirect(url_for('python_strategy_bp.index'))
+
     log_files = []
-    
+
     # Get all log files for this strategy
     try:
         for log_file in LOGS_DIR.glob(f"{strategy_id}_*.log"):
@@ -898,10 +976,10 @@ def view_logs(strategy_id):
             })
     except Exception as e:
         logger.error(f"Error reading log files: {e}")
-    
+
     # Sort by modified time (newest first)
     log_files.sort(key=lambda x: x['modified'], reverse=True)
-    
+
     # Get latest log content if requested
     log_content = None
     if log_files and request.args.get('latest'):
@@ -911,17 +989,24 @@ def view_logs(strategy_id):
                 log_content = f.read()
         except Exception as e:
             log_content = f"Error reading log file: {e}"
-    
-    return render_template('python_strategy/logs.html', 
+
+    return render_template('python_strategy/logs.html',
                          strategy_id=strategy_id,
                          log_files=log_files,
                          log_content=log_content)
 
 @python_strategy_bp.route('/logs/<strategy_id>/clear', methods=['POST'])
+@check_session_validity
 def clear_logs(strategy_id):
     """Clear all log files for a strategy"""
-    if strategy_id not in STRATEGY_CONFIGS:
-        return jsonify({'success': False, 'message': 'Strategy not found'}), 404
+    user_id = session.get('user')
+    if not user_id:
+        return jsonify({'success': False, 'message': 'Session expired'}), 401
+
+    # Verify ownership
+    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
+    if not is_owner:
+        return error_response
     
     try:
         cleared_count = 0
@@ -984,16 +1069,23 @@ def clear_logs(strategy_id):
         return jsonify({'success': False, 'message': f'Error clearing logs: {str(e)}'}), 500
 
 @python_strategy_bp.route('/clear-error/<strategy_id>', methods=['POST'])
+@check_session_validity
 def clear_error_state(strategy_id):
     """Clear error state for a strategy"""
-    if strategy_id not in STRATEGY_CONFIGS:
-        return jsonify({'success': False, 'message': 'Strategy not found'}), 404
-    
+    user_id = session.get('user')
+    if not user_id:
+        return jsonify({'success': False, 'message': 'Session expired'}), 401
+
+    # Verify ownership
+    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
+    if not is_owner:
+        return error_response
+
     config = STRATEGY_CONFIGS[strategy_id]
-    
+
     if config.get('is_running'):
         return jsonify({'success': False, 'message': 'Cannot clear error state while strategy is running'}), 400
-    
+
     if not config.get('is_error'):
         return jsonify({'success': False, 'message': 'Strategy is not in error state'}), 400
     
@@ -1012,6 +1104,7 @@ def clear_error_state(strategy_id):
         return jsonify({'success': False, 'message': f'Failed to clear error state: {str(e)}'}), 500
 
 @python_strategy_bp.route('/status')
+@check_session_validity
 def status():
     """Get system status"""
     cleanup_dead_processes()
@@ -1039,6 +1132,7 @@ def status():
     })
 
 @python_strategy_bp.route('/check-contracts', methods=['POST'])
+@check_session_validity
 def check_contracts():
     """Check master contracts and start pending strategies"""
     try:
@@ -1055,12 +1149,20 @@ def check_contracts():
         }), 500
 
 @python_strategy_bp.route('/edit/<strategy_id>')
+@check_session_validity
 def edit_strategy(strategy_id):
     """Edit or view a strategy file"""
-    if strategy_id not in STRATEGY_CONFIGS:
-        flash('Strategy not found', 'error')
+    user_id = session.get('user')
+    if not user_id:
+        flash('Session expired', 'error')
+        return redirect(url_for('auth.login'))
+
+    # Verify ownership
+    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
+    if not is_owner:
+        flash('Unauthorized access to strategy', 'error')
         return redirect(url_for('python_strategy_bp.index'))
-    
+
     config = STRATEGY_CONFIGS[strategy_id]
     file_path = Path(config['file_path'])
     
@@ -1097,12 +1199,20 @@ def edit_strategy(strategy_id):
                          can_edit=not is_running)
 
 @python_strategy_bp.route('/export/<strategy_id>')
+@check_session_validity
 def export_strategy(strategy_id):
     """Export/download a strategy file"""
-    if strategy_id not in STRATEGY_CONFIGS:
-        flash('Strategy not found', 'error')
+    user_id = session.get('user')
+    if not user_id:
+        flash('Session expired', 'error')
+        return redirect(url_for('auth.login'))
+
+    # Verify ownership
+    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
+    if not is_owner:
+        flash('Unauthorized access to strategy', 'error')
         return redirect(url_for('python_strategy_bp.index'))
-    
+
     config = STRATEGY_CONFIGS[strategy_id]
     file_path = Path(config['file_path'])
     
@@ -1135,13 +1245,20 @@ def export_strategy(strategy_id):
         return redirect(url_for('python_strategy_bp.index'))
 
 @python_strategy_bp.route('/save/<strategy_id>', methods=['POST'])
+@check_session_validity
 def save_strategy(strategy_id):
     """Save edited strategy file"""
-    if strategy_id not in STRATEGY_CONFIGS:
-        return jsonify({'success': False, 'message': 'Strategy not found'}), 404
-    
+    user_id = session.get('user')
+    if not user_id:
+        return jsonify({'success': False, 'message': 'Session expired'}), 401
+
+    # Verify ownership
+    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
+    if not is_owner:
+        return error_response
+
     config = STRATEGY_CONFIGS[strategy_id]
-    
+
     # Check if strategy is running
     if config.get('is_running', False):
         return jsonify({'success': False, 'message': 'Cannot edit running strategy. Please stop it first.'}), 400
@@ -1184,11 +1301,18 @@ def save_strategy(strategy_id):
         return jsonify({'success': False, 'message': f'Failed to save: {str(e)}'}), 500
 
 @python_strategy_bp.route('/env/<strategy_id>', methods=['GET', 'POST'])
+@check_session_validity
 def manage_env_variables(strategy_id):
     """Manage environment variables for a strategy"""
-    if strategy_id not in STRATEGY_CONFIGS:
-        return jsonify({'success': False, 'message': 'Strategy not found'}), 404
-    
+    user_id = session.get('user')
+    if not user_id:
+        return jsonify({'success': False, 'message': 'Session expired'}), 401
+
+    # Verify ownership
+    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
+    if not is_owner:
+        return error_response
+
     config = STRATEGY_CONFIGS[strategy_id]
     is_running = config.get('is_running', False)
     

@@ -162,19 +162,20 @@ def get_pending_order_by_id(order_id):
         logger.error(f"Error getting pending order by ID: {e}")
         return None
 
-def approve_pending_order(order_id, approved_by):
+def approve_pending_order(order_id, approved_by, user_id):
     """
     Approve a pending order with IST timestamp
 
     Args:
         order_id: Order ID
         approved_by: Username of approver
+        user_id: ID of the user who owns the order (for security)
 
     Returns:
         bool: True if successful, False otherwise
     """
     try:
-        pending_order = PendingOrder.query.filter_by(id=order_id, status='pending').first()
+        pending_order = PendingOrder.query.filter_by(id=order_id, user_id=user_id, status='pending').first()
 
         if pending_order:
             pending_order.status = 'approved'
@@ -194,7 +195,7 @@ def approve_pending_order(order_id, approved_by):
         db_session.rollback()
         return False
 
-def reject_pending_order(order_id, reason, rejected_by):
+def reject_pending_order(order_id, reason, rejected_by, user_id):
     """
     Reject a pending order with IST timestamp
 
@@ -202,12 +203,13 @@ def reject_pending_order(order_id, reason, rejected_by):
         order_id: Order ID
         reason: Rejection reason
         rejected_by: Username of rejector
+        user_id: ID of the user who owns the order (for security)
 
     Returns:
         bool: True if successful, False otherwise
     """
     try:
-        pending_order = PendingOrder.query.filter_by(id=order_id, status='pending').first()
+        pending_order = PendingOrder.query.filter_by(id=order_id, user_id=user_id, status='pending').first()
 
         if pending_order:
             pending_order.status = 'rejected'
@@ -228,18 +230,19 @@ def reject_pending_order(order_id, reason, rejected_by):
         db_session.rollback()
         return False
 
-def delete_pending_order(order_id):
+def delete_pending_order(order_id, user_id):
     """
     Delete a pending order (only if not in pending status)
 
     Args:
         order_id: Order ID
+        user_id: ID of the user who owns the order (for security)
 
     Returns:
         bool: True if successful, False otherwise
     """
     try:
-        pending_order = PendingOrder.query.filter_by(id=order_id).first()
+        pending_order = PendingOrder.query.filter_by(id=order_id, user_id=user_id).first()
 
         if pending_order:
             if pending_order.status == 'pending':

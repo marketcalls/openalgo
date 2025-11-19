@@ -836,21 +836,24 @@ class OrderManager:
 
     def _generate_order_id(self):
         """
-        Generate unique order ID in format: YYMMDD + 8-digit sequence
-        Example: 25100100000001 (Year 2025, Oct 1st, sequence 00000001)
+        Generate unique order ID in format: YYMMDD + 8-digit unique sequence
+        Example: 25100112345678 (Year 2025, Oct 1st, unique sequence)
+
+        Uses microsecond timestamp + random component to avoid race conditions
+        when multiple orders are placed in parallel.
         """
+        import random
+
         now = datetime.now(pytz.timezone('Asia/Kolkata'))
         date_prefix = now.strftime('%y%m%d')  # YYMMDD format
 
-        # Get the count of orders for today to generate sequence number
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        today_orders = SandboxOrders.query.filter(
-            SandboxOrders.user_id == self.user_id,
-            SandboxOrders.order_timestamp >= today_start
-        ).count()
+        # Use microseconds (0-999999) + random (0-99) for 8-digit unique sequence
+        # This avoids race conditions when parallel orders query count simultaneously
+        micro = now.microsecond
+        rand_suffix = random.randint(0, 99)
 
-        # Sequence is orders count + 1, padded to 8 digits
-        sequence = str(today_orders + 1).zfill(8)
+        # Combine: first 6 digits from microseconds, last 2 from random
+        sequence = f"{micro:06d}{rand_suffix:02d}"
 
         return f"{date_prefix}{sequence}"
 
