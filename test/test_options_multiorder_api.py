@@ -400,6 +400,68 @@ def test_jade_lizard():
         print(f"Error: {e}")
 
 
+def test_diagonal_spread():
+    """Test 12: Diagonal Spread - Different Strikes & Expiries"""
+    print("\n" + "="*60)
+    print("Test 12: Diagonal Spread (Different Strikes & Expiries)")
+    print("="*60)
+
+    url = f"{BASE_URL}/api/v1/optionsmultiorder"
+
+    payload = {
+        "apikey": API_KEY,
+        "strategy": "Diagonal Spread",
+        "underlying": "NIFTY",
+        "exchange": "NSE_INDEX",
+        "legs": [
+            {"offset": "ITM2", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "30DEC25"},
+            {"offset": "OTM2", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "25NOV25"}
+        ]
+    }
+
+    print(f"\nRequest Payload:")
+    print(json.dumps(payload, indent=2))
+
+    try:
+        response = requests.post(url, json=payload)
+        print(f"\nResponse Status: {response.status_code}")
+        print(f"Response Body:")
+        print(json.dumps(response.json(), indent=2))
+    except Exception as e:
+        print(f"Error: {e}")
+
+
+def test_calendar_spread():
+    """Test 13: Calendar Spread - Same Strike, Different Expiries"""
+    print("\n" + "="*60)
+    print("Test 13: Calendar Spread (Same Strike, Different Expiries)")
+    print("="*60)
+
+    url = f"{BASE_URL}/api/v1/optionsmultiorder"
+
+    payload = {
+        "apikey": API_KEY,
+        "strategy": "Calendar Spread",
+        "underlying": "NIFTY",
+        "exchange": "NSE_INDEX",
+        "legs": [
+            {"offset": "ATM", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "30DEC25"},
+            {"offset": "ATM", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "25NOV25"}
+        ]
+    }
+
+    print(f"\nRequest Payload:")
+    print(json.dumps(payload, indent=2))
+
+    try:
+        response = requests.post(url, json=payload)
+        print(f"\nResponse Status: {response.status_code}")
+        print(f"Response Body:")
+        print(json.dumps(response.json(), indent=2))
+    except Exception as e:
+        print(f"Error: {e}")
+
+
 if __name__ == "__main__":
     print("\n" + "="*60)
     print("OpenAlgo Options Multi-Order API Test Suite")
@@ -435,6 +497,10 @@ if __name__ == "__main__":
     test_validation_error()
     time.sleep(3)
     test_jade_lizard()
+    time.sleep(3)
+    test_diagonal_spread()
+    time.sleep(3)
+    test_calendar_spread()
 
     print("\n" + "="*60)
     print("All tests completed!")

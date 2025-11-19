@@ -76,10 +76,13 @@ def resolve_and_place_leg(
     """
     try:
         # Step 1: Resolve option symbol
+        # Use leg-specific expiry_date if provided, otherwise fall back to common expiry_date
+        leg_expiry = leg_data.get('expiry_date') or common_data.get('expiry_date')
+
         success, symbol_response, status_code = get_option_symbol(
             underlying=common_data.get('underlying'),
             exchange=common_data.get('exchange'),
-            expiry_date=common_data.get('expiry_date'),
+            expiry_date=leg_expiry,
             strike_int=common_data.get('strike_int'),
             offset=leg_data.get('offset'),
             option_type=leg_data.get('option_type'),
