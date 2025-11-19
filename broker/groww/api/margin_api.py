@@ -57,8 +57,8 @@ def calculate_margin_api(positions, auth):
         'segment': segment
     }
 
-    logger.info(f"Groww margin calculation for segment: {segment}")
-    logger.info(f"Margin calculation payload: {json.dumps(transformed_positions)}")
+    logger.debug(f"Groww margin calculation for segment: {segment}")
+    logger.debug(f"Margin calculation payload: {json.dumps(transformed_positions)}")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()

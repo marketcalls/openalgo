@@ -232,9 +232,9 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     f"using {actual_depth} instead"
                 )
             else:
-                # Default to 5-level depth (no auto-upgrade)
-                actual_depth = 5
-                self.logger.debug(f"Using 5-level depth for {exchange}:{actual_symbol}")
+                # Use the requested depth level (it's supported for this exchange)
+                actual_depth = depth_level
+                self.logger.debug(f"Using {actual_depth}-level depth for {exchange}:{actual_symbol}")
         
         # Prepare instrument info
         instrument = {
