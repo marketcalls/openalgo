@@ -55,7 +55,8 @@ def resolve_and_place_leg(
     leg_index: int,
     total_legs: int,
     auth_token: Optional[str] = None,
-    broker: Optional[str] = None
+    broker: Optional[str] = None,
+    underlying_ltp: Optional[float] = None
 ) -> Dict[str, Any]:
     """
     Resolve option symbol and place order for a single leg.
@@ -68,6 +69,7 @@ def resolve_and_place_leg(
         total_legs: Total number of legs
         auth_token: Direct broker auth token (optional)
         broker: Broker name (optional)
+        underlying_ltp: Pre-fetched underlying LTP to avoid redundant quote requests
 
     Returns:
         Result dictionary with leg details and order status
@@ -81,7 +83,8 @@ def resolve_and_place_leg(
             strike_int=common_data.get('strike_int'),
             offset=leg_data.get('offset'),
             option_type=leg_data.get('option_type'),
-            api_key=api_key
+            api_key=api_key,
+            underlying_ltp=underlying_ltp
         )
 
         if not success:
@@ -232,7 +235,8 @@ def process_multiorder_with_auth(
                         orig_idx,
                         total_legs,
                         auth_token,
-                        broker
+                        broker,
+                        underlying_ltp
                     )
                 )
 
@@ -255,7 +259,8 @@ def process_multiorder_with_auth(
                         orig_idx,
                         total_legs,
                         auth_token,
-                        broker
+                        broker,
+                        underlying_ltp
                     )
                 )
 
