@@ -1,7 +1,7 @@
 import time
 from functools import wraps
 from flask import g, request
-from database.latency_db import OrderLatency, latency_session, init_latency_db
+from database.latency_db import OrderLatency, latency_session, init_latency_db, purge_old_data_logs
 from database.auth_db import get_broker_name
 from utils.logging import get_logger
 from flask_restx import Resource
@@ -221,18 +221,29 @@ def init_latency_monitoring(app):
     """Initialize latency monitoring"""
     # Initialize the latency database
     init_latency_db()
-    
+
+    # Auto-purge old data endpoint logs (keep order logs forever, purge data logs after 7 days)
+    purge_old_data_logs(days=7)
+
     # Import all RESTX API resources
     from restx_api import api
     
     # Map of endpoint names to their types
+    # ORDER endpoints: Keep latency logs forever
+    # DATA endpoints: Auto-purge after 7 days
     api_types = {
+        # Order execution endpoints (keep forever)
         'place_order': 'PLACE',
         'place_smart_order': 'SMART',
         'modify_order': 'MODIFY',
         'cancel_order': 'CANCEL',
         'close_position': 'CLOSE',
         'cancel_all_order': 'CANCEL_ALL',
+        'basket_order': 'BASKET',
+        'split_order': 'SPLIT',
+        'options_order': 'OPTIONS',
+
+        # Data/Account endpoints (auto-purge after 7 days)
         'quotes': 'QUOTES',
         'history': 'HISTORY',
         'depth': 'DEPTH',
@@ -242,11 +253,23 @@ def init_latency_monitoring(app):
         'tradebook': 'TRADEBOOK',
         'positionbook': 'POSITIONBOOK',
         'holdings': 'HOLDINGS',
-        'basket_order': 'BASKET',
-        'split_order': 'SPLIT',
         'orderstatus': 'STATUS',
-        'openposition': 'POSITION'
+        'openposition': 'POSITION',
+        'instruments': 'INSTRUMENTS',
+        'search': 'SEARCH',
+        'symbol': 'SYMBOL',
+        'expiry': 'EXPIRY',
+        'margin': 'MARGIN',
+        'option_greeks': 'GREEKS',
+        'option_symbol': 'OPTION_SYMBOL',
+        'synthetic_future': 'SYNTHETIC',
+        'ticker': 'TICKER',
+        'ping': 'PING',
+        'analyzer': 'ANALYZER'
     }
+
+    # Order types that should be kept forever (not purged)
+    ORDER_TYPES = {'PLACE', 'SMART', 'MODIFY', 'CANCEL', 'CLOSE', 'CANCEL_ALL', 'BASKET', 'SPLIT', 'OPTIONS'}
     
     # Wrap all API endpoints with latency tracking
     for namespace in api.namespaces:
