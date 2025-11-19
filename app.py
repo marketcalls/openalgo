@@ -41,6 +41,7 @@ from blueprints.python_strategy import python_strategy_bp  # Import the python s
 from blueprints.telegram import telegram_bp  # Import the telegram blueprint
 from blueprints.security import security_bp  # Import the security blueprint
 from blueprints.sandbox import sandbox_bp  # Import the sandbox blueprint
+from blueprints.playground import playground_bp  # Import the API playground blueprint
 from services.telegram_bot_service import telegram_bot_service
 from database.telegram_db import get_bot_config
 
@@ -182,6 +183,7 @@ def create_app():
     app.register_blueprint(telegram_bp)  # Register Telegram blueprint
     app.register_blueprint(security_bp)  # Register Security blueprint
     app.register_blueprint(sandbox_bp)  # Register Sandbox blueprint
+    app.register_blueprint(playground_bp)  # Register API playground blueprint
 
 
     # Exempt webhook endpoints from CSRF protection after app initialization
@@ -364,6 +366,10 @@ def setup_environment(app):
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':
         from pyngrok import ngrok
+        # Disconnect only the 'flask' tunnel if it exists (to avoid "tunnel already exists" error)
+        for tunnel in ngrok.get_tunnels():
+            if tunnel.name == 'flask':
+                ngrok.disconnect(tunnel.public_url)
         public_url = ngrok.connect(name='flask').public_url  # Assuming Flask runs on the default port 5000
         logger.info(f"ngrok URL: {public_url}")
 

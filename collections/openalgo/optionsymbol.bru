@@ -1,0 +1,22 @@
+meta {
+  name: Option Symbol
+  type: http
+  seq: 14
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/optionsymbol
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "exchange": "NSE_INDEX",
+      "expiry_date": "25NOV25",
+      "offset": "ATM",
+      "option_type": "CE",
+      "underlying": "NIFTY"
+  }
+}

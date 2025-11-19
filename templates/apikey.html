@@ -5,16 +5,18 @@
 
 <div class="py-6">
     <div class="container mx-auto px-4">
-        <div class="card bg-base-100 shadow-xl">
-            <div class="card-body">
-                <h2 class="card-title">API Key Management</h2>
-                <p class="text-base-content/70">
-                    {% if has_api_key %}
-                        Your API key was automatically generated during account creation. You can view it below or generate a new one if needed.
-                    {% else %}
-                        Your API key could not be found. Please generate a new one.
-                    {% endif %}
-                </p>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- Left Column - API Key Management -->
+            <div class="card bg-base-100 shadow-xl">
+                <div class="card-body">
+                    <h2 class="card-title">API Key Management</h2>
+                    <p class="text-base-content/70">
+                        {% if has_api_key %}
+                            Your API key was automatically generated during account creation. You can view it below or generate a new one if needed.
+                        {% else %}
+                            Your API key could not be found. Please generate a new one.
+                        {% endif %}
+                    </p>
 
                 <!-- API Key Display -->
                 <div class="mt-4">
@@ -61,7 +63,7 @@
                     <div class="mt-8 border-t pt-6">
                         <h3 class="font-bold text-lg mb-2">Order Execution Mode</h3>
                         <p class="text-sm text-base-content/70 mb-4">
-                            Control how orders are executed when received via API. Switch between automatic execution and manual approval workflow.
+                            Choose between automatic execution or manual approval.
                         </p>
 
                         <div class="form-control">
@@ -73,7 +75,7 @@
                                         </svg>
                                         Auto Mode (Default)
                                     </span>
-                                    <div class="text-xs text-base-content/60 ml-7 mt-1">Orders execute immediately without manual approval</div>
+                                    <div class="text-xs text-base-content/60 ml-7 mt-1">Execute immediately</div>
                                 </div>
 
                                 <input type="checkbox" id="orderModeToggle" class="toggle toggle-primary toggle-lg"
@@ -85,9 +87,9 @@
                                         <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline-block mr-2" viewBox="0 0 20 20" fill="currentColor">
                                             <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd" />
                                         </svg>
-                                        Semi-Auto Mode
+                                        Semi-Auto
                                     </span>
-                                    <div class="text-xs text-base-content/60 ml-7 mt-1">Orders queued in Action Center for manual approval</div>
+                                    <div class="text-xs text-base-content/60 ml-7 mt-1">Queue for approval</div>
                                 </div>
                             </label>
                         </div>
@@ -173,6 +175,73 @@
                             <h3 class="font-bold">Success!</h3>
                             <div class="text-sm">API key has been generated successfully.</div>
                         </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+            <!-- Right Column - API Playground -->
+            <div class="card bg-base-100 shadow-xl">
+                <div class="card-body">
+                    <h2 class="card-title">
+                        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-yellow-500 to-amber-600 flex items-center justify-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                            </svg>
+                        </div>
+                        API Playground
+                    </h2>
+                    <p class="text-base-content/70">
+                        Test and explore OpenAlgo REST APIs directly in your browser. Send requests, view responses, and experiment with all available endpoints without writing any code.
+                    </p>
+
+                    <div class="mt-4">
+                        <h3 class="font-semibold mb-3">Features</h3>
+                        <ul class="text-sm text-base-content/70 space-y-2">
+                            <li class="flex items-start gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-success mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                                </svg>
+                                Send GET/POST requests to any endpoint
+                            </li>
+                            <li class="flex items-start gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-success mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                                </svg>
+                                Syntax highlighted JSON responses
+                            </li>
+                            <li class="flex items-start gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-success mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+                                </svg>
+                                Copy response or cURL command
+                            </li>
+                        </ul>
+                    </div>
+
+                    <div class="mt-4">
+                        <h3 class="font-semibold mb-3">How it Works</h3>
+                        <ol class="text-sm text-base-content/70 space-y-2 list-decimal list-inside">
+                            <li>Select an endpoint from the sidebar</li>
+                            <li>Modify the request body as needed</li>
+                            <li>Click Send to execute the request</li>
+                            <li>View the JSON response instantly</li>
+                        </ol>
+                    </div>
+
+                    <div class="mt-4 p-3 bg-base-200 rounded-lg">
+                        <p class="text-xs text-base-content/60">
+                            <strong>Tip:</strong> Your API key is automatically injected into requests when you use the Playground. No need to copy it manually.
+                        </p>
+                    </div>
+
+                    <div class="card-actions mt-6">
+                        <a href="{{ url_for('playground.index') }}" class="btn btn-primary gap-2">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                            </svg>
+                            Open Playground
+                        </a>
                     </div>
                 </div>
             </div>

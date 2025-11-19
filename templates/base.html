@@ -112,10 +112,12 @@
             </div>
 
             <!-- Main Content -->
-            <main class="flex-grow bg-base-100 mt-6">
+            <main class="flex-grow bg-base-100 {% block main_class %}mt-6{% endblock %}">
+                {% block content_wrapper %}
                 <div class="container mx-auto px-4">
                     {% block content %}{% endblock %}
                 </div>
+                {% endblock %}
             </main>
 
             <!-- Footer -->
@@ -223,6 +225,18 @@
                         <a href="{{ url_for('search_bp.token') }}" 
                            class="{{ 'active' if request.endpoint == 'search_bp.token' }}">
                             Search
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('analyzer_bp.analyzer') }}" 
+                           class="{{ 'active' if request.endpoint == 'analyzer_bp.analyzer' }}">
+                            API Analyzer
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('playground.index') }}" 
+                           class="{{ 'active' if request.endpoint == 'playground.index' }}">
+                            Playground
                         </a>
                     </li>
                     <li>

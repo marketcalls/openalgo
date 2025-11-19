@@ -1,0 +1,18 @@
+meta {
+  name: Analyzer Toggle
+  type: http
+  seq: 2
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/analyzer/toggle
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "mode": true
+  }
+}

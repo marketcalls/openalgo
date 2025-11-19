@@ -1,0 +1,17 @@
+meta {
+  name: Analyzer Status
+  type: http
+  seq: 1
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/analyzer
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": ""
+  }
+}
