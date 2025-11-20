@@ -2,8 +2,8 @@ import json
 import os
 import httpx
 from database.auth_db import get_auth_token
-from database.token_db import get_token , get_br_symbol, get_symbol
-from broker.motilal.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
+from database.token_db import get_token , get_br_symbol, get_symbol, get_symbol_info
+from broker.motilal.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data, map_exchange, reverse_map_exchange
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -12,7 +12,7 @@ logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     AUTH_TOKEN = auth
-    api_key = os.getenv('BROKER_API_KEY')
+    api_key = os.getenv('BROKER_API_SECRET')
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -73,11 +73,34 @@ def get_positions(auth):
     return get_api_response("/rest/book/v1/getposition", auth, method="POST")
 
 def get_holdings(auth):
-    return get_api_response("/rest/report/v1/getdpholding", auth, method="POST")
+    """
+    Fetch holdings/DP holdings from Motilal Oswal.
+    Motilal API endpoint: /rest/report/v1/getdpholding (POST)
+    Request body: {} (empty JSON for non-dealer accounts)
+    """
+    # Motilal requires POST with JSON body (empty for non-dealer accounts)
+    payload = json.dumps({})
+
+    logger.info("Fetching holdings from Motilal API...")
+    response = get_api_response("/rest/report/v1/getdpholding", auth, method="POST", payload=payload)
+
+    # Log the raw response for debugging
+    logger.info(f"Motilal Holdings API raw response: status={response.get('status')}, message={response.get('message')}, data_length={len(response.get('data', [])) if response.get('data') else 0}")
+
+    if response.get('status') == 'SUCCESS' and response.get('data'):
+        logger.info(f"Successfully fetched {len(response.get('data', []))} holdings from Motilal")
+    elif response.get('status') == 'SUCCESS' and not response.get('data'):
+        logger.warning("Motilal API returned SUCCESS but data is null/empty. This might indicate no holdings or an API issue.")
+    else:
+        logger.error(f"Motilal Holdings API error: {response.get('message', 'Unknown error')}, errorcode: {response.get('errorcode', '')}")
+
+    return response
 
 def get_open_position(tradingsymbol, exchange, producttype,auth):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol,exchange)
+    # Map exchange from OpenAlgo format to Motilal format for comparison
+    motilal_exchange = map_exchange(exchange)
     positions_data = get_positions(auth)
 
     logger.debug(f"{positions_data}")
@@ -90,7 +113,8 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
             # Motilal uses 'symbol' not 'tradingsymbol' and 'productname' not 'producttype'
             # Since Motilal uses DELIVERY for both CNC and MIS in cash segment,
             # we need to match positions based on Motilal's product type
-            if position.get('symbol') == tradingsymbol and position.get('exchange') == exchange and position.get('productname') == producttype:
+            # Compare with motilal_exchange since positions are in Motilal format
+            if position.get('symbol') == tradingsymbol and position.get('exchange') == motilal_exchange and position.get('productname') == producttype:
                 # Calculate net quantity from buy and sell quantities
                 buyqty = int(position.get('buyquantity', 0))
                 sellqty = int(position.get('sellquantity', 0))
@@ -101,8 +125,8 @@ def get_open_position(tradingsymbol, exchange, producttype,auth):
 
 def place_order_api(data,auth):
     AUTH_TOKEN = auth
-    BROKER_API_KEY = os.getenv('BROKER_API_KEY')
-    data['apikey'] = BROKER_API_KEY
+    BROKER_API_SECRET = os.getenv('BROKER_API_SECRET')
+    data['apikey'] = BROKER_API_SECRET
     token = get_token(data['symbol'], data['exchange'])
 
     logger.info(f"Placing order for symbol: {data['symbol']}, exchange: {data['exchange']}, token: {token}")
@@ -110,6 +134,13 @@ def place_order_api(data,auth):
     if not token:
         logger.error(f"Failed to get token for symbol: {data['symbol']}, exchange: {data['exchange']}")
         return None, {"status": "ERROR", "message": "Invalid symbol or token not found", "errorcode": "TOKEN_NOT_FOUND"}, None
+
+    # Get symbol info to get lot size for quantity conversion
+    symbol_info = get_symbol_info(data['symbol'], data['exchange'])
+    lotsize = 1  # Default to 1 for cash segment
+    if symbol_info and symbol_info.lotsize:
+        lotsize = symbol_info.lotsize
+        logger.debug(f"Lot size for {data['symbol']}: {lotsize}")
 
     newdata = transform_data(data, token)
 
@@ -119,7 +150,7 @@ def place_order_api(data,auth):
         'Content-Type': 'application/json',
         'Accept': 'application/json',
         'User-Agent': 'MOSL/V.1.1.0',
-        'ApiKey': BROKER_API_KEY,
+        'ApiKey': BROKER_API_SECRET,
         'ClientLocalIp': '1.2.3.4',
         'ClientPublicIp': '1.2.3.4',
         'MacAddress': '00:00:00:00:00:00',
@@ -137,6 +168,23 @@ def place_order_api(data,auth):
 
     # Motilal Oswal Place Order Payload
     # Build payload with only non-empty optional fields
+    # Convert quantity to lots (Motilal requires quantity in lots, not shares)
+    actual_quantity = int(newdata['quantity'])
+
+    # Validate that quantity is a multiple of lot size
+    if actual_quantity % lotsize != 0:
+        error_msg = f"Invalid quantity: {actual_quantity} shares is not a multiple of lot size {lotsize}. " \
+                    f"Valid quantities: {lotsize}, {lotsize*2}, {lotsize*3}, etc."
+        logger.error(error_msg)
+        return None, {
+            "status": "ERROR",
+            "message": error_msg,
+            "errorcode": "INVALID_QUANTITY"
+        }, None
+
+    quantity_in_lots = actual_quantity // lotsize  # Integer division to get number of lots
+    logger.info(f"Quantity conversion: {actual_quantity} shares / {lotsize} lot size = {quantity_in_lots} lots")
+
     payload_dict = {
         "exchange": newdata['exchange'],
         "symboltoken": int(newdata['symboltoken']),  # Must be integer
@@ -146,7 +194,7 @@ def place_order_api(data,auth):
         "orderduration": newdata.get('orderduration', 'DAY'),
         "price": float(newdata.get('price', '0')),
         "triggerprice": float(newdata.get('triggerprice', '0')),
-        "quantityinlot": int(newdata['quantity']),
+        "quantityinlot": quantity_in_lots,  # Converted to lots
         "disclosedquantity": int(newdata.get('disclosedquantity', '0')),
         "amoorder": newdata.get('amoorder', 'N')
     }
@@ -314,10 +362,17 @@ def close_all_positions(current_api_key,auth):
             action = 'SELL' if net_qty > 0 else 'BUY'
             quantity = abs(net_qty)
 
+            # Convert Motilal exchange to OpenAlgo exchange for symbol lookup
+            motilal_exchange = position['exchange']
+            openalgo_exchange = reverse_map_exchange(motilal_exchange)
 
-            #get openalgo symbol to send to placeorder function
-            symbol = get_symbol(position['symboltoken'],position['exchange'])
+            # Get openalgo symbol to send to placeorder function
+            symbol = get_symbol(position['symboltoken'], openalgo_exchange)
             logger.info(f"The Symbol is {symbol}")
+
+            if not symbol:
+                logger.error(f"Symbol not found for token {position['symboltoken']} and exchange {openalgo_exchange}")
+                continue
 
             # Prepare the order payload - Motilal uses 'productname' instead of 'producttype'
             place_order_payload = {
@@ -325,9 +380,9 @@ def close_all_positions(current_api_key,auth):
                 "strategy": "Squareoff",
                 "symbol": symbol,
                 "action": action,
-                "exchange": position['exchange'],
+                "exchange": openalgo_exchange,  # Use OpenAlgo exchange format
                 "pricetype": "MARKET",
-                "product": reverse_map_product_type(position['productname'], position['exchange']),
+                "product": reverse_map_product_type(position['productname'], openalgo_exchange),
                 "quantity": str(quantity)
             }
 
@@ -350,7 +405,7 @@ def close_all_positions(current_api_key,auth):
 def cancel_order(orderid,auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
-    api_key = os.getenv('BROKER_API_KEY')
+    api_key = os.getenv('BROKER_API_SECRET')
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -422,7 +477,7 @@ def modify_order(data,auth):
     """
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
-    api_key = os.getenv('BROKER_API_KEY')
+    api_key = os.getenv('BROKER_API_SECRET')
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -456,6 +511,33 @@ def modify_order(data,auth):
     logger.info(f"Order details: lastmodifiedtime={lastmodifiedtime}, qtytradedtoday={qtytradedtoday}")
 
     token = get_token(data['symbol'], data['exchange'])
+
+    # Get symbol info to get lot size for quantity conversion
+    symbol_info = get_symbol_info(data['symbol'], data['exchange'])
+    lotsize = 1  # Default to 1 for cash segment
+    if symbol_info and symbol_info.lotsize:
+        lotsize = symbol_info.lotsize
+        logger.debug(f"Lot size for {data['symbol']}: {lotsize}")
+
+    # Convert quantity to lots for modify order
+    if 'quantity' in data:
+        actual_quantity = int(data['quantity'])
+
+        # Validate that quantity is a multiple of lot size
+        if actual_quantity % lotsize != 0:
+            error_msg = f"Invalid quantity for modify order: {actual_quantity} shares is not a multiple of lot size {lotsize}. " \
+                        f"Valid quantities: {lotsize}, {lotsize*2}, {lotsize*3}, etc."
+            logger.error(error_msg)
+            return {
+                "status": "error",
+                "message": error_msg,
+                "errorcode": "INVALID_QUANTITY"
+            }, 400
+
+        quantity_in_lots = actual_quantity // lotsize
+        data['quantity'] = str(quantity_in_lots)  # Convert to lots
+        logger.info(f"Modify quantity conversion: {actual_quantity} shares / {lotsize} lot size = {quantity_in_lots} lots")
+
     data['symbol'] = get_br_symbol(data['symbol'],data['exchange'])
 
     # Pass the order details to the transformation function

@@ -11,7 +11,7 @@ logger = get_logger(__name__)
 
 def get_margin_data(auth_token):
     """Fetch margin data from Motilal Oswal API using the provided auth token."""
-    api_key = os.getenv('BROKER_API_KEY')
+    api_key = os.getenv('BROKER_API_SECRET')
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()

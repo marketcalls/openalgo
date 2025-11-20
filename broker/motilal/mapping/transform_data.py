@@ -3,21 +3,58 @@
 
 from database.token_db import get_br_symbol
 
+def map_exchange(exchange):
+    """
+    Maps OpenAlgo exchange names to Motilal Oswal exchange names.
+
+    OpenAlgo uses: NSE, BSE, NFO, CDS, MCX, BFO
+    Motilal uses: NSE, BSE, NSEFO, NSECD, MCX, BSEFO
+    """
+    exchange_mapping = {
+        "NSE": "NSE",
+        "BSE": "BSE",
+        "NFO": "NSEFO",
+        "CDS": "NSECD",
+        "MCX": "MCX",
+        "BFO": "BSEFO",
+        "NSEFO": "NSEFO",  # Already in Motilal format
+        "NSECD": "NSECD",  # Already in Motilal format
+        "BSEFO": "BSEFO",  # Already in Motilal format
+    }
+    return exchange_mapping.get(exchange, exchange)
+
+
+def reverse_map_exchange(exchange):
+    """
+    Reverse maps Motilal Oswal exchange names to OpenAlgo exchange names.
+    """
+    reverse_exchange_mapping = {
+        "NSE": "NSE",
+        "BSE": "BSE",
+        "NSEFO": "NFO",
+        "NSECD": "CDS",
+        "MCX": "MCX",
+        "BSEFO": "BFO",
+    }
+    return reverse_exchange_mapping.get(exchange, exchange)
+
+
 def transform_data(data,token):
     """
     Transforms the OpenAlgo API request structure to Motilal Oswal expected structure.
     """
     symbol = get_br_symbol(data["symbol"],data["exchange"])
-    exchange = data["exchange"]
+    openalgo_exchange = data["exchange"]
+    motilal_exchange = map_exchange(openalgo_exchange)
 
     # Basic mapping for Motilal Oswal
     transformed = {
         "apikey": data["apikey"],
         "symboltoken": token,
         "buyorsell": data["action"].upper(),  # Motilal uses 'buyorsell' instead of 'transactiontype'
-        "exchange": exchange,
+        "exchange": motilal_exchange,
         "ordertype": map_order_type(data["pricetype"]),
-        "producttype": map_product_type(data["product"], exchange),  # Pass exchange for context
+        "producttype": map_product_type(data["product"], openalgo_exchange),  # Pass OpenAlgo exchange for context
         "orderduration": "DAY",  # Motilal uses 'orderduration' instead of 'duration'
         "price": data.get("price", "0"),
         "triggerprice": data.get("trigger_price", "0"),
@@ -86,17 +123,22 @@ def map_product_type(product, exchange=None):
         - MIS (Margin Intraday Square off) → VALUEPLUS (for intraday margin trading)
         - NRML → VALUEPLUS (fallback for cash segment with margin)
 
-    For F&O Segment (NSEFO, MCX, NSECD):
+    For F&O Segment (NFO, MCX, CDS, BFO):
         - NRML (Normal for F&O) → NORMAL
         - MIS → NORMAL (intraday F&O)
         - CNC → NORMAL (fallback for F&O segment)
 
     Note: VALUEPLUS is Motilal's margin product for intraday trading.
     Accounts may have specific product authorizations based on their configuration.
+
+    Args:
+        product: OpenAlgo product type (CNC, MIS, NRML)
+        exchange: OpenAlgo exchange name (NSE, BSE, NFO, CDS, MCX, BFO)
     """
     # Determine if this is a cash segment or derivative segment
+    # Using OpenAlgo exchange names
     is_cash_segment = exchange in ['NSE', 'BSE']
-    is_fo_segment = exchange in ['NSEFO', 'MCX', 'NSECD', 'NSECO', 'BSECO']
+    is_fo_segment = exchange in ['NFO', 'MCX', 'CDS', 'BFO', 'NSEFO', 'NSECD', 'BSEFO']
 
     if is_cash_segment:
         # For cash segment: CNC = DELIVERY, MIS = VALUEPLUS (margin intraday)

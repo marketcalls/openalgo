@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 def get_api_response(endpoint, auth, method="GET", payload=''):
     """Helper function to make API calls to Angel One"""
     AUTH_TOKEN = auth
-    api_key = os.getenv('BROKER_API_KEY')
+    api_key = os.getenv('BROKER_API_SECRET')
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
