@@ -1,6 +1,7 @@
 import json
-from database.token_db import get_symbol, get_oa_symbol 
+from database.token_db import get_symbol, get_oa_symbol
 from utils.logging import get_logger
+from broker.motilal.mapping.transform_data import reverse_map_exchange
 
 logger = get_logger(__name__)
 
@@ -32,28 +33,37 @@ def map_order_data(order_data):
         for order in order_data:
             # Extract the instrument_token and exchange for the current order
             symboltoken = order['symboltoken']
-            exchange = order['exchange']
+            motilal_exchange = order['exchange']
+            # Convert Motilal exchange (NSEFO) to OpenAlgo exchange (NFO) for database lookup
+            openalgo_exchange = reverse_map_exchange(motilal_exchange)
 
             # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_symbol(symboltoken, exchange)
+            # Use OpenAlgo exchange format for lookup
+            symbol_from_db = get_symbol(symboltoken, openalgo_exchange)
 
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
                 order['symbol'] = symbol_from_db  # Motilal uses 'symbol' field
+                # Convert exchange to OpenAlgo format for display
+                order['exchange'] = openalgo_exchange
+
                 # Map Motilal product types to OpenAlgo format
-                if (order['exchange'] == 'NSE' or order['exchange'] == 'BSE'):
+                if openalgo_exchange in ['NSE', 'BSE']:
                     if order['producttype'] == 'DELIVERY':
                         order['producttype'] = 'CNC'
                     elif order['producttype'] == 'VALUEPLUS':
                         order['producttype'] = 'MIS'  # Motilal uses VALUEPLUS for margin intraday
 
-                elif order['producttype'] == 'NORMAL':
-                    order['producttype'] = 'MIS'  # Motilal uses NORMAL for F&O intraday
-
-                elif order['exchange'] in ['NSEFO', 'MCX', 'NSECD'] and order['producttype'] == 'VALUEPLUS':
-                    order['producttype'] = 'NRML'
+                elif openalgo_exchange in ['NFO', 'MCX', 'CDS', 'BFO']:
+                    # F&O segment product mapping
+                    if order['producttype'] == 'NORMAL':
+                        order['producttype'] = 'MIS'  # Motilal uses NORMAL for F&O intraday
+                    elif order['producttype'] == 'VALUEPLUS':
+                        order['producttype'] = 'NRML'
             else:
-                logger.info(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
+                logger.info(f"Symbol not found for token {symboltoken} and exchange {openalgo_exchange}. Keeping original trading symbol.")
+                # Still convert exchange to OpenAlgo format
+                order['exchange'] = openalgo_exchange
 
     return order_data
 
@@ -174,8 +184,8 @@ def transform_order_data(orders):
             "exchange": order.get("exchange", ""),
             "action": order.get("buyorsell", "").upper(),  # Ensure uppercase BUY/SELL
             "quantity": order.get("orderqty", 0),  # Motilal uses 'orderqty'
-            "price": display_price,  # Use execution price if available, else order price
-            "trigger_price": order.get("triggerprice", 0.0),
+            "price": round(float(display_price), 2),  # Format to 2 decimal places
+            "trigger_price": round(float(order.get("triggerprice", 0.0)), 2),  # Format to 2 decimal places
             "pricetype": ordertype,
             "product": order.get("producttype", ""),
             "orderid": order.get("uniqueorderid", ""),  # Motilal uses 'uniqueorderid'
@@ -215,28 +225,34 @@ def map_trade_data(trade_data):
         for order in trade_data:
             # Extract the instrument_token and exchange for the current order
             symbol = order['symbol']  # Motilal uses 'symbol'
-            exchange = order['exchange']
+            motilal_exchange = order['exchange']
+            # Convert Motilal exchange to OpenAlgo exchange for database lookup
+            openalgo_exchange = reverse_map_exchange(motilal_exchange)
 
             # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_oa_symbol(symbol, exchange)
+            symbol_from_db = get_oa_symbol(symbol, openalgo_exchange)
 
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
                 order['symbol'] = symbol_from_db
+                # Convert exchange to OpenAlgo format
+                order['exchange'] = openalgo_exchange
+
                 # Map Motilal product types to OpenAlgo format
-                if (order['exchange'] == 'NSE' or order['exchange'] == 'BSE'):
+                if openalgo_exchange in ['NSE', 'BSE']:
                     if order['producttype'] == 'DELIVERY':
                         order['producttype'] = 'CNC'
                     elif order['producttype'] == 'VALUEPLUS':
                         order['producttype'] = 'MIS'  # Motilal uses VALUEPLUS for margin intraday
 
-                elif order['producttype'] == 'NORMAL':
-                    order['producttype'] = 'MIS'  # Motilal uses NORMAL for F&O intraday
-
-                elif order['exchange'] in ['NSEFO', 'MCX', 'NSECD'] and order['producttype'] == 'VALUEPLUS':
-                    order['producttype'] = 'NRML'
+                elif openalgo_exchange in ['NFO', 'MCX', 'CDS', 'BFO']:
+                    if order['producttype'] == 'NORMAL':
+                        order['producttype'] = 'MIS'  # Motilal uses NORMAL for F&O intraday
+                    elif order['producttype'] == 'VALUEPLUS':
+                        order['producttype'] = 'NRML'
             else:
-                logger.info(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
+                logger.info(f"Unable to find the symbol {symbol} and exchange {openalgo_exchange}. Keeping original trading symbol.")
+                order['exchange'] = openalgo_exchange
 
     return trade_data
 
@@ -288,34 +304,39 @@ def map_position_data(position_data):
         for position in position_data_list:
             # Extract the symboltoken and exchange for the current position
             symboltoken = position.get('symboltoken')
-            exchange = position.get('exchange')
+            motilal_exchange = position.get('exchange')
+            # Convert Motilal exchange to OpenAlgo exchange for database lookup
+            openalgo_exchange = reverse_map_exchange(motilal_exchange)
 
             # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_symbol(symboltoken, exchange)
+            symbol_from_db = get_symbol(symboltoken, openalgo_exchange)
 
             # Check if a symbol was found; if so, update the symbol in the current position
             if symbol_from_db:
                 position['symbol'] = symbol_from_db
+                # Convert exchange to OpenAlgo format
+                position['exchange'] = openalgo_exchange
 
                 # Map Motilal product types to OpenAlgo format
                 # Motilal uses 'productname' field for positions instead of 'producttype'
                 productname = position.get('productname', '')
 
-                if exchange in ['NSE', 'BSE']:
+                if openalgo_exchange in ['NSE', 'BSE']:
                     # Cash segment product mapping
                     if productname == 'DELIVERY':
                         position['productname'] = 'CNC'
                     elif productname == 'VALUEPLUS':
                         position['productname'] = 'MIS'  # Motilal uses VALUEPLUS for margin intraday
 
-                elif productname == 'NORMAL':
+                elif openalgo_exchange in ['NFO', 'MCX', 'CDS', 'BFO']:
                     # F&O segment product mapping
-                    position['productname'] = 'MIS'  # Motilal uses NORMAL for F&O intraday
-
-                elif exchange in ['NSEFO', 'MCX', 'NSECD'] and productname == 'VALUEPLUS':
-                    position['productname'] = 'NRML'
+                    if productname == 'NORMAL':
+                        position['productname'] = 'MIS'  # Motilal uses NORMAL for F&O intraday
+                    elif productname == 'VALUEPLUS':
+                        position['productname'] = 'NRML'
             else:
-                logger.info(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original symbol.")
+                logger.info(f"Symbol not found for token {symboltoken} and exchange {openalgo_exchange}. Keeping original symbol.")
+                position['exchange'] = openalgo_exchange
 
     return position_data_list
 
