@@ -107,6 +107,7 @@ class OptionsMultiOrderLegSchema(Schema):
     option_type = fields.Str(required=True, validate=validate.OneOf(["CE", "PE", "ce", "pe"]))  # Call or Put
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
     quantity = fields.Int(required=True, validate=validate.Range(min=1, error="Quantity must be a positive integer."))
+    expiry_date = fields.Str(required=False)  # Optional per-leg expiry (DDMMMYY format) - for diagonal/calendar spreads
     pricetype = fields.Str(missing='MARKET', validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"]))
     product = fields.Str(missing='MIS', validate=validate.OneOf(["MIS", "NRML"]))  # Options only support MIS and NRML
     price = fields.Float(missing=0.0, validate=validate.Range(min=0, error="Price must be a non-negative number."))

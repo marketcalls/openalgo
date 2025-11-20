@@ -5,7 +5,7 @@
     {
       "type": "http",
       "name": "BasketOrder",
-      "seq": 17,
+      "seq": 1,
       "request": {
         "url": "http://127.0.0.1:5000/api/v1/basketorder",
         "method": "POST",
@@ -29,7 +29,7 @@
     {
       "type": "http",
       "name": "CancelAllOrder",
-      "seq": 7,
+      "seq": 2,
       "request": {
         "url": "http://127.0.0.1:5000/api/v1/cancelallorder",
         "method": "POST",
@@ -53,7 +53,7 @@
     {
       "type": "http",
       "name": "CancelOrder",
-      "seq": 5,
+      "seq": 3,
       "request": {
         "url": "http://127.0.0.1:5000/api/v1/cancelorder",
         "method": "POST",
@@ -77,7 +77,7 @@
     {
       "type": "http",
       "name": "Chartink",
-      "seq": 21,
+      "seq": 4,
       "request": {
         "url": "http://8d32-49-207-193-1.ngrok-free.app/chartink/webhook/0fd7ee15-c83b-4f6e-97ae-68cb4b9bdf95",
         "method": "POST",
@@ -101,7 +101,7 @@
     {
       "type": "http",
       "name": "CloseAllPositions",
-      "seq": 4,
+      "seq": 5,
       "request": {
         "url": "http://127.0.0.1:5000/api/v1/closeposition",
         "method": "POST",
@@ -124,104 +124,8 @@
     },
     {
       "type": "http",
-      "name": "ModifyOrder",
-      "seq": 6,
-      "request": {
-        "url": "http://127.0.0.1:5000/api/v1/modifyorder",
-        "method": "POST",
-        "headers": [],
-        "params": [],
-        "body": {
-          "mode": "json",
-          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"strategy\": \"Test Message\",\n    \"symbol\": \"GOLDPETAL31OCT24FUT\",\n    \"action\": \"BUY\",\n    \"exchange\": \"MCX\",\n    \"orderid\":\"427510324509895\",\n    \"product\":\"MIS\",\n    \"pricetype\":\"LIMIT\",\n    \"price\":\"7410\",\n    \"quantity\":\"1\",\n    \"disclosed_quantity\":\"0\",\n    \"trigger_price\":\"0\"\n}\n",
-          "formUrlEncoded": [],
-          "multipartForm": []
-        },
-        "script": {},
-        "vars": {},
-        "assertions": [],
-        "tests": "",
-        "auth": {
-          "mode": "none"
-        }
-      }
-    },
-    {
-      "type": "http",
-      "name": "PlaceOrder",
-      "seq": 3,
-      "request": {
-        "url": "http://127.0.0.1:5000/api/v1/placeorder",
-        "method": "POST",
-        "headers": [],
-        "params": [],
-        "body": {
-          "mode": "json",
-          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"strategy\": \"My Strategy\",\n    \"exchange\": \"NSE\",\n    \"symbol\": \"M&M\",\n    \"action\": \"buy\",\n    \"product\": \"MIS\",\n    \"pricetype\": \"MARKET\",\n    \"quantity\": \"100\",\n    \"price\": \"0\",\n    \"trigger_price\": \"0\",\n    \"disclosed_quantity\": \"0\"\n}",
-          "formUrlEncoded": [],
-          "multipartForm": []
-        },
-        "script": {},
-        "vars": {},
-        "assertions": [],
-        "tests": "",
-        "auth": {
-          "mode": "none"
-        }
-      }
-    },
-    {
-      "type": "http",
-      "name": "PlaceSmartOrder",
-      "seq": 2,
-      "request": {
-        "url": "http://127.0.0.1:5000/api/v1/placesmartorder",
-        "method": "POST",
-        "headers": [],
-        "params": [],
-        "body": {
-          "mode": "json",
-          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"strategy\": \"Test Strategy\",\n    \"exchange\": \"NSE\",\n    \"symbol\": \"YESBANK\",\n    \"action\": \"BUY\",\n    \"product\": \"MIS\",\n    \"pricetype\": \"MARKET\",\n    \"quantity\": \"10\",\n    \"price\": \"0\",\n    \"trigger_price\": \"0\",\n    \"disclosed_quantity\": \"0\",\n    \"position_size\": \"10\"\n}",
-          "formUrlEncoded": [],
-          "multipartForm": []
-        },
-        "script": {},
-        "vars": {},
-        "assertions": [],
-        "tests": "",
-        "auth": {
-          "mode": "none"
-        }
-      }
-    },
-    {
-      "type": "http",
-      "name": "SplitOrder",
-      "seq": 18,
-      "request": {
-        "url": "http://127.0.0.1:5000/api/v1/splitorder",
-        "method": "POST",
-        "headers": [],
-        "params": [],
-        "body": {
-          "mode": "json",
-          "json": "{\n    \"apikey\": \"38f99d7d226cc0c3baa19dcacf0b1f049d2f68371da1dda2c97b1b63a3a9ca2e\",\n    \"strategy\": \"Test Strategy\",\n    \"exchange\": \"NSE\",\n    \"symbol\": \"YESBANK\",\n    \"action\": \"SELL\",\n    \"quantity\": \"105\",\n    \"splitsize\": \"20\",\n    \"pricetype\": \"MARKET\",\n    \"product\": \"MIS\"\n}",
-          "formUrlEncoded": [],
-          "multipartForm": []
-        },
-        "script": {},
-        "vars": {},
-        "assertions": [],
-        "tests": "",
-        "auth": {
-          "mode": "none"
-        }
-      }
-    },
-    {
-      "type": "http",
       "name": "depth",
-      "seq": 10,
+      "seq": 6,
       "request": {
         "url": "http://127.0.0.1:5000/api/v1/depth",
         "method": "POST",
@@ -245,7 +149,7 @@
     {
       "type": "http",
       "name": "funds",
-      "seq": 12,
+      "seq": 7,
       "request": {
         "url": "http://127.0.0.1:5000/api/v1/funds",
         "method": "POST",
@@ -268,7 +172,31 @@
     },
     {
       "type": "http",
-      "name": "historical",
+      "name": "history (EOD)",
+      "seq": 8,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/history",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"symbol\": \"SBIN\",\n    \"exchange\": \"NSE\",\n    \"interval\": \"D\",\n    \"start_date\": \"2025-01-01\",\n    \"end_date\": \"2025-11-20\"\n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "history (intraday)",
       "seq": 9,
       "request": {
         "url": "http://127.0.0.1:5000/api/v1/history",
@@ -277,7 +205,7 @@
         "params": [],
         "body": {
           "mode": "json",
-          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"symbol\": \"SBIN\",\n    \"exchange\": \"NSE\",\n    \"interval\": \"1m\",\n    \"start_date\": \"2024-12-17\",\n    \"end_date\": \"2024-12-18\"\n  \n}\n",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"symbol\": \"SBIN\",\n    \"exchange\": \"NSE\",\n    \"interval\": \"1m\",\n    \"start_date\": \"2025-10-15\",\n    \"end_date\": \"2025-10-20\"\n}",
           "formUrlEncoded": [],
           "multipartForm": []
         },
@@ -293,7 +221,7 @@
     {
       "type": "http",
       "name": "holdings",
-      "seq": 16,
+      "seq": 10,
       "request": {
         "url": "http://127.0.0.1:5000/api/v1/holdings",
         "method": "POST",
@@ -340,8 +268,32 @@
     },
     {
       "type": "http",
+      "name": "ModifyOrder",
+      "seq": 12,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/modifyorder",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"strategy\": \"Test Message\",\n    \"symbol\": \"GOLDPETAL31OCT24FUT\",\n    \"action\": \"BUY\",\n    \"exchange\": \"MCX\",\n    \"orderid\":\"427510324509895\",\n    \"product\":\"MIS\",\n    \"pricetype\":\"LIMIT\",\n    \"price\":\"7410\",\n    \"quantity\":\"1\",\n    \"disclosed_quantity\":\"0\",\n    \"trigger_price\":\"0\"\n}\n",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
       "name": "openposition",
-      "seq": 20,
+      "seq": 13,
       "request": {
         "url": "http://127.0.0.1:5000/api/v1/openposition",
         "method": "POST",
@@ -365,7 +317,7 @@
     {
       "type": "http",
       "name": "orderbook",
-      "seq": 13,
+      "seq": 14,
       "request": {
         "url": "http://127.0.0.1:5000/api/v1/orderbook",
         "method": "POST",
@@ -389,7 +341,7 @@
     {
       "type": "http",
       "name": "orderstatus",
-      "seq": 19,
+      "seq": 15,
       "request": {
         "url": "http://127.0.0.1:5000/api/v1/orderstatus",
         "method": "POST",
@@ -412,8 +364,56 @@
     },
     {
       "type": "http",
+      "name": "PlaceOrder",
+      "seq": 16,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/placeorder",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"strategy\": \"My Strategy\",\n    \"exchange\": \"NSE\",\n    \"symbol\": \"M&M\",\n    \"action\": \"buy\",\n    \"product\": \"MIS\",\n    \"pricetype\": \"MARKET\",\n    \"quantity\": \"100\",\n    \"price\": \"0\",\n    \"trigger_price\": \"0\",\n    \"disclosed_quantity\": \"0\"\n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "PlaceSmartOrder",
+      "seq": 17,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/placesmartorder",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00\",\n    \"strategy\": \"Test Strategy\",\n    \"exchange\": \"NSE\",\n    \"symbol\": \"YESBANK\",\n    \"action\": \"BUY\",\n    \"product\": \"MIS\",\n    \"pricetype\": \"MARKET\",\n    \"quantity\": \"10\",\n    \"price\": \"0\",\n    \"trigger_price\": \"0\",\n    \"disclosed_quantity\": \"0\",\n    \"position_size\": \"10\"\n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
       "name": "positionbook",
-      "seq": 15,
+      "seq": 18,
       "request": {
         "url": "http://127.0.0.1:5000/api/v1/positionbook",
         "method": "POST",
@@ -437,7 +437,7 @@
     {
       "type": "http",
       "name": "quotes",
-      "seq": 8,
+      "seq": 19,
       "request": {
         "url": "http://127.0.0.1:5000/api/v1/quotes",
         "method": "POST",
@@ -460,8 +460,32 @@
     },
     {
       "type": "http",
+      "name": "SplitOrder",
+      "seq": 20,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/splitorder",
+        "method": "POST",
+        "headers": [],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"apikey\": \"38f99d7d226cc0c3baa19dcacf0b1f049d2f68371da1dda2c97b1b63a3a9ca2e\",\n    \"strategy\": \"Test Strategy\",\n    \"exchange\": \"NSE\",\n    \"symbol\": \"YESBANK\",\n    \"action\": \"SELL\",\n    \"quantity\": \"105\",\n    \"splitsize\": \"20\",\n    \"pricetype\": \"MARKET\",\n    \"product\": \"MIS\"\n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
       "name": "tradebook",
-      "seq": 14,
+      "seq": 21,
       "request": {
         "url": "http://127.0.0.1:5000/api/v1/tradebook",
         "method": "POST",

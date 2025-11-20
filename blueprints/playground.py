@@ -1,5 +1,6 @@
-from flask import Blueprint, render_template, request, jsonify, session
+from flask import Blueprint, render_template, request, jsonify, session, current_app
 import json
+from collections import OrderedDict
 import os
 import re
 import glob
@@ -63,9 +64,10 @@ def parse_bru_file(filepath):
         if body_match:
             body_content = body_match.group(1).strip()
             try:
-                body_json = json.loads(body_content)
+                # Use object_pairs_hook to preserve field order from .bru file
+                body_json = json.loads(body_content, object_pairs_hook=OrderedDict)
                 # Clear the hardcoded API key
-                if isinstance(body_json, dict) and 'apikey' in body_json:
+                if isinstance(body_json, (dict, OrderedDict)) and 'apikey' in body_json:
                     body_json['apikey'] = ''
                 endpoint['body'] = body_json
             except json.JSONDecodeError:
@@ -157,6 +159,10 @@ def load_bruno_endpoints():
 
         endpoints[category].append(clean_endpoint)
 
+    # Sort endpoints alphabetically by name within each category
+    for category in endpoints:
+        endpoints[category].sort(key=lambda x: x.get('name', '').lower())
+
     return endpoints
 
 playground_bp = Blueprint('playground', __name__, url_prefix='/playground')
@@ -224,15 +230,24 @@ def get_endpoints():
         # If no endpoints loaded from Bruno, return empty structure
         if not any(endpoints.values()):
             logger.warning("No endpoints loaded from Bruno collections")
-            return jsonify({
-                'account': [],
-                'orders': [],
-                'data': [],
-                'utilities': []
-            })
+            return current_app.response_class(
+                response=json.dumps({
+                    'account': [],
+                    'orders': [],
+                    'data': [],
+                    'utilities': []
+                }),
+                status=200,
+                mimetype='application/json'
+            )
 
         logger.info(f"Loaded {sum(len(v) for v in endpoints.values())} endpoints from Bruno collections")
-        return jsonify(endpoints)
+        # Return with sort_keys=False to preserve field order from .bru files
+        return current_app.response_class(
+            response=json.dumps(endpoints, sort_keys=False),
+            status=200,
+            mimetype='application/json'
+        )
 
     except Exception as e:
         logger.error(f"Error loading endpoints: {e}")
