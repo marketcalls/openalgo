@@ -110,6 +110,235 @@ Place Smart Market Order Response
 {'orderid': '250408000997543', 'status': 'success'}
 ```
 
+### OptionsOrder Example
+
+To place ATM options order
+
+```python
+response = client.optionsorder(
+      strategy="python",
+      underlying="NIFTY",
+      exchange="NSE_INDEX",
+      expiry_date="28OCT25",
+      offset="ATM",
+      option_type="CE",
+      action="BUY",
+      quantity=75,
+      pricetype="MARKET",
+      product="NRML"
+  )
+
+print(response)
+```
+
+Place Options Order Response
+
+```json
+{
+  "exchange": "NFO",
+  "offset": "ATM",
+  "option_type": "CE",
+  "orderid": "25102800000006",
+  "status": "success",
+  "symbol": "NIFTY28OCT2525950CE",
+  "underlying": "NIFTY28OCT25FUT",
+  "underlying_ltp": 25966.05
+}
+```
+
+To place ITM options order
+
+```python
+response = client.optionsorder(
+      strategy="python",
+      underlying="NIFTY",
+      exchange="NSE_INDEX",
+      expiry_date="28OCT25",
+      offset="ITM4",
+      option_type="PE",
+      action="BUY",
+      quantity=75,
+      pricetype="MARKET",
+      product="NRML"
+  )
+
+print(response)
+```
+
+Place Options Order Response
+
+```json
+{
+  "exchange": "NFO",
+  "offset": "ITM4",
+  "option_type": "PE",
+  "orderid": "25102800000007",
+  "status": "success",
+  "symbol": "NIFTY28OCT2526150PE",
+  "underlying": "NIFTY28OCT25FUT",
+  "underlying_ltp": 25966.05
+}
+```
+
+To place OTM options order
+
+```python
+response = client.optionsorder(
+      strategy="python",
+      underlying="NIFTY",
+      exchange="NSE_INDEX",
+      expiry_date="28OCT25",
+      offset="OTM5",
+      option_type="CE",
+      action="BUY",
+      quantity=75,
+      pricetype="MARKET",
+      product="NRML"
+  )
+
+print(response)
+```
+
+Place Options Order Response
+
+```json
+{
+  "exchange": "NFO",
+  "mode": "analyze",
+  "offset": "OTM5",
+  "option_type": "CE",
+  "orderid": "25102800000008",
+  "status": "success",
+  "symbol": "NIFTY28OCT2526200CE",
+  "underlying": "NIFTY28OCT25FUT",
+  "underlying_ltp": 25966.05
+}
+```
+
+### OptionsMultiOrder Example
+
+To place Iron options order (Same Expiry)
+
+```python
+response = client.optionsmultiorder(
+    strategy="Iron Condor Test",
+    underlying="NIFTY",
+    exchange="NSE_INDEX",
+    expiry_date="25NOV25",
+    legs=[
+        {"offset": "OTM6", "option_type": "CE", "action": "BUY", "quantity": 75},
+        {"offset": "OTM6", "option_type": "PE", "action": "BUY", "quantity": 75},
+        {"offset": "OTM4", "option_type": "CE", "action": "SELL", "quantity": 75},
+        {"offset": "OTM4", "option_type": "PE", "action": "SELL", "quantity": 75}
+    ]
+)
+
+print(response)
+```
+
+Place OptionsMultiOrder Response
+
+```json
+{
+    'status': 'success',
+    'underlying': 'NIFTY',
+    'underlying_ltp': 26050.45,
+    'results': [
+        {
+            'action': 'BUY',
+            'leg': 1,
+            'mode': 'analyze',
+            'offset': 'OTM6',
+            'option_type': 'CE',
+            'orderid': '25111996859688',
+            'status': 'success',
+            'symbol': 'NIFTY25NOV2526350CE'
+        },
+        {
+            'action': 'BUY',
+            'leg': 2,
+            'mode': 'analyze',
+            'offset': 'OTM6',
+            'option_type': 'PE',
+            'orderid': '25111996042210',
+            'status': 'success',
+            'symbol': 'NIFTY25NOV2525750PE'
+        },
+        {
+            'action': 'SELL',
+            'leg': 3,
+            'mode': 'analyze',
+            'offset': 'OTM4',
+            'option_type': 'CE',
+            'orderid': '25111922189638',
+            'status': 'success',
+            'symbol': 'NIFTY25NOV2526250CE'
+        },
+        {
+            'action': 'SELL',
+            'leg': 4,
+            'mode': 'analyze',
+            'offset': 'OTM4',
+            'option_type': 'PE',
+            'orderid': '25111919252668',
+            'status': 'success',
+            'symbol': 'NIFTY25NOV2525850PE'
+        }
+    ]
+}
+
+```
+
+To place Diagonal Spread options order (Different Expiry)
+
+```python
+response = client.optionsmultiorder(
+      strategy="Diagonal Spread Test",
+      underlying="NIFTY",
+      exchange="NSE_INDEX",
+      legs=[
+          {"offset": "ITM2", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "30DEC25"},
+          {"offset": "OTM2", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "25NOV25"}
+      ]
+  )
+
+print(response)
+
+```
+
+Place OptionsMultiOrder Response
+
+```json
+{
+    "results": [
+        {
+            "action": "BUY",
+            "leg": 1,
+            "mode": "analyze",
+            "offset": "ITM2",
+            "option_type": "CE",
+            "orderid": "25111933337854",
+            "status": "success",
+            "symbol": "NIFTY30DEC2525950CE"
+        },
+        {
+            "action": "SELL",
+            "leg": 2,
+            "mode": "analyze",
+            "offset": "OTM2",
+            "option_type": "CE",
+            "orderid": "25111957475473",
+            "status": "success",
+            "symbol": "NIFTY25NOV2526150CE"
+        }
+    ],
+    "status": "success",
+    "underlying": "NIFTY",
+    "underlying_ltp": 26052.65
+}
+
+```
+
 ### BasketOrder example
 
 To place a new basket order:
@@ -609,6 +838,152 @@ print(response)
 }
 ```
 
+### OptionSymbol Example
+
+ATM Option
+
+```python
+response = client.optionsymbol(
+      underlying="NIFTY",
+      exchange="NSE_INDEX",
+      expiry_date="28OCT25",
+      offset="ATM",
+      option_type="CE"
+  )
+
+print(response)
+```
+
+**OptionSymbol Response**
+
+```json
+{
+  "status": "success",
+  "symbol": "NIFTY28OCT2525950CE",
+  "exchange": "NFO",
+  "lotsize": 75,
+  "tick_size": 0.05,
+  "underlying_ltp": 25966.05
+}
+```
+
+ITM Option
+
+```python
+response = client.optionsymbol(
+      underlying="NIFTY",
+      exchange="NSE_INDEX",
+      expiry_date="28OCT25",
+      offset="ITM3",
+      option_type="PE"
+  )
+
+print(response)
+```
+
+**OptionSymbol Response**
+
+```json
+{
+  "status": "success",
+  "symbol": "NIFTY28OCT2526100PE",
+  "exchange": "NFO",
+  "lotsize": 75,
+  "tick_size": 0.05,
+  "underlying_ltp": 25966.05
+}
+```
+
+OTM Option
+
+```python
+response = client.optionsymbol(
+      underlying="NIFTY",
+      exchange="NSE_INDEX",
+      expiry_date="28OCT25",
+      offset="OTM4",
+      option_type="CE"
+  )
+
+print(response)
+```
+
+**OptionSymbol Response**
+
+```json
+{
+  "status": "success",
+  "symbol": "NIFTY28OCT2526150CE",
+  "exchange": "NFO",
+  "lotsize": 75,
+  "tick_size": 0.05,
+  "underlying_ltp": 25966.05
+}
+```
+
+### SyntheticFuture Example
+
+```python
+response = client.syntheticfuture(
+      underlying="NIFTY",
+      exchange="NSE_INDEX",
+      expiry_date="25NOV25"
+  )
+
+print(response)
+```
+
+SyntheticFuture **Response**
+
+```
+{
+ 'atm_strike': 25900.0,
+ 'expiry': '25NOV25',
+ 'status': 'success',
+ 'synthetic_future_price': 25980.05,
+ 'underlying': 'NIFTY',
+ 'underlying_ltp': 25910.05
+}
+```
+
+### OptionGreeks Example
+
+```python
+response = client.optiongreeks(
+      symbol="NIFTY25NOV2526000CE",
+      exchange="NFO",
+      interest_rate=0.00,
+      underlying_symbol="NIFTY",
+      underlying_exchange="NSE_INDEX"
+  )
+
+print(response)
+```
+
+OptionGreeks  **Response**
+
+```
+{
+'days_to_expiry': 28.5071,
+ 'exchange': 'NFO',
+ 'expiry_date': '25-Nov-2025',
+ 'greeks': {'delta': 0.4967,
+  'gamma': 0.000352,
+  'rho': 9.733994,
+  'theta': -7.919,
+  'vega': 28.9489},
+ 'implied_volatility': 15.6,
+ 'interest_rate': 0.0,
+ 'option_price': 435,
+ 'option_type': 'CE',
+ 'spot_price': 25966.05,
+ 'status': 'success',
+ 'strike': 26000.0,
+ 'symbol': 'NIFTY25NOV2526000CE',
+ 'underlying': 'NIFTY'
+}
+```
+
 ### Expiry Example
 
 ```python
@@ -646,6 +1021,52 @@ response
  'status': 'success'}
 ```
 
+### Instruments Example
+
+```python
+response = client.instruments(exchange="NSE")
+
+print(response.tail())
+```
+
+Instruments **Response**
+
+```json
+     brexchange           brsymbol exchange expiry instrumenttype  lotsize  \
+3041        NSE      NSE:NEOGEN-EQ      NSE   None             EQ        1   
+3042        NSE     NSE:ALANKIT-EQ      NSE   None             EQ        1   
+3043        NSE  NSE:EVERESTIND-EQ      NSE   None             EQ        1   
+3044        NSE   NSE:VIKASLIFE-EQ      NSE   None             EQ        1   
+3045        NSE    NSE:ONEPOINT-EQ      NSE   None             EQ        1   
+
+                          name  strike      symbol  tick_size           token  
+3041  NEOGEN CHEMICALS LIMITED    -1.0      NEOGEN       0.10  10100000009917  
+3042           ALANKIT LIMITED    -1.0     ALANKIT       0.01  10100000009921  
+3043    EVEREST INDUSTRIES LTD    -1.0  EVERESTIND       0.05   1010000000993  
+3044    VIKAS LIFECARE LIMITED    -1.0   VIKASLIFE       0.01  10100000009931  
+3045     ONE POINT ONE SOL LTD    -1.0    ONEPOINT       0.01  10100000009939  
+```
+
+### Telegram Alert Example
+
+```python
+response = client.telegram(
+      username="<openalgo_loginid>",
+      message="NIFTY crossed 26000!"
+  )
+
+print(response)
+```
+
+**Telegram Alert Response**
+
+```json
+{
+  "message": "Notification sent successfully",
+  "status": "success"
+}
+```
+
 ### Funds Example
 
 ```python
@@ -667,6 +1088,42 @@ print(response)
   }
 }
 
+```
+
+### Margin Example
+
+```python
+response = client.margin(positions=[
+      {
+          "symbol": "NIFTY25NOV2525000CE",
+          "exchange": "NFO",
+          "action": "BUY",
+          "product": "NRML",
+          "pricetype": "MARKET",
+          "quantity": "75"
+      },
+      {
+          "symbol": "NIFTY25NOV2525500CE",
+          "exchange": "NFO",
+          "action": "SELL",
+          "product": "NRML",
+          "pricetype": "MARKET",
+          "quantity": "75"
+      }
+  ])
+```
+
+**Margin Response**
+
+```json
+{
+    "status": "success",
+    "data": {
+      "total_margin_required": 91555.7625,
+      "span_margin": 0.0,
+      "exposure_margin": 91555.7625
+    }
+}
 ```
 
 ### OrderBook Example
