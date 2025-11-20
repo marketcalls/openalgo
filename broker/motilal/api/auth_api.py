@@ -17,7 +17,7 @@ def authenticate_broker(userid, broker_pin, totp_code, date_of_birth):
     Returns:
         Tuple of (auth_token, None, error_message)
     """
-    api_key = os.getenv('BROKER_API_KEY')
+    api_key = os.getenv('BROKER_API_SECRET')
 
     try:
         # Get the shared httpx client
