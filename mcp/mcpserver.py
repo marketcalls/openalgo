@@ -180,7 +180,6 @@ def place_options_order(
     underlying: str,
     exchange: str,
     expiry_date: str,
-    strike_int: int,
     offset: str,
     option_type: str,
     action: str,
@@ -197,7 +196,6 @@ def place_options_order(
         underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY')
         exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX')
         expiry_date: Expiry date in format 'DDMMMYY' (e.g., '28OCT25')
-        strike_int: Strike interval (e.g., 50 for NIFTY)
         offset: Strike offset - 'ATM', 'ITM1'-'ITM10', 'OTM1'-'OTM10'
         option_type: 'CE' for Call or 'PE' for Put
         action: 'BUY' or 'SELL'
@@ -213,7 +211,6 @@ def place_options_order(
             "underlying": underlying.upper(),
             "exchange": exchange.upper(),
             "expiry_date": expiry_date,
-            "strike_int": strike_int,
             "offset": offset.upper(),
             "option_type": option_type.upper(),
             "action": action.upper(),
@@ -229,6 +226,59 @@ def place_options_order(
         return json.dumps(response, indent=2)
     except Exception as e:
         return f"Error placing options order: {str(e)}"
+
+@mcp.tool()
+def place_options_multi_order(
+    strategy: str,
+    underlying: str,
+    exchange: str,
+    legs: List[Dict[str, Any]],
+    expiry_date: Optional[str] = None
+) -> str:
+    """
+    Place a multi-leg options order (spreads, iron condor, etc.).
+
+    Args:
+        strategy: Strategy name
+        underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY')
+        exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX')
+        legs: List of leg dictionaries, each containing:
+            - offset: Strike offset ('ATM', 'ITM1'-'ITM10', 'OTM1'-'OTM10')
+            - option_type: 'CE' for Call or 'PE' for Put
+            - action: 'BUY' or 'SELL'
+            - quantity: Number of lots
+            - expiry_date: (Optional) Expiry date for this leg if different from main expiry
+        expiry_date: Default expiry date in format 'DDMMMYY' (e.g., '25NOV25') for all legs
+
+    Example legs for Iron Condor (same expiry):
+        [
+            {"offset": "OTM6", "option_type": "CE", "action": "BUY", "quantity": 75},
+            {"offset": "OTM6", "option_type": "PE", "action": "BUY", "quantity": 75},
+            {"offset": "OTM4", "option_type": "CE", "action": "SELL", "quantity": 75},
+            {"offset": "OTM4", "option_type": "PE", "action": "SELL", "quantity": 75}
+        ]
+
+    Example legs for Diagonal Spread (different expiry):
+        [
+            {"offset": "ITM2", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "30DEC25"},
+            {"offset": "OTM2", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "25NOV25"}
+        ]
+    """
+    try:
+        params = {
+            "strategy": strategy,
+            "underlying": underlying.upper(),
+            "exchange": exchange.upper(),
+            "legs": legs
+        }
+
+        if expiry_date is not None:
+            params["expiry_date"] = expiry_date
+
+        response = client.optionsmultiorder(**params)
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        return f"Error placing options multi order: {str(e)}"
 
 @mcp.tool()
 def modify_order(
@@ -614,7 +664,6 @@ def get_option_symbol(
     underlying: str,
     exchange: str,
     expiry_date: str,
-    strike_int: int,
     offset: str,
     option_type: str
 ) -> str:
@@ -625,7 +674,6 @@ def get_option_symbol(
         underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY')
         exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX')
         expiry_date: Expiry date in format 'DDMMMYY' (e.g., '28OCT25')
-        strike_int: Strike interval (e.g., 50 for NIFTY)
         offset: Strike offset - 'ATM', 'ITM1'-'ITM10', 'OTM1'-'OTM10'
         option_type: 'CE' for Call or 'PE' for Put
 
@@ -637,13 +685,39 @@ def get_option_symbol(
             underlying=underlying.upper(),
             exchange=exchange.upper(),
             expiry_date=expiry_date,
-            strike_int=strike_int,
             offset=offset.upper(),
             option_type=option_type.upper()
         )
         return json.dumps(response, indent=2)
     except Exception as e:
         return f"Error getting option symbol: {str(e)}"
+
+@mcp.tool()
+def get_synthetic_future(
+    underlying: str,
+    exchange: str,
+    expiry_date: str
+) -> str:
+    """
+    Calculate synthetic future price using put-call parity.
+
+    Args:
+        underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY')
+        exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX')
+        expiry_date: Expiry date in format 'DDMMMYY' (e.g., '25NOV25')
+
+    Returns:
+        JSON with atm_strike, expiry, status, synthetic_future_price, underlying, underlying_ltp
+    """
+    try:
+        response = client.syntheticfuture(
+            underlying=underlying.upper(),
+            exchange=exchange.upper(),
+            expiry_date=expiry_date
+        )
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        return f"Error calculating synthetic future: {str(e)}"
 
 @mcp.tool()
 def get_option_greeks(
