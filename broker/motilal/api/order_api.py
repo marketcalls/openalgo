@@ -170,10 +170,19 @@ def place_order_api(data,auth):
     # Build payload with only non-empty optional fields
     # Convert quantity to lots (Motilal requires quantity in lots, not shares)
     actual_quantity = int(newdata['quantity'])
-    quantity_in_lots = actual_quantity // lotsize  # Integer division to get number of lots
-    if quantity_in_lots == 0 and actual_quantity > 0:
-        quantity_in_lots = 1  # Minimum 1 lot if quantity > 0
 
+    # Validate that quantity is a multiple of lot size
+    if actual_quantity % lotsize != 0:
+        error_msg = f"Invalid quantity: {actual_quantity} shares is not a multiple of lot size {lotsize}. " \
+                    f"Valid quantities: {lotsize}, {lotsize*2}, {lotsize*3}, etc."
+        logger.error(error_msg)
+        return None, {
+            "status": "ERROR",
+            "message": error_msg,
+            "errorcode": "INVALID_QUANTITY"
+        }, None
+
+    quantity_in_lots = actual_quantity // lotsize  # Integer division to get number of lots
     logger.info(f"Quantity conversion: {actual_quantity} shares / {lotsize} lot size = {quantity_in_lots} lots")
 
     payload_dict = {
@@ -513,9 +522,19 @@ def modify_order(data,auth):
     # Convert quantity to lots for modify order
     if 'quantity' in data:
         actual_quantity = int(data['quantity'])
+
+        # Validate that quantity is a multiple of lot size
+        if actual_quantity % lotsize != 0:
+            error_msg = f"Invalid quantity for modify order: {actual_quantity} shares is not a multiple of lot size {lotsize}. " \
+                        f"Valid quantities: {lotsize}, {lotsize*2}, {lotsize*3}, etc."
+            logger.error(error_msg)
+            return {
+                "status": "error",
+                "message": error_msg,
+                "errorcode": "INVALID_QUANTITY"
+            }, 400
+
         quantity_in_lots = actual_quantity // lotsize
-        if quantity_in_lots == 0 and actual_quantity > 0:
-            quantity_in_lots = 1
         data['quantity'] = str(quantity_in_lots)  # Convert to lots
         logger.info(f"Modify quantity conversion: {actual_quantity} shares / {lotsize} lot size = {quantity_in_lots} lots")
 
