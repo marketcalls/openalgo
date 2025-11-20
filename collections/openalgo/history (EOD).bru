@@ -1,0 +1,22 @@
+meta {
+  name: history (EOD)
+  type: http
+  seq: 10
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/history
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00",
+      "symbol": "SBIN",
+      "exchange": "NSE",
+      "interval": "D",
+      "start_date": "2025-01-01",
+      "end_date": "2025-11-20"
+  }
+}
