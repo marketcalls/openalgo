@@ -27,6 +27,7 @@ except ImportError:
     from base_adapter import BaseBrokerWebSocketAdapter
     from mapping import SymbolMapper
 from database.auth_db import get_auth_token
+from database.token_db import get_br_symbol
 
 # Import our HSM implementation
 from .fyers_adapter import FyersAdapter
@@ -38,7 +39,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """Fyers-specific implementation of the WebSocket adapter for OpenAlgo proxy"""
 
     # Exchanges that support 50-level depth (Fyers TBT only supports NSE equity)
-    TBT_SUPPORTED_EXCHANGES = {'NSE'}
+    TBT_SUPPORTED_EXCHANGES = {'NSE','NFO'}
 
     def __init__(self):
         super().__init__()
@@ -558,7 +559,7 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _convert_to_fyers_ticker(self, symbol: str, exchange: str) -> Optional[str]:
         """
-        Convert OpenAlgo symbol to Fyers ticker format
+        Convert OpenAlgo symbol to Fyers ticker format using database lookup
 
         Args:
             symbol: OpenAlgo symbol (e.g., 'RELIANCE', 'NIFTY24DEC25000CE')
@@ -568,6 +569,16 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             Fyers ticker (e.g., 'NSE:RELIANCE-EQ', 'NSE:NIFTY24DECFUT')
         """
         try:
+            # First, try to get brsymbol from database (same as normal 5-level depth)
+            brsymbol = get_br_symbol(symbol, exchange)
+
+            if brsymbol:
+                self.logger.debug(f"TBT brsymbol lookup: {symbol}@{exchange} -> {brsymbol}")
+                return brsymbol
+
+            # Fallback to simple conversion if database lookup fails
+            self.logger.warning(f"No brsymbol found for {symbol}@{exchange}, using fallback conversion")
+
             # For equity symbols, add -EQ suffix
             if exchange == 'NSE':
                 # Check if it's a derivatives symbol (contains expiry info)
