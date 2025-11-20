@@ -378,24 +378,29 @@ def transform_positions_data(positions_data):
 def transform_holdings_data(holdings_data):
     """
     Transforms Motilal Oswal holdings data to OpenAlgo format.
-    Motilal returns data differently - check the API response structure.
+    Motilal holdings response has: scripname, dpquantity, buyavgprice, nsesymboltoken, bsescripcode
     """
     transformed_data = []
     # Motilal returns holdings directly in the data array
     holdings_list = holdings_data if isinstance(holdings_data, list) else holdings_data.get('holdings', [])
 
     for holdings in holdings_list:
-        # Calculate P&L percentage if not provided
-        buy_avg = float(holdings.get('buyavgprice', 0.0))
+        # Get the mapped OpenAlgo symbol and exchange from map_portfolio_data
+        symbol = holdings.get('symbol', '')  # Already mapped by map_portfolio_data
+        exchange = holdings.get('exchange', 'NSE')  # Already determined by map_portfolio_data
+
+        # Get quantity
         dp_qty = int(holdings.get('dpquantity', 0))
-        # P&L calculation would need current price, which may not be in holdings response
+
+        # P&L calculation would need current LTP, which is not in holdings response
+        # For now, set to 0.0
 
         transformed_position = {
-            "symbol": holdings.get('scripname', ''),  # Motilal uses 'scripname'
-            "exchange": "NSE",  # Default to NSE, adjust based on scripcode mapping
+            "symbol": symbol,
+            "exchange": exchange,
             "quantity": dp_qty,
             "product": "CNC",  # Holdings are always CNC/DELIVERY
-            "pnl": 0.0,  # Would need current price to calculate
+            "pnl": 0.0,  # Would need current price to calculate P&L
             "pnlpercent": 0.0
         }
         transformed_data.append(transformed_position)
@@ -404,54 +409,111 @@ def transform_holdings_data(holdings_data):
 def map_portfolio_data(portfolio_data):
     """
     Processes Motilal Oswal portfolio/holdings data.
-    Motilal returns holdings in a simple list format with DP holding data.
+    Motilal returns holdings with nsesymboltoken and bsescripcode fields.
+
+    Holdings structure:
+    - scripname: Broker symbol (e.g., "RELAXO EQ")
+    - dpquantity: Total quantity
+    - buyavgprice: Average buy price
+    - nsesymboltoken: NSE token
+    - bsescripcode: BSE scrip code
 
     Parameters:
     - portfolio_data: A dictionary containing holdings data
 
     Returns:
-    - The modified portfolio_data with mapped fields.
+    - The modified portfolio_data with mapped fields (OpenAlgo symbols and exchange).
     """
+    # Log the raw response for debugging
+    logger.info(f"Motilal Holdings API Response: status={portfolio_data.get('status')}, data_type={type(portfolio_data.get('data'))}")
+
     # Motilal returns status as "SUCCESS" string
-    if portfolio_data.get('status') != 'SUCCESS' or portfolio_data.get('data') is None:
-        logger.info("No data available.")
-        return {}
+    if portfolio_data.get('status') != 'SUCCESS':
+        logger.warning(f"Holdings API returned non-SUCCESS status: {portfolio_data.get('status')}")
+        return {'holdings': [], 'totalholding': None}
+
+    if portfolio_data.get('data') is None:
+        logger.info("No holdings data available (data is None).")
+        return {'holdings': [], 'totalholding': None}
 
     # Directly work with 'data' for clarity and simplicity
     data = portfolio_data['data']
 
+    # Check if data is empty list
+    if isinstance(data, list) and len(data) == 0:
+        logger.info("Holdings data is empty list - no holdings found in API response.")
+        return {'holdings': [], 'totalholding': None}
+
+    logger.info(f"Processing {len(data) if isinstance(data, list) else 'unknown'} holdings from Motilal API")
+
     # Motilal returns holdings as a list directly
     if isinstance(data, list):
-        for portfolio in data:
-            scripname = portfolio.get('scripname', '')
-            # Map Motilal scripname to OpenAlgo symbol if needed
-            # This would require looking up by ISIN or scripcode
-            isin = portfolio.get('scripisinno', '')
-            if isin:
-                # Try to get symbol from database using ISIN
-                symbol_from_db = get_oa_symbol(isin, 'NSE')
-                if symbol_from_db:
-                    portfolio['scripname'] = symbol_from_db
+        for idx, holding in enumerate(data):
+            logger.info(f"Processing holding {idx + 1}: scripname={holding.get('scripname')}, dpquantity={holding.get('dpquantity')}")
+
+            # Determine exchange based on which token is available
+            # Priority: NSE token first, then BSE scripcode
+            nsesymboltoken = holding.get('nsesymboltoken')
+            bsescripcode = holding.get('bsescripcode')
+
+            logger.debug(f"Tokens for {holding.get('scripname')}: nsesymboltoken={nsesymboltoken}, bsescripcode={bsescripcode}")
+
+            exchange = None
+            token = None
+
+            # Check which token is available (non-zero, non-null)
+            if nsesymboltoken and int(nsesymboltoken) > 0:
+                exchange = 'NSE'
+                token = nsesymboltoken
+            elif bsescripcode and int(bsescripcode) > 0:
+                exchange = 'BSE'
+                token = bsescripcode
+            else:
+                # If no valid token, log and skip symbol lookup
+                logger.warning(f"No valid token found for holding: {holding.get('scripname', 'Unknown')}")
+                holding['symbol'] = holding.get('scripname', '')  # Keep broker symbol as fallback
+                holding['exchange'] = 'NSE'  # Default to NSE
+                holding['product'] = 'CNC'
+                continue
+
+            # Use get_symbol to fetch the OpenAlgo symbol from database
+            symbol_from_db = get_symbol(token, exchange)
+
+            if symbol_from_db:
+                holding['symbol'] = symbol_from_db
+                holding['exchange'] = exchange
+                logger.info(f"✓ Mapped holding: {holding.get('scripname')} (token {token} on {exchange}) -> {symbol_from_db}")
+            else:
+                # If symbol not found in database, keep the scripname as fallback
+                logger.warning(f"Symbol not found in DB for token {token} on {exchange}. Using scripname: {holding.get('scripname', '')}")
+                holding['symbol'] = holding.get('scripname', '')
+                holding['exchange'] = exchange
 
             # All holdings are CNC/DELIVERY product
-            portfolio['product'] = 'CNC'
+            holding['product'] = 'CNC'
+
+        logger.info(f"Completed processing holdings. Total processed: {len(data)}")
 
     return {'holdings': data, 'totalholding': None}  # Match expected structure
 
 
 def calculate_portfolio_statistics(holdings_data):
-
-    if holdings_data['totalholding'] is None:
+    """
+    Calculates portfolio statistics from holdings data.
+    Motilal doesn't provide totalholding summary in the API response,
+    so we return zeros for all statistics.
+    """
+    # Check if holdings_data has the expected structure
+    if not holdings_data or 'totalholding' not in holdings_data or holdings_data['totalholding'] is None:
         totalholdingvalue = 0
         totalinvvalue = 0
         totalprofitandloss = 0
         totalpnlpercentage = 0
     else:
-
         totalholdingvalue = holdings_data['totalholding']['totalholdingvalue']
         totalinvvalue = holdings_data['totalholding']['totalinvvalue']
         totalprofitandloss = holdings_data['totalholding']['totalprofitandloss']
-        
+
         # To avoid division by zero in the case when total_investment_value is 0
         totalpnlpercentage = holdings_data['totalholding']['totalpnlpercentage']
 

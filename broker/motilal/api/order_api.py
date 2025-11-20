@@ -73,7 +73,28 @@ def get_positions(auth):
     return get_api_response("/rest/book/v1/getposition", auth, method="POST")
 
 def get_holdings(auth):
-    return get_api_response("/rest/report/v1/getdpholding", auth, method="POST")
+    """
+    Fetch holdings/DP holdings from Motilal Oswal.
+    Motilal API endpoint: /rest/report/v1/getdpholding (POST)
+    Request body: {} (empty JSON for non-dealer accounts)
+    """
+    # Motilal requires POST with JSON body (empty for non-dealer accounts)
+    payload = json.dumps({})
+
+    logger.info("Fetching holdings from Motilal API...")
+    response = get_api_response("/rest/report/v1/getdpholding", auth, method="POST", payload=payload)
+
+    # Log the raw response for debugging
+    logger.info(f"Motilal Holdings API raw response: status={response.get('status')}, message={response.get('message')}, data_length={len(response.get('data', [])) if response.get('data') else 0}")
+
+    if response.get('status') == 'SUCCESS' and response.get('data'):
+        logger.info(f"Successfully fetched {len(response.get('data', []))} holdings from Motilal")
+    elif response.get('status') == 'SUCCESS' and not response.get('data'):
+        logger.warning("Motilal API returned SUCCESS but data is null/empty. This might indicate no holdings or an API issue.")
+    else:
+        logger.error(f"Motilal Holdings API error: {response.get('message', 'Unknown error')}, errorcode: {response.get('errorcode', '')}")
+
+    return response
 
 def get_open_position(tradingsymbol, exchange, producttype,auth):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
