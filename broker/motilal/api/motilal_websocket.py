@@ -1118,13 +1118,15 @@ class MotilalWebSocket:
         Get the latest index value.
 
         Args:
-            exchange (str): Exchange code
+            exchange (str): Exchange code (full name like NSE, BSE, etc.)
             index_code (str): Index code
 
         Returns:
             dict: Latest index data or None if not available
         """
-        key = f"{exchange}:{index_code}"
+        # Convert exchange to single char for key lookup (binary parser stores with single-char exchange)
+        exchange_char = self._map_exchange_to_char(exchange)
+        key = f"{exchange_char}:{index_code}"
         with self.lock:
             index = self.last_index.get(key)
             if index:
