@@ -118,8 +118,8 @@ class MotilalWebSocket:
                 # Reset reconnect count on successful connection attempt
                 self.reconnect_count = 0
 
-                # Run the WebSocket connection with proper SSL context
-                self.ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
+                # Run the WebSocket connection with SSL certificate verification enabled
+                self.ws.run_forever()
 
                 # If we're here, the connection was closed
                 if self.is_connected:
@@ -232,7 +232,7 @@ class MotilalWebSocket:
 
             # Motilal sends BINARY data, not JSON
             if isinstance(message, bytes):
-                logger.info(f"✓ Received binary message: {len(message)} bytes")
+                logger.debug(f"✓ Received binary message: {len(message)} bytes")
                 logger.debug(f"Binary data (hex): {message.hex()}")
 
                 # Mark as connected when we receive first message (login response)
@@ -313,26 +313,26 @@ class MotilalWebSocket:
                         symbol = self.subscriptions[subscription_key].symbol
 
                 # Log what we're parsing
-                logger.info(f"📊 Parsing packet: Exchange={exchange_byte}, Scrip={scrip}, MsgType='{msgtype}', Key={key}, Symbol={symbol}")
+                logger.debug(f"📊 Parsing packet: Exchange={exchange_byte}, Scrip={scrip}, MsgType='{msgtype}', Key={key}, Symbol={symbol}")
 
                 # Parse based on message type
                 # Message types from Motilal SDK:
                 # 'A' = LTP, 'B'-'F' = Depth levels 1-5, 'G' = OHLC, 'H' = Index, 'm' = OI
                 if msgtype in ['B', 'C', 'D', 'E', 'F']:  # Market Depth levels 1-5
                     level = ord(msgtype) - ord('B') + 1  # B=1, C=2, D=3, E=4, F=5
-                    logger.info(f"✓ Parsing DEPTH level {level} packet for {key}")
+                    logger.debug(f"✓ Parsing DEPTH level {level} packet for {key}")
                     self._parse_depth_level_packet(body, key, symbol, level)
                 elif msgtype == 'A':  # LTP
-                    logger.info(f"✓ Parsing LTP packet for {key}")
+                    logger.debug(f"✓ Parsing LTP packet for {key}")
                     self._parse_ltp_packet(body, key, symbol)
                 elif msgtype == 'G':  # Day OHLC
-                    logger.info(f"✓ Parsing OHLC packet for {key}")
+                    logger.debug(f"✓ Parsing OHLC packet for {key}")
                     self._parse_ohlc_packet(body, key, symbol)
                 elif msgtype == 'H':  # Index data
-                    logger.info(f"✓ Parsing INDEX packet for {key}")
+                    logger.debug(f"✓ Parsing INDEX packet for {key}")
                     self._parse_index_packet(body, key, symbol)
                 elif msgtype == 'm':  # Open Interest
-                    logger.info(f"✓ Parsing OI packet for {key}")
+                    logger.debug(f"✓ Parsing OI packet for {key}")
                     self._parse_oi_packet(body, key, symbol)
                 elif msgtype == 'W':  # DPR (circuit limits)
                     logger.debug(f"Skipping DPR packet for {key}")
@@ -506,8 +506,9 @@ class MotilalWebSocket:
                 logger.debug("Message does not contain Exchange or Scrip Code, skipping")
                 return
 
-            # Create a unique key for this instrument
-            key = f"{exchange}:{scrip_code}"
+            # Create a unique key for this instrument (use single-char exchange to match binary parser)
+            exchange_char = self._map_exchange_to_char(exchange)
+            key = f"{exchange_char}:{scrip_code}"
 
             # Look up the original subscription to get the correct symbol
             subscription_key = f"{exchange}|{scrip_code}"
@@ -1012,13 +1013,15 @@ class MotilalWebSocket:
         Get the latest quote for an instrument.
 
         Args:
-            exchange (str): Exchange code
+            exchange (str): Exchange code (full name like NSE, MCX, etc.)
             scrip_code (str): Scrip code/token
 
         Returns:
             dict: Latest quote data or None if not available
         """
-        key = f"{exchange}:{scrip_code}"
+        # Convert exchange to single char for key lookup (binary parser stores with single-char exchange)
+        exchange_char = self._map_exchange_to_char(exchange)
+        key = f"{exchange_char}:{scrip_code}"
         with self.lock:
             quote = self.last_quotes.get(key)
             if quote:
@@ -1115,13 +1118,15 @@ class MotilalWebSocket:
         Get the latest index value.
 
         Args:
-            exchange (str): Exchange code
+            exchange (str): Exchange code (full name like NSE, BSE, etc.)
             index_code (str): Index code
 
         Returns:
             dict: Latest index data or None if not available
         """
-        key = f"{exchange}:{index_code}"
+        # Convert exchange to single char for key lookup (binary parser stores with single-char exchange)
+        exchange_char = self._map_exchange_to_char(exchange)
+        key = f"{exchange_char}:{index_code}"
         with self.lock:
             index = self.last_index.get(key)
             if index:
