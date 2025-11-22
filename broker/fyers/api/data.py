@@ -126,7 +126,7 @@ class BrokerData:
 
     def get_multiquotes(self, symbols: list) -> list:
         """
-        Get real-time quotes for multiple symbols in a single API call
+        Get real-time quotes for multiple symbols with automatic batching
         Args:
             symbols: List of dicts with 'symbol' and 'exchange' keys
                      Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
@@ -135,64 +135,98 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            # Convert symbols to broker format and build comma-separated list
-            br_symbols = []
-            symbol_map = {}  # Map br_symbol back to original symbol/exchange
+            BATCH_SIZE = 50  # Fyers API limit per request
 
-            for item in symbols:
-                symbol = item['symbol']
-                exchange = item['exchange']
-                br_symbol = get_br_symbol(symbol, exchange)
-                br_symbols.append(br_symbol)
-                symbol_map[br_symbol] = {'symbol': symbol, 'exchange': exchange}
+            # If symbols exceed batch size, process in batches
+            if len(symbols) > BATCH_SIZE:
+                logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
 
-            # Join all symbols with comma and URL encode
-            symbols_param = ','.join(br_symbols)
-            encoded_symbols = urllib.parse.quote(symbols_param)
+                # Split symbols into batches
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.debug(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
 
-            # Make single API call for all symbols
-            response = get_api_response(f"/data/quotes?symbols={encoded_symbols}", self.auth_token)
-            logger.debug(f"Fyers multiquotes API response: {response}")
+                    # Process this batch
+                    batch_results = self._process_quotes_batch(batch)
+                    all_results.extend(batch_results)
 
-            if response.get('s') != 'ok':
-                error_msg = f"Error from Fyers API: {response.get('message', 'Unknown error')}"
-                logger.error(error_msg)
-                raise Exception(error_msg)
+                    # Small delay between batches to avoid rate limiting
+                    if i + BATCH_SIZE < len(symbols):
+                        time.sleep(0.1)
 
-            # Parse response and build results
-            results = []
-            quotes_data = response.get('d', [])
-
-            for quote_item in quotes_data:
-                # Get the symbol from quote data
-                br_symbol = quote_item.get('n', '')
-                v = quote_item.get('v', {})
-
-                # Look up original symbol and exchange
-                original = symbol_map.get(br_symbol, {'symbol': br_symbol, 'exchange': 'UNKNOWN'})
-
-                result_item = {
-                    'symbol': original['symbol'],
-                    'exchange': original['exchange'],
-                    'data': {
-                        'bid': v.get('bid', 0),
-                        'ask': v.get('ask', 0),
-                        'open': v.get('open_price', 0),
-                        'high': v.get('high_price', 0),
-                        'low': v.get('low_price', 0),
-                        'ltp': v.get('lp', 0),
-                        'prev_close': v.get('prev_close_price', 0),
-                        'volume': v.get('volume', 0),
-                        'oi': int(v.get('oi', 0))
-                    }
-                }
-                results.append(result_item)
-
-            return results
+                logger.info(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
+                return all_results
+            else:
+                # Single batch processing
+                return self._process_quotes_batch(symbols)
 
         except Exception as e:
             logger.exception(f"Error fetching multiquotes")
             raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_quotes_batch(self, symbols: list) -> list:
+        """
+        Process a single batch of symbols (internal method)
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys (max 50)
+        Returns:
+            list: List of quote data for the batch
+        """
+        # Convert symbols to broker format and build comma-separated list
+        br_symbols = []
+        symbol_map = {}  # Map br_symbol back to original symbol/exchange
+
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+            br_symbol = get_br_symbol(symbol, exchange)
+            br_symbols.append(br_symbol)
+            symbol_map[br_symbol] = {'symbol': symbol, 'exchange': exchange}
+
+        # Join all symbols with comma and URL encode
+        symbols_param = ','.join(br_symbols)
+        encoded_symbols = urllib.parse.quote(symbols_param)
+
+        # Make API call for this batch
+        response = get_api_response(f"/data/quotes?symbols={encoded_symbols}", self.auth_token)
+        logger.debug(f"Fyers multiquotes API response for batch: {response}")
+
+        if response.get('s') != 'ok':
+            error_msg = f"Error from Fyers API: {response.get('message', 'Unknown error')}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+
+        # Parse response and build results
+        results = []
+        quotes_data = response.get('d', [])
+
+        for quote_item in quotes_data:
+            # Get the symbol from quote data
+            br_symbol = quote_item.get('n', '')
+            v = quote_item.get('v', {})
+
+            # Look up original symbol and exchange
+            original = symbol_map.get(br_symbol, {'symbol': br_symbol, 'exchange': 'UNKNOWN'})
+
+            result_item = {
+                'symbol': original['symbol'],
+                'exchange': original['exchange'],
+                'data': {
+                    'bid': v.get('bid', 0),
+                    'ask': v.get('ask', 0),
+                    'open': v.get('open_price', 0),
+                    'high': v.get('high_price', 0),
+                    'low': v.get('low_price', 0),
+                    'ltp': v.get('lp', 0),
+                    'prev_close': v.get('prev_close_price', 0),
+                    'volume': v.get('volume', 0),
+                    'oi': int(v.get('oi', 0))
+                }
+            }
+            results.append(result_item)
+
+        return results
 
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
         """

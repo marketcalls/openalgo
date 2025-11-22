@@ -40,7 +40,7 @@ class SymbolExchangePair(Schema):
 
 class MultiQuotesSchema(Schema):
     apikey = fields.Str(required=True)
-    symbols = fields.List(fields.Nested(SymbolExchangePair), required=True, validate=validate.Length(min=1, max=50))
+    symbols = fields.List(fields.Nested(SymbolExchangePair), required=True, validate=validate.Length(min=1))
 
 class HistorySchema(Schema):
     apikey = fields.Str(required=True)
