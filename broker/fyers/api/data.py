@@ -124,6 +124,75 @@ class BrokerData:
             logger.exception(f"Error fetching quotes for {exchange}:{symbol}")
             raise Exception(f"Error fetching quotes: {e}")
 
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols in a single API call
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            # Convert symbols to broker format and build comma-separated list
+            br_symbols = []
+            symbol_map = {}  # Map br_symbol back to original symbol/exchange
+
+            for item in symbols:
+                symbol = item['symbol']
+                exchange = item['exchange']
+                br_symbol = get_br_symbol(symbol, exchange)
+                br_symbols.append(br_symbol)
+                symbol_map[br_symbol] = {'symbol': symbol, 'exchange': exchange}
+
+            # Join all symbols with comma and URL encode
+            symbols_param = ','.join(br_symbols)
+            encoded_symbols = urllib.parse.quote(symbols_param)
+
+            # Make single API call for all symbols
+            response = get_api_response(f"/data/quotes?symbols={encoded_symbols}", self.auth_token)
+            logger.debug(f"Fyers multiquotes API response: {response}")
+
+            if response.get('s') != 'ok':
+                error_msg = f"Error from Fyers API: {response.get('message', 'Unknown error')}"
+                logger.error(error_msg)
+                raise Exception(error_msg)
+
+            # Parse response and build results
+            results = []
+            quotes_data = response.get('d', [])
+
+            for quote_item in quotes_data:
+                # Get the symbol from quote data
+                br_symbol = quote_item.get('n', '')
+                v = quote_item.get('v', {})
+
+                # Look up original symbol and exchange
+                original = symbol_map.get(br_symbol, {'symbol': br_symbol, 'exchange': 'UNKNOWN'})
+
+                result_item = {
+                    'symbol': original['symbol'],
+                    'exchange': original['exchange'],
+                    'data': {
+                        'bid': v.get('bid', 0),
+                        'ask': v.get('ask', 0),
+                        'open': v.get('open_price', 0),
+                        'high': v.get('high_price', 0),
+                        'low': v.get('low_price', 0),
+                        'ltp': v.get('lp', 0),
+                        'prev_close': v.get('prev_close_price', 0),
+                        'volume': v.get('volume', 0),
+                        'oi': int(v.get('oi', 0))
+                    }
+                }
+                results.append(result_item)
+
+            return results
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
 
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
         """

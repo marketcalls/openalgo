@@ -34,6 +34,14 @@ class QuotesSchema(Schema):
     symbol = fields.Str(required=True)  # Single symbol
     exchange = fields.Str(required=True)  # Exchange (e.g., NSE, BSE)
 
+class SymbolExchangePair(Schema):
+    symbol = fields.Str(required=True)
+    exchange = fields.Str(required=True)
+
+class MultiQuotesSchema(Schema):
+    apikey = fields.Str(required=True)
+    symbols = fields.List(fields.Nested(SymbolExchangePair), required=True, validate=validate.Length(min=1, max=50))
+
 class HistorySchema(Schema):
     apikey = fields.Str(required=True)
     symbol = fields.Str(required=True)
