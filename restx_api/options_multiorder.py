@@ -45,11 +45,12 @@ Response (Success):
 {
     "status": "success",
     "underlying": "NIFTY",
-    "underlying_ltp": 24150.50,
+    "underlying_ltp": 26000.50,
     "results": [
         {
             "leg": 1,
-            "symbol": "NIFTY28NOV24650CE",
+            "symbol": "NIFTY25NOV2526000CE",
+            "exchange": "NFO",
             "offset": "OTM10",
             "option_type": "CE",
             "action": "BUY",

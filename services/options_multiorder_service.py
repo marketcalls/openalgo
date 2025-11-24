@@ -131,6 +131,7 @@ def resolve_and_place_leg(
             result = {
                 'leg': leg_index + 1,
                 'symbol': resolved_symbol,
+                'exchange': resolved_exchange,
                 'offset': leg_data.get('offset'),
                 'option_type': leg_data.get('option_type', '').upper(),
                 'action': leg_data.get('action', '').upper(),
@@ -147,6 +148,7 @@ def resolve_and_place_leg(
             return {
                 'leg': leg_index + 1,
                 'symbol': resolved_symbol,
+                'exchange': resolved_exchange,
                 'offset': leg_data.get('offset'),
                 'option_type': leg_data.get('option_type', '').upper(),
                 'action': leg_data.get('action', '').upper(),
