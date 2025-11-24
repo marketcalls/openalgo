@@ -252,7 +252,7 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
             is_fallback=is_fallback
         )
 
-    def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> Dict[str, Any]:
+    def unsubscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
         """
         Unsubscribe from market data
 
@@ -260,6 +260,7 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
             symbol: Trading symbol
             exchange: Exchange code
             mode: Subscription mode
+            depth_level: Market depth level (used to match correlation ID for depth subscriptions)
 
         Returns:
             Dict: Response with status
@@ -277,8 +278,10 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
         motilal_exchange = MotilalExchangeMapper.get_exchange_type(brexchange)
         exchange_segment = MotilalCapabilityRegistry.get_exchange_segment(exchange)
 
-        # Generate correlation ID
+        # Generate correlation ID (must match the one used in subscribe)
         correlation_id = f"{symbol}_{exchange}_{mode}"
+        if mode == 3:
+            correlation_id = f"{correlation_id}_{depth_level}"
 
         # Remove from subscriptions
         with self.lock:

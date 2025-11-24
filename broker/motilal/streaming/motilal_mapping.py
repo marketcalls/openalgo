@@ -38,7 +38,10 @@ class MotilalExchangeMapper:
     }
 
     # Reverse mapping for binary packets
+    # Note: NSE and NSEFO both use 'N', differentiated by exchange type (CASH vs DERIVATIVES)
+    # We default 'N' to 'NSE' in the reverse mapping
     CHAR_TO_EXCHANGE = {v: k for k, v in EXCHANGE_CHAR_MAP.items()}
+    CHAR_TO_EXCHANGE['N'] = 'NSE'  # Ensure 'N' maps to NSE (not NSEFO)
 
     @staticmethod
     def get_exchange_type(exchange):

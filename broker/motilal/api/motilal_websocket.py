@@ -321,7 +321,7 @@ class MotilalWebSocket:
                 subscription_key_check = f"{self._map_exchange_back(exchange_byte)}|{scrip}"
                 with self.lock:
                     if subscription_key_check in self.subscriptions:
-                        logger.info(f"🔍 SUBSCRIBED SCRIP DATA: {key} ({symbol}) - MsgType='{msgtype}' (ASCII {ord(msgtype)}), BodyHex={body.hex()}")
+                        logger.info(f"🔍 SUBSCRIBED SCRIP DATA: {key} ({symbol}) - MsgType='{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}), BodyHex={body.hex()}")
 
                 # Parse based on message type
                 # Message types from Motilal SDK:
