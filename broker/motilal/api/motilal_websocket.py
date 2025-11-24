@@ -118,8 +118,10 @@ class MotilalWebSocket:
                 # Reset reconnect count on successful connection attempt
                 self.reconnect_count = 0
 
-                # Run the WebSocket connection with SSL certificate verification enabled
-                self.ws.run_forever()
+                # Run the WebSocket connection with SSL certificate verification disabled
+                # Note: Disabled due to Motilal Oswal's expired SSL certificate
+                self.ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
+
 
                 # If we're here, the connection was closed
                 if self.is_connected:
