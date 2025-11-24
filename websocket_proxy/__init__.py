@@ -62,6 +62,9 @@ from broker.indmoney.streaming.indmoney_adapter import IndmoneyWebSocketAdapter
 # Import the mstock_adapter
 from broker.mstock.streaming.mstock_adapter import MstockWebSocketAdapter
 
+# Import the motilal_adapter
+from broker.motilal.streaming.motilal_adapter import MotilalWebSocketAdapter
+
 # AliceBlue adapter will be loaded dynamically
 
 # Register adapters
@@ -83,6 +86,7 @@ register_adapter("definedge", DefinedgeWebSocketAdapter)
 register_adapter("paytm", PaytmWebSocketAdapter)
 register_adapter("indmoney", IndmoneyWebSocketAdapter)
 register_adapter("mstock", MstockWebSocketAdapter)
+register_adapter("motilal", MotilalWebSocketAdapter)
 
 # AliceBlue adapter will be registered dynamically when first used
 
@@ -110,5 +114,6 @@ __all__ = [
     'DefinedgeWebSocketAdapter',
     'PaytmWebSocketAdapter',
     'IndmoneyWebSocketAdapter',
-    'MstockWebSocketAdapter'
+    'MstockWebSocketAdapter',
+    'MotilalWebSocketAdapter'
 ]
