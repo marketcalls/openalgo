@@ -357,16 +357,24 @@ class BrokerData:
 
                     if success:
                         # Wait for depth data to arrive
-                        # NOTE: Motilal's WebSocket broadcast feed only provides depth level 1 (best bid/ask)
-                        # Levels 2-5 are NOT sent via WebSocket. This is a known limitation.
+                        # NOTE: Motilal's WebSocket broadcast feed typically only provides depth level 1 (best bid/ask)
+                        # Levels 2-5 may not be sent via WebSocket depending on subscription type
                         logger.info(f"Waiting for WebSocket depth data for {exchange}:{symbol}")
-                        logger.warning("⚠️ Motilal only provides depth level 1 (best bid/ask) via WebSocket")
+                        logger.warning("⚠️ Motilal may only provide depth level 1 (best bid/ask) via WebSocket")
 
-                        # Wait for level 1 data to arrive (typically < 1 second)
-                        time.sleep(1.5)
+                        # Wait for depth data to arrive (increased time for potential multiple levels)
+                        time.sleep(3.0)
 
-                        # Retrieve depth (will only have level 1)
+                        # Retrieve depth (may contain 1-5 levels depending on broker feed)
                         depth = websocket.get_market_depth(motilal_exchange, token)
+
+                        # Log what we actually received
+                        if depth:
+                            bids_count = len([b for b in depth.get('bids', []) if b and b.get('price', 0) > 0])
+                            asks_count = len([a for a in depth.get('asks', []) if a and a.get('price', 0) > 0])
+                            logger.info(f"📊 Received {bids_count} bid levels and {asks_count} ask levels for {symbol}")
+                        else:
+                            logger.warning(f"❌ No depth data received for {symbol}")
 
                         # Also try to get quote data (OHLC, LTP, volume) for this symbol
                         quote = websocket.get_quote(motilal_exchange, token)

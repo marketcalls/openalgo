@@ -317,12 +317,18 @@ class MotilalWebSocket:
                 # Log what we're parsing
                 logger.debug(f"📊 Parsing packet: Exchange={exchange_byte}, Scrip={scrip}, MsgType='{msgtype}', Key={key}, Symbol={symbol}")
 
+                # Detailed logging for subscribed scrips to analyze unknown packets
+                subscription_key_check = f"{self._map_exchange_back(exchange_byte)}|{scrip}"
+                with self.lock:
+                    if subscription_key_check in self.subscriptions:
+                        logger.info(f"🔍 SUBSCRIBED SCRIP DATA: {key} ({symbol}) - MsgType='{msgtype}' (ASCII {ord(msgtype)}), BodyHex={body.hex()}")
+
                 # Parse based on message type
                 # Message types from Motilal SDK:
                 # 'A' = LTP, 'B'-'F' = Depth levels 1-5, 'G' = OHLC, 'H' = Index, 'm' = OI
                 if msgtype in ['B', 'C', 'D', 'E', 'F']:  # Market Depth levels 1-5
                     level = ord(msgtype) - ord('B') + 1  # B=1, C=2, D=3, E=4, F=5
-                    logger.debug(f"✓ Parsing DEPTH level {level} packet for {key}")
+                    logger.info(f"✓ Parsing DEPTH level {level} (msgtype='{msgtype}') packet for {key}, Symbol: {symbol}")
                     self._parse_depth_level_packet(body, key, symbol, level)
                 elif msgtype == 'A':  # LTP
                     logger.debug(f"✓ Parsing LTP packet for {key}")
@@ -342,8 +348,14 @@ class MotilalWebSocket:
                     logger.debug(f"Heartbeat received")
                 elif msgtype == 'X':  # Unknown - need to investigate
                     logger.debug(f"Received message type 'X' for {key} - investigating")
+                elif msgtype == 'g':  # Lowercase 'g' - possibly alternate OHLC or tick data
+                    logger.debug(f"📦 Packet 'g' for {key}: {body.hex()}")
+                elif msgtype == 'z':  # Lowercase 'z' - unknown supplementary data
+                    logger.debug(f"📦 Packet 'z' for {key}: {body.hex()}")
+                elif msgtype == 'Y':  # Uppercase 'Y' - exchange-specific data
+                    logger.debug(f"📦 Packet 'Y' for {key}: {body.hex()}")
                 else:
-                    logger.warning(f"❌ Unknown message type '{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}) for {key}")
+                    logger.warning(f"❌ Unknown message type '{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}) for {key}, body: {body.hex()}")
 
         except Exception as e:
             logger.error(f"Error parsing binary market data: {str(e)}")
@@ -413,7 +425,7 @@ class MotilalWebSocket:
                 if 0 <= level_index < 5:
                     self.last_depth[key]['bids'][level_index] = bid_data
                     self.last_depth[key]['asks'][level_index] = ask_data
-                    logger.debug(f"Depth level {level} updated for {key}: Bid={bid_rate}@{bid_qty}, Ask={offer_rate}@{offer_qty}")
+                    logger.info(f"📊 Depth level {level} stored for {key} ({symbol}): Bid={bid_rate}@{bid_qty}, Ask={offer_rate}@{offer_qty}")
 
         except Exception as e:
             logger.error(f"Error parsing depth level {level} packet: {str(e)}")
@@ -1077,7 +1089,13 @@ class MotilalWebSocket:
                 bids_filtered = [bid for bid in bids_raw if bid is not None]
                 asks_filtered = [ask for ask in asks_raw if ask is not None]
 
+                # Log detailed depth summary
                 logger.info(f"✓ Found depth data for {key}: {len(bids_filtered)} bid levels, {len(asks_filtered)} ask levels")
+                for i, bid in enumerate(bids_filtered, 1):
+                    logger.debug(f"  Bid Level {i}: Price={bid.get('price')}, Qty={bid.get('quantity')}, Orders={bid.get('orders')}")
+                for i, ask in enumerate(asks_filtered, 1):
+                    logger.debug(f"  Ask Level {i}: Price={ask.get('price')}, Qty={ask.get('quantity')}, Orders={ask.get('orders')}")
+
                 logger.debug(f"Retrieved market depth for {key} - Bid levels: {len(bids_filtered)}, Ask levels: {len(asks_filtered)}, Symbol: {depth.get('symbol', 'N/A')}")
 
                 # Return filtered depth
