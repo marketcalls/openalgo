@@ -16,6 +16,12 @@ import sys
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import OperationalError
 
+# Set UTF-8 encoding for output to handle Unicode characters on Windows
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -26,8 +32,26 @@ logger = get_logger(__name__)
 def get_database_url():
     """Get database URL from environment"""
     from dotenv import load_dotenv
-    load_dotenv()
-    return os.getenv('DATABASE_URL')
+
+    # Get the project root directory (parent of upgrade folder)
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    # Load .env from project root
+    load_dotenv(os.path.join(project_root, '.env'))
+
+    database_url = os.getenv('DATABASE_URL')
+
+    # Convert relative SQLite paths to absolute paths
+    if database_url and database_url.startswith('sqlite:///'):
+        # Extract the relative path after sqlite:///
+        relative_path = database_url.replace('sqlite:///', '', 1)
+
+        # If it's not already an absolute path, make it absolute relative to project root
+        if not os.path.isabs(relative_path):
+            absolute_path = os.path.join(project_root, relative_path)
+            database_url = f'sqlite:///{absolute_path}'
+
+    return database_url
 
 def check_column_exists(engine, table_name, column_name):
     """Check if a column exists in a table"""
