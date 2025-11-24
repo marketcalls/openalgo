@@ -68,6 +68,9 @@ class BrokerData:
         """Initialize Motilal Oswal data handler with authentication token"""
         self.auth_token = auth_token
         self._websocket = None
+        # Motilal does not support historical data with date ranges
+        # EOD API only returns current day's data, not historical ranges
+        self.timeframe_map = {}
 
     def _auto_detect_exchange(self, symbol: str) -> str:
         """
@@ -422,27 +425,38 @@ class BrokerData:
     def get_history(self, symbol: str, exchange: str, interval: str,
                    start_date: str, end_date: str) -> pd.DataFrame:
         """
-        Get historical data for given symbol.
-
-        Note: Motilal Oswal does NOT provide historical candle data via REST API.
-
+        Get historical data for given symbol and timeframe
         Args:
             symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX)
-            interval: Candle interval (1m, 3m, 5m, 10m, 15m, 30m, 1h, D)
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
+            exchange: Exchange (e.g., NSE, BSE)
+            interval: Time interval (e.g., 1m, 5m, 15m, 60m, D)
+            start_date: Start date in format YYYY-MM-DD
+            end_date: End date in format YYYY-MM-DD
+        Returns:
+            pd.DataFrame: Empty DataFrame (historical data not supported)
+        """
+        logger.info(f"Historical data not provided by Motilal Oswal for {symbol}")
+        # Return empty DataFrame with expected columns
+        return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
+
+    def get_intervals(self) -> list:
+        """Get available intervals/timeframes for historical data
 
         Returns:
-            pd.DataFrame: Empty dataframe
-
-        Raises:
-            Exception: Always raises exception as historical data is not supported
+            list: Empty list (historical data not supported)
         """
-        error_msg = (
-            "Historical candle data is not available via REST API for Motilal Oswal. "
-            "Motilal provides EOD (End of Day) data only. "
-            "For intraday historical data, you may need to use third-party data providers."
-        )
-        logger.warning(f"History API called for {symbol} on {exchange}, but not supported")
-        raise Exception(error_msg)
+        logger.info("Historical data intervals not provided by Motilal Oswal")
+        return []
+
+    def get_supported_intervals(self) -> dict:
+        """Return supported intervals matching the format expected by intervals.py"""
+        intervals = {
+            'seconds': [],
+            'minutes': [],
+            'hours': [],
+            'days': [],
+            'weeks': [],
+            'months': []
+        }
+        logger.warning("Motilal Oswal does not support historical data intervals")
+        return intervals
