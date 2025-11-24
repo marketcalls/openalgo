@@ -68,6 +68,9 @@ class BrokerData:
         """Initialize Motilal Oswal data handler with authentication token"""
         self.auth_token = auth_token
         self._websocket = None
+        # Motilal does not support historical data with date ranges
+        # EOD API only returns current day's data, not historical ranges
+        self.timeframe_map = {}
 
     def _auto_detect_exchange(self, symbol: str) -> str:
         """
@@ -176,6 +179,15 @@ class BrokerData:
 
             if not token:
                 raise Exception(f"Token not found for symbol: {symbol}, exchange: {exchange}")
+
+            # Convert index exchanges to regular exchanges before API call
+            # Motilal API doesn't accept NSE_INDEX, it expects NSE
+            if exchange == 'NSE_INDEX':
+                exchange = 'NSE'
+            elif exchange == 'BSE_INDEX':
+                exchange = 'BSE'
+            elif exchange == 'MCX_INDEX':
+                exchange = 'MCX'
 
             # Map OpenAlgo exchange to Motilal exchange
             from broker.motilal.mapping.transform_data import map_exchange
@@ -321,12 +333,22 @@ class BrokerData:
                     # Get broker symbol if different
                     br_symbol = get_br_symbol(symbol, exchange) or symbol
 
+                    # Convert index exchanges to regular exchanges before API call
+                    # Motilal API doesn't accept NSE_INDEX, it expects NSE
+                    api_exchange = exchange
+                    if api_exchange == 'NSE_INDEX':
+                        api_exchange = 'NSE'
+                    elif api_exchange == 'BSE_INDEX':
+                        api_exchange = 'BSE'
+                    elif api_exchange == 'MCX_INDEX':
+                        api_exchange = 'MCX'
+
                     # Map OpenAlgo exchange to Motilal exchange
                     from broker.motilal.mapping.transform_data import map_exchange
-                    motilal_exchange = map_exchange(exchange)
+                    motilal_exchange = map_exchange(api_exchange)
 
                     # Determine exchange type (CASH or DERIVATIVES)
-                    exchange_type = "DERIVATIVES" if exchange in ['NFO', 'BFO', 'CDS', 'MCX'] else "CASH"
+                    exchange_type = "DERIVATIVES" if api_exchange in ['NFO', 'BFO', 'CDS', 'MCX'] else "CASH"
 
                     logger.info(f"Subscribing to market depth for {exchange}:{symbol} with token {token}")
 
@@ -335,16 +357,41 @@ class BrokerData:
 
                     if success:
                         # Wait for depth data to arrive
+                        # NOTE: Motilal's WebSocket broadcast feed typically only provides depth level 1 (best bid/ask)
+                        # Levels 2-5 may not be sent via WebSocket depending on subscription type
                         logger.info(f"Waiting for WebSocket depth data for {exchange}:{symbol}")
-                        time.sleep(2.5)
+                        logger.warning("⚠️ Motilal may only provide depth level 1 (best bid/ask) via WebSocket")
 
-                        # Retrieve depth from WebSocket
+                        # Wait for depth data to arrive (increased time for potential multiple levels)
+                        time.sleep(3.0)
+
+                        # Retrieve depth (may contain 1-5 levels depending on broker feed)
                         depth = websocket.get_market_depth(motilal_exchange, token)
+
+                        # Log what we actually received
+                        if depth:
+                            bids_count = len([b for b in depth.get('bids', []) if b and b.get('price', 0) > 0])
+                            asks_count = len([a for a in depth.get('asks', []) if a and a.get('price', 0) > 0])
+                            logger.info(f"📊 Received {bids_count} bid levels and {asks_count} ask levels for {symbol}")
+                        else:
+                            logger.warning(f"❌ No depth data received for {symbol}")
+
+                        # Also try to get quote data (OHLC, LTP, volume) for this symbol
+                        quote = websocket.get_quote(motilal_exchange, token)
 
                         if depth:
                             # Create a normalized depth structure in the OpenAlgo format
                             bids = depth.get('bids', [])
                             asks = depth.get('asks', [])
+
+                            # Extract quote data if available
+                            ltp = quote.get('ltp', 0) if quote else 0
+                            oi = 0  # OI comes separately from quote
+                            high = quote.get('high', 0) if quote else 0
+                            low = quote.get('low', 0) if quote else 0
+                            open_price = quote.get('open', 0) if quote else 0
+                            prev_close = quote.get('prev_close', 0) if quote else 0
+                            volume = quote.get('volume', 0) if quote else 0
 
                             item = {
                                 'symbol': symbol,
@@ -353,8 +400,13 @@ class BrokerData:
                                 'timestamp': datetime.now().isoformat(),
                                 'total_buy_qty': sum(b.get('quantity', 0) for b in bids),
                                 'total_sell_qty': sum(a.get('quantity', 0) for a in asks),
-                                'ltp': 0,  # LTP not available in depth packet
-                                'oi': 0,   # OI not available in depth packet
+                                'ltp': ltp,
+                                'oi': oi,
+                                'high': high,
+                                'low': low,
+                                'open': open_price,
+                                'prev_close': prev_close,
+                                'volume': volume,
                                 'depth': {
                                     'buy': [],
                                     'sell': []
@@ -400,20 +452,51 @@ class BrokerData:
         if not depth_data:
             return {}
 
-        # For single symbol request (most common case), return in simplified format
+        # For single symbol request (most common case), return in OpenAlgo standard format
         if len(depth_data) == 1:
             # Extract the first and only depth item
             depth_item = depth_data[0]
+            depth_buy = depth_item.get('depth', {}).get('buy', [])
+            depth_sell = depth_item.get('depth', {}).get('sell', [])
 
-            # Return the data directly without wrapping
+            # Format bids and asks - ensure exactly 5 entries each (matching Angel format)
+            bids = []
+            asks = []
+
+            # Process buy orders (ensure 5 entries)
+            for i in range(5):
+                if i < len(depth_buy):
+                    bids.append({
+                        'price': depth_buy[i].get('price', 0),
+                        'quantity': depth_buy[i].get('quantity', 0)
+                    })
+                else:
+                    bids.append({'price': 0, 'quantity': 0})
+
+            # Process sell orders (ensure 5 entries)
+            for i in range(5):
+                if i < len(depth_sell):
+                    asks.append({
+                        'price': depth_sell[i].get('price', 0),
+                        'quantity': depth_sell[i].get('quantity', 0)
+                    })
+                else:
+                    asks.append({'price': 0, 'quantity': 0})
+
+            # Return in Angel's OpenAlgo standard format (matching lines 524-537 of angel/api/data.py)
             return {
-                "symbol": depth_item.get('symbol', ''),
-                "exchange": depth_item.get('exchange', ''),
-                "ltp": depth_item.get('ltp', 0),
-                "oi": depth_item.get('oi', 0),
-                "total_buy_qty": depth_item.get('total_buy_qty', 0),
-                "total_sell_qty": depth_item.get('total_sell_qty', 0),
-                "depth": depth_item.get('depth', {'buy': [], 'sell': []})
+                'bids': bids,
+                'asks': asks,
+                'high': depth_item.get('high', 0),
+                'low': depth_item.get('low', 0),
+                'ltp': depth_item.get('ltp', 0),
+                'ltq': 0,  # Last traded quantity not available in Motilal depth data
+                'open': depth_item.get('open', 0),
+                'prev_close': depth_item.get('prev_close', 0),
+                'volume': depth_item.get('volume', 0),
+                'oi': depth_item.get('oi', 0),
+                'totalbuyqty': depth_item.get('total_buy_qty', 0),
+                'totalsellqty': depth_item.get('total_sell_qty', 0)
             }
 
         # For multiple symbols, return as list
@@ -422,27 +505,38 @@ class BrokerData:
     def get_history(self, symbol: str, exchange: str, interval: str,
                    start_date: str, end_date: str) -> pd.DataFrame:
         """
-        Get historical data for given symbol.
-
-        Note: Motilal Oswal does NOT provide historical candle data via REST API.
-
+        Get historical data for given symbol and timeframe
         Args:
             symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX)
-            interval: Candle interval (1m, 3m, 5m, 10m, 15m, 30m, 1h, D)
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
+            exchange: Exchange (e.g., NSE, BSE)
+            interval: Time interval (e.g., 1m, 5m, 15m, 60m, D)
+            start_date: Start date in format YYYY-MM-DD
+            end_date: End date in format YYYY-MM-DD
+        Returns:
+            pd.DataFrame: Empty DataFrame (historical data not supported)
+        """
+        logger.info(f"Historical data not provided by Motilal Oswal for {symbol}")
+        # Return empty DataFrame with expected columns
+        return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
+
+    def get_intervals(self) -> list:
+        """Get available intervals/timeframes for historical data
 
         Returns:
-            pd.DataFrame: Empty dataframe
-
-        Raises:
-            Exception: Always raises exception as historical data is not supported
+            list: Empty list (historical data not supported)
         """
-        error_msg = (
-            "Historical candle data is not available via REST API for Motilal Oswal. "
-            "Motilal provides EOD (End of Day) data only. "
-            "For intraday historical data, you may need to use third-party data providers."
-        )
-        logger.warning(f"History API called for {symbol} on {exchange}, but not supported")
-        raise Exception(error_msg)
+        logger.info("Historical data intervals not provided by Motilal Oswal")
+        return []
+
+    def get_supported_intervals(self) -> dict:
+        """Return supported intervals matching the format expected by intervals.py"""
+        intervals = {
+            'seconds': [],
+            'minutes': [],
+            'hours': [],
+            'days': [],
+            'weeks': [],
+            'months': []
+        }
+        logger.warning("Motilal Oswal does not support historical data intervals")
+        return intervals

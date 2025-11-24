@@ -137,6 +137,129 @@ def extract_expiry_from_scripname(scripname):
         return ''
 
 
+def download_csv_index_data(exchange_name):
+    """
+    Downloads the index CSV file from Motilal Oswal for NSE/BSE indices.
+
+    Args:
+        exchange_name (str): Exchange name ('NSE' or 'BSE')
+
+    Returns:
+        pd.DataFrame: DataFrame containing the downloaded index data
+    """
+    try:
+        # Get the shared httpx client
+        client = get_httpx_client()
+
+        # Motilal Oswal Index CSV download URL
+        url = f'https://openapi.motilaloswal.com/getindexdatacsv?name={exchange_name}'
+
+        logger.info(f"Downloading Motilal index data for {exchange_name} from {url}")
+
+        # Make the GET request using the shared client
+        response = client.get(url, timeout=30)
+        response.raise_for_status()
+
+        # Process the response directly as CSV
+        csv_string = response.text
+        df = pd.read_csv(io.StringIO(csv_string))
+
+        logger.info(f"Downloaded {len(df)} index records for {exchange_name}")
+        return df
+
+    except Exception as e:
+        error_message = str(e)
+        logger.error(f"Error downloading Motilal index data for {exchange_name}: {error_message}")
+        raise
+
+
+def process_motilal_index_csv(df, exchange_name):
+    """
+    Processes the Motilal Index CSV file to fit the OpenAlgo database schema.
+
+    Args:
+        df (pd.DataFrame): Raw DataFrame from Motilal Index API
+        exchange_name (str): Exchange name ('NSE' or 'BSE')
+
+    Returns:
+        pd.DataFrame: Processed DataFrame ready for database insertion
+    """
+    logger.info(f"Processing Motilal Index CSV Data for {exchange_name}")
+
+    # Rename columns based on Motilal Index API format
+    df = df.rename(columns={
+        'indexcode': 'token',
+        'indexname': 'symbol',
+        'exchangename': 'brexchange'
+    })
+
+    # Set the name same as symbol for indices
+    df['name'] = df['symbol']
+    df['brsymbol'] = df['symbol']
+
+    # Map exchange to OpenAlgo format with _INDEX suffix
+    if exchange_name == 'NSE':
+        df['exchange'] = 'NSE_INDEX'
+    elif exchange_name == 'BSE':
+        df['exchange'] = 'BSE_INDEX'
+    else:
+        df['exchange'] = exchange_name + '_INDEX'
+
+    # Set instrumenttype for indices
+    df['instrumenttype'] = 'INDEX'
+
+    # Set default values for fields not applicable to indices
+    df['expiry'] = ''
+    df['strike'] = 0.0
+    df['lotsize'] = 1
+    df['tick_size'] = 0.05
+
+    # Convert token to string
+    df['token'] = df['token'].astype(str)
+
+    # Standardize index names to match OpenAlgo format
+    df['symbol'] = df['symbol'].replace({
+        'Nifty 50': 'NIFTY',
+        'NIFTY 50': 'NIFTY',
+        'Nifty Next 50': 'NIFTYNXT50',
+        'NIFTY NEXT 50': 'NIFTYNXT50',
+        'Nifty Fin Service': 'FINNIFTY',
+        'NIFTY FIN SERVICE': 'FINNIFTY',
+        'Nifty Bank': 'BANKNIFTY',
+        'NIFTY BANK': 'BANKNIFTY',
+        'NIFTY MID SELECT': 'MIDCPNIFTY',
+        'Nifty Midcap Select': 'MIDCPNIFTY',
+        'India VIX': 'INDIAVIX',
+        'INDIA VIX': 'INDIAVIX',
+        'SENSEX': 'SENSEX',
+        'BSE SENSEX': 'SENSEX',
+        'SNSX50': 'SENSEX50',
+        'BSE100': 'BSE100',
+        'BSE 200': 'BSE200',
+        'BSE 500': 'BSE500',
+        'BSE AUTO': 'BSEAUTO',
+        'BSE BANKEX': 'BSEBANKEX',
+        'BSE CAPGOOD': 'BSECAPGOOD',
+        'BSE CARBON': 'BSECARBON',
+        'BSE CONSDUR': 'BSECONSDUR',
+        'BSE CPSE': 'BSECPSE'
+    })
+
+    # Select only the columns needed for the database
+    required_columns = ['token', 'symbol', 'brsymbol', 'name', 'exchange', 'brexchange',
+                       'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
+
+    df = df[required_columns]
+
+    # Fill NaN values
+    df['symbol'] = df['symbol'].fillna('')
+    df['brsymbol'] = df['brsymbol'].fillna('')
+    df['name'] = df['name'].fillna('')
+
+    logger.info(f"Processed {len(df)} index records for {exchange_name}")
+    return df
+
+
 def process_motilal_csv(df, exchange_name):
     """
     Processes the Motilal CSV file to fit the OpenAlgo database schema.
@@ -302,32 +425,49 @@ def process_motilal_csv(df, exchange_name):
 
 def master_contract_download():
     """
-    Downloads master contracts from Motilal Oswal for all supported exchanges.
+    Downloads master contracts from Motilal Oswal for all supported exchanges including indices.
     """
     logger.info("Downloading Master Contract from Motilal Oswal")
 
-    # List of exchanges to download
+    # List of exchanges to download scrip master data
     exchanges = ['NSE', 'BSE', 'NSEFO', 'NSECD', 'MCX', 'BSEFO']
+
+    # List of exchanges to download index data
+    index_exchanges = ['NSE', 'BSE']
 
     try:
         all_data = []
 
+        # Download scrip master data for all exchanges
         for exchange in exchanges:
             try:
-                logger.info(f"Downloading {exchange} data...")
+                logger.info(f"Downloading {exchange} scrip master data...")
                 df = download_csv_motilal_data(exchange)
                 processed_df = process_motilal_csv(df, exchange)
                 all_data.append(processed_df)
-                logger.info(f"Successfully processed {exchange}")
+                logger.info(f"Successfully processed {exchange} scrip master")
             except Exception as e:
                 logger.error(f"Error processing {exchange}: {str(e)}")
                 # Continue with other exchanges even if one fails
                 continue
 
+        # Download index data for NSE and BSE
+        for exchange in index_exchanges:
+            try:
+                logger.info(f"Downloading {exchange} index data...")
+                df = download_csv_index_data(exchange)
+                processed_df = process_motilal_index_csv(df, exchange)
+                all_data.append(processed_df)
+                logger.info(f"Successfully processed {exchange} indices")
+            except Exception as e:
+                logger.error(f"Error processing {exchange} indices: {str(e)}")
+                # Continue even if index download fails
+                continue
+
         if not all_data:
             raise Exception("Failed to download data from any exchange")
 
-        # Combine all exchange data
+        # Combine all exchange data (scrip master + indices)
         token_df = pd.concat(all_data, ignore_index=True)
 
         # Remove duplicates based on token
