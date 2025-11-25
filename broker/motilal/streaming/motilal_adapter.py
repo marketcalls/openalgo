@@ -457,13 +457,16 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         Normalize Depth data from Motilal format to common format
 
+        Note: Motilal only provides depth level 1 (best bid/ask).
+        Levels 2-5 are padded with zeros to maintain standard 5-level depth format.
+
         Args:
             quote: Quote data from Motilal WebSocket
             depth: Market depth data (can be None)
             oi: Open interest data (can be None)
 
         Returns:
-            Dict: Normalized Depth data
+            Dict: Normalized Depth data with 5 levels
         """
         result = {
             'ltp': quote.get('ltp', 0),
@@ -479,18 +482,58 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Add OI if available
         if oi:
             result['oi'] = oi.get('oi', 0)
-
-        # Add depth data if available
-        if depth:
-            result['depth'] = {
-                'buy': depth.get('bids', []),
-                'sell': depth.get('asks', [])
-            }
         else:
-            # Return empty depth if not available
-            result['depth'] = {
-                'buy': [],
-                'sell': []
-            }
+            result['oi'] = 0
+
+        # Add depth data - always ensure 5 levels
+        buy_depth = []
+        sell_depth = []
+
+        if depth:
+            # Get existing bids and asks (Motilal typically provides only level 1)
+            bids = depth.get('bids', [])
+            asks = depth.get('asks', [])
+
+            # Ensure exactly 5 levels for buy depth
+            for i in range(5):
+                if i < len(bids) and bids[i] is not None:
+                    buy_depth.append({
+                        'price': bids[i].get('price', 0),
+                        'quantity': bids[i].get('quantity', 0),
+                        'orders': bids[i].get('orders', 0)
+                    })
+                else:
+                    # Pad with zeros for levels 2-5
+                    buy_depth.append({
+                        'price': 0,
+                        'quantity': 0,
+                        'orders': 0
+                    })
+
+            # Ensure exactly 5 levels for sell depth
+            for i in range(5):
+                if i < len(asks) and asks[i] is not None:
+                    sell_depth.append({
+                        'price': asks[i].get('price', 0),
+                        'quantity': asks[i].get('quantity', 0),
+                        'orders': asks[i].get('orders', 0)
+                    })
+                else:
+                    # Pad with zeros for levels 2-5
+                    sell_depth.append({
+                        'price': 0,
+                        'quantity': 0,
+                        'orders': 0
+                    })
+        else:
+            # No depth data available - return 5 levels of zeros
+            for i in range(5):
+                buy_depth.append({'price': 0, 'quantity': 0, 'orders': 0})
+                sell_depth.append({'price': 0, 'quantity': 0, 'orders': 0})
+
+        result['depth'] = {
+            'buy': buy_depth,
+            'sell': sell_depth
+        }
 
         return result
