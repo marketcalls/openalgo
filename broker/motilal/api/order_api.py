@@ -211,7 +211,7 @@ def place_order_api(data,auth):
 
     payload = json.dumps(payload_dict)
 
-    logger.info(f"Motilal Place Order Request Payload: {payload_dict}")
+    logger.debug(f"Motilal Place Order Request Payload: {payload_dict}")
     logger.debug(f"Payload JSON: {payload}")
 
     # Get the shared httpx client with connection pooling

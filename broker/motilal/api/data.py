@@ -117,7 +117,7 @@ class BrokerData:
 
                 for result in results:
                     if result.instrumenttype and 'INDEX' in result.instrumenttype.upper():
-                        logger.info(f"Found index in database: {symbol} -> {result.instrumenttype}")
+                        logger.debug(f"Found index in database: {symbol} -> {result.instrumenttype}")
                         return result.instrumenttype
         except Exception as e:
             logger.error(f"Error looking up index in database: {str(e)}")
@@ -212,7 +212,7 @@ class BrokerData:
 
         while elapsed < max_wait:
             if self._websocket.is_connected:
-                logger.info(f"WebSocket connection established after {elapsed:.1f} seconds")
+                logger.debug(f"WebSocket connection established after {elapsed:.1f} seconds")
                 return self._websocket
             time.sleep(wait_interval)
             elapsed += wait_interval
@@ -341,7 +341,7 @@ class BrokerData:
         # Handle generic 'INDEX' exchange by detecting specific index exchange
         if exchange == 'INDEX':
             exchange = self._detect_index_exchange(symbol)
-            logger.info(f"Converted generic INDEX to {exchange} for {symbol}")
+            logger.debug(f"Converted generic INDEX to {exchange} for {symbol}")
 
         # Get WebSocket connection with retry logic
         websocket = None
@@ -353,7 +353,7 @@ class BrokerData:
                 websocket = self.get_websocket()
 
                 if websocket and websocket.is_connected:
-                    logger.info(f"WebSocket connected on attempt {retry_count + 1}")
+                    logger.debug(f"WebSocket connected on attempt {retry_count + 1}")
                     break
 
                 logger.warning(f"WebSocket not connected on attempt {retry_count + 1}, retrying...")
@@ -365,7 +365,7 @@ class BrokerData:
                 time.sleep(2)
 
                 if websocket and websocket.is_connected:
-                    logger.info(f"WebSocket connected after retry {retry_count + 1}")
+                    logger.debug(f"WebSocket connected after retry {retry_count + 1}")
                     break
 
                 retry_count += 1
@@ -431,7 +431,7 @@ class BrokerData:
             # Wait for depth data to arrive
             # NOTE: Motilal's WebSocket broadcast feed typically only provides depth level 1 (best bid/ask)
             # Levels 2-5 may not be sent via WebSocket depending on subscription type
-            logger.info(f"Waiting for WebSocket depth data for {exchange}:{symbol}")
+            logger.debug(f"Waiting for WebSocket depth data for {exchange}:{symbol}")
             logger.warning("⚠️ Motilal may only provide depth level 1 (best bid/ask) via WebSocket")
 
             # Wait for depth data to arrive (increased time for potential multiple levels)
@@ -444,7 +444,7 @@ class BrokerData:
             if depth:
                 bids_count = len([b for b in depth.get('bids', []) if b and b.get('price', 0) > 0])
                 asks_count = len([a for a in depth.get('asks', []) if a and a.get('price', 0) > 0])
-                logger.info(f"📊 Received {bids_count} bid levels and {asks_count} ask levels for {symbol}")
+                logger.debug(f"📊 Received {bids_count} bid levels and {asks_count} ask levels for {symbol}")
             else:
                 logger.warning(f"❌ No depth data received for {symbol}")
 

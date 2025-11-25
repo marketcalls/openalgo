@@ -88,7 +88,7 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
         )
 
         self.running = True
-        self.logger.info(f"Motilal WebSocket adapter initialized for user {user_id}")
+        self.logger.debug(f"Motilal WebSocket adapter initialized for user {user_id}")
 
     def connect(self) -> None:
         """Establish connection to Motilal WebSocket"""
@@ -102,7 +102,7 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Connect to Motilal WebSocket with retry logic"""
         while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
             try:
-                self.logger.info(f"Connecting to Motilal WebSocket (attempt {self.reconnect_attempts + 1})")
+                self.logger.debug(f"Connecting to Motilal WebSocket (attempt {self.reconnect_attempts + 1})")
                 self.ws_client.connect()
 
                 # Wait a bit for connection to establish
@@ -195,7 +195,7 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 )
                 is_fallback = True
 
-                self.logger.info(
+                self.logger.debug(
                     f"Depth level {depth_level} not supported for {exchange}, "
                     f"using {actual_depth} instead"
                 )
@@ -235,7 +235,7 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     return self._create_error_response("SUBSCRIPTION_ERROR",
                                                       f"Failed to register scrip {symbol}")
 
-                self.logger.info(f"Subscribed to {symbol}.{exchange} (token: {token}, mode: {mode})")
+                self.logger.debug(f"Subscribed to {symbol}.{exchange} (token: {token}, mode: {mode})")
 
             except Exception as e:
                 self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
@@ -328,7 +328,7 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 )
 
                 if success:
-                    self.logger.info(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
+                    self.logger.debug(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
                 else:
                     self.logger.warning(f"Failed to resubscribe to {sub['symbol']}.{sub['exchange']}")
 
@@ -340,7 +340,7 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._stop_poll.clear()
         self._data_poll_thread = threading.Thread(target=self._poll_market_data, daemon=True)
         self._data_poll_thread.start()
-        self.logger.info("Started market data polling thread")
+        self.logger.debug("Started market data polling thread")
 
     def _poll_market_data(self) -> None:
         """
@@ -349,7 +349,7 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Since Motilal stores data in internal dictionaries (last_quotes, last_depth, last_oi),
         we need to periodically poll and publish this data.
         """
-        self.logger.info("Market data polling started")
+        self.logger.debug("Market data polling started")
 
         while not self._stop_poll.is_set() and self.running:
             try:
@@ -415,7 +415,7 @@ class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error(f"Error in polling loop: {e}", exc_info=True)
                 time.sleep(1)
 
-        self.logger.info("Market data polling stopped")
+        self.logger.debug("Market data polling stopped")
 
     def _normalize_ltp_data(self, quote: Dict[str, Any]) -> Dict[str, Any]:
         """
