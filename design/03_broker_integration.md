@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-The broker integration layer is the cornerstone of OpenAlgo's broker-agnostic architecture, providing a unified interface to interact with 25+ Indian stock brokers. Through a sophisticated adapter pattern, it abstracts broker-specific APIs, authentication mechanisms, and data formats into a consistent interface.
+The broker integration layer is the cornerstone of OpenAlgo's broker-agnostic architecture, providing a unified interface to interact with 27 Indian stock brokers. Through a sophisticated adapter pattern, it abstracts broker-specific APIs, authentication mechanisms, and data formats into a consistent interface.
 
 ## Architecture Overview
 
@@ -20,16 +20,18 @@ graph TB
         ZerodhaAdapter[Zerodha Adapter]
         AngelAdapter[Angel One Adapter]
         UpstoxAdapter[Upstox Adapter]
-        FyersAdapter[Fyers Adapter]
-        OtherAdapters[20+ Other Adapters]
+        MotilalAdapter[Motilal Oswal Adapter]
+        DhanAdapter[Dhan Adapter]
+        OtherAdapters[22+ Other Adapters]
     end
 
     subgraph "Broker APIs"
         ZerodhaAPI[Zerodha Kite API]
         AngelAPI[Angel SmartAPI]
         UpstoxAPI[Upstox API]
-        FyersAPI[Fyers API]
-        OtherAPIs[20+ Other APIs]
+        MotilalAPI[Motilal API]
+        DhanAPI[Dhan API]
+        OtherAPIs[22+ Other APIs]
     end
 
     ServiceLayer --> UnifiedInterface
@@ -37,47 +39,78 @@ graph TB
     BaseAdapter --> ZerodhaAdapter
     BaseAdapter --> AngelAdapter
     BaseAdapter --> UpstoxAdapter
-    BaseAdapter --> FyersAdapter
+    BaseAdapter --> MotilalAdapter
+    BaseAdapter --> DhanAdapter
     BaseAdapter --> OtherAdapters
 
     ZerodhaAdapter --> ZerodhaAPI
     AngelAdapter --> AngelAPI
     UpstoxAdapter --> UpstoxAPI
-    FyersAdapter --> FyersAPI
+    MotilalAdapter --> MotilalAPI
+    DhanAdapter --> DhanAPI
     OtherAdapters --> OtherAPIs
 ```
 
-## Supported Brokers
+## Supported Brokers (27 Total)
 
-### Current Integrations (25+)
+### Complete Broker List
 
-| Category | Broker | Status | Features | Recent Updates |
-|----------|--------|--------|----------|----------------|
-| **Traditional Brokers** |
-| | Zerodha | ✅ Active | Full API, WebSocket | Stable |
-| | Angel One | ✅ Active | SmartAPI v2, WebSocket | Logging optimized (Sept 2025) |
-| | Upstox | ✅ Active | API v2, WebSocket | NSE_COM filtered (Sept 2025) |
-| | 5Paisa | ✅ Active | OpenAPI, WebSocket | Stable |
-| | IIFL | ✅ Active | API v3 | Stable |
-| **Discount Brokers** |
-| | Fyers | ✅ Active | API v3, DataSocket | Logging optimized (Sept 2025) |
-| | Alice Blue | ✅ Active | ANT API | Stable |
-| | Flattrade | ✅ Active | REST API | Stable |
-| | Shoonya | ✅ Active | NorenAPI | Stable |
-| | Dhan | ✅ Active | API v2 | Date handling fixed (Sept 2025) |
-| **Bank-based Brokers** |
-| | Kotak Securities | ✅ Active | Neo API | Stable |
-| | ICICI Direct | ✅ Active | Breeze API | Stable |
-| **New Generation** |
-| | Groww | ✅ Active | API v1 | Stable |
-| | Paytm Money | ✅ Active | REST API | Stable |
-| | Motilal Oswal | ✅ Active | API v1 | Stable |
-| **Specialized** |
-| | Definedge | ✅ Active | Symphony API | Stable |
-| | Wisdom Capital | ✅ Active | REST API | Stable |
-| | JM Financial | ✅ Active | API v1 | Stable |
-| | Nuvama | ✅ Active | REST API | Stable |
-| | Arham Capital | ✅ Active | API v1 | Stable |
+| # | Broker | Status | API Version | WebSocket | Recent Updates |
+|---|--------|--------|-------------|-----------|----------------|
+| 1 | 5Paisa | Active | OpenAPI | Yes | Stable |
+| 2 | 5Paisa XTS | Active | XTS API | Yes | Stable |
+| 3 | AliceBlue | Active | ANT API | Yes | Stable |
+| 4 | Angel One | Active | SmartAPI v2 | Yes | Logging optimized |
+| 5 | Compositedge | Active | REST API | Yes | Stable |
+| 6 | Definedge | Active | Symphony API | Yes | Stable |
+| 7 | Dhan | Active | API v2 | Yes | Date handling fixed |
+| 8 | Dhan Sandbox | Active | Sandbox API | No | Paper trading |
+| 9 | Firstock | Active | REST API | No | Stable |
+| 10 | Flattrade | Active | NorenAPI | Yes | Stable |
+| 11 | Fyers | Active | API v3 | Yes | Logging optimized |
+| 12 | Groww | Active | API v1 | No | Stable |
+| 13 | IBulls | Active | REST API | No | Stable |
+| 14 | IIFL | Active | API v3 | No | Stable |
+| 15 | Indmoney | Active | REST API | No | Stable |
+| 16 | Kotak Neo | Active | Neo API | Yes | Stable |
+| 17 | **Motilal Oswal** | Active | API v1 | **Yes (New)** | **LTP, Quotes, Depth L1** |
+| 18 | Mstock | Active | REST API | No | Stable |
+| 19 | Paytm Money | Active | REST API | No | Stable |
+| 20 | Pocketful | Active | REST API | No | Stable |
+| 21 | Shoonya (Finvasia) | Active | NorenAPI | Yes | Stable |
+| 22 | Tradejini | Active | REST API | No | Stable |
+| 23 | Upstox | Active | API v2 | Yes | NSE_COM filtered |
+| 24 | Wisdom Capital | Active | REST API | No | Stable |
+| 25 | Zebu | Active | REST API | No | Stable |
+| 26 | Zerodha | Active | Kite API v3 | Yes | Multi-quote API |
+| 27 | (Reserved) | - | - | - | - |
+
+### Broker Categories
+
+#### Traditional Full-Service Brokers
+- **Zerodha**: Market leader with comprehensive API
+- **Angel One**: SmartAPI with WebSocket support
+- **IIFL**: Full-featured API v3
+- **Motilal Oswal**: Recently enhanced with WebSocket
+
+#### Discount Brokers
+- **Upstox**: High-performance API v2
+- **Fyers**: DataSocket for streaming
+- **Dhan**: Live and Sandbox modes
+- **5Paisa**: Standard and XTS variants
+
+#### Bank-based Brokers
+- **Kotak Securities**: Neo API platform
+- **ICICI Direct**: Breeze API integration
+
+#### New Generation Platforms
+- **Groww**: Modern REST API
+- **Paytm Money**: Consumer-focused
+- **Indmoney**: Wealth management focus
+
+#### Specialized Platforms
+- **Definedge**: Symphony for technical analysis
+- **Shoonya/Flattrade**: NorenAPI based
 
 ## Broker Adapter Structure
 
@@ -87,64 +120,50 @@ graph TB
 broker/
 ├── [broker_name]/
 │   ├── __init__.py           # Adapter initialization
-│   ├── plugin.json           # Broker metadata and configuration
 │   ├── api/
 │   │   ├── __init__.py
 │   │   ├── auth_api.py       # Authentication handling
 │   │   ├── order_api.py      # Order management
-│   │   ├── market_data_api.py # Market data operations
-│   │   ├── funds_api.py      # Account and funds
-│   │   └── portfolio_api.py  # Positions and holdings
+│   │   ├── data.py           # Market data operations
+│   │   ├── funds.py          # Account and funds
+│   │   └── margin_api.py     # Margin calculations
 │   ├── mapping/
 │   │   ├── __init__.py
 │   │   ├── order_data.py     # Order data transformation
-│   │   ├── symbol_mapping.py # Symbol format conversion
 │   │   └── transform_data.py # Response transformation
 │   ├── database/
 │   │   ├── __init__.py
 │   │   └── master_contract_db.py # Instrument master data
 │   └── streaming/
 │       ├── __init__.py
-│       └── websocket_client.py # Real-time data streaming
+│       ├── [broker]_adapter.py   # WebSocket adapter
+│       ├── [broker]_client.py    # WebSocket client
+│       └── [broker]_mapping.py   # Data mapping
 ```
 
-### Plugin Configuration
+### Example: Motilal Oswal Structure (Latest)
 
-```json
-// broker/zerodha/plugin.json
-{
-    "name": "zerodha",
-    "display_name": "Zerodha Kite",
-    "version": "3.0.0",
-    "api_version": "3",
-    "supported_exchanges": ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS"],
-    "features": {
-        "orders": true,
-        "market_data": true,
-        "historical_data": true,
-        "websocket": true,
-        "basket_orders": true,
-        "gtt_orders": true,
-        "cover_orders": true,
-        "bracket_orders": false
-    },
-    "authentication": {
-        "type": "oauth2",
-        "requires_totp": true,
-        "session_expiry": "daily",
-        "api_key_required": true,
-        "api_secret_required": true
-    },
-    "rate_limits": {
-        "orders": "10/second",
-        "quotes": "1/second",
-        "historical": "3/second"
-    },
-    "maintenance_window": {
-        "daily": "00:00-06:30",
-        "weekly": "Saturday 00:00 - Sunday 08:00"
-    }
-}
+```
+broker/motilal/
+├── __init__.py
+├── api/
+│   ├── __init__.py
+│   ├── auth_api.py
+│   ├── order_api.py
+│   ├── data.py
+│   ├── funds.py
+│   └── margin_api.py
+├── mapping/
+│   ├── __init__.py
+│   ├── order_data.py
+│   └── transform_data.py
+├── database/
+│   └── master_contract_db.py
+└── streaming/
+    ├── __init__.py
+    ├── motilal_adapter.py
+    ├── motilal_websocket.py
+    └── motilal_mapping.py
 ```
 
 ## Authentication Mechanisms
@@ -175,7 +194,6 @@ sequenceDiagram
 ### API Key Authentication (Fyers, Alice Blue)
 
 ```python
-# Direct API key authentication
 class FyersAuth:
     def authenticate(self, api_key: str, api_secret: str) -> Dict:
         auth_payload = {
@@ -196,12 +214,9 @@ class FyersAuth:
 ### Session-based Authentication (5Paisa, IIFL)
 
 ```python
-# Session cookie authentication
 class SessionAuth:
     def login(self, username: str, password: str, totp: str) -> str:
         session = requests.Session()
-
-        # Initial login
         login_response = session.post(
             f"{self.base_url}/login",
             json={
@@ -210,8 +225,6 @@ class SessionAuth:
                 "totp": totp
             }
         )
-
-        # Store session cookie
         self.session_cookie = session.cookies.get("session_id")
         return self.session_cookie
 ```
@@ -272,238 +285,143 @@ class BaseBrokerAdapter(ABC):
     def get_quotes(self, symbols: List[str]) -> Dict:
         """Get real-time quotes"""
         pass
-```
 
-### Concrete Adapter Example
+    @abstractmethod
+    def get_depth(self, symbol: str, exchange: str) -> Dict:
+        """Get market depth"""
+        pass
 
-```python
-# broker/zerodha/api/order_api.py
-from broker.base_adapter import BaseBrokerAdapter
-from kiteconnect import KiteConnect
-
-class ZerodhaAdapter(BaseBrokerAdapter):
-    def __init__(self, auth_token: str, config: Dict):
-        super().__init__(auth_token, config)
-        self.kite = KiteConnect(api_key=config["api_key"])
-        self.kite.set_access_token(auth_token)
-
-    def place_order(self, params: Dict) -> Dict:
-        # Transform OpenAlgo params to Kite format
-        kite_params = self._transform_order_params(params)
-
-        try:
-            order_id = self.kite.place_order(
-                variety=kite_params["variety"],
-                exchange=kite_params["exchange"],
-                tradingsymbol=kite_params["tradingsymbol"],
-                transaction_type=kite_params["transaction_type"],
-                quantity=kite_params["quantity"],
-                product=kite_params["product"],
-                order_type=kite_params["order_type"],
-                price=kite_params.get("price", 0),
-                trigger_price=kite_params.get("trigger_price", 0)
-            )
-
-            return {
-                "status": "success",
-                "order_id": order_id,
-                "message": "Order placed successfully"
-            }
-        except Exception as e:
-            return {
-                "status": "error",
-                "message": str(e)
-            }
-
-    def _transform_order_params(self, params: Dict) -> Dict:
-        """Transform OpenAlgo params to Kite format"""
-        return {
-            "variety": "regular",
-            "exchange": params["exchange"],
-            "tradingsymbol": params["symbol"],
-            "transaction_type": params["action"],  # BUY/SELL
-            "quantity": int(params["quantity"]),
-            "product": params["product"],  # MIS/CNC/NRML
-            "order_type": params["pricetype"],  # MARKET/LIMIT
-            "price": float(params.get("price", 0)),
-            "trigger_price": float(params.get("trigger_price", 0))
-        }
+    @abstractmethod
+    def get_history(self, symbol: str, interval: str, start: str, end: str) -> List:
+        """Get historical data"""
+        pass
 ```
 
 ## Data Transformation
 
 ### Symbol Mapping
 
-```python
-# broker/zerodha/mapping/symbol_mapping.py
-class SymbolMapper:
-    def to_broker_format(self, openalgo_symbol: str) -> str:
-        """
-        Convert OpenAlgo symbol format to broker format
-        OpenAlgo: SBIN-EQ
-        Zerodha: SBIN
-        """
-        if "-EQ" in openalgo_symbol:
-            return openalgo_symbol.replace("-EQ", "")
-        return openalgo_symbol
+Each broker uses different symbol formats. OpenAlgo normalizes them:
 
-    def to_openalgo_format(self, broker_symbol: str, exchange: str) -> str:
-        """
-        Convert broker symbol to OpenAlgo format
-        Zerodha: SBIN
-        OpenAlgo: SBIN-EQ
-        """
-        if exchange in ["NSE", "BSE"]:
-            return f"{broker_symbol}-EQ"
-        return broker_symbol
+```python
+# OpenAlgo Standard Format Examples
+NSE Equity:    "RELIANCE"
+BSE Equity:    "RELIANCE"
+NFO Futures:   "NIFTY25NOVFUT"
+NFO Options:   "NIFTY2511519500CE"
+MCX Futures:   "CRUDEOIL25NOVFUT"
 ```
 
 ### Response Transformation
 
 ```python
-# broker/zerodha/mapping/transform_data.py
 class ResponseTransformer:
     def transform_position(self, broker_position: Dict) -> Dict:
         """Transform broker position to OpenAlgo format"""
         return {
-            "symbol": self.symbol_mapper.to_openalgo_format(
-                broker_position["tradingsymbol"],
-                broker_position["exchange"]
-            ),
+            "symbol": self.normalize_symbol(broker_position),
             "exchange": broker_position["exchange"],
             "quantity": broker_position["quantity"],
-            "product": broker_position["product"],
-            "buy_price": broker_position["average_price"],
-            "sell_price": 0,
-            "buy_quantity": broker_position["buy_quantity"],
-            "sell_quantity": broker_position["sell_quantity"],
+            "product": self.map_product(broker_position["product"]),
+            "average_price": broker_position["average_price"],
+            "ltp": broker_position["last_price"],
             "pnl": broker_position["pnl"],
-            "ltp": broker_position["last_price"]
+            "pnl_percent": self.calculate_pnl_percent(broker_position)
         }
 
     def transform_order(self, broker_order: Dict) -> Dict:
         """Transform broker order to OpenAlgo format"""
         return {
-            "order_id": broker_order["order_id"],
-            "symbol": self.symbol_mapper.to_openalgo_format(
-                broker_order["tradingsymbol"],
-                broker_order["exchange"]
-            ),
+            "orderid": broker_order["order_id"],
+            "symbol": self.normalize_symbol(broker_order),
             "exchange": broker_order["exchange"],
             "action": broker_order["transaction_type"],
             "quantity": broker_order["quantity"],
             "price": broker_order["price"],
-            "pricetype": broker_order["order_type"],
-            "product": broker_order["product"],
-            "status": self._map_order_status(broker_order["status"]),
+            "pricetype": self.map_order_type(broker_order["order_type"]),
+            "product": self.map_product(broker_order["product"]),
+            "status": self.map_status(broker_order["status"]),
             "filled_quantity": broker_order["filled_quantity"],
             "pending_quantity": broker_order["pending_quantity"],
             "order_datetime": broker_order["order_timestamp"]
         }
 ```
 
-## Master Contract Management
+## WebSocket Streaming
 
-### Instrument Data Synchronization
+### Supported Data Types
+
+| Data Type | Description | Brokers Supporting |
+|-----------|-------------|-------------------|
+| **LTP** | Last Traded Price | All WebSocket brokers |
+| **Quotes** | OHLC + Volume | Most brokers |
+| **Depth** | Market Depth L1-L5 | Zerodha, Angel, Motilal, etc. |
+
+### WebSocket Adapter Example (Motilal - Latest)
 
 ```python
-# broker/zerodha/database/master_contract_db.py
-import pandas as pd
-from sqlalchemy import create_engine
+# broker/motilal/streaming/motilal_adapter.py
+class MotilalWebSocketAdapter(BaseBrokerWebSocketAdapter):
+    def __init__(self, auth_token: str, feed_token: str):
+        super().__init__()
+        self.auth_token = auth_token
+        self.feed_token = feed_token
+        self.client = MotilalWebSocket(auth_token, feed_token)
 
+    async def connect(self):
+        """Establish WebSocket connection"""
+        await self.client.connect()
+        self.client.on_tick = self.on_tick
+        self.client.on_connect = self.on_connect
+
+    async def subscribe(self, symbols: List[str], mode: str):
+        """Subscribe to market data
+        Modes: LTP, QUOTE, DEPTH
+        """
+        tokens = [self.get_token(s) for s in symbols]
+        await self.client.subscribe(tokens, mode)
+
+    def on_tick(self, tick_data: Dict):
+        """Process incoming tick"""
+        normalized = self.normalize_tick(tick_data)
+        self.publish_to_zmq(normalized)
+```
+
+## Master Contract Management
+
+### Contract Synchronization
+
+```python
 class MasterContractManager:
-    def __init__(self, db_url: str):
+    def __init__(self, broker: str, db_url: str):
+        self.broker = broker
         self.engine = create_engine(db_url)
 
     def download_contracts(self) -> pd.DataFrame:
         """Download latest instrument master from broker"""
-        url = "https://api.kite.trade/instruments"
-        df = pd.read_csv(url)
-        return df
+        # Broker-specific download logic
+        pass
 
     def process_contracts(self, df: pd.DataFrame) -> pd.DataFrame:
         """Process and standardize instrument data"""
-        # Add OpenAlgo specific columns
+        # Add OpenAlgo standard columns
         df['openalgo_symbol'] = df.apply(self._create_symbol, axis=1)
         df['token'] = df['instrument_token']
 
         # Filter active instruments
-        df = df[df['exchange'].isin(['NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS'])]
+        df = df[df['exchange'].isin([
+            'NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NCDEX'
+        ])]
 
-        # Recent Update: Filter out NSE_COM instruments (Upstox)
-        if 'segment' in df.columns:
+        # Recent: Filter out NSE_COM for Upstox
+        if self.broker == 'upstox' and 'segment' in df.columns:
             df = df[df['segment'] != 'NSE_COM']
 
         return df
 
     def save_to_database(self, df: pd.DataFrame):
         """Save processed contracts to database"""
-        df.to_sql(
-            'master_contracts',
-            self.engine,
-            if_exists='replace',
-            index=False
-        )
-
-        # Create indexes for fast lookup
-        with self.engine.connect() as conn:
-            conn.execute("CREATE INDEX idx_symbol ON master_contracts(openalgo_symbol)")
-            conn.execute("CREATE INDEX idx_token ON master_contracts(token)")
-```
-
-## WebSocket Streaming
-
-### Real-time Data Integration
-
-```python
-# broker/zerodha/streaming/websocket_client.py
-from kiteconnect import KiteTicker
-import asyncio
-import json
-
-class ZerodhaWebSocketClient:
-    def __init__(self, api_key: str, access_token: str):
-        self.kite_ticker = KiteTicker(api_key, access_token)
-        self.subscribers = {}
-        self.setup_callbacks()
-
-    def setup_callbacks(self):
-        self.kite_ticker.on_ticks = self.on_ticks
-        self.kite_ticker.on_connect = self.on_connect
-        self.kite_ticker.on_close = self.on_close
-        self.kite_ticker.on_error = self.on_error
-
-    def on_ticks(self, ws, ticks):
-        """Process incoming tick data"""
-        for tick in ticks:
-            openalgo_tick = self._transform_tick(tick)
-            self._broadcast_to_subscribers(openalgo_tick)
-
-    def _transform_tick(self, tick: Dict) -> Dict:
-        """Transform broker tick to OpenAlgo format"""
-        return {
-            "symbol": self._get_symbol_from_token(tick["instrument_token"]),
-            "ltp": tick["last_price"],
-            "volume": tick.get("volume", 0),
-            "bid": tick.get("depth", {}).get("buy", [{}])[0].get("price", 0),
-            "ask": tick.get("depth", {}).get("sell", [{}])[0].get("price", 0),
-            "oi": tick.get("oi", 0),
-            "timestamp": tick["timestamp"]
-        }
-
-    def subscribe(self, symbols: List[str], callback):
-        """Subscribe to real-time data for symbols"""
-        tokens = [self._get_token_from_symbol(s) for s in symbols]
-        self.kite_ticker.subscribe(tokens)
-
-        for symbol in symbols:
-            if symbol not in self.subscribers:
-                self.subscribers[symbol] = []
-            self.subscribers[symbol].append(callback)
-
-    def start(self):
-        """Start WebSocket connection"""
-        self.kite_ticker.connect(threaded=True)
+        df.to_sql('master_contracts', self.engine, if_exists='replace')
 ```
 
 ## Error Handling
@@ -511,7 +429,6 @@ class ZerodhaWebSocketClient:
 ### Broker-specific Error Mapping
 
 ```python
-# broker/common/error_handler.py
 class BrokerErrorHandler:
     ERROR_MAPPINGS = {
         "zerodha": {
@@ -526,29 +443,26 @@ class BrokerErrorHandler:
             "AB1002": "INVALID_ORDER",
             "AB1003": "INSUFFICIENT_FUNDS",
             "AB1004": "MARKET_CLOSED"
+        },
+        "motilal": {
+            "MOT001": "INVALID_TOKEN",
+            "MOT002": "ORDER_REJECTED",
+            "MOT003": "SYMBOL_NOT_FOUND"
         }
     }
 
     def handle_error(self, broker: str, error: Exception) -> Dict:
         """Convert broker error to standardized format"""
         error_type = type(error).__name__
-        error_code = self.ERROR_MAPPINGS.get(broker, {}).get(error_type, "UNKNOWN_ERROR")
-
+        error_code = self.ERROR_MAPPINGS.get(broker, {}).get(
+            error_type, "UNKNOWN_ERROR"
+        )
         return {
             "status": "error",
             "error_code": error_code,
             "message": str(error),
-            "broker": broker,
-            "retry_after": self._get_retry_after(error_code)
+            "broker": broker
         }
-
-    def _get_retry_after(self, error_code: str) -> Optional[int]:
-        """Get retry delay in seconds based on error type"""
-        if error_code == "NETWORK_ERROR":
-            return 5
-        elif error_code == "RATE_LIMIT":
-            return 60
-        return None
 ```
 
 ## Rate Limiting
@@ -556,47 +470,63 @@ class BrokerErrorHandler:
 ### Broker-specific Rate Management
 
 ```python
-# broker/common/rate_limiter.py
-from functools import wraps
-import time
-from collections import defaultdict
-
 class BrokerRateLimiter:
     def __init__(self):
         self.limits = {
             "zerodha": {"orders": 10, "quotes": 1, "window": 1},
             "angelone": {"orders": 10, "quotes": 10, "window": 1},
             "upstox": {"orders": 25, "quotes": 25, "window": 1},
-            "fyers": {"orders": 10, "quotes": 10, "window": 1}
+            "fyers": {"orders": 10, "quotes": 10, "window": 1},
+            "motilal": {"orders": 10, "quotes": 10, "window": 1},
+            "dhan": {"orders": 20, "quotes": 20, "window": 1}
         }
-        self.counters = defaultdict(lambda: defaultdict(list))
+```
 
-    def rate_limit(self, broker: str, endpoint: str):
-        """Decorator for rate limiting"""
-        def decorator(func):
-            @wraps(func)
-            def wrapper(*args, **kwargs):
-                if not self._can_proceed(broker, endpoint):
-                    raise RateLimitError(f"Rate limit exceeded for {broker}:{endpoint}")
+## Recent Updates (November 2025)
 
-                self._record_request(broker, endpoint)
-                return func(*args, **kwargs)
-            return wrapper
-        return decorator
+### 1. Motilal Oswal WebSocket Enhancement
 
-    def _can_proceed(self, broker: str, endpoint: str) -> bool:
-        """Check if request can proceed"""
-        limit_config = self.limits.get(broker, {})
-        limit = limit_config.get(endpoint, float('inf'))
-        window = limit_config.get("window", 1)
+```python
+# New WebSocket support for Motilal
+# Supports: LTP, Quotes, Depth Level 1
+# Features:
+# - SSL certificate handling
+# - Index quote support
+# - Quantity conversion for lot sizes
+```
 
-        now = time.time()
-        recent_requests = [
-            t for t in self.counters[broker][endpoint]
-            if now - t < window
-        ]
+### 2. Multi-Quote API (Zerodha)
 
-        return len(recent_requests) < limit
+```python
+# Batch quote retrieval
+def get_multi_quotes(symbols: List[str]) -> Dict:
+    """Get quotes for multiple symbols in single request"""
+    return self.kite.quote(symbols)
+```
+
+### 3. Upstox NSE_COM Filtering
+
+```python
+# Filter out commodity instruments from equity segment
+df = df[df['segment'] != 'NSE_COM']
+```
+
+### 4. Logging Optimization (Fyers, Dhan, Angel One)
+
+```python
+# Changed from INFO to DEBUG for sensitive operations
+logger.debug(f"Symbol subscription: {symbols}")
+logger.debug(f"Order placement details: {masked_params}")
+```
+
+### 5. Dhan Historical Data Date Fix
+
+```python
+# Fixed date parsing for sandbox environment
+if is_sandbox:
+    date_format = "%Y-%m-%d %H:%M:%S"
+else:
+    date_format = "%Y-%m-%d"
 ```
 
 ## Connection Management
@@ -604,10 +534,6 @@ class BrokerRateLimiter:
 ### Connection Pool Implementation
 
 ```python
-# broker/common/connection_manager.py
-from contextlib import contextmanager
-import httpx
-
 class BrokerConnectionManager:
     def __init__(self):
         self.clients = {}
@@ -625,90 +551,13 @@ class BrokerConnectionManager:
         return self.clients[broker]
 
     def _create_client(self, broker: str) -> httpx.Client:
-        """Create new HTTP client with connection pooling"""
         return httpx.Client(
             limits=httpx.Limits(
                 max_connections=self.config["pool_connections"],
                 max_keepalive_connections=self.config["pool_maxsize"]
             ),
-            timeout=self.config["timeout"],
-            headers={
-                "User-Agent": f"OpenAlgo/1.0 ({broker})"
-            }
+            timeout=self.config["timeout"]
         )
-
-    @contextmanager
-    def get_connection(self, broker: str):
-        """Context manager for broker connections"""
-        client = self.get_client(broker)
-        try:
-            yield client
-        except httpx.NetworkError as e:
-            # Retry logic
-            for attempt in range(self.config["max_retries"]):
-                try:
-                    yield client
-                    break
-                except:
-                    if attempt == self.config["max_retries"] - 1:
-                        raise
-```
-
-## Recent Updates and Optimizations
-
-### September 2025 Updates
-
-#### 1. Upstox - NSE_COM Filtering
-```python
-# Filter out commodity instruments from equity segment
-df = df[df['segment'] != 'NSE_COM']
-```
-
-#### 2. Logging Optimization (Fyers, Dhan, Angel One)
-```python
-# Changed from INFO to DEBUG for sensitive operations
-logger.debug(f"Symbol subscription: {symbols}")  # Previously INFO
-logger.debug(f"Order placement details: {masked_params}")  # Previously INFO
-```
-
-#### 3. Dhan - Historical Data Date Handling Fix
-```python
-# Fixed date parsing for sandbox environment
-if is_sandbox:
-    date_format = "%Y-%m-%d %H:%M:%S"
-else:
-    date_format = "%Y-%m-%d"
-```
-
-## Testing Strategy
-
-### Integration Testing
-
-```python
-# test/test_broker_integration.py
-import pytest
-from broker.zerodha.api import ZerodhaAdapter
-
-@pytest.fixture
-def zerodha_adapter():
-    return ZerodhaAdapter(
-        auth_token="test_token",
-        config={"api_key": "test_key"}
-    )
-
-def test_place_order(zerodha_adapter, mock_api):
-    # Test order placement
-    response = zerodha_adapter.place_order({
-        "exchange": "NSE",
-        "symbol": "SBIN-EQ",
-        "action": "BUY",
-        "quantity": 1,
-        "pricetype": "MARKET",
-        "product": "MIS"
-    })
-
-    assert response["status"] == "success"
-    assert "order_id" in response
 ```
 
 ## Best Practices
@@ -745,4 +594,4 @@ def test_place_order(zerodha_adapter, mock_api):
 
 ## Conclusion
 
-The broker integration layer successfully abstracts the complexity of 25+ different broker APIs into a unified, consistent interface. Through careful design patterns, robust error handling, and continuous optimization, it provides a stable foundation for algorithmic trading across multiple Indian brokers.
+The broker integration layer successfully abstracts the complexity of 27 different broker APIs into a unified, consistent interface. Through careful design patterns, robust error handling, and continuous optimization, it provides a stable foundation for algorithmic trading across multiple Indian brokers.
