@@ -2,7 +2,7 @@
 
 import os
 import json
-from sqlalchemy import create_engine, Column, Integer, DateTime, Text, String
+from sqlalchemy import create_engine, Column, Integer, DateTime, Text, String, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
@@ -44,6 +44,13 @@ class AnalyzerLog(Base):
     request_data = Column(Text, nullable=False)
     response_data = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), default=func.now())
+
+    # Performance indexes for analyzer queries
+    __table_args__ = (
+        Index('idx_analyzer_api_type', 'api_type'),         # Speeds up filtering by API type
+        Index('idx_analyzer_created_at', 'created_at'),     # Speeds up time-based queries and log retrieval
+        Index('idx_analyzer_type_time', 'api_type', 'created_at'),  # Composite for API type + time range queries
+    )
 
     def to_dict(self):
         """Convert log entry to dictionary"""

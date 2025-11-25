@@ -2,7 +2,7 @@
 
 import os
 import base64
-from sqlalchemy import create_engine, UniqueConstraint
+from sqlalchemy import create_engine, UniqueConstraint, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean
@@ -122,6 +122,13 @@ class Auth(Base):
     user_id = Column(String(255), nullable=True)  # Add user_id column
     is_revoked = Column(Boolean, default=False)
 
+    # Performance indexes for frequently queried columns
+    __table_args__ = (
+        Index('idx_auth_broker', 'broker'),           # Speeds up get_broker_name() queries
+        Index('idx_auth_user_id', 'user_id'),         # Speeds up get_user_id() lookups
+        Index('idx_auth_is_revoked', 'is_revoked'),   # Speeds up token validity checks
+    )
+
 class ApiKeys(Base):
     __tablename__ = 'api_keys'
     id = Column(Integer, primary_key=True)
@@ -130,6 +137,12 @@ class ApiKeys(Base):
     api_key_encrypted = Column(Text, nullable=False)  # For retrieval
     created_at = Column(DateTime(timezone=True), default=func.now())
     order_mode = Column(String(20), default='auto')  # 'auto' or 'semi_auto'
+
+    # Performance indexes
+    __table_args__ = (
+        Index('idx_api_keys_order_mode', 'order_mode'),    # Speeds up filtering by order mode
+        Index('idx_api_keys_created_at', 'created_at'),    # Speeds up time-based queries
+    )
 
 def init_db():
     from database.db_init_helper import init_db_with_logging
