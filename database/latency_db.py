@@ -101,68 +101,113 @@ class OrderLatency(LatencyBase):
 
     @staticmethod
     def get_latency_stats():
-        """Get latency statistics"""
+        """Get latency statistics - optimized with minimal database queries"""
         try:
-            from sqlalchemy import func
-            
-            # Overall stats
-            total_orders = OrderLatency.query.count()
-            failed_orders = OrderLatency.query.filter(OrderLatency.status == 'FAILED').count()
-            
-            # Get average latencies
-            avg_rtt = latency_session.query(func.avg(OrderLatency.rtt_ms)).scalar() or 0
-            avg_overhead = latency_session.query(func.avg(OrderLatency.overhead_ms)).scalar() or 0
-            avg_total = latency_session.query(func.avg(OrderLatency.total_latency_ms)).scalar() or 0
-            
-            # Get p50, p90, p95, p99 latencies for TOTAL LATENCY using numpy for accurate percentile calculation
+            from sqlalchemy import func, case
             import numpy as np
-            total_latencies = [l[0] for l in OrderLatency.query.with_entities(OrderLatency.total_latency_ms).all()]
 
-            p50_total = p90_total = p95_total = p99_total = 0
-            if total_latencies:
-                p50_total = float(np.percentile(total_latencies, 50))
-                p90_total = float(np.percentile(total_latencies, 90))
-                p95_total = float(np.percentile(total_latencies, 95))
-                p99_total = float(np.percentile(total_latencies, 99))
+            # OPTIMIZED: Single query for all overall stats using CASE statements
+            # This replaces 9 separate queries with 1
+            overall_stats = latency_session.query(
+                func.count(OrderLatency.id).label('total'),
+                func.sum(case((OrderLatency.status == 'FAILED', 1), else_=0)).label('failed'),
+                func.avg(OrderLatency.rtt_ms).label('avg_rtt'),
+                func.avg(OrderLatency.overhead_ms).label('avg_overhead'),
+                func.avg(OrderLatency.total_latency_ms).label('avg_total'),
+                func.sum(case((OrderLatency.total_latency_ms < 100, 1), else_=0)).label('under_100'),
+                func.sum(case((OrderLatency.total_latency_ms < 150, 1), else_=0)).label('under_150'),
+                func.sum(case((OrderLatency.total_latency_ms < 200, 1), else_=0)).label('under_200'),
+            ).first()
 
-            # Calculate SLA compliance based on TOTAL LATENCY (orders under various thresholds)
-            orders_under_100ms = OrderLatency.query.filter(OrderLatency.total_latency_ms < 100).count()
-            orders_under_150ms = OrderLatency.query.filter(OrderLatency.total_latency_ms < 150).count()
-            orders_under_200ms = OrderLatency.query.filter(OrderLatency.total_latency_ms < 200).count()
+            total_orders = overall_stats.total or 0
+            failed_orders = overall_stats.failed or 0
+            avg_rtt = overall_stats.avg_rtt or 0
+            avg_overhead = overall_stats.avg_overhead or 0
+            avg_total = overall_stats.avg_total or 0
+            orders_under_100ms = overall_stats.under_100 or 0
+            orders_under_150ms = overall_stats.under_150 or 0
+            orders_under_200ms = overall_stats.under_200 or 0
 
+            # Calculate SLA percentages
             sla_100ms = (orders_under_100ms / total_orders * 100) if total_orders else 0
             sla_150ms = (orders_under_150ms / total_orders * 100) if total_orders else 0
             sla_200ms = (orders_under_200ms / total_orders * 100) if total_orders else 0
 
-            # Breakdown by broker
+            # OPTIMIZED: Single query for percentiles (still need all values for accurate percentiles)
+            # But now we only fetch one column instead of full rows
+            p50_total = p90_total = p95_total = p99_total = 0
+            if total_orders > 0:
+                total_latencies = [row[0] for row in latency_session.query(
+                    OrderLatency.total_latency_ms
+                ).filter(OrderLatency.total_latency_ms.isnot(None)).all()]
+
+                if total_latencies:
+                    p50_total = float(np.percentile(total_latencies, 50))
+                    p90_total = float(np.percentile(total_latencies, 90))
+                    p95_total = float(np.percentile(total_latencies, 95))
+                    p99_total = float(np.percentile(total_latencies, 99))
+
+            # OPTIMIZED: Single GROUP BY query for all broker stats
+            # This replaces N x 7 queries (where N = number of brokers) with just 1
+            broker_agg = latency_session.query(
+                OrderLatency.broker,
+                func.count(OrderLatency.id).label('total'),
+                func.sum(case((OrderLatency.status == 'FAILED', 1), else_=0)).label('failed'),
+                func.avg(OrderLatency.rtt_ms).label('avg_rtt'),
+                func.avg(OrderLatency.overhead_ms).label('avg_overhead'),
+                func.avg(OrderLatency.total_latency_ms).label('avg_total'),
+                func.sum(case((OrderLatency.total_latency_ms < 150, 1), else_=0)).label('under_150'),
+            ).filter(
+                OrderLatency.broker.isnot(None)
+            ).group_by(
+                OrderLatency.broker
+            ).all()
+
+            # Build broker stats dict from aggregated results
             broker_stats = {}
-            brokers = [b[0] for b in OrderLatency.query.with_entities(OrderLatency.broker).distinct().all()]
-            for broker in brokers:
-                if broker:  # Skip None values
-                    broker_orders = OrderLatency.query.filter_by(broker=broker)
-                    broker_total = broker_orders.count()
-                    broker_total_values = [r[0] for r in broker_orders.with_entities(OrderLatency.total_latency_ms).all()]
 
-                    # Calculate broker percentiles based on TOTAL LATENCY
-                    broker_p50 = broker_p99 = 0
-                    if broker_total_values:
-                        broker_p50 = float(np.percentile(broker_total_values, 50))
-                        broker_p99 = float(np.percentile(broker_total_values, 99))
+            # For percentiles, we need per-broker latency values
+            # OPTIMIZED: Single query to get all latencies grouped by broker
+            broker_latencies = {}
+            if broker_agg:
+                broker_names = [b.broker for b in broker_agg]
+                latency_rows = latency_session.query(
+                    OrderLatency.broker,
+                    OrderLatency.total_latency_ms
+                ).filter(
+                    OrderLatency.broker.in_(broker_names),
+                    OrderLatency.total_latency_ms.isnot(None)
+                ).all()
 
-                    # Calculate broker SLA based on TOTAL LATENCY
-                    broker_under_150 = broker_orders.filter(OrderLatency.total_latency_ms < 150).count()
-                    broker_sla = (broker_under_150 / broker_total * 100) if broker_total else 0
+                # Group latencies by broker
+                for row in latency_rows:
+                    if row.broker not in broker_latencies:
+                        broker_latencies[row.broker] = []
+                    broker_latencies[row.broker].append(row.total_latency_ms)
 
-                    broker_stats[broker] = {
-                        'total_orders': broker_total,
-                        'failed_orders': broker_orders.filter_by(status='FAILED').count(),
-                        'avg_rtt': float(broker_orders.with_entities(func.avg(OrderLatency.rtt_ms)).scalar() or 0),
-                        'avg_overhead': float(broker_orders.with_entities(func.avg(OrderLatency.overhead_ms)).scalar() or 0),
-                        'avg_total': float(broker_orders.with_entities(func.avg(OrderLatency.total_latency_ms)).scalar() or 0),
-                        'p50_total': broker_p50,
-                        'p99_total': broker_p99,
-                        'sla_150ms': broker_sla
-                    }
+            # Build final broker stats
+            for broker_row in broker_agg:
+                broker = broker_row.broker
+                broker_total = broker_row.total or 0
+                broker_under_150 = broker_row.under_150 or 0
+                broker_sla = (broker_under_150 / broker_total * 100) if broker_total else 0
+
+                # Calculate percentiles for this broker
+                broker_p50 = broker_p99 = 0
+                if broker in broker_latencies and broker_latencies[broker]:
+                    broker_p50 = float(np.percentile(broker_latencies[broker], 50))
+                    broker_p99 = float(np.percentile(broker_latencies[broker], 99))
+
+                broker_stats[broker] = {
+                    'total_orders': broker_total,
+                    'failed_orders': broker_row.failed or 0,
+                    'avg_rtt': float(broker_row.avg_rtt or 0),
+                    'avg_overhead': float(broker_row.avg_overhead or 0),
+                    'avg_total': float(broker_row.avg_total or 0),
+                    'p50_total': broker_p50,
+                    'p99_total': broker_p99,
+                    'sla_150ms': broker_sla
+                }
 
             return {
                 'total_orders': total_orders,
