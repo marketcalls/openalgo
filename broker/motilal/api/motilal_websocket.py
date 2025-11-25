@@ -425,7 +425,7 @@ class MotilalWebSocket:
                 if 0 <= level_index < 5:
                     self.last_depth[key]['bids'][level_index] = bid_data
                     self.last_depth[key]['asks'][level_index] = ask_data
-                    logger.info(f"📊 Depth level {level} stored for {key} ({symbol}): Bid={bid_rate}@{bid_qty}, Ask={offer_rate}@{offer_qty}")
+                    logger.info(f"📊 Depth level {level} stored for {key} ({symbol}): Bid={bid_data['price']}@{bid_qty}, Ask={ask_data['price']}@{offer_qty}")
 
         except Exception as e:
             logger.error(f"Error parsing depth level {level} packet: {str(e)}")
