@@ -138,7 +138,7 @@ class MotilalWebSocket:
             # Exponential backoff for reconnection attempts
             attempt += 1
             sleep_time = min(2 ** attempt, 30)  # Max 30 seconds between retries
-            logger.info(f"Reconnection attempt {attempt}/{self.MAX_RECONNECT_ATTEMPTS} failed. Retrying in {sleep_time}s")
+            logger.debug(f"Reconnection attempt {attempt}/{self.MAX_RECONNECT_ATTEMPTS} failed. Retrying in {sleep_time}s")
             time.sleep(sleep_time)
 
         if attempt >= self.MAX_RECONNECT_ATTEMPTS and not self.is_connected:
@@ -212,7 +212,7 @@ class MotilalWebSocket:
 
             # Send binary login packet
             ws.send(login_packet, opcode=websocket.ABNF.OPCODE_BINARY)
-            logger.info(f"Motilal WebSocket binary login packet sent ({len(login_packet)} bytes)")
+            logger.debug(f"Motilal WebSocket binary login packet sent ({len(login_packet)} bytes)")
             logger.debug(f"Login packet (hex): {login_packet.hex()}")
 
             # Don't mark as connected yet - wait for server response
@@ -257,7 +257,7 @@ class MotilalWebSocket:
 
             else:
                 # Might be a text response (error, etc.)
-                logger.info(f"Received text message: {message[:200]}")
+                logger.debug(f"Received text message: {message[:200]}")
                 try:
                     data = json.loads(message)
                     if "status" in data and data.get("status") == "ERROR":
@@ -321,14 +321,14 @@ class MotilalWebSocket:
                 subscription_key_check = f"{self._map_exchange_back(exchange_byte)}|{scrip}"
                 with self.lock:
                     if subscription_key_check in self.subscriptions:
-                        logger.info(f"🔍 SUBSCRIBED SCRIP DATA: {key} ({symbol}) - MsgType='{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}), BodyHex={body.hex()}")
+                        logger.debug(f"🔍 SUBSCRIBED SCRIP DATA: {key} ({symbol}) - MsgType='{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}), BodyHex={body.hex()}")
 
                 # Parse based on message type
                 # Message types from Motilal SDK:
                 # 'A' = LTP, 'B'-'F' = Depth levels 1-5, 'G' = OHLC, 'H' = Index, 'm' = OI
                 if msgtype in ['B', 'C', 'D', 'E', 'F']:  # Market Depth levels 1-5
                     level = ord(msgtype) - ord('B') + 1  # B=1, C=2, D=3, E=4, F=5
-                    logger.info(f"✓ Parsing DEPTH level {level} (msgtype='{msgtype}') packet for {key}, Symbol: {symbol}")
+                    logger.debug(f"✓ Parsing DEPTH level {level} (msgtype='{msgtype}') packet for {key}, Symbol: {symbol}")
                     self._parse_depth_level_packet(body, key, symbol, level)
                 elif msgtype == 'A':  # LTP
                     logger.debug(f"✓ Parsing LTP packet for {key}")
@@ -425,7 +425,7 @@ class MotilalWebSocket:
                 if 0 <= level_index < 5:
                     self.last_depth[key]['bids'][level_index] = bid_data
                     self.last_depth[key]['asks'][level_index] = ask_data
-                    logger.info(f"📊 Depth level {level} stored for {key} ({symbol}): Bid={bid_rate}@{bid_qty}, Ask={offer_rate}@{offer_qty}")
+                    logger.debug(f"📊 Depth level {level} stored for {key} ({symbol}): Bid={bid_data['price']}@{bid_qty}, Ask={ask_data['price']}@{offer_qty}")
 
         except Exception as e:
             logger.error(f"Error parsing depth level {level} packet: {str(e)}")
@@ -534,7 +534,7 @@ class MotilalWebSocket:
             symbol = None
             if original_instrument and hasattr(original_instrument, 'symbol'):
                 symbol = original_instrument.symbol
-                logger.info(f"✓ Using subscription symbol: {symbol} for {subscription_key}")
+                logger.debug(f"✓ Using subscription symbol: {symbol} for {subscription_key}")
             else:
                 logger.warning(f"✗ No subscription symbol found for {subscription_key}")
 
@@ -611,7 +611,7 @@ class MotilalWebSocket:
                     self.last_quotes[key] = {}
                 self.last_quotes[key].update(ltp_data)
 
-            logger.info(f"✓ Updated LTP data for {key} - LTP: {ltp_data['ltp']}, Symbol: {symbol}, OI: {ltp_data['open_interest']}")
+            logger.debug(f"✓ Updated LTP data for {key} - LTP: {ltp_data['ltp']}, Symbol: {symbol}, OI: {ltp_data['open_interest']}")
         except Exception as e:
             logger.error(f"Error processing LTP data: {str(e)}")
 
@@ -680,7 +680,7 @@ class MotilalWebSocket:
                 self.last_depth[key]['time'] = data.get('Time', '')
                 self.last_depth[key]['timestamp'] = datetime.now().isoformat()
 
-            logger.info(f"✓ Updated market depth level {level} for {key} - Symbol: {symbol}")
+            logger.debug(f"✓ Updated market depth level {level} for {key} - Symbol: {symbol}")
         except Exception as e:
             logger.error(f"Error processing market depth data: {str(e)}")
 
@@ -752,7 +752,7 @@ class MotilalWebSocket:
         with self.lock:
             self.is_connected = False
 
-        logger.info(f"Motilal WebSocket connection closed: {close_status_code}, {close_msg}")
+        logger.debug(f"Motilal WebSocket connection closed: {close_status_code}, {close_msg}")
 
         # Only attempt to reconnect if we didn't explicitly stop
         if not self._stop_event.is_set():
@@ -841,7 +841,7 @@ class MotilalWebSocket:
                 )
 
                 self.ws.send(register_packet, opcode=websocket.ABNF.OPCODE_BINARY)
-                logger.info(f"Registered scrip: {exchange} {exchange_type} {scrip_code} (Symbol: {symbol})")
+                logger.debug(f"Registered scrip: {exchange} {exchange_type} {scrip_code} (Symbol: {symbol})")
                 return True
             except Exception as e:
                 logger.error(f"Error sending register packet: {str(e)}")
@@ -905,7 +905,7 @@ class MotilalWebSocket:
                 )
 
                 self.ws.send(unregister_packet, opcode=websocket.ABNF.OPCODE_BINARY)
-                logger.info(f"Unregistered scrip: {exchange} {exchange_type} {scrip_code}")
+                logger.debug(f"Unregistered scrip: {exchange} {exchange_type} {scrip_code}")
                 return True
             except Exception as e:
                 logger.error(f"Error sending unregister packet: {str(e)}")
@@ -938,7 +938,7 @@ class MotilalWebSocket:
 
             try:
                 self.ws.send(json.dumps(index_msg))
-                logger.info(f"Registered index: {exchange}")
+                logger.debug(f"Registered index: {exchange}")
                 return True
             except Exception as e:
                 logger.error(f"Error sending index register message: {str(e)}")
@@ -970,7 +970,7 @@ class MotilalWebSocket:
 
             try:
                 self.ws.send(json.dumps(index_msg))
-                logger.info(f"Unregistered index: {exchange}")
+                logger.debug(f"Unregistered index: {exchange}")
                 return True
             except Exception as e:
                 logger.error(f"Error sending index unregister message: {str(e)}")
@@ -980,7 +980,7 @@ class MotilalWebSocket:
         """
         Resubscribes to all previously subscribed scrips and indices after reconnection.
         """
-        logger.info(f"Resubscribing to {len(self.subscribed_scrips)} scrips and {len(self.subscribed_indices)} indices")
+        logger.debug(f"Resubscribing to {len(self.subscribed_scrips)} scrips and {len(self.subscribed_indices)} indices")
 
         # Resubscribe to scrips
         for full_key, scrip_info in self.subscribed_scrips.items():
@@ -1077,7 +1077,7 @@ class MotilalWebSocket:
 
         with self.lock:
             depth = self.last_depth.get(key)
-            logger.info(f"🔍 Looking for depth with key '{key}'. Available keys: {list(self.last_depth.keys())}")
+            logger.debug(f"🔍 Looking for depth with key '{key}'. Available keys: {list(self.last_depth.keys())}")
 
             if depth:
                 # Filter out None values from bids and asks arrays
@@ -1090,7 +1090,7 @@ class MotilalWebSocket:
                 asks_filtered = [ask for ask in asks_raw if ask is not None]
 
                 # Log detailed depth summary
-                logger.info(f"✓ Found depth data for {key}: {len(bids_filtered)} bid levels, {len(asks_filtered)} ask levels")
+                logger.debug(f"✓ Found depth data for {key}: {len(bids_filtered)} bid levels, {len(asks_filtered)} ask levels")
                 for i, bid in enumerate(bids_filtered, 1):
                     logger.debug(f"  Bid Level {i}: Price={bid.get('price')}, Qty={bid.get('quantity')}, Orders={bid.get('orders')}")
                 for i, ask in enumerate(asks_filtered, 1):
