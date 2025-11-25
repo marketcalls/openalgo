@@ -1106,7 +1106,7 @@ wheels = [
 
 [[package]]
 name = "openalgo"
-version = "1.0.39"
+version = "1.0.40"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -1115,14 +1115,14 @@ dependencies = [
     { name = "pandas" },
     { name = "websocket-client" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cf/ae/4f511a4b4806d861c2606469205e87b02f042fcff36c65edfc750269031e/openalgo-1.0.39.tar.gz", hash = "sha256:9f10c72755dab67eca5291e982dff4496cf17822114c0bfc7a875bbd193ac7af", size = 108901, upload-time = "2025-11-19T10:30:41.004Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f6/b9/d8c65d9af8860b4e8b241e9f5b4b31c361602342f4c461a6716d65efb3f9/openalgo-1.0.40.tar.gz", hash = "sha256:e90cee48ec677d8a8fb2516ecb6d48eebc1de75a1d52fa7404aa0fb5449ab248", size = 109397, upload-time = "2025-11-25T08:13:47.104Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ea/0f/0c17a8bb982add6498f04799376db34133c37cead8f61d8e123dc85e53fc/openalgo-1.0.39-py3-none-any.whl", hash = "sha256:9bcbbd67bef63768dd7cae629aeffd5982b9769e2e168330cb05647159f8700f", size = 108914, upload-time = "2025-11-19T10:30:39.516Z" },
+    { url = "https://files.pythonhosted.org/packages/a2/e0/a94c761bf8bf51cb44698cea897c35e9e5d319cdef0ab0a642662766df7b/openalgo-1.0.40-py3-none-any.whl", hash = "sha256:d8bd4036aa5d17f7383825bea2dca0077e7c4ef4f9b9783f1bebfe4e73c8503e", size = 109470, upload-time = "2025-11-25T08:13:45.112Z" },
 ]
 
 [[package]]
 name = "openalgoui"
-version = "1.0.0.38"
+version = "1.0.0.39"
 source = { editable = "." }
 dependencies = [
     { name = "aniso8601" },
@@ -1351,7 +1351,7 @@ requires-dist = [
     { name = "nest-asyncio", specifier = "==1.6.0" },
     { name = "numba", specifier = "==0.63.0b1" },
     { name = "numpy", specifier = "==2.2.4" },
-    { name = "openalgo", specifier = "==1.0.39" },
+    { name = "openalgo", specifier = "==1.0.40" },
     { name = "ordered-set", specifier = "==4.1.0" },
     { name = "orjson", specifier = "==3.11.3" },
     { name = "packaging", specifier = "==24.1" },
