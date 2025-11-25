@@ -4,210 +4,178 @@
 
 Welcome to the design documentation for OpenAlgo, a comprehensive broker-agnostic algorithmic trading platform with advanced strategy hosting capabilities.
 
+**Current Version**: 1.0.0.38 (UI), Python SDK 1.0.39
+**Last Updated**: November 2025
+
 ### Purpose
 
 This documentation provides a comprehensive understanding of the OpenAlgo system architecture, core components, design patterns, data flows, and operational considerations. It serves as a guide for developers, architects, and maintainers involved in the development and extension of the platform.
 
-### Overview
+### Platform Overview
 
 OpenAlgo is a full-featured trading platform that provides:
-* **RESTful API Interface**: Built with Flask for programmatic trading
-* **Python Strategy Hosting**: Complete strategy management system with scheduling and monitoring
-* **Multi-Broker Support**: Unified interface for 20+ Indian brokers
-* **Real-time Market Data**: WebSocket infrastructure for live market feeds
-* **Web Dashboard**: Intuitive UI for manual trading and monitoring
-* **Advanced Order Management**: Smart orders, basket orders, and position management
+* **RESTful API Interface**: Built with Flask-RESTX for programmatic trading (40+ endpoints)
+* **Multi-Broker Support**: Unified interface for 27 Indian brokers
+* **Strategy Hosting**: TradingView webhooks, ChartInk integration, and Python strategies
+* **Real-time Market Data**: WebSocket infrastructure with ZeroMQ backend
+* **Paper Trading**: Sandbox mode with Rs 1 Crore virtual capital
+* **Telegram Bot**: Mobile trading and monitoring integration
+* **Advanced Analytics**: PnL tracking, latency monitoring, traffic analysis
 
 ### Key Features
 
 #### Trading Capabilities
-* Place, modify, and cancel orders across multiple brokers
-* Smart order types (SL, Target, Trailing SL)
+* Place, modify, and cancel orders across 27 brokers
+* Smart orders with position sizing (percentage/value)
 * Basket orders for multi-leg strategies
-* Position management and P&L tracking
-* Real-time order and trade book
+* Split orders for large quantity execution
+* Options trading with multi-leg support
+* Option Greeks calculator
 
 #### Strategy Management
-* Upload and host Python trading strategies
-* Process isolation for each strategy
-* Scheduled execution with cron-like scheduling
-* Real-time strategy logs and monitoring
-* Environment variable management for API keys
-* Automatic restart on system reboot
+* TradingView webhook signal execution
+* ChartInk scanner integration
+* Python strategy hosting with process isolation
+* Scheduled execution with IST timezone
+* Action Center for semi-auto order approval
 
 #### Market Data
-* Real-time quotes and market depth
+* Real-time quotes and multi-quotes
+* Market depth (Level 5)
 * Historical data with multiple timeframes
 * WebSocket streaming for live updates
-* Symbol search and contract management
+
+#### Monitoring & Analytics
+* Real-time PnL tracking (sub-minute support)
+* Order latency monitoring with percentiles
+* API traffic analytics and logging
+* Master contract status tracking
 
 ### Goals
 
-* **Broker Agnosticism:** Provide a unified API layer abstracting the complexities of different broker APIs
-* **Strategy Hosting:** Enable traders to deploy and manage automated strategies easily
-* **Extensibility:** Easily integrate new brokers and trading strategies
-* **Performance:** Ensure efficient handling of API requests and trading operations
-* **Reliability:** Maintain stable connections with automatic reconnection and error recovery
-* **Security:** Implement robust authentication, encryption, and data protection
-* **Usability:** Offer clear APIs and intuitive web interface
+* **Broker Agnosticism:** Unified API abstracting 27 different broker APIs
+* **Strategy Hosting:** Deploy and manage automated strategies easily
+* **Extensibility:** Easy integration of new brokers and strategies
+* **Performance:** Efficient handling with < 100ms order placement
+* **Reliability:** Stable connections with auto-reconnection
+* **Security:** Multi-layer security with Argon2, Fernet encryption
+* **Usability:** Clear APIs and intuitive web interface
 
 ### Target Users
 
-* **Algorithmic Traders**: Deploy and manage automated trading strategies
-* **Developers**: Build custom trading applications using the API
-* **Quantitative Analysts**: Backtest and deploy quantitative strategies
+* **Algorithmic Traders**: Deploy automated trading strategies
+* **Developers**: Build custom trading applications via API
+* **Quantitative Analysts**: Backtest and deploy quant strategies
 * **Trading Firms**: Manage multiple accounts and strategies
-* **Individual Traders**: Execute trades across multiple brokers from one platform
+* **Individual Traders**: Execute across brokers from one platform
 
 ## Documentation Structure
 
 ### Core Architecture
 - **[01_architecture.md](01_architecture.md)** - Overall system architecture and technology stack
-- **[02_api_layer.md](02_api_layer.md)** - RESTful API design and request handling
-- **[03_broker_integration.md](03_broker_integration.md)** - Broker-specific integrations and adapters
+- **[02_api_layer.md](02_api_layer.md)** - RESTful API design with 40+ endpoints
+- **[03_broker_integration.md](03_broker_integration.md)** - 27 broker integrations and adapters
 
 ### Data and Storage
-- **[04_database_layer.md](04_database_layer.md)** - Database design and data access patterns
-- **[05_strategies.md](05_strategies.md)** - Trading strategy implementation and management
-- **[11_python_strategy_hosting.md](11_python_strategy_hosting.md)** - Python strategy hosting system architecture
+- **[04_database_layer.md](04_database_layer.md)** - Multi-database design (4 databases, 21+ models)
+- **[05_strategies.md](05_strategies.md)** - Trading strategy implementation
+- **[11_python_strategy_hosting.md](11_python_strategy_hosting.md)** - Python strategy hosting system
 
 ### Security and Configuration
-- **[06_authentication_platform.md](06_authentication_platform.md)** - Authentication and authorization systems
-- **[07_configuration.md](07_configuration.md)** - Configuration management and environment setup
-- **[12_deployment_architecture.md](12_deployment_architecture.md)** - Deployment options and infrastructure
+- **[06_authentication_platform.md](06_authentication_platform.md)** - Authentication and authorization
+- **[07_configuration.md](07_configuration.md)** - Configuration management
+- **[12_deployment_architecture.md](12_deployment_architecture.md)** - Deployment options (VPS, Docker, AWS)
 
 ### Infrastructure and Utilities
-- **[08_utilities.md](08_utilities.md)** - Common utilities and helper functions
+- **[08_utilities.md](08_utilities.md)** - Common utilities and helpers
 - **[09_websocket_architecture.md](09_websocket_architecture.md)** - Real-time WebSocket infrastructure
 - **[10_logging_system.md](10_logging_system.md)** - Centralized logging system
 
 ### Advanced Features
-- **[13_telegram_bot_integration.md](13_telegram_bot_integration.md)** - Telegram bot for mobile trading and monitoring
-- **[14_sandbox_architecture.md](14_sandbox_architecture.md)** - Sandbox Mode (API Analyzer) architecture and design
+- **[13_telegram_bot_integration.md](13_telegram_bot_integration.md)** - Telegram bot for mobile trading
+- **[14_sandbox_architecture.md](14_sandbox_architecture.md)** - Sandbox/API Analyzer mode
 
 ## System Architecture Overview
 
 ### High-Level Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Client Layer                         │
-├──────────────┬──────────────┬──────────────┬──────────────┤
-│   Web UI     │  REST API    │  WebSocket   │   Strategy   │
-│  Dashboard   │   Clients    │   Clients    │   Scripts    │
-└──────────────┴──────────────┴──────────────┴──────────────┘
-                              │
-┌─────────────────────────────────────────────────────────────┐
-│                    OpenAlgo Platform                        │
-├─────────────────────────────────────────────────────────────┤
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │              Application Layer (Flask)               │   │
-│  ├───────────────┬─────────────┬───────────────────────┤   │
-│  │  Web Routes   │  REST API   │  Strategy Manager     │   │
-│  │  (Blueprints) │ (Flask-RESTX)│  (/python route)     │   │
-│  └───────────────┴─────────────┴───────────────────────┘   │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │              Business Logic Layer                    │   │
-│  ├──────────┬──────────┬──────────┬──────────────────┤   │
-│  │  Order   │ Position │ Strategy │   Market Data    │   │
-│  │  Manager │ Manager  │  Engine  │    Manager       │   │
-│  └──────────┴──────────┴──────────┴──────────────────┘   │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │            Broker Integration Layer                  │   │
-│  ├─────────────────────────────────────────────────────┤   │
-│  │  Broker Adapters (20+ brokers)                      │   │
-│  │  WebSocket Adapters | REST API Adapters             │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │              Infrastructure Layer                    │   │
-│  ├──────────┬──────────┬──────────┬──────────────────┤   │
-│  │ Database │ Logging  │ WebSocket│    Security      │   │
-│  │   ORM    │  System  │   Proxy  │   & Auth         │   │
-│  └──────────┴──────────┴──────────┴──────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-                              │
-┌─────────────────────────────────────────────────────────────┐
-│                    External Systems                         │
-├──────────────┬──────────────┬──────────────┬──────────────┤
-│   Database   │ Broker APIs  │ Market Data  │   Cloud      │
-│   (SQLite/   │  (REST/WS)   │   Feeds      │  Services    │
-│   PostgreSQL)│              │              │   (AWS)      │
-└──────────────┴──────────────┴──────────────┴──────────────┘
++-----------------------------------------------------------------+
+|                        Client Layer                              |
++----------------+----------------+----------------+---------------+
+|   Web UI       |  REST API      |  WebSocket     |   Telegram    |
+|  Dashboard     |   Clients      |   Clients      |     Bot       |
++----------------+----------------+----------------+---------------+
+                              |
++-----------------------------------------------------------------+
+|                    OpenAlgo Platform                             |
++-----------------------------------------------------------------+
+|  +-----------------------------------------------------------+  |
+|  |              Application Layer (Flask)                     |  |
+|  +---------------+-------------+-----------------------------+  |
+|  |  26 Blueprints|  REST API   |  Strategy Manager           |  |
+|  |  (Web Routes) | (Flask-RESTX)|  (TradingView/ChartInk/Py)  |  |
+|  +---------------+-------------+-----------------------------+  |
+|                                                                  |
+|  +-----------------------------------------------------------+  |
+|  |              Business Logic Layer                          |  |
+|  +----------+----------+----------+------------+-------------+  |
+|  |  Order   | Position | Strategy |  Market    |   Sandbox    |  |
+|  |  Manager | Manager  |  Engine  |  Data Mgr  |   Engine     |  |
+|  +----------+----------+----------+------------+-------------+  |
+|                                                                  |
+|  +-----------------------------------------------------------+  |
+|  |            Broker Integration Layer (27 Brokers)           |  |
+|  +-----------------------------------------------------------+  |
+|  |  Broker Adapters | WebSocket Adapters | Symbol Mapping     |  |
+|  +-----------------------------------------------------------+  |
+|                                                                  |
+|  +-----------------------------------------------------------+  |
+|  |              Infrastructure Layer                          |  |
+|  +----------+----------+----------+------------+-------------+  |
+|  | Database | Logging  | WebSocket|  Security  |  Monitoring  |  |
+|  |   ORM    |  System  |   Proxy  |  & Auth    |  & Analytics |  |
+|  +----------+----------+----------+------------+-------------+  |
++-----------------------------------------------------------------+
+                              |
++-----------------------------------------------------------------+
+|                    External Systems                              |
++----------------+----------------+----------------+---------------+
+|   4 Databases  | 27 Broker APIs| Market Data    |    Cloud      |
+|   (SQLite/     |  (REST/WS)    |   Feeds        |   Services    |
+|   PostgreSQL)  |               |                |    (AWS)      |
++----------------+----------------+----------------+---------------+
 ```
 
-## Recent Architecture Enhancements
+## Recent Enhancements (November 2025)
 
-### Python Strategy Hosting System (New)
-A comprehensive strategy hosting system that enables traders to:
-- **Upload and Deploy**: Upload Python scripts through web interface
-- **Process Isolation**: Each strategy runs in its own process for safety
-- **Scheduling**: Cron-like scheduling with IST timezone support
-- **Monitoring**: Real-time logs and status monitoring
-- **Environment Management**: Secure storage of API keys and configuration
-- **Cross-Platform**: Works on Windows, Linux, and macOS
+### Core Features
+- **PNL Tracker Sub-Minute Support** - Fixed timestamp handling for intraday analysis
+- **Motilal Oswal WebSocket** - LTP, Quotes, and Depth Level 1 support
+- **Options Multi-Order Fix** - Corrected response schema for multi-leg orders
+- **Multi-Quote API** - Batch quote retrieval for multiple symbols
+- **Action Center** - Semi-auto order approval workflow
 
-### Enhanced WebSocket Infrastructure
-- **WebSocket Proxy Server**: Central hub for managing client connections
-- **Broker Adapter Factory**: Dynamic loading of broker-specific adapters
-- **ZeroMQ Message Broker**: High-performance internal messaging
-- **Auto-Reconnection**: Automatic reconnection with exponential backoff
-- **Multi-Symbol Streaming**: Subscribe to multiple symbols simultaneously
+### Infrastructure
+- **4 Separate Databases** - Main, Sandbox, Latency, and Logs isolation
+- **26 Flask Blueprints** - Comprehensive modular routing
+- **40+ REST API Endpoints** - Complete trading functionality
+- **21+ Database Models** - Full data persistence layer
 
-### Advanced Order Management
-- **Smart Orders**: Implement SL, target, and trailing stop-loss orders
-- **Basket Orders**: Execute multiple orders as a single transaction
-- **Split Orders**: Automatically split large orders into smaller chunks
-- **Order Validation**: Client-side and server-side validation
+### Monitoring & Analytics
+- **Latency Monitoring** - Order RTT with percentile analysis
+- **Traffic Analytics** - Per-user and per-endpoint tracking
+- **Master Contract Status** - Contract download monitoring
 
-### Sandbox Mode (API Analyzer)
-- **Simulated Trading**: Test strategies with ₹1 Crore sandbox funds
-- **Realistic Execution**: Orders execute using real-time market data (LTP)
-- **Complete Order Types**: Support for MARKET, LIMIT, SL, and SL-M orders
-- **Accurate Margin System**: Leverage-based margin blocking and release
-- **Auto Square-Off**: Automatic MIS position closure at exchange-specific times
-- **Separate Database**: Isolated sandbox.db for clean data separation
-- **Thread Management**: Background execution and squareoff schedulers
+## Supported Brokers (27 Total)
 
-### Telegram Bot Integration
-- **Mobile Trading**: Monitor and interact with trading account via Telegram
-- **Real-time Notifications**: Order and position updates
-- **Chart Generation**: Generate and share charts directly in Telegram
-- **Secure Authentication**: Encrypted API key storage
-- **Command System**: Comprehensive command interface for all trading operations
-
-### Security Enhancements
-- **API Key Management**: Secure storage with encryption
-- **CSRF Protection**: Comprehensive CSRF token validation
-- **Rate Limiting**: Per-user and per-IP rate limiting
-- **Session Security**: Secure session handling with expiry
-- **Audit Logging**: Detailed logging for compliance
-- **Sensitive Data Protection**: Automatic redaction in logs
-
-### Deployment Options
-- **Docker Support**: Containerized deployment with docker-compose
-- **AWS Elastic Beanstalk**: Automated deployment to AWS
-- **Ubuntu VPS**: Production-ready installation scripts
-- **Nginx Integration**: Reverse proxy with SSL support
-- **Systemd Services**: Reliable process management
-
-### Performance Optimizations
-- **Connection Pooling**: Database connection pooling
-- **Caching**: In-memory caching for frequently accessed data
-- **Async Processing**: WebSocket and background task processing
-- **Lazy Loading**: On-demand loading of broker modules
-- **Resource Management**: Automatic cleanup of idle resources
-
-## Supported Brokers
-
-OpenAlgo currently supports 20+ Indian brokers including:
-- Zerodha, Angel One, Upstox, Groww
-- 5Paisa, IIFL, Kotak Securities
-- Dhan, Fyers, Alice Blue
-- Shoonya (Finvasia), Flattrade
-- And many more...
+| Category | Brokers |
+|----------|---------|
+| **Major Brokers** | Zerodha, Angel One, Upstox, IIFL, Kotak Neo |
+| **Discount Brokers** | Fyers, Dhan (Live + Sandbox), 5Paisa, 5Paisa XTS |
+| **Traditional** | Motilal Oswal (with WebSocket), Groww, Mstock |
+| **Specialized** | Definedge, Shoonya, Flattrade, Alice Blue |
+| **Others** | Compositedge, Firstock, IBulls, Indmoney, Paytm Money, Pocketful, Tradejini, Wisdom Capital, Zebu |
 
 Each broker integration includes:
 - Order placement and management
@@ -216,12 +184,66 @@ Each broker integration includes:
 - WebSocket streaming (where available)
 - Master contract management
 
-## Getting Started
+## Quick Start
 
-1. **Installation**: Use provided installation scripts for Ubuntu/VPS deployment
-2. **Configuration**: Set up broker API credentials in .env file
-3. **Authentication**: Login through web interface or API
-4. **Trading**: Use web dashboard or REST API for trading
-5. **Strategy Deployment**: Upload Python strategies via /python route
+### Installation
+1. Use provided installation scripts for Ubuntu/VPS deployment
+2. Configure broker API credentials in `.env` file
+3. Run migration scripts for database setup
+4. Start application with `uv run app.py`
+
+### API Authentication
+```bash
+# All API calls require X-API-KEY header
+curl -X GET "http://localhost:5000/api/v1/quotes?symbol=RELIANCE&exchange=NSE" \
+  -H "X-API-KEY: your_api_key"
+```
+
+### WebSocket Connection
+```python
+# Connect to WebSocket proxy on port 8765
+import websocket
+ws = websocket.WebSocket()
+ws.connect("ws://localhost:8765")
+```
+
+## Technology Stack
+
+| Component | Technology |
+|-----------|------------|
+| **Backend** | Python 3.8+, Flask 3.0.3 |
+| **API** | Flask-RESTX 1.3.0 |
+| **Database** | SQLAlchemy 2.0.31, SQLite/PostgreSQL |
+| **WebSocket** | websockets 15.0.1, ZeroMQ |
+| **Security** | Argon2, Fernet, pyotp |
+| **Scheduling** | APScheduler 3.11.0 |
+| **Data Processing** | Pandas 2.2.3, NumPy 2.2.4 |
+
+## Performance Targets
+
+| Operation | Target | Typical |
+|-----------|--------|---------|
+| Order Placement | < 100ms | ~50ms |
+| Quote Retrieval | < 200ms | ~100ms |
+| WebSocket Tick | < 50ms | ~20ms |
+| Database Query | < 10ms | ~5ms |
+
+## Security Features
+
+- **Password Hashing**: Argon2 with pepper
+- **Token Encryption**: Fernet symmetric encryption
+- **2FA Support**: TOTP via pyotp
+- **Session Security**: IST-based expiry at 3:00 AM
+- **API Rate Limiting**: Per-user and per-endpoint
+- **CSRF Protection**: WTF-CSRF tokens
+- **Sensitive Data Redaction**: In logs and responses
+
+## Contributing
 
 For detailed setup instructions, refer to the INSTALL.md file in the root directory.
+
+For API documentation, access the Swagger UI at `/api/v1/docs` after starting the application.
+
+## License
+
+OpenAlgo is open source software. See the LICENSE file for details.
