@@ -122,13 +122,13 @@ def create_pending_orders_table(engine):
             """))
             conn.commit()
 
-        # Create indexes
+        # Create indexes (IF NOT EXISTS for idempotency)
         with engine.connect() as conn:
             conn.execute(text("""
-                CREATE INDEX idx_user_status ON pending_orders(user_id, status)
+                CREATE INDEX IF NOT EXISTS idx_user_status ON pending_orders(user_id, status)
             """))
             conn.execute(text("""
-                CREATE INDEX idx_created_at ON pending_orders(created_at)
+                CREATE INDEX IF NOT EXISTS idx_created_at ON pending_orders(created_at)
             """))
             conn.commit()
 

@@ -1,6 +1,20 @@
 # OpenAlgo Upgrade Guide
 
-## Running Migrations
+## Quick Start (Recommended)
+
+**One command runs ALL migrations** - works for fresh installs and existing users on any version:
+
+```bash
+cd upgrade
+uv run migrate_all.py
+cd ..
+```
+
+Each migration automatically skips if already applied, so it's safe to run anytime.
+
+---
+
+## Running Individual Migrations
 
 All migration scripts support the `uv run` command (recommended) or standard Python execution:
 
@@ -134,10 +148,57 @@ When you first use the feature, these will be created automatically:
 ## Core Database Migrations
 
 ### Available Migrations
+- **migrate_all.py** - Runs ALL migrations in correct order (recommended)
 - **add_feed_token.py** - Adds feed token support for data feeds
 - **add_user_id.py** - Adds user ID column to various tables
-- **migrate_security_columns.py** - Migrates security-related columns
+- **migrate_telegram_bot.py** - Telegram bot integration tables
 - **migrate_smtp_simple.py** - SMTP configuration migration
+- **migrate_security_columns.py** - Migrates security-related columns
+- **migrate_sandbox.py** - Sandbox mode database setup
+- **migrate_order_mode.py** - Order mode and Action Center
+- **migrate_indexes.py** - Adds performance indexes to all database tables
+
+---
+
+### Performance Indexes Migration (v2.1.0)
+**Performance** - Adds database indexes for improved query performance
+
+#### How to Apply
+```bash
+# Navigate to openalgo directory
+cd openalgo
+
+# Apply indexes migration
+uv run upgrade/migrate_indexes.py
+
+# Or using Python directly
+python upgrade/migrate_indexes.py
+```
+
+#### What It Does
+The `migrate_indexes.py` script adds performance indexes across all databases:
+
+**Main Database:**
+- `auth` table: broker, user_id, is_revoked indexes
+- `api_keys` table: order_mode, created_at indexes
+- `analyzer_logs` table: api_type, created_at, composite (api_type+created_at) indexes
+
+**Logs Database:**
+- `traffic_logs` table: timestamp, client_ip, status_code, user_id, composite (client_ip+timestamp) indexes
+- `error_404_tracker` table: error_count, first_error_at indexes
+- `invalid_api_key_tracker` table: attempt_count, first_attempt_at indexes
+
+#### Benefits
+- Faster query execution (O(log n) vs O(n) table scans)
+- Improved security dashboard performance
+- Better log retrieval and analytics
+- Reduced database I/O operations
+
+#### Migration Features
+- **Idempotent**: Safe to run multiple times
+- **Non-destructive**: Skips existing indexes
+- **Multi-database**: Handles main DB and logs DB automatically
+- **Verification**: Confirms all indexes after creation
 
 ---
 

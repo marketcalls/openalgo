@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Boolean, Text
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Boolean, Text, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
@@ -38,7 +38,7 @@ LogBase.query = logs_session.query_property()
 class TrafficLog(LogBase):
     """Model for traffic logging"""
     __tablename__ = 'traffic_logs'
-    
+
     id = Column(Integer, primary_key=True)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
     client_ip = Column(String(50), nullable=False)
@@ -49,6 +49,15 @@ class TrafficLog(LogBase):
     host = Column(String(500))
     error = Column(String(500))
     user_id = Column(Integer)  # No foreign key since it's a separate database
+
+    # Performance indexes for common query patterns
+    __table_args__ = (
+        Index('idx_traffic_timestamp', 'timestamp'),          # Speeds up time-based queries and log retrieval
+        Index('idx_traffic_client_ip', 'client_ip'),          # Speeds up IP-based filtering and analytics
+        Index('idx_traffic_status_code', 'status_code'),      # Speeds up error rate calculations
+        Index('idx_traffic_user_id', 'user_id'),              # Speeds up per-user traffic analysis
+        Index('idx_traffic_ip_timestamp', 'client_ip', 'timestamp'),  # Composite for IP + time range queries
+    )
 
     @staticmethod
     def log_request(client_ip, method, path, status_code, duration_ms, host=None, error=None, user_id=None):
@@ -241,6 +250,12 @@ class Error404Tracker(LogBase):
     last_error_at = Column(DateTime(timezone=True), server_default=func.now())
     paths_attempted = Column(Text)  # JSON array of attempted paths
 
+    # Performance indexes for security monitoring
+    __table_args__ = (
+        Index('idx_404_error_count', 'error_count'),              # Speeds up get_suspicious_ips() filtering
+        Index('idx_404_first_error_at', 'first_error_at'),        # Speeds up old entry cleanup
+    )
+
     @staticmethod
     def track_404(ip_address, path):
         """Track a 404 error for an IP"""
@@ -341,6 +356,12 @@ class InvalidAPIKeyTracker(LogBase):
     first_attempt_at = Column(DateTime(timezone=True), server_default=func.now())
     last_attempt_at = Column(DateTime(timezone=True), server_default=func.now())
     api_keys_tried = Column(Text)  # JSON array of API keys tried (hashed)
+
+    # Performance indexes for security monitoring
+    __table_args__ = (
+        Index('idx_api_tracker_attempt_count', 'attempt_count'),      # Speeds up get_suspicious_api_users() filtering
+        Index('idx_api_tracker_first_attempt_at', 'first_attempt_at'), # Speeds up old entry cleanup
+    )
 
     @staticmethod
     def track_invalid_api_key(ip_address, api_key_hash=None):
