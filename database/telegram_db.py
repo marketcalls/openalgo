@@ -15,9 +15,17 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker, relationship
 from sqlalchemy.sql import func
 from sqlalchemy.pool import NullPool
+from cachetools import TTLCache
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Telegram caches - 30 minute TTL for user lookups
+# These reduce DB queries significantly for bot message handling
+_telegram_user_cache = TTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
+_telegram_username_cache = TTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
+_user_preferences_cache = TTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
+_user_credentials_cache = TTLCache(maxsize=10000, ttl=1800)  # 30 minutes TTL
 
 # Database configuration
 DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///db/telegram.db')
@@ -183,7 +191,13 @@ def init_db():
 # Telegram User Management Functions
 
 def get_telegram_user(telegram_id: int) -> Optional[Dict]:
-    """Get telegram user by telegram_id"""
+    """Get telegram user by telegram_id (cached for 30 minutes)"""
+    cache_key = f"user_{telegram_id}"
+
+    # Check cache first
+    if cache_key in _telegram_user_cache:
+        return _telegram_user_cache[cache_key]
+
     try:
         user = db_session.query(TelegramUser).filter_by(
             telegram_id=telegram_id,
@@ -191,7 +205,7 @@ def get_telegram_user(telegram_id: int) -> Optional[Dict]:
         ).first()
 
         if user:
-            return {
+            result = {
                 'id': user.id,
                 'telegram_id': user.telegram_id,
                 'openalgo_username': user.openalgo_username,
@@ -205,6 +219,9 @@ def get_telegram_user(telegram_id: int) -> Optional[Dict]:
                 'updated_at': user.updated_at,
                 'last_command_at': user.last_command_at
             }
+            # Cache the result
+            _telegram_user_cache[cache_key] = result
+            return result
         return None
     except Exception as e:
         logger.error(f"Failed to get telegram user: {str(e)}")
@@ -214,7 +231,13 @@ def get_telegram_user(telegram_id: int) -> Optional[Dict]:
 
 
 def get_telegram_user_by_username(username: str) -> Optional[Dict]:
-    """Get telegram user by OpenAlgo username"""
+    """Get telegram user by OpenAlgo username (cached for 30 minutes)"""
+    cache_key = f"username_{username}"
+
+    # Check cache first
+    if cache_key in _telegram_username_cache:
+        return _telegram_username_cache[cache_key]
+
     try:
         user = db_session.query(TelegramUser).filter_by(
             openalgo_username=username,
@@ -222,7 +245,7 @@ def get_telegram_user_by_username(username: str) -> Optional[Dict]:
         ).first()
 
         if user:
-            return {
+            result = {
                 'id': user.id,
                 'telegram_id': user.telegram_id,
                 'openalgo_username': user.openalgo_username,
@@ -236,6 +259,9 @@ def get_telegram_user_by_username(username: str) -> Optional[Dict]:
                 'updated_at': user.updated_at,
                 'last_command_at': user.last_command_at
             }
+            # Cache the result
+            _telegram_username_cache[cache_key] = result
+            return result
         return None
     except Exception as e:
         logger.error(f"Failed to get telegram user by username: {str(e)}")
@@ -290,6 +316,18 @@ def create_or_update_telegram_user(telegram_id: int, username: str, api_key: str
 
         db_session.commit()
         logger.debug(f"Telegram user {telegram_id} linked successfully")
+
+        # Invalidate caches for this user
+        user_cache_key = f"user_{telegram_id}"
+        username_cache_key = f"username_{username}"
+        creds_cache_key = f"creds_{telegram_id}"
+        if user_cache_key in _telegram_user_cache:
+            del _telegram_user_cache[user_cache_key]
+        if username_cache_key in _telegram_username_cache:
+            del _telegram_username_cache[username_cache_key]
+        if creds_cache_key in _user_credentials_cache:
+            del _user_credentials_cache[creds_cache_key]
+
         return True
 
     except Exception as e:
@@ -306,10 +344,26 @@ def delete_telegram_user(telegram_id: int) -> bool:
         user = db_session.query(TelegramUser).filter_by(telegram_id=telegram_id).first()
 
         if user:
+            username = user.openalgo_username
             user.is_active = False
             user.updated_at = func.now()
             db_session.commit()
             logger.debug(f"Telegram user {telegram_id} unlinked")
+
+            # Invalidate caches for this user
+            user_cache_key = f"user_{telegram_id}"
+            username_cache_key = f"username_{username}"
+            creds_cache_key = f"creds_{telegram_id}"
+            prefs_cache_key = f"prefs_{telegram_id}"
+            if user_cache_key in _telegram_user_cache:
+                del _telegram_user_cache[user_cache_key]
+            if username_cache_key in _telegram_username_cache:
+                del _telegram_username_cache[username_cache_key]
+            if creds_cache_key in _user_credentials_cache:
+                del _user_credentials_cache[creds_cache_key]
+            if prefs_cache_key in _user_preferences_cache:
+                del _user_preferences_cache[prefs_cache_key]
+
             return True
 
         return False
@@ -517,12 +571,18 @@ def get_command_stats(days: int = 7) -> Dict:
 # User Preferences Functions
 
 def get_user_preferences(telegram_id: int) -> Dict:
-    """Get user preferences"""
+    """Get user preferences (cached for 30 minutes)"""
+    cache_key = f"prefs_{telegram_id}"
+
+    # Check cache first
+    if cache_key in _user_preferences_cache:
+        return _user_preferences_cache[cache_key]
+
     try:
         pref = db_session.query(UserPreference).filter_by(telegram_id=telegram_id).first()
 
         if pref:
-            return {
+            result = {
                 'order_notifications': pref.order_notifications,
                 'trade_notifications': pref.trade_notifications,
                 'pnl_notifications': pref.pnl_notifications,
@@ -531,17 +591,21 @@ def get_user_preferences(telegram_id: int) -> Dict:
                 'language': pref.language,
                 'timezone': pref.timezone
             }
+        else:
+            # Return default preferences
+            result = {
+                'order_notifications': True,
+                'trade_notifications': True,
+                'pnl_notifications': True,
+                'daily_summary': True,
+                'summary_time': '18:00',
+                'language': 'en',
+                'timezone': 'Asia/Kolkata'
+            }
 
-        # Return default preferences
-        return {
-            'order_notifications': True,
-            'trade_notifications': True,
-            'pnl_notifications': True,
-            'daily_summary': True,
-            'summary_time': '18:00',
-            'language': 'en',
-            'timezone': 'Asia/Kolkata'
-        }
+        # Cache the result
+        _user_preferences_cache[cache_key] = result
+        return result
 
     except Exception as e:
         logger.error(f"Failed to get user preferences: {str(e)}")
@@ -566,6 +630,12 @@ def update_user_preferences(telegram_id: int, preferences: Dict) -> bool:
 
         db_session.commit()
         logger.debug(f"User preferences updated for telegram_id: {telegram_id}")
+
+        # Invalidate preferences cache
+        prefs_cache_key = f"prefs_{telegram_id}"
+        if prefs_cache_key in _user_preferences_cache:
+            del _user_preferences_cache[prefs_cache_key]
+
         return True
 
     except Exception as e:
@@ -663,7 +733,13 @@ def get_decrypted_api_key(telegram_id: int) -> Optional[str]:
 
 
 def get_user_credentials(telegram_id: int) -> Optional[Dict]:
-    """Get user's API credentials and host URL"""
+    """Get user's API credentials and host URL (cached for 30 minutes)"""
+    cache_key = f"creds_{telegram_id}"
+
+    # Check cache first
+    if cache_key in _user_credentials_cache:
+        return _user_credentials_cache[cache_key]
+
     try:
         user = db_session.query(TelegramUser).filter_by(
             telegram_id=telegram_id,
@@ -678,12 +754,15 @@ def get_user_credentials(telegram_id: int) -> Optional[Dict]:
                 except Exception as e:
                     logger.error(f"Failed to decrypt API key: {str(e)}")
 
-            return {
+            result = {
                 'username': user.openalgo_username,
                 'api_key': api_key,
                 'host_url': user.host_url or os.getenv('HOST_SERVER', 'http://127.0.0.1:5000'),
                 'broker': user.broker
             }
+            # Cache the result
+            _user_credentials_cache[cache_key] = result
+            return result
         return None
     except Exception as e:
         logger.error(f"Failed to get user credentials: {str(e)}")
@@ -697,6 +776,18 @@ def get_auth_token_by_username(username: str):
     """Helper function to get auth token - imports here to avoid circular imports"""
     from database.auth_db import get_auth_token
     return get_auth_token(username)
+
+
+def clear_telegram_cache():
+    """
+    Clear all telegram caches.
+    Called on logout/session expiry to ensure fresh data on next login.
+    """
+    _telegram_user_cache.clear()
+    _telegram_username_cache.clear()
+    _user_preferences_cache.clear()
+    _user_credentials_cache.clear()
+    logger.info("Telegram cache cleared")
 
 
 # Cleanup function

@@ -4,12 +4,17 @@ from sqlalchemy import create_engine, Column, Integer, String, Boolean, MetaData
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.pool import NullPool
+from cachetools import TTLCache
 import os
 from utils.logging import get_logger
 from cryptography.fernet import Fernet
 import base64
 
 logger = get_logger(__name__)
+
+# Settings cache - 1 hour TTL (settings rarely change)
+# This cache significantly reduces DB queries since get_analyze_mode() is called on every request
+_settings_cache = TTLCache(maxsize=10, ttl=3600)  # 1 hour TTL
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 
@@ -72,12 +77,22 @@ def init_db():
         logger.debug(f"Settings DB: Default config may already exist (race condition): {e}")
 
 def get_analyze_mode():
-    """Get current analyze mode setting"""
+    """Get current analyze mode setting (cached for 1 hour)"""
+    cache_key = 'analyze_mode'
+
+    # Check cache first
+    if cache_key in _settings_cache:
+        return _settings_cache[cache_key]
+
+    # Cache miss - query database
     settings = Settings.query.first()
     if not settings:
         settings = Settings(analyze_mode=False)  # Default to Live Mode
         db_session.add(settings)
         db_session.commit()
+
+    # Store in cache
+    _settings_cache[cache_key] = settings.analyze_mode
     return settings.analyze_mode
 
 def set_analyze_mode(mode: bool):
@@ -89,6 +104,10 @@ def set_analyze_mode(mode: bool):
     else:
         settings.analyze_mode = mode
     db_session.commit()
+
+    # Invalidate cache after update
+    if 'analyze_mode' in _settings_cache:
+        del _settings_cache['analyze_mode']
 
 def _get_encryption_key():
     """Get or create encryption key for SMTP password"""
@@ -159,7 +178,14 @@ def set_smtp_settings(smtp_server=None, smtp_port=None, smtp_username=None,
     logger.info("SMTP settings updated successfully")
 
 def get_security_settings():
-    """Get security configuration"""
+    """Get security configuration (cached for 1 hour)"""
+    cache_key = 'security_settings'
+
+    # Check cache first
+    if cache_key in _settings_cache:
+        return _settings_cache[cache_key]
+
+    # Cache miss - query database
     settings = Settings.query.first()
     if not settings:
         # Create with defaults
@@ -174,13 +200,17 @@ def get_security_settings():
         db_session.add(settings)
         db_session.commit()
 
-    return {
+    result = {
         '404_threshold': settings.security_404_threshold or 20,
         '404_ban_duration': settings.security_404_ban_duration or 24,
         'api_threshold': settings.security_api_threshold or 10,
         'api_ban_duration': settings.security_api_ban_duration or 48,
         'repeat_offender_limit': settings.security_repeat_offender_limit or 3
     }
+
+    # Store in cache
+    _settings_cache[cache_key] = result
+    return result
 
 def set_security_settings(threshold_404=None, ban_duration_404=None,
                          threshold_api=None, ban_duration_api=None,
@@ -204,3 +234,16 @@ def set_security_settings(threshold_404=None, ban_duration_404=None,
 
     db_session.commit()
     logger.info("Security settings updated successfully")
+
+    # Invalidate cache after update
+    if 'security_settings' in _settings_cache:
+        del _settings_cache['security_settings']
+
+
+def clear_settings_cache():
+    """
+    Clear all settings caches.
+    Called on logout/session expiry to ensure fresh data on next login.
+    """
+    _settings_cache.clear()
+    logger.info("Settings cache cleared")

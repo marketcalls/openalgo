@@ -3,10 +3,16 @@ from sqlalchemy.orm import scoped_session, sessionmaker, relationship
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
 from sqlalchemy.pool import NullPool
+from cachetools import TTLCache
 import os
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Strategy caches - 5 minute TTL for webhook lookups (high frequency)
+# Webhook lookups happen on every webhook trigger, caching significantly reduces DB load
+_strategy_webhook_cache = TTLCache(maxsize=5000, ttl=300)  # 5 minutes TTL
+_user_strategies_cache = TTLCache(maxsize=1000, ttl=600)   # 10 minutes TTL
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 
@@ -89,6 +95,12 @@ def create_strategy(name, webhook_id, user_id, is_intraday=True, trading_mode='L
         )
         db_session.add(strategy)
         db_session.commit()
+
+        # Invalidate user strategies cache
+        user_cache_key = f"user_{user_id}"
+        if user_cache_key in _user_strategies_cache:
+            del _user_strategies_cache[user_cache_key]
+
         return strategy
     except Exception as e:
         logger.error(f"Error creating strategy: {str(e)}")
@@ -104,9 +116,17 @@ def get_strategy(strategy_id):
         return None
 
 def get_strategy_by_webhook_id(webhook_id):
-    """Get strategy by webhook ID"""
+    """Get strategy by webhook ID (cached for 5 minutes)"""
+    # Check cache first
+    if webhook_id in _strategy_webhook_cache:
+        return _strategy_webhook_cache[webhook_id]
+
     try:
-        return Strategy.query.filter_by(webhook_id=webhook_id).first()
+        strategy = Strategy.query.filter_by(webhook_id=webhook_id).first()
+        # Cache the result (including None for not found)
+        if strategy:
+            _strategy_webhook_cache[webhook_id] = strategy
+        return strategy
     except Exception as e:
         logger.error(f"Error getting strategy by webhook ID {webhook_id}: {str(e)}")
         return None
@@ -120,11 +140,19 @@ def get_all_strategies():
         return []
 
 def get_user_strategies(user_id):
-    """Get all strategies for a user"""
+    """Get all strategies for a user (cached for 10 minutes)"""
+    cache_key = f"user_{user_id}"
+
+    # Check cache first
+    if cache_key in _user_strategies_cache:
+        return _user_strategies_cache[cache_key]
+
     try:
         logger.info(f"Fetching strategies for user: {user_id}")
         strategies = Strategy.query.filter_by(user_id=user_id).all()
         logger.info(f"Found {len(strategies)} strategies")
+        # Cache the result
+        _user_strategies_cache[cache_key] = strategies
         return strategies
     except Exception as e:
         logger.error(f"Error getting user strategies for {user_id}: {str(e)}")
@@ -136,9 +164,21 @@ def delete_strategy(strategy_id):
         strategy = get_strategy(strategy_id)
         if not strategy:
             return False
-        
+
+        # Invalidate caches before deletion
+        webhook_id = strategy.webhook_id
+        user_id = strategy.user_id
+
         db_session.delete(strategy)
         db_session.commit()
+
+        # Clear from caches
+        if webhook_id in _strategy_webhook_cache:
+            del _strategy_webhook_cache[webhook_id]
+        user_cache_key = f"user_{user_id}"
+        if user_cache_key in _user_strategies_cache:
+            del _user_strategies_cache[user_cache_key]
+
         return True
     except Exception as e:
         logger.error(f"Error deleting strategy {strategy_id}: {str(e)}")
@@ -234,3 +274,13 @@ def delete_symbol_mapping(mapping_id):
         logger.error(f"Error deleting symbol mapping {mapping_id}: {str(e)}")
         db_session.rollback()
         return False
+
+
+def clear_strategy_cache():
+    """
+    Clear all strategy caches.
+    Called on logout/session expiry to ensure fresh data on next login.
+    """
+    _strategy_webhook_cache.clear()
+    _user_strategies_cache.clear()
+    logger.info("Strategy cache cleared")
