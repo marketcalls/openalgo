@@ -104,6 +104,26 @@ def check_session_validity(f):
             # Revoke tokens before clearing session
             revoke_user_tokens()
             session.clear()
+
+            # Check if this is an AJAX/fetch request
+            from flask import request, jsonify
+            is_ajax = (
+                request.headers.get('X-Requested-With') == 'XMLHttpRequest' or
+                request.headers.get('Accept', '').startswith('application/json') or
+                request.content_type == 'application/json' or
+                request.is_json
+            )
+
+            if is_ajax:
+                # Return JSON response for AJAX requests instead of redirect
+                # This prevents consuming rate limits on the login endpoint
+                logger.info("Invalid session detected - returning 401 for AJAX request")
+                return jsonify({
+                    'status': 'error',
+                    'error': 'session_expired',
+                    'message': 'Your session has expired. Please log in again.'
+                }), 401
+
             logger.info("Invalid session detected - redirecting to login")
             return redirect(url_for('auth.login'))
         logger.debug("Session validated successfully")

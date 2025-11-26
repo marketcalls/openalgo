@@ -1,7 +1,26 @@
+// Helper function to check for session expiry (401 response)
+async function checkSessionExpiry(response) {
+    if (response.status === 401) {
+        // Session expired - trigger global handler if available
+        if (typeof window.handleSessionExpiry === 'function') {
+            window.handleSessionExpiry();
+        } else {
+            // Fallback: redirect to login
+            window.location.href = '/auth/login';
+        }
+        return true;
+    }
+    return false;
+}
+
 // Function to fetch and update logs
 async function refreshLogs() {
+    // Skip if session is expired
+    if (window.sessionExpired) return;
+
     try {
         const response = await fetch('/logs');
+        if (await checkSessionExpiry(response)) return;
         const html = await response.text();
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
@@ -17,12 +36,16 @@ async function refreshLogs() {
 
 // Function to fetch and update orderbook
 async function refreshOrderbook() {
+    // Skip if session is expired
+    if (window.sessionExpired) return;
+
     try {
         const response = await fetch('/orderbook');
+        if (await checkSessionExpiry(response)) return;
         const html = await response.text();
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
-        
+
         // Update stats grid
         const newStatsGrid = tempDiv.querySelector('.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-5');
         if (newStatsGrid) {
@@ -31,7 +54,7 @@ async function refreshOrderbook() {
                 currentStatsGrid.innerHTML = newStatsGrid.innerHTML;
             }
         }
-        
+
         // Update table
         const newContent = tempDiv.querySelector('#orderbook-table-container');
         if (newContent) {
@@ -45,8 +68,12 @@ async function refreshOrderbook() {
 
 // Function to fetch and update tradebook
 async function refreshTradebook() {
+    // Skip if session is expired
+    if (window.sessionExpired) return;
+
     try {
         const response = await fetch('/tradebook');
+        if (await checkSessionExpiry(response)) return;
         const html = await response.text();
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
@@ -73,8 +100,12 @@ async function refreshTradebook() {
 
 // Function to fetch and update positions
 async function refreshPositions() {
+    // Skip if session is expired
+    if (window.sessionExpired) return;
+
     try {
         const response = await fetch('/positions');
+        if (await checkSessionExpiry(response)) return;
         const html = await response.text();
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
@@ -90,8 +121,12 @@ async function refreshPositions() {
 
 // Function to fetch and update dashboard funds
 async function refreshDashboard() {
+    // Skip if session is expired
+    if (window.sessionExpired) return;
+
     try {
         const response = await fetch('/dashboard');
+        if (await checkSessionExpiry(response)) return;
         const html = await response.text();
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
@@ -107,9 +142,13 @@ async function refreshDashboard() {
 
 // Function to fetch and update analyzer
 async function refreshAnalyzer() {
+    // Skip if session is expired
+    if (window.sessionExpired) return;
+
     try {
         // Update stats
         const statsResponse = await fetch('/analyzer/stats');
+        if (await checkSessionExpiry(statsResponse)) return;
         const statsData = await statsResponse.json();
         
         const totalRequests = document.getElementById('total-requests');
@@ -257,11 +296,26 @@ window.refreshCurrentPageContent = function() {
 
 // Refresh action center
 function refreshActionCenter() {
+    // Skip if session is expired
+    if (window.sessionExpired) return;
+
     const urlParams = new URLSearchParams(window.location.search);
     const status = urlParams.get('status') || 'pending';
     fetch(`/action-center?status=${status}`)
-        .then(response => response.text())
+        .then(response => {
+            if (response.status === 401) {
+                // Session expired - handle gracefully
+                if (typeof window.handleSessionExpiry === 'function') {
+                    window.handleSessionExpiry();
+                } else {
+                    window.location.href = '/auth/login';
+                }
+                return null;
+            }
+            return response.text();
+        })
         .then(html => {
+            if (!html) return;
             // Parse the HTML and extract the main content
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
@@ -271,7 +325,9 @@ function refreshActionCenter() {
                 currentContent.innerHTML = newContent.innerHTML;
             }
         })
-        .catch(error => console.error('Error refreshing action center:', error));
+        .catch(error => {
+            // Silently handle errors
+        });
 }
 
 document.addEventListener('DOMContentLoaded', function() {

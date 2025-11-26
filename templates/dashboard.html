@@ -227,12 +227,32 @@ class MasterContractStatus {
     }
 
     async checkStatus() {
+        // Skip if session is expired
+        if (window.sessionExpired) {
+            this.destroy();
+            return;
+        }
+
         try {
-            const response = await fetch('/api/master-contract/status');
+            const response = await fetch('/api/master-contract/status', {
+                headers: { 'Accept': 'application/json' }
+            });
+
+            // Handle session expiry (401)
+            if (response.status === 401) {
+                this.destroy();
+                if (typeof window.handleSessionExpiry === 'function') {
+                    window.handleSessionExpiry();
+                } else {
+                    window.location.href = '/auth/login';
+                }
+                return;
+            }
+
             const data = await response.json();
             this.updateDisplay(data);
         } catch (error) {
-            console.error('Error checking master contract status:', error);
+            // Silently handle errors
             this.updateDisplay({ status: 'error', message: 'Failed to check status' });
         }
     }

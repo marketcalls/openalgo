@@ -306,11 +306,38 @@
 </div>
 
 <script>
+// Global session expired flag to stop all polling
+window.sessionExpired = false;
+
+// Global function to handle session expiry - redirect to login page
+function handleSessionExpiry() {
+    if (!window.sessionExpired) {
+        window.sessionExpired = true;
+        // Redirect to login page
+        window.location.href = '/auth/login';
+    }
+}
+
 // Update Action Center badge with pending order count
+let actionCenterInterval = null;
+
 function updateActionCenterBadge() {
-    fetch('/action-center/count')
-        .then(res => res.json())
+    // Skip if session is expired
+    if (window.sessionExpired) return;
+
+    fetch('/action-center/count', {
+        headers: { 'Accept': 'application/json' }
+    })
+        .then(res => {
+            if (res.status === 401) {
+                // Session expired - handle gracefully
+                handleSessionExpiry();
+                return null;
+            }
+            return res.json();
+        })
         .then(data => {
+            if (!data) return;
             const badge = document.getElementById('action-center-badge');
             if (badge && data.count > 0) {
                 badge.textContent = data.count;
@@ -320,7 +347,7 @@ function updateActionCenterBadge() {
             }
         })
         .catch(error => {
-            console.error('Error fetching action center count:', error);
+            // Silently handle errors - don't spam console
         });
 }
 
@@ -328,5 +355,5 @@ function updateActionCenterBadge() {
 document.addEventListener('DOMContentLoaded', updateActionCenterBadge);
 
 // Update badge every 30 seconds
-setInterval(updateActionCenterBadge, 30000);
+actionCenterInterval = setInterval(updateActionCenterBadge, 30000);
 </script>
