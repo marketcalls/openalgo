@@ -93,7 +93,7 @@ class WebSocketProxy:
         
         try:
             # Start ZeroMQ listener
-            logger.info("Initializing ZeroMQ listener task")
+            logger.debug("Initializing ZeroMQ listener task")
             
             # Get the current event loop
             loop = aio.get_running_loop()
@@ -123,17 +123,17 @@ class WebSocketProxy:
                     try:
                         for sig in (signal.SIGINT, signal.SIGTERM):
                             loop.add_signal_handler(sig, stop.set_result, None)
-                        logger.info("Signal handlers registered successfully")
+                        logger.debug("Signal handlers registered successfully")
                     except (NotImplementedError, RuntimeError) as e:
                         # On Windows or when in a non-main thread
-                        logger.info(f"Signal handlers not registered: {e}. Using fallback mechanism.")
+                        logger.debug(f"Signal handlers not registered: {e}. Using fallback mechanism.")
                 else:
-                    logger.info("Running in a non-main thread. Signal handlers will not be used.")
+                    logger.debug("Running in a non-main thread. Signal handlers will not be used.")
             except RuntimeError:
-                logger.info("No running event loop found for signal handlers")
+                logger.debug("No running event loop found for signal handlers")
             
             highlighted_address = highlight_url(f"{self.host}:{self.port}")
-            logger.info(f"Starting WebSocket server on {highlighted_address}")
+            logger.debug(f"Starting WebSocket server on {highlighted_address}")
             
             # Try to start the WebSocket server with proper socket options for immediate port reuse
             try:
@@ -147,7 +147,7 @@ class WebSocketProxy:
                 )
                 
                 highlighted_success_address = highlight_url(f"{self.host}:{self.port}")
-                logger.info(f"WebSocket server successfully started on {highlighted_success_address}")
+                logger.debug(f"WebSocket server successfully started on {highlighted_success_address}")
                 
                 await stop  # Wait until stopped
                 
@@ -896,7 +896,7 @@ class WebSocketProxy:
         2. Use subscription_index for O(1) lookup instead of O(n²) iteration
         3. Batch message sending with asyncio.gather
         """
-        logger.info("Starting OPTIMIZED ZeroMQ listener with subscription indexing")
+        logger.debug("Starting OPTIMIZED ZeroMQ listener with subscription indexing")
 
         while self.running:
             try:

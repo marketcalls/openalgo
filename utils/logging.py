@@ -265,6 +265,16 @@ def setup_logging():
     # Suppress hpack DEBUG logs - they have format string bugs and are not useful
     logging.getLogger('hpack.hpack').setLevel(logging.INFO)
     logging.getLogger('hpack').setLevel(logging.INFO)
+    # Suppress APScheduler verbose logs
+    logging.getLogger('apscheduler').setLevel(logging.WARNING)
+    logging.getLogger('apscheduler.scheduler').setLevel(logging.WARNING)
+    logging.getLogger('apscheduler.executors').setLevel(logging.WARNING)
+    # Suppress websockets library logs
+    logging.getLogger('websockets').setLevel(logging.WARNING)
+    logging.getLogger('websockets.server').setLevel(logging.WARNING)
+    # Suppress telegram-bot library logs
+    logging.getLogger('telegram').setLevel(logging.WARNING)
+    logging.getLogger('telegram.ext').setLevel(logging.WARNING)
     
 
 def highlight_url(url: str, text: str = None) -> str:

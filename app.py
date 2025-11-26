@@ -2,6 +2,12 @@
 from utils.env_check import load_and_check_env_variables  # Import the environment check function
 load_and_check_env_variables()
 
+import re
+import sys
+
+# Initialize logging EARLY to suppress verbose startup logs
+from utils.logging import get_logger, log_startup_banner, highlight_url  # Import centralized logging
+
 from flask import Flask, render_template, session
 from flask_wtf.csrf import CSRFProtect  # Import CSRF protection
 from extensions import socketio  # Import SocketIO
@@ -12,7 +18,6 @@ from utils.version import get_version  # Import version management
 from utils.latency_monitor import init_latency_monitoring  # Import latency monitoring
 from utils.traffic_logger import init_traffic_logging  # Import traffic logging
 from utils.security_middleware import init_security_middleware  # Import security middleware
-from utils.logging import get_logger, log_startup_banner, highlight_url  # Import centralized logging
 from utils.socketio_error_handler import init_socketio_error_handling  # Import Socket.IO error handler
 # Import WebSocket proxy server - using relative import to avoid @ symbol issues
 from websocket_proxy.app_integration import start_websocket_proxy
@@ -229,17 +234,17 @@ def create_app():
             import sys
             bot_config = get_bot_config()
             if bot_config.get('is_active') and bot_config.get('bot_token'):
-                logger.info("Auto-starting Telegram bot (background)...")
+                logger.debug("Auto-starting Telegram bot (background)...")
 
                 # Check if we're in eventlet environment
                 if 'eventlet' in sys.modules:
-                    logger.info("Eventlet detected during auto-start - using synchronous initialization")
+                    logger.debug("Eventlet detected during auto-start - using synchronous initialization")
                     # Use synchronous initialization for eventlet
                     success, message = telegram_bot_service.initialize_bot_sync(token=bot_config['bot_token'])
                     if success:
                         success, message = telegram_bot_service.start_bot()
                         if success:
-                            logger.info(f"Telegram bot auto-started successfully: {message}")
+                            logger.debug(f"Telegram bot auto-started successfully: {message}")
                         else:
                             logger.error(f"Failed to auto-start Telegram bot: {message}")
                     else:
@@ -263,7 +268,7 @@ def create_app():
                             if success:
                                 success, message = telegram_bot_service.start_bot()
                                 if success:
-                                    logger.info(f"Telegram bot auto-started successfully: {message}")
+                                    logger.debug(f"Telegram bot auto-started successfully: {message}")
                                 else:
                                     logger.error(f"Failed to auto-start Telegram bot: {message}")
                             else:
@@ -274,7 +279,7 @@ def create_app():
                     # Start in background - don't wait for completion
                     thread = threading.Thread(target=init_and_start_bot, daemon=True)
                     thread.start()
-                    logger.info("Telegram bot initialization started in background")
+                    logger.debug("Telegram bot initialization started in background")
 
         except Exception as e:
             logger.error(f"Error auto-starting Telegram bot: {str(e)}")
@@ -390,7 +395,7 @@ def setup_environment(app):
                     logger.error(f"Failed to initialize {db_name}: {e}")
 
         db_init_time = (time.time() - db_init_start) * 1000
-        logger.info(f"All databases initialized in parallel ({db_init_time:.0f}ms)")
+        logger.debug(f"All databases initialized in parallel ({db_init_time:.0f}ms)")
 
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':
@@ -409,7 +414,7 @@ def setup_environment(app):
         # Kill any existing ngrok process first (more robust cleanup)
         try:
             ngrok.kill()
-            logger.info("Killed existing ngrok process")
+            logger.debug("Killed existing ngrok process")
             time.sleep(1)  # Wait for process to fully terminate
         except Exception:
             pass  # No existing process to kill
@@ -425,7 +430,7 @@ def setup_environment(app):
                 for tunnel in existing_tunnels:
                     if tunnel.name == 'flask':
                         public_url = tunnel.public_url
-                        logger.info(f"Reusing existing ngrok tunnel: {public_url}")
+                        logger.debug(f"Reusing existing ngrok tunnel: {public_url}")
                         break
 
                 if public_url:
@@ -433,7 +438,7 @@ def setup_environment(app):
 
                 # Create new tunnel if none exists
                 public_url = ngrok.connect(name='flask').public_url
-                logger.info(f"Created new ngrok tunnel: {public_url}")
+                logger.debug(f"Created new ngrok tunnel: {public_url}")
                 break
 
             except Exception as e:
@@ -503,21 +508,21 @@ with app.app_context():
                         service_name, success, message = future.result()
                         if service_name == 'execution_engine':
                             if success:
-                                logger.info("Execution engine auto-started (Analyzer mode is ON)")
+                                logger.debug("Execution engine auto-started (Analyzer mode is ON)")
                             else:
                                 logger.warning(f"Failed to auto-start execution engine: {message}")
                         elif service_name == 'squareoff_scheduler':
                             if success:
-                                logger.info("Square-off scheduler auto-started (Analyzer mode is ON)")
+                                logger.debug("Square-off scheduler auto-started (Analyzer mode is ON)")
                             else:
                                 logger.warning(f"Failed to auto-start square-off scheduler: {message}")
                         elif service_name == 'catchup_settlement':
-                            logger.info("Catch-up settlement check completed on startup")
+                            logger.debug("Catch-up settlement check completed on startup")
                     except Exception as e:
                         logger.error(f"Error starting service: {e}")
 
             startup_time = (time.time() - startup_start) * 1000
-            logger.info(f"Services started in parallel ({startup_time:.0f}ms)")
+            logger.debug(f"Services started in parallel ({startup_time:.0f}ms)")
     except Exception as e:
         logger.error(f"Error checking analyzer mode on startup: {e}")
 
@@ -527,9 +532,9 @@ with app.app_context():
 is_docker = os.path.exists('/.dockerenv') or os.environ.get('APP_MODE', '').strip().strip("'\"") == 'standalone'
 
 if is_docker:
-    logger.info("Running in Docker/standalone mode - WebSocket server started separately by start.sh")
+    logger.debug("Running in Docker/standalone mode - WebSocket server started separately by start.sh")
 else:
-    logger.info("Running in local/integrated mode - Starting WebSocket proxy in Flask")
+    logger.debug("Running in local/integrated mode - Starting WebSocket proxy in Flask")
     start_websocket_proxy(app)
 
 # Start Flask development server with SocketIO support if directly executed
@@ -537,40 +542,105 @@ if __name__ == '__main__':
     # Get environment variables
     host_ip = os.getenv('FLASK_HOST_IP', '127.0.0.1')  # Default to '127.0.0.1' if not set
     port = int(os.getenv('FLASK_PORT', 5000))  # Default to 5000 if not set
+    ws_port = int(os.getenv('WEBSOCKET_PORT', 8765))  # WebSocket port
     debug = os.getenv('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')  # Default to False if not set
 
-    # Log the OpenAlgo access URL with enhanced styling
+    # Clean startup banner
     import socket
 
-    # If binding to all interfaces (0.0.0.0), show all available IPs
+    # Determine display IP for banner
+    display_ip = host_ip
     if host_ip == '0.0.0.0':
-        urls = []
-        urls.append(f"http://localhost:{port}")
-        urls.append(f"http://127.0.0.1:{port}")
-
-        # Get local network IP
+        # Get local network IP for display
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
-            local_ip = s.getsockname()[0]
+            display_ip = s.getsockname()[0]
             s.close()
-            urls.append(f"http://{local_ip}:{port}")
         except:
-            local_ip = "127.0.0.1"
+            display_ip = "127.0.0.1"
 
-        # Show accessible URLs (excluding localhost) with blue highlighting
-        logger.info("=" * 60)
-        logger.info("OpenAlgo is running!")
-        logger.info(f"Access the application at:")
-        for url in urls:
-            # Skip localhost URL
-            if "localhost" not in url:
-                highlighted = highlight_url(url)
-                logger.info(f"  → {highlighted}")
-        logger.info("=" * 60)
-    else:
-        # Single IP binding
-        url = f"http://{host_ip}:{port}"
-        log_startup_banner(logger, "OpenAlgo is running!", url)
+    # Print startup banner
+    version = get_version()
+    web_url = f"http://{display_ip}:{port}"
+    ws_url = f"ws://{display_ip}:{ws_port}"
+    docs_url = "https://docs.openalgo.in"
+
+    # ANSI color codes
+    GREEN = "\033[92m"
+    CYAN = "\033[96m"
+    MAGENTA = "\033[95m"
+    WHITE = "\033[97m"
+    YELLOW = "\033[93m"
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+
+    # Border color
+    B = CYAN
+
+    slogan = "Your Personal Algo Trading Platform"
+
+    MIN_WIDTH = 54
+    ansi_escape = re.compile(r"\x1B\[[0-9;]*m")
+
+    def visible_len(text: str) -> int:
+        return len(ansi_escape.sub("", text))
+
+    title = f" OpenAlgo v{version} "
+
+    content_samples = [
+        "",
+        slogan,
+        f"{WHITE}{BOLD}Endpoints{RESET}",
+        f"{WHITE}Web App{RESET}    {CYAN}{web_url}{RESET}",
+        f"{WHITE}WebSocket{RESET}  {MAGENTA}{ws_url}{RESET}",
+        f"{WHITE}Docs{RESET}       {YELLOW}{docs_url}{RESET}",
+        f"{WHITE}Status{RESET}     {GREEN}{BOLD}Ready{RESET}",
+    ]
+
+    inner_target = max(MIN_WIDTH - 4, max((visible_len(text) for text in content_samples), default=0))
+    W = max(inner_target + 4, len(title) + 5)
+
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        "╭╮╰╯│─".encode(encoding)
+        TL, TR, BL, BR = "╭", "╮", "╰", "╯"
+        H, V = "─", "│"
+    except Exception:
+        TL, TR, BL, BR = "+", "+", "+", "+"
+        H, V = "-", "|"
+
+    # Helper to create a padded line
+    def mkline(text=""):
+        inner = W - 4  # subtract 2 borders + 2 spaces
+        text_len = visible_len(text)
+        padding = max(inner - text_len, 0)
+        return f"{B}{V}{RESET} {text}{' ' * padding} {B}{V}{RESET}"
+
+    # Build banner
+    top_dashes = max(0, W - 5 - len(title))  # ensures non-negative padding around the title
+
+    print()
+    print(f"{B}{TL}{H * 3}{GREEN}{BOLD}{title}{RESET}{B}{H * top_dashes}{TR}{RESET}")
+    print(mkline())
+
+    # Centered slogan
+    inner_w = W - 4
+    text_len = visible_len(slogan)
+    sl = max((inner_w - text_len) // 2, 0)
+    sr = max(inner_w - text_len - sl, 0)
+    print(f"{B}{V}{RESET} {' ' * sl}{DIM}{slogan}{RESET}{' ' * sr} {B}{V}{RESET}")
+
+    print(mkline())
+    print(mkline(f"{WHITE}{BOLD}Endpoints{RESET}"))
+    print(mkline(f"{WHITE}Web App{RESET}    {CYAN}{web_url}{RESET}"))
+    print(mkline(f"{WHITE}WebSocket{RESET}  {MAGENTA}{ws_url}{RESET}"))
+    print(mkline(f"{WHITE}Docs{RESET}       {YELLOW}{docs_url}{RESET}"))
+    print(mkline())
+    print(mkline(f"{WHITE}Status{RESET}     {GREEN}{BOLD}Ready{RESET}"))
+    print(mkline())
+    print(f"{B}{BL}{H * (W - 2)}{BR}{RESET}")
+    print()
 
     socketio.run(app, host=host_ip, port=port, debug=debug)

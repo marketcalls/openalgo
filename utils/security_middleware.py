@@ -47,7 +47,7 @@ def init_security_middleware(app):
     # Wrap the WSGI app with security middleware
     app.wsgi_app = SecurityMiddleware(app.wsgi_app)
 
-    logger.info("Security middleware initialized")
+    logger.debug("Security middleware initialized")
 
     # Note: 404 handler is now in app.py to avoid conflicts
     # The main app's 404 handler calls Error404Tracker.track_404()
@@ -57,4 +57,4 @@ def init_security_middleware(app):
     def handle_403(e):
         return jsonify({'error': 'Access Denied'}), 403
 
-    logger.info("Security middleware initialized")
+    logger.debug("Security middleware initialized")

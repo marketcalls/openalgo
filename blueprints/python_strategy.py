@@ -62,7 +62,7 @@ def init_scheduler():
     if SCHEDULER is None:
         SCHEDULER = BackgroundScheduler(daemon=True, timezone=IST)
         SCHEDULER.start()
-        logger.info(f"Scheduler initialized with IST timezone on {OS_TYPE}")
+        logger.debug(f"Scheduler initialized with IST timezone on {OS_TYPE}")
 
 def load_configs():
     """Load strategy configurations from file"""
@@ -105,7 +105,7 @@ def ensure_directories():
     try:
         STRATEGIES_DIR.mkdir(parents=True, exist_ok=True)
         LOGS_DIR.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Directories initialized on {OS_TYPE}")
+        logger.debug(f"Directories initialized on {OS_TYPE}")
     except PermissionError as e:
         # If we can't create directories, check if they exist
         if STRATEGIES_DIR.exists() and LOGS_DIR.exists():
@@ -1602,4 +1602,4 @@ def initialize_with_app_context():
 # Note: Flask removed before_app_first_request in newer versions
 # The initialization is now handled in the index route and other entry points
 
-logger.info(f"Python Strategy System initialized (basic) on {OS_TYPE}")
+logger.debug(f"Python Strategy System initialized (basic) on {OS_TYPE}")

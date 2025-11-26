@@ -113,15 +113,6 @@ def load_and_check_env_variables():
     if not check_env_version_compatibility():
         sys.exit(1)
 
-    # Print OpenAlgo version at the very start with color coding
-    try:
-        from utils.version import get_version
-        version = get_version()
-        # Use ANSI color codes: cyan for label, green for version
-        print(f"\033[96mOpenAlgo Version:\033[0m \033[92m{version}\033[0m")
-    except ImportError:
-        pass  # Skip if version module not available
-
     # Define the path to the .env file in the main application path
     env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
 

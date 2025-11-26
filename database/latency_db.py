@@ -274,7 +274,7 @@ def purge_old_data_logs(days=7):
         ).delete(synchronize_session=False)
 
         latency_session.commit()
-        logger.info(f"Purged {deleted} old data endpoint latency logs (older than {days} days)")
+        logger.debug(f"Purged {deleted} old data endpoint latency logs (older than {days} days)")
         return deleted
     except Exception as e:
         logger.error(f"Error purging old latency logs: {str(e)}")

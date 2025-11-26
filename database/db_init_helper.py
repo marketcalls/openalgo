@@ -39,6 +39,6 @@ def init_db_with_logging(base, engine, db_name, logger):
         logger.debug(f"{db_name}: Verified {len(tables_already_exist)} existing table(s)")
 
     if not tables_to_create and tables_already_exist:
-        logger.info(f"{db_name}: Connection verified ({len(tables_already_exist)} table(s) ready)")
+        logger.debug(f"{db_name}: Connection verified ({len(tables_already_exist)} table(s) ready)")
 
     return len(tables_to_create), len(tables_already_exist)

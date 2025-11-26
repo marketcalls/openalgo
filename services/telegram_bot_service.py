@@ -519,7 +519,7 @@ class TelegramBotService:
             import asyncio
 
         # Create new event loop in this thread
-        logger.info("Creating new event loop in bot thread")
+        logger.debug("Creating new event loop in bot thread")
 
         # Create a new event loop for this thread
         loop = asyncio.new_event_loop()
@@ -620,7 +620,7 @@ class TelegramBotService:
 
                 self.is_running = True
                 update_bot_config({'is_active': True})
-                logger.info("Telegram bot started successfully and is polling for updates")
+                logger.debug("Telegram bot started successfully and is polling for updates")
 
                 # Reset retry count on successful connection
                 retry_count = 0

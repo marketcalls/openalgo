@@ -111,7 +111,7 @@ def start_websocket_server():
     """
     global _websocket_proxy_instance, _websocket_thread
     
-    logger.info("Starting WebSocket proxy server in a separate thread")
+    logger.debug("Starting WebSocket proxy server in a separate thread")
     
     def run_websocket_server():
         """Run the WebSocket server in an event loop"""
@@ -160,11 +160,11 @@ def start_websocket_server():
             signal.signal(signal.SIGTERM, signal_handler)
             signals_registered.append("SIGTERM")
         
-        logger.info(f"Signal handlers registered: {', '.join(signals_registered)}")
+        logger.debug(f"Signal handlers registered: {', '.join(signals_registered)}")
     except Exception as e:
         logger.warning(f"Could not register signal handlers: {e}")
     
-    logger.info("WebSocket proxy server thread started")
+    logger.debug("WebSocket proxy server thread started")
     return _websocket_thread
     
 def start_websocket_proxy(app):
@@ -182,10 +182,10 @@ def start_websocket_proxy(app):
         # Our flag will prevent multiple starts if called multiple times
         if not _websocket_server_started:
             _websocket_server_started = True
-            logger.info("Starting WebSocket server in Flask application process")
+            logger.debug("Starting WebSocket server in Flask application process")
             start_websocket_server()
-            logger.info("WebSocket server integration with Flask complete")
+            logger.debug("WebSocket server integration with Flask complete")
         else:
-            logger.info("WebSocket server already running, skipping initialization")
+            logger.debug("WebSocket server already running, skipping initialization")
     else:
-        logger.info("Skipping WebSocket server in parent/monitor process")
+        logger.debug("Skipping WebSocket server in parent/monitor process")
