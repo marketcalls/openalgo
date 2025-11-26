@@ -614,10 +614,150 @@ class BrokerData:
                         'error': str(e)
                     }
                 raise
-            
+
         except Exception as e:
             logger.error(f"Error in get_quotes: {str(e)}", exc_info=True)
             raise Exception(f"Error fetching quotes: {str(e)}")
+
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols with automatic batching
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            BATCH_SIZE = 500  # Dhan API supports up to 1000, using 500 for safety
+
+            # If symbols exceed batch size, process in batches
+            if len(symbols) > BATCH_SIZE:
+                logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                # Split symbols into batches
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.debug(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    # Process this batch
+                    batch_results = self._process_quotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                logger.info(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
+                return all_results
+            else:
+                # Single batch processing
+                return self._process_quotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_quotes_batch(self, symbols: list) -> list:
+        """
+        Process a single batch of symbols (internal method)
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys (max 100)
+        Returns:
+            list: List of quote data for the batch
+        """
+        # Group symbols by exchange segment and build security ID map
+        exchange_securities = {}  # {exchange_segment: [security_id1, security_id2, ...]}
+        security_map = {}  # {exchange_segment:security_id -> {symbol, exchange}}
+
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            try:
+                security_id = get_token(symbol, exchange)
+                exchange_segment = self._get_exchange_segment(exchange)
+
+                # Skip if security_id or exchange_segment is None
+                if not security_id:
+                    logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve security ID")
+                    continue
+                if not exchange_segment:
+                    logger.warning(f"Skipping symbol {symbol} on {exchange}: unsupported exchange")
+                    continue
+
+                # Add to exchange group
+                if exchange_segment not in exchange_securities:
+                    exchange_securities[exchange_segment] = []
+                exchange_securities[exchange_segment].append(int(security_id))
+
+                # Store mapping for response parsing
+                security_map[f"{exchange_segment}:{security_id}"] = {
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'security_id': security_id
+                }
+
+            except Exception as e:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
+                continue
+
+        # Return empty if no valid securities
+        if not exchange_securities:
+            logger.warning("No valid securities to fetch quotes for")
+            return []
+
+        logger.info(f"Requesting quotes for {sum(len(s) for s in exchange_securities.values())} instruments across {len(exchange_securities)} exchange segments")
+        logger.debug(f"Exchange securities: {exchange_securities}")
+
+        # Make API call
+        try:
+            response = get_api_response("/v2/marketfeed/quote", self.auth_token, "POST", json.dumps(exchange_securities))
+            logger.debug(f"Multiquotes response: {response}")
+        except Exception as e:
+            logger.error(f"API Error: {str(e)}")
+            raise Exception(f"API Error: {str(e)}")
+
+        # Parse response and build results
+        results = []
+        response_data = response.get('data', {})
+
+        # Build results from security_map
+        for key, original in security_map.items():
+            exchange_segment, security_id = key.split(':')
+            quote_data = response_data.get(exchange_segment, {}).get(str(security_id), {})
+
+            if not quote_data:
+                logger.warning(f"No quote data found for {original['symbol']} ({key})")
+                results.append({
+                    'symbol': original['symbol'],
+                    'exchange': original['exchange'],
+                    'error': 'No quote data available'
+                })
+                continue
+
+            # Parse and format quote data
+            ohlc = quote_data.get('ohlc', {})
+            depth = quote_data.get('depth', {})
+            buy_orders = depth.get('buy', [])
+            sell_orders = depth.get('sell', [])
+
+            result_item = {
+                'symbol': original['symbol'],
+                'exchange': original['exchange'],
+                'data': {
+                    'bid': float(buy_orders[0].get('price', 0)) if buy_orders else 0,
+                    'ask': float(sell_orders[0].get('price', 0)) if sell_orders else 0,
+                    'open': float(ohlc.get('open', 0)),
+                    'high': float(ohlc.get('high', 0)),
+                    'low': float(ohlc.get('low', 0)),
+                    'ltp': float(quote_data.get('last_price', 0)),
+                    'prev_close': float(ohlc.get('close', 0)),
+                    'volume': int(quote_data.get('volume', 0)),
+                    'oi': int(quote_data.get('oi', 0))
+                }
+            }
+            results.append(result_item)
+
+        return results
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
