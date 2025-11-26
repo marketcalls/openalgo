@@ -2,6 +2,7 @@ import httpx
 import json
 import os
 import pandas as pd
+import time
 from datetime import datetime, timedelta
 import urllib.parse
 from database.token_db import get_br_symbol, get_token, get_oa_symbol

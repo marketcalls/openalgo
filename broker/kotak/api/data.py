@@ -1,5 +1,6 @@
 import httpx
 import json
+import time
 import pandas as pd
 import urllib.parse
 from database.token_db import get_token, get_br_symbol, get_brexchange
