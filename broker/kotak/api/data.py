@@ -291,6 +291,206 @@ class BrokerData:
             logger.error(f"Error in get_depth: {e}")
             return self._get_default_depth()
 
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols with automatic batching
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            BATCH_SIZE = 50  # Conservative limit for URL length (GET request)
+
+            # If symbols exceed batch size, process in batches
+            if len(symbols) > BATCH_SIZE:
+                logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                # Split symbols into batches
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.debug(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    # Process this batch
+                    batch_results = self._process_quotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                logger.info(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
+                return all_results
+            else:
+                # Single batch processing
+                return self._process_quotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_quotes_batch(self, symbols: list) -> list:
+        """
+        Process a single batch of symbols (internal method)
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys (max 50)
+        Returns:
+            list: List of quote data for the batch
+        """
+        # Build comma-separated queries and mapping
+        queries = []
+        query_map = {}  # {query -> {symbol, exchange}}
+
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            try:
+                # Check if this is an index
+                if 'INDEX' in exchange.upper():
+                    kotak_exchange = self._get_kotak_exchange(exchange)
+                    neo_symbol = self._get_index_symbol(symbol)
+                    query = f"{kotak_exchange}|{neo_symbol}"
+                else:
+                    # For regular stocks/F&O, get pSymbol and brexchange
+                    psymbol = get_token(symbol, exchange)
+                    brexchange = get_brexchange(symbol, exchange)
+
+                    if not psymbol or not brexchange:
+                        logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve pSymbol or brexchange")
+                        continue
+
+                    # Map brexchange to Kotak format if needed
+                    if brexchange in ['NSE', 'BSE', 'NFO', 'BFO', 'CDS', 'MCX']:
+                        kotak_exchange = self._get_kotak_exchange(brexchange)
+                    else:
+                        kotak_exchange = brexchange
+
+                    query = f"{kotak_exchange}|{psymbol}"
+
+                queries.append(query)
+                query_map[query] = {
+                    'symbol': symbol,
+                    'exchange': exchange
+                }
+
+            except Exception as e:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
+                continue
+
+        # Return empty if no valid queries
+        if not queries:
+            logger.warning("No valid queries to fetch quotes for")
+            return []
+
+        # Build comma-separated query string
+        combined_query = ','.join(queries)
+
+        logger.info(f"Requesting quotes for {len(queries)} instruments")
+        logger.debug(f"Combined query: {combined_query[:200]}..." if len(combined_query) > 200 else f"Combined query: {combined_query}")
+
+        # Make API request using existing method (handles URL encoding)
+        try:
+            # Get the shared httpx client
+            client = get_httpx_client()
+
+            # URL encode spaces but keep pipe and comma characters
+            encoded_query = urllib.parse.quote(combined_query, safe='|,')
+            endpoint = f"/script-details/1.0/quotes/neosymbol/{encoded_query}/all"
+
+            headers = {
+                'Authorization': self.access_token,
+                'Content-Type': 'application/json'
+            }
+
+            url = f"{self.quotes_base_url}{endpoint}"
+            logger.debug(f"MULTIQUOTES API - Making request to: {url[:200]}...")
+
+            response = client.get(url, headers=headers)
+
+            if response.status_code != 200:
+                logger.error(f"MULTIQUOTES API - HTTP {response.status_code}: {response.text}")
+                raise Exception(f"API Error: HTTP {response.status_code}")
+
+            response_data = json.loads(response.text)
+
+        except Exception as e:
+            logger.error(f"API Error: {str(e)}")
+            raise Exception(f"API Error: {str(e)}")
+
+        # Parse response and build results
+        results = []
+
+        if not response_data or not isinstance(response_data, list):
+            logger.warning("Empty or invalid response from API")
+            return results
+
+        # Build lookup by query for response matching
+        # Response items have 'exchange' and 'exchange_token' or 'display_symbol'
+        response_lookup = {}
+        for quote in response_data:
+            # Build possible keys to match
+            exch = quote.get('exchange', '')
+            token = quote.get('exchange_token', '')
+            display = quote.get('display_symbol', '')
+
+            # Try to match with original query format
+            key1 = f"{exch}|{token}"
+            key2 = f"{exch}|{display.replace('-EQ', '').replace('-IN', '')}" if display else None
+
+            response_lookup[key1] = quote
+            if key2:
+                response_lookup[key2] = quote
+
+        # Build results from query_map
+        for query, original in query_map.items():
+            # Try to find matching quote in response
+            quote_data = response_lookup.get(query)
+
+            # If not found, try variations
+            if not quote_data:
+                for resp_key, resp_quote in response_lookup.items():
+                    if query.lower() == resp_key.lower():
+                        quote_data = resp_quote
+                        break
+
+            if not quote_data:
+                logger.warning(f"No quote data found for {original['symbol']} ({query})")
+                results.append({
+                    'symbol': original['symbol'],
+                    'exchange': original['exchange'],
+                    'error': 'No quote data available'
+                })
+                continue
+
+            # Parse and format quote data
+            ohlc_data = quote_data.get('ohlc', {})
+            depth_data = quote_data.get('depth', {})
+            buy_orders = depth_data.get('buy', [])
+            sell_orders = depth_data.get('sell', [])
+
+            ltp = float(quote_data.get('ltp', 0))
+            bid_price = float(buy_orders[0].get('price', 0)) if buy_orders else ltp
+            ask_price = float(sell_orders[0].get('price', 0)) if sell_orders else ltp
+
+            result_item = {
+                'symbol': original['symbol'],
+                'exchange': original['exchange'],
+                'data': {
+                    'bid': bid_price,
+                    'ask': ask_price,
+                    'open': float(ohlc_data.get('open', 0)),
+                    'high': float(ohlc_data.get('high', 0)),
+                    'low': float(ohlc_data.get('low', 0)),
+                    'ltp': ltp,
+                    'prev_close': float(ohlc_data.get('close', 0)),
+                    'volume': float(quote_data.get('last_volume', 0)),
+                    'oi': int(quote_data.get('open_int', 0))
+                }
+            }
+            results.append(result_item)
+
+        return results
+
     def _get_default_quote(self):
         """Return default quote structure"""
         return {
