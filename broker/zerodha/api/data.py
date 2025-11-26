@@ -253,6 +253,7 @@ class BrokerData:
         """
         try:
             BATCH_SIZE = 500  # Zerodha API limit per request
+            RATE_LIMIT_DELAY = 1.0  # 1 request per second = 500 symbols/second
 
             # If symbols exceed batch size, process in batches
             if len(symbols) > BATCH_SIZE:
@@ -268,9 +269,9 @@ class BrokerData:
                     batch_results = self._process_quotes_batch(batch)
                     all_results.extend(batch_results)
 
-                    # Small delay between batches to avoid rate limiting
+                    # Rate limit delay between batches
                     if i + BATCH_SIZE < len(symbols):
-                        time.sleep(0.1)
+                        time.sleep(RATE_LIMIT_DELAY)
 
                 logger.info(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
                 return all_results
