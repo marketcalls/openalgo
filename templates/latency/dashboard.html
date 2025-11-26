@@ -69,7 +69,7 @@
                     </svg>
                 </div>
                 <div class="stat-title">Average Confirmation Time</div>
-                <div class="stat-value {% if stats.avg_total < 150 %}text-success{% elif stats.avg_total < 250 %}text-warning{% else %}text-error{% endif %}" id="avg-speed">{{ "%.0f"|format(stats.avg_total) }}ms</div>
+                <div class="stat-value {% if stats.avg_total < 150 %}text-success{% elif stats.avg_total < 250 %}text-warning{% else %}text-error{% endif %}" id="avg-speed">{{ "%.2f"|format(stats.avg_total) }}ms</div>
                 <div class="stat-desc">End-to-end order confirmation</div>
             </div>
         </div>
@@ -159,11 +159,11 @@
                             <td class="font-semibold">{{ broker }}</td>
                             <td>
                                 <div class="badge {% if data.avg_total < 150 %}badge-success{% elif data.avg_total < 250 %}badge-warning{% else %}badge-error{% endif %}">
-                                    {{ "%.0f"|format(data.avg_total) }}ms
+                                    {{ "%.2f"|format(data.avg_total) }}ms
                                 </div>
                             </td>
-                            <td>{{ "%.0f"|format(data.p50_total) }}ms</td>
-                            <td>{{ "%.0f"|format(data.p99_total) }}ms</td>
+                            <td>{{ "%.2f"|format(data.p50_total) }}ms</td>
+                            <td>{{ "%.2f"|format(data.p99_total) }}ms</td>
                             <td>{{ "%.1f"|format(data.sla_150ms) }}%</td>
                             <td>{{ data.total_orders }}</td>
                             <td>
@@ -213,19 +213,19 @@
                                 <div class="flex items-center gap-2">
                                     {% if log.total_latency_ms < 150 %}
                                         <div class="badge badge-success">
-                                            {{ "%.0f"|format(log.total_latency_ms) }}ms
+                                            {{ "%.2f"|format(log.total_latency_ms) }}ms
                                         </div>
                                     {% elif log.total_latency_ms < 250 %}
                                         <div class="badge badge-warning">
-                                            {{ "%.0f"|format(log.total_latency_ms) }}ms
+                                            {{ "%.2f"|format(log.total_latency_ms) }}ms
                                         </div>
                                     {% elif log.total_latency_ms < 400 %}
                                         <div class="badge badge-warning opacity-75">
-                                            {{ "%.0f"|format(log.total_latency_ms) }}ms
+                                            {{ "%.2f"|format(log.total_latency_ms) }}ms
                                         </div>
                                     {% else %}
                                         <div class="badge badge-error">
-                                            {{ "%.0f"|format(log.total_latency_ms) }}ms
+                                            {{ "%.2f"|format(log.total_latency_ms) }}ms
                                         </div>
                                     {% endif %}
                                 </div>
@@ -277,7 +277,7 @@ function updateStats(stats) {
     document.getElementById('total-orders').textContent = stats.total_orders;
     document.getElementById('success-rate').textContent = stats.success_rate.toFixed(1) + '%';
     document.getElementById('failed-orders-desc').textContent = `${stats.failed_orders} failed`;
-    document.getElementById('avg-speed').textContent = Math.round(stats.avg_rtt) + 'ms';
+    document.getElementById('avg-speed').textContent = stats.avg_rtt.toFixed(2) + 'ms';
     document.getElementById('sla-value').textContent = stats.sla_150ms.toFixed(1) + '%';
 
     // Update radial progress
@@ -315,13 +315,13 @@ function updateTable(logs) {
         // Speed badge with color (using total latency)
         let speedBadge = '';
         if (log.total_latency_ms < 150) {
-            speedBadge = `<div class="badge badge-success">${Math.round(log.total_latency_ms)}ms</div>`;
+            speedBadge = `<div class="badge badge-success">${log.total_latency_ms.toFixed(2)}ms</div>`;
         } else if (log.total_latency_ms < 250) {
-            speedBadge = `<div class="badge badge-warning">${Math.round(log.total_latency_ms)}ms</div>`;
+            speedBadge = `<div class="badge badge-warning">${log.total_latency_ms.toFixed(2)}ms</div>`;
         } else if (log.total_latency_ms < 400) {
-            speedBadge = `<div class="badge badge-warning opacity-75">${Math.round(log.total_latency_ms)}ms</div>`;
+            speedBadge = `<div class="badge badge-warning opacity-75">${log.total_latency_ms.toFixed(2)}ms</div>`;
         } else {
-            speedBadge = `<div class="badge badge-error">${Math.round(log.total_latency_ms)}ms</div>`;
+            speedBadge = `<div class="badge badge-error">${log.total_latency_ms.toFixed(2)}ms</div>`;
         }
 
         return `
@@ -396,7 +396,7 @@ async function showOrderDetails(orderId) {
                                 <span class="font-semibold">Total Confirmation Time</span>
                                 <p class="text-xs opacity-70">What you experience end-to-end</p>
                             </div>
-                            <span class="text-lg font-bold">${Math.round(order.total_latency_ms)}ms</span>
+                            <span class="text-lg font-bold">${order.total_latency_ms.toFixed(2)}ms</span>
                         </div>
                         <progress class="progress progress-primary" value="${order.total_latency_ms}" max="${Math.max(order.total_latency_ms, 500)}"></progress>
                     </div>
@@ -414,7 +414,7 @@ async function showOrderDetails(orderId) {
                                 </div>
                                 <p class="text-xs opacity-70 mt-1">Network latency + broker processing</p>
                             </div>
-                            <span class="text-base font-bold">${Math.round(order.rtt_ms)}ms</span>
+                            <span class="text-base font-bold">${order.rtt_ms.toFixed(2)}ms</span>
                         </div>
                         <div class="text-xs opacity-60 mt-2">
                             <div>• Network round-trip time</div>
@@ -433,7 +433,7 @@ async function showOrderDetails(orderId) {
                                 </div>
                                 <p class="text-xs opacity-70 mt-1">Authentication, validation & logging</p>
                             </div>
-                            <span class="text-base font-bold">${Math.round(order.overhead_ms)}ms</span>
+                            <span class="text-base font-bold">${order.overhead_ms.toFixed(2)}ms</span>
                         </div>
                         <div class="text-xs opacity-60 mt-2">
                             <div>• API key authentication (~5-10ms)</div>
@@ -448,7 +448,7 @@ async function showOrderDetails(orderId) {
                     <div class="alert alert-info text-xs mt-3">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                         <div>
-                            <div class="font-semibold">Why Bruno/Postman shows ${Math.round(order.total_latency_ms) + 19}ms?</div>
+                            <div class="font-semibold">Why Bruno/Postman shows ${(order.total_latency_ms + 19).toFixed(2)}ms?</div>
                             <div class="mt-1">Bruno/Postman measure client → server → client:</div>
                             <div class="mt-1">• Your network to OpenAlgo (~5-10ms)</div>
                             <div>• Flask framework overhead (~10-20ms)</div>
@@ -460,7 +460,7 @@ async function showOrderDetails(orderId) {
                     <div class="bg-base-200 p-4 rounded-lg border-2 border-primary">
                         <div class="flex justify-between">
                             <span class="font-bold">Total Latency</span>
-                            <span class="text-xl font-bold text-primary">${Math.round(order.total_latency_ms)}ms</span>
+                            <span class="text-xl font-bold text-primary">${order.total_latency_ms.toFixed(2)}ms</span>
                         </div>
                     </div>
                 </div>
