@@ -194,6 +194,7 @@ class BrokerData:
         # Group symbols by exchange and build token map
         exchange_tokens = {}  # {exchange: [token1, token2, ...]}
         token_map = {}  # {exchange:token -> {symbol, exchange, br_symbol}}
+        skipped_symbols = []  # Track symbols that couldn't be resolved
 
         for item in symbols:
             symbol = item['symbol']
@@ -203,9 +204,14 @@ class BrokerData:
                 br_symbol = get_br_symbol(symbol, exchange)
                 token = get_token(symbol, exchange)
 
-                # Skip if token is None or empty
+                # Track symbols that couldn't be resolved
                 if not token:
                     logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve token")
+                    skipped_symbols.append({
+                        'symbol': symbol,
+                        'exchange': exchange,
+                        'error': 'Could not resolve token'
+                    })
                     continue
 
                 # Normalize exchange for indices
@@ -232,12 +238,17 @@ class BrokerData:
 
             except Exception as e:
                 logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': str(e)
+                })
                 continue
 
-        # Return empty if no valid tokens
+        # Return skipped symbols if no valid tokens
         if not exchange_tokens:
             logger.warning("No valid tokens to fetch quotes for")
-            return []
+            return skipped_symbols
 
         # Prepare payload for Angel's quote API
         payload = {
@@ -310,9 +321,10 @@ class BrokerData:
             }
             results.append(result_item)
 
-        return results
+        # Include skipped symbols in results
+        return skipped_symbols + results
 
-    def get_history(self, symbol: str, exchange: str, interval: str, 
+    def get_history(self, symbol: str, exchange: str, interval: str,
                    start_date: str, end_date: str) -> pd.DataFrame:
         """
         Get historical data for given symbol

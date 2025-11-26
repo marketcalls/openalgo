@@ -741,7 +741,7 @@ class BrokerData:
 
             # Parse and format quote data
             ohlc = quote_data.get('ohlc', {})
-            depth = quote_data.get('depth', {})
+            depth = quote_data.get('depth') or {}  # Guard against null depth
             buy_orders = depth.get('buy', [])
             sell_orders = depth.get('sell', [])
 

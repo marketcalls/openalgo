@@ -344,6 +344,7 @@ class BrokerData:
         # Build comma-separated queries and mapping
         queries = []
         query_map = {}  # {query -> {symbol, exchange}}
+        skipped_symbols = []  # Track symbols that couldn't be resolved
 
         for item in symbols:
             symbol = item['symbol']
@@ -362,6 +363,11 @@ class BrokerData:
 
                     if not psymbol or not brexchange:
                         logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve pSymbol or brexchange")
+                        skipped_symbols.append({
+                            'symbol': symbol,
+                            'exchange': exchange,
+                            'error': 'Could not resolve pSymbol or brexchange'
+                        })
                         continue
 
                     # Map brexchange to Kotak format if needed
@@ -380,12 +386,17 @@ class BrokerData:
 
             except Exception as e:
                 logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': str(e)
+                })
                 continue
 
-        # Return empty if no valid queries
+        # Return skipped symbols if no valid queries
         if not queries:
             logger.warning("No valid queries to fetch quotes for")
-            return []
+            return skipped_symbols
 
         # Build comma-separated query string
         combined_query = ','.join(queries)
@@ -469,7 +480,7 @@ class BrokerData:
 
             # Parse and format quote data
             ohlc_data = quote_data.get('ohlc', {})
-            depth_data = quote_data.get('depth', {})
+            depth_data = quote_data.get('depth') or {}  # Guard against null depth
             buy_orders = depth_data.get('buy', [])
             sell_orders = depth_data.get('sell', [])
 
@@ -494,7 +505,8 @@ class BrokerData:
             }
             results.append(result_item)
 
-        return results
+        # Include skipped symbols in results
+        return skipped_symbols + results
 
     def _get_default_quote(self):
         """Return default quote structure"""

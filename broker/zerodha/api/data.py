@@ -297,6 +297,7 @@ class BrokerData:
         # Build list of exchange:symbol pairs and symbol map
         instruments = []
         symbol_map = {}  # Map "exchange:br_symbol" to original symbol/exchange
+        skipped_symbols = []  # Track symbols that couldn't be resolved
 
         for item in symbols:
             symbol = item['symbol']
@@ -304,9 +305,14 @@ class BrokerData:
             br_symbol = get_br_symbol(symbol, exchange)
             logger.info(f"Symbol mapping: {symbol}@{exchange} -> br_symbol={br_symbol}")
 
-            # Skip if br_symbol is None or empty
+            # Track symbols that couldn't be resolved
             if not br_symbol:
                 logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve broker symbol")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': 'Could not resolve broker symbol'
+                })
                 continue
 
             # Normalize exchange for indices
@@ -325,10 +331,10 @@ class BrokerData:
                 'api_exchange': api_exchange
             }
 
-        # Return empty if no valid instruments
+        # Return skipped symbols if no valid instruments
         if not instruments:
             logger.warning("No valid instruments to fetch quotes for")
-            return []
+            return skipped_symbols
 
         # Build query string with multiple 'i' parameters
         # Format: /quote?i=NSE:SBIN&i=NSE:TCS&i=BSE:INFY
@@ -382,7 +388,8 @@ class BrokerData:
             }
             results.append(result_item)
 
-        return results
+        # Include skipped symbols in results
+        return skipped_symbols + results
 
     def get_history(self, symbol: str, exchange: str, timeframe: str, from_date: str, to_date: str) -> pd.DataFrame:
         """

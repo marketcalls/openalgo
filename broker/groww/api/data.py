@@ -1737,6 +1737,7 @@ class BrokerData:
         cash_symbols = []
         fno_symbols = []
         symbol_map = {}  # {exchange_symbol -> {symbol, exchange}}
+        skipped_symbols = []  # Track symbols that couldn't be resolved
 
         for item in symbols:
             symbol = item['symbol']
@@ -1748,6 +1749,11 @@ class BrokerData:
 
                 if not br_symbol:
                     logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve broker symbol")
+                    skipped_symbols.append({
+                        'symbol': symbol,
+                        'exchange': exchange,
+                        'error': 'Could not resolve broker symbol'
+                    })
                     continue
 
                 # For derivatives, convert symbol format
@@ -1780,12 +1786,17 @@ class BrokerData:
 
             except Exception as e:
                 logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': str(e)
+                })
                 continue
 
-        # Return empty if no valid symbols
+        # Return skipped symbols if no valid symbols
         if not cash_symbols and not fno_symbols:
             logger.warning("No valid symbols to fetch quotes for")
-            return []
+            return skipped_symbols
 
         results = []
 
@@ -1801,7 +1812,8 @@ class BrokerData:
             fno_results = self._fetch_ohlc_batch(fno_symbols, SEGMENT_FNO, symbol_map)
             results.extend(fno_results)
 
-        return results
+        # Include skipped symbols in results
+        return skipped_symbols + results
 
     def _fetch_ohlc_batch(self, exchange_symbols: list, segment: str, symbol_map: dict) -> list:
         """
