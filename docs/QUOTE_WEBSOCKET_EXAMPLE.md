@@ -101,21 +101,67 @@ client = api(
 
 ## Quote Data Format
 
-When you receive quote data, it contains the following fields:
+### Callback Data (on_data_received)
+
+When you receive quote data via callback, it has this structure:
 
 ```python
 {
-    "exchange": "NSE",
+    "type": "market_data",
     "symbol": "INFY",
-    "ltp": 1450.25,           # Last Traded Price
-    "open": 1445.00,          # Day's Open
-    "high": 1460.50,          # Day's High
-    "low": 1442.00,           # Day's Low
-    "close": 1448.75,         # Previous Close
-    "volume": 2456789,        # Traded Volume
-    "bid": 1450.20,           # Best Bid Price
-    "ask": 1450.30,           # Best Ask Price
-    "timestamp": "2025-11-26T10:30:15.123"
+    "exchange": "NSE",
+    "mode": 2,                    # Mode 2 = Quote
+    "data": {
+        "open": 1532.1,           # Day's Open
+        "high": 1543.8,           # Day's High
+        "low": 1532.1,            # Day's Low
+        "close": 1536.8,          # Previous Close
+        "ltp": 1536.8,            # Last Traded Price
+        "volume": 907035,         # Traded Volume
+        "timestamp": 1764095400000  # Unix timestamp in milliseconds
+    }
+}
+```
+
+### Polling Data (get_quotes())
+
+When you poll using `client.get_quotes()`, data is nested by exchange and symbol:
+
+```python
+{
+    "quote": {
+        "NSE_INDEX": {
+            "NIFTY": {
+                "timestamp": 1764095400000,
+                "open": 25842.95,
+                "high": 26035.0,
+                "low": 25842.95,
+                "close": 26035.0,
+                "ltp": 26035.0,
+                "volume": 0
+            }
+        },
+        "NSE": {
+            "INFY": {
+                "timestamp": 1764095400000,
+                "open": 1532.1,
+                "high": 1543.8,
+                "low": 1532.1,
+                "close": 1536.8,
+                "ltp": 1536.8,
+                "volume": 907035
+            },
+            "TCS": {
+                "timestamp": 1764095400000,
+                "open": 3118.8,
+                "high": 3139.0,
+                "low": 3117.0,
+                "close": 3130.7,
+                "ltp": 3130.7,
+                "volume": 292559
+            }
+        }
+    }
 }
 ```
 
@@ -128,9 +174,14 @@ The callback function is invoked automatically whenever new data arrives:
 ```python
 def on_data_received(data):
     symbol = data.get("symbol")
-    ltp = data.get("ltp")
-    change = ltp - data.get("close", ltp)
-    print(f"{symbol}: LTP={ltp}, Change={change:+.2f}")
+    exchange = data.get("exchange")
+    quote = data.get("data", {})
+
+    ltp = quote.get("ltp", 0)
+    close = quote.get("close", ltp)
+    change = ltp - close
+
+    print(f"[{exchange}] {symbol}: LTP={ltp}, Change={change:+.2f}")
 
 client.connect()
 client.subscribe_quote(instruments_list, on_data_received=on_data_received)
@@ -149,9 +200,13 @@ client.subscribe_quote(instruments_list, on_data_received=lambda x: None)
 
 # Poll every second
 while True:
-    quotes = client.get_quotes()
-    for symbol, data in quotes.items():
-        print(f"{symbol}: {data.get('ltp')}")
+    result = client.get_quotes()
+    quotes = result.get("quote", {})
+
+    # Iterate through exchanges and symbols
+    for exchange, symbols in quotes.items():
+        for symbol, data in symbols.items():
+            print(f"[{exchange}] {symbol}: {data.get('ltp')}")
     time.sleep(1)
 ```
 
@@ -175,10 +230,13 @@ client.subscribe_quote(instruments_list, on_data_received=on_data_received)
 # Report statistics every 5 seconds
 for _ in range(12):
     time.sleep(5)
-    quotes = client.get_quotes()
+    result = client.get_quotes()
+    quotes = result.get("quote", {})
+
     print("\n--- 5 Second Report ---")
-    for symbol, data in quotes.items():
-        print(f"{symbol}: LTP={data.get('ltp')}, Ticks={tick_counts[symbol]}")
+    for exchange, symbols in quotes.items():
+        for symbol, quote_data in symbols.items():
+            print(f"[{exchange}] {symbol}: LTP={quote_data.get('ltp')}, Ticks={tick_counts[symbol]}")
 ```
 
 ## Advanced Examples
@@ -206,7 +264,8 @@ triggered_alerts = set()
 
 def check_alerts(data):
     symbol = data.get("symbol")
-    ltp = data.get("ltp")
+    quote = data.get("data", {})
+    ltp = quote.get("ltp", 0)
 
     if symbol not in alerts:
         return
@@ -264,7 +323,8 @@ signal_triggered = set()
 
 def track_consecutive(data):
     symbol = data.get("symbol")
-    ltp = data.get("ltp")
+    quote = data.get("data", {})
+    ltp = quote.get("ltp", 0)
 
     if ltp > PRICE_LEVEL:
         consecutive_above[symbol] += 1
@@ -309,10 +369,12 @@ client = api(
 
 def display_ohlc_range(data):
     symbol = data.get("symbol")
-    open_price = data.get("open", 0)
-    high = data.get("high", 0)
-    low = data.get("low", 0)
-    ltp = data.get("ltp", 0)
+    quote = data.get("data", {})
+
+    open_price = quote.get("open", 0)
+    high = quote.get("high", 0)
+    low = quote.get("low", 0)
+    ltp = quote.get("ltp", 0)
 
     if high > 0 and low > 0:
         day_range = high - low
@@ -372,7 +434,8 @@ instruments_list = [
 def on_data_received(data):
     exchange = data.get("exchange")
     symbol = data.get("symbol")
-    ltp = data.get("ltp")
+    quote = data.get("data", {})
+    ltp = quote.get("ltp", 0)
     print(f"[{exchange}] {symbol}: {ltp}")
 
 client.connect()
@@ -448,7 +511,8 @@ CONSECUTIVE_THRESHOLD = 5  # Must stay above for 5 ticks
 
 def on_tick(data):
     symbol = data.get("symbol")
-    ltp = data.get("ltp")
+    quote = data.get("data", {})
+    ltp = quote.get("ltp", 0)
     timestamp = datetime.now().isoformat()
 
     # Skip if not in our watch list
@@ -693,7 +757,6 @@ Measure the delay between when the broker sends data and when you receive it:
 ```python
 from openalgo import api
 import time
-from datetime import datetime
 
 client = api(
     api_key="your_api_key_here",
@@ -702,19 +765,18 @@ client = api(
 )
 
 def on_tick(data):
-    receive_time = time.time()
+    receive_time = time.time() * 1000  # Convert to milliseconds
+    symbol = data.get("symbol")
+    quote = data.get("data", {})
 
-    # If data includes timestamp from broker
-    if 'timestamp' in data:
-        # Parse broker timestamp (adjust format as needed)
-        try:
-            broker_time = datetime.fromisoformat(data['timestamp']).timestamp()
-            latency_ms = (receive_time - broker_time) * 1000
+    # Timestamp is in milliseconds from broker
+    broker_time = quote.get("timestamp", 0)
 
-            if latency_ms > 100:
-                print(f"High latency: {latency_ms:.0f}ms for {data['symbol']}")
-        except:
-            pass
+    if broker_time > 0:
+        latency_ms = receive_time - broker_time
+
+        if latency_ms > 100:
+            print(f"High latency: {latency_ms:.0f}ms for {symbol}")
 
 instruments_list = [
     {"exchange": "NSE_INDEX", "symbol": "NIFTY"}
@@ -748,7 +810,8 @@ client = api(
 def process_tick(data):
     # Your actual processing logic here
     symbol = data.get("symbol")
-    ltp = data.get("ltp")
+    quote = data.get("data", {})
+    ltp = quote.get("ltp", 0)
     # ... strategy calculations, database writes, etc.
 
 def on_tick(data):
@@ -784,7 +847,6 @@ A complete example that monitors all three metrics:
 ```python
 from openalgo import api
 import time
-from datetime import datetime
 from collections import deque
 
 client = api(
@@ -805,20 +867,18 @@ def process_tick(data):
 
 def on_tick(data):
     global update_count
-    receive_time = time.time()
+    receive_time = time.time() * 1000  # Convert to milliseconds
     proc_start = time.perf_counter()
 
     # Count updates
     update_count += 1
 
-    # Measure latency
-    if 'timestamp' in data:
-        try:
-            broker_time = datetime.fromisoformat(data['timestamp']).timestamp()
-            latency_ms = (receive_time - broker_time) * 1000
-            latencies.append(latency_ms)
-        except:
-            pass
+    # Measure latency (timestamp is in milliseconds)
+    quote = data.get("data", {})
+    broker_time = quote.get("timestamp", 0)
+    if broker_time > 0:
+        latency_ms = receive_time - broker_time
+        latencies.append(latency_ms)
 
     # Process the tick
     process_tick(data)
@@ -898,7 +958,10 @@ signal.signal(signal.SIGINT, cleanup)
 signal.signal(signal.SIGTERM, cleanup)
 
 def on_data_received(data):
-    print(f"Quote: {data.get('symbol')} = {data.get('ltp')}")
+    symbol = data.get("symbol")
+    quote = data.get("data", {})
+    ltp = quote.get("ltp", 0)
+    print(f"Quote: {symbol} = {ltp}")
 
 try:
     client.connect()
@@ -930,7 +993,10 @@ instruments_list = [
 ]
 
 def on_data_received(data):
-    print(f"Quote: {data}")
+    symbol = data.get("symbol")
+    quote = data.get("data", {})
+    ltp = quote.get("ltp", 0)
+    print(f"Quote: {symbol} = {ltp}")
 
 def run_with_recovery():
     while True:
