@@ -41,7 +41,7 @@
                     </svg>
                 </div>
                 <div class="stat-title">Total Orders Tracked</div>
-                <div class="stat-value text-primary" id="total-orders">{{ stats.total_orders }}</div>
+                <div class="stat-value text-primary" id="total-orders">{{ stats.total_orders|default(0) }}</div>
                 <div class="stat-desc">All time</div>
             </div>
         </div>
@@ -55,21 +55,21 @@
                     </svg>
                 </div>
                 <div class="stat-title">Success Rate</div>
-                <div class="stat-value text-success" id="success-rate">{{ "%.1f"|format(stats.success_rate) }}%</div>
-                <div class="stat-desc" id="failed-orders-desc">{{ stats.failed_orders }} failed</div>
+                <div class="stat-value text-success" id="success-rate">{{ "%.1f"|format(stats.success_rate|default(0)) }}%</div>
+                <div class="stat-desc" id="failed-orders-desc">{{ stats.failed_orders|default(0) }} failed</div>
             </div>
         </div>
 
         <!-- Average Speed -->
         <div class="stats shadow">
             <div class="stat">
-                <div class="stat-figure {% if stats.avg_total < 150 %}text-success{% elif stats.avg_total < 250 %}text-warning{% else %}text-error{% endif %}">
+                <div class="stat-figure {% if (stats.avg_total|default(0)) < 150 %}text-success{% elif (stats.avg_total|default(0)) < 250 %}text-warning{% else %}text-error{% endif %}">
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="inline-block w-8 h-8 stroke-current">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
                     </svg>
                 </div>
                 <div class="stat-title">Average Confirmation Time</div>
-                <div class="stat-value {% if stats.avg_total < 150 %}text-success{% elif stats.avg_total < 250 %}text-warning{% else %}text-error{% endif %}" id="avg-speed">{{ "%.0f"|format(stats.avg_total) }}ms</div>
+                <div class="stat-value {% if (stats.avg_total|default(0)) < 150 %}text-success{% elif (stats.avg_total|default(0)) < 250 %}text-warning{% else %}text-error{% endif %}" id="avg-speed">{{ "%.2f"|format(stats.avg_total|default(0)) }}ms</div>
                 <div class="stat-desc">End-to-end order confirmation</div>
             </div>
         </div>
@@ -78,14 +78,14 @@
         <div class="stats shadow">
             <div class="stat">
                 <div class="stat-figure">
-                    <div class="radial-progress {% if stats.sla_150ms >= 95 %}text-success{% elif stats.sla_150ms >= 85 %}text-warning{% else %}text-error{% endif %}"
-                         style="--value:{{ "%.0f"|format(stats.sla_150ms) }}; --size:4rem;"
+                    <div class="radial-progress {% if (stats.sla_150ms|default(0)) >= 95 %}text-success{% elif (stats.sla_150ms|default(0)) >= 85 %}text-warning{% else %}text-error{% endif %}"
+                         style="--value:{{ "%.0f"|format(stats.sla_150ms|default(0)) }}; --size:4rem;"
                          role="progressbar" id="sla-radial">
-                        {{ "%.0f"|format(stats.sla_150ms) }}%
+                        {{ "%.0f"|format(stats.sla_150ms|default(0)) }}%
                     </div>
                 </div>
                 <div class="stat-title">Fast Orders</div>
-                <div class="stat-value" id="sla-value">{{ "%.1f"|format(stats.sla_150ms) }}%</div>
+                <div class="stat-value" id="sla-value">{{ "%.1f"|format(stats.sla_150ms|default(0)) }}%</div>
                 <div class="stat-desc">Under 150ms (Target: 95%)</div>
             </div>
         </div>
@@ -158,17 +158,17 @@
                         <tr>
                             <td class="font-semibold">{{ broker }}</td>
                             <td>
-                                <div class="badge {% if data.avg_total < 150 %}badge-success{% elif data.avg_total < 250 %}badge-warning{% else %}badge-error{% endif %}">
-                                    {{ "%.0f"|format(data.avg_total) }}ms
+                                <div class="badge {% if (data.avg_total|default(0)) < 150 %}badge-success{% elif (data.avg_total|default(0)) < 250 %}badge-warning{% else %}badge-error{% endif %}">
+                                    {{ "%.2f"|format(data.avg_total|default(0)) }}ms
                                 </div>
                             </td>
-                            <td>{{ "%.0f"|format(data.p50_total) }}ms</td>
-                            <td>{{ "%.0f"|format(data.p99_total) }}ms</td>
-                            <td>{{ "%.1f"|format(data.sla_150ms) }}%</td>
-                            <td>{{ data.total_orders }}</td>
+                            <td>{{ "%.2f"|format(data.p50_total|default(0)) }}ms</td>
+                            <td>{{ "%.2f"|format(data.p99_total|default(0)) }}ms</td>
+                            <td>{{ "%.1f"|format(data.sla_150ms|default(0)) }}%</td>
+                            <td>{{ data.total_orders|default(0) }}</td>
                             <td>
-                                <progress class="progress {% if data.avg_total < 150 %}progress-success{% elif data.avg_total < 250 %}progress-warning{% else %}progress-error{% endif %}"
-                                          value="{{ 400 - data.avg_total if data.avg_total < 400 else 0 }}" max="400"></progress>
+                                <progress class="progress {% if (data.avg_total|default(0)) < 150 %}progress-success{% elif (data.avg_total|default(0)) < 250 %}progress-warning{% else %}progress-error{% endif %}"
+                                          value="{{ 400 - (data.avg_total|default(0)) if (data.avg_total|default(0)) < 400 else 0 }}" max="400"></progress>
                             </td>
                         </tr>
                     {% endfor %}
@@ -211,21 +211,21 @@
                             </td>
                             <td>
                                 <div class="flex items-center gap-2">
-                                    {% if log.total_latency_ms < 150 %}
+                                    {% if (log.total_latency_ms|default(0)) < 150 %}
                                         <div class="badge badge-success">
-                                            {{ "%.0f"|format(log.total_latency_ms) }}ms
+                                            {{ "%.2f"|format(log.total_latency_ms|default(0)) }}ms
                                         </div>
-                                    {% elif log.total_latency_ms < 250 %}
+                                    {% elif (log.total_latency_ms|default(0)) < 250 %}
                                         <div class="badge badge-warning">
-                                            {{ "%.0f"|format(log.total_latency_ms) }}ms
+                                            {{ "%.2f"|format(log.total_latency_ms|default(0)) }}ms
                                         </div>
-                                    {% elif log.total_latency_ms < 400 %}
+                                    {% elif (log.total_latency_ms|default(0)) < 400 %}
                                         <div class="badge badge-warning opacity-75">
-                                            {{ "%.0f"|format(log.total_latency_ms) }}ms
+                                            {{ "%.2f"|format(log.total_latency_ms|default(0)) }}ms
                                         </div>
                                     {% else %}
                                         <div class="badge badge-error">
-                                            {{ "%.0f"|format(log.total_latency_ms) }}ms
+                                            {{ "%.2f"|format(log.total_latency_ms|default(0)) }}ms
                                         </div>
                                     {% endif %}
                                 </div>
@@ -274,21 +274,23 @@ function closeModal() {
 
 // Update functions
 function updateStats(stats) {
-    document.getElementById('total-orders').textContent = stats.total_orders;
-    document.getElementById('success-rate').textContent = stats.success_rate.toFixed(1) + '%';
-    document.getElementById('failed-orders-desc').textContent = `${stats.failed_orders} failed`;
-    document.getElementById('avg-speed').textContent = Math.round(stats.avg_rtt) + 'ms';
-    document.getElementById('sla-value').textContent = stats.sla_150ms.toFixed(1) + '%';
+    document.getElementById('total-orders').textContent = stats.total_orders || 0;
+    document.getElementById('success-rate').textContent = (stats.success_rate || 0).toFixed(1) + '%';
+    document.getElementById('failed-orders-desc').textContent = `${stats.failed_orders || 0} failed`;
+    document.getElementById('avg-speed').textContent = (stats.avg_total || 0).toFixed(2) + 'ms';
+    document.getElementById('sla-value').textContent = (stats.sla_150ms || 0).toFixed(1) + '%';
 
     // Update radial progress
     const radial = document.getElementById('sla-radial');
-    radial.style.setProperty('--value', Math.round(stats.sla_150ms));
-    radial.textContent = Math.round(stats.sla_150ms) + '%';
+    const slaValue = stats.sla_150ms || 0;
+    radial.style.setProperty('--value', Math.round(slaValue));
+    radial.textContent = Math.round(slaValue) + '%';
 
     // Update color classes
+    const avgTotal = stats.avg_total || 0;
     const avgSpeed = document.getElementById('avg-speed');
-    avgSpeed.className = stats.avg_rtt < 100 ? 'stat-value text-success' :
-                         stats.avg_rtt < 200 ? 'stat-value text-warning' :
+    avgSpeed.className = avgTotal < 150 ? 'stat-value text-success' :
+                         avgTotal < 250 ? 'stat-value text-warning' :
                          'stat-value text-error';
 }
 
@@ -311,17 +313,18 @@ function updateTable(logs) {
     const tbody = document.getElementById('orders-table-body');
     tbody.innerHTML = logs.map(log => {
         const statusClass = log.status === 'SUCCESS' ? 'badge-success' : 'badge-error';
+        const latency = log.total_latency_ms || 0;
 
         // Speed badge with color (using total latency)
         let speedBadge = '';
-        if (log.total_latency_ms < 150) {
-            speedBadge = `<div class="badge badge-success">${Math.round(log.total_latency_ms)}ms</div>`;
-        } else if (log.total_latency_ms < 250) {
-            speedBadge = `<div class="badge badge-warning">${Math.round(log.total_latency_ms)}ms</div>`;
-        } else if (log.total_latency_ms < 400) {
-            speedBadge = `<div class="badge badge-warning opacity-75">${Math.round(log.total_latency_ms)}ms</div>`;
+        if (latency < 150) {
+            speedBadge = `<div class="badge badge-success">${latency.toFixed(2)}ms</div>`;
+        } else if (latency < 250) {
+            speedBadge = `<div class="badge badge-warning">${latency.toFixed(2)}ms</div>`;
+        } else if (latency < 400) {
+            speedBadge = `<div class="badge badge-warning opacity-75">${latency.toFixed(2)}ms</div>`;
         } else {
-            speedBadge = `<div class="badge badge-error">${Math.round(log.total_latency_ms)}ms</div>`;
+            speedBadge = `<div class="badge badge-error">${latency.toFixed(2)}ms</div>`;
         }
 
         return `
@@ -357,16 +360,21 @@ async function showOrderDetails(orderId) {
         if (order) {
             const modalContent = document.getElementById('modal-content');
 
+            // Safe values with fallbacks
+            const totalLatency = order.total_latency_ms || 0;
+            const rttMs = order.rtt_ms || 0;
+            const overheadMs = order.overhead_ms || 0;
+
             // Speed rating (using total latency)
             let speedRating = '';
             let speedColor = '';
-            if (order.total_latency_ms < 150) {
+            if (totalLatency < 150) {
                 speedRating = 'Excellent';
                 speedColor = 'text-success';
-            } else if (order.total_latency_ms < 250) {
+            } else if (totalLatency < 250) {
                 speedRating = 'Good';
                 speedColor = 'text-warning';
-            } else if (order.total_latency_ms < 400) {
+            } else if (totalLatency < 400) {
                 speedRating = 'Acceptable';
                 speedColor = 'text-warning';
             } else {
@@ -396,9 +404,9 @@ async function showOrderDetails(orderId) {
                                 <span class="font-semibold">Total Confirmation Time</span>
                                 <p class="text-xs opacity-70">What you experience end-to-end</p>
                             </div>
-                            <span class="text-lg font-bold">${Math.round(order.total_latency_ms)}ms</span>
+                            <span class="text-lg font-bold">${totalLatency.toFixed(2)}ms</span>
                         </div>
-                        <progress class="progress progress-primary" value="${order.total_latency_ms}" max="${Math.max(order.total_latency_ms, 500)}"></progress>
+                        <progress class="progress progress-primary" value="${totalLatency}" max="${Math.max(totalLatency, 500)}"></progress>
                     </div>
 
                     <!-- Breakdown -->
@@ -414,7 +422,7 @@ async function showOrderDetails(orderId) {
                                 </div>
                                 <p class="text-xs opacity-70 mt-1">Network latency + broker processing</p>
                             </div>
-                            <span class="text-base font-bold">${Math.round(order.rtt_ms)}ms</span>
+                            <span class="text-base font-bold">${rttMs.toFixed(2)}ms</span>
                         </div>
                         <div class="text-xs opacity-60 mt-2">
                             <div>• Network round-trip time</div>
@@ -433,7 +441,7 @@ async function showOrderDetails(orderId) {
                                 </div>
                                 <p class="text-xs opacity-70 mt-1">Authentication, validation & logging</p>
                             </div>
-                            <span class="text-base font-bold">${Math.round(order.overhead_ms)}ms</span>
+                            <span class="text-base font-bold">${overheadMs.toFixed(2)}ms</span>
                         </div>
                         <div class="text-xs opacity-60 mt-2">
                             <div>• API key authentication (~5-10ms)</div>
@@ -448,7 +456,7 @@ async function showOrderDetails(orderId) {
                     <div class="alert alert-info text-xs mt-3">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-5 h-5"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                         <div>
-                            <div class="font-semibold">Why Bruno/Postman shows ${Math.round(order.total_latency_ms) + 19}ms?</div>
+                            <div class="font-semibold">Why Bruno/Postman shows ${(totalLatency + 19).toFixed(2)}ms?</div>
                             <div class="mt-1">Bruno/Postman measure client → server → client:</div>
                             <div class="mt-1">• Your network to OpenAlgo (~5-10ms)</div>
                             <div>• Flask framework overhead (~10-20ms)</div>
@@ -460,7 +468,7 @@ async function showOrderDetails(orderId) {
                     <div class="bg-base-200 p-4 rounded-lg border-2 border-primary">
                         <div class="flex justify-between">
                             <span class="font-bold">Total Latency</span>
-                            <span class="text-xl font-bold text-primary">${Math.round(order.total_latency_ms)}ms</span>
+                            <span class="text-xl font-bold text-primary">${totalLatency.toFixed(2)}ms</span>
                         </div>
                     </div>
                 </div>
@@ -502,11 +510,11 @@ async function refreshData() {
 function updateChart(logs) {
     if (!speedChart) return;
 
-    // Count orders in each speed category (using total latency)
-    const excellent = logs.filter(l => l.total_latency_ms < 150).length;
-    const good = logs.filter(l => l.total_latency_ms >= 150 && l.total_latency_ms < 250).length;
-    const acceptable = logs.filter(l => l.total_latency_ms >= 250 && l.total_latency_ms < 400).length;
-    const slow = logs.filter(l => l.total_latency_ms >= 400).length;
+    // Count orders in each speed category (using total latency with null safety)
+    const excellent = logs.filter(l => (l.total_latency_ms || 0) < 150).length;
+    const good = logs.filter(l => (l.total_latency_ms || 0) >= 150 && (l.total_latency_ms || 0) < 250).length;
+    const acceptable = logs.filter(l => (l.total_latency_ms || 0) >= 250 && (l.total_latency_ms || 0) < 400).length;
+    const slow = logs.filter(l => (l.total_latency_ms || 0) >= 400).length;
 
     // Update chart data
     speedChart.data.datasets[0].data = [excellent, good, acceptable, slow];
@@ -532,11 +540,11 @@ function initSpeedChart() {
         return;
     }
 
-    // Count orders in each speed category (using total latency)
-    const excellent = logs.filter(l => l.total_latency_ms < 150).length;
-    const good = logs.filter(l => l.total_latency_ms >= 150 && l.total_latency_ms < 250).length;
-    const acceptable = logs.filter(l => l.total_latency_ms >= 250 && l.total_latency_ms < 400).length;
-    const slow = logs.filter(l => l.total_latency_ms >= 400).length;
+    // Count orders in each speed category (using total latency with null safety)
+    const excellent = logs.filter(l => (l.total_latency_ms || 0) < 150).length;
+    const good = logs.filter(l => (l.total_latency_ms || 0) >= 150 && (l.total_latency_ms || 0) < 250).length;
+    const acceptable = logs.filter(l => (l.total_latency_ms || 0) >= 250 && (l.total_latency_ms || 0) < 400).length;
+    const slow = logs.filter(l => (l.total_latency_ms || 0) >= 400).length;
 
     if (speedChart) {
         speedChart.destroy();

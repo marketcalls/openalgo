@@ -63,9 +63,35 @@ from database.action_center_db import init_db as ensure_action_center_tables_exi
 from utils.plugin_loader import load_broker_auth_functions
 
 import os
+import atexit
+import signal
 
 # Initialize logger
 logger = get_logger(__name__)
+
+# Global variable to track ngrok state
+_ngrok_tunnel = None
+
+def cleanup_ngrok():
+    """Cleanup ngrok tunnel on shutdown"""
+    global _ngrok_tunnel
+    if _ngrok_tunnel:
+        try:
+            from pyngrok import ngrok
+            logger.info("Shutting down ngrok tunnel...")
+            ngrok.disconnect(_ngrok_tunnel)
+            ngrok.kill()  # Kill the ngrok process
+            _ngrok_tunnel = None
+            logger.info("ngrok tunnel closed successfully")
+        except Exception as e:
+            logger.warning(f"Error during ngrok cleanup: {e}")
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals"""
+    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
+    cleanup_ngrok()
+    # Re-raise to allow normal shutdown
+    raise SystemExit(0)
 
 def create_app():
     # Initialize Flask application
@@ -365,12 +391,35 @@ def setup_environment(app):
 
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':
+        global _ngrok_tunnel
         from pyngrok import ngrok
-        # Disconnect only the 'flask' tunnel if it exists (to avoid "tunnel already exists" error)
-        for tunnel in ngrok.get_tunnels():
-            if tunnel.name == 'flask':
-                ngrok.disconnect(tunnel.public_url)
-        public_url = ngrok.connect(name='flask').public_url  # Assuming Flask runs on the default port 5000
+
+        # Register cleanup handlers for graceful shutdown
+        atexit.register(cleanup_ngrok)
+
+        # Register signal handlers (Windows uses SIGINT, SIGTERM; Unix also has SIGHUP)
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+
+        # Kill any existing ngrok process first (more robust cleanup)
+        try:
+            ngrok.kill()
+            logger.info("Killed existing ngrok process")
+        except Exception:
+            pass  # No existing process to kill
+
+        # Disconnect any existing 'flask' tunnel if it exists
+        try:
+            for tunnel in ngrok.get_tunnels():
+                if tunnel.name == 'flask':
+                    ngrok.disconnect(tunnel.public_url)
+                    logger.info(f"Disconnected existing tunnel: {tunnel.public_url}")
+        except Exception as e:
+            logger.warning(f"Error checking existing tunnels: {e}")
+
+        # Create new tunnel
+        public_url = ngrok.connect(name='flask').public_url
+        _ngrok_tunnel = public_url  # Store for cleanup
         logger.info(f"ngrok URL: {public_url}")
 
 app = create_app()
