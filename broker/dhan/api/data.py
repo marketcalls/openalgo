@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from datetime import datetime, timedelta
 import pandas as pd
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
@@ -630,7 +631,8 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            BATCH_SIZE = 500  # Dhan API supports up to 1000, using 500 for safety
+            BATCH_SIZE = 1000  # Dhan API supports up to 1000 per request
+            RATE_LIMIT_DELAY = 1.0  # 1 request/sec = 1000 symbols/sec
 
             # If symbols exceed batch size, process in batches
             if len(symbols) > BATCH_SIZE:
@@ -645,6 +647,10 @@ class BrokerData:
                     # Process this batch
                     batch_results = self._process_quotes_batch(batch)
                     all_results.extend(batch_results)
+
+                    # Rate limit delay between batches
+                    if i + BATCH_SIZE < len(symbols):
+                        time.sleep(RATE_LIMIT_DELAY)
 
                 logger.info(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
                 return all_results
@@ -736,7 +742,7 @@ class BrokerData:
 
             # Parse and format quote data
             ohlc = quote_data.get('ohlc', {})
-            depth = quote_data.get('depth', {})
+            depth = quote_data.get('depth') or {}  # Guard against null depth
             buy_orders = depth.get('buy', [])
             sell_orders = depth.get('sell', [])
 

@@ -1672,12 +1672,291 @@ class BrokerData:
 
     def get_market_depth(self, symbol_list, timeout: int = 5) -> Dict[str, Any]:
         """Alias for get_depth. Maintains API compatibility.
-        
+
         Args:
             symbol_list: List of symbols, single symbol dict with exchange and symbol, or a single symbol string
             timeout (int): Timeout in seconds
-            
+
         Returns:
             Dict[str, Any]: Market depth data in OpenAlgo format
         """
         return self.get_depth(symbol_list, timeout)
+
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols with automatic batching
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            BATCH_SIZE = 50  # Groww API limit: up to 50 instruments per request
+            RATE_LIMIT_DELAY = 0.2  # Delay in seconds between batch API calls
+
+            # If symbols exceed batch size, process in batches
+            if len(symbols) > BATCH_SIZE:
+                logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                # Split symbols into batches
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.debug(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    # Process this batch
+                    batch_results = self._process_quotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                    # Rate limit delay between batches
+                    if i + BATCH_SIZE < len(symbols):
+                        time.sleep(RATE_LIMIT_DELAY)
+
+                logger.info(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
+                return all_results
+            else:
+                # Single batch processing
+                return self._process_quotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_quotes_batch(self, symbols: list) -> list:
+        """
+        Process a single batch of symbols (internal method)
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys (max 50)
+        Returns:
+            list: List of quote data for the batch
+        """
+        # Build exchange_trading_symbols list and mapping
+        # Group by segment (CASH vs FNO)
+        cash_symbols = []
+        fno_symbols = []
+        symbol_map = {}  # {exchange_symbol -> {symbol, exchange}}
+        skipped_symbols = []  # Track symbols that couldn't be resolved
+
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            try:
+                # Get broker symbol from database - skip if not found
+                br_symbol = get_br_symbol(symbol, exchange)
+
+                if not br_symbol:
+                    logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve broker symbol")
+                    skipped_symbols.append({
+                        'symbol': symbol,
+                        'exchange': exchange,
+                        'error': 'Could not resolve broker symbol'
+                    })
+                    continue
+
+                # For derivatives, convert symbol format
+                if exchange in ['NFO', 'BFO']:
+                    br_symbol = self._convert_openalgo_to_groww_derivative_symbol(br_symbol)
+
+                # Determine Groww exchange prefix
+                if exchange in ['NSE', 'NFO', 'NSE_INDEX']:
+                    groww_exchange = 'NSE'
+                elif exchange in ['BSE', 'BFO', 'BSE_INDEX']:
+                    groww_exchange = 'BSE'
+                else:
+                    groww_exchange = 'NSE'  # Default
+
+                # Build exchange_trading_symbol format: EXCHANGE_SYMBOL
+                exchange_symbol = f"{groww_exchange}_{br_symbol}"
+
+                # Store mapping
+                symbol_map[exchange_symbol] = {
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'br_symbol': br_symbol
+                }
+
+                # Group by segment
+                if exchange in ['NFO', 'BFO']:
+                    fno_symbols.append(exchange_symbol)
+                else:
+                    cash_symbols.append(exchange_symbol)
+
+            except Exception as e:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': str(e)
+                })
+                continue
+
+        # Return skipped symbols if no valid symbols
+        if not cash_symbols and not fno_symbols:
+            logger.warning("No valid symbols to fetch quotes for")
+            return skipped_symbols
+
+        results = []
+
+        # Fetch CASH segment quotes
+        if cash_symbols:
+            logger.info(f"Requesting OHLC for {len(cash_symbols)} CASH instruments")
+            cash_results = self._fetch_ohlc_batch(cash_symbols, SEGMENT_CASH, symbol_map)
+            results.extend(cash_results)
+
+        # Fetch FNO segment quotes
+        if fno_symbols:
+            logger.info(f"Requesting OHLC for {len(fno_symbols)} FNO instruments")
+            fno_results = self._fetch_ohlc_batch(fno_symbols, SEGMENT_FNO, symbol_map)
+            results.extend(fno_results)
+
+        # Include skipped symbols in results
+        return skipped_symbols + results
+
+    def _fetch_ohlc_batch(self, exchange_symbols: list, segment: str, symbol_map: dict) -> list:
+        """
+        Fetch OHLC data for a batch of symbols
+        Args:
+            exchange_symbols: List of exchange_trading_symbols (e.g., ['NSE_SBIN', 'NSE_TCS'])
+            segment: CASH or FNO
+            symbol_map: Mapping from exchange_symbol to original symbol/exchange
+        Returns:
+            list: List of quote data
+        """
+        results = []
+
+        try:
+            # Build comma-separated symbols for API
+            symbols_param = ','.join(exchange_symbols)
+
+            logger.info(f"Requesting OHLC with exchange_symbols: {symbols_param[:200]}...")  # Log first 200 chars
+
+            # Make API request to OHLC endpoint using GET
+            response = get_api_response(
+                endpoint="/v1/live-data/ohlc",
+                auth_token=self.auth_token,
+                method="GET",
+                params={
+                    'segment': segment,
+                    'exchange_symbols': symbols_param  # Comma-separated string
+                },
+                debug=True
+            )
+
+            logger.debug(f"Groww OHLC API response: {response}")
+
+            # Check for valid response - handle invalid symbol errors with retry
+            if not response or response.get('error'):
+                error_details = response.get('details', '') if response else ''
+
+                # Check if error is due to invalid symbol
+                if 'Invalid trading symbol' in str(error_details):
+                    # Extract invalid symbol from error message
+                    import re
+                    match = re.search(r'Invalid trading symbol: (\w+)', str(error_details))
+                    if match:
+                        invalid_symbol = match.group(1)
+                        logger.warning(f"Invalid symbol detected: {invalid_symbol}, retrying without it")
+
+                        # Find and remove the invalid symbol from the list
+                        filtered_symbols = [s for s in exchange_symbols if invalid_symbol not in s]
+
+                        if filtered_symbols and len(filtered_symbols) < len(exchange_symbols):
+                            # Mark invalid symbol as error
+                            for es in exchange_symbols:
+                                if invalid_symbol in es:
+                                    original = symbol_map.get(es, {})
+                                    results.append({
+                                        'symbol': original.get('symbol', es),
+                                        'exchange': original.get('exchange', 'UNKNOWN'),
+                                        'error': f'Invalid trading symbol in Groww'
+                                    })
+
+                            # Retry with filtered symbols (recursive call with max 5 retries)
+                            if hasattr(self, '_retry_count'):
+                                self._retry_count += 1
+                            else:
+                                self._retry_count = 1
+
+                            if self._retry_count <= 5 and filtered_symbols:
+                                retry_results = self._fetch_ohlc_batch(filtered_symbols, segment, symbol_map)
+                                results.extend(retry_results)
+                                self._retry_count = 0
+                                return results
+
+                logger.error(f"API Error: {response.get('error', 'Unknown error')}")
+                # Return error entries for all remaining symbols
+                for exchange_symbol in exchange_symbols:
+                    if not any(r.get('symbol') == symbol_map.get(exchange_symbol, {}).get('symbol') for r in results):
+                        original = symbol_map.get(exchange_symbol, {})
+                        results.append({
+                            'symbol': original.get('symbol', exchange_symbol),
+                            'exchange': original.get('exchange', 'UNKNOWN'),
+                            'error': response.get('error', 'API Error') if response else 'No response'
+                        })
+                return results
+
+            # Extract payload data
+            if response.get('status') == 'SUCCESS':
+                payload = response.get('payload', {})
+            else:
+                payload = response  # Direct response format
+
+            # Process each symbol's data
+            for exchange_symbol in exchange_symbols:
+                original = symbol_map.get(exchange_symbol, {})
+                ohlc_data = payload.get(exchange_symbol)
+
+                if not ohlc_data:
+                    logger.warning(f"No OHLC data found for {exchange_symbol}")
+                    results.append({
+                        'symbol': original.get('symbol', exchange_symbol),
+                        'exchange': original.get('exchange', 'UNKNOWN'),
+                        'error': 'No quote data available'
+                    })
+                    continue
+
+                # Parse OHLC data (can be dict or nested)
+                if isinstance(ohlc_data, dict):
+                    open_price = float(ohlc_data.get('open', 0))
+                    high_price = float(ohlc_data.get('high', 0))
+                    low_price = float(ohlc_data.get('low', 0))
+                    close_price = float(ohlc_data.get('close', 0))
+                    # Use close as LTP for OHLC endpoint
+                    ltp = close_price
+                else:
+                    # Scalar value (just LTP)
+                    ltp = float(ohlc_data) if ohlc_data else 0
+                    open_price = high_price = low_price = close_price = ltp
+
+                result_item = {
+                    'symbol': original.get('symbol', exchange_symbol),
+                    'exchange': original.get('exchange', 'UNKNOWN'),
+                    'data': {
+                        'bid': 0,  # OHLC endpoint doesn't provide bid/ask
+                        'ask': 0,
+                        'open': open_price,
+                        'high': high_price,
+                        'low': low_price,
+                        'ltp': ltp,
+                        'prev_close': close_price,  # Using close as prev_close
+                        'volume': 0,  # OHLC endpoint doesn't provide volume
+                        'oi': 0  # OHLC endpoint doesn't provide OI
+                    }
+                }
+                results.append(result_item)
+
+        except Exception as e:
+            logger.error(f"Error fetching OHLC batch: {str(e)}")
+            # Return error entries for all symbols
+            for exchange_symbol in exchange_symbols:
+                original = symbol_map.get(exchange_symbol, {})
+                results.append({
+                    'symbol': original.get('symbol', exchange_symbol),
+                    'exchange': original.get('exchange', 'UNKNOWN'),
+                    'error': str(e)
+                })
+
+        return results

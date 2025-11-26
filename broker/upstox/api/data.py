@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import httpx
 from utils.httpx_client import get_httpx_client
 from database.token_db import get_token, get_br_symbol, get_oa_symbol
@@ -242,6 +243,7 @@ class BrokerData:
         """
         try:
             BATCH_SIZE = 500  # Upstox API limit per request
+            RATE_LIMIT_DELAY = 1.0  # 1 request/sec = 500 symbols/sec
 
             # If symbols exceed batch size, process in batches
             if len(symbols) > BATCH_SIZE:
@@ -256,6 +258,10 @@ class BrokerData:
                     # Process this batch
                     batch_results = self._process_quotes_batch(batch)
                     all_results.extend(batch_results)
+
+                    # Rate limit delay between batches
+                    if i + BATCH_SIZE < len(symbols):
+                        time.sleep(RATE_LIMIT_DELAY)
 
                 logger.info(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
                 return all_results
@@ -278,6 +284,7 @@ class BrokerData:
         # Build list of instrument keys and mapping
         instrument_keys = []
         key_map = {}  # {instrument_key -> {symbol, exchange}}
+        skipped_symbols = []  # Track symbols that couldn't be resolved
 
         for item in symbols:
             symbol = item['symbol']
@@ -286,9 +293,14 @@ class BrokerData:
             try:
                 instrument_key = self._get_instrument_key(symbol, exchange)
 
-                # Skip if key is None or empty
+                # Track symbols that couldn't be resolved
                 if not instrument_key:
                     logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve instrument key")
+                    skipped_symbols.append({
+                        'symbol': symbol,
+                        'exchange': exchange,
+                        'error': 'Could not resolve instrument key'
+                    })
                     continue
 
                 instrument_keys.append(instrument_key)
@@ -299,12 +311,17 @@ class BrokerData:
 
             except Exception as e:
                 logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': str(e)
+                })
                 continue
 
-        # Return empty if no valid keys
+        # Return skipped symbols if no valid keys
         if not instrument_keys:
             logger.warning("No valid instrument keys to fetch quotes for")
-            return []
+            return skipped_symbols
 
         # Build comma-separated instrument keys and URL encode
         keys_param = ','.join(instrument_keys)
@@ -396,7 +413,8 @@ class BrokerData:
             }
             results.append(result_item)
 
-        return results
+        # Include skipped symbols in results
+        return skipped_symbols + results
 
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
         """

@@ -136,6 +136,7 @@ class BrokerData:
         """
         try:
             BATCH_SIZE = 50  # Fyers API limit per request
+            RATE_LIMIT_DELAY = 0.1  # Delay in seconds between batch API calls
 
             # If symbols exceed batch size, process in batches
             if len(symbols) > BATCH_SIZE:
@@ -151,9 +152,9 @@ class BrokerData:
                     batch_results = self._process_quotes_batch(batch)
                     all_results.extend(batch_results)
 
-                    # Small delay between batches to avoid rate limiting
+                    # Rate limit delay between batches
                     if i + BATCH_SIZE < len(symbols):
-                        time.sleep(0.1)
+                        time.sleep(RATE_LIMIT_DELAY)
 
                 logger.info(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
                 return all_results
@@ -176,13 +177,30 @@ class BrokerData:
         # Convert symbols to broker format and build comma-separated list
         br_symbols = []
         symbol_map = {}  # Map br_symbol back to original symbol/exchange
+        skipped_symbols = []  # Track symbols that couldn't be resolved
 
         for item in symbols:
             symbol = item['symbol']
             exchange = item['exchange']
             br_symbol = get_br_symbol(symbol, exchange)
+
+            # Track symbols that couldn't be resolved
+            if not br_symbol:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve broker symbol")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': 'Could not resolve broker symbol'
+                })
+                continue
+
             br_symbols.append(br_symbol)
             symbol_map[br_symbol] = {'symbol': symbol, 'exchange': exchange}
+
+        # Return skipped symbols if no valid symbols
+        if not br_symbols:
+            logger.warning("No valid symbols to fetch quotes for")
+            return skipped_symbols
 
         # Join all symbols with comma and URL encode
         symbols_param = ','.join(br_symbols)
@@ -226,7 +244,8 @@ class BrokerData:
             }
             results.append(result_item)
 
-        return results
+        # Include skipped symbols in results
+        return skipped_symbols + results
 
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
         """

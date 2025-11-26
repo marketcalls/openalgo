@@ -2,6 +2,7 @@ import httpx
 import json
 import os
 import pandas as pd
+import time
 from datetime import datetime, timedelta
 import urllib.parse
 from database.token_db import get_br_symbol, get_token, get_oa_symbol
@@ -152,7 +153,8 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            BATCH_SIZE = 50  # Angel API recommended limit per request
+            BATCH_SIZE = 50  # Angel API limit: 50 symbols per request
+            RATE_LIMIT_DELAY = 1.0  # Angel rate limit: 1 request per second
 
             # If symbols exceed batch size, process in batches
             if len(symbols) > BATCH_SIZE:
@@ -167,6 +169,10 @@ class BrokerData:
                     # Process this batch
                     batch_results = self._process_quotes_batch(batch)
                     all_results.extend(batch_results)
+
+                    # Rate limit delay between batches
+                    if i + BATCH_SIZE < len(symbols):
+                        time.sleep(RATE_LIMIT_DELAY)
 
                 logger.info(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
                 return all_results
@@ -189,6 +195,7 @@ class BrokerData:
         # Group symbols by exchange and build token map
         exchange_tokens = {}  # {exchange: [token1, token2, ...]}
         token_map = {}  # {exchange:token -> {symbol, exchange, br_symbol}}
+        skipped_symbols = []  # Track symbols that couldn't be resolved
 
         for item in symbols:
             symbol = item['symbol']
@@ -198,9 +205,14 @@ class BrokerData:
                 br_symbol = get_br_symbol(symbol, exchange)
                 token = get_token(symbol, exchange)
 
-                # Skip if token is None or empty
+                # Track symbols that couldn't be resolved
                 if not token:
                     logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve token")
+                    skipped_symbols.append({
+                        'symbol': symbol,
+                        'exchange': exchange,
+                        'error': 'Could not resolve token'
+                    })
                     continue
 
                 # Normalize exchange for indices
@@ -227,12 +239,17 @@ class BrokerData:
 
             except Exception as e:
                 logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': str(e)
+                })
                 continue
 
-        # Return empty if no valid tokens
+        # Return skipped symbols if no valid tokens
         if not exchange_tokens:
             logger.warning("No valid tokens to fetch quotes for")
-            return []
+            return skipped_symbols
 
         # Prepare payload for Angel's quote API
         payload = {
@@ -305,9 +322,10 @@ class BrokerData:
             }
             results.append(result_item)
 
-        return results
+        # Include skipped symbols in results
+        return skipped_symbols + results
 
-    def get_history(self, symbol: str, exchange: str, interval: str, 
+    def get_history(self, symbol: str, exchange: str, interval: str,
                    start_date: str, end_date: str) -> pd.DataFrame:
         """
         Get historical data for given symbol
