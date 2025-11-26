@@ -401,26 +401,59 @@ def setup_environment(app):
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
 
+        import time
+
         # Kill any existing ngrok process first (more robust cleanup)
         try:
             ngrok.kill()
             logger.info("Killed existing ngrok process")
+            time.sleep(1)  # Wait for process to fully terminate
         except Exception:
             pass  # No existing process to kill
 
-        # Disconnect any existing 'flask' tunnel if it exists
-        try:
-            for tunnel in ngrok.get_tunnels():
-                if tunnel.name == 'flask':
-                    ngrok.disconnect(tunnel.public_url)
-                    logger.info(f"Disconnected existing tunnel: {tunnel.public_url}")
-        except Exception as e:
-            logger.warning(f"Error checking existing tunnels: {e}")
+        # Try to connect, handling "tunnel already exists" error
+        max_retries = 3
+        public_url = None
 
-        # Create new tunnel
-        public_url = ngrok.connect(name='flask').public_url
-        _ngrok_tunnel = public_url  # Store for cleanup
-        logger.info(f"ngrok URL: {public_url}")
+        for attempt in range(max_retries):
+            try:
+                # First check if tunnel already exists and reuse it
+                existing_tunnels = ngrok.get_tunnels()
+                for tunnel in existing_tunnels:
+                    if tunnel.name == 'flask':
+                        public_url = tunnel.public_url
+                        logger.info(f"Reusing existing ngrok tunnel: {public_url}")
+                        break
+
+                if public_url:
+                    break
+
+                # Create new tunnel if none exists
+                public_url = ngrok.connect(name='flask').public_url
+                logger.info(f"Created new ngrok tunnel: {public_url}")
+                break
+
+            except Exception as e:
+                error_msg = str(e)
+                if 'already exists' in error_msg:
+                    logger.warning(f"Tunnel conflict detected (attempt {attempt + 1}/{max_retries}), cleaning up...")
+                    try:
+                        # Force kill and wait
+                        ngrok.kill()
+                        time.sleep(2)  # Longer wait after conflict
+                    except Exception:
+                        pass
+                else:
+                    logger.error(f"ngrok error: {e}")
+                    if attempt == max_retries - 1:
+                        raise
+                    time.sleep(1)
+
+        if public_url:
+            _ngrok_tunnel = public_url  # Store for cleanup
+            logger.info(f"ngrok URL: {public_url}")
+        else:
+            logger.error("Failed to establish ngrok tunnel after all retries")
 
 app = create_app()
 
