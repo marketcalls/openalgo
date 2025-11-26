@@ -230,6 +230,174 @@ class BrokerData:
             logger.exception(f"Error fetching quotes for {symbol} on {exchange}")
             raise
 
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols with automatic batching
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            BATCH_SIZE = 500  # Upstox API limit per request
+
+            # If symbols exceed batch size, process in batches
+            if len(symbols) > BATCH_SIZE:
+                logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                # Split symbols into batches
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.debug(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    # Process this batch
+                    batch_results = self._process_quotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                logger.info(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
+                return all_results
+            else:
+                # Single batch processing
+                return self._process_quotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_quotes_batch(self, symbols: list) -> list:
+        """
+        Process a single batch of symbols (internal method)
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys (max 500)
+        Returns:
+            list: List of quote data for the batch
+        """
+        # Build list of instrument keys and mapping
+        instrument_keys = []
+        key_map = {}  # {instrument_key -> {symbol, exchange}}
+
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            try:
+                instrument_key = self._get_instrument_key(symbol, exchange)
+
+                # Skip if key is None or empty
+                if not instrument_key:
+                    logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve instrument key")
+                    continue
+
+                instrument_keys.append(instrument_key)
+                key_map[instrument_key] = {
+                    'symbol': symbol,
+                    'exchange': exchange
+                }
+
+            except Exception as e:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
+                continue
+
+        # Return empty if no valid keys
+        if not instrument_keys:
+            logger.warning("No valid instrument keys to fetch quotes for")
+            return []
+
+        # Build comma-separated instrument keys and URL encode
+        keys_param = ','.join(instrument_keys)
+        encoded_keys = urllib.parse.quote(keys_param)
+
+        logger.info(f"Requesting quotes for {len(instrument_keys)} instruments")
+        logger.debug(f"Instrument keys: {instrument_keys[:5]}..." if len(instrument_keys) > 5 else f"Instrument keys: {instrument_keys}")
+
+        # Use v3 OHLC endpoint for multiple instruments
+        url = f"/market-quote/ohlc?instrument_key={encoded_keys}&interval=1d"
+        response = get_api_response(url, self.auth_token)
+
+        if response.get('status') != 'success':
+            error_msg = response.get('message', 'Unknown error')
+            if 'errors' in response and response['errors']:
+                error = response['errors'][0]
+                error_msg = error.get('message', error_msg)
+            logger.error(f"API Error: {error_msg}")
+            raise Exception(f"API Error: {error_msg}")
+
+        # Also fetch v2 quotes for bid/ask/OI data
+        v2_quotes = {}
+        try:
+            client = get_httpx_client()
+            headers = {
+                'Authorization': f'Bearer {self.auth_token}',
+                'Accept': 'application/json'
+            }
+            v2_url = f"https://api.upstox.com/v2/market-quote/quotes?instrument_key={encoded_keys}"
+            v2_response = client.get(v2_url, headers=headers)
+            v2_data = v2_response.json()
+
+            if v2_data.get('status') == 'success':
+                for key, value in v2_data.get('data', {}).items():
+                    inst_key = value.get('instrument_token')
+                    if inst_key:
+                        v2_quotes[inst_key] = value
+        except Exception as e:
+            logger.debug(f"Could not get v2 quotes data: {e}")
+
+        # Parse response and build results
+        results = []
+        quote_data = response.get('data', {})
+
+        # Build lookup by instrument_token
+        quotes_by_key = {}
+        for key, value in quote_data.items():
+            inst_key = value.get('instrument_token')
+            if inst_key:
+                quotes_by_key[inst_key] = value
+
+        # Build results from key_map
+        for instrument_key, original in key_map.items():
+            quote = quotes_by_key.get(instrument_key)
+
+            if not quote:
+                logger.warning(f"No quote data found for {original['symbol']} ({instrument_key})")
+                results.append({
+                    'symbol': original['symbol'],
+                    'exchange': original['exchange'],
+                    'error': 'No quote data available'
+                })
+                continue
+
+            # Extract OHLC data from v3 response
+            live_ohlc = quote.get('live_ohlc') or {}
+            prev_ohlc = quote.get('prev_ohlc') or {}
+
+            # Get bid/ask/OI from v2 data if available
+            v2_quote = v2_quotes.get(instrument_key, {})
+            depth = v2_quote.get('depth', {})
+            best_bid = depth.get('buy', [{}])[0] if depth.get('buy') else {}
+            best_ask = depth.get('sell', [{}])[0] if depth.get('sell') else {}
+
+            result_item = {
+                'symbol': original['symbol'],
+                'exchange': original['exchange'],
+                'data': {
+                    'ask': float(best_ask.get('price', 0)) if best_ask.get('price') else 0,
+                    'bid': float(best_bid.get('price', 0)) if best_bid.get('price') else 0,
+                    'high': float(live_ohlc.get('high', 0)) if live_ohlc.get('high') else 0,
+                    'low': float(live_ohlc.get('low', 0)) if live_ohlc.get('low') else 0,
+                    'ltp': float(quote.get('last_price', 0)) if quote.get('last_price') else 0,
+                    'open': float(live_ohlc.get('open', 0)) if live_ohlc.get('open') else 0,
+                    'prev_close': float(prev_ohlc.get('close', 0)) if prev_ohlc.get('close') else 0,
+                    'volume': int(live_ohlc.get('volume', 0)) if live_ohlc.get('volume') else 0,
+                    'oi': int(v2_quote.get('oi', 0)) if v2_quote.get('oi') else 0
+                }
+            }
+            results.append(result_item)
+
+        return results
+
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
         Get historical data for given symbol with automatic chunking based on Upstox API V3 limits

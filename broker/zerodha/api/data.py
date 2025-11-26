@@ -51,14 +51,7 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
         'Content-Type': 'application/json'
     }
     
-    # For GET requests, include params in URL
-    params = {}
-    if method.upper() == 'GET' and '?' in endpoint:
-        # Extract query params from endpoint
-        path, query = endpoint.split('?', 1)
-        params = dict(urllib.parse.parse_qsl(query))
-        endpoint = path
-    
+    # Keep query params in URL to preserve duplicate keys (e.g., multiple i= for quotes)
     url = f"{base_url}{endpoint}"
     
     try:
@@ -69,22 +62,18 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
         #logger.info(f"Headers: {json.dumps(headers, indent=2)}")
         if payload:
             logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
-        if params:
-            logger.debug(f"Params: {json.dumps(params, indent=2)}")
         
         # Make the request using the shared client
         if method.upper() == 'GET':
             response = client.get(
                 url,
-                headers=headers,
-                params=params
+                headers=headers
             )
         elif method.upper() == 'POST':
             headers['Content-Type'] = 'application/json'
             response = client.post(
                 url,
                 headers=headers,
-                params=params,
                 json=payload
             )
         else:
@@ -312,6 +301,12 @@ class BrokerData:
             symbol = item['symbol']
             exchange = item['exchange']
             br_symbol = get_br_symbol(symbol, exchange)
+            logger.info(f"Symbol mapping: {symbol}@{exchange} -> br_symbol={br_symbol}")
+
+            # Skip if br_symbol is None or empty
+            if not br_symbol:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve broker symbol")
+                continue
 
             # Normalize exchange for indices
             api_exchange = exchange
@@ -328,6 +323,11 @@ class BrokerData:
                 'br_symbol': br_symbol,
                 'api_exchange': api_exchange
             }
+
+        # Return empty if no valid instruments
+        if not instruments:
+            logger.warning("No valid instruments to fetch quotes for")
+            return []
 
         # Build query string with multiple 'i' parameters
         # Format: /quote?i=NSE:SBIN&i=NSE:TCS&i=BSE:INFY
