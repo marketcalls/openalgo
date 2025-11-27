@@ -111,13 +111,14 @@ class BrokerData:
             
             return {
                 'bid': v.get('bid', 0),
-                'ask': v.get('ask', 0), 
+                'ask': v.get('ask', 0),
                 'open': v.get('open_price', 0),
                 'high': v.get('high_price', 0),
                 'low': v.get('low_price', 0),
                 'ltp': v.get('lp', 0),
                 'prev_close': v.get('prev_close_price', 0),
-                'volume': v.get('volume', 0)
+                'volume': v.get('volume', 0),
+                'oi': int(v.get('oi', 0))
             }
             
         except Exception as e:
