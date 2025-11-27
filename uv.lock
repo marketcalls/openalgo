@@ -1106,7 +1106,7 @@ wheels = [
 
 [[package]]
 name = "openalgo"
-version = "1.0.41"
+version = "1.0.42"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -1115,9 +1115,9 @@ dependencies = [
     { name = "pandas" },
     { name = "websocket-client" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f2/d7/9fe688f27431461bd4c2588533bc247dc719fc6dba540cd49df08324605d/openalgo-1.0.41.tar.gz", hash = "sha256:8a821ddf39e7f3de6b3eec250e5ace2adc3b22de1da011ea97d1d90e63fa99f7", size = 109175, upload-time = "2025-11-26T11:36:12.271Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/52/56/6000b3bfc999895ee56f86294fe244a93b3f90a8272219fbaa2b91175cd9/openalgo-1.0.42.tar.gz", hash = "sha256:65da3a27644022318a2d50f8465f1ed3c8ff38474f5b1f8672d1955045ce9c86", size = 111121, upload-time = "2025-11-27T12:28:52.607Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/76/d6/c6e2c329def7269f692acee84ee8e7c132e4ed01b6049866eda7560134b0/openalgo-1.0.41-py3-none-any.whl", hash = "sha256:150d66b07fca47ce2180716364fe59be4aa063d5011ef66708f666c5318c1192", size = 109231, upload-time = "2025-11-26T11:36:11.067Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/31/782ee89e47d5190373c9c2ce8ac8f97e8918b365771ff6f8e685513bb5e2/openalgo-1.0.42-py3-none-any.whl", hash = "sha256:155d6401783c99ac38e8fe14dd7bee9532f948e8982848e4d5450f663917dac0", size = 111346, upload-time = "2025-11-27T12:28:50.867Z" },
 ]
 
 [[package]]
@@ -1351,7 +1351,7 @@ requires-dist = [
     { name = "nest-asyncio", specifier = "==1.6.0" },
     { name = "numba", specifier = "==0.63.0b1" },
     { name = "numpy", specifier = "==2.2.4" },
-    { name = "openalgo", specifier = "==1.0.41" },
+    { name = "openalgo", specifier = "==1.0.42" },
     { name = "ordered-set", specifier = "==4.1.0" },
     { name = "orjson", specifier = "==3.11.3" },
     { name = "packaging", specifier = "==24.1" },

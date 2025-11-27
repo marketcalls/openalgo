@@ -75,7 +75,7 @@ nbformat==5.10.4
 nest-asyncio==1.6.0
 numba==0.63.0b1
 numpy==2.2.4
-openalgo==1.0.41
+openalgo==1.0.42
 ordered-set==4.1.0
 orjson==3.11.3
 packaging==24.1
