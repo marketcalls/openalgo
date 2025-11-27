@@ -482,7 +482,7 @@ def calculate_margin(positions: List[Dict[str, Any]]) -> str:
 def get_quote(symbol: str, exchange: str = "NSE") -> str:
     """
     Get current quote for a symbol.
-    
+
     Args:
         symbol: Stock symbol
         exchange: Exchange name
@@ -492,6 +492,79 @@ def get_quote(symbol: str, exchange: str = "NSE") -> str:
         return json.dumps(response, indent=2)
     except Exception as e:
         return f"Error getting quote: {str(e)}"
+
+@mcp.tool()
+def get_multi_quotes(symbols: List[Dict[str, str]]) -> str:
+    """
+    Get real-time quotes for multiple symbols in a single request.
+
+    Args:
+        symbols: List of symbol-exchange pairs
+        Example: [{"symbol": "RELIANCE", "exchange": "NSE"}, {"symbol": "INFY", "exchange": "NSE"}]
+
+    Returns:
+        JSON with quotes for all requested symbols including ltp, bid, ask, open, high, low, volume, oi
+    """
+    try:
+        # Normalize symbols to uppercase
+        normalized_symbols = [
+            {"symbol": s["symbol"].upper(), "exchange": s["exchange"].upper()}
+            for s in symbols
+        ]
+        response = client.multiquotes(symbols=normalized_symbols)
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        return f"Error getting multi quotes: {str(e)}"
+
+@mcp.tool()
+def get_option_chain(
+    underlying: str,
+    exchange: str,
+    expiry_date: str,
+    strike_count: Optional[int] = None
+) -> str:
+    """
+    Get option chain data with real-time quotes for all strikes.
+
+    Args:
+        underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY', 'RELIANCE')
+        exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX', 'NSE', 'BSE')
+        expiry_date: Expiry date in DDMMMYY format (e.g., '30DEC25')
+        strike_count: Number of strikes above and below ATM (1-100). If not provided, returns entire chain.
+
+    Returns:
+        JSON with:
+        - underlying: Base symbol
+        - underlying_ltp: Current price of underlying
+        - expiry_date: Expiry date
+        - atm_strike: At-The-Money strike price
+        - chain: Array of strikes with CE and PE data including:
+            - symbol, label (ATM/ITM1/OTM1 etc.), ltp, bid, ask, open, high, low, volume, oi, lotsize
+
+    Note: CE and PE have different labels at the same strike:
+        - Strikes below ATM: CE is ITM, PE is OTM
+        - Strikes above ATM: CE is OTM, PE is ITM
+
+    Example for 10 strikes around ATM:
+        get_option_chain("NIFTY", "NSE_INDEX", "30DEC25", 10)
+
+    Example for full chain:
+        get_option_chain("NIFTY", "NSE_INDEX", "30DEC25")
+    """
+    try:
+        params = {
+            "underlying": underlying.upper(),
+            "exchange": exchange.upper(),
+            "expiry_date": expiry_date.upper()
+        }
+
+        if strike_count is not None:
+            params["strike_count"] = strike_count
+
+        response = client.optionchain(**params)
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        return f"Error getting option chain: {str(e)}"
 
 @mcp.tool()
 def get_market_depth(symbol: str, exchange: str = "NSE") -> str:
