@@ -118,3 +118,10 @@ class InstrumentsSchema(Schema):
         "NSE", "BSE", "NFO", "BFO", "BCD", "CDS", "MCX", "NSE_INDEX", "BSE_INDEX"
     ]))  # Optional exchange filter
     format = fields.Str(required=False, validate=validate.OneOf(["json", "csv"]))  # Output format (json or csv), defaults to json
+
+class OptionChainSchema(Schema):
+    apikey = fields.Str(required=True)      # API Key for authentication
+    underlying = fields.Str(required=True)  # Underlying symbol (e.g., NIFTY, BANKNIFTY, RELIANCE)
+    exchange = fields.Str(required=True)    # Exchange (NSE_INDEX, NSE, NFO, BSE_INDEX, BSE, BFO, MCX, CDS)
+    expiry_date = fields.Str(required=True)  # Expiry date in DDMMMYY format (e.g., 28NOV25) - MANDATORY
+    strike_count = fields.Int(required=False, validate=validate.Range(min=1, max=100), allow_none=True)  # Number of strikes above/below ATM. If not provided, returns entire chain

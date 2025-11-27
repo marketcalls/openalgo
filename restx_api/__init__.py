@@ -15,6 +15,7 @@ from .quotes import api as quotes_ns
 from .multiquotes import api as multiquotes_ns
 from .history import api as history_ns
 from .depth import api as depth_ns
+from .option_chain import api as option_chain_ns
 from .intervals import api as intervals_ns
 from .funds import api as funds_ns
 from .orderbook import api as orderbook_ns
@@ -51,6 +52,7 @@ api.add_namespace(quotes_ns, path='/quotes')
 api.add_namespace(multiquotes_ns, path='/multiquotes')
 api.add_namespace(history_ns, path='/history')
 api.add_namespace(depth_ns, path='/depth')
+api.add_namespace(option_chain_ns, path='/optionchain')
 api.add_namespace(intervals_ns, path='/intervals')
 api.add_namespace(funds_ns, path='/funds')
 api.add_namespace(orderbook_ns, path='/orderbook')

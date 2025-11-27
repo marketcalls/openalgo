@@ -1,0 +1,20 @@
+meta {
+  name: Option Chain
+  type: http
+  seq: 15
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/optionchain
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "underlying": "NIFTY",
+      "exchange": "NSE_INDEX",
+      "expiry_date": "30DEC25"
+  }
+}
