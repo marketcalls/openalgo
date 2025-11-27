@@ -32,6 +32,12 @@ chain = client.optionchain(
     strike_count=5
 )
 
+print("\nNIFTY Option Chain (5 strikes around ATM):")
+print("-" * 50)
+print(chain)
+print("-" * 50)
+print("Strike  | CE LTP (Label) | PE LTP (Label)")
+
 if chain["status"] == "success":
     print(f"\nUnderlying LTP: {chain['underlying_ltp']}")
     print(f"ATM Strike: {chain['atm_strike']}")
