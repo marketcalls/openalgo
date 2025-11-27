@@ -12,7 +12,7 @@ from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 # Toggle between async and threaded approach
-USE_ASYNC = False  # Set to False to use ThreadPoolExecutor
+USE_ASYNC = True  # Set to True to use asyncio (better performance)
 
 logger = get_logger(__name__)
 
@@ -385,7 +385,7 @@ class BrokerData:
                         })
 
         elapsed = time.time() - start_time
-        logger.info(f"Batch of {len(prepared_symbols)} symbols completed in {elapsed:.2f}s ({len(prepared_symbols)/max(elapsed, 0.001):.1f} symbols/sec)")
+        logger.debug(f"Batch of {len(prepared_symbols)} symbols completed in {elapsed:.2f}s ({len(prepared_symbols)/max(elapsed, 0.001):.1f} symbols/sec)")
 
         return skipped_symbols + results
 
