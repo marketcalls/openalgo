@@ -161,6 +161,144 @@ class BrokerData:
             logger.error(f"Error fetching quotes: {e}")
             return {"status": "error", "message": str(e)}
 
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols using Firstock's getMultiQuotes API
+        Firstock Quote API Rate Limit: 1 request/second
+
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            # Firstock rate limit: 1 request per second for quotes
+            RATE_LIMIT_DELAY = 1.0  # 1 second between batch requests
+            BATCH_SIZE = 50  # Symbols per API request
+
+            if len(symbols) > BATCH_SIZE:
+                logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.debug(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    batch_results = self._process_quotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                    # Rate limit delay between batches
+                    if i + BATCH_SIZE < len(symbols):
+                        time.sleep(RATE_LIMIT_DELAY)
+
+                logger.info(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
+                return all_results
+            else:
+                return self._process_quotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_quotes_batch(self, symbols: list) -> list:
+        """
+        Process a batch of symbols using Firstock's getMultiQuotes endpoint
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+        Returns:
+            list: List of quote data for the batch
+        """
+        skipped_symbols = []
+        symbol_map = {}  # Map br_symbol to original symbol/exchange
+
+        api_key = os.getenv('BROKER_API_KEY')
+        if not api_key:
+            raise Exception("BROKER_API_KEY not found in environment variables")
+        api_key = api_key[:-4]  # Firstock specific requirement
+
+        # Build the data array for multi-quote request
+        data_array = []
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            # Convert symbol to broker format
+            br_symbol = get_br_symbol(symbol, exchange)
+
+            if not br_symbol:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve broker symbol")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': 'Could not resolve broker symbol'
+                })
+                continue
+
+            # Map exchange to Firstock format (NSE_INDEX -> NSE)
+            firstock_exchange = 'NSE' if exchange == 'NSE_INDEX' else ('BSE' if exchange == 'BSE_INDEX' else exchange)
+
+            data_array.append({
+                "exchange": firstock_exchange,
+                "tradingSymbol": br_symbol
+            })
+
+            # Store mapping for response processing
+            symbol_map[f"{firstock_exchange}:{br_symbol}"] = {
+                'symbol': symbol,
+                'exchange': exchange
+            }
+
+        if not data_array:
+            logger.warning("No valid symbols to fetch quotes for")
+            return skipped_symbols
+
+        # Make multi-quote API request
+        payload = {
+            "userId": api_key,
+            "jKey": self.auth_token,
+            "data": data_array
+        }
+
+        response = get_api_response("/getMultiQuotes", self.auth_token, payload=payload)
+
+        if response.get('status') != 'success':
+            error_msg = response.get('error', {}).get('message', response.get('message', 'Unknown error'))
+            logger.error(f"Error from Firstock Multi-Quote API: {error_msg}")
+            raise Exception(f"Error from Firstock API: {error_msg}")
+
+        # Parse response and build results
+        results = []
+        quotes_data = response.get('data', [])
+
+        for quote_item in quotes_data:
+            # Get the symbol identifier from response
+            resp_exchange = quote_item.get('exchange', '')
+            resp_symbol = quote_item.get('tradingSymbol', '')
+            key = f"{resp_exchange}:{resp_symbol}"
+
+            # Look up original symbol and exchange
+            original = symbol_map.get(key, {'symbol': resp_symbol, 'exchange': resp_exchange})
+
+            results.append({
+                'symbol': original['symbol'],
+                'exchange': original['exchange'],
+                'data': {
+                    'bid': float(quote_item.get('bestBuyPrice1', 0)),
+                    'ask': float(quote_item.get('bestSellPrice1', 0)),
+                    'open': float(quote_item.get('dayOpenPrice', 0)),
+                    'high': float(quote_item.get('dayHighPrice', 0)),
+                    'low': float(quote_item.get('dayLowPrice', 0)),
+                    'ltp': float(quote_item.get('lastTradedPrice', 0)),
+                    'prev_close': float(quote_item.get('dayClosePrice', 0)),
+                    'volume': int(quote_item.get('volume', 0)),
+                    'oi': int(float(quote_item.get('openInterest', 0)))
+                }
+            })
+
+        return skipped_symbols + results
+
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
         Get market depth for given symbol
