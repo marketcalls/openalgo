@@ -272,9 +272,9 @@ def get_pnl_data():
                             ist = pytz.timezone('Asia/Kolkata')
                             today = datetime.now(ist).date()
                             time_parts = str(fill_time_str).split(':')
-                            trade_time = ist.localize(datetime.combine(today, time(
-                                int(time_parts[0]), 
-                                int(time_parts[1]), 
+                            trade_time = ist.localize(datetime.combine(today, dt_time(
+                                int(time_parts[0]),
+                                int(time_parts[1]),
                                 int(time_parts[2]) if len(time_parts) > 2 else 0
                             )))
                             if first_trade_time is None or trade_time < first_trade_time:
@@ -320,9 +320,9 @@ def get_pnl_data():
                             ist = pytz.timezone('Asia/Kolkata')
                             today = datetime.now(ist).date()
                             time_parts = trade_timestamp.split(':')
-                            trade_time = ist.localize(datetime.combine(today, time(
-                                int(time_parts[0]), 
-                                int(time_parts[1]), 
+                            trade_time = ist.localize(datetime.combine(today, dt_time(
+                                int(time_parts[0]),
+                                int(time_parts[1]),
                                 int(time_parts[2]) if len(time_parts) > 2 else 0
                             )))
                         else:
