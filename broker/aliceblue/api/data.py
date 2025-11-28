@@ -381,7 +381,171 @@ class BrokerData:
         
         # For multiple symbols, return the full list
         return quote_data
-        
+
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols using WebSocket
+        AliceBlue WebSocket supports subscribing to multiple instruments
+
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            # AliceBlue WebSocket can handle multiple instruments
+            # Using batch size of 100 for practical response times
+            BATCH_SIZE = 100
+
+            if len(symbols) > BATCH_SIZE:
+                logger.debug(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.info(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    batch_results = self._process_multiquotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                logger.debug(f"Successfully processed {len(all_results)} quotes")
+                return all_results
+            else:
+                return self._process_multiquotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_multiquotes_batch(self, symbols: list) -> list:
+        """
+        Process a batch of symbols using WebSocket subscription
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+        Returns:
+            list: List of quote data for the batch
+        """
+        results = []
+        skipped_symbols = []
+        instruments = []
+        symbol_map = {}  # Map token to original symbol/exchange
+
+        # Get WebSocket connection
+        websocket = self.get_websocket()
+
+        if not websocket or not websocket.is_connected:
+            logger.warning("WebSocket not connected, reconnecting...")
+            websocket = self.get_websocket(force_new=True)
+
+        if not websocket or not websocket.is_connected:
+            logger.error("Could not establish WebSocket connection")
+            raise ConnectionError("WebSocket connection unavailable")
+
+        # Create Instrument class for subscription
+        class Instrument:
+            def __init__(self, exchange, token, symbol=None):
+                self.exchange = exchange
+                self.token = token
+                self.symbol = symbol
+
+        # Step 1: Prepare all instruments
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            token = get_token(symbol, exchange)
+            if not token:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve token")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': 'Could not resolve token'
+                })
+                continue
+
+            # Get broker symbol
+            br_symbol = get_br_symbol(symbol, exchange) or symbol
+
+            # Map exchange for AliceBlue API
+            api_exchange = exchange
+            if exchange == 'NSE_INDEX':
+                api_exchange = 'NSE'
+            elif exchange == 'BSE_INDEX':
+                api_exchange = 'BSE'
+            elif exchange == 'MCX_INDEX':
+                api_exchange = 'MCX'
+
+            instrument = Instrument(exchange=api_exchange, token=token, symbol=br_symbol)
+            instruments.append(instrument)
+
+            # Store mapping for response processing
+            symbol_map[f"{api_exchange}:{token}"] = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'token': token
+            }
+
+        if not instruments:
+            logger.warning("No valid symbols to fetch quotes for")
+            return skipped_symbols
+
+        # Step 2: Subscribe to all instruments at once
+        logger.info(f"Subscribing to {len(instruments)} symbols via WebSocket")
+        success = websocket.subscribe(instruments)
+
+        if not success:
+            logger.error("Failed to send subscription request")
+            for key, info in symbol_map.items():
+                results.append({
+                    'symbol': info['symbol'],
+                    'exchange': info['exchange'],
+                    'error': 'Subscription failed'
+                })
+            return skipped_symbols + results
+
+        # Step 3: Wait for data to arrive
+        wait_time = min(max(len(instruments) * 0.05, 2), 10)  # Between 2-10 seconds
+        logger.debug(f"Waiting {wait_time:.1f}s for quote data...")
+        time.sleep(wait_time)
+
+        # Step 4: Collect results from WebSocket
+        for key, info in symbol_map.items():
+            api_exchange, token = key.split(':')
+
+            quote = websocket.get_quote(api_exchange, token)
+
+            if quote:
+                results.append({
+                    'symbol': info['symbol'],
+                    'exchange': info['exchange'],
+                    'data': {
+                        'bid': float(quote.get('bid', 0)),
+                        'ask': float(quote.get('ask', 0)),
+                        'open': float(quote.get('open', 0)),
+                        'high': float(quote.get('high', 0)),
+                        'low': float(quote.get('low', 0)),
+                        'ltp': float(quote.get('ltp', 0)),
+                        'prev_close': float(quote.get('close', 0)),
+                        'volume': int(quote.get('volume', 0)),
+                        'oi': int(quote.get('open_interest', 0))
+                    }
+                })
+            else:
+                results.append({
+                    'symbol': info['symbol'],
+                    'exchange': info['exchange'],
+                    'error': 'No data received'
+                })
+
+        # Step 5: Unsubscribe after getting data
+        logger.info(f"Unsubscribing from {len(instruments)} symbols")
+        websocket.unsubscribe(instruments, is_depth=False)
+
+        logger.info(f"Retrieved quotes for {len([r for r in results if 'data' in r])}/{len(symbol_map)} symbols")
+        return skipped_symbols + results
+
         # Support various input formats
         if not hasattr(symbol_list, '__iter__'):
             logger.error(f"symbol_list must be iterable, got {type(symbol_list)}")
