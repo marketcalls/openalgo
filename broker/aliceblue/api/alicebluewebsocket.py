@@ -5,6 +5,7 @@ import time
 import hashlib
 import ssl
 import os
+import httpx
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any, Union
 from utils.logging import get_logger
@@ -17,18 +18,21 @@ class AliceBlueWebSocket:
     Handles connection to the WebSocket server, authentication, subscription,
     and message parsing for market data.
     """
-    
+
     # WebSocket endpoints
     PRIMARY_URL = "wss://ws1.aliceblueonline.com/NorenWS/"
     ALTERNATE_URL = "wss://ws2.aliceblueonline.com/NorenWS/"
-    
+
+    # REST API base URL for WebSocket session management
+    BASE_URL = "https://ant.aliceblueonline.com/rest/AliceBlueAPIService/api/"
+
     # Maximum reconnection attempts
     MAX_RECONNECT_ATTEMPTS = 5
-    
+
     def __init__(self, user_id: str, session_id: str):
         """
         Initialize the AliceBlue WebSocket client.
-        
+
         Args:
             user_id (str): AliceBlue user ID
             session_id (str): Session ID obtained from authentication
@@ -46,23 +50,106 @@ class AliceBlueWebSocket:
         self.last_depth = {}    # Dictionary to store depth data: exchange:token -> depth data
         self._connect_thread = None
         self._stop_event = threading.Event()
-        
+
         # Generate the encrypted token as required by AliceBlue
         sha256_encryption1 = hashlib.sha256(session_id.encode('utf-8')).hexdigest()
         self.enc_token = hashlib.sha256(sha256_encryption1.encode('utf-8')).hexdigest()
+
+    def _get_auth_header(self) -> dict:
+        """Get authorization header for REST API calls."""
+        return {
+            "Authorization": f"Bearer {self.user_id.upper()} {self.session_id}",
+            "Content-Type": "application/json"
+        }
+
+    def _invalidate_socket_session(self) -> bool:
+        """
+        Invalidate any existing WebSocket session.
+        Must be called before creating a new WebSocket session.
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Try both endpoint variants (createWsSession and createSocketSess)
+            url = self.BASE_URL + "ws/invalidateWsSession"
+            payload = {"loginType": "API"}
+
+            with httpx.Client() as client:
+                response = client.post(url, json=payload, headers=self._get_auth_header(), timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(f"Invalidate socket session response: {data}")
+                # Accept both 'Ok' and 'Not_Ok' as valid responses (Not_Ok means no session to invalidate)
+                return True
+            else:
+                logger.warning(f"Failed to invalidate socket session: {response.status_code}")
+                return True  # Continue anyway
+
+        except Exception as e:
+            logger.warning(f"Error invalidating socket session: {str(e)}")
+            return True  # Continue anyway, this is not critical
+
+    def _create_socket_session(self) -> bool:
+        """
+        Create a new WebSocket session.
+        Must be called before connecting to WebSocket.
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Use the same endpoint as aliceblue_client.py: ws/createWsSession
+            url = self.BASE_URL + "ws/createWsSession"
+            payload = {"loginType": "API"}
+
+            with httpx.Client() as client:
+                response = client.post(url, json=payload, headers=self._get_auth_header(), timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(f"Create socket session response: {data}")
+
+                # Check for success
+                if data.get('stat') == 'Ok':
+                    logger.info("WebSocket session created successfully")
+                    return True
+                else:
+                    error_msg = data.get('emsg', 'Unknown error')
+                    logger.error(f"Failed to create socket session: {error_msg}")
+                    return False
+            else:
+                logger.error(f"Failed to create socket session: HTTP {response.status_code}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error creating socket session: {str(e)}")
+            return False
     
     def connect(self):
         """
         Establishes the WebSocket connection and starts the connection thread.
+        Must first create a WebSocket session via REST API before connecting.
         """
         if self._connect_thread and self._connect_thread.is_alive():
             logger.info("WebSocket connection thread is already running")
             return
-        
+
         # Reset the stop event
         self._stop_event.clear()
-        
-        # Start the connection in a separate thread
+
+        # Step 1: Invalidate any existing WebSocket session
+        logger.info("Invalidating existing WebSocket session...")
+        self._invalidate_socket_session()
+
+        # Step 2: Create a new WebSocket session
+        logger.info("Creating new WebSocket session...")
+        if not self._create_socket_session():
+            logger.error("Failed to create WebSocket session. Cannot connect.")
+            return
+
+        # Step 3: Start the connection in a separate thread
         self._connect_thread = threading.Thread(target=self._connect_with_retry)
         self._connect_thread.daemon = True
         self._connect_thread.start()
@@ -529,56 +616,55 @@ class AliceBlueWebSocket:
     
     def subscribe(self, instruments, is_depth=False):
         """Subscribe to market data for given instruments
-        
+
         Args:
             instruments: List of instrument objects with exchange and token attributes
             is_depth: Whether to subscribe to market depth (True) or just ticks (False)
-            
+
         Returns:
             bool: True if subscription was successful, False otherwise
         """
+        if not self.is_connected:
+            logger.error("Cannot subscribe: WebSocket is not connected")
+            return False
+
+        if not instruments:
+            logger.warning("No instruments to subscribe")
+            return False
+
+        # Add instruments to subscriptions mapping: exchange|token -> instrument
         with self.lock:
-            if not self.is_connected:
-                logger.error("Cannot subscribe: WebSocket is not connected")
-                return False
-            
-            if not instruments:
-                logger.warning("No instruments to subscribe")
-                return False
-                
-            # Add instruments to subscriptions mapping: exchange|token -> instrument
             for instrument in instruments:
                 subscription_key = f"{instrument.exchange}|{instrument.token}"
                 self.subscriptions[subscription_key] = instrument
                 logger.info(f"Storing subscription: {subscription_key} -> {getattr(instrument, 'symbol', 'Unknown')}")
-                logger.info(f"Instrument attributes: exchange={instrument.exchange}, token={instrument.token}, symbol={getattr(instrument, 'symbol', 'None')}")
-            
-            # Format according to AliceBlue API documentation: {"k":"NFO|54957#MCX|239484","t":"t"}
-            # For depth: {"k":"NFO|54957#MCX|239484","t":"d"}
-            # Prepare the subscription key string with proper format
-            subscription_keys = []
-            for instrument in instruments:
-                subscription_keys.append(f"{instrument.exchange}|{instrument.token}")
-            
-            if subscription_keys:
-                # Create the subscription message with the correct format
-                # Join multiple instruments with # as specified in the API docs
-                subscription_key = "#".join(subscription_keys)
-                message = {
-                    "t": "d" if is_depth else "t",  # d for depth, t for tick data
-                    "k": subscription_key  # Format: "NFO|54957#MCX|239484"
-                }
-                
-                logger.info(f"Sending {'depth' if is_depth else 'tick'} subscription message: {json.dumps(message)}")
-                
-                # Send the message
-                self.ws.send(json.dumps(message))
-                
-                logger.info(f"Subscribed to {len(instruments)} instruments for {'market depth' if is_depth else 'tick data'}")
-                return True
-            else:
-                logger.warning("No valid subscription keys generated")
-                return False
+
+        # Format according to AliceBlue API documentation: {"k":"NFO|54957#MCX|239484","t":"t"}
+        # For depth: {"k":"NFO|54957#MCX|239484","t":"d"}
+        # Prepare the subscription key string with proper format
+        subscription_keys = []
+        for instrument in instruments:
+            subscription_keys.append(f"{instrument.exchange}|{instrument.token}")
+
+        if subscription_keys:
+            # Create the subscription message with the correct format
+            # Join multiple instruments with # as specified in the API docs
+            subscription_key = "#".join(subscription_keys)
+            message = {
+                "t": "d" if is_depth else "t",  # d for depth, t for tick data
+                "k": subscription_key  # Format: "NFO|54957#MCX|239484"
+            }
+
+            logger.info(f"Sending {'depth' if is_depth else 'tick'} subscription message: {json.dumps(message)}")
+
+            # Send the message
+            self.ws.send(json.dumps(message))
+
+            logger.info(f"Subscribed to {len(instruments)} instruments for {'market depth' if is_depth else 'tick data'}")
+            return True
+        else:
+            logger.warning("No valid subscription keys generated")
+            return False
     
     def unsubscribe(self, instruments, is_depth=False):
         """Unsubscribe from market data for specified instruments"""

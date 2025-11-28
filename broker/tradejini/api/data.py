@@ -539,18 +539,21 @@ class BrokerData:
         # Step 4: Collect results from L1 cache
         with self.ws.lock:
             for symbol_key, info in symbol_map.items():
-                # Try different key formats
+                # Try different key formats that Tradejini WebSocket might use
                 possible_keys = [
-                    symbol_key,
-                    f"{info['token']}_NSE",
-                    f"{info['token']}_{info['exchange']}",
-                    str(info['token']),
+                    symbol_key,                                # token_exchange (e.g., "1234_NSE")
+                    f"{info['exchange']}_{info['token']}",     # exchange_token (e.g., "NSE_1234")
+                    f"{info['token']}_NSE",                    # token_NSE fallback
+                    f"{info['token']}_{info['exchange']}",     # token_exchange format
+                    f"NSE_{info['token']}",                    # NSE_token format
+                    str(info['token']),                        # just token
                 ]
 
                 quote_data = None
                 for key in possible_keys:
                     if key in self.ws.L1_dict:
                         quote_data = self.ws.L1_dict[key]
+                        logger.debug(f"Found quote data for {info['symbol']} using key: {key}")
                         break
 
                 if quote_data:

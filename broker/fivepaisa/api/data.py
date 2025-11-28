@@ -512,9 +512,19 @@ class BrokerData:
             })
 
             # Store mapping for response processing
-            symbol_map[str(token)] = {
+            # Use composite key (token + exchange + symbol) to handle token "0" cases
+            # where multiple symbols might have the same fallback token
+            if token == "0":
+                # For fallback cases, use ScripData (br_symbol) as key
+                map_key = f"scripdata:{br_symbol}"
+            else:
+                map_key = str(token)
+
+            symbol_map[map_key] = {
                 'symbol': symbol,
-                'exchange': exchange
+                'exchange': exchange,
+                'br_symbol': br_symbol,
+                'token': token
             }
 
         if not data_array:
@@ -562,12 +572,23 @@ class BrokerData:
             for quote_item in quotes_data:
                 # Get the scrip code from response
                 scrip_code = str(quote_item.get('ScripCode', ''))
+                scrip_data = quote_item.get('ScripData', '') or quote_item.get('Symbol', '')
 
                 # Look up original symbol and exchange
-                original = symbol_map.get(scrip_code, None)
+                # First try by scrip_code, then by scripdata for token "0" cases
+                original = symbol_map.get(scrip_code)
+                if not original and scrip_code == "0" and scrip_data:
+                    original = symbol_map.get(f"scripdata:{scrip_data}")
+
                 if not original:
-                    # Try to find by matching
-                    logger.warning(f"Could not map scrip code {scrip_code} to original symbol")
+                    # Try to find by matching broker symbol in values
+                    for key, info in symbol_map.items():
+                        if info.get('br_symbol') == scrip_data:
+                            original = info
+                            break
+
+                if not original:
+                    logger.warning(f"Could not map scrip code {scrip_code} (ScripData: {scrip_data}) to original symbol")
                     continue
 
                 # Get previous close

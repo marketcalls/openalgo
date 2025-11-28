@@ -109,6 +109,28 @@ class BrokerData:
             'D': 'DAY'    # Daily data
         }
 
+    def _format_quote_data(self, quote_item: dict) -> dict:
+        """
+        Format raw quote data from Firstock API into standardized format.
+        Shared by both get_quotes and get_multiquotes.
+
+        Args:
+            quote_item: Raw quote data from Firstock API
+        Returns:
+            dict: Formatted quote data
+        """
+        return {
+            'bid': float(quote_item.get('bestBuyPrice1', 0)),
+            'ask': float(quote_item.get('bestSellPrice1', 0)),
+            'open': float(quote_item.get('dayOpenPrice', 0)),
+            'high': float(quote_item.get('dayHighPrice', 0)),
+            'low': float(quote_item.get('dayLowPrice', 0)),
+            'ltp': float(quote_item.get('lastTradedPrice', 0)),
+            'prev_close': float(quote_item.get('dayClosePrice', 0)),
+            'volume': int(quote_item.get('volume', 0)),
+            'oi': int(float(quote_item.get('openInterest', 0)))
+        }
+
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
         Get real-time quotes for given symbol
@@ -121,42 +143,32 @@ class BrokerData:
         try:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
-            
+
             # Map exchange to Firstock format (NSE_INDEX -> NSE)
             firstock_exchange = 'NSE' if exchange == 'NSE_INDEX' else exchange
-            
+
             payload = {
                 "userId": os.getenv('BROKER_API_KEY')[:-4],
                 "exchange": firstock_exchange,
                 "tradingSymbol": br_symbol,
                 "jKey": self.auth_token
             }
-            
+
             response = get_api_response("/getQuote", self.auth_token, payload=payload)
-            
+
             if response.get('status') != 'success':
                 raise Exception(f"Error from Firstock API: {response.get('error', {}).get('message', 'Unknown error')}")
-            
+
             quote_data = response.get('data', {})
-            
+
             # Debug logging to check response structure
             if not quote_data:
                 logger.warning(f"Empty quote data received for {br_symbol} on {firstock_exchange}")
                 logger.debug(f"Full response: {response}")
-            
-            # Create the quote data without any wrapping - let the API handle the wrapping
-            return {
-                "ask": float(quote_data.get('bestSellPrice1', 0)),
-                "bid": float(quote_data.get('bestBuyPrice1', 0)),
-                "high": float(quote_data.get('dayHighPrice', 0)),
-                "low": float(quote_data.get('dayLowPrice', 0)),
-                "ltp": float(quote_data.get('lastTradedPrice', 0)),
-                "open": float(quote_data.get('dayOpenPrice', 0)),
-                "prev_close": float(quote_data.get('dayClosePrice', 0)),
-                "volume": int(quote_data.get('volume', 0)),
-                "oi": int(float(quote_data.get('openInterest', 0)))
-            }
-            
+
+            # Use shared formatting method
+            return self._format_quote_data(quote_data)
+
         except Exception as e:
             logger.error(f"Error fetching quotes: {e}")
             return {"status": "error", "message": str(e)}
@@ -284,17 +296,7 @@ class BrokerData:
             results.append({
                 'symbol': original['symbol'],
                 'exchange': original['exchange'],
-                'data': {
-                    'bid': float(quote_item.get('bestBuyPrice1', 0)),
-                    'ask': float(quote_item.get('bestSellPrice1', 0)),
-                    'open': float(quote_item.get('dayOpenPrice', 0)),
-                    'high': float(quote_item.get('dayHighPrice', 0)),
-                    'low': float(quote_item.get('dayLowPrice', 0)),
-                    'ltp': float(quote_item.get('lastTradedPrice', 0)),
-                    'prev_close': float(quote_item.get('dayClosePrice', 0)),
-                    'volume': int(quote_item.get('volume', 0)),
-                    'oi': int(float(quote_item.get('openInterest', 0)))
-                }
+                'data': self._format_quote_data(quote_item)
             })
 
         return skipped_symbols + results
