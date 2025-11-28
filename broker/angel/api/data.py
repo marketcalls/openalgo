@@ -432,7 +432,7 @@ class BrokerData:
                         continue
                         
                 except Exception as chunk_error:
-                    logger.error(f"Debug - Error fetching chunk {current_start} to {current_end}: {str(chunk_error)}")
+                    logger.debug(f"Debug - Error fetching chunk {current_start} to {current_end}: {str(chunk_error)}")
                     current_start = current_end + timedelta(days=1)
                     continue
                 
