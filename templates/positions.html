@@ -2,20 +2,101 @@
 
 {% block head %}
 <style>
-    .stat-card {
-        @apply bg-base-100 rounded-lg shadow-lg p-6 transition-all duration-300;
-    }
-    
-    .stat-card:hover {
-        @apply shadow-xl transform -translate-y-1;
-    }
-
     .table-container {
-        @apply overflow-x-auto bg-base-100 rounded-lg shadow-lg mt-8;
+        @apply overflow-x-auto bg-base-100 rounded-lg shadow-lg;
     }
 
     .table-header {
         @apply sticky top-0 bg-base-200 z-10;
+    }
+
+    .numeric-cell {
+        @apply font-mono text-right;
+    }
+
+    /* Settings */
+    .settings-btn-wrapper {
+        @apply relative;
+    }
+
+    .filter-dot {
+        @apply w-2 h-2 bg-error rounded-full absolute -top-1 -right-1;
+        display: none;
+    }
+
+    .filter-dot.active {
+        display: block;
+    }
+
+    .settings-section {
+        @apply mb-5;
+    }
+
+    .settings-section:last-child {
+        @apply mb-0;
+    }
+
+    .settings-title {
+        @apply text-xs font-semibold uppercase tracking-wider text-base-content/60 mb-3;
+    }
+
+    .filter-chip.active {
+        @apply btn-primary border-primary;
+    }
+
+    /* Group header */
+    .group-header-row {
+        @apply bg-base-200 cursor-pointer;
+    }
+
+    .group-header-row:hover {
+        @apply bg-base-300;
+    }
+
+    .group-header-row td {
+        @apply py-3 font-semibold;
+    }
+
+    .group-info {
+        @apply flex items-center gap-3;
+    }
+
+    .group-chevron {
+        width: 20px;
+        height: 20px;
+        min-width: 20px;
+        min-height: 20px;
+        flex-shrink: 0;
+        @apply text-base-content/60 transition-transform duration-200;
+    }
+
+    .group-chevron.collapsed {
+        transform: rotate(-90deg);
+    }
+
+    .group-pnl {
+        @apply flex items-center justify-end gap-3;
+    }
+
+    .group-pnl-value {
+        @apply font-mono font-semibold;
+    }
+
+    .group-pnl-pct {
+        @apply text-sm font-mono px-2 py-0.5 rounded;
+    }
+
+    .group-pnl-pct.profit {
+        @apply bg-success/10 text-success;
+    }
+
+    .group-pnl-pct.loss {
+        @apply bg-error/10 text-error;
+    }
+
+    /* Position rows */
+    .position-row.collapsed {
+        display: none;
     }
 
     .position-long {
@@ -30,26 +111,18 @@
         @apply text-base-content font-semibold;
     }
 
-    .quick-action-btn {
-        @apply btn btn-sm;
+    /* Footer */
+    .footer-row {
+        @apply bg-base-200;
     }
 
-    /* Ensure dropdown is visible */
-    .dropdown.dropdown-end .dropdown-content {
-        @apply mt-2;
-        min-width: 12rem;
-        z-index: 50;
+    .footer-row td {
+        @apply py-4 font-semibold;
     }
 
-    /* Add some padding to menu items */
-    .dropdown-content .menu li > * {
-        @apply py-3 px-4;
-    }
-
-    /* Ensure last row dropdown is visible */
-    tr:last-child .dropdown .dropdown-content {
-        bottom: 100%;
-        top: auto;
+    /* Empty state */
+    .empty-state {
+        @apply text-center py-16 bg-base-100 rounded-lg shadow-lg;
     }
 </style>
 {% endblock %}
@@ -57,20 +130,31 @@
 {% block content %}
 <div class="w-full">
     <!-- Header Section -->
-    <div class="mb-6 flex justify-between items-center">
+    <div class="mb-6 flex flex-wrap justify-between items-center gap-4">
         <div>
-            <h1 class="text-3xl font-bold">Trading Positions</h1>
+            <h1 class="text-3xl font-bold">Positions</h1>
             <p class="text-base-content/60">Monitor and manage your active trading positions</p>
         </div>
-        <div class="flex gap-2">
-            <button onclick="openCloseAllModal()" class="btn btn-error">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+        <div class="flex gap-2 items-center flex-wrap">
+            <!-- Settings Button -->
+            <div class="settings-btn-wrapper">
+                <button class="btn btn-ghost btn-sm gap-2" onclick="openSettingsModal()">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                    </svg>
+                    Settings
+                    <span id="filter-indicator" class="filter-dot"></span>
+                </button>
+            </div>
+
+            <button onclick="openCloseAllModal()" class="btn btn-error btn-sm gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                     <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
                 </svg>
                 Close All
             </button>
-            <a href="{{ url_for('orders_bp.export_positions') }}" class="btn btn-primary">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+            <a href="{{ url_for('orders_bp.export_positions') }}" class="btn btn-primary btn-sm gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                     <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
                 </svg>
                 Export to CSV
@@ -78,12 +162,53 @@
         </div>
     </div>
 
+    <!-- Position Summary -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+        <div class="stat bg-base-100 rounded-lg shadow">
+            <div class="stat-title">Total P&L</div>
+            <div id="total-pnl" class="stat-value">0.00</div>
+            <div class="stat-desc">Unrealized profit/loss</div>
+        </div>
+
+        <div class="stat bg-base-100 rounded-lg shadow">
+            <div class="stat-title">Open Positions</div>
+            <div id="open-positions" class="stat-value">0</div>
+            <div class="stat-desc">Active positions</div>
+        </div>
+
+        <div class="stat bg-base-100 rounded-lg shadow">
+            <div class="stat-title">Long Positions</div>
+            <div id="long-positions" class="stat-value text-success">0</div>
+            <div class="stat-desc">
+                <div class="badge badge-success gap-1">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+                    </svg>
+                    Buy side
+                </div>
+            </div>
+        </div>
+
+        <div class="stat bg-base-100 rounded-lg shadow">
+            <div class="stat-title">Short Positions</div>
+            <div id="short-positions" class="stat-value text-error">0</div>
+            <div class="stat-desc">
+                <div class="badge badge-error gap-1">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+                    </svg>
+                    Sell side
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Positions Table -->
-    <div id="positions-table-container" class="table-container">
-        <table class="table w-full table-zebra">
+    <div id="table-container" class="table-container">
+        <table class="table w-full">
             <thead class="table-header">
                 <tr>
-                    <th class="cursor-pointer hover:bg-base-300">
+                    <th class="cursor-pointer hover:bg-base-300" onclick="sortTable(0)">
                         Trading Symbol
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline-block ml-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
@@ -91,200 +216,531 @@
                     </th>
                     <th>Exchange</th>
                     <th>Product Type</th>
-                    <th>Net Qty</th>
-                    <th>Avg Price</th>
+                    <th class="cursor-pointer hover:bg-base-300" onclick="sortTable(3)">Net Qty</th>
+                    <th class="cursor-pointer hover:bg-base-300" onclick="sortTable(4)">Avg Price</th>
                     <th>LTP</th>
-                    <th>P&L</th>
-                    <th class="w-20">Actions</th>
+                    <th class="cursor-pointer hover:bg-base-300" onclick="sortTable(6)">P&L</th>
+                    <th class="cursor-pointer hover:bg-base-300" onclick="sortTable(7)">Chg%</th>
+                    <th>Actions</th>
                 </tr>
             </thead>
-            <tbody>
-                {% for position in positions_data %}
-                <tr class="hover:bg-base-200">
-                    <td class="font-medium">{{ position.symbol }}</td>
-                    <td>
-                        {% set exchange_colors = {
-                            'NSE': 'badge-accent',
-                            'BSE': 'badge-neutral',
-                            'NFO': 'badge-secondary',
-                            'MCX': 'badge-primary'
-                        } %}
-                        <div class="badge {{ exchange_colors.get(position.exchange, 'badge-ghost') }}">
-                            {{ position.exchange }}
-                        </div>
-                    </td>
-                    <td>
-                        {% set product_type_colors = {
-                            'CNC': 'badge-secondary',
-                            'MIS': 'badge-accent',
-                            'NRML': 'badge-neutral'
-                        } %}
-                        <div class="badge {{ product_type_colors.get(position.product, 'badge-ghost') }}">
-                            {{ position.product }}
-                        </div>
-                    </td>
-                    <td class="{% if position.quantity|int > 0 %}position-long{% elif position.quantity|int < 0 %}position-short{% else %}position-neutral{% endif %}">
-                        {{ position.quantity }}
-                    </td>
-                    <td class="font-mono">{{ position.average_price }}</td>
-                    <td class="font-mono">{{ position.ltp if position.ltp is defined else 'N/A' }}</td>
-                    <td class="{% if position.pnl|default(0)|float > 0 %}position-long{% elif position.pnl|default(0)|float < 0 %}position-short{% else %}position-neutral{% endif %}">
-                        {{ position.pnl if position.pnl is defined else '0.00' }}
-                    </td>
-                    <td>
-                        <div class="dropdown dropdown-end">
-                            <label tabindex="0" class="btn btn-ghost btn-sm">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
-                                </svg>
-                            </label>
-                            <ul tabindex="0" class="dropdown-content menu menu-compact shadow-lg bg-base-100 rounded-box w-36">
-                                <li>
-                                    <a class="text-base-content" onclick="exitPosition('{{ position.symbol }}', '{{ position.exchange }}', '{{ position.product }}')">
-                                        <span class="text-sm">Exit</span>
-                                    </a>
-                                </li>
-                            </ul>
-                        </div>
-                    </td>
+            <tbody id="positions-tbody"></tbody>
+            <tfoot>
+                <tr class="footer-row">
+                    <td colspan="6" class="text-right text-base-content/70">Total P&L:</td>
+                    <td id="footer-total-pnl" class="numeric-cell font-bold">0.00</td>
+                    <td colspan="2"></td>
                 </tr>
-                {% endfor %}
-            </tbody>
+            </tfoot>
         </table>
+    </div>
+
+    <!-- Empty State -->
+    <div id="empty-state" class="empty-state" style="display: none;">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto text-base-content/30 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+        <p class="text-base-content/60 mb-4">No positions match your filters</p>
+        <button class="btn btn-ghost btn-sm" onclick="clearFilters()">Clear Filters</button>
     </div>
 </div>
 
 <script>
+const originalPositions = {{ positions_data | tojson | safe }};
+
+let currentGrouping = 'none';
+let activeFilters = { product: [], direction: [], exchange: [] };
+let collapsedGroups = new Set();
+let sortColumn = null;
+let sortDirection = 'asc';
+
 document.addEventListener('DOMContentLoaded', function() {
-    // Add sorting functionality to table headers
-    document.querySelectorAll('th.cursor-pointer').forEach(headerCell => {
-        headerCell.addEventListener('click', () => {
-            const table = headerCell.closest('table');
-            const tbody = table.querySelector('tbody');
-            const rows = Array.from(tbody.querySelectorAll('tr'));
-            const index = Array.from(headerCell.parentElement.children).indexOf(headerCell);
-            
-            // Get current sort direction
-            const currentDirection = headerCell.getAttribute('data-sort') || 'asc';
-            const newDirection = currentDirection === 'asc' ? 'desc' : 'asc';
-            
-            // Update sort direction
-            headerCell.setAttribute('data-sort', newDirection);
-            
-            // Sort rows
-            rows.sort((a, b) => {
-                const aValue = a.children[index].textContent.trim();
-                const bValue = b.children[index].textContent.trim();
-                
-                // Check if values are numbers
-                const aNum = parseFloat(aValue);
-                const bNum = parseFloat(bValue);
-                
-                if (!isNaN(aNum) && !isNaN(bNum)) {
-                    return newDirection === 'asc' ? aNum - bNum : bNum - aNum;
-                }
-                
-                return newDirection === 'asc' 
-                    ? aValue.localeCompare(bValue)
-                    : bValue.localeCompare(aValue);
-            });
-            
-            // Clear and repopulate tbody
-            tbody.innerHTML = '';
-            rows.forEach(row => tbody.appendChild(row));
-        });
-    });
+    loadPreferences();
+    renderPositions();
+    updateStats();
 });
 
-// Position management functions
+function parseSymbol(symbol, exchange) {
+    if (exchange === 'NSE' || exchange === 'BSE') {
+        return { underlying: symbol, expiry: null, strike: null, optionType: null };
+    }
+
+    const futMatch = symbol.match(/^(.+?)(\d{1,2}[A-Z]{3}\d{2})FUT$/i);
+    if (futMatch) {
+        return { underlying: futMatch[1], expiry: futMatch[2], strike: null, optionType: 'FUT' };
+    }
+
+    const optMatch = symbol.match(/^(.+?)(\d{1,2}[A-Z]{3}\d{2})(\d+\.?\d*)(CE|PE)$/i);
+    if (optMatch) {
+        return { underlying: optMatch[1], expiry: optMatch[2], strike: optMatch[3], optionType: optMatch[4] };
+    }
+
+    return { underlying: symbol, expiry: null, strike: null, optionType: null };
+}
+
+function getGroupKey(pos) {
+    const exchange = pos.exchange;
+    const product = pos.product;
+
+    // For NSE/BSE equity positions
+    if (exchange === 'NSE' || exchange === 'BSE') {
+        if (product === 'CNC') {
+            return 'Equity (Delivery)';
+        } else if (product === 'MIS') {
+            return 'Equity (Intraday)';
+        }
+    }
+
+    // For derivatives
+    const parsed = parseSymbol(pos.symbol, exchange);
+
+    if (currentGrouping === 'underlying') {
+        return parsed.underlying;
+    } else if (currentGrouping === 'underlying_expiry') {
+        return parsed.expiry ? `${parsed.underlying} - ${parsed.expiry}` : parsed.underlying;
+    }
+
+    return parsed.underlying;
+}
+
+function calculatePnlPercent(position) {
+    const avgPrice = parseFloat(position.average_price) || 0;
+    const qty = parseInt(position.quantity) || 0;
+    const pnl = parseFloat(position.pnl) || 0;
+    if (avgPrice === 0 || qty === 0) return 0;
+    const investment = Math.abs(avgPrice * qty);
+    return investment > 0 ? (pnl / investment) * 100 : 0;
+}
+
+function filterPositions(positions) {
+    return positions.filter(pos => {
+        if (activeFilters.product.length > 0 && !activeFilters.product.includes(pos.product)) return false;
+
+        const qty = parseInt(pos.quantity) || 0;
+        if (activeFilters.direction.length > 0) {
+            const isLong = qty > 0;
+            const isShort = qty < 0;
+            if (activeFilters.direction.includes('LONG') && !activeFilters.direction.includes('SHORT') && !isLong) return false;
+            if (activeFilters.direction.includes('SHORT') && !activeFilters.direction.includes('LONG') && !isShort) return false;
+        }
+
+        if (activeFilters.exchange.length > 0 && !activeFilters.exchange.includes(pos.exchange)) return false;
+
+        return true;
+    });
+}
+
+function groupPositions(positions) {
+    if (currentGrouping === 'none') {
+        return { '_all': positions };
+    }
+
+    const groups = {};
+    positions.forEach(pos => {
+        const groupKey = getGroupKey(pos);
+        if (!groups[groupKey]) groups[groupKey] = [];
+        groups[groupKey].push(pos);
+    });
+
+    return groups;
+}
+
+function calculateGroupStats(positions) {
+    let totalPnl = 0;
+    let totalInvestment = 0;
+
+    positions.forEach(pos => {
+        totalPnl += parseFloat(pos.pnl) || 0;
+        const avgPrice = parseFloat(pos.average_price) || 0;
+        const qty = Math.abs(parseInt(pos.quantity) || 0);
+        totalInvestment += avgPrice * qty;
+    });
+
+    const pnlPercent = totalInvestment > 0 ? (totalPnl / totalInvestment) * 100 : 0;
+    return { totalPnl, pnlPercent, count: positions.length };
+}
+
+function sortPositions(positions) {
+    if (sortColumn === null) return positions;
+
+    return [...positions].sort((a, b) => {
+        let aVal, bVal;
+        switch(sortColumn) {
+            case 0: aVal = a.symbol; bVal = b.symbol; break;
+            case 3: aVal = parseInt(a.quantity) || 0; bVal = parseInt(b.quantity) || 0; break;
+            case 4: aVal = parseFloat(a.average_price) || 0; bVal = parseFloat(b.average_price) || 0; break;
+            case 6: aVal = parseFloat(a.pnl) || 0; bVal = parseFloat(b.pnl) || 0; break;
+            case 7: aVal = calculatePnlPercent(a); bVal = calculatePnlPercent(b); break;
+            default: return 0;
+        }
+        if (typeof aVal === 'string') {
+            return sortDirection === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+        }
+        return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
+    });
+}
+
+function renderPositions() {
+    const filteredPositions = filterPositions(originalPositions);
+    const sortedPositions = sortPositions(filteredPositions);
+    const groupedPositions = groupPositions(sortedPositions);
+
+    const tbody = document.getElementById('positions-tbody');
+    const emptyState = document.getElementById('empty-state');
+    const tableContainer = document.getElementById('table-container');
+
+    tbody.innerHTML = '';
+
+    if (filteredPositions.length === 0) {
+        tableContainer.style.display = 'none';
+        emptyState.style.display = 'block';
+        return;
+    }
+
+    tableContainer.style.display = 'block';
+    emptyState.style.display = 'none';
+
+    const exchangeColors = {
+        'NSE': 'badge-accent',
+        'BSE': 'badge-neutral',
+        'NFO': 'badge-secondary',
+        'BFO': 'badge-warning',
+        'MCX': 'badge-primary',
+        'CDS': 'badge-info'
+    };
+
+    const productColors = {
+        'CNC': 'badge-secondary',
+        'MIS': 'badge-accent',
+        'NRML': 'badge-neutral'
+    };
+
+    const sortedGroupKeys = Object.keys(groupedPositions).sort((a, b) => {
+        if (a.startsWith('Equity') && !b.startsWith('Equity')) return -1;
+        if (!a.startsWith('Equity') && b.startsWith('Equity')) return 1;
+        return a.localeCompare(b);
+    });
+
+    sortedGroupKeys.forEach(groupKey => {
+        const positions = groupedPositions[groupKey];
+        const isCollapsed = collapsedGroups.has(groupKey);
+
+        if (currentGrouping !== 'none') {
+            const stats = calculateGroupStats(positions);
+            const pnlClass = stats.totalPnl >= 0 ? 'profit' : 'loss';
+            const pnlTextClass = stats.totalPnl >= 0 ? 'text-success' : 'text-error';
+            const pnlSign = stats.totalPnl >= 0 ? '+' : '';
+            const pctSign = stats.pnlPercent >= 0 ? '+' : '';
+
+            const headerRow = document.createElement('tr');
+            headerRow.className = 'group-header-row';
+            headerRow.onclick = () => toggleGroup(groupKey);
+            headerRow.innerHTML = `
+                <td colspan="6">
+                    <div class="group-info">
+                        <svg class="group-chevron ${isCollapsed ? 'collapsed' : ''}" xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                        </svg>
+                        <span class="font-bold text-base">${groupKey}</span>
+                        <span class="badge badge-ghost badge-sm">${stats.count}</span>
+                    </div>
+                </td>
+                <td class="numeric-cell font-bold ${pnlTextClass}">${pnlSign}${stats.totalPnl.toFixed(2)}</td>
+                <td class="numeric-cell font-semibold ${pnlTextClass}">${pctSign}${stats.pnlPercent.toFixed(2)}%</td>
+                <td></td>
+            `;
+            tbody.appendChild(headerRow);
+        }
+
+        positions.forEach(position => {
+            const qty = parseInt(position.quantity) || 0;
+            const pnl = parseFloat(position.pnl) || 0;
+            const pnlPercent = calculatePnlPercent(position);
+
+            const qtyClass = qty > 0 ? 'position-long' : qty < 0 ? 'position-short' : 'position-neutral';
+            const pnlClass = pnl >= 0 ? 'text-success' : 'text-error';
+            const pnlSign = pnl >= 0 ? '+' : '';
+            const pctSign = pnlPercent >= 0 ? '+' : '';
+
+            const row = document.createElement('tr');
+            row.className = `hover:bg-base-200 position-row ${isCollapsed ? 'collapsed' : ''}`;
+            row.innerHTML = `
+                <td class="font-medium">${position.symbol}</td>
+                <td>
+                    <div class="badge ${exchangeColors[position.exchange] || 'badge-ghost'}">${position.exchange}</div>
+                </td>
+                <td>
+                    <div class="badge ${productColors[position.product] || 'badge-ghost'}">${position.product}</div>
+                </td>
+                <td class="${qtyClass}">${position.quantity}</td>
+                <td class="numeric-cell">${position.average_price}</td>
+                <td class="numeric-cell">${position.ltp !== undefined ? position.ltp : '-'}</td>
+                <td class="numeric-cell font-semibold ${pnlClass}">${pnlSign}${pnl.toFixed(2)}</td>
+                <td class="numeric-cell ${pnlClass}">${pctSign}${pnlPercent.toFixed(2)}%</td>
+                <td>
+                    <div class="dropdown dropdown-end">
+                        <label tabindex="0" class="btn btn-ghost btn-sm">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" />
+                            </svg>
+                        </label>
+                        <ul tabindex="0" class="dropdown-content menu menu-compact shadow-lg bg-base-100 rounded-box w-32 border border-base-300">
+                            <li><a onclick="exitPosition('${position.symbol}', '${position.exchange}', '${position.product}')">Exit</a></li>
+                        </ul>
+                    </div>
+                </td>
+            `;
+            tbody.appendChild(row);
+        });
+    });
+
+    updateFooterTotals(filteredPositions);
+}
+
+function updateFooterTotals(positions) {
+    const stats = calculateGroupStats(positions);
+    const pnlClass = stats.totalPnl >= 0 ? 'text-success' : 'text-error';
+    const pnlSign = stats.totalPnl >= 0 ? '+' : '';
+
+    const footerPnl = document.getElementById('footer-total-pnl');
+    footerPnl.textContent = `${pnlSign}${stats.totalPnl.toFixed(2)}`;
+    footerPnl.className = `numeric-cell font-bold ${pnlClass}`;
+}
+
+function updateStats() {
+    const filteredPositions = filterPositions(originalPositions);
+    const stats = calculateGroupStats(filteredPositions);
+
+    const totalPnlEl = document.getElementById('total-pnl');
+    const pnlSign = stats.totalPnl >= 0 ? '+' : '';
+    totalPnlEl.textContent = `${pnlSign}${stats.totalPnl.toFixed(2)}`;
+    totalPnlEl.className = `stat-value ${stats.totalPnl >= 0 ? 'text-success' : 'text-error'}`;
+
+    const openCount = filteredPositions.filter(p => parseInt(p.quantity) !== 0).length;
+    document.getElementById('open-positions').textContent = openCount;
+
+    const longCount = filteredPositions.filter(p => parseInt(p.quantity) > 0).length;
+    document.getElementById('long-positions').textContent = longCount;
+
+    const shortCount = filteredPositions.filter(p => parseInt(p.quantity) < 0).length;
+    document.getElementById('short-positions').textContent = shortCount;
+}
+
+function openSettingsModal() {
+    document.getElementById('settings-modal').checked = true;
+}
+
+function applyGrouping(value) {
+    currentGrouping = value;
+    collapsedGroups.clear();
+    savePreferences();
+    renderPositions();
+}
+
+function toggleFilter(btn) {
+    const filterType = btn.dataset.filter;
+    const value = btn.dataset.value;
+
+    btn.classList.toggle('active');
+
+    const index = activeFilters[filterType].indexOf(value);
+    if (index > -1) {
+        activeFilters[filterType].splice(index, 1);
+    } else {
+        activeFilters[filterType].push(value);
+    }
+
+    updateFilterIndicator();
+    savePreferences();
+    renderPositions();
+    updateStats();
+}
+
+function clearFilters() {
+    activeFilters = { product: [], direction: [], exchange: [] };
+    document.querySelectorAll('.filter-chip').forEach(btn => btn.classList.remove('active'));
+    updateFilterIndicator();
+    savePreferences();
+    renderPositions();
+    updateStats();
+}
+
+function updateFilterIndicator() {
+    const hasActiveFilters = Object.values(activeFilters).some(arr => arr.length > 0);
+    document.getElementById('filter-indicator').classList.toggle('active', hasActiveFilters);
+}
+
+function toggleGroup(groupKey) {
+    if (collapsedGroups.has(groupKey)) {
+        collapsedGroups.delete(groupKey);
+    } else {
+        collapsedGroups.add(groupKey);
+    }
+    renderPositions();
+}
+
+function sortTable(column) {
+    if (sortColumn === column) {
+        sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+        sortColumn = column;
+        sortDirection = 'asc';
+    }
+    renderPositions();
+}
+
+function savePreferences() {
+    localStorage.setItem('openalgo_positions_prefs', JSON.stringify({
+        grouping: currentGrouping,
+        filters: activeFilters
+    }));
+}
+
+function loadPreferences() {
+    try {
+        const saved = localStorage.getItem('openalgo_positions_prefs');
+        if (saved) {
+            const prefs = JSON.parse(saved);
+            if (prefs.grouping) {
+                currentGrouping = prefs.grouping;
+                const radio = document.querySelector(`input[name="grouping"][value="${prefs.grouping}"]`);
+                if (radio) radio.checked = true;
+            }
+            if (prefs.filters) {
+                // Migrate old filters that had status
+                activeFilters = {
+                    product: prefs.filters.product || [],
+                    direction: prefs.filters.direction || [],
+                    exchange: prefs.filters.exchange || []
+                };
+                document.querySelectorAll('.filter-chip').forEach(btn => {
+                    const filterType = btn.dataset.filter;
+                    const value = btn.dataset.value;
+                    if (activeFilters[filterType]?.includes(value)) {
+                        btn.classList.add('active');
+                    }
+                });
+                updateFilterIndicator();
+            }
+        }
+    } catch (e) {
+        console.error('Error loading preferences:', e);
+    }
+}
+
 function exitPosition(symbol, exchange, product) {
-    // Call the close_position endpoint directly without confirmation
-    const csrfToken = getCSRFToken(); // Get CSRF token from base.html helper
+    const csrfToken = getCSRFToken();
     fetch('/close_position', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': csrfToken // Add CSRF token to headers
-        },
-        body: JSON.stringify({
-            symbol: symbol,
-            exchange: exchange,
-            product: product
-        })
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+        body: JSON.stringify({ symbol, exchange, product })
     })
     .then(response => response.json())
     .then(data => {
-        // In analyze mode, the socket event will handle the toast
-        // In live mode, show the toast here
         const isAnalyzeMode = document.getElementById('mode-badge')?.textContent === 'Analyze Mode';
-
         if (!isAnalyzeMode) {
-            // Only show toast in live mode (analyze mode uses socket events)
-            if (data.status === 'success') {
-                showToast(data.message, 'success');
-            } else {
-                showToast(data.message, 'error');
-            }
+            showToast(data.message, data.status === 'success' ? 'success' : 'error');
         }
-
-        // Refresh positions after a delay to avoid rate limiting
-        setTimeout(() => {
-            refreshCurrentPageContent();
-        }, 1000);
+        setTimeout(() => refreshCurrentPageContent(), 1000);
     })
     .catch(error => {
         console.error('Error:', error);
-        showToast('Failed to exit position. Please try again.', 'error');
+        showToast('Failed to exit position', 'error');
     });
 }
 
 function closeAllPositions() {
-    // Close the modal
     document.getElementById('close-all-modal').checked = false;
-    
-    // Call the close_all_positions endpoint
     fetch('/close_all_positions', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': getCSRFToken()
-        },
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCSRFToken() },
         body: JSON.stringify({})
     })
     .then(response => response.json())
     .then(data => {
-        // Show toast notification
-        if (data.status === 'success') {
-            showToast(data.message, 'success');
-            // Reload the page after a short delay to show updated positions
-            setTimeout(() => {
-                window.location.reload();
-            }, 2000);
-        } else {
-            showToast(data.message, 'error');
-        }
+        showToast(data.message, data.status === 'success' ? 'success' : 'error');
+        if (data.status === 'success') setTimeout(() => window.location.reload(), 2000);
     })
     .catch(error => {
         console.error('Error:', error);
-        showToast('An error occurred while closing all positions.', 'error');
+        showToast('An error occurred while closing all positions', 'error');
     });
 }
 
 function openCloseAllModal() {
     document.getElementById('close-all-modal').checked = true;
 }
-
-function modifyPosition(symbol, exchange) {
-    console.log(`Modifying position for ${symbol} on ${exchange}`);
-}
 </script>
 
-<!-- DaisyUI Modal for Close All confirmation -->
+<!-- Settings Modal -->
+<input type="checkbox" id="settings-modal" class="modal-toggle" />
+<div class="modal" role="dialog">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg mb-4">Position Settings</h3>
+
+        <div class="settings-section">
+            <div class="settings-title">Grouping</div>
+            <div class="flex flex-col gap-1">
+                <label class="flex items-center gap-3 cursor-pointer p-2 rounded hover:bg-base-200">
+                    <input type="radio" name="grouping" value="none" class="radio radio-sm radio-primary" checked onchange="applyGrouping(this.value)">
+                    <span>None</span>
+                </label>
+                <label class="flex items-center gap-3 cursor-pointer p-2 rounded hover:bg-base-200">
+                    <input type="radio" name="grouping" value="underlying" class="radio radio-sm radio-primary" onchange="applyGrouping(this.value)">
+                    <span>Underlying</span>
+                </label>
+                <label class="flex items-center gap-3 cursor-pointer p-2 rounded hover:bg-base-200">
+                    <input type="radio" name="grouping" value="underlying_expiry" class="radio radio-sm radio-primary" onchange="applyGrouping(this.value)">
+                    <span>Underlying & Expiry</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="divider my-3"></div>
+
+        <div class="mb-4">
+            <div class="text-xs font-semibold uppercase tracking-wider text-base-content/60 mb-3">Product Type</div>
+            <div class="flex flex-wrap gap-2">
+                <button class="btn btn-sm btn-outline rounded-full filter-chip" data-filter="product" data-value="CNC" onclick="toggleFilter(this)">CNC</button>
+                <button class="btn btn-sm btn-outline rounded-full filter-chip" data-filter="product" data-value="MIS" onclick="toggleFilter(this)">MIS</button>
+                <button class="btn btn-sm btn-outline rounded-full filter-chip" data-filter="product" data-value="NRML" onclick="toggleFilter(this)">NRML</button>
+            </div>
+        </div>
+
+        <div class="mb-4">
+            <div class="text-xs font-semibold uppercase tracking-wider text-base-content/60 mb-3">Direction</div>
+            <div class="flex flex-wrap gap-2">
+                <button class="btn btn-sm btn-outline rounded-full filter-chip" data-filter="direction" data-value="LONG" onclick="toggleFilter(this)">Long</button>
+                <button class="btn btn-sm btn-outline rounded-full filter-chip" data-filter="direction" data-value="SHORT" onclick="toggleFilter(this)">Short</button>
+            </div>
+        </div>
+
+        <div class="mb-4">
+            <div class="text-xs font-semibold uppercase tracking-wider text-base-content/60 mb-3">Exchange</div>
+            <div class="flex flex-wrap gap-2">
+                <button class="btn btn-sm btn-outline rounded-full filter-chip" data-filter="exchange" data-value="NSE" onclick="toggleFilter(this)">NSE</button>
+                <button class="btn btn-sm btn-outline rounded-full filter-chip" data-filter="exchange" data-value="BSE" onclick="toggleFilter(this)">BSE</button>
+                <button class="btn btn-sm btn-outline rounded-full filter-chip" data-filter="exchange" data-value="NFO" onclick="toggleFilter(this)">NFO</button>
+                <button class="btn btn-sm btn-outline rounded-full filter-chip" data-filter="exchange" data-value="BFO" onclick="toggleFilter(this)">BFO</button>
+                <button class="btn btn-sm btn-outline rounded-full filter-chip" data-filter="exchange" data-value="MCX" onclick="toggleFilter(this)">MCX</button>
+                <button class="btn btn-sm btn-outline rounded-full filter-chip" data-filter="exchange" data-value="CDS" onclick="toggleFilter(this)">CDS</button>
+            </div>
+        </div>
+
+        <div class="modal-action">
+            <button class="btn btn-ghost" onclick="clearFilters()">Clear All</button>
+            <label for="settings-modal" class="btn btn-primary">Done</label>
+        </div>
+    </div>
+    <label class="modal-backdrop" for="settings-modal"></label>
+</div>
+
+<!-- Close All Modal -->
 <input type="checkbox" id="close-all-modal" class="modal-toggle" />
 <div class="modal" role="dialog">
     <div class="modal-box">
-        <h3 class="font-bold text-lg text-error">⚠️ Close All Positions</h3>
-        <p class="py-4">Are you sure you want to close all open positions? This action will exit all your current trades immediately at market price.</p>
+        <h3 class="font-bold text-lg text-error">Close All Positions</h3>
+        <p class="py-4">Are you sure you want to close all open positions? This will exit all trades at market price.</p>
         <div class="modal-action">
             <label for="close-all-modal" class="btn">Cancel</label>
             <button onclick="closeAllPositions()" class="btn btn-error">Yes, Close All</button>
