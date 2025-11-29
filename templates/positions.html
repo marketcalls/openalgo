@@ -165,12 +165,6 @@
     <!-- Position Summary -->
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <div class="stat bg-base-100 rounded-lg shadow">
-            <div class="stat-title">Total P&L</div>
-            <div id="total-pnl" class="stat-value">0.00</div>
-            <div class="stat-desc">Unrealized profit/loss</div>
-        </div>
-
-        <div class="stat bg-base-100 rounded-lg shadow">
             <div class="stat-title">Open Positions</div>
             <div id="open-positions" class="stat-value">0</div>
             <div class="stat-desc">Active positions</div>
@@ -180,12 +174,7 @@
             <div class="stat-title">Long Positions</div>
             <div id="long-positions" class="stat-value text-success">0</div>
             <div class="stat-desc">
-                <div class="badge badge-success gap-1">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
-                    </svg>
-                    Buy side
-                </div>
+                <div class="badge badge-success gap-1">Buy side</div>
             </div>
         </div>
 
@@ -193,13 +182,14 @@
             <div class="stat-title">Short Positions</div>
             <div id="short-positions" class="stat-value text-error">0</div>
             <div class="stat-desc">
-                <div class="badge badge-error gap-1">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
-                    </svg>
-                    Sell side
-                </div>
+                <div class="badge badge-error gap-1">Sell side</div>
             </div>
+        </div>
+
+        <div class="stat bg-base-100 rounded-lg shadow">
+            <div class="stat-title">Total P&L</div>
+            <div id="total-pnl" class="stat-value">0.00</div>
+            <div class="stat-desc">Unrealized profit/loss</div>
         </div>
     </div>
 
@@ -259,6 +249,11 @@ document.addEventListener('DOMContentLoaded', function() {
     renderPositions();
     updateStats();
 });
+
+// Global function for mode toggle refresh
+function refreshCurrentPageContent() {
+    window.location.reload();
+}
 
 function parseSymbol(symbol, exchange) {
     if (exchange === 'NSE' || exchange === 'BSE') {
