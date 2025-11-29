@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timedelta
 import os
+import time
 from typing import Dict, Any, Optional
 import httpx
 import pytz
@@ -427,6 +428,200 @@ class BrokerData:
         except Exception as e:
             logger.error(f"Error in get_quotes: {e}")
             return None
+
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols using 5paisa's MarketSnapshot API
+        The API supports multiple symbols in a single request via the Data array
+
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            # 5paisa MarketSnapshot supports multiple symbols per request
+            # Note: API returns empty for large batches (100+), 50 works reliably
+            BATCH_SIZE = 50  # Symbols per API request
+            RATE_LIMIT_DELAY = 0.5  # 500ms delay between batches
+
+            if len(symbols) > BATCH_SIZE:
+                logger.debug(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.info(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    batch_results = self._process_quotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                    # Rate limit delay between batches
+                    if i + BATCH_SIZE < len(symbols):
+                        time.sleep(RATE_LIMIT_DELAY)
+
+                logger.debug(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
+                return all_results
+            else:
+                return self._process_quotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_quotes_batch(self, symbols: list) -> list:
+        """
+        Process a batch of symbols using 5paisa's MarketSnapshot endpoint
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+        Returns:
+            list: List of quote data for the batch
+        """
+        skipped_symbols = []
+        symbol_map = {}  # Map scrip_code to original symbol/exchange
+
+        # Build the Data array for multi-quote request
+        data_array = []
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            # Normalize exchange for index symbols
+            normalized_exchange = normalize_exchange_for_query(symbol, exchange)
+
+            # Get token and broker symbol
+            token = get_token(symbol, normalized_exchange)
+            br_symbol = get_br_symbol(symbol, normalized_exchange)
+
+            if not token:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve token")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': 'Could not resolve token'
+                })
+                continue
+
+            data_array.append({
+                "Exchange": map_exchange(exchange),
+                "ExchangeType": map_exchange_type(normalized_exchange),
+                "ScripCode": token,
+                "ScripData": br_symbol if token == "0" else ""
+            })
+
+            # Store mapping for response processing
+            # Use composite key (token + exchange + symbol) to handle token "0" cases
+            # where multiple symbols might have the same fallback token
+            if token == "0":
+                # For fallback cases, use ScripData (br_symbol) as key
+                map_key = f"scripdata:{br_symbol}"
+            else:
+                map_key = str(token)
+
+            symbol_map[map_key] = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'br_symbol': br_symbol,
+                'token': token
+            }
+
+        if not data_array:
+            logger.warning("No valid symbols to fetch quotes for")
+            return skipped_symbols
+
+        # Build request payload
+        json_data = {
+            "head": {
+                "key": api_key
+            },
+            "body": {
+                "ClientCode": client_id,
+                "Data": data_array
+            }
+        }
+
+        # Get the shared httpx client
+        client = get_httpx_client()
+
+        # Make API request
+        headers = {
+            'Authorization': f'bearer {self.auth_token}',
+            'Content-Type': 'application/json'
+        }
+
+        try:
+            response = client.post(
+                f"{BASE_URL}/VendorsAPI/Service1.svc/MarketSnapshot",
+                json=json_data,
+                headers=headers
+            )
+            response.raise_for_status()
+            response_data = response.json()
+
+            if response_data['head']['statusDescription'] != 'Success':
+                error_msg = response_data['head'].get('statusDescription', 'Unknown error')
+                logger.error(f"Error from 5Paisa MarketSnapshot API: {error_msg}")
+                raise Exception(f"Error from 5Paisa API: {error_msg}")
+
+            # Parse response and build results
+            results = []
+            quotes_data = response_data.get('body', {}).get('Data', [])
+
+            for quote_item in quotes_data:
+                # Get the scrip code from response
+                scrip_code = str(quote_item.get('ScripCode', ''))
+                scrip_data = quote_item.get('ScripData', '') or quote_item.get('Symbol', '')
+
+                # Look up original symbol and exchange
+                # First try by scrip_code, then by scripdata for token "0" cases
+                original = symbol_map.get(scrip_code)
+                if not original and scrip_code == "0" and scrip_data:
+                    original = symbol_map.get(f"scripdata:{scrip_data}")
+
+                if not original:
+                    # Try to find by matching broker symbol in values
+                    for key, info in symbol_map.items():
+                        if info.get('br_symbol') == scrip_data:
+                            original = info
+                            break
+
+                if not original:
+                    logger.warning(f"Could not map scrip code {scrip_code} (ScripData: {scrip_data}) to original symbol")
+                    continue
+
+                # Get previous close
+                prev_close = float(quote_item.get('PClose', 0))
+                if prev_close == 0:
+                    prev_close = float(quote_item.get('PreviousClose', 0))
+                    if prev_close == 0:
+                        prev_close = float(quote_item.get('Close', 0))
+
+                results.append({
+                    'symbol': original['symbol'],
+                    'exchange': original['exchange'],
+                    'data': {
+                        'bid': 0,  # MarketSnapshot doesn't include bid/ask
+                        'ask': 0,
+                        'open': float(quote_item.get('Open', 0)),
+                        'high': float(quote_item.get('High', 0)),
+                        'low': float(quote_item.get('Low', 0)),
+                        'ltp': float(quote_item.get('LastTradedPrice', 0)),
+                        'prev_close': prev_close,
+                        'volume': int(quote_item.get('Volume', 0)),
+                        'oi': int(quote_item.get('OpenInterest', 0))
+                    }
+                })
+
+            return skipped_symbols + results
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error in multiquotes: {e.response.status_code} - {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Error processing quotes batch: {e}")
+            raise
 
     def map_interval(self, interval: str) -> str:
         """Map openalgo interval to 5paisa interval"""

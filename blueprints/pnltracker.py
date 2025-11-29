@@ -1,6 +1,7 @@
 from flask import Blueprint, render_template, request, jsonify, session, redirect, url_for
 from flask_cors import cross_origin
-from datetime import datetime, time, timedelta
+from datetime import datetime, time as dt_time, timedelta
+import time as time_module
 import pandas as pd
 import numpy as np
 from importlib import import_module
@@ -11,8 +12,31 @@ from services.tradebook_service import get_tradebook
 from services.history_service import get_history
 import traceback
 import pytz
+import threading
 
 logger = get_logger(__name__)
+
+# Rate limiter for historical data API calls
+class RateLimiter:
+    """Thread-safe rate limiter for API calls"""
+    def __init__(self, calls_per_second=2):
+        self.calls_per_second = calls_per_second
+        self.min_interval = 1.0 / calls_per_second  # Time between calls
+        self.last_call_time = 0
+        self.lock = threading.Lock()
+
+    def wait(self):
+        """Wait if necessary to respect rate limit"""
+        with self.lock:
+            current_time = time_module.time()
+            elapsed = current_time - self.last_call_time
+            if elapsed < self.min_interval:
+                sleep_time = self.min_interval - elapsed
+                time_module.sleep(sleep_time)
+            self.last_call_time = time_module.time()
+
+# Global rate limiter instance - 2 calls per second (conservative limit)
+history_rate_limiter = RateLimiter(calls_per_second=2)
 
 # Define the blueprint
 pnltracker_bp = Blueprint('pnltracker_bp', __name__, url_prefix='/')
@@ -206,9 +230,9 @@ def get_pnl_data():
                         ist = pytz.timezone('Asia/Kolkata')
                         today = datetime.now(ist).date()
                         time_parts = trade_timestamp.split(':')
-                        trade_time = ist.localize(datetime.combine(today, time(
-                            int(time_parts[0]), 
-                            int(time_parts[1]), 
+                        trade_time = ist.localize(datetime.combine(today, dt_time(
+                            int(time_parts[0]),
+                            int(time_parts[1]),
                             int(time_parts[2]) if len(time_parts) > 2 else 0
                         )))
                     elif isinstance(trade_timestamp, (int, float)):
@@ -248,9 +272,9 @@ def get_pnl_data():
                             ist = pytz.timezone('Asia/Kolkata')
                             today = datetime.now(ist).date()
                             time_parts = str(fill_time_str).split(':')
-                            trade_time = ist.localize(datetime.combine(today, time(
-                                int(time_parts[0]), 
-                                int(time_parts[1]), 
+                            trade_time = ist.localize(datetime.combine(today, dt_time(
+                                int(time_parts[0]),
+                                int(time_parts[1]),
                                 int(time_parts[2]) if len(time_parts) > 2 else 0
                             )))
                             if first_trade_time is None or trade_time < first_trade_time:
@@ -296,9 +320,9 @@ def get_pnl_data():
                             ist = pytz.timezone('Asia/Kolkata')
                             today = datetime.now(ist).date()
                             time_parts = trade_timestamp.split(':')
-                            trade_time = ist.localize(datetime.combine(today, time(
-                                int(time_parts[0]), 
-                                int(time_parts[1]), 
+                            trade_time = ist.localize(datetime.combine(today, dt_time(
+                                int(time_parts[0]),
+                                int(time_parts[1]),
                                 int(time_parts[2]) if len(time_parts) > 2 else 0
                             )))
                         else:
@@ -407,6 +431,10 @@ def get_pnl_data():
             
             # Now get historical data and calculate PnL for each position window
             try:
+                # Apply rate limiting before API call (2 calls/sec to stay under broker's 3/sec limit)
+                history_rate_limiter.wait()
+                logger.debug(f"Fetching historical data for {symbol} on {exchange}")
+
                 success, hist_response, _ = get_history(
                     symbol=symbol,
                     exchange=exchange,
@@ -544,6 +572,10 @@ def get_pnl_data():
                     continue
                     
                 try:
+                    # Apply rate limiting before API call (2 calls/sec to stay under broker's 3/sec limit)
+                    history_rate_limiter.wait()
+                    logger.debug(f"Fetching historical data for position {symbol} on {exchange}")
+
                     # Get historical data for this position
                     success, hist_response, _ = get_history(
                         symbol=symbol,

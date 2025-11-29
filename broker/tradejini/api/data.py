@@ -420,6 +420,169 @@ class BrokerData:
                 'volume': 0
             }
 
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols using WebSocket
+        Tradejini WebSocket supports up to 3,000 instruments per connection
+
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            # Tradejini WebSocket can handle up to 3000 instruments
+            # Using batch size of 100 for practical response times
+            BATCH_SIZE = 100
+            WAIT_TIME_PER_SYMBOL = 0.1  # 100ms per symbol for data arrival
+
+            if len(symbols) > BATCH_SIZE:
+                logger.debug(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.info(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    batch_results = self._process_multiquotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                logger.debug(f"Successfully processed {len(all_results)} quotes")
+                return all_results
+            else:
+                return self._process_multiquotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_multiquotes_batch(self, symbols: list) -> list:
+        """
+        Process a batch of symbols using WebSocket subscription
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+        Returns:
+            list: List of quote data for the batch
+        """
+        results = []
+        skipped_symbols = []
+        symbol_keys = []  # For WebSocket subscription
+        symbol_map = {}   # Map symbol_key to original symbol/exchange
+
+        # Connect to WebSocket if not already connected
+        if not self.ws.connected:
+            logger.info("WebSocket not connected, attempting to connect...")
+            if not self.connect_websocket():
+                raise ConnectionError("Failed to connect to WebSocket")
+
+        # Wait for initial setup
+        time.sleep(2)
+
+        # Clear existing quote data
+        with self.ws.lock:
+            self.ws.L1_dict.clear()
+            logger.debug("Cleared all cached quote data")
+
+        # Step 1: Prepare all symbol keys
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            token = get_token(symbol, exchange)
+            if not token:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve token")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': 'Could not resolve token'
+                })
+                continue
+
+            # Format as per Tradejini requirements: token_exchange
+            symbol_key = f"{token}_{exchange}"
+            symbol_keys.append(symbol_key)
+
+            # Store mapping for response processing
+            symbol_map[symbol_key] = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'token': token
+            }
+
+        if not symbol_keys:
+            logger.warning("No valid symbols to fetch quotes for")
+            return skipped_symbols
+
+        # Step 2: Subscribe to all symbols at once
+        logger.info(f"Subscribing to {len(symbol_keys)} symbols via WebSocket")
+        subscription_success = self.ws.subscribe_quotes(symbol_keys)
+
+        if not subscription_success:
+            logger.error("Failed to send subscription request")
+            # Return errors for all symbols
+            for symbol_key, info in symbol_map.items():
+                results.append({
+                    'symbol': info['symbol'],
+                    'exchange': info['exchange'],
+                    'error': 'Subscription failed'
+                })
+            return skipped_symbols + results
+
+        # Step 3: Wait for data to arrive
+        # Dynamic wait time based on number of symbols
+        wait_time = min(max(len(symbol_keys) * 0.05, 2), 10)  # Between 2-10 seconds
+        logger.debug(f"Waiting {wait_time:.1f}s for quote data...")
+        time.sleep(wait_time)
+
+        # Step 4: Collect results from L1 cache
+        with self.ws.lock:
+            for symbol_key, info in symbol_map.items():
+                # Try different key formats that Tradejini WebSocket might use
+                possible_keys = [
+                    symbol_key,                                # token_exchange (e.g., "1234_NSE")
+                    f"{info['exchange']}_{info['token']}",     # exchange_token (e.g., "NSE_1234")
+                    f"{info['token']}_NSE",                    # token_NSE fallback
+                    f"{info['token']}_{info['exchange']}",     # token_exchange format
+                    f"NSE_{info['token']}",                    # NSE_token format
+                    str(info['token']),                        # just token
+                ]
+
+                quote_data = None
+                for key in possible_keys:
+                    if key in self.ws.L1_dict:
+                        quote_data = self.ws.L1_dict[key]
+                        logger.debug(f"Found quote data for {info['symbol']} using key: {key}")
+                        break
+
+                if quote_data:
+                    results.append({
+                        'symbol': info['symbol'],
+                        'exchange': info['exchange'],
+                        'data': {
+                            'bid': float(quote_data.get('bidPrice', 0)),
+                            'ask': float(quote_data.get('askPrice', 0)),
+                            'open': float(quote_data.get('open', 0)),
+                            'high': float(quote_data.get('high', 0)),
+                            'low': float(quote_data.get('low', 0)),
+                            'ltp': float(quote_data.get('ltp', 0)),
+                            'prev_close': float(quote_data.get('close', 0)),
+                            'volume': int(quote_data.get('vol', 0) or 0),
+                            'oi': int(quote_data.get('OI', 0) or 0)
+                        }
+                    })
+                else:
+                    # No data received for this symbol
+                    results.append({
+                        'symbol': info['symbol'],
+                        'exchange': info['exchange'],
+                        'error': 'No data received'
+                    })
+
+        logger.info(f"Retrieved quotes for {len([r for r in results if 'data' in r])}/{len(symbol_map)} symbols")
+        return skipped_symbols + results
+
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """Get market depth for given symbol"""
         try:
