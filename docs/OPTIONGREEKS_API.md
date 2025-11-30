@@ -2,7 +2,7 @@
 
 ## Endpoint URL
 
-This API Function Calculates Option Greeks (Delta, Gamma, Theta, Vega, Rho) and Implied Volatility using Black-Scholes Model
+This API Function Calculates Option Greeks (Delta, Gamma, Theta, Vega, Rho) and Implied Volatility using Black-76 Model
 
 ```http
 Local Host   :  POST http://127.0.0.1:5000/api/v1/optiongreeks
@@ -10,12 +10,27 @@ Ngrok Domain :  POST https://<your-ngrok-domain>.ngrok-free.app/api/v1/optiongre
 Custom Domain:  POST https://<your-custom-domain>/api/v1/optiongreeks
 ```
 
+## Why Black-76 Model?
+
+OpenAlgo uses the **Black-76 model** (via py_vollib library) instead of Black-Scholes for calculating option Greeks. This is the correct choice for Indian F&O markets:
+
+| Model | Designed For | Used In |
+|-------|--------------|---------|
+| Black-Scholes | Stock options (spot-settled) | US equity options |
+| **Black-76** | Options on futures/forwards | **NFO, BFO, MCX, CDS** |
+
+**Key Benefits:**
+- Accurate pricing for options on futures and forwards
+- Industry-standard model used by NSE, BSE, MCX
+- Greeks match with professional platforms (Sensibull, Opstra)
+- Proper handling of cost of carry
+
 ## Prerequisites
 
-1. **mibian Library Required**
-   - Install with: `pip install mibian`
-   - Or with uv: `uv pip install mibian`
-   - Required for Black-Scholes calculations
+1. **py_vollib Library Required**
+   - Install with: `pip install py_vollib`
+   - Or with uv: `uv pip install py_vollib`
+   - Required for Black-76 calculations
 
 2. **Market Data Access**
    - Requires real-time LTP for underlying and option
@@ -56,6 +71,25 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optiongreeks
 
 ###
 
+## Sample API Request (With Custom Forward Price - Synthetic Futures)
+
+```json
+{
+    "apikey": "your_api_key",
+    "symbol": "NIFTY02DEC2524000CE",
+    "exchange": "NFO",
+    "forward_price": 24550.75,
+    "interest_rate": 7.0
+}
+```
+
+**Note**: Uses custom forward price for Greeks calculation. Useful for:
+- **Synthetic futures pricing**: Calculate forward price as `Spot x e^(rT)`
+- **Illiquid underlyings**: SENSEX, FINNIFTY where futures may be illiquid
+- **Custom scenarios**: Test Greeks with specific forward price assumptions
+
+###
+
 ## Sample API Response (Success)
 
 ```json
@@ -71,18 +105,18 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optiongreeks
     "spot_price": 25966.05,
     "option_price": 85.55,
     "interest_rate": 0,
-    "implied_volatility": 464.42,
+    "implied_volatility": 15.25,
     "greeks": {
         "delta": 0.4489,
         "gamma": 0.001554,
-        "theta": -30962.4879,
-        "vega": 0.2169,
+        "theta": -4.9678,
+        "vega": 30.7654,
         "rho": 0.000516
     }
 }
 ```
 
-**Note**: This is an expiry day example (0.59 days to expiry) showing very high IV (464.42%) and extreme theta decay (-30962.48 per day), typical of near-expiry ATM options.
+**Note**: Greeks are in trader-friendly units - Theta is daily decay, Vega is per 1% IV change.
 
 ###
 
@@ -121,8 +155,8 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optiongreeks
     "greeks": {
         "delta": 0.5234,
         "gamma": 0.000125,
-        "theta": -12.5678,
-        "vega": 18.7654,
+        "theta": -4.9678,
+        "vega": 30.7654,
         "rho": 0.001234
     }
 }
@@ -147,15 +181,19 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optiongreeks
 
 ###
 
-## Sample API Request (BFO - SENSEX Option)
+## Sample API Request (BFO - SENSEX Option with Forward Price)
 
 ```json
 {
     "apikey": "your_api_key",
     "symbol": "SENSEX28NOV2580000CE",
-    "exchange": "BFO"
+    "exchange": "BFO",
+    "forward_price": 80250.50,
+    "interest_rate": 6.5
 }
 ```
+
+**Note**: SENSEX futures can be illiquid. Use `forward_price` with synthetic futures calculation for accurate Greeks.
 
 ###
 
@@ -209,12 +247,14 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optiongreeks
 | symbol               | Option symbol (e.g., NIFTY28NOV2526000CE)           | Mandatory          | -             |
 | exchange             | Exchange code (NFO, BFO, CDS, MCX)                  | Mandatory          | -             |
 | interest_rate        | Risk-free interest rate (annualized %). Specify current RBI repo rate (e.g., 6.5, 6.75) for accurate Rho calculations. Use 0 for theoretical calculations or when interest rate impact is negligible | Optional | 0 |
+| forward_price        | Custom forward/synthetic futures price. If provided, skips underlying price fetch. Useful for synthetic futures (Spot x e^rT) or illiquid underlyings like SENSEX, FINNIFTY | Optional | Auto-fetched |
 | underlying_symbol    | Custom underlying symbol (e.g., NIFTY or NIFTY28NOV25FUT) | Optional | Auto-detected |
 | underlying_exchange  | Custom underlying exchange (e.g., NSE_INDEX or NFO) | Optional           | Auto-detected |
 | expiry_time          | Custom expiry time in HH:MM format (e.g., "17:00", "19:00"). Required for MCX contracts with non-standard expiry times | Optional | Exchange defaults: NFO/BFO=15:30, CDS=12:30, MCX=23:30 |
 
 **Notes**:
 - **Interest Rate**: Default is 0. For accurate Greeks (especially Rho), specify current RBI repo rate (typically 6.25-7.0%). Interest rate has minimal impact on short-term options (< 7 days).
+- **Forward Price**: When provided, the API uses this value directly instead of fetching underlying price. Calculate synthetic futures as: `Forward = Spot x e^(r x T)` where r is interest rate and T is time to expiry in years.
 - Use `underlying_symbol` and `underlying_exchange` to choose between spot and futures as underlying. If not specified, automatically uses spot price.
 - Use `expiry_time` for MCX commodities that don't expire at the default 23:30. See MCX Commodity Expiry Times section below.
 
@@ -232,7 +272,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optiongreeks
 | option_type         | Option type (CE/PE)                      | string  |
 | expiry_date         | Expiry date (formatted)                  | string  |
 | days_to_expiry      | Days remaining to expiry                 | number  |
-| spot_price          | Underlying spot/futures price            | number  |
+| spot_price          | Underlying spot/futures/forward price    | number  |
 | option_price        | Current option premium                   | number  |
 | interest_rate       | Interest rate used                       | number  |
 | implied_volatility  | Implied Volatility (%)                   | number  |
@@ -240,7 +280,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optiongreeks
 | greeks.delta        | Delta (rate of change of option price)   | number  |
 | greeks.gamma        | Gamma (rate of change of delta)          | number  |
 | greeks.theta        | Theta (time decay per day)               | number  |
-| greeks.vega         | Vega (sensitivity to volatility)         | number  |
+| greeks.vega         | Vega (sensitivity to volatility per 1%)  | number  |
 | greeks.rho          | Rho (sensitivity to interest rate)       | number  |
 
 ###
@@ -249,33 +289,96 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optiongreeks
 
 ### Delta
 - **Range**: -1 to +1 (Call: 0 to 1, Put: -1 to 0)
-- **Meaning**: Change in option price for ₹1 change in underlying
-- **Example**: Delta of 0.5 means option moves ₹0.50 for ₹1 move in underlying
+- **Meaning**: Change in option price for Rs.1 change in underlying
+- **Example**: Delta of 0.5 means option moves Rs.0.50 for Rs.1 move in underlying
 - **Use**: Position sizing, hedge ratio calculation
 
 ### Gamma
-- **Range**: 0 to ∞ (same for Call and Put)
-- **Meaning**: Change in Delta for ₹1 change in underlying
-- **Example**: Gamma of 0.01 means Delta increases by 0.01 for ₹1 rise
+- **Range**: 0 to infinity (same for Call and Put)
+- **Meaning**: Change in Delta for Rs.1 change in underlying
+- **Example**: Gamma of 0.01 means Delta increases by 0.01 for Rs.1 rise
 - **Use**: Delta hedging frequency, risk assessment
 
 ### Theta
 - **Range**: Negative for long options
 - **Meaning**: Change in option price per day (time decay)
-- **Example**: Theta of -10 means option loses ₹10 per day
+- **Example**: Theta of -10 means option loses Rs.10 per day
 - **Use**: Time decay analysis, optimal holding period
+- **Note**: py_vollib returns theta in trader-friendly daily units
 
 ### Vega
 - **Range**: Positive for long options
 - **Meaning**: Change in option price for 1% change in IV
-- **Example**: Vega of 15 means option gains ₹15 if IV rises by 1%
+- **Example**: Vega of 15 means option gains Rs.15 if IV rises by 1%
 - **Use**: Volatility trading, earnings plays
+- **Note**: py_vollib returns vega per 1% IV change (no conversion needed)
 
 ### Rho
 - **Range**: Positive for Calls, Negative for Puts
 - **Meaning**: Change in option price for 1% change in interest rate
-- **Example**: Rho of 0.05 means option gains ₹0.05 for 1% rate rise
+- **Example**: Rho of 0.05 means option gains Rs.0.05 for 1% rate rise
 - **Use**: Long-term options, rate-sensitive strategies
+
+###
+
+## Forward Price Parameter - Detailed Guide
+
+The `forward_price` parameter allows you to specify a custom forward/futures price for Greeks calculation instead of fetching the underlying price automatically.
+
+### When to Use forward_price
+
+1. **Illiquid Futures**: SENSEX, FINNIFTY, MIDCPNIFTY futures may have low liquidity
+2. **Synthetic Futures**: Calculate theoretical forward price from spot
+3. **Custom Scenarios**: Test Greeks with specific price assumptions
+4. **Arbitrage Analysis**: Use your calculated fair value
+
+### Calculating Synthetic Futures Price
+
+```python
+import math
+
+spot = 24200.00      # Current NIFTY spot
+r = 0.065            # Interest rate (6.5% annualized)
+T = 30 / 365         # Time to expiry in years (30 days)
+
+forward_price = spot * math.exp(r * T)
+# forward_price = 24200 * e^(0.065 * 0.0822)
+# forward_price = 24329.64
+```
+
+### Example: FINNIFTY with Synthetic Forward
+
+```json
+{
+    "apikey": "your_api_key",
+    "symbol": "FINNIFTY02DEC2524000CE",
+    "exchange": "NFO",
+    "forward_price": 24050.75,
+    "interest_rate": 6.5
+}
+```
+
+### Example: SENSEX with Calculated Forward
+
+```json
+{
+    "apikey": "your_api_key",
+    "symbol": "SENSEX05DEC2580000CE",
+    "exchange": "BFO",
+    "forward_price": 80125.50,
+    "interest_rate": 6.5
+}
+```
+
+### forward_price vs underlying_symbol
+
+| Parameter | Use Case | Price Source |
+|-----------|----------|--------------|
+| `forward_price` | Custom/synthetic forward | User-provided value |
+| `underlying_symbol` | Specific underlying | Fetched from broker |
+| Neither | Auto-detect | Fetched from broker |
+
+**Priority**: If `forward_price` is provided, it takes precedence and `underlying_symbol`/`underlying_exchange` are ignored.
 
 ###
 
@@ -396,10 +499,10 @@ This section demonstrates various usage scenarios and when to use optional param
 ```
 
 **What Happens**:
-- ✓ Auto-detects NIFTY from NSE_INDEX (spot price)
-- ✓ Uses default interest rate: 0%
-- ✓ Uses default expiry time: 15:30 (NFO)
-- ✓ Simplest usage - good for most traders
+- Auto-detects NIFTY from NSE_INDEX (spot price)
+- Uses default interest rate: 0%
+- Uses default expiry time: 15:30 (NFO)
+- Simplest usage - good for most traders
 
 **When to Use**:
 - Standard index options trading
@@ -422,9 +525,9 @@ This section demonstrates various usage scenarios and when to use optional param
 ```
 
 **What Happens**:
-- ✓ Uses 6.5% instead of default 0%
-- ✓ Affects Rho calculation significantly
-- ✓ Minor impact on other Greeks (< 0.5%)
+- Uses 6.5% instead of default 0%
+- Affects Rho calculation significantly
+- Minor impact on other Greeks (< 0.5%)
 
 **When to Use**:
 - Long-dated options (> 30 days to expiry)
@@ -453,9 +556,9 @@ This section demonstrates various usage scenarios and when to use optional param
 ```
 
 **What Happens**:
-- ✓ Uses NIFTY futures price instead of spot
-- ✓ Futures price includes cost of carry
-- ✓ Delta, IV may differ by 1-3% vs spot
+- Uses NIFTY futures price instead of spot
+- Futures price includes cost of carry
+- Delta, IV may differ by 1-3% vs spot
 
 **When to Use**:
 - Arbitrage strategies (futures vs options)
@@ -476,7 +579,41 @@ This section demonstrates various usage scenarios and when to use optional param
 
 ---
 
-### Example 4: MCX with Custom Expiry Time
+### Example 4: Using Custom Forward Price (Synthetic Futures)
+
+**Scenario**: Calculate Greeks for illiquid underlying using synthetic forward
+
+```json
+{
+    "apikey": "your_api_key",
+    "symbol": "FINNIFTY02DEC2524000CE",
+    "exchange": "NFO",
+    "forward_price": 24125.50,
+    "interest_rate": 6.5
+}
+```
+
+**What Happens**:
+- Uses user-provided forward price directly
+- Skips underlying price fetch
+- Ideal for illiquid futures
+
+**When to Use**:
+- FINNIFTY, MIDCPNIFTY, SENSEX (illiquid futures)
+- Testing with specific forward price assumptions
+- Synthetic futures pricing strategies
+- When broker futures LTP is stale or unreliable
+
+**How to Calculate Synthetic Forward**:
+```python
+import math
+forward = spot * math.exp(rate * time_to_expiry_years)
+# Example: 24000 * e^(0.065 * 0.0822) = 24129.13
+```
+
+---
+
+### Example 5: MCX with Custom Expiry Time
 
 **Scenario**: Calculate Greeks for Crude Oil options (expires at 19:00)
 
@@ -490,9 +627,9 @@ This section demonstrates various usage scenarios and when to use optional param
 ```
 
 **What Happens**:
-- ✓ Uses 19:00 (7 PM) expiry instead of default 23:30
-- ✓ DTE calculated accurately
-- ✓ Theta, IV more accurate on expiry day
+- Uses 19:00 (7 PM) expiry instead of default 23:30
+- DTE calculated accurately
+- Theta, IV more accurate on expiry day
 
 **When to Use**:
 - ALL MCX commodity options (except those expiring at 23:30)
@@ -512,7 +649,7 @@ This section demonstrates various usage scenarios and when to use optional param
 
 ---
 
-### Example 5: Currency Options (CDS)
+### Example 6: Currency Options (CDS)
 
 **Scenario**: USD/INR option (expires at 12:30)
 
@@ -525,59 +662,61 @@ This section demonstrates various usage scenarios and when to use optional param
 ```
 
 **What Happens**:
-- ✓ Auto-detects USDINR from CDS exchange
-- ✓ Uses correct expiry time: 12:30 (CDS default)
-- ✓ Supports decimal strikes (83.50)
+- Auto-detects USDINR from CDS exchange
+- Uses correct expiry time: 12:30 (CDS default)
+- Supports decimal strikes (83.50)
 
 **When to Use**: Currency derivatives trading
 
 ---
 
-### Example 6: All Parameters Combined
+### Example 7: All Parameters Combined (Professional Setup)
 
-**Scenario**: Professional setup with full control
+**Scenario**: Maximum control with custom forward price and interest rate
 
 ```json
 {
     "apikey": "your_api_key",
     "symbol": "NIFTY28DEC2526500CE",
     "exchange": "NFO",
-    "interest_rate": 6.75,
-    "underlying_symbol": "NIFTY28DEC25FUT",
-    "underlying_exchange": "NFO"
+    "forward_price": 26750.00,
+    "interest_rate": 6.75
 }
 ```
 
 **What Happens**:
-- ✓ Custom interest rate: 6.75% (instead of default 0%)
-- ✓ Uses futures as underlying (instead of spot)
-- ✓ Maximum control over calculation
+- Custom forward price: 26750.00 (synthetic or calculated)
+- Custom interest rate: 6.75%
+- Maximum control over calculation
 
 **When to Use**:
-- Institutional trading with specific interest rate requirements
-- Greeks matching with broker platform that uses specific rates
-- Research and backtesting with historical interest rates
-- Long-dated options requiring accurate Rho
+- Institutional trading with specific requirements
+- Research and backtesting
+- Comparing with broker platforms
+- Illiquid underlying with custom forward calculation
 
 ---
 
-### Example 7: BSE Options (BFO)
+### Example 8: BSE Options (BFO) with Forward Price
 
-**Scenario**: SENSEX option
+**Scenario**: SENSEX option with synthetic forward (illiquid futures)
 
 ```json
 {
     "apikey": "your_api_key",
-    "symbol": "SENSEX28NOV2475000CE",
-    "exchange": "BFO"
+    "symbol": "SENSEX28NOV2480000CE",
+    "exchange": "BFO",
+    "forward_price": 80350.25,
+    "interest_rate": 6.5
 }
 ```
 
 **What Happens**:
-- ✓ Auto-detects SENSEX from BSE_INDEX
-- ✓ Uses correct expiry time: 15:30 (BFO)
+- Uses synthetic forward price for SENSEX
+- Avoids issues with illiquid SENSEX futures
+- Accurate Greeks calculation
 
-**When to Use**: BSE index options trading
+**When to Use**: BSE index options trading where futures are illiquid
 
 ---
 
@@ -586,6 +725,7 @@ This section demonstrates various usage scenarios and when to use optional param
 | Parameter           | Use When                                          | Don't Use When                    |
 | ------------------- | ------------------------------------------------- | --------------------------------- |
 | `interest_rate`     | Long-dated options, Rho analysis, matching broker | Short-term weekly options         |
+| `forward_price`     | Illiquid futures (SENSEX, FINNIFTY), synthetic futures, custom scenarios | Liquid underlyings with reliable LTP |
 | `underlying_symbol` | Arbitrage, comparing with broker, equity options  | Standard index option trading     |
 | `underlying_exchange` | Custom underlying setup                         | Auto-detection works fine         |
 | `expiry_time`       | **ALWAYS for MCX** (except 23:30 contracts)      | NFO/BFO/CDS (already correct)     |
@@ -594,26 +734,31 @@ This section demonstrates various usage scenarios and when to use optional param
 
 ### Impact of Optional Parameters on Greeks
 
-**Interest Rate (Default 0% → Custom 6.5%)**:
+**Interest Rate (Default 0% -> Custom 6.5%)**:
 - Rho: Significant change (from near-zero to meaningful value)
-- Delta: ±0.2-0.5% change (for long-dated options)
+- Delta: +/-0.2-0.5% change (for long-dated options)
 - Other Greeks: < 0.1% change
 - **Impact**:
   - **High for Rho** (critical for interest rate sensitive strategies)
   - **Low for other Greeks** (especially short-term options)
   - **Negligible for < 7 days to expiry**
 
+**Forward Price (Custom vs Auto-Fetched)**:
+- Uses provided value instead of fetching
+- All Greeks calculated based on this price
+- **Impact**: Direct - all Greeks change proportionally
+
 **Underlying: Spot vs Futures (1% difference in price)**:
-- Delta: ±2-5% change
-- IV: ±0.3-1% change
-- Other Greeks: ±1-3% change
+- Delta: +/-2-5% change
+- IV: +/-0.3-1% change
+- Other Greeks: +/-1-3% change
 - **Impact**: Moderate to High
 
 **Expiry Time (6 hours difference: 17:00 vs 23:30)**:
 - DTE: 6 hours difference
-- Theta: ±10-30% change on expiry day
-- IV: ±2-8% change near expiry
-- Gamma: ±5-15% change near expiry
+- Theta: +/-10-30% change on expiry day
+- IV: +/-2-8% change near expiry
+- Gamma: +/-5-15% change near expiry
 - **Impact**: High (especially near expiry)
 
 ---
@@ -664,22 +809,22 @@ MCX Option (CRUDEOIL17NOV255400CE):
 **Note**: Default is 0 for all exchanges. Explicitly specify `interest_rate` parameter (e.g., 6.5, 6.75) for accurate Rho calculations and when trading long-dated options.
 
 **When to Specify Interest Rate**:
-- ✓ Long-dated options (> 30 days to expiry)
-- ✓ Interest rate sensitive strategies (Rho hedging)
-- ✓ Matching with broker Greeks
-- ✗ Short-term options (< 7 days) - minimal impact
-- ✗ Theoretical or academic calculations
+- Long-dated options (> 30 days to expiry)
+- Interest rate sensitive strategies (Rho hedging)
+- Matching with broker Greeks
+- Short-term options (< 7 days) - minimal impact (optional)
+- Theoretical or academic calculations (use 0)
 
 ###
 
 ## Error Responses
 
-### mibian Library Not Installed
+### py_vollib Library Not Installed
 
 ```json
 {
     "status": "error",
-    "message": "Option Greeks calculation requires mibian library. Install with: pip install mibian"
+    "message": "Option Greeks calculation requires py_vollib library. Install with: pip install py_vollib"
 }
 ```
 
@@ -719,18 +864,28 @@ MCX Option (CRUDEOIL17NOV255400CE):
 }
 ```
 
+### Invalid Forward Price
+
+```json
+{
+    "status": "error",
+    "message": "Spot price and option price must be positive"
+}
+```
+
 ###
 
 ## Common Error Messages
 
 | Error Message                                  | Cause                                | Solution                              |
 | ---------------------------------------------- | ------------------------------------ | ------------------------------------- |
-| mibian library not installed                   | Missing dependency                   | Run: pip install mibian               |
+| py_vollib library not installed                | Missing dependency                   | Run: pip install py_vollib            |
 | Invalid option symbol format                   | Symbol pattern doesn't match         | Use: SYMBOL[DD][MMM][YY][STRIKE][CE/PE] |
 | Option has expired                             | Expiry date in the past              | Use current month contracts           |
-| Failed to fetch underlying price               | Underlying symbol not found          | Verify symbol and exchange            |
+| Failed to fetch underlying price               | Underlying symbol not found          | Verify symbol and exchange, or use forward_price |
 | Option LTP not available                       | No trading data for option           | Check market hours, symbol validity   |
 | Invalid openalgo apikey                        | API key incorrect                    | Verify API key in settings            |
+| Spot price and option price must be positive   | Invalid forward_price value          | Provide positive forward_price        |
 
 ###
 
@@ -775,12 +930,12 @@ MCX at 11:00 AM (12.5 hours to expiry):
 
 **Same option, different DTE affects IV calculation:**
 
-- **More time** → Lower IV for same premium (more time value)
-- **Less time** → Higher IV for same premium (less time value)
+- **More time** -> Lower IV for same premium (more time value)
+- **Less time** -> Higher IV for same premium (less time value)
 
 **Example:**
 ```
-NIFTY Option Premium: ₹50
+NIFTY Option Premium: Rs.50
 
 At 10:00 AM (5.5 hrs to NFO expiry):
   Implied IV: ~18%
@@ -796,7 +951,7 @@ At 3:00 PM (0.5 hrs to NFO expiry):
 
 - Very near expiry (< 1 hour), delta can shift rapidly
 - ATM options approach delta of 0.5 faster
-- Deep ITM → 1.0, Deep OTM → 0.0 faster near expiry
+- Deep ITM -> 1.0, Deep OTM -> 0.0 faster near expiry
 
 ### Impact on Gamma
 
@@ -861,12 +1016,12 @@ NIFTY ATM Call:
 
 ###
 
-## Spot vs Futures as Underlying
+## Spot vs Futures vs Forward Price
 
 ### When to Use Spot (Default)
 
 **Best For**:
-- Index options (NIFTY, BANKNIFTY, SENSEX)
+- Index options (NIFTY, BANKNIFTY) with liquid spot
 - Currency options (USDINR, EURINR)
 - Most traders prefer spot for simplicity
 
@@ -897,22 +1052,47 @@ Auto-detects NIFTY from NSE_INDEX
 }
 ```
 
-**Example - Equity with Futures**:
+### When to Use Forward Price
+
+**Best For**:
+- Illiquid futures (SENSEX, FINNIFTY, MIDCPNIFTY)
+- Synthetic futures pricing
+- Custom scenario analysis
+- When broker futures LTP is unreliable
+
+**Example - Using Forward Price**:
 ```json
 {
-    "symbol": "RELIANCE28NOV251600CE",
+    "symbol": "FINNIFTY02DEC2524000CE",
     "exchange": "NFO",
-    "underlying_symbol": "RELIANCE28NOV25FUT",
-    "underlying_exchange": "NFO"
+    "forward_price": 24125.50,
+    "interest_rate": 6.5
 }
 ```
 
-### Spot vs Futures Pricing Difference
+### Comparison
 
-- **Spot**: Current index/stock price
-- **Futures**: Forward price (includes cost of carry)
-- **Difference**: Typically 0.5-2% depending on time to expiry
-- **Impact**: Can affect Delta by 1-3% and IV by 0.1-0.5%
+| Method | Use Case | Pros | Cons |
+|--------|----------|------|------|
+| Spot (default) | Standard trading | Simple, reliable | May differ from futures-based pricing |
+| Futures | Arbitrage, broker matching | Matches market pricing | Requires liquid futures |
+| Forward Price | Illiquid, synthetic | Full control | Requires manual calculation |
+
+### Calculating Forward from Spot
+
+```python
+import math
+
+# Parameters
+spot = 24200.00
+rate = 0.065  # 6.5% annual
+days_to_expiry = 30
+T = days_to_expiry / 365
+
+# Forward price
+forward = spot * math.exp(rate * T)
+print(f"Forward: {forward:.2f}")  # 24329.64
+```
 
 ###
 
@@ -975,6 +1155,29 @@ if greeks['gamma'] > 0.01:
     # Consider: tighter stop-loss, reduce position size
 ```
 
+### 5. Synthetic Futures Pricing
+
+Use forward_price for illiquid underlyings.
+
+```python
+import math
+
+# Calculate synthetic forward
+spot = 24200.00
+rate = 0.065
+T = 30 / 365
+forward = spot * math.exp(rate * T)
+
+# Use in API request
+payload = {
+    "apikey": "your_key",
+    "symbol": "FINNIFTY02DEC2524000CE",
+    "exchange": "NFO",
+    "forward_price": forward,
+    "interest_rate": 6.5
+}
+```
+
 ###
 
 ## Integration Examples
@@ -983,8 +1186,9 @@ if greeks['gamma'] > 0.01:
 
 ```python
 import requests
+import math
 
-def get_option_greeks(symbol, exchange, interest_rate=None):
+def get_option_greeks(symbol, exchange, interest_rate=None, forward_price=None):
     url = "http://127.0.0.1:5000/api/v1/optiongreeks"
 
     payload = {
@@ -993,24 +1197,41 @@ def get_option_greeks(symbol, exchange, interest_rate=None):
         "exchange": exchange
     }
 
-    if interest_rate:
+    if interest_rate is not None:
         payload["interest_rate"] = interest_rate
+
+    if forward_price is not None:
+        payload["forward_price"] = forward_price
 
     response = requests.post(url, json=payload)
     return response.json()
 
-# Usage
+# Basic usage
 greeks = get_option_greeks("NIFTY28NOV2526000CE", "NFO")
 
 print(f"Delta: {greeks['greeks']['delta']}")
 print(f"Theta: {greeks['greeks']['theta']}")
 print(f"IV: {greeks['implied_volatility']}%")
+
+# With synthetic forward price
+spot = 24200.00
+rate = 0.065
+T = 30 / 365
+forward = spot * math.exp(rate * T)
+
+greeks_synthetic = get_option_greeks(
+    "FINNIFTY02DEC2524000CE",
+    "NFO",
+    interest_rate=6.5,
+    forward_price=forward
+)
+print(f"Synthetic Forward Greeks: {greeks_synthetic}")
 ```
 
 ### JavaScript Example
 
 ```javascript
-async function getOptionGreeks(symbol, exchange, interestRate = null) {
+async function getOptionGreeks(symbol, exchange, interestRate = null, forwardPrice = null) {
     const url = 'http://127.0.0.1:5000/api/v1/optiongreeks';
 
     const payload = {
@@ -1019,8 +1240,12 @@ async function getOptionGreeks(symbol, exchange, interestRate = null) {
         exchange: exchange
     };
 
-    if (interestRate) {
+    if (interestRate !== null) {
         payload.interest_rate = interestRate;
+    }
+
+    if (forwardPrice !== null) {
+        payload.forward_price = forwardPrice;
     }
 
     const response = await fetch(url, {
@@ -1034,23 +1259,46 @@ async function getOptionGreeks(symbol, exchange, interestRate = null) {
     return await response.json();
 }
 
-// Usage
+// Basic usage
 getOptionGreeks('BANKNIFTY28NOV2550000CE', 'NFO')
     .then(data => {
         console.log('Delta:', data.greeks.delta);
         console.log('IV:', data.implied_volatility);
+    });
+
+// With forward price
+const spot = 80000;
+const rate = 0.065;
+const T = 30 / 365;
+const forward = spot * Math.exp(rate * T);
+
+getOptionGreeks('SENSEX28NOV2580000CE', 'BFO', 6.5, forward)
+    .then(data => {
+        console.log('SENSEX Greeks with synthetic forward:', data);
     });
 ```
 
 ### cURL Example
 
 ```bash
+# Basic request
 curl -X POST http://127.0.0.1:5000/api/v1/optiongreeks \
   -H "Content-Type: application/json" \
   -d '{
     "apikey": "your_api_key_here",
     "symbol": "NIFTY28NOV2526000CE",
     "exchange": "NFO"
+  }'
+
+# With forward price
+curl -X POST http://127.0.0.1:5000/api/v1/optiongreeks \
+  -H "Content-Type: application/json" \
+  -d '{
+    "apikey": "your_api_key_here",
+    "symbol": "FINNIFTY02DEC2524000CE",
+    "exchange": "NFO",
+    "forward_price": 24125.50,
+    "interest_rate": 6.5
   }'
 ```
 
@@ -1067,8 +1315,8 @@ curl -X POST http://127.0.0.1:5000/api/v1/optiongreeks \
 ## Best Practices
 
 1. **Install Dependencies First**
-   - Install mibian before using API: `pip install mibian`
-   - Verify installation: `python -c "import mibian"`
+   - Install py_vollib before using API: `pip install py_vollib`
+   - Verify installation: `python -c "from py_vollib.black.greeks.analytical import delta"`
 
 2. **Use Current Contracts**
    - Expired options will return error
@@ -1076,11 +1324,11 @@ curl -X POST http://127.0.0.1:5000/api/v1/optiongreeks \
 
 3. **Verify Symbol Format**
    - Format: `SYMBOL[DD][MMM][YY][STRIKE][CE/PE]`
-   - Example: `NIFTY28NOV2526000CE` ✓
-   - Wrong: `NIFTY24000CE` ✗
+   - Example: `NIFTY28NOV2526000CE`
+   - Wrong: `NIFTY24000CE`
 
 4. **Market Hours**
-   - Greeks require live prices
+   - Greeks require live prices (unless using forward_price)
    - Ensure markets are open for accurate data
    - Pre-market/post-market may have stale data
 
@@ -1092,12 +1340,17 @@ curl -X POST http://127.0.0.1:5000/api/v1/optiongreeks \
      - Matching with broker Greeks
    - Interest rate has minimal impact on short-term options (< 7 days)
 
-6. **Understand Greek Limitations**
-   - Based on Black-Scholes (assumes log-normal distribution)
-   - May not account for dividends, early exercise
-   - More accurate for European-style index options
+6. **Use Forward Price for Illiquid Underlyings**
+   - SENSEX, FINNIFTY, MIDCPNIFTY futures may be illiquid
+   - Calculate synthetic forward: `Spot x e^(rT)`
+   - Provides consistent Greeks regardless of futures liquidity
 
-7. **Cache Results**
+7. **Understand Greek Units**
+   - Theta: Daily decay (no conversion needed)
+   - Vega: Per 1% IV change (no conversion needed)
+   - py_vollib returns trader-friendly units directly
+
+8. **Cache Results**
    - Greeks don't change drastically every second
    - Cache for 30-60 seconds to reduce API calls
    - Recalculate when underlying moves significantly
@@ -1106,13 +1359,13 @@ curl -X POST http://127.0.0.1:5000/api/v1/optiongreeks \
 
 ## Troubleshooting
 
-### Import Error: No module named 'mibian'
+### Import Error: No module named 'py_vollib'
 
-**Solution**: Install mibian library
+**Solution**: Install py_vollib library
 ```bash
-pip install mibian
+pip install py_vollib
 # or
-uv pip install mibian
+uv pip install py_vollib
 ```
 
 ### Greeks Seem Incorrect
@@ -1122,40 +1375,67 @@ uv pip install mibian
 2. **Wrong Interest Rate**: Adjust interest_rate parameter
 3. **Symbol Parsing**: Verify symbol format
 4. **Deep ITM/OTM**: Greeks may be extreme for deep options
+5. **Illiquid Underlying**: Use forward_price parameter
 
 **Solution**:
 - Verify underlying and option LTP manually
 - Compare with broker's Greeks
 - Check expiry date is future
+- Try using forward_price for illiquid underlyings
+
+### Greeks Don't Match Sensibull/Opstra
+
+**Solution**: OpenAlgo now uses Black-76 model (same as these platforms)
+- Ensure you're using the latest version with py_vollib
+- Check interest rate settings match
+- Verify forward/spot price used is the same
 
 ### High IV Calculation Errors
 
-**Cause**: Black-Scholes may not converge for very deep ITM/OTM options
+**Cause**: Black-76 may not converge for very deep ITM/OTM options
 
 **Solution**:
 - Use ATM or near-ATM options for accurate Greeks
-- Very deep options may require different models
+- Very deep options may require different approaches
 
 ###
 
 ## Technical Notes
 
-### Black-Scholes Model
+### Black-76 Model
 
-The API uses Black-Scholes model for European options:
+The API uses Black-76 model (via py_vollib) for options on futures/forwards:
+
+**Why Black-76 instead of Black-Scholes?**
+- Black-Scholes: Designed for stock options (spot-settled)
+- Black-76: Designed for options on futures/forwards
+- Indian F&O markets trade options on futures, not spot
+
+**Model Formula**:
+```
+Call = e^(-rT) * [F*N(d1) - K*N(d2)]
+Put  = e^(-rT) * [K*N(-d2) - F*N(-d1)]
+
+Where:
+F = Forward/Futures price
+K = Strike price
+r = Risk-free rate
+T = Time to expiry (years)
+sigma = Implied volatility
+```
 
 **Assumptions**:
 - Constant volatility
 - Log-normal price distribution
-- No dividends
+- No dividends (forward price already accounts for cost of carry)
 - European exercise (index options)
 
 **Calculation Steps**:
 1. Parse option symbol to extract strike, expiry
-2. Fetch spot price and option premium
+2. Fetch forward price (or use provided forward_price)
 3. Calculate time to expiry in years
-4. Solve for Implied Volatility (IV)
-5. Calculate Greeks using BS model with IV
+4. Solve for Implied Volatility (IV) using Black-76
+5. Calculate Greeks using Black-76 model with IV
 
 ### Symbol Parsing
 
@@ -1169,32 +1449,53 @@ Supports multiple formats across exchanges:
 
 ## Features
 
-1. **Multi-Exchange Support**: NFO, BFO, CDS, MCX
-2. **Automatic Price Fetching**: Gets live prices via quotes API
-3. **Accurate IV Calculation**: Solves Black-Scholes for IV
-4. **Complete Greeks**: Delta, Gamma, Theta, Vega, Rho
-5. **Flexible Interest Rate**: Override default per request
-6. **Decimal Strike Support**: For currency options
-7. **Error Handling**: Comprehensive validation and errors
+1. **Black-76 Model**: Industry-standard for options on futures
+2. **Multi-Exchange Support**: NFO, BFO, CDS, MCX
+3. **Automatic Price Fetching**: Gets live prices via quotes API
+4. **Custom Forward Price**: Support for synthetic futures and illiquid underlyings
+5. **Accurate IV Calculation**: Solves Black-76 for IV
+6. **Complete Greeks**: Delta, Gamma, Theta, Vega, Rho
+7. **Trader-Friendly Units**: Theta (daily), Vega (per 1% IV)
+8. **Flexible Interest Rate**: Override default per request
+9. **Decimal Strike Support**: For currency options
+10. **Error Handling**: Comprehensive validation and errors
 
 ###
 
 ## Limitations
 
-1. **Requires mibian Library**: Must install separately
+1. **Requires py_vollib Library**: Must install separately
 2. **European Options**: Best suited for index options
 3. **No Dividend Adjustment**: Doesn't account for dividends
-4. **Market Hours**: Requires live prices for accuracy
+4. **Market Hours**: Requires live prices for accuracy (unless using forward_price)
 5. **Deep Options**: May have convergence issues for very deep ITM/OTM
 6. **Rate Assumption**: Uses fixed interest rate (not dynamic)
+
+###
+
+## Migration from mibian (Black-Scholes)
+
+If you were using an older version with mibian library:
+
+1. **Uninstall mibian**: `pip uninstall mibian`
+2. **Install py_vollib**: `pip install py_vollib`
+3. **No API changes needed**: Request/response format unchanged
+4. **Greeks now match industry**: Theta/Vega in trader-friendly units
+
+**Benefits of Migration**:
+- Correct model for Indian F&O (Black-76 vs Black-Scholes)
+- Greeks match Sensibull, Opstra, broker platforms
+- Actively maintained library
+- Better numerical stability
 
 ###
 
 ## Support
 
 For issues or questions:
-- Verify mibian installation
+- Verify py_vollib installation
 - Check symbol format matches documented pattern
-- Ensure markets are open for live data
+- Ensure markets are open for live data (or use forward_price)
 - Review OpenAlgo logs for detailed errors
 - Compare with broker Greeks to validate
+- For illiquid underlyings, use forward_price parameter
