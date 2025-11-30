@@ -27,7 +27,7 @@ class OptionGreeks(Resource):
         """
         Calculate Option Greeks (Delta, Gamma, Theta, Vega, Rho) and Implied Volatility
 
-        This endpoint calculates option Greeks using Black-Scholes model for options
+        This endpoint calculates option Greeks using Black-76 model for options
         across all supported exchanges (NFO, BFO, CDS, MCX).
 
         Required fields:
@@ -36,35 +36,41 @@ class OptionGreeks(Resource):
         - exchange: Exchange code (NFO, BFO, CDS, MCX)
 
         Optional fields:
-        - interest_rate: Risk-free interest rate (annualized %). Defaults to 6.5%
+        - interest_rate: Risk-free interest rate (annualized %). Defaults to 0%
+        - forward_price: Custom forward/synthetic futures price. If provided, skips underlying price fetch.
+                        Useful for synthetic futures (Spot × e^rT) or illiquid underlyings.
+        - underlying_symbol: Underlying symbol (e.g., NIFTY or NIFTY28NOV24FUT)
+        - underlying_exchange: Underlying exchange (NSE_INDEX, NFO, etc.)
+        - expiry_time: Custom expiry time in HH:MM format (e.g., "15:30")
 
-        Example Request:
+        Example Request (with forward_price):
         {
             "apikey": "your_api_key",
-            "symbol": "NIFTY28NOV2424000CE",
+            "symbol": "NIFTY02DEC2524000CE",
             "exchange": "NFO",
-            "interest_rate": 6.5
+            "forward_price": 24550.75,
+            "interest_rate": 7.0
         }
 
         Example Response:
         {
             "status": "success",
-            "symbol": "NIFTY28NOV2424000CE",
+            "symbol": "NIFTY02DEC2524000CE",
             "exchange": "NFO",
             "underlying": "NIFTY",
             "strike": 24000,
             "option_type": "CE",
-            "expiry_date": "28-Nov-2024",
-            "days_to_expiry": 5.5,
-            "spot_price": 24015.75,
-            "option_price": 125.50,
-            "interest_rate": 6.5,
+            "expiry_date": "02-Dec-2025",
+            "days_to_expiry": 30.5,
+            "forward_price": 24550.75,
+            "option_price": 296.05,
+            "interest_rate": 7.0,
             "implied_volatility": 15.25,
             "greeks": {
                 "delta": 0.5234,
                 "gamma": 0.000125,
-                "theta": -12.5678,
-                "vega": 18.7654,
+                "theta": -4.9678,
+                "vega": 30.7654,
                 "rho": 0.001234
             }
         }
@@ -95,6 +101,7 @@ class OptionGreeks(Resource):
             symbol = validated_data.get('symbol')
             exchange = validated_data.get('exchange')
             interest_rate = validated_data.get('interest_rate')
+            forward_price = validated_data.get('forward_price')
             underlying_symbol = validated_data.get('underlying_symbol')
             underlying_exchange = validated_data.get('underlying_exchange')
             expiry_time = validated_data.get('expiry_time')
@@ -109,7 +116,9 @@ class OptionGreeks(Resource):
 
             # Get option Greeks
             logger.info(f"Calculating Greeks for {symbol} on {exchange}")
-            if underlying_symbol:
+            if forward_price:
+                logger.info(f"Using custom forward price: {forward_price}")
+            elif underlying_symbol:
                 logger.info(f"Using custom underlying: {underlying_symbol} on {underlying_exchange or 'auto-detected'}")
             if expiry_time:
                 logger.info(f"Using custom expiry time: {expiry_time}")
@@ -118,6 +127,7 @@ class OptionGreeks(Resource):
                 option_symbol=symbol,
                 exchange=exchange,
                 interest_rate=interest_rate,
+                forward_price=forward_price,
                 underlying_symbol=underlying_symbol,
                 underlying_exchange=underlying_exchange,
                 expiry_time=expiry_time,

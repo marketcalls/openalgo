@@ -370,6 +370,7 @@ def get_option_greeks(
     option_symbol: str,
     exchange: str,
     interest_rate: Optional[float] = None,
+    forward_price: Optional[float] = None,
     underlying_symbol: Optional[str] = None,
     underlying_exchange: Optional[str] = None,
     expiry_time: Optional[str] = None,
@@ -382,6 +383,7 @@ def get_option_greeks(
         option_symbol: Option symbol
         exchange: Exchange code (NFO, BFO, CDS, MCX)
         interest_rate: Optional interest rate (default from exchange mapping)
+        forward_price: Optional custom forward/synthetic futures price. If provided, skips underlying fetch.
         underlying_symbol: Optional underlying symbol to use for spot price (e.g., NIFTY or NIFTY28NOV24FUT)
         underlying_exchange: Optional underlying exchange (e.g., NSE_INDEX or NFO)
         expiry_time: Optional custom expiry time in "HH:MM" format (e.g., "19:00" for MCX)
@@ -397,39 +399,42 @@ def get_option_greeks(
         # Parse symbol to get underlying (if not provided)
         base_symbol, expiry, strike, opt_type = parse_option_symbol(option_symbol, exchange, expiry_time)
 
-        # Use provided underlying symbol/exchange or derive from option symbol
-        if underlying_symbol:
-            # User specified custom underlying
-            spot_symbol = underlying_symbol
-            logger.info(f"Using custom underlying symbol: {underlying_symbol}")
+        # Determine the forward/futures price to use
+        if forward_price:
+            # User provided custom forward price (e.g., synthetic future)
+            spot_price = forward_price
+            logger.info(f"Using custom forward price: {forward_price}")
         else:
-            # Auto-detect from option symbol
-            spot_symbol = base_symbol
+            # Fetch underlying price from broker
+            # Use provided underlying symbol/exchange or derive from option symbol
+            if underlying_symbol:
+                spot_symbol = underlying_symbol
+                logger.info(f"Using custom underlying symbol: {underlying_symbol}")
+            else:
+                spot_symbol = base_symbol
 
-        if underlying_exchange:
-            # User specified custom underlying exchange
-            spot_exchange = underlying_exchange
-            logger.info(f"Using custom underlying exchange: {underlying_exchange}")
-        else:
-            # Auto-detect exchange
-            spot_exchange = get_underlying_exchange(base_symbol, exchange)
+            if underlying_exchange:
+                spot_exchange = underlying_exchange
+                logger.info(f"Using custom underlying exchange: {underlying_exchange}")
+            else:
+                spot_exchange = get_underlying_exchange(base_symbol, exchange)
 
-        # Fetch underlying price
-        logger.info(f"Fetching spot price for {spot_symbol} from {spot_exchange}")
-        success, spot_response, status_code = get_quotes(spot_symbol, spot_exchange, api_key)
+            # Fetch underlying price
+            logger.info(f"Fetching spot price for {spot_symbol} from {spot_exchange}")
+            success, spot_response, status_code = get_quotes(spot_symbol, spot_exchange, api_key)
 
-        if not success:
-            return False, {
-                'status': 'error',
-                'message': f'Failed to fetch underlying price: {spot_response.get("message", "Unknown error")}'
-            }, status_code
+            if not success:
+                return False, {
+                    'status': 'error',
+                    'message': f'Failed to fetch underlying price: {spot_response.get("message", "Unknown error")}'
+                }, status_code
 
-        spot_price = spot_response.get('data', {}).get('ltp')
-        if not spot_price:
-            return False, {
-                'status': 'error',
-                'message': 'Underlying LTP not available'
-            }, 404
+            spot_price = spot_response.get('data', {}).get('ltp')
+            if not spot_price:
+                return False, {
+                    'status': 'error',
+                    'message': 'Underlying LTP not available'
+                }, 404
 
         # Fetch option price
         logger.info(f"Fetching option price for {option_symbol} from {exchange}")
