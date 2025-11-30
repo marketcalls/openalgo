@@ -2,6 +2,9 @@
 Option Greeks Service
 Calculates option Greeks (Delta, Gamma, Theta, Vega, Rho) and Implied Volatility
 for options across all supported exchanges (NFO, BFO, CDS, MCX)
+
+Uses Black-76 model (py_vollib) - appropriate for options on futures/forwards
+which is the correct model for Indian F&O markets (NFO, BFO, MCX, CDS)
 """
 
 import re
@@ -9,12 +12,17 @@ from datetime import datetime
 from typing import Dict, Any, Tuple, Optional
 from utils.logging import get_logger
 
-# Import mibian for Black-Scholes calculations
+# Import py_vollib for Black-76 calculations
 try:
-    import mibian
-    MIBIAN_AVAILABLE = True
+    from py_vollib.black.implied_volatility import implied_volatility as black_iv
+    from py_vollib.black.greeks.analytical import delta as black_delta
+    from py_vollib.black.greeks.analytical import gamma as black_gamma
+    from py_vollib.black.greeks.analytical import theta as black_theta
+    from py_vollib.black.greeks.analytical import vega as black_vega
+    from py_vollib.black.greeks.analytical import rho as black_rho
+    PYVOLLIB_AVAILABLE = True
 except ImportError:
-    MIBIAN_AVAILABLE = False
+    PYVOLLIB_AVAILABLE = False
 
 logger = get_logger(__name__)
 
@@ -47,13 +55,13 @@ DEFAULT_INTEREST_RATES = {
     "MCX": 0       # Commodities
 }
 
-def check_mibian_availability():
-    """Check if mibian library is available"""
-    if not MIBIAN_AVAILABLE:
-        logger.error("mibian library not installed. Install with: pip install mibian")
+def check_pyvollib_availability():
+    """Check if py_vollib library is available"""
+    if not PYVOLLIB_AVAILABLE:
+        logger.error("py_vollib library not installed. Install with: pip install py_vollib")
         return False, {
             'status': 'error',
-            'message': 'Option Greeks calculation requires mibian library. Install with: pip install mibian'
+            'message': 'Option Greeks calculation requires py_vollib library. Install with: pip install py_vollib'
         }, 500
     return True, None, None
 
@@ -134,7 +142,7 @@ def parse_option_symbol(symbol: str, exchange: str, custom_expiry_time: Optional
         )
 
         # Convert strike to proper format
-        # Strike must be in same units as spot price for Black-Scholes
+        # Strike must be in same units as futures price for Black-76
         strike = float(strike_str)
 
         logger.info(f"Parsed symbol {symbol}: base={base_symbol}, expiry={expiry}, strike={strike}, type={opt_type}")
@@ -173,34 +181,36 @@ def get_underlying_exchange(base_symbol: str, options_exchange: str) -> str:
     return "NSE"
 
 
-def calculate_time_to_expiry(expiry: datetime) -> float:
+def calculate_time_to_expiry(expiry: datetime) -> Tuple[float, float]:
     """
-    Calculate time to expiry in days (for mibian library)
+    Calculate time to expiry in years (for py_vollib Black-76 model)
 
-    mibian.BS expects time to expiry in DAYS, not years.
-    Preserves fractional days (e.g., 0.59 days = ~14 hours).
+    py_vollib expects time to expiry in YEARS.
+    Also returns days for display purposes.
 
     Returns:
-        Time to expiry in days (float)
+        Tuple of (time_in_years, time_in_days)
     """
     current_time = datetime.now()
 
     if expiry < current_time:
         logger.warning(f"Option has already expired: {expiry}")
-        return 0.0
+        return 0.0, 0.0
 
-    # Calculate days to expiry - mibian expects DAYS not years
+    # Calculate time to expiry
     time_delta = expiry - current_time
     days_to_expiry = time_delta.total_seconds() / (60 * 60 * 24)
+    years_to_expiry = days_to_expiry / 365.0
 
     # Ensure minimum value to avoid numerical issues
-    if days_to_expiry < 0.01:  # Less than ~15 minutes
-        days_to_expiry = 0.01
-        logger.info(f"Very close to expiry - using minimum 0.01 days")
+    if years_to_expiry < 0.0001:  # Less than ~1 hour
+        years_to_expiry = 0.0001
+        days_to_expiry = years_to_expiry * 365.0
+        logger.info(f"Very close to expiry - using minimum 0.0001 years")
 
-    logger.info(f"Time to expiry: {days_to_expiry:.4f} days")
+    logger.info(f"Time to expiry: {days_to_expiry:.4f} days ({years_to_expiry:.6f} years)")
 
-    return days_to_expiry
+    return years_to_expiry, days_to_expiry
 
 
 def calculate_greeks(
@@ -213,12 +223,15 @@ def calculate_greeks(
     api_key: str = None
 ) -> Tuple[bool, Dict[str, Any], int]:
     """
-    Calculate Option Greeks using Black-Scholes model
+    Calculate Option Greeks using Black-76 model (py_vollib)
+
+    Black-76 is the appropriate model for options on futures/forwards,
+    which includes Indian F&O markets (NFO, BFO, MCX, CDS).
 
     Args:
         option_symbol: Option symbol (e.g., NIFTY28NOV2424000CE)
         exchange: Exchange code (NFO, BFO, CDS, MCX)
-        spot_price: Underlying spot/futures price
+        spot_price: Underlying futures/forward price
         option_price: Current option price
         interest_rate: Risk-free interest rate (annualized %)
         expiry_time: Optional custom expiry time in "HH:MM" format
@@ -228,18 +241,18 @@ def calculate_greeks(
         Tuple of (success, response_dict, status_code)
     """
     try:
-        # Check if mibian is available
-        available, error_response, status_code = check_mibian_availability()
+        # Check if py_vollib is available
+        available, error_response, status_code = check_pyvollib_availability()
         if not available:
             return False, error_response, status_code
 
         # Parse option symbol with custom expiry time if provided
         base_symbol, expiry, strike, opt_type = parse_option_symbol(option_symbol, exchange, expiry_time)
 
-        # Calculate time to expiry
-        time_to_expiry = calculate_time_to_expiry(expiry)
+        # Calculate time to expiry (returns years and days)
+        time_to_expiry_years, time_to_expiry_days = calculate_time_to_expiry(expiry)
 
-        if time_to_expiry <= 0:
+        if time_to_expiry_years <= 0:
             return False, {
                 'status': 'error',
                 'message': f'Option has expired on {expiry.strftime("%d-%b-%Y")}'
@@ -249,8 +262,8 @@ def calculate_greeks(
         if interest_rate is None:
             interest_rate = DEFAULT_INTEREST_RATES.get(exchange, 0)
 
-        # Convert interest rate from percentage to decimal for mibian
-        # mibian expects decimal (0.065 for 6.5%)
+        # Convert interest rate from percentage to decimal
+        # py_vollib expects decimal (0.065 for 6.5%)
         interest_rate_decimal = interest_rate / 100.0
 
         # Validate inputs
@@ -266,20 +279,23 @@ def calculate_greeks(
                 'message': 'Strike price must be positive'
             }, 400
 
-        # Calculate Implied Volatility
-        try:
-            if opt_type == 'CE':
-                iv_model = mibian.BS(
-                    [spot_price, strike, interest_rate_decimal, time_to_expiry],
-                    callPrice=option_price
-                )
-            else:  # PE
-                iv_model = mibian.BS(
-                    [spot_price, strike, interest_rate_decimal, time_to_expiry],
-                    putPrice=option_price
-                )
+        # Set option flag for py_vollib ('c' for call, 'p' for put)
+        flag = 'c' if opt_type == 'CE' else 'p'
 
-            implied_volatility = iv_model.impliedVolatility
+        # Calculate Implied Volatility using Black-76 model
+        try:
+            # black_iv(price, F, K, r, t, flag)
+            # Returns IV as decimal (e.g., 0.15 for 15%)
+            implied_volatility_decimal = black_iv(
+                option_price,
+                spot_price,
+                strike,
+                interest_rate_decimal,
+                time_to_expiry_years,
+                flag
+            )
+            # Convert to percentage for display
+            implied_volatility = implied_volatility_decimal * 100.0
 
         except Exception as e:
             logger.error(f"Error calculating IV: {e}")
@@ -288,25 +304,19 @@ def calculate_greeks(
                 'message': f'Failed to calculate Implied Volatility: {str(e)}'
             }, 500
 
-        # Calculate Greeks using the implied volatility
+        # Calculate Greeks using Black-76 model
         try:
-            greek_model = mibian.BS(
-                [spot_price, strike, interest_rate_decimal, time_to_expiry],
-                volatility=implied_volatility
-            )
+            # All Greek functions: func(flag, F, K, t, r, sigma)
+            # sigma is IV as decimal
+            delta = black_delta(flag, spot_price, strike, time_to_expiry_years, interest_rate_decimal, implied_volatility_decimal)
+            gamma = black_gamma(flag, spot_price, strike, time_to_expiry_years, interest_rate_decimal, implied_volatility_decimal)
+            theta = black_theta(flag, spot_price, strike, time_to_expiry_years, interest_rate_decimal, implied_volatility_decimal)
+            vega = black_vega(flag, spot_price, strike, time_to_expiry_years, interest_rate_decimal, implied_volatility_decimal)
+            rho = black_rho(flag, spot_price, strike, time_to_expiry_years, interest_rate_decimal, implied_volatility_decimal)
 
-            # Extract Greeks based on option type
-            if opt_type == 'CE':
-                delta = greek_model.callDelta
-                theta = greek_model.callTheta
-                rho = greek_model.callRho
-            else:  # PE
-                delta = greek_model.putDelta
-                theta = greek_model.putTheta
-                rho = greek_model.putRho
-
-            gamma = greek_model.gamma
-            vega = greek_model.vega
+            # Note: py_vollib Black model returns Greeks in trader-friendly units:
+            # - theta: already daily theta (no conversion needed)
+            # - vega: already per 1% vol change (no conversion needed)
 
         except Exception as e:
             logger.error(f"Error calculating Greeks: {e}")
@@ -321,10 +331,10 @@ def calculate_greeks(
             'symbol': option_symbol,
             'exchange': exchange,
             'underlying': base_symbol,
-            'strike': round(strike, 2),  # Round for cleaner output
+            'strike': round(strike, 2),
             'option_type': opt_type,
             'expiry_date': expiry.strftime('%d-%b-%Y'),
-            'days_to_expiry': round(time_to_expiry, 4),  # Already in days
+            'days_to_expiry': round(time_to_expiry_days, 4),
             'spot_price': round(spot_price, 2),
             'option_price': round(option_price, 2),
             'interest_rate': round(interest_rate, 2),
@@ -338,7 +348,7 @@ def calculate_greeks(
             }
         }
 
-        logger.info(f"Greeks calculated successfully for {option_symbol}")
+        logger.info(f"Greeks calculated successfully for {option_symbol} using Black-76 model")
         return True, response, 200
 
     except ValueError as e:
