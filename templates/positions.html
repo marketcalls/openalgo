@@ -20,12 +20,58 @@
     }
 
     .filter-dot {
-        @apply w-2 h-2 bg-error rounded-full absolute -top-1 -right-1;
+        @apply w-2.5 h-2.5 bg-error rounded-full absolute -top-0.5 -right-0.5 ring-2 ring-base-100;
         display: none;
     }
 
     .filter-dot.active {
         display: block;
+    }
+
+    .settings-btn.has-filters {
+        @apply btn-outline btn-primary;
+    }
+
+    .active-filters-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .active-filters-label {
+        font-size: 0.875rem;
+        color: rgba(255, 255, 255, 0.6);
+        margin-right: 4px;
+    }
+
+    .active-filter-chip {
+        display: inline-block;
+        padding: 6px 14px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        background-color: rgba(232, 121, 169, 0.15);
+        border: 1px solid #e879a9;
+        color: #e879a9;
+        border-radius: 9999px;
+    }
+
+    .clear-filters-btn {
+        display: inline-block;
+        padding: 6px 16px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        background-color: transparent;
+        border: 1px solid #f87272;
+        color: #f87272;
+        border-radius: 9999px;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .clear-filters-btn:hover {
+        background-color: #f87272;
+        color: #1f1523;
     }
 
     .settings-section {
@@ -41,7 +87,21 @@
     }
 
     .filter-chip.active {
-        @apply btn-primary border-primary;
+        background-color: #e879a9 !important;
+        color: #1f1523 !important;
+        border-color: #e879a9 !important;
+    }
+
+    /* Selected grouping label styling */
+    .grouping-label.selected {
+        background-color: rgba(232, 121, 169, 0.2) !important;
+        border: 1px solid #e879a9 !important;
+        border-radius: 0.5rem;
+    }
+
+    .grouping-label.selected span {
+        color: #e879a9 !important;
+        font-weight: 600 !important;
     }
 
     /* Group header */
@@ -138,7 +198,7 @@
         <div class="flex gap-2 items-center flex-wrap">
             <!-- Settings Button -->
             <div class="settings-btn-wrapper">
-                <button class="btn btn-ghost btn-sm gap-2" onclick="openSettingsModal()">
+                <button id="settings-btn" class="btn btn-ghost btn-sm gap-2 settings-btn" onclick="openSettingsModal()">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
                     </svg>
@@ -161,6 +221,9 @@
             </a>
         </div>
     </div>
+
+    <!-- Active Filters Bar -->
+    <div id="active-filters-bar" class="active-filters-bar mb-4" style="display: none;"></div>
 
     <!-- Position Summary -->
     <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
@@ -246,6 +309,7 @@ let sortDirection = 'asc';
 
 document.addEventListener('DOMContentLoaded', function() {
     loadPreferences();
+    updateGroupingLabels();
     renderPositions();
     updateStats();
 });
@@ -528,8 +592,17 @@ function openSettingsModal() {
 function applyGrouping(value) {
     currentGrouping = value;
     collapsedGroups.clear();
+    updateGroupingLabels();
+    updateFilterIndicator();
     savePreferences();
     renderPositions();
+}
+
+function updateGroupingLabels() {
+    document.querySelectorAll('.grouping-label').forEach(label => {
+        const radio = label.querySelector('input[type="radio"]');
+        label.classList.toggle('selected', radio.checked);
+    });
 }
 
 function toggleFilter(btn) {
@@ -562,7 +635,109 @@ function clearFilters() {
 
 function updateFilterIndicator() {
     const hasActiveFilters = Object.values(activeFilters).some(arr => arr.length > 0);
-    document.getElementById('filter-indicator').classList.toggle('active', hasActiveFilters);
+    const hasGrouping = currentGrouping !== 'none';
+    const hasAnyActive = hasActiveFilters || hasGrouping;
+
+    // Update the red dot indicator
+    document.getElementById('filter-indicator').classList.toggle('active', hasAnyActive);
+
+    // Update the settings button style
+    const settingsBtn = document.getElementById('settings-btn');
+    settingsBtn.classList.toggle('has-filters', hasAnyActive);
+    settingsBtn.classList.toggle('btn-ghost', !hasAnyActive);
+
+    // Update the active filters bar
+    renderActiveFiltersBar();
+}
+
+function renderActiveFiltersBar() {
+    const bar = document.getElementById('active-filters-bar');
+    const hasActiveFilters = Object.values(activeFilters).some(arr => arr.length > 0);
+    const hasGrouping = currentGrouping !== 'none';
+
+    if (!hasActiveFilters && !hasGrouping) {
+        bar.style.display = 'none';
+        return;
+    }
+
+    bar.style.display = 'flex';
+    let chips = [];
+
+    // Show grouping if active
+    if (hasGrouping) {
+        const groupingLabels = {
+            'underlying': 'Underlying',
+            'underlying_expiry': 'Underlying & Expiry'
+        };
+        chips.push(`<span class="active-filter-chip">Grouped: ${groupingLabels[currentGrouping]}</span>`);
+    }
+
+    // Show product filters
+    activeFilters.product.forEach(val => {
+        chips.push(`<span class="active-filter-chip">${val}</span>`);
+    });
+
+    // Show direction filters
+    activeFilters.direction.forEach(val => {
+        chips.push(`<span class="active-filter-chip">${val}</span>`);
+    });
+
+    // Show exchange filters
+    activeFilters.exchange.forEach(val => {
+        chips.push(`<span class="active-filter-chip">${val}</span>`);
+    });
+
+    // Build final HTML with label and clear button
+    let html = '<span class="active-filters-label">Active Filters:</span>';
+    html += chips.join('');
+    html += '<button class="clear-filters-btn" onclick="clearAllFiltersAndGrouping()">Clear All</button>';
+
+    bar.innerHTML = html;
+}
+
+function removeFilter(filterType, value) {
+    const index = activeFilters[filterType].indexOf(value);
+    if (index > -1) {
+        activeFilters[filterType].splice(index, 1);
+    }
+    // Update the chip in modal
+    const chip = document.querySelector(`.filter-chip[data-filter="${filterType}"][data-value="${value}"]`);
+    if (chip) chip.classList.remove('active');
+
+    updateFilterIndicator();
+    savePreferences();
+    renderPositions();
+    updateStats();
+}
+
+function resetGrouping() {
+    currentGrouping = 'none';
+    collapsedGroups.clear();
+    // Update radio in modal
+    const radio = document.querySelector('input[name="grouping"][value="none"]');
+    if (radio) radio.checked = true;
+    updateGroupingLabels();
+
+    updateFilterIndicator();
+    savePreferences();
+    renderPositions();
+}
+
+function clearAllFiltersAndGrouping() {
+    activeFilters = { product: [], direction: [], exchange: [] };
+    currentGrouping = 'none';
+    collapsedGroups.clear();
+
+    // Update UI in modal
+    document.querySelectorAll('.filter-chip').forEach(btn => btn.classList.remove('active'));
+    const radio = document.querySelector('input[name="grouping"][value="none"]');
+    if (radio) radio.checked = true;
+    updateGroupingLabels();
+
+    updateFilterIndicator();
+    savePreferences();
+    renderPositions();
+    updateStats();
 }
 
 function toggleGroup(groupKey) {
@@ -600,6 +775,7 @@ function loadPreferences() {
                 currentGrouping = prefs.grouping;
                 const radio = document.querySelector(`input[name="grouping"][value="${prefs.grouping}"]`);
                 if (radio) radio.checked = true;
+                updateGroupingLabels();
             }
             if (prefs.filters) {
                 // Migrate old filters that had status
@@ -676,15 +852,15 @@ function openCloseAllModal() {
         <div class="settings-section">
             <div class="settings-title">Grouping</div>
             <div class="flex flex-col gap-1">
-                <label class="flex items-center gap-3 cursor-pointer p-2 rounded hover:bg-base-200">
+                <label class="grouping-label flex items-center gap-3 cursor-pointer p-2 rounded hover:bg-base-200">
                     <input type="radio" name="grouping" value="none" class="radio radio-sm radio-primary" checked onchange="applyGrouping(this.value)">
                     <span>None</span>
                 </label>
-                <label class="flex items-center gap-3 cursor-pointer p-2 rounded hover:bg-base-200">
+                <label class="grouping-label flex items-center gap-3 cursor-pointer p-2 rounded hover:bg-base-200">
                     <input type="radio" name="grouping" value="underlying" class="radio radio-sm radio-primary" onchange="applyGrouping(this.value)">
                     <span>Underlying</span>
                 </label>
-                <label class="flex items-center gap-3 cursor-pointer p-2 rounded hover:bg-base-200">
+                <label class="grouping-label flex items-center gap-3 cursor-pointer p-2 rounded hover:bg-base-200">
                     <input type="radio" name="grouping" value="underlying_expiry" class="radio radio-sm radio-primary" onchange="applyGrouping(this.value)">
                     <span>Underlying & Expiry</span>
                 </label>

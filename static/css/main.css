@@ -2597,8 +2597,8 @@
       }
     }
   }
-  .-top-1 {
-    top: calc(var(--spacing) * -1);
+  .-top-0\.5 {
+    top: calc(var(--spacing) * -0.5);
   }
   .top-0 {
     top: calc(var(--spacing) * 0);
@@ -2617,6 +2617,9 @@
   }
   .top-4 {
     top: calc(var(--spacing) * 4);
+  }
+  .-right-0\.5 {
+    right: calc(var(--spacing) * -0.5);
   }
   .right-0 {
     right: calc(var(--spacing) * 0);
