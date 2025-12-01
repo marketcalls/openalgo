@@ -44,6 +44,7 @@
                             id="{{ config_key }}"
                             class="select select-bordered flex-1"
                             onchange="updateConfig('{{ config_key }}', this.value)">
+                            <option value="Never" {% if config_data.value == 'Never' %}selected{% endif %}>Never</option>
                             <option value="Monday" {% if config_data.value == 'Monday' %}selected{% endif %}>Monday</option>
                             <option value="Tuesday" {% if config_data.value == 'Tuesday' %}selected{% endif %}>Tuesday</option>
                             <option value="Wednesday" {% if config_data.value == 'Wednesday' %}selected{% endif %}>Wednesday</option>

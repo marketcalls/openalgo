@@ -128,31 +128,36 @@ def _schedule_square_off_jobs(scheduler):
 
         reset_day = get_config('reset_day', 'Sunday')
         reset_time_str = get_config('reset_time', '00:00')
-        reset_hour, reset_minute = map(int, reset_time_str.split(':'))
 
-        # Map day names to APScheduler day_of_week values
-        day_mapping = {
-            'Monday': 0, 'Tuesday': 1, 'Wednesday': 2, 'Thursday': 3,
-            'Friday': 4, 'Saturday': 5, 'Sunday': 6
-        }
+        # Check if auto-reset is disabled
+        if reset_day.lower() == 'never':
+            logger.info("  Auto-Reset: Disabled (reset_day = Never)")
+        else:
+            reset_hour, reset_minute = map(int, reset_time_str.split(':'))
 
-        reset_trigger = CronTrigger(
-            day_of_week=day_mapping.get(reset_day, 6),  # Default to Sunday
-            hour=reset_hour,
-            minute=reset_minute,
-            timezone=IST
-        )
+            # Map day names to APScheduler day_of_week values
+            day_mapping = {
+                'Monday': 0, 'Tuesday': 1, 'Wednesday': 2, 'Thursday': 3,
+                'Friday': 4, 'Saturday': 5, 'Sunday': 6
+            }
 
-        reset_job = scheduler.add_job(
-            func=reset_all_user_funds,
-            trigger=reset_trigger,
-            id='auto_reset',
-            name=f'Auto-Reset Funds ({reset_day} {reset_time_str})',
-            replace_existing=True,
-            misfire_grace_time=300
-        )
+            reset_trigger = CronTrigger(
+                day_of_week=day_mapping.get(reset_day, 6),  # Default to Sunday
+                hour=reset_hour,
+                minute=reset_minute,
+                timezone=IST
+            )
 
-        logger.info(f"  Auto-Reset: {reset_day} {reset_time_str} IST (Job ID: {reset_job.id})")
+            reset_job = scheduler.add_job(
+                func=reset_all_user_funds,
+                trigger=reset_trigger,
+                id='auto_reset',
+                name=f'Auto-Reset Funds ({reset_day} {reset_time_str})',
+                replace_existing=True,
+                misfire_grace_time=300
+            )
+
+            logger.info(f"  Auto-Reset: {reset_day} {reset_time_str} IST (Job ID: {reset_job.id})")
 
     except Exception as e:
         logger.error(f"Failed to schedule auto-reset: {e}")

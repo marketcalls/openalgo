@@ -129,6 +129,11 @@ class FundManager:
     def _check_and_reset_funds(self, funds):
         """Check if funds need to be reset (every Sunday at midnight IST)"""
         try:
+            # Check if auto-reset is disabled
+            reset_day = get_config('reset_day', 'Sunday')
+            if reset_day.lower() == 'never':
+                return  # Skip reset check entirely
+
             ist = pytz.timezone('Asia/Kolkata')
             now = datetime.now(ist)
             last_reset = funds.last_reset_date
@@ -137,8 +142,7 @@ class FundManager:
             if last_reset.tzinfo is None:
                 last_reset = ist.localize(last_reset)
 
-            # Check if it's Sunday and we haven't reset today
-            reset_day = get_config('reset_day', 'Sunday')
+            # Check if it's the configured reset day and we haven't reset today
             reset_time_str = get_config('reset_time', '00:00')
 
             if now.strftime('%A') == reset_day:
