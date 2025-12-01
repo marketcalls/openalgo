@@ -21,7 +21,7 @@ def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, 
     AUTH_TOKEN = auth
     FEED_TOKEN = feed_token
     if feed_token:
-        logger.info(f"Feed Token: {FEED_TOKEN}")
+        logger.debug(f"Feed Token: {FEED_TOKEN}")
     
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -38,12 +38,12 @@ def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, 
     
     try:
         # Log request details
-        logger.info("=== API Request Details ===")
-        logger.info(f"URL: {url}")
-        logger.info(f"Method: {method}")
-        logger.info(f"Headers: {json.dumps(headers, indent=2)}")
+        logger.debug("=== API Request Details ===")
+        logger.debug(f"URL: {url}")
+        logger.debug(f"Method: {method}")
+        logger.debug(f"Headers: {json.dumps(headers, indent=2)}")
         if params:
-            logger.info(f"Query Params: {json.dumps(params, indent=2)}")
+            logger.debug(f"Query Params: {json.dumps(params, indent=2)}")
         if payload and payload != '':
             if isinstance(payload, str):
                 try:
@@ -51,7 +51,7 @@ def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, 
                 except json.JSONDecodeError:
                     logger.error("Failed to parse payload as JSON")
                     raise Exception("Invalid payload format")
-            logger.info(f"Payload: {json.dumps(payload, indent=2)}")
+            logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
 
         # Perform the request
         if method.upper() == "GET":
@@ -62,10 +62,10 @@ def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, 
             response = client.request(method, url, headers=headers, json=payload)
 
         # Log response details
-        logger.info("=== API Response Details ===")
-        logger.info(f"Status Code: {response.status_code}")
-        logger.info(f"Response Headers: {dict(response.headers)}")
-        logger.info(f"Response Body: {response.text}")
+        logger.debug("=== API Response Details ===")
+        logger.debug(f"Status Code: {response.status_code}")
+        logger.debug(f"Response Headers: {dict(response.headers)}")
+        logger.debug(f"Response Body: {response.text}")
 
         # Add status attribute for compatibility
         response.status = response.status_code
@@ -188,25 +188,25 @@ class BrokerData:
         try:
             # Get instrument token and exchange segment
             symbol_info, brexchange = self._get_instrument_token(symbol, exchange)
-            
+
             # Prepare token for API requests
             token = {
                 "exchangeSegment": brexchange,
                 "exchangeInstrumentID": symbol_info.token
             }
-            
+
             # Fetch market data (xtsMessageCode 1502)
             market_data = self._fetch_market_data(token, 1502)
             if not market_data:
                 raise Exception("Failed to fetch market data")
-                
+
             # Fetch Open Interest data (xtsMessageCode 1510) - non-blocking
             oi_data = None
             try:
                 oi_data = self._fetch_market_data(token, 1510)
             except Exception as e:
                 logger.warning(f"Failed to fetch OI data: {str(e)}")
-            
+
             # Process market data
             touchline = market_data.get('Touchline', {})
             quote_data = {
@@ -220,17 +220,220 @@ class BrokerData:
                 'volume': touchline.get('TotalTradedQuantity', 0),
                 'oi': 0  # Default value if OI data is not available
             }
-            
+
             # Add OI data if available
             if oi_data and 'OpenInterest' in oi_data:
                 quote_data['oi'] = oi_data['OpenInterest']
                 logger.debug(f"Added OI data: {quote_data['oi']}")
-            
+
             return quote_data
-            
+
         except Exception as e:
             logger.error(f"Error fetching quotes: {str(e)}")
             raise Exception(f"Error fetching quotes: {str(e)}")
+
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols with automatic batching
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        import time
+
+        try:
+            BATCH_SIZE = 50  # XTS API limit: only 50 instruments allowed per request
+            RATE_LIMIT_DELAY = 0.1  # Delay in seconds between batch API calls
+
+            # If symbols exceed batch size, process in batches
+            if len(symbols) > BATCH_SIZE:
+                logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                # Split symbols into batches
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.debug(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    # Process this batch
+                    batch_results = self._process_multiquotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                    # Rate limit delay between batches
+                    if i + BATCH_SIZE < len(symbols):
+                        time.sleep(RATE_LIMIT_DELAY)
+
+                logger.info(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
+                return all_results
+            else:
+                # Single batch processing
+                return self._process_multiquotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_multiquotes_batch(self, symbols: list) -> list:
+        """
+        Process a single batch of symbols for multiquotes (internal method)
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys (max 50)
+        Returns:
+            list: List of quote data for the batch
+        """
+        # Exchange segment mapping
+        exchange_segment_map = {
+            "NSE": 1,
+            "NSE_INDEX": 1,
+            "NFO": 2,
+            "CDS": 3,
+            "BSE": 11,
+            "BSE_INDEX": 11,
+            "BFO": 12,
+            "MCX": 51
+        }
+
+        instruments = []
+        symbol_map = {}  # Map instrument key to original symbol/exchange
+        skipped_symbols = []  # Track symbols that couldn't be resolved
+
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            try:
+                # Convert symbol to broker format
+                br_symbol = get_br_symbol(symbol, exchange)
+
+                brexchange = exchange_segment_map.get(exchange)
+                if brexchange is None:
+                    logger.warning(f"Skipping symbol {symbol} on {exchange}: unknown exchange segment")
+                    skipped_symbols.append({
+                        'symbol': symbol,
+                        'exchange': exchange,
+                        'error': f'Unknown exchange segment: {exchange}'
+                    })
+                    continue
+
+                # Get exchange_token from database
+                with db_session() as session:
+                    symbol_info = session.query(SymToken).filter(
+                        SymToken.exchange == exchange,
+                        SymToken.brsymbol == br_symbol
+                    ).first()
+
+                    if not symbol_info:
+                        logger.warning(f"Skipping symbol {symbol} on {exchange}: could not find token")
+                        skipped_symbols.append({
+                            'symbol': symbol,
+                            'exchange': exchange,
+                            'error': f'Could not find exchange token for {exchange}:{br_symbol}'
+                        })
+                        continue
+
+                    instrument = {
+                        "exchangeSegment": brexchange,
+                        "exchangeInstrumentID": symbol_info.token
+                    }
+                    instruments.append(instrument)
+
+                    # Create key for mapping response back to original symbol
+                    instrument_key = f"{brexchange}_{symbol_info.token}"
+                    symbol_map[instrument_key] = {
+                        'symbol': symbol,
+                        'exchange': exchange,
+                        'br_symbol': br_symbol
+                    }
+
+            except Exception as e:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': str(e)
+                })
+                continue
+
+        # Return skipped symbols if no valid instruments
+        if not instruments:
+            logger.warning("No valid symbols to fetch quotes for")
+            return skipped_symbols
+
+        results = []
+
+        try:
+            # Make API call for market data (xtsMessageCode 1502)
+            payload = {
+                "instruments": instruments,
+                "xtsMessageCode": 1502,
+                "publishFormat": "JSON"
+            }
+
+            response = get_api_response(
+                "/instruments/quotes",
+                self.auth_token,
+                method="POST",
+                payload=payload,
+                feed_token=self.feed_token
+            )
+
+            if not response or response.get('type') != 'success':
+                error_msg = response.get('description', 'Unknown error') if response else 'No response'
+                logger.error(f"Error fetching multiquotes: {error_msg}")
+                raise Exception(f"Error from FivepaisaXTS API: {error_msg}")
+
+            # Parse response
+            list_quotes = response.get('result', {}).get('listQuotes', [])
+
+            for raw_data in list_quotes:
+                try:
+                    # Parse JSON if string
+                    quote_data = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+
+                    # Extract instrument identifier
+                    exchange_segment = quote_data.get('ExchangeSegment')
+                    instrument_id = quote_data.get('ExchangeInstrumentID')
+                    instrument_key = f"{exchange_segment}_{instrument_id}"
+
+                    # Look up original symbol and exchange
+                    original = symbol_map.get(instrument_key)
+                    if not original:
+                        logger.warning(f"Could not map response for instrument {instrument_key}")
+                        continue
+
+                    # Process market data
+                    touchline = quote_data.get('Touchline', {})
+
+                    result_item = {
+                        'symbol': original['symbol'],
+                        'exchange': original['exchange'],
+                        'data': {
+                            'ask': touchline.get('AskInfo', {}).get('Price', 0),
+                            'bid': touchline.get('BidInfo', {}).get('Price', 0),
+                            'high': touchline.get('High', 0),
+                            'low': touchline.get('Low', 0),
+                            'ltp': touchline.get('LastTradedPrice', 0),
+                            'open': touchline.get('Open', 0),
+                            'prev_close': touchline.get('Close', 0),
+                            'volume': touchline.get('TotalTradedQuantity', 0),
+                            'oi': 0  # OI requires separate API call (1510), set default
+                        }
+                    }
+                    results.append(result_item)
+
+                except Exception as e:
+                    logger.warning(f"Error parsing quote data: {str(e)}")
+                    continue
+
+        except Exception as e:
+            logger.error(f"Error in _process_multiquotes_batch: {str(e)}")
+            raise
+
+        # Include skipped symbols in results
+        return skipped_symbols + results
 
     def get_history(self, symbol, exchange, timeframe, from_date, to_date):
         """Get historical data for a symbol"""
@@ -301,10 +504,10 @@ class BrokerData:
                 from_str = current_start.strftime('%b %d %Y %H%M%S')
                 to_str = current_end.strftime('%b %d %Y %H%M%S')
 
-                logger.info(f"Fetching {timeframe} data for {exchange}:{symbol}")
-                logger.info(f"Start Time (IST): {current_start}")
-                logger.info(f"End Time (IST): {current_end}")
-                logger.info(f"API Format - From: {from_str}, To: {to_str}")
+                logger.debug(f"Fetching {timeframe} data for {exchange}:{symbol}")
+                logger.debug(f"Start Time (IST): {current_start}")
+                logger.debug(f"End Time (IST): {current_end}")
+                logger.debug(f"API Format - From: {from_str}, To: {to_str}")
 
                 params = {
                     "exchangeSegment": exchange_segment,
@@ -314,7 +517,7 @@ class BrokerData:
                     "compressionValue": compression_value
                 }
                 
-                logger.info(f"API Parameters: {json.dumps(params, indent=2)}")
+                logger.debug(f"API Parameters: {json.dumps(params, indent=2)}")
 
                 response = get_api_response("/instruments/ohlc", self.auth_token, method="GET", feed_token=self.feed_token, params=params)
 
@@ -370,7 +573,7 @@ class BrokerData:
 
                     # Determine segment ID based on exchange
                     segment_id = exchange_segment_map.get(exchange)
-                    logger.info(f"Exchange: {{exchange}}, Segment ID: {segment_id}")
+                    logger.debug(f"Exchange: {{exchange}}, Segment ID: {segment_id}")
                     if segment_id is None:
                         raise ValueError(f"Unknown exchange: {exchange}")
                     payload = {
@@ -395,7 +598,7 @@ class BrokerData:
                     # Parse the JSON string in listQuotes
                     quote = json.loads(raw_quotes[0])
                     touchline = quote.get('Touchline', {})
-                    logger.info(f"Parsed Quote Data: {touchline}")
+                    logger.debug(f"Parsed Quote Data: {touchline}")
                     
                     if touchline:
                         # For daily data, set timestamp to midnight IST
@@ -448,7 +651,7 @@ class BrokerData:
             
             # Log sample timestamps for verification
             sample_time = pd.to_datetime(final_df['timestamp'].iloc[0], unit='s')
-            logger.info(f"First candle: {sample_time.strftime('%Y-%m-%d') if compression_value == 'D' else sample_time}")
+            logger.debug(f"First candle: {sample_time.strftime('%Y-%m-%d') if compression_value == 'D' else sample_time}")
             
             return final_df
 
@@ -475,8 +678,8 @@ class BrokerData:
             dict: Market depth data
         """
         try:
-            logger.info(f"=== Starting Market Depth Request ===")
-            logger.info(f"Symbol: {symbol}, Exchange: {exchange}")
+            logger.debug(f"=== Starting Market Depth Request ===")
+            logger.debug(f"Symbol: {symbol}, Exchange: {exchange}")
             
             # Get feed token and user ID for request
             user_id = None
@@ -524,8 +727,8 @@ class BrokerData:
                     logger.info(f"Got new user_id from feed token: {user_id}")
             
             # Log the user ID and feed token we're using
-            logger.info(f"Using user ID: {user_id}")
-            logger.info(f"Using feed token: {feed_token[:20]}..." if feed_token else "No feed token available")
+            logger.debug(f"Using user ID: {user_id}")
+            logger.debug(f"Using feed token: {feed_token[:20]}..." if feed_token else "No feed token available")
             
             # Exchange segment mapping
             exchange_segment_map = {
@@ -539,17 +742,17 @@ class BrokerData:
             
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
-            logger.info(f"Converted symbol {symbol} to broker format: {br_symbol}")
+            logger.debug(f"Converted symbol {symbol} to broker format: {br_symbol}")
             
             brexchange = exchange_segment_map.get(exchange)
-            logger.info(f"Mapped exchange {exchange} to segment: {brexchange}")
+            logger.debug(f"Mapped exchange {exchange} to segment: {brexchange}")
             
             if brexchange is None:
                 logger.error(f"Unknown exchange segment: {exchange}")
                 raise Exception(f"Unknown exchange segment: {exchange}")
                 
             # Get exchange_token from database
-            logger.info("Querying database for symbol token...")
+            logger.debug("Querying database for symbol token...")
             with db_session() as session:
                 symbol_info = session.query(SymToken).filter(
                     SymToken.exchange == exchange,
@@ -559,7 +762,7 @@ class BrokerData:
                 if not symbol_info:
                     logger.error(f"Could not find exchange token for {exchange}:{br_symbol}")
                     raise Exception(f"Could not find exchange token for {exchange}:{br_symbol}")
-                logger.info(f"Found token {symbol_info.token} for {exchange}:{br_symbol}")
+                logger.debug(f"Found token {symbol_info.token} for {exchange}:{br_symbol}")
 
             # Get market depth via REST API
             logger.info("Getting market depth via REST API...")
