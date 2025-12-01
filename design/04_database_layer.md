@@ -1,685 +1,594 @@
-# OpenAlgo Database Layer Architecture
+# Database Layer Architecture
 
-## Executive Summary
+OpenAlgo implements a sophisticated multi-database architecture with intelligent caching, supporting both SQLite (development) and PostgreSQL (production) through SQLAlchemy ORM.
 
-OpenAlgo employs a multi-database architecture using SQLAlchemy ORM with SQLite for development and PostgreSQL/MySQL support for production. The system maintains 4 separate databases for clean data isolation: Main (authentication, strategies), Sandbox (paper trading), Latency (performance tracking), and Logs (API traffic).
+## Multi-Database Architecture
 
-## Database Architecture
+OpenAlgo uses **5 separate databases** to isolate different concerns:
 
-### Multi-Database Design
-
-```mermaid
-graph TB
-    subgraph "OpenAlgo Application"
-        MainApp[Flask Application]
-        Services[Service Layer]
-        DBLayer[Database Layer]
-    end
-
-    subgraph "Primary Databases"
-        MainDB[(Main DB<br/>openalgo.db)]
-        SandboxDB[(Sandbox DB<br/>sandbox.db)]
-        LatencyDB[(Latency DB<br/>latency.db)]
-        LogsDB[(Logs DB<br/>logs.db)]
-    end
-
-    MainApp --> Services
-    Services --> DBLayer
-    DBLayer --> MainDB
-    DBLayer --> SandboxDB
-    DBLayer --> LatencyDB
-    DBLayer --> LogsDB
 ```
-
-### Technology Stack
-
-- **ORM**: SQLAlchemy 2.0.31 with declarative models
-- **Database Support**: SQLite (development), PostgreSQL/MySQL (production)
-- **Connection Pooling**: QueuePool with 50 base, 100 max overflow
-- **Encryption**: Fernet symmetric encryption for sensitive data
-- **Hashing**: Argon2 for password and API key hashing
+databases/
+├── openalgo.db          # Main application database
+├── openalgo_sandbox.db  # Paper trading sandbox
+├── latency.db           # Order execution metrics
+├── logs.db              # Application logging
+└── telegram.db          # Telegram bot state
+```
 
 ### Database Configuration
 
 ```python
-# .env Configuration
-DATABASE_URL = 'sqlite:///db/openalgo.db'
-SANDBOX_DATABASE_URL = 'sqlite:///db/sandbox.db'
-LATENCY_DATABASE_URL = 'sqlite:///db/latency.db'
-LOGS_DATABASE_URL = 'sqlite:///db/logs.db'
-
-# Production PostgreSQL
-DATABASE_URL = 'postgresql://user:password@localhost/openalgo'
-SANDBOX_DATABASE_URL = 'postgresql://user:password@localhost/sandbox'
+# database/db_init.py
+DATABASE_URLS = {
+    'main': os.getenv('DATABASE_URL', 'sqlite:///databases/openalgo.db'),
+    'sandbox': os.getenv('SANDBOX_DATABASE_URL', 'sqlite:///databases/openalgo_sandbox.db'),
+    'latency': os.getenv('LATENCY_DATABASE_URL', 'sqlite:///databases/latency.db'),
+    'logs': os.getenv('LOGS_DATABASE_URL', 'sqlite:///databases/logs.db'),
+    'telegram': os.getenv('TELEGRAM_DATABASE_URL', 'sqlite:///databases/telegram.db')
+}
 ```
 
-## Database Models Overview
+### Connection Pooling
 
-### 1. Main Database (openalgo.db) - 15+ Models
-
-| Model | Purpose | File Location |
-|-------|---------|---------------|
-| **User** | User accounts with 2FA | `database/user_db.py` |
-| **Auth** | Broker authentication tokens | `database/auth_db.py` |
-| **ApiKeys** | API key management | `database/auth_db.py` |
-| **Strategy** | TradingView webhook strategies | `database/strategy_db.py` |
-| **StrategySymbolMapping** | Strategy symbol configurations | `database/strategy_db.py` |
-| **ChartinkStrategy** | ChartInk integrations | `database/chartink_db.py` |
-| **TelegramUser** | Telegram bot users | `database/telegram_db.py` |
-| **BotConfig** | Telegram bot configuration | `database/telegram_db.py` |
-| **CommandLog** | Telegram command history | `database/telegram_db.py` |
-| **PendingOrder** | Semi-auto order approval | `database/action_center_db.py` |
-| **MasterContractStatus** | Contract download status | `database/master_contract_status_db.py` |
-| **Settings** | User preferences | `database/settings_db.py` |
-| **Token** | Instrument master data | `database/token_db.py` |
-
-### 2. Sandbox Database (sandbox.db) - 6 Models
-
-| Model | Purpose | File Location |
-|-------|---------|---------------|
-| **SandboxOrders** | Virtual order records | `database/sandbox_db.py` |
-| **SandboxTrades** | Virtual trade history | `database/sandbox_db.py` |
-| **SandboxPositions** | Virtual positions | `database/sandbox_db.py` |
-| **SandboxHoldings** | Virtual holdings | `database/sandbox_db.py` |
-| **SandboxFunds** | Virtual capital management | `database/sandbox_db.py` |
-| **SandboxConfig** | Sandbox configuration | `database/sandbox_db.py` |
-
-### 3. Latency Database (latency.db) - 1 Model
-
-| Model | Purpose | File Location |
-|-------|---------|---------------|
-| **OrderLatency** | Order round-trip tracking | `database/latency_db.py` |
-
-### 4. Logs Database (logs.db) - 2 Models
-
-| Model | Purpose | File Location |
-|-------|---------|---------------|
-| **APILog** | API request/response logs | `database/traffic_db.py` |
-| **AnalyzerLog** | Analyzer mode logs | `database/analyzer_db.py` |
-
-## Core Model Definitions
-
-### User Model
+| Database Type | Pool Size | Max Overflow | Timeout |
+|---------------|-----------|--------------|---------|
+| PostgreSQL    | 50        | 100          | 30s     |
+| SQLite        | NullPool  | N/A          | N/A     |
 
 ```python
-# database/user_db.py
-class User(db.Model):
-    __tablename__ = 'users'
-
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(50), unique=True, nullable=False)
-    email = db.Column(db.String(100), unique=True, nullable=False)
-    password_hash = db.Column(db.String(255), nullable=False)  # Argon2
-    totp_secret = db.Column(db.String(32), nullable=True)  # 2FA secret
-    is_admin = db.Column(db.Boolean, default=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, onupdate=datetime.utcnow)
+def get_engine_options(url):
+    if 'postgresql' in url:
+        return {
+            'pool_size': 50,
+            'max_overflow': 100,
+            'pool_timeout': 30,
+            'pool_recycle': 1800,
+            'pool_pre_ping': True
+        }
+    return {'poolclass': NullPool}  # SQLite
 ```
 
-### Auth Model (Broker Tokens)
+## Database Models
 
+### Main Database Tables (25+)
+
+#### User Management
+
+**User Table** (`user_db.py`)
 ```python
-# database/auth_db.py
-class Auth(db.Model):
-    __tablename__ = 'auth'
+class User(Base):
+    __tablename__ = 'user'
+    id = Column(Integer, primary_key=True)
+    username = Column(String(80), unique=True, nullable=False)
+    email = Column(String(120), unique=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)  # Argon2 hash
+    created_at = Column(DateTime, default=datetime.utcnow)
+    is_active = Column(Boolean, default=True)
+```
 
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)  # Username
-    auth = db.Column(db.Text, nullable=False)  # Encrypted auth token
-    feed_token = db.Column(db.Text, nullable=True)  # Feed token (nullable)
-    broker = db.Column(db.String(50), nullable=False)
-    user_id = db.Column(db.String(50), nullable=False)
-    is_revoked = db.Column(db.Boolean, default=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+**API Key Table** (`apikey_db.py`)
+```python
+class ApiKey(Base):
+    __tablename__ = 'api_keys'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('user.id'), nullable=False)
+    api_key = Column(String(64), unique=True, nullable=False)
+    name = Column(String(100))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_used = Column(DateTime)
+    is_active = Column(Boolean, default=True)
+```
+
+#### Broker Authentication
+
+**Auth Token Table** (`auth_db.py`)
+```python
+class AuthToken(Base):
+    __tablename__ = 'auth_tokens'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('user.id'), nullable=False)
+    broker = Column(String(50), nullable=False)
+    access_token = Column(Text)           # Fernet encrypted
+    refresh_token = Column(Text)          # Fernet encrypted
+    feed_token = Column(Text)             # Fernet encrypted (Angel/Dhan)
+    token_expiry = Column(DateTime)
+    auth_data = Column(JSON)              # Additional broker-specific data
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, onupdate=datetime.utcnow)
+```
+
+#### Trading Operations
+
+**Order Book Table** (`orderbook_db.py`)
+```python
+class Order(Base):
+    __tablename__ = 'orders'
+    id = Column(Integer, primary_key=True)
+    order_id = Column(String(50), unique=True, nullable=False)
+    user_id = Column(Integer, ForeignKey('user.id'), nullable=False)
+    broker = Column(String(50), nullable=False)
+    symbol = Column(String(50), nullable=False)
+    exchange = Column(String(20), nullable=False)
+    action = Column(String(10))           # BUY/SELL
+    quantity = Column(Integer)
+    price = Column(Float)
+    trigger_price = Column(Float)
+    order_type = Column(String(20))       # MARKET/LIMIT/SL/SL-M
+    product = Column(String(20))          # CNC/MIS/NRML
+    status = Column(String(20))           # OPEN/COMPLETE/CANCELLED/REJECTED
+    fill_price = Column(Float)
+    fill_quantity = Column(Integer)
+    placed_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, onupdate=datetime.utcnow)
+```
+
+**Trade Book Table** (`tradebook_db.py`)
+```python
+class Trade(Base):
+    __tablename__ = 'trades'
+    id = Column(Integer, primary_key=True)
+    trade_id = Column(String(50), unique=True)
+    order_id = Column(String(50), ForeignKey('orders.order_id'))
+    user_id = Column(Integer, ForeignKey('user.id'))
+    symbol = Column(String(50))
+    exchange = Column(String(20))
+    action = Column(String(10))
+    quantity = Column(Integer)
+    price = Column(Float)
+    traded_at = Column(DateTime)
+```
+
+**Position Book Table** (`positionbook_db.py`)
+```python
+class Position(Base):
+    __tablename__ = 'positions'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('user.id'))
+    broker = Column(String(50))
+    symbol = Column(String(50))
+    exchange = Column(String(20))
+    product = Column(String(20))
+    quantity = Column(Integer)
+    average_price = Column(Float)
+    last_price = Column(Float)
+    pnl = Column(Float)
+    day_quantity = Column(Integer)
+    overnight_quantity = Column(Integer)
+```
+
+**Holdings Table** (`holdings_db.py`)
+```python
+class Holding(Base):
+    __tablename__ = 'holdings'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('user.id'))
+    broker = Column(String(50))
+    symbol = Column(String(50))
+    exchange = Column(String(20))
+    isin = Column(String(20))
+    quantity = Column(Integer)
+    average_price = Column(Float)
+    last_price = Column(Float)
+    pnl = Column(Float)
+    pnl_percent = Column(Float)
+```
+
+#### Strategy Management
+
+**Strategy Table** (`strategy_db.py`)
+```python
+class Strategy(Base):
+    __tablename__ = 'strategies'
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('user.id'))
+    name = Column(String(100), nullable=False)
+    description = Column(Text)
+    strategy_type = Column(String(50))    # webhook/python/chartink
+    config = Column(JSON)
+    is_active = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, onupdate=datetime.utcnow)
+```
+
+#### Symbol Management
+
+**Symbol Master Table** (`symbol_db.py`)
+```python
+class Symbol(Base):
+    __tablename__ = 'symbols'
+    id = Column(Integer, primary_key=True)
+    broker = Column(String(50), nullable=False)
+    symbol = Column(String(50), nullable=False)
+    broker_symbol = Column(String(100))
+    token = Column(String(50))
+    exchange = Column(String(20))
+    instrument_type = Column(String(20))
+    lot_size = Column(Integer)
+    tick_size = Column(Float)
+    expiry = Column(Date)
+    strike = Column(Float)
+    option_type = Column(String(5))       # CE/PE
+    last_updated = Column(DateTime)
 
     __table_args__ = (
-        db.UniqueConstraint('user_id', 'broker', name='unique_user_broker'),
+        UniqueConstraint('broker', 'symbol', 'exchange', name='uix_symbol'),
     )
 ```
 
-### ApiKeys Model
+### Sandbox Database
 
-```python
-# database/auth_db.py
-class ApiKeys(db.Model):
-    __tablename__ = 'api_keys'
-
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.String(50), unique=True, nullable=False)
-    api_key_hash = db.Column(db.String(255), nullable=False)  # Argon2 hash
-    api_key_encrypted = db.Column(db.Text, nullable=False)  # Fernet encrypted
-    order_mode = db.Column(db.String(20), default='auto')  # 'auto' or 'semi_auto'
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-```
-
-### Strategy Model
-
-```python
-# database/strategy_db.py
-class Strategy(db.Model):
-    __tablename__ = 'strategies'
-
-    id = db.Column(db.Integer, primary_key=True)
-    strategy_id = db.Column(db.String(36), unique=True, nullable=False)
-    user_id = db.Column(db.String(50), nullable=False)
-    name = db.Column(db.String(100), nullable=False)
-    description = db.Column(db.Text)
-    webhook_id = db.Column(db.String(64), unique=True, nullable=False)
-    is_active = db.Column(db.Boolean, default=True)
-    api_type = db.Column(db.String(20), default='placesmartorder')
-
-    # Time controls
-    entry_time = db.Column(db.String(10))  # HH:MM format
-    exit_time = db.Column(db.String(10))
-    entry_day = db.Column(db.String(50))  # CSV: "Mon,Tue,Wed"
-    exit_day = db.Column(db.String(50))
-
-    # Position controls
-    max_position = db.Column(db.Integer, default=0)
-    re_entry = db.Column(db.Boolean, default=True)
-
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, onupdate=datetime.utcnow)
-
-    # Relationship
-    symbol_mappings = db.relationship('StrategySymbolMapping', backref='strategy')
-```
-
-### StrategySymbolMapping Model
-
-```python
-# database/strategy_db.py
-class StrategySymbolMapping(db.Model):
-    __tablename__ = 'strategy_symbol_mappings'
-
-    id = db.Column(db.Integer, primary_key=True)
-    strategy_id = db.Column(db.String(36), db.ForeignKey('strategies.strategy_id'))
-    symbol = db.Column(db.String(50), nullable=False)
-    exchange = db.Column(db.String(20), nullable=False)
-    product = db.Column(db.String(20), nullable=False)
-    action = db.Column(db.String(10))  # BUY or SELL
-    quantity = db.Column(db.Integer, nullable=False)
-    price_type = db.Column(db.String(20), default='MARKET')
-    order_status = db.Column(db.String(20), default='pending')
-```
-
-### PendingOrder Model (Action Center)
-
-```python
-# database/action_center_db.py
-class PendingOrder(db.Model):
-    __tablename__ = 'pending_orders'
-
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.String(50), nullable=False)
-    api_type = db.Column(db.String(50), nullable=False)
-    order_data = db.Column(db.Text, nullable=False)  # JSON serialized
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    status = db.Column(db.String(20), default='pending')  # pending/approved/rejected
-
-    # Approval tracking
-    approved_at = db.Column(db.DateTime, nullable=True)
-    approved_by = db.Column(db.String(50), nullable=True)
-
-    # Rejection tracking
-    rejected_at = db.Column(db.DateTime, nullable=True)
-    rejected_by = db.Column(db.String(50), nullable=True)
-    rejected_reason = db.Column(db.Text, nullable=True)
-
-    # Execution tracking
-    broker_order_id = db.Column(db.String(50), nullable=True)
-    broker_status = db.Column(db.String(50), nullable=True)
-```
-
-### Telegram Models
-
-```python
-# database/telegram_db.py
-class TelegramUser(db.Model):
-    __tablename__ = 'telegram_users'
-
-    id = db.Column(db.Integer, primary_key=True)
-    telegram_id = db.Column(db.BigInteger, unique=True, nullable=False)
-    openalgo_username = db.Column(db.String(100))
-    encrypted_api_key = db.Column(db.Text, nullable=True)  # Fernet encrypted
-    host_url = db.Column(db.String(255), nullable=True)
-    first_name = db.Column(db.String(100))
-    last_name = db.Column(db.String(100))
-    broker = db.Column(db.String(50))
-    is_active = db.Column(db.Boolean, default=True)
-    notifications_enabled = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    last_command_at = db.Column(db.DateTime)
-
-    # Relationships
-    command_logs = db.relationship('CommandLog', backref='user')
-    notifications = db.relationship('NotificationQueue', backref='user')
-
-
-class BotConfig(db.Model):
-    __tablename__ = 'bot_config'
-
-    id = db.Column(db.Integer, primary_key=True)
-    bot_token = db.Column(db.Text)  # Encrypted
-    bot_username = db.Column(db.String(100))
-    broadcast_enabled = db.Column(db.Boolean, default=False)
-    master_commands_enabled = db.Column(db.Boolean, default=True)
-    notification_settings = db.Column(db.Text)  # JSON
-    is_active = db.Column(db.Boolean, default=False)
-    auto_start = db.Column(db.Boolean, default=False)
-
-
-class CommandLog(db.Model):
-    __tablename__ = 'command_logs'
-
-    id = db.Column(db.Integer, primary_key=True)
-    telegram_id = db.Column(db.BigInteger, db.ForeignKey('telegram_users.telegram_id'))
-    command = db.Column(db.String(100), nullable=False)
-    status = db.Column(db.String(20))  # success/error
-    request_data = db.Column(db.Text)
-    response_data = db.Column(db.Text)
-    execution_time = db.Column(db.Float)  # seconds
-    error_message = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-```
-
-### Sandbox Models
+Mirrors main database structure for paper trading:
 
 ```python
 # database/sandbox_db.py
-class SandboxOrders(db.Model):
+class SandboxOrder(Base):
     __tablename__ = 'sandbox_orders'
+    # Same structure as Order, isolated for paper trading
 
-    id = db.Column(db.Integer, primary_key=True)
-    orderid = db.Column(db.String(50), unique=True, nullable=False)
-    user_id = db.Column(db.String(50), nullable=False)
-    strategy = db.Column(db.String(100))
-    symbol = db.Column(db.String(50), nullable=False)
-    exchange = db.Column(db.String(20), nullable=False)
-    action = db.Column(db.String(10), nullable=False)  # BUY/SELL
-    quantity = db.Column(db.Integer, nullable=False)
-    price = db.Column(db.Numeric(10, 2))  # Limit price
-    trigger_price = db.Column(db.Numeric(10, 2))  # For SL orders
-    price_type = db.Column(db.String(20), nullable=False)  # MARKET/LIMIT/SL/SL-M
-    product = db.Column(db.String(20), nullable=False)  # CNC/NRML/MIS
-    order_status = db.Column(db.String(20), default='open')
-    average_price = db.Column(db.Numeric(10, 2))
-    filled_quantity = db.Column(db.Integer, default=0)
-    pending_quantity = db.Column(db.Integer)
-    rejection_reason = db.Column(db.Text)
-    margin_blocked = db.Column(db.Numeric(10, 2), default=0.00)
-    order_timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    update_timestamp = db.Column(db.DateTime, onupdate=datetime.utcnow)
-
-
-class SandboxTrades(db.Model):
-    __tablename__ = 'sandbox_trades'
-
-    id = db.Column(db.Integer, primary_key=True)
-    tradeid = db.Column(db.String(50), unique=True, nullable=False)
-    orderid = db.Column(db.String(50), nullable=False)
-    user_id = db.Column(db.String(50), nullable=False)
-    symbol = db.Column(db.String(50), nullable=False)
-    exchange = db.Column(db.String(20), nullable=False)
-    action = db.Column(db.String(10), nullable=False)
-    quantity = db.Column(db.Integer, nullable=False)
-    price = db.Column(db.Numeric(10, 2), nullable=False)  # Execution price
-    product = db.Column(db.String(20), nullable=False)
-    strategy = db.Column(db.String(100))
-    trade_timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-
-
-class SandboxPositions(db.Model):
+class SandboxPosition(Base):
     __tablename__ = 'sandbox_positions'
+    # Same structure as Position
 
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.String(50), nullable=False)
-    symbol = db.Column(db.String(50), nullable=False)
-    exchange = db.Column(db.String(20), nullable=False)
-    product = db.Column(db.String(20), nullable=False)
-    quantity = db.Column(db.Integer, nullable=False)  # Positive=Long, Negative=Short
-    average_price = db.Column(db.Numeric(10, 2), nullable=False)
-    ltp = db.Column(db.Numeric(10, 2))
-    pnl = db.Column(db.Numeric(10, 2), default=0.00)
-    pnl_percent = db.Column(db.Numeric(10, 4), default=0.00)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, onupdate=datetime.utcnow)
-
-    __table_args__ = (
-        db.UniqueConstraint('user_id', 'symbol', 'exchange', 'product'),
-    )
-
-
-class SandboxFunds(db.Model):
-    __tablename__ = 'sandbox_funds'
-
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.String(50), unique=True, nullable=False)
-    total_capital = db.Column(db.Numeric(15, 2), default=10000000.00)  # 1 Crore
-    available_balance = db.Column(db.Numeric(15, 2), default=10000000.00)
-    used_margin = db.Column(db.Numeric(15, 2), default=0.00)
-    realized_pnl = db.Column(db.Numeric(15, 2), default=0.00)
-    unrealized_pnl = db.Column(db.Numeric(15, 2), default=0.00)
-    total_pnl = db.Column(db.Numeric(15, 2), default=0.00)
-    last_reset_date = db.Column(db.DateTime, default=datetime.utcnow)
-    reset_count = db.Column(db.Integer, default=0)
-
-
-class SandboxConfig(db.Model):
-    __tablename__ = 'sandbox_config'
-
-    id = db.Column(db.Integer, primary_key=True)
-    config_key = db.Column(db.String(100), unique=True, nullable=False)
-    config_value = db.Column(db.Text, nullable=False)
-    description = db.Column(db.Text)
-    updated_at = db.Column(db.DateTime, onupdate=datetime.utcnow)
+class SandboxTrade(Base):
+    __tablename__ = 'sandbox_trades'
+    # Same structure as Trade
 ```
 
-### Latency Model
+### Latency Database
 
+**Latency Metrics Table** (`latency_db.py`)
 ```python
-# database/latency_db.py
-class OrderLatency(db.Model):
-    __tablename__ = 'order_latency'
-
-    id = db.Column(db.Integer, primary_key=True)
-    api_type = db.Column(db.String(50), nullable=False)
-    broker = db.Column(db.String(50), nullable=False)
-    user_id = db.Column(db.String(50), nullable=False)
-    request_sent_at = db.Column(db.DateTime, nullable=False)
-    order_acked_at = db.Column(db.DateTime, nullable=False)
-    rtt_ms = db.Column(db.Float, nullable=False)  # Round-trip time in milliseconds
-    request_size = db.Column(db.Integer)
-    response_size = db.Column(db.Integer)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    __table_args__ = (
-        db.Index('idx_latency_broker', 'broker'),
-        db.Index('idx_latency_user', 'user_id'),
-        db.Index('idx_latency_created', 'created_at'),
-    )
+class LatencyMetric(Base):
+    __tablename__ = 'latency_metrics'
+    id = Column(Integer, primary_key=True)
+    order_id = Column(String(50))
+    broker = Column(String(50))
+    operation = Column(String(50))        # place_order/modify_order/cancel_order
+    start_time = Column(DateTime)
+    end_time = Column(DateTime)
+    latency_ms = Column(Float)
+    success = Column(Boolean)
+    error_message = Column(Text)
 ```
 
-### Traffic Log Model
+### Logs Database
 
+**Application Log Table** (`logs_db.py`)
 ```python
-# database/traffic_db.py
-class APILog(db.Model):
-    __tablename__ = 'api_logs'
-
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.String(50))
-    endpoint = db.Column(db.String(200), nullable=False)
-    method = db.Column(db.String(10), nullable=False)
-    status_code = db.Column(db.Integer, nullable=False)
-    request_size = db.Column(db.Integer)
-    response_size = db.Column(db.Integer)
-    processing_time = db.Column(db.Float)
-    ip_address = db.Column(db.String(50))
-    user_agent = db.Column(db.String(500))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-    __table_args__ = (
-        db.Index('idx_apilog_user', 'user_id'),
-        db.Index('idx_apilog_endpoint', 'endpoint'),
-        db.Index('idx_apilog_created', 'created_at'),
-    )
+class ApplicationLog(Base):
+    __tablename__ = 'application_logs'
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    level = Column(String(20))            # DEBUG/INFO/WARNING/ERROR/CRITICAL
+    logger = Column(String(100))
+    message = Column(Text)
+    module = Column(String(100))
+    function = Column(String(100))
+    line_number = Column(Integer)
+    exception = Column(Text)
+    extra_data = Column(JSON)
 ```
 
-## Database Engine Configuration
+### Telegram Database
 
-### SQLAlchemy Setup
-
+**Chat State Table** (`telegram_db.py`)
 ```python
-# database/engine.py
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, scoped_session
-from sqlalchemy.pool import QueuePool
+class TelegramChat(Base):
+    __tablename__ = 'telegram_chats'
+    id = Column(Integer, primary_key=True)
+    chat_id = Column(BigInteger, unique=True, nullable=False)
+    user_id = Column(Integer, ForeignKey('user.id'))
+    username = Column(String(100))
+    is_authorized = Column(Boolean, default=False)
+    notification_enabled = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-def get_engine(database_url: str):
-    """Create SQLAlchemy engine with connection pooling"""
-    return create_engine(
-        database_url,
-        poolclass=QueuePool,
-        pool_size=50,
-        max_overflow=100,
-        pool_pre_ping=True,
-        pool_recycle=3600,
-        echo=False
-    )
-
-# Create engines for each database
-main_engine = get_engine(os.getenv('DATABASE_URL'))
-sandbox_engine = get_engine(os.getenv('SANDBOX_DATABASE_URL'))
-latency_engine = get_engine(os.getenv('LATENCY_DATABASE_URL'))
-logs_engine = get_engine(os.getenv('LOGS_DATABASE_URL'))
-
-# Scoped sessions for thread safety
-MainSession = scoped_session(sessionmaker(bind=main_engine))
-SandboxSession = scoped_session(sessionmaker(bind=sandbox_engine))
-LatencySession = scoped_session(sessionmaker(bind=latency_engine))
-LogsSession = scoped_session(sessionmaker(bind=logs_engine))
+class TelegramMessage(Base):
+    __tablename__ = 'telegram_messages'
+    id = Column(Integer, primary_key=True)
+    chat_id = Column(BigInteger, ForeignKey('telegram_chats.chat_id'))
+    message_type = Column(String(50))     # order/alert/error
+    content = Column(Text)
+    sent_at = Column(DateTime, default=datetime.utcnow)
+    delivered = Column(Boolean, default=False)
 ```
 
-## Security Features
+## Caching Architecture
 
-### 1. Encryption at Rest
+### TTLCache Implementation
+
+OpenAlgo uses `cachetools.TTLCache` for high-performance in-memory caching:
 
 ```python
-# Fernet encryption for sensitive data
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cachetools import TTLCache
 
-def get_encryption_key() -> bytes:
-    """Derive encryption key from APP_KEY"""
-    app_key = os.getenv('APP_KEY').encode()
-    salt = os.getenv('API_KEY_PEPPER', 'default_salt').encode()
+# API Key Cache - 10 hour TTL for valid keys
+api_key_cache = TTLCache(maxsize=1000, ttl=36000)
 
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=480000
-    )
-    return base64.urlsafe_b64encode(kdf.derive(app_key))
+# Invalid Key Cache - 5 minute TTL to prevent brute force
+invalid_key_cache = TTLCache(maxsize=10000, ttl=300)
 
-def encrypt_token(token: str) -> str:
-    """Encrypt sensitive token using Fernet"""
-    f = Fernet(get_encryption_key())
-    return f.encrypt(token.encode()).decode()
+# Symbol Cache - Session-based expiry
+symbol_cache = TTLCache(maxsize=50000, ttl=get_ttl_to_session_end())
 
-def decrypt_token(encrypted: str) -> str:
-    """Decrypt sensitive token"""
-    f = Fernet(get_encryption_key())
-    return f.decrypt(encrypted.encode()).decode()
+# Token Cache - 24 hour TTL
+token_cache = TTLCache(maxsize=500, ttl=86400)
 ```
 
-### 2. Password Hashing
+### Session-Based Cache Expiry
+
+Caches expire at 3:00 AM IST daily (market session boundary):
 
 ```python
-# Argon2 hashing with pepper
-from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
+def get_ttl_to_session_end():
+    """Calculate seconds until 3:00 AM IST"""
+    ist = pytz.timezone('Asia/Kolkata')
+    now = datetime.now(ist)
 
-class PasswordManager:
-    def __init__(self):
-        self.hasher = PasswordHasher()
-        self.pepper = os.getenv('API_KEY_PEPPER', '')
+    # Next 3:00 AM IST
+    next_session_end = now.replace(hour=3, minute=0, second=0, microsecond=0)
+    if now.hour >= 3:
+        next_session_end += timedelta(days=1)
 
-    def hash_password(self, password: str) -> str:
-        return self.hasher.hash(password + self.pepper)
+    return (next_session_end - now).total_seconds()
+```
 
-    def verify_password(self, password: str, hash: str) -> bool:
-        try:
-            self.hasher.verify(hash, password + self.pepper)
-            return True
-        except VerifyMismatchError:
-            return False
+### Cache Flow Diagram
+
+```
+API Request
+    |
+    v
++------------------+
+| Check API Key    |
+| Cache (10hr)     |
++--------+---------+
+         |
+    Cache Hit? ---Yes---> Return Cached Result
+         |
+         No
+         |
+         v
++------------------+
+| Check Invalid    |
+| Cache (5min)     |
++--------+---------+
+         |
+    In Invalid? ---Yes---> Return 401 Immediately
+         |
+         No
+         |
+         v
++------------------+
+| Database Query   |
++--------+---------+
+         |
+         v
++------------------+
+| Update Cache     |
+| (Valid/Invalid)  |
++------------------+
 ```
 
 ## Database Operations
 
-### CRUD Operations Pattern
+### CRUD Functions
+
+Each database module provides standard CRUD operations:
 
 ```python
-# database/auth_db.py - Example operations
+# database/user_db.py
+def create_user(username, email, password_hash):
+    """Create new user record"""
 
-def get_user_auth(user_id: str, broker: str) -> Optional[Auth]:
-    """Get authentication record for user and broker"""
-    return Auth.query.filter_by(
-        user_id=user_id,
-        broker=broker,
-        is_revoked=False
-    ).first()
+def get_user_by_username(username):
+    """Retrieve user by username"""
 
-def save_auth_token(user_id: str, broker: str, auth_token: str, feed_token: str = None):
-    """Save or update authentication token"""
-    existing = get_user_auth(user_id, broker)
+def get_user_by_api_key(api_key):
+    """Retrieve user associated with API key"""
 
-    if existing:
-        existing.auth = encrypt_token(auth_token)
-        existing.feed_token = encrypt_token(feed_token) if feed_token else None
-    else:
-        new_auth = Auth(
-            user_id=user_id,
-            broker=broker,
-            auth=encrypt_token(auth_token),
-            feed_token=encrypt_token(feed_token) if feed_token else None
-        )
-        db.session.add(new_auth)
+def update_user(user_id, **kwargs):
+    """Update user attributes"""
 
-    db.session.commit()
+def delete_user(user_id):
+    """Soft delete user (set is_active=False)"""
 ```
 
-## Migration System
-
-### Migration Scripts
-
-```
-upgrade/
-├── migrate_user_db.py
-├── migrate_auth_db.py
-├── migrate_sandbox.py
-├── migrate_order_mode.py
-├── migrate_telegram.py
-└── migrate_latency.py
-```
-
-### Example Migration
+### Transaction Management
 
 ```python
-# upgrade/migrate_sandbox.py
-from sqlalchemy import text
+from contextlib import contextmanager
 
-def run_migration(engine):
-    """Apply sandbox database migration"""
-    with engine.connect() as conn:
-        # Create tables
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS sandbox_orders (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                orderid VARCHAR(50) UNIQUE NOT NULL,
-                user_id VARCHAR(50) NOT NULL,
-                symbol VARCHAR(50) NOT NULL,
-                exchange VARCHAR(20) NOT NULL,
-                action VARCHAR(10) NOT NULL,
-                quantity INTEGER NOT NULL,
-                price DECIMAL(10, 2),
-                trigger_price DECIMAL(10, 2),
-                price_type VARCHAR(20) NOT NULL,
-                product VARCHAR(20) NOT NULL,
-                order_status VARCHAR(20) DEFAULT 'open',
-                margin_blocked DECIMAL(10, 2) DEFAULT 0.00,
-                order_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """))
+@contextmanager
+def get_db_session(database='main'):
+    """Provide transactional scope around operations"""
+    session = Session(get_engine(database))
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
-        # Create indexes
-        conn.execute(text("""
-            CREATE INDEX IF NOT EXISTS idx_orders_user
-            ON sandbox_orders(user_id)
-        """))
-
-        conn.commit()
-
-if __name__ == '__main__':
-    run_migration(sandbox_engine)
+# Usage
+with get_db_session('main') as session:
+    order = Order(symbol='RELIANCE', quantity=100)
+    session.add(order)
+    # Auto-commit on context exit
 ```
 
-## Entity Relationship Diagram
+### Bulk Operations
 
-```mermaid
-erDiagram
-    User ||--o{ ApiKeys : has
-    User ||--o{ Auth : authenticates
-    User ||--o{ Strategy : creates
-    Strategy ||--|{ StrategySymbolMapping : contains
-    User ||--o{ TelegramUser : links
-    TelegramUser ||--o{ CommandLog : executes
-    ApiKeys ||--o{ PendingOrder : generates
-    User ||--o{ SandboxFunds : owns
-    SandboxFunds ||--o{ SandboxOrders : funds
-    SandboxOrders ||--o{ SandboxTrades : generates
-    SandboxTrades ||--o{ SandboxPositions : updates
+```python
+def bulk_insert_symbols(symbols_data, broker):
+    """Efficiently insert many symbols"""
+    with get_db_session() as session:
+        session.bulk_insert_mappings(Symbol, symbols_data)
+
+def bulk_update_positions(positions_data):
+    """Update multiple positions atomically"""
+    with get_db_session() as session:
+        session.bulk_update_mappings(Position, positions_data)
 ```
 
-## Performance Optimization
+## Database Initialization
 
-### 1. Indexing Strategy
-- Primary keys on all tables
-- Foreign key indexes for joins
-- Composite indexes for frequent queries
-- Covering indexes for read-heavy operations
+### Startup Sequence
 
-### 2. Connection Pooling
-- Base pool size: 50 connections
-- Max overflow: 100 connections
-- Connection recycling: 1 hour
-- Pre-ping for connection validation
+```python
+# database/db_init.py
+def init_databases():
+    """Initialize all databases on application startup"""
 
-### 3. Query Optimization
-- Eager loading for relationships
-- Bulk operations for inserts/updates
-- Pagination for large result sets
-- Query result caching
+    # 1. Create database directories
+    os.makedirs('databases', exist_ok=True)
 
-### Performance Metrics
+    # 2. Initialize engines for each database
+    for db_name, url in DATABASE_URLS.items():
+        engine = create_engine(url, **get_engine_options(url))
+        engines[db_name] = engine
 
-| Operation | Target | Typical |
-|-----------|--------|---------|
-| Single record fetch | < 10ms | ~5ms |
-| Paginated list (50 records) | < 50ms | ~30ms |
-| Bulk insert (100 records) | < 100ms | ~60ms |
-| Complex join query | < 100ms | ~50ms |
+    # 3. Create all tables
+    for db_name, engine in engines.items():
+        Base.metadata.create_all(engine)
 
-## Backup and Recovery
+    # 4. Run migrations if needed
+    run_pending_migrations()
 
-### Backup Strategy
+    # 5. Initialize caches
+    warm_symbol_cache()
+    warm_api_key_cache()
+```
+
+### Migration Support
+
+```python
+def run_pending_migrations():
+    """Apply any pending database migrations"""
+    # Check current schema version
+    current_version = get_schema_version()
+
+    # Apply migrations sequentially
+    for migration in get_pending_migrations(current_version):
+        apply_migration(migration)
+        update_schema_version(migration.version)
+```
+
+## Query Patterns
+
+### Optimized Queries
+
+```python
+# Efficient symbol lookup with caching
+def get_symbol_token(symbol, exchange, broker):
+    cache_key = f"{broker}:{exchange}:{symbol}"
+
+    if cache_key in symbol_cache:
+        return symbol_cache[cache_key]
+
+    with get_db_session() as session:
+        result = session.query(Symbol.token).filter(
+            Symbol.symbol == symbol,
+            Symbol.exchange == exchange,
+            Symbol.broker == broker
+        ).scalar()
+
+        symbol_cache[cache_key] = result
+        return result
+
+# Paginated order history
+def get_order_history(user_id, page=1, per_page=50):
+    with get_db_session() as session:
+        return session.query(Order)\
+            .filter(Order.user_id == user_id)\
+            .order_by(Order.placed_at.desc())\
+            .offset((page - 1) * per_page)\
+            .limit(per_page)\
+            .all()
+```
+
+### Aggregation Queries
+
+```python
+# Daily P&L calculation
+def get_daily_pnl(user_id, date):
+    with get_db_session() as session:
+        return session.query(
+            func.sum(Trade.quantity * Trade.price).label('turnover'),
+            func.sum(case(
+                (Trade.action == 'SELL', Trade.quantity * Trade.price),
+                else_=-Trade.quantity * Trade.price
+            )).label('realized_pnl')
+        ).filter(
+            Trade.user_id == user_id,
+            func.date(Trade.traded_at) == date
+        ).first()
+```
+
+## Performance Considerations
+
+### Index Strategy
+
+```python
+# Composite indexes for common queries
+__table_args__ = (
+    Index('ix_orders_user_status', 'user_id', 'status'),
+    Index('ix_orders_symbol_date', 'symbol', 'placed_at'),
+    Index('ix_trades_user_date', 'user_id', 'traded_at'),
+)
+```
+
+### Connection Health
+
+```python
+# PostgreSQL connection health check
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,      # Verify connections before use
+    pool_recycle=1800,       # Recycle connections every 30 min
+)
+```
+
+### Read Replicas (Production)
+
+```python
+# Optional read replica configuration
+WRITE_DATABASE_URL = os.getenv('DATABASE_URL')
+READ_DATABASE_URL = os.getenv('READ_DATABASE_URL', WRITE_DATABASE_URL)
+
+def get_read_session():
+    """Get session for read-only operations"""
+    return Session(read_engine)
+
+def get_write_session():
+    """Get session for write operations"""
+    return Session(write_engine)
+```
+
+## Environment Configuration
 
 ```bash
-# SQLite backup
-sqlite3 /var/python/openalgo/db/openalgo.db ".backup ${BACKUP_DIR}/openalgo_${DATE}.db"
+# SQLite (Development)
+DATABASE_URL=sqlite:///databases/openalgo.db
 
-# PostgreSQL backup
-pg_dump openalgo > ${BACKUP_DIR}/openalgo_${DATE}.sql
+# PostgreSQL (Production)
+DATABASE_URL=postgresql://user:pass@localhost:5432/openalgo
+SANDBOX_DATABASE_URL=postgresql://user:pass@localhost:5432/openalgo_sandbox
+LATENCY_DATABASE_URL=postgresql://user:pass@localhost:5432/openalgo_latency
+LOGS_DATABASE_URL=postgresql://user:pass@localhost:5432/openalgo_logs
+TELEGRAM_DATABASE_URL=postgresql://user:pass@localhost:5432/openalgo_telegram
+
+# Connection Pool Settings
+DB_POOL_SIZE=50
+DB_MAX_OVERFLOW=100
+DB_POOL_TIMEOUT=30
 ```
 
-### Recovery Procedures
+## Related Documentation
 
-1. Stop application
-2. Restore database from backup
-3. Verify data integrity
-4. Restart application
-5. Validate connections
-
-## Future Enhancements
-
-1. **Read Replicas**: Separate read/write for high-traffic scenarios
-2. **Sharding**: User-based sharding for horizontal scaling
-3. **Time-Series DB**: TimescaleDB for tick data storage
-4. **Caching Layer**: Redis integration for frequently accessed data
-5. **Audit Trail**: Complete audit logging for compliance
-
-## Conclusion
-
-The OpenAlgo database layer provides a robust, secure, and scalable foundation for the trading platform. With 4 separate databases for clean isolation, comprehensive models covering all aspects from user management to trading operations, encrypted storage for sensitive data, and optimized performance through connection pooling and indexing, it ensures reliable data persistence for algorithmic trading operations.
+- [Authentication Platform](./06_authentication_platform.md) - Token encryption and API key management
+- [Broker Integration](./03_broker_integration.md) - Symbol mapping and token storage
+- [Logging System](./10_logging_system.md) - Database logging configuration
+- [Sandbox Architecture](./14_sandbox_architecture.md) - Paper trading database isolation

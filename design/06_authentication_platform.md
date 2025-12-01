@@ -1,782 +1,660 @@
-# OpenAlgo Authentication & Security Platform
+# Authentication & Security Platform
 
-## Executive Summary
+OpenAlgo implements a multi-layered security architecture with Argon2 password hashing, Fernet token encryption, intelligent API key caching, and session management with IST timezone awareness.
 
-OpenAlgo implements a comprehensive multi-layered security architecture with authentication mechanisms including session-based login, API key authentication, TOTP-based two-factor authentication, and secure password reset via email or TOTP. The platform features robust encryption, secure session management, and extensive security controls.
+## Security Architecture Overview
 
-## Authentication Architecture
-
-### System Overview
-
-```mermaid
-graph TB
-    subgraph "Authentication Methods"
-        WebLogin[Web UI Login]
-        APIKey[API Key Auth]
-        TOTPAuth[TOTP 2FA]
-        EmailAuth[Email Verification]
-    end
-
-    subgraph "Security Layers"
-        Argon2[Argon2 Hashing]
-        Fernet[Fernet Encryption]
-        SessionMgmt[Session Management]
-        CSRF[CSRF Protection]
-    end
-
-    subgraph "Password Reset"
-        TOTPReset[TOTP Reset]
-        EmailReset[Email Reset]
-        SMTPConfig[SMTP Configuration]
-    end
-
-    subgraph "UI Features"
-        ThemeSystem[Theme System]
-        DarkMode[Dark/Light Mode]
-        LocalStorage[LocalStorage]
-    end
-
-    WebLogin --> Argon2
-    WebLogin --> SessionMgmt
-    APIKey --> Argon2
-    APIKey --> Fernet
-    TOTPAuth --> TOTPReset
-    EmailAuth --> EmailReset
-    EmailReset --> SMTPConfig
-    WebLogin --> CSRF
-    ThemeSystem --> DarkMode
-    DarkMode --> LocalStorage
+```
++---------------------------------------------------------------------+
+|                         Security Layers                              |
++---------------------------------------------------------------------+
+|  Layer 1: Password Security (Argon2 + Pepper)                       |
+|  Layer 2: Token Encryption (Fernet AES-128)                         |
+|  Layer 3: API Key Authentication (SHA-256 + Intelligent Cache)      |
+|  Layer 4: Session Management (IST 3:00 AM Expiry)                   |
+|  Layer 5: Rate Limiting (10 orders/sec, 50 API calls/sec)          |
++---------------------------------------------------------------------+
 ```
 
-## Core Authentication Mechanisms
+## Password Security
 
-### 1. Web UI Session Authentication
+### Argon2 Implementation
 
-#### Login Flow
-```python
-# blueprints/auth.py
-@auth_bp.route('/login', methods=['POST'])
-def login():
-    username = request.form.get('username')
-    password = request.form.get('password')
-
-    # Authenticate user with Argon2
-    user = authenticate_user(username, password)
-
-    if user:
-        # Create session
-        session['user'] = username
-        session['user_id'] = user.id
-        session.permanent = True
-
-        # Set session expiry (daily at 3:30 AM IST)
-        app.permanent_session_lifetime = calculate_session_lifetime()
-
-        return redirect('/dashboard')
-```
-
-#### Password Security
-- **Hashing Algorithm**: Argon2id (winner of Password Hashing Competition)
-- **Pepper**: Additional secret added before hashing
-- **Salt**: Unique per password (handled by Argon2)
-- **Parameters**: Memory-hard to prevent GPU attacks
+OpenAlgo uses Argon2id (winner of the Password Hashing Competition) with an additional pepper for defense-in-depth:
 
 ```python
-# database/auth_db.py
+# services/auth_service.py
+import argon2
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
 
+# Argon2 configuration
 ph = PasswordHasher(
-    time_cost=2,      # Number of iterations
-    memory_cost=65536, # Memory usage in KB
-    parallelism=1,     # Number of parallel threads
+    time_cost=3,          # Number of iterations
+    memory_cost=65536,    # 64 MB memory usage
+    parallelism=4,        # Parallel threads
+    hash_len=32,          # Output hash length
+    salt_len=16           # Salt length
 )
 
 def hash_password(password: str) -> str:
+    """Hash password with Argon2 and pepper"""
     pepper = os.getenv('API_KEY_PEPPER', '')
-    return ph.hash(password + pepper)
+    peppered_password = password + pepper
+    return ph.hash(peppered_password)
 
 def verify_password(password: str, hash: str) -> bool:
+    """Verify password against stored hash"""
     pepper = os.getenv('API_KEY_PEPPER', '')
+    peppered_password = password + pepper
+
     try:
-        ph.verify(hash, password + pepper)
-        # Rehash if needed (Argon2 parameters changed)
+        ph.verify(hash, peppered_password)
+
+        # Check if rehash needed (params changed)
         if ph.check_needs_rehash(hash):
-            return True, ph.hash(password + pepper)
-        return True, None
-    except VerifyMismatchError:
-        return False, None
+            return 'NEEDS_REHASH'
+        return True
+    except argon2.exceptions.VerifyMismatchError:
+        return False
+    except argon2.exceptions.InvalidHash:
+        return False
 ```
 
-### 2. API Key Authentication
+### Password Requirements
 
-#### Key Generation and Storage
 ```python
-# database/auth_db.py
-class ApiKeys(Base):
-    __tablename__ = 'api_keys'
+def validate_password_strength(password: str) -> tuple[bool, str]:
+    """Enforce password complexity requirements"""
+    if len(password) < 8:
+        return False, "Password must be at least 8 characters"
 
-    id = Column(Integer, primary_key=True)
-    user_id = Column(String, nullable=False, unique=True)
-    api_key_hash = Column(Text, nullable=False)      # Argon2 hash for verification
-    api_key_encrypted = Column(Text, nullable=False)  # Fernet encrypted for display
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    last_used = Column(DateTime(timezone=True))
-    is_active = Column(Boolean, default=True)
+    if not re.search(r'[A-Z]', password):
+        return False, "Password must contain uppercase letter"
 
-def generate_api_key():
-    # Generate secure random key
-    raw_key = secrets.token_hex(32)  # 64 characters
+    if not re.search(r'[a-z]', password):
+        return False, "Password must contain lowercase letter"
 
-    # Hash for verification
-    pepper = os.getenv('API_KEY_PEPPER', '')
-    key_hash = ph.hash(raw_key + pepper)
+    if not re.search(r'\d', password):
+        return False, "Password must contain a digit"
 
-    # Encrypt for storage/retrieval
-    cipher_suite = Fernet(get_fernet_key())
-    key_encrypted = cipher_suite.encrypt(raw_key.encode()).decode()
+    if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
+        return False, "Password must contain special character"
 
-    return raw_key, key_hash, key_encrypted
+    return True, "Password meets requirements"
 ```
 
-#### API Key Verification
+## Token Encryption
+
+### Fernet Implementation
+
+Broker tokens are encrypted at rest using Fernet (AES-128-CBC with HMAC-SHA256):
+
 ```python
-# restx_api/auth.py
-def verify_api_key(provided_key: str) -> Optional[str]:
-    # Get all active API keys
-    api_keys = get_active_api_keys()
-    pepper = os.getenv('API_KEY_PEPPER', '')
-
-    for api_key_record in api_keys:
-        try:
-            # Verify against hash
-            ph.verify(api_key_record.api_key_hash, provided_key + pepper)
-
-            # Update last used timestamp
-            update_api_key_last_used(api_key_record.id)
-
-            return api_key_record.user_id
-        except VerifyMismatchError:
-            continue
-
-    return None
-```
-
-### 3. TOTP Two-Factor Authentication
-
-#### TOTP Setup
-```python
-# database/user_db.py
-import pyotp
-import qrcode
-import io
+# services/encryption_service.py
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 import base64
 
-def setup_totp(user_id: int) -> Dict:
-    # Generate secret
-    secret = pyotp.random_base32()
+def derive_encryption_key(secret: str, salt: bytes = None) -> tuple[bytes, bytes]:
+    """Derive Fernet key from secret using PBKDF2"""
+    if salt is None:
+        salt = os.urandom(16)
 
-    # Create TOTP object
-    totp = pyotp.TOTP(secret)
-
-    # Generate provisioning URI
-    provisioning_uri = totp.provisioning_uri(
-        name=user.email,
-        issuer_name='OpenAlgo'
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100000,  # OWASP recommended minimum
     )
 
-    # Generate QR code
-    qr = qrcode.QRCode(version=1, box_size=10, border=5)
-    qr.add_data(provisioning_uri)
-    qr.make(fit=True)
+    key = base64.urlsafe_b64encode(kdf.derive(secret.encode()))
+    return key, salt
 
-    img = qr.make_image(fill_color="black", back_color="white")
-    buf = io.BytesIO()
-    img.save(buf, format='PNG')
+def get_fernet_instance() -> Fernet:
+    """Get Fernet instance with derived key"""
+    secret = os.getenv('FERNET_SECRET_KEY')
+    salt = base64.b64decode(os.getenv('FERNET_SALT'))
+    key, _ = derive_encryption_key(secret, salt)
+    return Fernet(key)
 
-    # Store encrypted secret
-    encrypted_secret = encrypt_totp_secret(secret)
-    update_user_totp_secret(user_id, encrypted_secret)
+def encrypt_token(token: str) -> str:
+    """Encrypt broker token for database storage"""
+    if not token:
+        return None
+    fernet = get_fernet_instance()
+    return fernet.encrypt(token.encode()).decode()
 
-    return {
-        'qr_code': base64.b64encode(buf.getvalue()).decode(),
-        'secret': secret,  # For manual entry
-        'provisioning_uri': provisioning_uri
+def decrypt_token(encrypted_token: str) -> str:
+    """Decrypt broker token from database"""
+    if not encrypted_token:
+        return None
+    fernet = get_fernet_instance()
+    return fernet.decrypt(encrypted_token.encode()).decode()
+```
+
+### Token Storage
+
+```python
+# database/auth_db.py
+def store_broker_tokens(user_id: int, broker: str, tokens: dict):
+    """Store encrypted broker tokens"""
+    encrypted_tokens = {
+        'access_token': encrypt_token(tokens.get('access_token')),
+        'refresh_token': encrypt_token(tokens.get('refresh_token')),
+        'feed_token': encrypt_token(tokens.get('feed_token')),
     }
-```
 
-#### TOTP Verification
-```python
-def verify_totp(user_id: int, token: str) -> bool:
-    # Get encrypted secret
-    encrypted_secret = get_user_totp_secret(user_id)
+    with get_db_session() as session:
+        auth = session.query(AuthToken).filter(
+            AuthToken.user_id == user_id,
+            AuthToken.broker == broker
+        ).first()
 
-    # Decrypt secret
-    secret = decrypt_totp_secret(encrypted_secret)
-
-    # Verify token
-    totp = pyotp.TOTP(secret)
-
-    # Allow 1 window of tolerance (30 seconds before/after)
-    return totp.verify(token, valid_window=1)
-```
-
-## Password Reset System
-
-### Dual-Mode Password Reset
-
-The system offers two methods for password recovery:
-
-#### 1. TOTP-Based Reset (Always Available)
-```python
-# blueprints/auth.py
-@auth_bp.route('/reset_password_totp', methods=['POST'])
-def reset_password_totp():
-    email = request.form.get('email')
-    totp_code = request.form.get('totp_code')
-
-    # Get user by email
-    user = get_user_by_email(email)
-    if not user:
-        return error_response()
-
-    # Verify TOTP
-    if verify_totp(user.id, totp_code):
-        # Generate reset token
-        reset_token = generate_reset_token(user.id)
-        session['reset_token'] = reset_token
-        session['reset_user_id'] = user.id
-
-        return redirect('/reset_password_form')
-
-    return error_response("Invalid TOTP code")
-```
-
-#### 2. Email-Based Reset (Requires SMTP)
-```python
-# blueprints/auth.py
-@auth_bp.route('/reset_password_email', methods=['POST'])
-@limiter.limit("3 per hour")  # Rate limiting
-def reset_password_email():
-    email = request.form.get('email')
-
-    # Check SMTP configuration
-    if not is_smtp_configured():
-        return error_response("Email reset not available. Use TOTP method.")
-
-    # Get user by email
-    user = get_user_by_email(email)
-    if not user:
-        # Don't reveal if email exists
-        return success_response("If email exists, reset link sent")
-
-    # Generate secure token
-    token = generate_secure_token()
-    store_reset_token(user.id, token, expires_in=3600)  # 1 hour expiry
-
-    # Send email
-    reset_link = f"{HOST_SERVER}/reset_password?token={token}"
-    send_reset_email(email, reset_link)
-
-    return success_response("Reset link sent to email")
-```
-
-## SMTP Configuration System
-
-### Database Schema for SMTP Settings
-```python
-# database/settings_db.py
-class SMTPSettings(Base):
-    __tablename__ = 'smtp_settings'
-
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey('users.id'), unique=True)
-    smtp_server = Column(String(255), nullable=False)
-    smtp_port = Column(Integer, nullable=False)
-    smtp_username = Column(String(255), nullable=False)
-    smtp_password_encrypted = Column(Text, nullable=False)  # Fernet encrypted
-    use_tls = Column(Boolean, default=True)
-    use_ssl = Column(Boolean, default=False)
-    from_email = Column(String(255), nullable=False)
-    from_name = Column(String(255), default='OpenAlgo')
-    helo_hostname = Column(String(255))
-    is_active = Column(Boolean, default=True)
-    last_test_at = Column(DateTime(timezone=True))
-    last_test_success = Column(Boolean)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-```
-
-### SMTP Configuration Interface
-```python
-# blueprints/profile.py
-@profile_bp.route('/smtp_config', methods=['GET', 'POST'])
-@login_required
-def smtp_config():
-    if request.method == 'POST':
-        settings = {
-            'smtp_server': request.form.get('smtp_server'),
-            'smtp_port': int(request.form.get('smtp_port')),
-            'smtp_username': request.form.get('smtp_username'),
-            'smtp_password': encrypt_password(request.form.get('smtp_password')),
-            'use_tls': request.form.get('use_tls') == 'on',
-            'use_ssl': request.form.get('use_ssl') == 'on',
-            'from_email': request.form.get('from_email'),
-            'helo_hostname': request.form.get('helo_hostname', 'localhost')
-        }
-
-        save_smtp_settings(current_user.id, settings)
-        return success_response("SMTP settings saved")
-
-    return render_template('smtp_config.html')
-```
-
-### Email Service Implementation
-```python
-# utils/email_utils.py
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-
-class EmailService:
-    def __init__(self, smtp_settings):
-        self.settings = smtp_settings
-        self.password = decrypt_password(smtp_settings.smtp_password_encrypted)
-
-    def send_email(self, to_email: str, subject: str, body: str, html_body: str = None):
-        msg = MIMEMultipart('alternative')
-        msg['Subject'] = subject
-        msg['From'] = f"{self.settings.from_name} <{self.settings.from_email}>"
-        msg['To'] = to_email
-
-        # Add text part
-        msg.attach(MIMEText(body, 'plain'))
-
-        # Add HTML part if provided
-        if html_body:
-            msg.attach(MIMEText(html_body, 'html'))
-
-        # Connect and send
-        if self.settings.use_ssl:
-            server = smtplib.SMTP_SSL(
-                self.settings.smtp_server,
-                self.settings.smtp_port
-            )
+        if auth:
+            for key, value in encrypted_tokens.items():
+                setattr(auth, key, value)
+            auth.updated_at = datetime.utcnow()
         else:
-            server = smtplib.SMTP(
-                self.settings.smtp_server,
-                self.settings.smtp_port
+            auth = AuthToken(
+                user_id=user_id,
+                broker=broker,
+                **encrypted_tokens
             )
-            if self.settings.use_tls:
-                server.starttls()
+            session.add(auth)
 
-        # Authenticate
-        server.login(self.settings.smtp_username, self.password)
+def get_broker_tokens(user_id: int, broker: str) -> dict:
+    """Retrieve and decrypt broker tokens"""
+    with get_db_session() as session:
+        auth = session.query(AuthToken).filter(
+            AuthToken.user_id == user_id,
+            AuthToken.broker == broker
+        ).first()
 
-        # Send email
-        server.send_message(msg)
-        server.quit()
+        if not auth:
+            return None
+
+        return {
+            'access_token': decrypt_token(auth.access_token),
+            'refresh_token': decrypt_token(auth.refresh_token),
+            'feed_token': decrypt_token(auth.feed_token),
+        }
 ```
 
-## Theme System Implementation
+## API Key Authentication
 
-### Frontend Theme Management
+### Key Generation
 
-#### Theme Storage and Application
-```javascript
-// static/js/theme.js
-class ThemeManager {
-    constructor() {
-        this.themes = ['light', 'dark', 'cupcake', 'bumblebee', 'emerald',
-                      'corporate', 'synthwave', 'retro', 'cyberpunk', 'valentine',
-                      'halloween', 'garden', 'forest', 'aqua', 'lofi', 'pastel',
-                      'fantasy', 'wireframe', 'black', 'luxury', 'dracula'];
-        this.defaultTheme = 'light';
-        this.init();
-    }
-
-    init() {
-        // Apply saved theme immediately (before page render)
-        const savedTheme = this.getSavedTheme();
-        this.applyTheme(savedTheme);
-
-        // Setup theme toggle buttons
-        this.setupThemeToggle();
-    }
-
-    getSavedTheme() {
-        return localStorage.getItem('theme') || this.defaultTheme;
-    }
-
-    applyTheme(theme) {
-        // Apply to HTML element for DaisyUI
-        document.documentElement.setAttribute('data-theme', theme);
-
-        // Save to localStorage
-        localStorage.setItem('theme', theme);
-
-        // Update UI elements
-        this.updateThemeUI(theme);
-    }
-
-    setupThemeToggle() {
-        // Theme toggle button in navbar
-        const themeToggle = document.getElementById('theme-toggle');
-        if (themeToggle) {
-            themeToggle.addEventListener('click', () => {
-                const currentTheme = this.getSavedTheme();
-                const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-                this.applyTheme(newTheme);
-            });
-        }
-
-        // Theme dropdown for all themes
-        const themeDropdown = document.getElementById('theme-dropdown');
-        if (themeDropdown) {
-            this.themes.forEach(theme => {
-                const option = document.createElement('option');
-                option.value = theme;
-                option.textContent = theme.charAt(0).toUpperCase() + theme.slice(1);
-                if (theme === this.getSavedTheme()) {
-                    option.selected = true;
-                }
-                themeDropdown.appendChild(option);
-            });
-
-            themeDropdown.addEventListener('change', (e) => {
-                this.applyTheme(e.target.value);
-            });
-        }
-    }
-
-    updateThemeUI(theme) {
-        // Update icon
-        const icon = document.querySelector('#theme-toggle i');
-        if (icon) {
-            if (theme === 'dark') {
-                icon.classList.remove('fa-moon');
-                icon.classList.add('fa-sun');
-            } else {
-                icon.classList.remove('fa-sun');
-                icon.classList.add('fa-moon');
-            }
-        }
-
-        // Update charts if they exist
-        if (window.updateChartsTheme) {
-            window.updateChartsTheme(theme);
-        }
-    }
-}
-
-// Initialize on DOM ready
-document.addEventListener('DOMContentLoaded', () => {
-    new ThemeManager();
-});
-```
-
-#### DaisyUI Theme Configuration
-```javascript
-// tailwind.config.js
-module.exports = {
-    content: ["./templates/**/*.html", "./static/js/**/*.js"],
-    theme: {
-        extend: {
-            // Custom theme extensions
-        }
-    },
-    plugins: [
-        require("daisyui")
-    ],
-    daisyui: {
-        themes: [
-            "light",
-            "dark",
-            "cupcake",
-            "bumblebee",
-            "emerald",
-            "corporate",
-            "synthwave",
-            "retro",
-            "cyberpunk",
-            "valentine",
-            "halloween",
-            "garden",
-            "forest",
-            "aqua",
-            "lofi",
-            "pastel",
-            "fantasy",
-            "wireframe",
-            "black",
-            "luxury",
-            "dracula",
-            {
-                openalgo: {  // Custom theme
-                    "primary": "#0ea5e9",
-                    "secondary": "#6366f1",
-                    "accent": "#f59e0b",
-                    "neutral": "#1e293b",
-                    "base-100": "#ffffff",
-                    "info": "#3b82f6",
-                    "success": "#10b981",
-                    "warning": "#f59e0b",
-                    "error": "#ef4444",
-                }
-            }
-        ],
-        darkTheme: "dark",
-        base: true,
-        styled: true,
-        utils: true,
-        logs: false
-    }
-}
-```
-
-### Backend Theme Support
 ```python
-# blueprints/profile.py
-@profile_bp.route('/save_preferences', methods=['POST'])
-@login_required
-def save_preferences():
-    preferences = {
-        'theme': request.form.get('theme', 'light'),
-        'language': request.form.get('language', 'en'),
-        'timezone': request.form.get('timezone', 'Asia/Kolkata'),
-        'notifications': request.form.get('notifications') == 'on'
-    }
+# services/apikey_service.py
+import secrets
+import hashlib
 
-    save_user_preferences(current_user.id, preferences)
-    return jsonify({'status': 'success'})
+def generate_api_key() -> tuple[str, str]:
+    """Generate new API key and its hash"""
+    # Generate 32-byte random key
+    raw_key = secrets.token_urlsafe(32)
+
+    # Create hash for storage (never store raw key)
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+
+    return raw_key, key_hash
+
+def create_api_key(user_id: int, name: str = None) -> str:
+    """Create and store new API key for user"""
+    raw_key, key_hash = generate_api_key()
+
+    with get_db_session() as session:
+        api_key = ApiKey(
+            user_id=user_id,
+            api_key=key_hash,  # Store hash only
+            name=name or f"Key-{datetime.now().strftime('%Y%m%d')}",
+            created_at=datetime.utcnow(),
+            is_active=True
+        )
+        session.add(api_key)
+
+    # Return raw key to user (only time it's visible)
+    return raw_key
+```
+
+### Intelligent Caching System
+
+OpenAlgo implements a two-tier cache to optimize authentication while preventing brute force attacks:
+
+```python
+# services/auth_cache.py
+from cachetools import TTLCache
+
+# Valid API key cache: 10 hour TTL
+# Reduces database queries for legitimate requests
+api_key_cache = TTLCache(maxsize=1000, ttl=36000)
+
+# Invalid API key cache: 5 minute TTL
+# Blocks repeated invalid key attempts without DB hit
+invalid_key_cache = TTLCache(maxsize=10000, ttl=300)
+
+def verify_api_key(api_key: str) -> dict | None:
+    """Verify API key with intelligent caching"""
+
+    # 1. Check invalid cache first (fast rejection)
+    if api_key in invalid_key_cache:
+        return None
+
+    # 2. Check valid cache
+    if api_key in api_key_cache:
+        return api_key_cache[api_key]
+
+    # 3. Database lookup
+    key_hash = hashlib.sha256(api_key.encode()).hexdigest()
+
+    with get_db_session() as session:
+        api_key_record = session.query(ApiKey).filter(
+            ApiKey.api_key == key_hash,
+            ApiKey.is_active == True
+        ).first()
+
+        if api_key_record:
+            # Cache valid key with user data
+            user_data = {
+                'user_id': api_key_record.user_id,
+                'key_id': api_key_record.id,
+                'broker': get_user_broker(api_key_record.user_id)
+            }
+            api_key_cache[api_key] = user_data
+
+            # Update last used timestamp
+            api_key_record.last_used = datetime.utcnow()
+
+            return user_data
+        else:
+            # Cache invalid key to prevent repeated lookups
+            invalid_key_cache[api_key] = True
+            return None
+```
+
+### Cache Flow Diagram
+
+```
+API Request with Key
+        |
+        v
++-------------------+
+| Invalid Cache     |---- Found ----> Return 401 (no DB hit)
+| Check (5min TTL)  |
++--------+----------+
+         | Not Found
+         v
++-------------------+
+| Valid Cache       |---- Found ----> Return User Data
+| Check (10hr TTL)  |
++--------+----------+
+         | Not Found
+         v
++-------------------+
+| Database Lookup   |
++--------+----------+
+         |
+    +----+----+
+    |         |
+  Valid    Invalid
+    |         |
+    v         v
+ Add to    Add to
+ Valid     Invalid
+ Cache     Cache
 ```
 
 ## Session Management
 
-### Session Configuration
+### IST Timezone Session Expiry
+
+Sessions expire at 3:00 AM IST daily (market session boundary):
+
 ```python
-# app.py
-from datetime import datetime, timedelta
+# services/session_service.py
 import pytz
+from datetime import datetime, timedelta
 
-# Session configuration
-app.config['SESSION_TYPE'] = 'filesystem'
-app.config['SESSION_PERMANENT'] = False
-app.config['SESSION_USE_SIGNER'] = True
-app.config['SESSION_KEY_PREFIX'] = 'openalgo:'
-app.config['SESSION_COOKIE_SECURE'] = USE_HTTPS  # True in production
-app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+IST = pytz.timezone('Asia/Kolkata')
 
-# Session expiry at 3:30 AM IST daily
-def calculate_session_lifetime():
-    ist = pytz.timezone('Asia/Kolkata')
-    now = datetime.now(ist)
+def get_session_expiry() -> datetime:
+    """Calculate session expiry time (3:00 AM IST)"""
+    now = datetime.now(IST)
 
-    # Next 3:30 AM IST
-    next_expiry = now.replace(hour=3, minute=30, second=0, microsecond=0)
-    if now >= next_expiry:
-        next_expiry += timedelta(days=1)
+    # Next 3:00 AM IST
+    expiry = now.replace(hour=3, minute=0, second=0, microsecond=0)
 
-    return next_expiry - now
+    if now.hour >= 3:
+        # Already past 3 AM, expire tomorrow
+        expiry += timedelta(days=1)
 
-app.permanent_session_lifetime = calculate_session_lifetime()
+    return expiry
+
+def create_session(user_id: int) -> str:
+    """Create new user session"""
+    session_id = secrets.token_urlsafe(32)
+    expiry = get_session_expiry()
+
+    session_data = {
+        'user_id': user_id,
+        'created_at': datetime.now(IST).isoformat(),
+        'expires_at': expiry.isoformat()
+    }
+
+    # Store in session cache/database
+    session_store[session_id] = session_data
+
+    return session_id
+
+def validate_session(session_id: str) -> dict | None:
+    """Validate session and check expiry"""
+    session_data = session_store.get(session_id)
+
+    if not session_data:
+        return None
+
+    expiry = datetime.fromisoformat(session_data['expires_at'])
+    if datetime.now(IST) > expiry:
+        # Session expired
+        del session_store[session_id]
+        return None
+
+    return session_data
 ```
 
-### Session Validation
+### Session Token Format
+
 ```python
-# utils/session.py
+# Flask session configuration
+from flask import Flask
+
+app = Flask(__name__)
+app.config.update(
+    SECRET_KEY=os.getenv('FLASK_SECRET_KEY'),
+    SESSION_COOKIE_NAME='openalgo_session',
+    SESSION_COOKIE_SECURE=True,          # HTTPS only
+    SESSION_COOKIE_HTTPONLY=True,        # No JavaScript access
+    SESSION_COOKIE_SAMESITE='Lax',       # CSRF protection
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=24)
+)
+```
+
+## Authentication Decorators
+
+### API Key Decorator
+
+```python
+# utils/auth_decorators.py
 from functools import wraps
-from flask import session, redirect, url_for, request
+from flask import request, jsonify
 
-def check_session_validity(f):
+def require_api_key(f):
+    """Decorator to require valid API key"""
     @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # Check if user is logged in
-        if 'user' not in session:
-            if request.is_json:
-                return jsonify({'error': 'Authentication required'}), 401
-            return redirect(url_for('auth.login'))
+    def decorated(*args, **kwargs):
+        # Check header first, then request body
+        api_key = request.headers.get('X-API-Key')
+        if not api_key:
+            api_key = request.json.get('apikey') if request.is_json else None
 
-        # Check session expiry
-        if session.permanent:
-            # Refresh session lifetime
-            session.permanent = True
+        if not api_key:
+            return jsonify({
+                'status': 'error',
+                'message': 'API key required'
+            }), 401
 
-        # Validate CSRF for state-changing operations
-        if request.method in ['POST', 'PUT', 'DELETE', 'PATCH']:
-            validate_csrf()
+        user_data = verify_api_key(api_key)
+        if not user_data:
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid API key'
+            }), 401
 
+        # Add user data to request context
+        request.user_data = user_data
         return f(*args, **kwargs)
-    return decorated_function
+
+    return decorated
 ```
 
-## CSRF Protection
+### Session Decorator
 
-### CSRF Token Management
 ```python
-# app.py
-from flask_wtf.csrf import CSRFProtect
+def require_session(f):
+    """Decorator to require valid session"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        session_id = request.cookies.get('openalgo_session')
 
-csrf = CSRFProtect(app)
+        if not session_id:
+            return redirect('/login')
 
-# CSRF configuration
-app.config['WTF_CSRF_ENABLED'] = os.getenv('CSRF_ENABLED', 'TRUE') == 'TRUE'
-app.config['WTF_CSRF_TIME_LIMIT'] = None  # No time limit
-app.config['WTF_CSRF_METHODS'] = ['POST', 'PUT', 'PATCH', 'DELETE']
+        session_data = validate_session(session_id)
+        if not session_data:
+            return redirect('/login?expired=true')
 
-# Exempt API endpoints (they use API key auth)
-csrf.exempt('restx_api.doc')
-csrf.exempt('restx_api.root')
+        request.session_data = session_data
+        return f(*args, **kwargs)
+
+    return decorated
+```
+
+### Combined Authentication
+
+```python
+def require_auth(f):
+    """Accept either API key or session authentication"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        # Try API key first
+        api_key = request.headers.get('X-API-Key')
+        if api_key:
+            user_data = verify_api_key(api_key)
+            if user_data:
+                request.auth_type = 'api_key'
+                request.user_data = user_data
+                return f(*args, **kwargs)
+
+        # Try session
+        session_id = request.cookies.get('openalgo_session')
+        if session_id:
+            session_data = validate_session(session_id)
+            if session_data:
+                request.auth_type = 'session'
+                request.user_data = {'user_id': session_data['user_id']}
+                return f(*args, **kwargs)
+
+        return jsonify({
+            'status': 'error',
+            'message': 'Authentication required'
+        }), 401
+
+    return decorated
 ```
 
 ## Rate Limiting
 
-### Login and Password Reset Protection
+### Configuration
+
 ```python
-# app.py
+# services/rate_limiter.py
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
 limiter = Limiter(
-    app=app,
-    key_func=get_remote_address,
-    default_limits=["200 per day", "50 per hour"],
-    storage_uri="memory://",
+    key_func=get_api_key_or_ip,
+    default_limits=["50 per second"],
+    storage_uri="memory://"
 )
 
-# Specific limits
-limiter.limit("5 per minute")(auth_bp.route('/login'))
-limiter.limit("3 per hour")(auth_bp.route('/reset_password'))
-limiter.limit("10 per hour")(auth_bp.route('/verify_totp'))
+# Endpoint-specific limits
+ORDER_LIMIT = "10 per second"
+API_LIMIT = "50 per second"
+LOGIN_LIMIT = "5 per minute"
 ```
 
-## Security Headers
+### Rate Limit Decorators
 
-### Content Security Policy
 ```python
-# utils/security.py
-from flask import make_response
+@app.route('/api/v1/placeorder', methods=['POST'])
+@limiter.limit(ORDER_LIMIT)
+@require_api_key
+def place_order():
+    """Place order with rate limiting"""
+    pass
 
-def add_security_headers(response):
-    # Content Security Policy
-    csp = {
-        "default-src": "'self'",
-        "script-src": "'self' 'unsafe-inline' cdn.socket.io cdn.jsdelivr.net",
-        "style-src": "'self' 'unsafe-inline' cdn.jsdelivr.net",
-        "img-src": "'self' data: https:",
-        "font-src": "'self' data: cdn.jsdelivr.net",
-        "connect-src": "'self' wss: ws:",
-    }
+@app.route('/login', methods=['POST'])
+@limiter.limit(LOGIN_LIMIT)
+def login():
+    """Login with strict rate limiting"""
+    pass
+```
 
-    csp_string = "; ".join([f"{k} {v}" for k, v in csp.items()])
-    response.headers['Content-Security-Policy'] = csp_string
+### Rate Limit Headers
 
-    # Other security headers
-    response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
-    response.headers['X-XSS-Protection'] = '1; mode=block'
-    response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
-
-    if USE_HTTPS:
-        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
-
+```python
+@app.after_request
+def add_rate_limit_headers(response):
+    """Add rate limit info to response headers"""
+    if hasattr(g, 'rate_limit'):
+        response.headers['X-RateLimit-Limit'] = g.rate_limit.limit
+        response.headers['X-RateLimit-Remaining'] = g.rate_limit.remaining
+        response.headers['X-RateLimit-Reset'] = g.rate_limit.reset
     return response
+```
 
-app.after_request(add_security_headers)
+## Broker OAuth Flow
+
+### OAuth Authorization
+
+```python
+# blueprints/auth.py
+@auth_bp.route('/broker/<broker>/authorize')
+@require_session
+def broker_authorize(broker):
+    """Initiate broker OAuth flow"""
+    adapter = get_broker_adapter(broker)
+
+    # Generate state token for CSRF protection
+    state = secrets.token_urlsafe(32)
+    session['oauth_state'] = state
+
+    auth_url = adapter.get_authorization_url(
+        redirect_uri=url_for('auth.broker_callback', broker=broker, _external=True),
+        state=state
+    )
+
+    return redirect(auth_url)
+
+@auth_bp.route('/broker/<broker>/callback')
+@require_session
+def broker_callback(broker):
+    """Handle broker OAuth callback"""
+    # Verify state token
+    state = request.args.get('state')
+    if state != session.get('oauth_state'):
+        return jsonify({'error': 'Invalid state'}), 400
+
+    # Exchange code for tokens
+    adapter = get_broker_adapter(broker)
+    code = request.args.get('code') or request.args.get('request_token')
+
+    tokens = adapter.exchange_code_for_tokens(code)
+
+    # Store encrypted tokens
+    store_broker_tokens(
+        user_id=session['user_id'],
+        broker=broker,
+        tokens=tokens
+    )
+
+    return redirect('/dashboard?broker_linked=true')
+```
+
+## Security Best Practices
+
+### Environment Variables
+
+```bash
+# Required security environment variables
+FLASK_SECRET_KEY=<random-64-byte-string>
+API_KEY_PEPPER=<random-32-byte-string>
+FERNET_SECRET_KEY=<random-32-byte-string>
+FERNET_SALT=<base64-encoded-16-byte-salt>
+
+# Generate secure values
+python -c "import secrets; print(secrets.token_urlsafe(64))"
+python -c "import os, base64; print(base64.b64encode(os.urandom(16)).decode())"
+```
+
+### Security Headers
+
+```python
+@app.after_request
+def add_security_headers(response):
+    """Add security headers to all responses"""
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    response.headers['Content-Security-Policy'] = "default-src 'self'"
+    return response
+```
+
+### Input Validation
+
+```python
+def sanitize_input(data: dict, schema: dict) -> dict:
+    """Validate and sanitize input data"""
+    cleaned = {}
+
+    for field, rules in schema.items():
+        value = data.get(field)
+
+        # Required field check
+        if rules.get('required') and value is None:
+            raise ValidationError(f"{field} is required")
+
+        # Type validation
+        expected_type = rules.get('type')
+        if value is not None and not isinstance(value, expected_type):
+            raise ValidationError(f"{field} must be {expected_type.__name__}")
+
+        # Pattern validation
+        if 'pattern' in rules and value:
+            if not re.match(rules['pattern'], str(value)):
+                raise ValidationError(f"{field} format invalid")
+
+        # Sanitize strings
+        if isinstance(value, str):
+            value = html.escape(value.strip())
+
+        cleaned[field] = value
+
+    return cleaned
 ```
 
 ## Audit Logging
 
-### Security Event Logging
 ```python
-# database/audit_db.py
-class SecurityAuditLog(Base):
-    __tablename__ = 'security_audit_logs'
+def log_auth_event(event_type: str, user_id: int = None, **kwargs):
+    """Log authentication events for security audit"""
+    from database.logs_db import insert_auth_log
 
-    id = Column(Integer, primary_key=True)
-    event_type = Column(String(50), nullable=False)  # LOGIN/LOGOUT/PASSWORD_RESET/API_KEY_CREATED
-    user_id = Column(Integer, ForeignKey('users.id'))
-    ip_address = Column(String(45))
-    user_agent = Column(String(500))
-    success = Column(Boolean, default=True)
-    failure_reason = Column(String(255))
-    metadata = Column(JSON)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-def log_security_event(event_type: str, user_id: int = None,
-                       success: bool = True, metadata: dict = None):
-    log = SecurityAuditLog(
-        event_type=event_type,
-        user_id=user_id,
-        ip_address=get_client_ip(),
-        user_agent=request.headers.get('User-Agent'),
-        success=success,
-        failure_reason=metadata.get('reason') if metadata else None,
-        metadata=metadata
-    )
-    db.session.add(log)
-    db.session.commit()
+    insert_auth_log({
+        'event_type': event_type,  # login/logout/api_key_created/failed_login
+        'user_id': user_id,
+        'ip_address': request.remote_addr,
+        'user_agent': request.headers.get('User-Agent'),
+        'timestamp': datetime.utcnow(),
+        'details': json.dumps(kwargs)
+    })
 ```
 
-## Best Practices Implemented
+## Related Documentation
 
-### 1. Password Security
-- Argon2id hashing (memory-hard, resistant to GPU attacks)
-- Unique salt per password
-- Pepper for additional security
-- Automatic rehashing when parameters change
-- Minimum password requirements enforced
-
-### 2. API Key Security
-- Cryptographically secure generation (64 characters)
-- Hashed storage with pepper
-- Encrypted copy for display only
-- Regular rotation encouraged
-- Last-used tracking
-
-### 3. Session Security
-- Secure cookie flags (HttpOnly, Secure, SameSite)
-- Daily expiry at fixed time
-- CSRF protection for state-changing operations
-- Session signing with secret key
-
-### 4. Communication Security
-- HTTPS enforcement in production
-- HSTS headers
-- TLS for SMTP connections
-- Secure WebSocket connections
-
-### 5. Data Protection
-- Fernet encryption for sensitive data
-- Environment-based encryption keys
-- Secure key storage
-- Encrypted configuration storage
-
-## Compliance Features
-
-### GDPR Compliance
-- Right to be forgotten (data deletion)
-- Data portability (export features)
-- Consent management
-- Audit trail of data access
-
-### Security Standards
-- OWASP Top 10 protection
-- PCI DSS compatible encryption
-- SOC 2 audit trail capabilities
-- ISO 27001 alignment
-
-## Future Enhancements
-
-### Planned Security Features
-1. **OAuth2/SAML Integration**: Enterprise SSO support
-2. **Hardware Token Support**: YubiKey integration
-3. **Biometric Authentication**: WebAuthn support
-4. **Advanced Threat Detection**: ML-based anomaly detection
-5. **Zero-Trust Architecture**: Per-request validation
-6. **Encrypted Database**: Full database encryption at rest
-
-## Conclusion
-
-The OpenAlgo authentication and security platform provides enterprise-grade security with multiple authentication methods, comprehensive encryption, secure session management, and robust password reset mechanisms. The theme system enhances user experience with 20+ themes including dark mode, while SMTP configuration enables email-based workflows. All security features follow industry best practices and standards.
+- [API Layer](./02_api_layer.md) - API authentication endpoints
+- [Database Layer](./04_database_layer.md) - Token and key storage
+- [Configuration](./07_configuration.md) - Security configuration options
+- [Logging System](./10_logging_system.md) - Security audit logs

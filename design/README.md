@@ -4,8 +4,8 @@
 
 Welcome to the design documentation for OpenAlgo, a comprehensive broker-agnostic algorithmic trading platform with advanced strategy hosting capabilities.
 
-**Current Version**: 1.0.0.38 (UI), Python SDK 1.0.39
-**Last Updated**: November 2025
+**Current Version**: 1.0.0.39 (UI), Python SDK 1.0.39
+**Last Updated**: December 2025
 
 ### Purpose
 
@@ -20,6 +20,7 @@ OpenAlgo is a full-featured trading platform that provides:
 * **Real-time Market Data**: WebSocket infrastructure with ZeroMQ backend
 * **Paper Trading**: Sandbox mode with Rs 1 Crore virtual capital
 * **Telegram Bot**: Mobile trading and monitoring integration
+* **Action Center**: Semi-automated order approval workflow for SEBI RA compliance
 * **Advanced Analytics**: PnL tracking, latency monitoring, traffic analysis
 
 ### Key Features
@@ -55,6 +56,7 @@ OpenAlgo is a full-featured trading platform that provides:
 
 * **Broker Agnosticism:** Unified API abstracting 27 different broker APIs
 * **Strategy Hosting:** Deploy and manage automated strategies easily
+* **SEBI Compliance:** Action Center for Research Analyst regulatory compliance
 * **Extensibility:** Easy integration of new brokers and strategies
 * **Performance:** Efficient handling with < 100ms order placement
 * **Reliability:** Stable connections with auto-reconnection
@@ -65,6 +67,7 @@ OpenAlgo is a full-featured trading platform that provides:
 
 * **Algorithmic Traders**: Deploy automated trading strategies
 * **Developers**: Build custom trading applications via API
+* **Research Analysts**: SEBI-compliant advisory with Action Center
 * **Quantitative Analysts**: Backtest and deploy quant strategies
 * **Trading Firms**: Manage multiple accounts and strategies
 * **Individual Traders**: Execute across brokers from one platform
@@ -94,6 +97,7 @@ OpenAlgo is a full-featured trading platform that provides:
 ### Advanced Features
 - **[13_telegram_bot_integration.md](13_telegram_bot_integration.md)** - Telegram bot for mobile trading
 - **[14_sandbox_architecture.md](14_sandbox_architecture.md)** - Sandbox/API Analyzer mode
+- **[15_action_center.md](15_action_center.md)** - Action Center and Order Mode System
 
 ## System Architecture Overview
 
@@ -147,14 +151,15 @@ OpenAlgo is a full-featured trading platform that provides:
 +----------------+----------------+----------------+---------------+
 ```
 
-## Recent Enhancements (November 2025)
+## Recent Enhancements (December 2025)
 
 ### Core Features
+- **Action Center** - Semi-auto order approval workflow for SEBI RA compliance
+- **Order Mode System** - Auto/Semi-Auto modes with operation restrictions
 - **PNL Tracker Sub-Minute Support** - Fixed timestamp handling for intraday analysis
 - **Motilal Oswal WebSocket** - LTP, Quotes, and Depth Level 1 support
 - **Options Multi-Order Fix** - Corrected response schema for multi-leg orders
 - **Multi-Quote API** - Batch quote retrieval for multiple symbols
-- **Action Center** - Semi-auto order approval workflow
 
 ### Infrastructure
 - **4 Separate Databases** - Main, Sandbox, Latency, and Logs isolation
@@ -237,6 +242,7 @@ ws.connect("ws://localhost:8765")
 - **API Rate Limiting**: Per-user and per-endpoint
 - **CSRF Protection**: WTF-CSRF tokens
 - **Sensitive Data Redaction**: In logs and responses
+- **SEBI RA Compliance**: Action Center for advisory separation
 
 ## Contributing
 
