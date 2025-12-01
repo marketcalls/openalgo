@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import pandas as pd
 from datetime import datetime, timedelta
 from utils.httpx_client import get_httpx_client
@@ -174,7 +175,7 @@ class BrokerData:
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
-        Get real-time quotes for given symbol using WebSocket
+        Get real-time quotes for given symbol using REST API
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX)
@@ -182,40 +183,257 @@ class BrokerData:
             dict: Quote data with required fields
         """
         try:
-            # Get token and exchange type
+            # Get token for the symbol
             token = get_token(symbol, exchange)
-            exchange_type = self.ws_exchange_map.get(exchange)
 
-            if not exchange_type:
+            if not token:
+                raise Exception(f"Token not found for symbol: {symbol}, exchange: {exchange}")
+
+            # Map exchange for API
+            quote_exchange_map = {
+                'NSE': 'NSE',
+                'BSE': 'BSE',
+                'NFO': 'NFO',
+                'BFO': 'BFO',
+                'CDS': 'CDS',
+                'MCX': 'MCX',
+                'NSE_INDEX': 'NSE',
+                'BSE_INDEX': 'BSE',
+                'MCX_INDEX': 'MCX'
+            }
+
+            api_exchange = quote_exchange_map.get(exchange)
+            if not api_exchange:
                 raise Exception(f"Exchange '{exchange}' not supported for quotes")
 
-            logger.debug(f"Fetching quotes for {symbol} (token: {token}, exchange: {exchange_type})")
+            logger.debug(f"Fetching quotes for {symbol} (token: {token}, exchange: {api_exchange})")
 
-            # Fetch quote using WebSocket (mode 3 = Snap Quote for full data)
-            quote_data = self.websocket.fetch_quote(token, exchange_type, mode=3)
+            # Call REST API for quote
+            payload = {
+                "mode": "OHLC",
+                "exchangeTokens": {api_exchange: [str(token)]}
+            }
 
-            if not quote_data:
-                raise Exception("Failed to fetch quote data from WebSocket")
+            response = get_api_response("/instruments/quote", self.auth_token, "GET", payload)
 
-            # Extract bid/ask from market depth
-            bid_price = quote_data['bids'][0]['price'] if quote_data['bids'] else 0
-            ask_price = quote_data['asks'][0]['price'] if quote_data['asks'] else 0
+            if not response.get('status'):
+                raise Exception(f"API error: {response.get('message', 'Unknown error')}")
+
+            # Extract quote from response
+            fetched = response.get('data', {}).get('fetched', [])
+
+            if not fetched:
+                raise Exception("No quote data received from API")
+
+            quote_data = fetched[0]
 
             # Return in OpenAlgo standard format
             return {
-                'bid': float(bid_price),
-                'ask': float(ask_price),
+                'bid': 0,  # Not provided in OHLC mode
+                'ask': 0,  # Not provided in OHLC mode
                 'open': float(quote_data.get('open', 0)),
                 'high': float(quote_data.get('high', 0)),
                 'low': float(quote_data.get('low', 0)),
                 'ltp': float(quote_data.get('ltp', 0)),
                 'prev_close': float(quote_data.get('close', 0)),
-                'volume': int(quote_data.get('volume', 0)),
-                'oi': int(quote_data.get('oi', 0))
+                'volume': int(quote_data.get('volume', 0)) if quote_data.get('volume') else 0,
+                'oi': 0  # Not provided in OHLC mode
             }
 
         except Exception as e:
             raise Exception(f"Error fetching quotes: {str(e)}")
+
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols using REST API
+        mstock REST API supports fetching multiple instruments in one call
+
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            # mstock WebSocket creates new connection per request
+            # Using batch size of 100 for practical response times
+            BATCH_SIZE = 500
+            RATE_LIMIT_DELAY = 1.0  # Delay between batches in seconds
+
+            if len(symbols) > BATCH_SIZE:
+                logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.debug(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    batch_results = self._process_multiquotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                    # Rate limit delay between batches
+                    time.sleep(RATE_LIMIT_DELAY)
+
+                logger.info(f"Successfully processed {len(all_results)} quotes")
+                return all_results
+            else:
+                return self._process_multiquotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_multiquotes_batch(self, symbols: list) -> list:
+        """
+        Process a batch of symbols using REST API /instruments/quote
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+        Returns:
+            list: List of quote data for the batch
+        """
+        results = []
+        skipped_symbols = []
+        symbol_map = {}  # Map token to original symbol/exchange
+
+        # Exchange mapping for quote API (uses exchange names like NSE, BSE)
+        quote_exchange_map = {
+            'NSE': 'NSE',
+            'BSE': 'BSE',
+            'NFO': 'NFO',
+            'BFO': 'BFO',
+            'CDS': 'CDS',
+            'MCX': 'MCX',
+            'NSE_INDEX': 'NSE',
+            'BSE_INDEX': 'BSE',
+            'MCX_INDEX': 'MCX'
+        }
+
+        # Step 1: Prepare tokens grouped by exchange
+        exchange_tokens = {}  # {"NSE": ["3045", "1594"], "BSE": ["500410"]}
+
+        for item in symbols:
+            symbol = item.get('symbol')
+            exchange = item.get('exchange')
+
+            if not symbol or not exchange:
+                logger.warning(f"Skipping entry due to missing symbol/exchange: {item}")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'data': None,
+                    'error': 'Missing required symbol or exchange'
+                })
+                continue
+
+            try:
+                token = get_token(symbol, exchange)
+                api_exchange = quote_exchange_map.get(exchange)
+
+                if not token:
+                    logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve token")
+                    skipped_symbols.append({
+                        'symbol': symbol,
+                        'exchange': exchange,
+                        'data': None,
+                        'error': 'Could not resolve token'
+                    })
+                    continue
+
+                if not api_exchange:
+                    logger.warning(f"Skipping symbol {symbol}: Exchange '{exchange}' not supported")
+                    skipped_symbols.append({
+                        'symbol': symbol,
+                        'exchange': exchange,
+                        'data': None,
+                        'error': f"Exchange '{exchange}' not supported"
+                    })
+                    continue
+
+                # Group tokens by exchange
+                if api_exchange not in exchange_tokens:
+                    exchange_tokens[api_exchange] = []
+                exchange_tokens[api_exchange].append(str(token))
+
+                # Store mapping for response processing
+                symbol_map[str(token)] = {
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'token': token
+                }
+
+            except Exception as e:
+                logger.warning(f"Error preparing {symbol} on {exchange}: {str(e)}")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'data': None,
+                    'error': str(e)
+                })
+
+        if not symbol_map:
+            logger.warning("No valid symbols to fetch quotes for")
+            return skipped_symbols
+
+        # Step 2: Call REST API for bulk quotes
+        try:
+            payload = {
+                "mode": "OHLC",
+                "exchangeTokens": exchange_tokens
+            }
+
+            logger.info(f"Fetching {len(symbol_map)} quotes via REST API")
+            response = get_api_response("/instruments/quote", self.auth_token, "GET", payload)
+
+            if not response.get('status'):
+                raise Exception(f"API error: {response.get('message', 'Unknown error')}")
+
+            # Step 3: Process response - fetched quotes
+            fetched = response.get('data', {}).get('fetched', [])
+
+            for quote_data in fetched:
+                token_str = str(quote_data.get('symbolToken', ''))
+                info = symbol_map.get(token_str)
+
+                if info:
+                    results.append({
+                        'symbol': info['symbol'],
+                        'exchange': info['exchange'],
+                        'data': {
+                            'bid': 0,  # Not provided in OHLC mode
+                            'ask': 0,  # Not provided in OHLC mode
+                            'open': float(quote_data.get('open', 0)),
+                            'high': float(quote_data.get('high', 0)),
+                            'low': float(quote_data.get('low', 0)),
+                            'ltp': float(quote_data.get('ltp', 0)),
+                            'prev_close': float(quote_data.get('close', 0)),
+                            'volume': int(quote_data.get('volume', 0)) if quote_data.get('volume') else 0,
+                            'oi': 0  # Not provided in OHLC mode
+                        }
+                    })
+                    # Remove from symbol_map to track unfetched
+                    del symbol_map[token_str]
+
+            # Add unfetched symbols as errors
+            for token_str, info in symbol_map.items():
+                results.append({
+                    'symbol': info['symbol'],
+                    'exchange': info['exchange'],
+                    'error': 'No data received'
+                })
+
+        except Exception as e:
+            logger.error(f"Error calling quote API: {str(e)}")
+            # Mark all remaining as errors
+            for info in symbol_map.values():
+                results.append({
+                    'symbol': info['symbol'],
+                    'exchange': info['exchange'],
+                    'error': str(e)
+                })
+
+        logger.info(f"Retrieved quotes for {len([r for r in results if 'data' in r])}/{len(symbols)} symbols")
+        return skipped_symbols + results
 
     def get_history(self, symbol: str, exchange: str, interval: str,
                    start_date: str, end_date: str) -> pd.DataFrame:
