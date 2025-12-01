@@ -371,7 +371,7 @@ def validate_config(config_key, config_value):
 
         # Validate day of week
         if config_key == 'reset_day':
-            valid_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+            valid_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday', 'Never']
             if config_value not in valid_days:
                 return f'Reset day must be one of: {", ".join(valid_days)}'
 
