@@ -12,6 +12,7 @@ Features:
 
 import os
 import sys
+import time
 from decimal import Decimal
 from datetime import datetime
 import pytz
@@ -219,32 +220,42 @@ class OrderManager:
 
             if price_type == 'MARKET':
                 # For MARKET orders, fetch current LTP for margin calculation
-                try:
-                    from sandbox.execution_engine import ExecutionEngine
-                    engine = ExecutionEngine()
-                    quote = engine._fetch_quote(symbol, exchange)
-                    if quote and quote.get('ltp'):
-                        margin_calculation_price = Decimal(str(quote['ltp']))
-                        logger.debug(f"Using LTP {margin_calculation_price} for MARKET order margin calculation")
-                    else:
-                        # In sandbox mode, use a default price if API fails
-                        # Try to get last execution price from positions
-                        if temp_existing_position and temp_existing_position.ltp:
-                            margin_calculation_price = temp_existing_position.ltp
-                            logger.warning(f"API failed, using last known price {margin_calculation_price} for {symbol}")
-                        else:
-                            # Use a reasonable default for sandbox testing
-                            margin_calculation_price = Decimal('100.00')  # Default price for testing
-                            logger.warning(f"API failed, using default sandbox price {margin_calculation_price} for {symbol}")
-                except Exception as e:
-                    logger.error(f"Error fetching quote for margin calculation: {e}")
-                    # In sandbox mode, use a fallback price
-                    if temp_existing_position and temp_existing_position.ltp:
+                # We need a valid price - reject order if unavailable (no hardcoded fallback)
+                quote_fetch_success = False
+
+                # Attempt 1: Fetch live quote with retry
+                for attempt in range(3):
+                    try:
+                        from sandbox.execution_engine import ExecutionEngine
+                        engine = ExecutionEngine()
+                        quote = engine._fetch_quote(symbol, exchange)
+                        if quote and quote.get('ltp') and Decimal(str(quote['ltp'])) > 0:
+                            margin_calculation_price = Decimal(str(quote['ltp']))
+                            logger.debug(f"Using LTP {margin_calculation_price} for MARKET order margin calculation")
+                            quote_fetch_success = True
+                            break
+                    except Exception as e:
+                        logger.debug(f"Quote fetch attempt {attempt + 1} failed: {e}")
+
+                    # Wait before retry (0.3s, 0.6s, 0.9s)
+                    if attempt < 2:
+                        time.sleep(0.3 * (attempt + 1))
+
+                # Attempt 2: Use position's last known LTP as fallback
+                if not quote_fetch_success:
+                    if temp_existing_position and temp_existing_position.ltp and temp_existing_position.ltp > 0:
                         margin_calculation_price = temp_existing_position.ltp
-                        logger.warning(f"API error, using last known price {margin_calculation_price} for {symbol}")
-                    else:
-                        margin_calculation_price = Decimal('100.00')  # Default price for testing
-                        logger.warning(f"API error, using default sandbox price {margin_calculation_price} for {symbol}")
+                        logger.warning(f"Quote fetch failed, using last known price {margin_calculation_price} for {symbol}")
+                        quote_fetch_success = True
+
+                # Attempt 3: Reject order if no valid price available
+                if not quote_fetch_success:
+                    logger.error(f"Cannot place MARKET order for {symbol} - unable to fetch current price")
+                    return False, {
+                        'status': 'error',
+                        'message': f'Cannot place MARKET order for {symbol} - unable to fetch current price. Please try again later or use LIMIT order with a specific price.',
+                        'mode': 'analyze'
+                    }, 400
 
             elif price_type == 'LIMIT':
                 # For LIMIT orders, use the limit price for margin calculation
@@ -796,6 +807,20 @@ class OrderManager:
         # Validate product
         if order_data['product'].upper() not in ['CNC', 'NRML', 'MIS']:
             return False, 'Invalid product. Must be CNC, NRML, or MIS'
+
+        # Validate product-exchange compatibility
+        exchange = order_data['exchange'].upper()
+        product = order_data['product'].upper()
+
+        # Equity exchanges (NSE/BSE cash segment): Only CNC and MIS allowed
+        if exchange in ['NSE', 'BSE']:
+            if product == 'NRML':
+                return False, f'NRML product not allowed for {exchange} equity segment. Use CNC for delivery or MIS for intraday.'
+
+        # Derivatives exchanges (F&O, Commodity, Currency): Only NRML and MIS allowed
+        if exchange in ['NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NCDEX']:
+            if product == 'CNC':
+                return False, f'CNC product not allowed for {exchange} derivatives segment. Use NRML for carryforward or MIS for intraday.'
 
         # Validate quantity
         try:

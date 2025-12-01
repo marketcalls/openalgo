@@ -17,6 +17,7 @@ Auto-Reset:
 
 import os
 import sys
+import threading
 from decimal import Decimal
 from datetime import datetime, timedelta
 import pytz
@@ -51,41 +52,46 @@ def is_future(symbol, exchange):
 class FundManager:
     """Manages virtual funds for sandbox mode"""
 
+    # Class-level lock for thread safety across all fund operations
+    # This prevents race conditions when multiple threads modify funds simultaneously
+    _lock = threading.Lock()
+
     def __init__(self, user_id):
         self.user_id = user_id
         self.starting_capital = Decimal(get_config('starting_capital', '10000000.00'))
 
     def initialize_funds(self):
         """Initialize funds for a new user"""
-        try:
-            # Check if user already has funds
-            funds = SandboxFunds.query.filter_by(user_id=self.user_id).first()
+        with self._lock:
+            try:
+                # Check if user already has funds
+                funds = SandboxFunds.query.filter_by(user_id=self.user_id).first()
 
-            if not funds:
-                # Create new fund account
-                funds = SandboxFunds(
-                    user_id=self.user_id,
-                    total_capital=self.starting_capital,
-                    available_balance=self.starting_capital,
-                    used_margin=Decimal('0.00'),
-                    realized_pnl=Decimal('0.00'),
-                    unrealized_pnl=Decimal('0.00'),
-                    total_pnl=Decimal('0.00'),
-                    last_reset_date=datetime.now(pytz.timezone('Asia/Kolkata')),
-                    reset_count=0
-                )
-                db_session.add(funds)
-                db_session.commit()
-                logger.info(f"Initialized funds for user {self.user_id} with ₹{self.starting_capital}")
-                return True, "Funds initialized successfully"
-            else:
-                logger.debug(f"User {self.user_id} already has funds initialized")
-                return True, "Funds already initialized"
+                if not funds:
+                    # Create new fund account
+                    funds = SandboxFunds(
+                        user_id=self.user_id,
+                        total_capital=self.starting_capital,
+                        available_balance=self.starting_capital,
+                        used_margin=Decimal('0.00'),
+                        realized_pnl=Decimal('0.00'),
+                        unrealized_pnl=Decimal('0.00'),
+                        total_pnl=Decimal('0.00'),
+                        last_reset_date=datetime.now(pytz.timezone('Asia/Kolkata')),
+                        reset_count=0
+                    )
+                    db_session.add(funds)
+                    db_session.commit()
+                    logger.info(f"Initialized funds for user {self.user_id} with ₹{self.starting_capital}")
+                    return True, "Funds initialized successfully"
+                else:
+                    logger.debug(f"User {self.user_id} already has funds initialized")
+                    return True, "Funds already initialized"
 
-        except Exception as e:
-            db_session.rollback()
-            logger.error(f"Error initializing funds for user {self.user_id}: {e}")
-            return False, f"Error initializing funds: {str(e)}"
+            except Exception as e:
+                db_session.rollback()
+                logger.error(f"Error initializing funds for user {self.user_id}: {e}")
+                return False, f"Error initializing funds: {str(e)}"
 
     def get_funds(self):
         """Get current fund status for user"""
@@ -153,31 +159,32 @@ class FundManager:
 
     def _reset_funds(self, funds):
         """Reset funds to starting capital"""
-        try:
-            logger.info(f"Resetting funds for user {self.user_id}")
+        with self._lock:
+            try:
+                logger.info(f"Resetting funds for user {self.user_id}")
 
-            # Reset all fund values
-            funds.total_capital = self.starting_capital
-            funds.available_balance = self.starting_capital
-            funds.used_margin = Decimal('0.00')
-            funds.realized_pnl = Decimal('0.00')
-            funds.unrealized_pnl = Decimal('0.00')
-            funds.total_pnl = Decimal('0.00')
-            funds.last_reset_date = datetime.now(pytz.timezone('Asia/Kolkata'))
-            funds.reset_count += 1
+                # Reset all fund values
+                funds.total_capital = self.starting_capital
+                funds.available_balance = self.starting_capital
+                funds.used_margin = Decimal('0.00')
+                funds.realized_pnl = Decimal('0.00')
+                funds.unrealized_pnl = Decimal('0.00')
+                funds.total_pnl = Decimal('0.00')
+                funds.last_reset_date = datetime.now(pytz.timezone('Asia/Kolkata'))
+                funds.reset_count += 1
 
-            db_session.commit()
+                db_session.commit()
 
-            # Clear all positions and holdings
-            SandboxPositions.query.filter_by(user_id=self.user_id).delete()
-            SandboxHoldings.query.filter_by(user_id=self.user_id).delete()
-            db_session.commit()
+                # Clear all positions and holdings
+                SandboxPositions.query.filter_by(user_id=self.user_id).delete()
+                SandboxHoldings.query.filter_by(user_id=self.user_id).delete()
+                db_session.commit()
 
-            logger.info(f"Funds reset successfully for user {self.user_id} (Reset #{funds.reset_count})")
+                logger.info(f"Funds reset successfully for user {self.user_id} (Reset #{funds.reset_count})")
 
-        except Exception as e:
-            db_session.rollback()
-            logger.error(f"Error resetting funds for user {self.user_id}: {e}")
+            except Exception as e:
+                db_session.rollback()
+                logger.error(f"Error resetting funds for user {self.user_id}: {e}")
 
     def check_margin_available(self, required_margin):
         """Check if user has sufficient margin available"""
@@ -201,60 +208,62 @@ class FundManager:
 
     def block_margin(self, amount, description=""):
         """Block margin for a trade"""
-        try:
-            funds = SandboxFunds.query.filter_by(user_id=self.user_id).first()
+        with self._lock:
+            try:
+                funds = SandboxFunds.query.filter_by(user_id=self.user_id).first()
 
-            if not funds:
-                return False, "Funds not initialized"
+                if not funds:
+                    return False, "Funds not initialized"
 
-            amount = Decimal(str(amount))
+                amount = Decimal(str(amount))
 
-            if funds.available_balance < amount:
-                return False, f"Insufficient funds. Required: ₹{amount}, Available: ₹{funds.available_balance}"
+                if funds.available_balance < amount:
+                    return False, f"Insufficient funds. Required: ₹{amount}, Available: ₹{funds.available_balance}"
 
-            # Block the margin
-            funds.available_balance -= amount
-            funds.used_margin += amount
+                # Block the margin
+                funds.available_balance -= amount
+                funds.used_margin += amount
 
-            db_session.commit()
+                db_session.commit()
 
-            logger.info(f"Blocked ₹{amount} margin for user {self.user_id}. {description}")
-            return True, f"Margin blocked: ₹{amount}"
+                logger.info(f"Blocked ₹{amount} margin for user {self.user_id}. {description}")
+                return True, f"Margin blocked: ₹{amount}"
 
-        except Exception as e:
-            db_session.rollback()
-            logger.error(f"Error blocking margin for user {self.user_id}: {e}")
-            return False, f"Error blocking margin: {str(e)}"
+            except Exception as e:
+                db_session.rollback()
+                logger.error(f"Error blocking margin for user {self.user_id}: {e}")
+                return False, f"Error blocking margin: {str(e)}"
 
     def release_margin(self, amount, realized_pnl=0, description=""):
         """Release blocked margin and update P&L"""
-        try:
-            funds = SandboxFunds.query.filter_by(user_id=self.user_id).first()
+        with self._lock:
+            try:
+                funds = SandboxFunds.query.filter_by(user_id=self.user_id).first()
 
-            if not funds:
-                return False, "Funds not initialized"
+                if not funds:
+                    return False, "Funds not initialized"
 
-            amount = Decimal(str(amount))
-            realized_pnl = Decimal(str(realized_pnl))
+                amount = Decimal(str(amount))
+                realized_pnl = Decimal(str(realized_pnl))
 
-            # Release the margin
-            funds.used_margin -= amount
-            funds.available_balance += amount
+                # Release the margin
+                funds.used_margin -= amount
+                funds.available_balance += amount
 
-            # Add realized P&L
-            funds.available_balance += realized_pnl
-            funds.realized_pnl += realized_pnl
-            funds.total_pnl = funds.realized_pnl + funds.unrealized_pnl
+                # Add realized P&L
+                funds.available_balance += realized_pnl
+                funds.realized_pnl += realized_pnl
+                funds.total_pnl = funds.realized_pnl + funds.unrealized_pnl
 
-            db_session.commit()
+                db_session.commit()
 
-            logger.info(f"Released ₹{amount} margin for user {self.user_id}. Realized P&L: ₹{realized_pnl}. {description}")
-            return True, f"Margin released: ₹{amount}, P&L: ₹{realized_pnl}"
+                logger.info(f"Released ₹{amount} margin for user {self.user_id}. Realized P&L: ₹{realized_pnl}. {description}")
+                return True, f"Margin released: ₹{amount}, P&L: ₹{realized_pnl}"
 
-        except Exception as e:
-            db_session.rollback()
-            logger.error(f"Error releasing margin for user {self.user_id}: {e}")
-            return False, f"Error releasing margin: {str(e)}"
+            except Exception as e:
+                db_session.rollback()
+                logger.error(f"Error releasing margin for user {self.user_id}: {e}")
+                return False, f"Error releasing margin: {str(e)}"
 
     def transfer_margin_to_holdings(self, amount, description=""):
         """
@@ -262,75 +271,78 @@ class FundManager:
         Reduces used_margin without crediting available_balance
         (the money is now represented in holdings value, not available cash)
         """
-        try:
-            funds = SandboxFunds.query.filter_by(user_id=self.user_id).first()
+        with self._lock:
+            try:
+                funds = SandboxFunds.query.filter_by(user_id=self.user_id).first()
 
-            if not funds:
-                return False, "Funds not initialized"
+                if not funds:
+                    return False, "Funds not initialized"
 
-            amount = Decimal(str(amount))
+                amount = Decimal(str(amount))
 
-            # Reduce used margin (release from used_margin)
-            # But do NOT credit available_balance - money is now in holdings
-            funds.used_margin -= amount
+                # Reduce used margin (release from used_margin)
+                # But do NOT credit available_balance - money is now in holdings
+                funds.used_margin -= amount
 
-            db_session.commit()
+                db_session.commit()
 
-            logger.info(f"Transferred ₹{amount} margin to holdings for user {self.user_id}. {description}")
-            return True, f"Margin transferred to holdings: ₹{amount}"
+                logger.info(f"Transferred ₹{amount} margin to holdings for user {self.user_id}. {description}")
+                return True, f"Margin transferred to holdings: ₹{amount}"
 
-        except Exception as e:
-            db_session.rollback()
-            logger.error(f"Error transferring margin to holdings for user {self.user_id}: {e}")
-            return False, f"Error transferring margin to holdings: {str(e)}"
+            except Exception as e:
+                db_session.rollback()
+                logger.error(f"Error transferring margin to holdings for user {self.user_id}: {e}")
+                return False, f"Error transferring margin to holdings: {str(e)}"
 
     def credit_sale_proceeds(self, amount, description=""):
         """
         Credit sale proceeds from selling CNC holdings
         Increases available_balance when holdings are sold
         """
-        try:
-            funds = SandboxFunds.query.filter_by(user_id=self.user_id).first()
+        with self._lock:
+            try:
+                funds = SandboxFunds.query.filter_by(user_id=self.user_id).first()
 
-            if not funds:
-                return False, "Funds not initialized"
+                if not funds:
+                    return False, "Funds not initialized"
 
-            amount = Decimal(str(amount))
+                amount = Decimal(str(amount))
 
-            # Credit sale proceeds to available balance
-            funds.available_balance += amount
+                # Credit sale proceeds to available balance
+                funds.available_balance += amount
 
-            db_session.commit()
+                db_session.commit()
 
-            logger.info(f"Credited ₹{amount} sale proceeds for user {self.user_id}. {description}")
-            return True, f"Sale proceeds credited: ₹{amount}"
+                logger.info(f"Credited ₹{amount} sale proceeds for user {self.user_id}. {description}")
+                return True, f"Sale proceeds credited: ₹{amount}"
 
-        except Exception as e:
-            db_session.rollback()
-            logger.error(f"Error crediting sale proceeds for user {self.user_id}: {e}")
-            return False, f"Error crediting sale proceeds: {str(e)}"
+            except Exception as e:
+                db_session.rollback()
+                logger.error(f"Error crediting sale proceeds for user {self.user_id}: {e}")
+                return False, f"Error crediting sale proceeds: {str(e)}"
 
     def update_unrealized_pnl(self, unrealized_pnl):
         """Update unrealized P&L from open positions"""
-        try:
-            funds = SandboxFunds.query.filter_by(user_id=self.user_id).first()
+        with self._lock:
+            try:
+                funds = SandboxFunds.query.filter_by(user_id=self.user_id).first()
 
-            if not funds:
-                return False, "Funds not initialized"
+                if not funds:
+                    return False, "Funds not initialized"
 
-            unrealized_pnl = Decimal(str(unrealized_pnl))
+                unrealized_pnl = Decimal(str(unrealized_pnl))
 
-            funds.unrealized_pnl = unrealized_pnl
-            funds.total_pnl = funds.realized_pnl + funds.unrealized_pnl
+                funds.unrealized_pnl = unrealized_pnl
+                funds.total_pnl = funds.realized_pnl + funds.unrealized_pnl
 
-            db_session.commit()
+                db_session.commit()
 
-            return True, "Unrealized P&L updated"
+                return True, "Unrealized P&L updated"
 
-        except Exception as e:
-            db_session.rollback()
-            logger.error(f"Error updating unrealized P&L for user {self.user_id}: {e}")
-            return False, f"Error updating unrealized P&L: {str(e)}"
+            except Exception as e:
+                db_session.rollback()
+                logger.error(f"Error updating unrealized P&L for user {self.user_id}: {e}")
+                return False, f"Error updating unrealized P&L: {str(e)}"
 
     def calculate_margin_required(self, symbol, exchange, product, quantity, price, action=None):
         """Calculate margin required for a trade based on leverage rules"""
