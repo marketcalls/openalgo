@@ -25,7 +25,7 @@ from database.sandbox_db import (
 )
 from sandbox.fund_manager import FundManager
 from sandbox.holdings_manager import HoldingsManager
-from services.quotes_service import get_quotes
+from services.quotes_service import get_quotes, get_multiquotes
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -187,12 +187,19 @@ class PositionManager:
             for position in positions:
                 symbols_to_fetch.add((position.symbol, position.exchange))
 
-            # Fetch quotes for all symbols
-            quote_cache = {}
-            for symbol, exchange in symbols_to_fetch:
-                quote = self._fetch_quote(symbol, exchange)
-                if quote:
-                    quote_cache[(symbol, exchange)] = quote
+            symbols_list = list(symbols_to_fetch)
+
+            # Fetch quotes using multiquotes (single API call)
+            quote_cache = self._fetch_quotes_batch(symbols_list)
+
+            # Fallback: For any symbols that failed in batch, try individual fetch
+            failed_symbols = [s for s in symbols_list if s not in quote_cache or quote_cache[s] is None]
+            if failed_symbols:
+                logger.debug(f"Fetching {len(failed_symbols)} symbols individually (multiquotes fallback)")
+                for symbol, exchange in failed_symbols:
+                    quote = self._fetch_quote(symbol, exchange)
+                    if quote:
+                        quote_cache[(symbol, exchange)] = quote
 
             # Update MTM for each position
             for position in positions:
@@ -338,6 +345,67 @@ class PositionManager:
         except Exception as e:
             logger.error(f"Error fetching quote for {symbol}: {e}")
             return None
+
+    def _fetch_quotes_batch(self, symbols_list):
+        """
+        Fetch quotes for multiple symbols in a single API call using multiquotes.
+        Returns dict mapping (symbol, exchange) to quote data.
+        Returns empty dict if multiquotes fails completely.
+        """
+        quote_cache = {}
+
+        if not symbols_list:
+            return quote_cache
+
+        try:
+            # Get any user's API key for fetching quotes
+            from database.auth_db import ApiKeys, decrypt_token
+            api_key_obj = ApiKeys.query.first()
+
+            if not api_key_obj:
+                logger.debug("No API keys found for fetching multiquotes")
+                return quote_cache
+
+            # Decrypt the API key
+            api_key = decrypt_token(api_key_obj.api_key_encrypted)
+
+            # Prepare symbols list for multiquotes API
+            symbols_payload = [
+                {"symbol": symbol, "exchange": exchange}
+                for symbol, exchange in symbols_list
+            ]
+
+            # Use multiquotes service
+            success, response, status_code = get_multiquotes(
+                symbols=symbols_payload,
+                api_key=api_key
+            )
+
+            if success and 'results' in response:
+                results = response['results']
+                successful_count = 0
+
+                for result in results:
+                    symbol = result.get('symbol')
+                    exchange = result.get('exchange')
+
+                    # Check if this result has data or error
+                    if 'data' in result and result['data']:
+                        quote_data = result['data']
+                        quote_cache[(symbol, exchange)] = quote_data
+                        logger.debug(f"Multiquotes: {symbol} LTP={quote_data.get('ltp', 0)}")
+                        successful_count += 1
+                    elif 'error' in result:
+                        logger.debug(f"Multiquotes error for {symbol}: {result['error']}")
+
+                logger.info(f"Positions MTM: Multiquotes fetched {successful_count}/{len(symbols_list)} symbols")
+            else:
+                logger.debug(f"Multiquotes failed: {response.get('message', 'Unknown error')}")
+
+        except Exception as e:
+            logger.debug(f"Exception in multiquotes fetch: {str(e)}")
+
+        return quote_cache
 
     def close_position(self, symbol, exchange, product):
         """
