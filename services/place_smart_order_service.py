@@ -224,7 +224,8 @@ def place_smart_order_with_auth(
                 }
             )
             # Send Telegram alert
-            telegram_alert_service.send_order_alert('placesmartorder', order_data, order_response_data, order_data.get('apikey'))
+            # Note: Use original_data to get apikey because broker module may overwrite order_data['apikey']
+            telegram_alert_service.send_order_alert('placesmartorder', order_data, order_response_data, original_data.get('apikey'))
             return True, order_response_data, 200
 
         # Log successful order immediately after placement
@@ -232,7 +233,8 @@ def place_smart_order_with_auth(
             order_response_data = {'status': 'success', 'orderid': order_id}
             executor.submit(async_log_order, 'placesmartorder', order_request_data, order_response_data)
             # Send Telegram alert
-            telegram_alert_service.send_order_alert('placesmartorder', order_data, order_response_data, order_data.get('apikey'))
+            # Note: Use original_data to get apikey because broker module may overwrite order_data['apikey']
+            telegram_alert_service.send_order_alert('placesmartorder', order_data, order_response_data, original_data.get('apikey'))
             # Emit SocketIO event asynchronously (non-blocking)
             socketio.start_background_task(
                 socketio.emit,

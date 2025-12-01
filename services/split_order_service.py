@@ -369,7 +369,8 @@ def split_order_with_auth(
         log_executor.submit(async_log_order, 'splitorder', split_request_data, response_data)
 
         # Send Telegram alert for live mode
-        telegram_alert_service.send_order_alert('splitorder', split_data, response_data, split_data.get('apikey'))
+        # Note: Use original_data to get apikey for consistency with other services
+        telegram_alert_service.send_order_alert('splitorder', split_data, response_data, original_data.get('apikey'))
 
         return True, response_data, 200
 
