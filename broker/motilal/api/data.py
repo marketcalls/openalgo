@@ -315,6 +315,194 @@ class BrokerData:
             logger.error(f"Error fetching quotes for {symbol} on {exchange}: {str(e)}")
             raise Exception(f"Error fetching quotes: {str(e)}")
 
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols using WebSocket
+        Motilal WebSocket supports subscribing to multiple instruments
+
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            # Motilal WebSocket can handle multiple instruments
+            # Using batch size of 100 for practical response times
+            BATCH_SIZE = 100
+            RATE_LIMIT_DELAY = 0.1  # Delay between batches in seconds
+
+            if len(symbols) > BATCH_SIZE:
+                logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.debug(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    batch_results = self._process_multiquotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                    # Rate limit delay between batches
+                    time.sleep(RATE_LIMIT_DELAY)
+
+                logger.info(f"Successfully processed {len(all_results)} quotes")
+                return all_results
+            else:
+                return self._process_multiquotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_multiquotes_batch(self, symbols: list) -> list:
+        """
+        Process a batch of symbols using WebSocket subscription
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+        Returns:
+            list: List of quote data for the batch
+        """
+        results = []
+        skipped_symbols = []
+        registered_scrips = []  # Track registered scrips for unregistration
+        symbol_map = {}  # Map exchange:token to original symbol/exchange
+
+        # Get WebSocket connection
+        websocket = self.get_websocket()
+
+        if not websocket or not websocket.is_connected:
+            logger.warning("WebSocket not connected, reconnecting...")
+            websocket = self.get_websocket(force_new=True)
+
+        if not websocket or not websocket.is_connected:
+            logger.error("Could not establish WebSocket connection")
+            raise ConnectionError("WebSocket connection unavailable")
+
+        # Step 1: Prepare and register all instruments
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            try:
+                # Get token for this symbol
+                token = get_token(symbol, exchange)
+                if not token:
+                    logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve token")
+                    skipped_symbols.append({
+                        'symbol': symbol,
+                        'exchange': exchange,
+                        'error': 'Could not resolve token'
+                    })
+                    continue
+
+                # Map exchange for Motilal API
+                api_exchange = exchange
+                if exchange == 'NSE_INDEX':
+                    api_exchange = 'NSE'
+                elif exchange == 'BSE_INDEX':
+                    api_exchange = 'BSE'
+                elif exchange == 'MCX_INDEX':
+                    api_exchange = 'MCX'
+
+                # Map OpenAlgo exchange to Motilal exchange
+                from broker.motilal.mapping.transform_data import map_exchange
+                motilal_exchange = map_exchange(api_exchange)
+
+                # Determine exchange type (CASH or DERIVATIVES)
+                exchange_type = "DERIVATIVES" if api_exchange in ['NFO', 'BFO', 'CDS', 'MCX'] else "CASH"
+
+                # Get broker symbol
+                br_symbol = get_br_symbol(symbol, exchange) or symbol
+
+                # Register scrip for market data
+                success = websocket.register_scrip(motilal_exchange, exchange_type, int(token), br_symbol)
+
+                if success:
+                    registered_scrips.append({
+                        'motilal_exchange': motilal_exchange,
+                        'exchange_type': exchange_type,
+                        'token': int(token)
+                    })
+
+                    # Store mapping for response processing
+                    key = f"{motilal_exchange}:{token}"
+                    symbol_map[key] = {
+                        'symbol': symbol,
+                        'exchange': exchange,
+                        'token': token
+                    }
+                else:
+                    logger.warning(f"Failed to register {symbol} on {exchange}")
+                    skipped_symbols.append({
+                        'symbol': symbol,
+                        'exchange': exchange,
+                        'error': 'Registration failed'
+                    })
+
+            except Exception as e:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': str(e)
+                })
+                continue
+
+        if not registered_scrips:
+            logger.warning("No valid symbols to fetch quotes for")
+            return skipped_symbols
+
+        # Step 2: Wait for data to arrive
+        wait_time = min(max(len(registered_scrips) * 0.1, 2), 5)  # Between 2-5 seconds
+        logger.debug(f"Waiting {wait_time:.1f}s for quote data...")
+        time.sleep(wait_time)
+
+        # Step 3: Collect results from WebSocket
+        for key, info in symbol_map.items():
+            motilal_exchange, token = key.split(':')
+
+            quote = websocket.get_quote(motilal_exchange, token)
+
+            if quote:
+                results.append({
+                    'symbol': info['symbol'],
+                    'exchange': info['exchange'],
+                    'data': {
+                        'bid': float(quote.get('bid', 0)),
+                        'ask': float(quote.get('ask', 0)),
+                        'open': float(quote.get('open', 0)),
+                        'high': float(quote.get('high', 0)),
+                        'low': float(quote.get('low', 0)),
+                        'ltp': float(quote.get('ltp', 0)),
+                        'prev_close': float(quote.get('prev_close', 0)),
+                        'volume': int(quote.get('volume', 0)),
+                        'oi': int(quote.get('open_interest', 0))
+                    }
+                })
+            else:
+                results.append({
+                    'symbol': info['symbol'],
+                    'exchange': info['exchange'],
+                    'error': 'No data received'
+                })
+
+        # Step 4: Unregister all scrips after getting data
+        logger.info(f"Unregistering {len(registered_scrips)} scrips")
+        for scrip in registered_scrips:
+            try:
+                websocket.unregister_scrip(
+                    scrip['motilal_exchange'],
+                    scrip['exchange_type'],
+                    scrip['token']
+                )
+            except Exception as e:
+                logger.warning(f"Error unregistering scrip: {e}")
+
+        logger.info(f"Retrieved quotes for {len([r for r in results if 'data' in r])}/{len(symbol_map)} symbols")
+        return skipped_symbols + results
+
     def _get_default_depth(self):
         """Return default empty depth structure"""
         return {
