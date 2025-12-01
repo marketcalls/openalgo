@@ -301,8 +301,18 @@ class BrokerData:
         skipped_symbols = []  # Track symbols that couldn't be resolved
 
         for item in symbols:
-            symbol = item['symbol']
-            exchange = item['exchange']
+            symbol = item.get('symbol')
+            exchange = item.get('exchange')
+
+            if not symbol or not exchange:
+                logger.warning(f"Skipping entry due to missing symbol/exchange: {item}")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'data': None,
+                    'error': 'Missing required symbol or exchange'
+                })
+                continue
 
             try:
                 # Convert symbol to broker format
@@ -314,6 +324,7 @@ class BrokerData:
                     skipped_symbols.append({
                         'symbol': symbol,
                         'exchange': exchange,
+                        'data': None,
                         'error': f'Unknown exchange segment: {exchange}'
                     })
                     continue
@@ -330,6 +341,7 @@ class BrokerData:
                         skipped_symbols.append({
                             'symbol': symbol,
                             'exchange': exchange,
+                            'data': None,
                             'error': f'Could not find exchange token for {exchange}:{br_symbol}'
                         })
                         continue
@@ -353,6 +365,7 @@ class BrokerData:
                 skipped_symbols.append({
                     'symbol': symbol,
                     'exchange': exchange,
+                    'data': None,
                     'error': str(e)
                 })
                 continue

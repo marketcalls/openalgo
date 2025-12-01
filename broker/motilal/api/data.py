@@ -382,8 +382,18 @@ class BrokerData:
 
         # Step 1: Prepare and register all instruments
         for item in symbols:
-            symbol = item['symbol']
-            exchange = item['exchange']
+            symbol = item.get('symbol')
+            exchange = item.get('exchange')
+
+            if not symbol or not exchange:
+                logger.warning(f"Skipping entry due to missing symbol/exchange: {item}")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'data': None,
+                    'error': 'Missing required symbol or exchange'
+                })
+                continue
 
             try:
                 # Get token for this symbol
@@ -393,6 +403,7 @@ class BrokerData:
                     skipped_symbols.append({
                         'symbol': symbol,
                         'exchange': exchange,
+                        'data': None,
                         'error': 'Could not resolve token'
                     })
                     continue
@@ -438,6 +449,7 @@ class BrokerData:
                     skipped_symbols.append({
                         'symbol': symbol,
                         'exchange': exchange,
+                        'data': None,
                         'error': 'Registration failed'
                     })
 
@@ -446,6 +458,7 @@ class BrokerData:
                 skipped_symbols.append({
                     'symbol': symbol,
                     'exchange': exchange,
+                    'data': None,
                     'error': str(e)
                 })
                 continue
