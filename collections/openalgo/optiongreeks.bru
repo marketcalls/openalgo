@@ -1,0 +1,19 @@
+meta {
+  name: Option Greeks
+  type: http
+  seq: 15
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/optiongreeks
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "exchange": "NFO",
+      "symbol": "NIFTY25NOV2526000CE"
+  }
+}

@@ -122,12 +122,20 @@ def transform_order_data(orders):
         elif order.get('prcTp') == 'SL-M':
             order['prcTp'] = 'SL-M'
         
+        # For limit orders, show the order price (prc) instead of average price (avgPrc)
+        # avgPrc is only relevant for executed orders
+        order_price = order.get("avgPrc", 0.0)
+        if order.get("prcTp") in ["LIMIT", "SL"]:
+            # If order is not executed/complete, use the limit price
+            if order.get("ordSt") != "complete":
+                order_price = order.get("prc", 0.0)
+
         transformed_order = {
             "symbol": order.get("trdSym", ""),
             "exchange": order.get("exSeg", ""),
             "action": order.get("trnsTp", ""),
             "quantity": order.get("qty", 0),
-            "price": order.get("avgPrc", 0.0),
+            "price": order_price,
             "trigger_price": order.get("trgPrc", 0.0),
             "pricetype": order.get("prcTp", ""),
             "product": order.get("prod", ""),
@@ -182,13 +190,14 @@ def map_trade_data(trade_data):
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
                 order['trdSym'] = symbol_from_db
-                if order['trnsTp'] == 'B':
-                    order['trnsTp'] = 'BUY'
-                elif order['trnsTp'] == 'S':
-                    order['trnsTp'] = 'SELL'
-                    
             else:
                 logger.info(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
+
+            # Map transaction type regardless of symbol lookup result
+            if order['trnsTp'] == 'B':
+                order['trnsTp'] = 'BUY'
+            elif order['trnsTp'] == 'S':
+                order['trnsTp'] = 'SELL'
     logger.info(f"{trade_data}")           
     return trade_data
 
@@ -232,7 +241,7 @@ def transform_positions_data(positions_data):
             transformed_position["average_price"] = round(float(position['buyAmt'])/float(position['flBuyQty']),2)
         elif transformed_position['quantity'] < 0:
             transformed_position["average_price"] = round(float(position['sellAmt'])/float(position['flSellQty']),2)
-            
+
         transformed_data.append(transformed_position)
     return transformed_data
 

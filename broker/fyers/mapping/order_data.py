@@ -46,12 +46,12 @@ def map_order_data(order_data):
         symbol = order.get('symbol')
         
         if symbol:
-            oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
+            oa_symbol = get_oa_symbol(brsymbol=symbol, exchange=exchange)
             if oa_symbol:
                 order['symbol'] = oa_symbol
                 order['exchange'] = exchange
             else:
-                logger.warning(f"Could not map Fyers symbol '{symbol}' for exchange '{exchange}'. Keeping original.")
+                logger.warning(f"Could not map Fyers brsymbol '{symbol}' for exchange '{exchange}'. Keeping original.")
         else:
             logger.warning(f"Symbol not found in order: {order}. Keeping original trading symbol.")
             
@@ -175,12 +175,12 @@ def map_trade_data(trade_data):
         symbol = trade.get('symbol')
         
         if symbol:
-            oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
+            oa_symbol = get_oa_symbol(brsymbol=symbol, exchange=exchange)
             if oa_symbol:
                 trade['symbol'] = oa_symbol
                 trade['exchange'] = exchange
             else:
-                logger.warning(f"Could not map Fyers symbol '{symbol}' for exchange '{exchange}'. Keeping original.")
+                logger.warning(f"Could not map Fyers brsymbol '{symbol}' for exchange '{exchange}'. Keeping original.")
         else:
             logger.warning(f"Symbol not found in trade: {trade}. Keeping original trading symbol.")
             
@@ -242,12 +242,12 @@ def map_position_data(position_data):
         symbol = position.get('symbol')
         
         if symbol:
-            oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
+            oa_symbol = get_oa_symbol(brsymbol=symbol, exchange=exchange)
             if oa_symbol:
                 position['symbol'] = oa_symbol
                 position['exchange'] = exchange
             else:
-                logger.warning(f"Could not map Fyers symbol '{symbol}' for exchange '{exchange}'. Keeping original.")
+                logger.warning(f"Could not map Fyers brsymbol '{symbol}' for exchange '{exchange}'. Keeping original.")
         else:
             logger.warning(f"Symbol not found in position: {position}. Keeping original trading symbol.")
             
@@ -260,7 +260,10 @@ def transform_positions_data(positions_data):
     for position in positions_data:
         # Ensure average_price is treated as a float, then format to a string with 2 decimal places
         average_price_formatted = "{:.2f}".format(float(position.get('netAvg', 0.0)))
-
+        
+        # Get LTP and PNL from Fyers response
+        ltp = "{:.2f}".format(float(position.get('ltp', 0.0)))
+        pnl = "{:.2f}".format(float(position.get('pl', 0.0)))
 
         if(position.get("productType")=="CNC"):
             producttype = "CNC"
@@ -279,6 +282,8 @@ def transform_positions_data(positions_data):
             "product": producttype,
             "quantity": position.get('netQty', '0'),
             "average_price": average_price_formatted,
+            "ltp": ltp,
+            "pnl": pnl
         }
         transformed_data.append(transformed_position)
     return transformed_data
@@ -315,12 +320,12 @@ def map_portfolio_data(portfolio_data):
         symbol = portfolio.get('symbol')
 
         if symbol:
-            oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
+            oa_symbol = get_oa_symbol(brsymbol=symbol, exchange=exchange)
             if oa_symbol:
                 portfolio['symbol'] = oa_symbol
                 portfolio['exchange'] = exchange
             else:
-                logger.warning(f"Could not map Fyers symbol '{symbol}' for exchange '{exchange}'. Keeping original.")
+                logger.warning(f"Could not map Fyers brsymbol '{symbol}' for exchange '{exchange}'. Keeping original.")
         else:
             logger.warning(f"Symbol not found in portfolio holding: {portfolio}. Keeping original trading symbol.")
             

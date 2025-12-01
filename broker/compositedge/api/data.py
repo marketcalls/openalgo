@@ -21,7 +21,7 @@ def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, 
     AUTH_TOKEN = auth
     if feed_token:
         FEED_TOKEN = feed_token
-    logger.info(f"Feed Token: {FEED_TOKEN}")
+    logger.debug(f"Feed Token: {FEED_TOKEN}")
     
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -38,12 +38,12 @@ def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, 
     
     try:
         # Log request details
-        logger.info("=== API Request Details ===")
-        logger.info(f"URL: {url}")
-        logger.info(f"Method: {method}")
-        logger.info(f"Headers: {json.dumps(headers, indent=2)}")
+        logger.debug("=== API Request Details ===")
+        logger.debug(f"URL: {url}")
+        logger.debug(f"Method: {method}")
+        logger.debug(f"Headers: {json.dumps(headers, indent=2)}")
         if params:
-            logger.info(f"Query Params: {json.dumps(params, indent=2)}")
+            logger.debug(f"Query Params: {json.dumps(params, indent=2)}")
         if payload and payload != '':
             if isinstance(payload, str):
                 try:
@@ -51,7 +51,7 @@ def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, 
                 except json.JSONDecodeError:
                     logger.error("Failed to parse payload as JSON")
                     raise Exception("Invalid payload format")
-            logger.info(f"Payload: {json.dumps(payload, indent=2)}")
+            logger.debug(f"Payload: {json.dumps(payload, indent=2)}")
 
         # Perform the request
         if method.upper() == "GET":
@@ -62,10 +62,10 @@ def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, 
             response = client.request(method, url, headers=headers, json=payload)
 
         # Log response details
-        logger.info("=== API Response Details ===")
-        logger.info(f"Status Code: {response.status_code}")
-        logger.info(f"Response Headers: {dict(response.headers)}")
-        logger.info(f"Response Body: {response.text}")
+        logger.debug("=== API Response Details ===")
+        logger.debug(f"Status Code: {response.status_code}")
+        logger.debug(f"Response Headers: {dict(response.headers)}")
+        logger.debug(f"Response Body: {response.text}")
 
         # Add status attribute for compatibility
         response.status = response.status_code
@@ -284,12 +284,12 @@ class BrokerData:
             # Convert dates to datetime objects with IST timezone
             start_date = pd.to_datetime(from_date).tz_localize('Asia/Kolkata')
             end_date = pd.to_datetime(to_date).tz_localize('Asia/Kolkata')
-            
-            # Set start time to market open (9:15 AM IST)
-            from_date = start_date.replace(hour=9, minute=15, second=0, microsecond=0)
-            
-            # Set end time to market close (3:30 PM IST)
-            to_date = end_date.replace(hour=15, minute=30, second=0, microsecond=0)
+
+            # Use start of day for from_date
+            from_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            # Use end of day for to_date
+            to_date = end_date.replace(hour=23, minute=59, second=59, microsecond=0)
 
             dfs = []
             current_start = from_date
@@ -301,10 +301,10 @@ class BrokerData:
                 from_str = current_start.strftime('%b %d %Y %H%M%S')
                 to_str = current_end.strftime('%b %d %Y %H%M%S')
 
-                logger.info(f"Fetching {timeframe} data for {exchange}:{symbol}")
-                logger.info(f"Start Time (IST): {current_start}")
-                logger.info(f"End Time (IST): {current_end}")
-                logger.info(f"API Format - From: {from_str}, To: {to_str}")
+                logger.debug(f"Fetching {timeframe} data for {exchange}:{symbol}")
+                logger.debug(f"Start Time (IST): {current_start}")
+                logger.debug(f"End Time (IST): {current_end}")
+                logger.debug(f"API Format - From: {from_str}, To: {to_str}")
 
                 params = {
                     "exchangeSegment": exchange_segment,
@@ -314,7 +314,7 @@ class BrokerData:
                     "compressionValue": compression_value
                 }
                 
-                logger.info(f"API Parameters: {json.dumps(params, indent=2)}")
+                logger.debug(f"API Parameters: {json.dumps(params, indent=2)}")
 
                 response = get_api_response("/instruments/ohlc", self.auth_token, method="GET", feed_token=self.feed_token, params=params)
 
@@ -370,7 +370,7 @@ class BrokerData:
 
                     # Determine segment ID based on exchange
                     segment_id = exchange_segment_map.get(exchange)
-                    logger.info(f"Exchange: {{exchange}}, Segment ID: {segment_id}")
+                    logger.debug(f"Exchange: {{exchange}}, Segment ID: {segment_id}")
                     if segment_id is None:
                         raise ValueError(f"Unknown exchange: {exchange}")
                     payload = {
@@ -395,7 +395,7 @@ class BrokerData:
                     # Parse the JSON string in listQuotes
                     quote = json.loads(raw_quotes[0])
                     touchline = quote.get('Touchline', {})
-                    logger.info(f"Parsed Quote Data: {touchline}")
+                    logger.debug(f"Parsed Quote Data: {touchline}")
                     
                     if touchline:
                         # For daily data, set timestamp to midnight IST
@@ -431,15 +431,13 @@ class BrokerData:
                     lambda x: x.replace(hour=0, minute=0, second=0)
                 )
             else:
-                # For intraday data
-                # First subtract 5:30 hours to get to IST
+                # For intraday data, subtract 5:30 hours to get to IST
                 final_df['timestamp'] = final_df['timestamp'] - pd.Timedelta(hours=5, minutes=30)
-                
-                # Round to the proper interval based on market open (9:15 AM)
+
+                # Round timestamps down to the start of each candle interval
                 interval_minutes = int(compression_value) // 60 if compression_value != 'D' else 0
                 if interval_minutes > 0:
-                    # Shift by 15 minutes to align with market open, round, then shift back
-                    final_df['timestamp'] = (final_df['timestamp'] - pd.Timedelta(minutes=15)).dt.ceil(f'{interval_minutes}min') + pd.Timedelta(minutes=15)
+                    final_df['timestamp'] = final_df['timestamp'].dt.floor(f'{interval_minutes}min')
             
             # Convert back to Unix timestamp
             final_df['timestamp'] = final_df['timestamp'].astype('int64') // 10**9
@@ -450,7 +448,7 @@ class BrokerData:
             
             # Log sample timestamps for verification
             sample_time = pd.to_datetime(final_df['timestamp'].iloc[0], unit='s')
-            logger.info(f"First candle: {sample_time.strftime('%Y-%m-%d') if compression_value == 'D' else sample_time}")
+            logger.debug(f"First candle: {sample_time.strftime('%Y-%m-%d') if compression_value == 'D' else sample_time}")
             
             return final_df
 
@@ -477,8 +475,8 @@ class BrokerData:
             dict: Market depth data
         """
         try:
-            logger.info(f"=== Starting Market Depth Request ===")
-            logger.info(f"Symbol: {symbol}, Exchange: {exchange}")
+            logger.debug(f"=== Starting Market Depth Request ===")
+            logger.debug(f"Symbol: {symbol}, Exchange: {exchange}")
             
             # Get feed token and user ID for request
             user_id = None
@@ -515,7 +513,7 @@ class BrokerData:
             
             # If still no feed token, try to get a new one
             if not feed_token:
-                logger.info("No feed token available, attempting to get one")
+                logger.debug("No feed token available, attempting to get one")
                 from database.auth_db import get_feed_token
                 feed_token, new_user_id, error = get_feed_token()
                 if error:
@@ -523,11 +521,11 @@ class BrokerData:
                     raise Exception(f"Failed to get feed token: {error}")
                 if not user_id and new_user_id:
                     user_id = new_user_id
-                    logger.info(f"Got new user_id from feed token: {user_id}")
+                    logger.debug(f"Got new user_id from feed token: {user_id}")
             
             # Log the user ID and feed token we're using
-            logger.info(f"Using user ID: {user_id}")
-            logger.info(f"Using feed token: {feed_token[:20]}..." if feed_token else "No feed token available")
+            logger.debug(f"Using user ID: {user_id}")
+            logger.debug(f"Using feed token: {feed_token[:20]}..." if feed_token else "No feed token available")
             
             # Exchange segment mapping
             exchange_segment_map = {
@@ -541,17 +539,17 @@ class BrokerData:
             
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
-            logger.info(f"Converted symbol {symbol} to broker format: {br_symbol}")
+            logger.debug(f"Converted symbol {symbol} to broker format: {br_symbol}")
             
             brexchange = exchange_segment_map.get(exchange)
-            logger.info(f"Mapped exchange {exchange} to segment: {brexchange}")
+            logger.debug(f"Mapped exchange {exchange} to segment: {brexchange}")
             
             if brexchange is None:
                 logger.error(f"Unknown exchange segment: {exchange}")
                 raise Exception(f"Unknown exchange segment: {exchange}")
                 
             # Get exchange_token from database
-            logger.info("Querying database for symbol token...")
+            logger.debug("Querying database for symbol token...")
             with db_session() as session:
                 symbol_info = session.query(SymToken).filter(
                     SymToken.exchange == exchange,
@@ -561,10 +559,10 @@ class BrokerData:
                 if not symbol_info:
                     logger.error(f"Could not find exchange token for {exchange}:{br_symbol}")
                     raise Exception(f"Could not find exchange token for {exchange}:{br_symbol}")
-                logger.info(f"Found token {symbol_info.token} for {exchange}:{br_symbol}")
+                logger.debug(f"Found token {symbol_info.token} for {exchange}:{br_symbol}")
 
             # Get market depth via REST API
-            logger.info("Getting market depth via REST API...")
+            logger.debug("Getting market depth via REST API...")
             
             # Prepare token for API requests
             token = {

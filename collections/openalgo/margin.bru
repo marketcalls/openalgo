@@ -1,0 +1,28 @@
+meta {
+  name: Margin Calculator
+  type: http
+  seq: 21
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/margin
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "positions": [
+          {
+              "symbol": "NIFTY25NOV2526000CE",
+              "exchange": "NFO",
+              "action": "SELL",
+              "product": "NRML",
+              "pricetype": "MARKET",
+              "quantity": "75",
+              "price": "0"
+          }
+      ]
+  }
+}

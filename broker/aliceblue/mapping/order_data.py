@@ -36,7 +36,7 @@ def map_order_data(order_data):
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol:
-                order['Trsym'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+                order['Trsym'] = get_oa_symbol(brsymbol=symbol, exchange=exchange)
             else:
                 logger.info(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
@@ -143,15 +143,25 @@ def transform_order_data(orders):
 def map_trade_data(trade_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
-    
+
     Parameters:
     - trade_data: A list of dictionaries, where each dictionary represents an order.
-    
+
     Returns:
     - The modified trade_data with updated 'tradingsymbol' and 'product' fields.
     """
+    # Log the raw tradebook response
+    logger.info(f"Raw tradebook response type: {type(trade_data)}")
+    if trade_data:
+        if isinstance(trade_data, list) and len(trade_data) > 0:
+            logger.info(f"First trade in raw response: {trade_data[0]}")
+            # Log all available fields in first trade
+            logger.info(f"Available fields in first trade: {list(trade_data[0].keys()) if trade_data[0] else 'No fields'}")
+        elif isinstance(trade_data, dict):
+            logger.info(f"Raw response is dict: {trade_data}")
+
     if isinstance(trade_data, dict):
-        if trade_data['stat'] == 'Not_Ok' :
+        if trade_data.get('stat') == 'Not_Ok':
             # Handle the case where there is an error in the data
             # For example, you might want to display an error message to the user
             # or pass an empty list or dictionary to the template.
@@ -159,8 +169,9 @@ def map_trade_data(trade_data):
             trade_data = {}
     else:
         trade_data = trade_data
-        
-    # logger.info(f"{trade_data}")
+
+    # Log the data being processed
+    logger.info(f"Number of trades to process: {len(trade_data) if trade_data else 0}")
 
     if trade_data:
         for trade in trade_data:
@@ -170,7 +181,7 @@ def map_trade_data(trade_data):
             
             # Check if a symbol was found; if so, update the trading_symbol in the current trade
             if symbol:
-                trade['Tsym'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+                trade['Tsym'] = get_oa_symbol(brsymbol=symbol, exchange=exchange)
             else:
                 logger.info(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
@@ -180,25 +191,36 @@ def transform_tradebook_data(tradebook_data):
     transformed_data = []
     for trade in tradebook_data:
 
-        # Check if the necessary keys exist in the order
-        # if 'Qty' not in trade or 'Average price' not in trade:
-        #     logger.error("Error: Missing required keys in the order. Skipping this item.")
-        #     continue
-
         # Ensure quantity and average price are converted to the correct types
         quantity = int(trade.get('Qty', 0))
-        average_price = float(trade.get('Average price', 0.0))
+        # AliceBlue uses 'AvgPrice' field (no space) for average price in tradebook
+        average_price = float(trade.get('AvgPrice', 0.0))
+
+        # Log if we got the price
+        if average_price > 0:
+            logger.debug(f"Got average price: {average_price} for qty: {quantity}")
+        else:
+            logger.warning(f"Zero or missing AvgPrice. Raw value: {trade.get('AvgPrice')}")
+        
+        # Map transaction type from 'B'/'S' to 'BUY'/'SELL'
+        trantype = trade.get('Trantype', '')
+        if trantype == 'B':
+            action = 'BUY'
+        elif trantype == 'S':
+            action = 'SELL'
+        else:
+            action = trantype
         
         transformed_trade = {
             "symbol": trade.get('Tsym'),
             "exchange": trade.get('Exchange', ''),
             "product": trade.get('Pcode', ''),
-            "action": trade.get('Trantype', ''),
+            "action": action,
             "quantity": quantity,
             "average_price": average_price,
             "trade_value": quantity * average_price,
             "orderid": trade.get('Nstordno', ''),
-            "timestamp": trade.get('Time', '')
+            "timestamp": trade.get('Filltime', '')  # Use Filltime which contains HH:MM:SS format
         }
         transformed_data.append(transformed_trade)
     return transformed_data
@@ -235,7 +257,7 @@ def map_position_data(position_data):
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol:
-                position['Tsym'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+                position['Tsym'] = get_oa_symbol(brsymbol=symbol, exchange=exchange)
             else:
                 logger.info(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
@@ -243,27 +265,70 @@ def map_position_data(position_data):
     
 
 def transform_positions_data(positions_data):
-    transformed_data = [] 
+    transformed_data = []
 
     for position in positions_data:
         netqty = float(position.get('Netqty', 0))
-        if netqty > 0 :
-            net_amount = float(position.get('NetBuyavgprc', 0))
+
+        # Get buy and sell average prices
+        buyavgprc = float(position.get('Buyavgprc', 0))
+        sellavgprc = float(position.get('Sellavgprc', 0))
+
+        # Determine average price based on net position
+        if netqty > 0:
+            # Long position - use buy average price
+            average_price = buyavgprc
         elif netqty < 0:
-            net_amount = float(position.get('NetSellavgprc', 0))
+            # Short position - use sell average price
+            average_price = sellavgprc
         else:
-            net_amount = 0
-        
-        average_price = net_amount    
-        # Ensure average_price is treated as a float, then format to a string with 2 decimal places
-        average_price_formatted = "{:.2f}".format(average_price)
+            # No net position
+            average_price = 0
+
+        # Get LTP (Last Traded Price) - AliceBlue uses 'LTP' field
+        ltp = float(position.get('LTP', 0))
+
+        # Calculate P&L correctly
+        pnl = 0
+        pnlpercentage = 0
+
+        if netqty != 0 and average_price > 0 and ltp > 0:
+            if netqty > 0:
+                # Long position: P&L = (LTP - Avg Buy Price) * Quantity
+                pnl = (ltp - average_price) * netqty
+            else:
+                # Short position: P&L = (Avg Sell Price - LTP) * abs(Quantity)
+                pnl = (average_price - ltp) * abs(netqty)
+
+            # Calculate P&L percentage
+            pnlpercentage = (pnl / (average_price * abs(netqty))) * 100 if average_price != 0 else 0
+
+        # Use broker-provided P&L if available and non-zero
+        unrealised_pnl = float(position.get('unrealisedprofitloss', 0))
+        if unrealised_pnl != 0:
+            pnl = unrealised_pnl
+            # Recalculate percentage with broker-provided P&L
+            if average_price > 0 and netqty != 0:
+                pnlpercentage = (pnl / (average_price * abs(netqty))) * 100
+
+        # Get M2M value or use calculated P&L
+        m2m = float(position.get('MtoM', pnl))
 
         transformed_position = {
             "symbol": position.get('Tsym', ''),
             "exchange": position.get('Exchange', ''),
             "product": position.get('Pcode', ''),
-            "quantity": position.get('Netqty', '0'),
-            "average_price": average_price_formatted,
+            "quantity": int(netqty),  # Return as integer value
+            "average_price": round(average_price, 2),  # Round to 2 decimals
+            "ltp": ltp,  # Return LTP value
+            "pnl": round(pnl, 2),  # Round P&L to 2 decimals
+            "pnlpercentage": round(pnlpercentage, 2),  # Add P&L percentage
+            "m2m": round(m2m, 2),  # Add M2M value
+            "buyqty": int(position.get('Bqty', 0)),  # Day buy quantity
+            "sellqty": int(position.get('Sqty', 0)),  # Day sell quantity
+            "netvalue": round(average_price * abs(netqty), 2) if average_price > 0 else 0,  # Position value
+            "realised": round(float(position.get('realisedprofitloss', 0)), 2),  # Realised P&L
+            "unrealised": round(unrealised_pnl, 2)  # Unrealised P&L
         }
         transformed_data.append(transformed_position)
     return transformed_data

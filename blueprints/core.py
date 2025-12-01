@@ -36,7 +36,14 @@ def setup():
         username = request.form['username']
         email = request.form['email']
         password = request.form['password']
-        
+
+        # Validate password strength
+        from utils.auth_utils import validate_password_strength
+        is_valid, error_message = validate_password_strength(password)
+        if not is_valid:
+            flash(error_message, 'error')
+            return render_template('setup.html')
+
         # Add the new admin user
         user = add_user(username, email, password, is_admin=True)
         if user:

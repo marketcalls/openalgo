@@ -70,7 +70,7 @@ class MarketDataService:
         self.cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
         self.cleanup_thread.start()
         
-        logger.info("MarketDataService initialized")
+        logger.debug("MarketDataService initialized")
     
     def process_market_data(self, data: Dict[str, Any]) -> None:
         """

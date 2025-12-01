@@ -18,6 +18,7 @@ from utils.constants import (
     REQUIRED_ORDER_FIELDS
 )
 from utils.logging import get_logger
+from services.telegram_alert_service import telegram_alert_service
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -51,11 +52,15 @@ def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dic
     # Log to analyzer database
     log_executor.submit(async_log_analyzer, analyzer_request, error_response, 'splitorder')
     
-    # Emit socket event
-    socketio.emit('analyzer_update', {
+    # Emit socket event asynchronously (non-blocking)
+    socketio.start_background_task(
+        socketio.emit,
+        'analyzer_update',
+        {
         'request': analyzer_request,
         'response': error_response
-    })
+    }
+    )
     
     return error_response
 
@@ -102,14 +107,17 @@ def place_single_order(
         res, response_data, order_id = broker_module.place_order_api(order_data, auth_token)
 
         if res.status == 200:
-            # Emit order event for toast notification with batch info
-            socketio.emit('order_event', {
-                'symbol': order_data['symbol'],
-                'action': order_data['action'],
-                'orderid': order_id,
-                'exchange': order_data.get('exchange', 'Unknown'),
-                'price_type': order_data.get('pricetype', 'Unknown'),
-                'product_type': order_data.get('product', 'Unknown'),
+            # Emit order event for toast notification with batch info asynchronously (non-blocking)
+            socketio.start_background_task(
+                socketio.emit,
+                'order_event',
+                {
+                    'symbol': order_data['symbol'],
+                    'action': order_data['action'],
+                    'orderid': order_id,
+                    'exchange': order_data.get('exchange', 'Unknown'),
+                    'price_type': order_data.get('pricetype', 'Unknown'),
+                    'product_type': order_data.get('product', 'Unknown'),
                 'mode': 'live',
                 'order_num': order_num,
                 'quantity': int(order_data['quantity']),
@@ -201,53 +209,69 @@ def split_order_with_auth(
         log_executor.submit(async_log_order, 'splitorder', original_data, error_response)
         return False, error_response, 400
     
-    # If in analyze mode, analyze each order
+    # If in analyze mode, route to sandbox for virtual trading
     if get_analyze_mode():
+        from services.sandbox_service import sandbox_place_order
+
+        api_key = original_data.get('apikey')
+        if not api_key:
+            return False, emit_analyzer_error(original_data, 'API key required for sandbox mode'), 400
+
         analyze_results = []
-        
-        # Analyze full-size orders
+
+        # Place full-size orders in sandbox
         for i in range(num_full_orders):
             order_data = copy.deepcopy(split_data)
             order_data['quantity'] = str(split_size)
-            
-            # Analyze the order
-            _, analysis = analyze_request(order_data, 'splitorder', True)
-            
-            if analysis.get('status') == 'success':
+            order_data['apikey'] = api_key
+
+            # Place order in sandbox
+            success, response, status_code = sandbox_place_order(
+                order_data,
+                api_key,
+                {'apikey': api_key, 'order_type': 'split'}
+            )
+
+            if success:
                 analyze_results.append({
                     'order_num': i + 1,
                     'quantity': split_size,
                     'status': 'success',
-                    'orderid': generate_order_id()
+                    'orderid': response.get('orderid')
                 })
             else:
                 analyze_results.append({
                     'order_num': i + 1,
                     'quantity': split_size,
                     'status': 'error',
-                    'message': analysis.get('message', 'Analysis failed')
+                    'message': response.get('message', 'Order placement failed')
                 })
 
-        # Analyze remaining quantity if any
+        # Place remaining quantity order if any
         if remaining_qty > 0:
             order_data = copy.deepcopy(split_data)
             order_data['quantity'] = str(remaining_qty)
-            
-            _, analysis = analyze_request(order_data, 'splitorder', True)
-            
-            if analysis.get('status') == 'success':
+            order_data['apikey'] = api_key
+
+            success, response, status_code = sandbox_place_order(
+                order_data,
+                api_key,
+                {'apikey': api_key, 'order_type': 'split'}
+            )
+
+            if success:
                 analyze_results.append({
                     'order_num': num_full_orders + 1,
                     'quantity': remaining_qty,
                     'status': 'success',
-                    'orderid': generate_order_id()
+                    'orderid': response.get('orderid')
                 })
             else:
                 analyze_results.append({
                     'order_num': num_full_orders + 1,
                     'quantity': remaining_qty,
                     'status': 'error',
-                    'message': analysis.get('message', 'Analysis failed')
+                    'message': response.get('message', 'Order placement failed')
                 })
 
         response_data = {
@@ -261,16 +285,22 @@ def split_order_with_auth(
         # Store complete request data without apikey
         analyzer_request = split_request_data.copy()
         analyzer_request['api_type'] = 'splitorder'
-        
+
         # Log to analyzer database
         log_executor.submit(async_log_analyzer, analyzer_request, response_data, 'splitorder')
-        
-        # Emit socket event for toast notification
-        socketio.emit('analyzer_update', {
+
+        # Emit socket event for toast notification asynchronously (non-blocking)
+        socketio.start_background_task(
+            socketio.emit,
+            'analyzer_update',
+            {
             'request': analyzer_request,
             'response': response_data
-        })
-        
+        }
+        )
+
+        # Send Telegram alert for analyze mode
+        telegram_alert_service.send_order_alert('splitorder', split_data, response_data, split_data.get('apikey'))
         return True, response_data, 200
 
     # Live mode - process actual orders
@@ -338,6 +368,9 @@ def split_order_with_auth(
         }
         log_executor.submit(async_log_order, 'splitorder', split_request_data, response_data)
 
+        # Send Telegram alert for live mode
+        telegram_alert_service.send_order_alert('splitorder', split_data, response_data, split_data.get('apikey'))
+
         return True, response_data, 200
 
 def split_order(
@@ -365,12 +398,19 @@ def split_order(
     original_data = copy.deepcopy(split_data)
     if api_key:
         original_data['apikey'] = api_key
-    
+
+    # Add API key to split data if provided (needed for validation)
+    if api_key:
+        split_data['apikey'] = api_key
+
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
-        # Add API key to split data
-        split_data['apikey'] = api_key
-        
+        # Check if order should be routed to Action Center (semi-auto mode)
+        from services.order_router_service import should_route_to_pending, queue_order
+
+        if should_route_to_pending(api_key, 'splitorder'):
+            return queue_order(api_key, original_data, 'splitorder')
+
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
             error_response = {
@@ -379,7 +419,7 @@ def split_order(
             }
             # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
-        
+
         return split_order_with_auth(split_data, AUTH_TOKEN, broker_name, original_data)
     
     # Case 2: Direct internal call with auth_token and broker

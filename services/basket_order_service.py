@@ -17,6 +17,7 @@ from utils.constants import (
 )
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from utils.logging import get_logger
+from services.telegram_alert_service import telegram_alert_service
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -46,13 +47,17 @@ def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dic
     
     # Log to analyzer database
     log_executor.submit(async_log_analyzer, analyzer_request, error_response, 'basketorder')
-    
-    # Emit socket event
-    socketio.emit('analyzer_update', {
-        'request': analyzer_request,
-        'response': error_response
-    })
-    
+
+    # Emit socket event asynchronously (non-blocking)
+    socketio.start_background_task(
+        socketio.emit,
+        'analyzer_update',
+        {
+            'request': analyzer_request,
+            'response': error_response
+        }
+    )
+
     return error_response
 
 def import_broker_module(broker_name: str) -> Optional[Any]:
@@ -94,9 +99,11 @@ def validate_order(order_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
     if order_data.get('exchange') not in VALID_EXCHANGES:
         return False, f'Invalid exchange. Must be one of: {", ".join(VALID_EXCHANGES)}'
 
-    # Validate action
-    if order_data.get('action') not in VALID_ACTIONS:
-        return False, f'Invalid action. Must be one of: {", ".join(VALID_ACTIONS)}'
+    # Convert action to uppercase and validate
+    if 'action' in order_data:
+        order_data['action'] = order_data['action'].upper()
+        if order_data['action'] not in VALID_ACTIONS:
+            return False, f'Invalid action. Must be one of: {", ".join(VALID_ACTIONS)} (case insensitive)'
 
     # Validate price type
     if 'pricetype' in order_data and order_data['pricetype'] not in VALID_PRICE_TYPES:
@@ -133,14 +140,17 @@ def place_single_order(
         res, response_data, order_id = broker_module.place_order_api(order_data, auth_token)
 
         if res.status == 200:
-            # Emit order event for toast notification
-            socketio.emit('order_event', {
-                'symbol': order_data['symbol'],
-                'action': order_data['action'],
-                'orderid': order_id,
-                'exchange': order_data.get('exchange', 'Unknown'),
-                'price_type': order_data.get('pricetype', 'Unknown'),
-                'product_type': order_data.get('product', 'Unknown'),
+            # Emit order event for toast notification asynchronously (non-blocking)
+            socketio.start_background_task(
+                socketio.emit,
+                'order_event',
+                {
+                    'symbol': order_data['symbol'],
+                    'action': order_data['action'],
+                    'orderid': order_id,
+                    'exchange': order_data.get('exchange', 'Unknown'),
+                    'price_type': order_data.get('pricetype', 'Unknown'),
+                    'product_type': order_data.get('product', 'Unknown'),
                 'mode': 'live',
                 'batch_order': True,
                 'is_last_order': order_index == total_orders - 1
@@ -194,17 +204,24 @@ def process_basket_order_with_auth(
     
     api_key = basket_data.get('apikey')
     
-    # If in analyze mode, analyze each order and return
+    # If in analyze mode, route each order to sandbox
     if get_analyze_mode():
+        from services.sandbox_service import sandbox_place_order
+
         analyze_results = []
         total_orders = len(basket_data['orders'])
-        
-        for i, order in enumerate(basket_data['orders']):
+
+        # Sort orders to prioritize BUY orders before SELL orders (same as live mode)
+        buy_orders = [order for order in basket_data['orders'] if order.get('action', '').upper() == 'BUY']
+        sell_orders = [order for order in basket_data['orders'] if order.get('action', '').upper() == 'SELL']
+        sorted_orders = buy_orders + sell_orders
+
+        for i, order in enumerate(sorted_orders):
             # Create order data with common fields from basket order
             order_with_auth = order.copy()
             order_with_auth['apikey'] = api_key
             order_with_auth['strategy'] = basket_data['strategy']
-            
+
             # Validate order
             is_valid, error_message = validate_order(order_with_auth)
             if not is_valid:
@@ -215,14 +232,18 @@ def process_basket_order_with_auth(
                 })
                 continue
 
-            # Analyze the order
-            _, analysis = analyze_request(order_with_auth, 'basketorder', True)
-            
-            if analysis.get('status') == 'success':
+            # Place order in sandbox
+            success, response, status_code = sandbox_place_order(
+                order_with_auth,
+                api_key,
+                {'apikey': api_key, 'order_type': 'basket'}
+            )
+
+            if success:
                 analyze_results.append({
                     'symbol': order.get('symbol', 'Unknown'),
                     'status': 'success',
-                    'orderid': generate_order_id(),
+                    'orderid': response.get('orderid'),
                     'batch_order': True,
                     'is_last_order': i == total_orders - 1
                 })
@@ -230,7 +251,7 @@ def process_basket_order_with_auth(
                 analyze_results.append({
                     'symbol': order.get('symbol', 'Unknown'),
                     'status': 'error',
-                    'message': analysis.get('message', 'Analysis failed')
+                    'message': response.get('message', 'Order placement failed')
                 })
 
         response_data = {
@@ -242,16 +263,22 @@ def process_basket_order_with_auth(
         # Store complete request data without apikey
         analyzer_request = basket_request_data.copy()
         analyzer_request['api_type'] = 'basketorder'
-        
+
         # Log to analyzer database
         log_executor.submit(async_log_analyzer, analyzer_request, response_data, 'basketorder')
-        
-        # Emit socket event for toast notification
-        socketio.emit('analyzer_update', {
-            'request': analyzer_request,
-            'response': response_data
-        })
-        
+
+        # Emit socket event for toast notification asynchronously (non-blocking)
+        socketio.start_background_task(
+            socketio.emit,
+            'analyzer_update',
+            {
+                'request': analyzer_request,
+                'response': response_data
+            }
+        )
+
+        # Send Telegram alert for analyze mode
+        telegram_alert_service.send_order_alert('basketorder', basket_data, response_data, basket_data.get('apikey'))
         return True, response_data, 200
 
     # Live mode - process actual orders
@@ -328,6 +355,9 @@ def process_basket_order_with_auth(
     }
     log_executor.submit(async_log_order, 'basketorder', basket_request_data, response_data)
 
+    # Send Telegram alert for live basket order
+    telegram_alert_service.send_order_alert('basketorder', basket_data, response_data, basket_data.get('apikey'))
+
     return True, response_data, 200
 
 def place_basket_order(
@@ -353,12 +383,21 @@ def place_basket_order(
         - HTTP status code (int)
     """
     original_data = copy.deepcopy(basket_data)
-    
+    if api_key:
+        original_data['apikey'] = api_key
+
+    # Add API key to basket data if provided (needed for validation)
+    if api_key:
+        basket_data['apikey'] = api_key
+
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
-        # Add API key to basket data
-        basket_data['apikey'] = api_key
-        
+        # Check if order should be routed to Action Center (semi-auto mode)
+        from services.order_router_service import should_route_to_pending, queue_order
+
+        if should_route_to_pending(api_key, 'basketorder'):
+            return queue_order(api_key, original_data, 'basketorder')
+
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
             error_response = {
@@ -367,7 +406,7 @@ def place_basket_order(
             }
             # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
-        
+
         return process_basket_order_with_auth(basket_data, AUTH_TOKEN, broker_name, original_data)
     
     # Case 2: Direct internal call with auth_token and broker

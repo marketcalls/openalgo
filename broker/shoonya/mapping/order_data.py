@@ -16,12 +16,12 @@ def map_order_data(order_data):
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
         # Check if 'data' is None
-    if order_data is None or (isinstance(order_data, dict) and (order_data['stat'] == "Not_Ok")):
+    if order_data is None or (isinstance(order_data, dict) and (order_data.get('stat') == "Not_Ok")):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
         logger.info("No data available.")
-        order_data = {}  # or set it to an empty list if it's supposed to be a list
+        order_data = []  # Return empty list for consistency with expected format
     else:
         order_data = order_data
         
@@ -140,20 +140,20 @@ def transform_order_data(orders):
 def map_trade_data(trade_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
-    
+
     Parameters:
     - order_data: A list of dictionaries, where each dictionary represents an order.
-    
+
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
         # Check if 'data' is None
-    if trade_data is None or (isinstance(trade_data, dict) and (trade_data['stat'] == "Not_Ok")):
+    if trade_data is None or (isinstance(trade_data, dict) and (trade_data.get('stat') == "Not_Ok")):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
         logger.info("No data available.")
-        trade_data = {}  # or set it to an empty list if it's supposed to be a list
+        trade_data = []  # Return empty list for consistency with expected format
     else:
         trade_data = trade_data
         
@@ -197,6 +197,12 @@ def map_trade_data(trade_data):
 def transform_tradebook_data(tradebook_data):
     transformed_data = []
     for trade in tradebook_data:
+        # Parse the timestamp from Shoonya format "HH:MM:SS DD-MM-YYYY" to just "HH:MM:SS"
+        timestamp = trade.get('norentm', '')
+        if timestamp and ' ' in timestamp:
+            # Extract just the time part (HH:MM:SS) from "HH:MM:SS DD-MM-YYYY"
+            timestamp = timestamp.split(' ')[0]
+
         transformed_trade = {
             "symbol": trade.get('tsym', ''),
             "exchange": trade.get('exch', ''),
@@ -206,7 +212,7 @@ def transform_tradebook_data(tradebook_data):
             "average_price": trade.get('avgprc', 0.0),
             "trade_value": float(trade.get('avgprc', 0)) * int(trade.get('qty', 0)),
             "orderid": trade.get('norenordno', ''),
-            "timestamp": trade.get('norentm', '')
+            "timestamp": timestamp  # Now just "HH:MM:SS"
         }
         transformed_data.append(transformed_trade)
     return transformed_data
@@ -214,12 +220,12 @@ def transform_tradebook_data(tradebook_data):
 
 def map_position_data(position_data):
 
-    if  position_data is None or (isinstance(position_data, dict) and (position_data['stat'] == "Not_Ok")):
+    if  position_data is None or (isinstance(position_data, dict) and (position_data.get('stat') == "Not_Ok")):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
         logger.info("No data available.")
-        position_data = {}  # or set it to an empty list if it's supposed to be a list
+        position_data = []  # Return empty list for consistency with expected format
     else:
         position_data = position_data
         
@@ -258,12 +264,32 @@ def map_position_data(position_data):
 def transform_positions_data(positions_data):
     transformed_data = []
     for position in positions_data:
+        # Get position values
+        netqty = float(position.get('netqty', 0))
+        netavgprc = float(position.get('netavgprc', 0.0))
+        lp = float(position.get('lp', 0.0))  # Last Price from Shoonya
+
+        # Calculate PnL only if there's an open position
+        if netqty != 0 and lp > 0:
+            if netqty > 0:
+                # Long position
+                pnl = (lp - netavgprc) * netqty
+            else:
+                # Short position
+                pnl = (netavgprc - lp) * abs(netqty)
+        else:
+            # No position or no LTP available
+            pnl = 0.0
+            lp = 0.0 if netqty == 0 else lp  # Set LTP to 0 if position is closed
+
         transformed_position = {
             "symbol": position.get('tsym', ''),
             "exchange": position.get('exch', ''),
             "product": position.get('prd', ''),
-            "quantity": position.get('netqty', 0),
-            "average_price": position.get('netavgprc', 0.0),
+            "quantity": netqty,
+            "average_price": netavgprc,
+            "ltp": lp,
+            "pnl": pnl
         }
         transformed_data.append(transformed_position)
     return transformed_data

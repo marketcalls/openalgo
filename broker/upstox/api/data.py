@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import httpx
 from utils.httpx_client import get_httpx_client
 from database.token_db import get_token, get_br_symbol, get_oa_symbol
@@ -71,16 +72,35 @@ class BrokerData:
         }
 
     def _get_instrument_key(self, symbol: str, exchange: str) -> str:
-        """Get the correct instrument key for a symbol"""
+        """Get the correct instrument key for a symbol with smart fallback for indices"""
         try:
             # Get token from database - this already includes the exchange prefix
             token = get_token(symbol, exchange)
+
+            # If token not found and exchange looks like it might be an index exchange
+            # Try the _INDEX variant (e.g., NSE -> NSE_INDEX)
+            if not token and exchange in ['NSE', 'BSE', 'MCX']:
+                index_exchange = f"{exchange}_INDEX"
+                logger.debug(f"Token not found for {symbol} on {exchange}, trying {index_exchange}")
+                token = get_token(symbol, index_exchange)
+                if token:
+                    logger.info(f"Found token using index exchange: {index_exchange}")
+
+            # If still not found and exchange is an index exchange, try without _INDEX
+            # (e.g., NSE_INDEX -> NSE)
+            if not token and exchange.endswith('_INDEX'):
+                base_exchange = exchange.replace('_INDEX', '')
+                logger.debug(f"Token not found for {symbol} on {exchange}, trying {base_exchange}")
+                token = get_token(symbol, base_exchange)
+                if token:
+                    logger.info(f"Found token using base exchange: {base_exchange}")
+
             if not token:
                 raise ValueError(f"No token found for {symbol} on {exchange}")
-            
+
             logger.debug(f"Using instrument key: {token}")
             return token
-            
+
         except Exception as e:
             logger.exception(f"Error getting instrument key for {symbol} on {exchange}")
             raise
@@ -97,12 +117,26 @@ class BrokerData:
         Get real-time quotes for given symbol
         Args:
             symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE)
+            exchange: Exchange (e.g., NSE, BSE, NSE_INDEX)
         Returns:
             dict: Quote data with standard fields
         """
         try:
-            # Get the correct instrument key
+            logger.debug(f"get_quotes called with symbol='{symbol}', exchange='{exchange}'")
+
+            # Auto-detect and fix reversed parameters (defensive programming)
+            # Exchange names are typically short codes like NSE, BSE, NFO, etc.
+            # Symbols are typically longer or alphanumeric
+            known_exchanges = ['NSE', 'BSE', 'NFO', 'BFO', 'CDS', 'MCX', 'NSE_INDEX', 'BSE_INDEX', 'MCX_INDEX',
+                             'NSE_EQ', 'NSE_FO', 'BSE_EQ', 'BSE_FO', 'MCX_FO', 'NSE_CD']
+            if symbol in known_exchanges and exchange not in known_exchanges:
+                # Parameters are likely reversed
+                logger.warning(f"Detected reversed parameters: symbol='{symbol}', exchange='{exchange}'. Auto-correcting...")
+                symbol, exchange = exchange, symbol
+                logger.info(f"Corrected to: symbol='{symbol}', exchange='{exchange}'")
+
+            # Get the correct instrument key using the original exchange (important for indices)
+            # This must happen BEFORE exchange normalization (like Angel does)
             instrument_key = self._get_instrument_key(symbol, exchange)
             
             # URL encode the instrument key
@@ -196,6 +230,191 @@ class BrokerData:
         except Exception as e:
             logger.exception(f"Error fetching quotes for {symbol} on {exchange}")
             raise
+
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols with automatic batching
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            BATCH_SIZE = 500  # Upstox API limit per request
+            RATE_LIMIT_DELAY = 1.0  # 1 request/sec = 500 symbols/sec
+
+            # If symbols exceed batch size, process in batches
+            if len(symbols) > BATCH_SIZE:
+                logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                # Split symbols into batches
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.debug(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    # Process this batch
+                    batch_results = self._process_quotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                    # Rate limit delay between batches
+                    if i + BATCH_SIZE < len(symbols):
+                        time.sleep(RATE_LIMIT_DELAY)
+
+                logger.info(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
+                return all_results
+            else:
+                # Single batch processing
+                return self._process_quotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_quotes_batch(self, symbols: list) -> list:
+        """
+        Process a single batch of symbols (internal method)
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys (max 500)
+        Returns:
+            list: List of quote data for the batch
+        """
+        # Build list of instrument keys and mapping
+        instrument_keys = []
+        key_map = {}  # {instrument_key -> {symbol, exchange}}
+        skipped_symbols = []  # Track symbols that couldn't be resolved
+
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            try:
+                instrument_key = self._get_instrument_key(symbol, exchange)
+
+                # Track symbols that couldn't be resolved
+                if not instrument_key:
+                    logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve instrument key")
+                    skipped_symbols.append({
+                        'symbol': symbol,
+                        'exchange': exchange,
+                        'error': 'Could not resolve instrument key'
+                    })
+                    continue
+
+                instrument_keys.append(instrument_key)
+                key_map[instrument_key] = {
+                    'symbol': symbol,
+                    'exchange': exchange
+                }
+
+            except Exception as e:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': str(e)
+                })
+                continue
+
+        # Return skipped symbols if no valid keys
+        if not instrument_keys:
+            logger.warning("No valid instrument keys to fetch quotes for")
+            return skipped_symbols
+
+        # Build comma-separated instrument keys and URL encode
+        keys_param = ','.join(instrument_keys)
+        encoded_keys = urllib.parse.quote(keys_param)
+
+        logger.info(f"Requesting quotes for {len(instrument_keys)} instruments")
+        logger.debug(f"Instrument keys: {instrument_keys[:5]}..." if len(instrument_keys) > 5 else f"Instrument keys: {instrument_keys}")
+
+        # Use v3 OHLC endpoint for multiple instruments
+        url = f"/market-quote/ohlc?instrument_key={encoded_keys}&interval=1d"
+        response = get_api_response(url, self.auth_token)
+
+        if response.get('status') != 'success':
+            error_msg = response.get('message', 'Unknown error')
+            if 'errors' in response and response['errors']:
+                error = response['errors'][0]
+                error_msg = error.get('message', error_msg)
+            logger.error(f"API Error: {error_msg}")
+            raise Exception(f"API Error: {error_msg}")
+
+        # Also fetch v2 quotes for bid/ask/OI data
+        v2_quotes = {}
+        try:
+            client = get_httpx_client()
+            headers = {
+                'Authorization': f'Bearer {self.auth_token}',
+                'Accept': 'application/json'
+            }
+            v2_url = f"https://api.upstox.com/v2/market-quote/quotes?instrument_key={encoded_keys}"
+            v2_response = client.get(v2_url, headers=headers)
+            v2_data = v2_response.json()
+
+            if v2_data.get('status') == 'success':
+                for key, value in v2_data.get('data', {}).items():
+                    inst_key = value.get('instrument_token')
+                    if inst_key:
+                        v2_quotes[inst_key] = value
+        except Exception as e:
+            logger.debug(f"Could not get v2 quotes data: {e}")
+
+        # Parse response and build results
+        results = []
+        quote_data = response.get('data', {})
+
+        # Build lookup by instrument_token
+        quotes_by_key = {}
+        for key, value in quote_data.items():
+            inst_key = value.get('instrument_token')
+            if inst_key:
+                quotes_by_key[inst_key] = value
+
+        # Build results from key_map
+        for instrument_key, original in key_map.items():
+            quote = quotes_by_key.get(instrument_key)
+
+            if not quote:
+                logger.warning(f"No quote data found for {original['symbol']} ({instrument_key})")
+                results.append({
+                    'symbol': original['symbol'],
+                    'exchange': original['exchange'],
+                    'error': 'No quote data available'
+                })
+                continue
+
+            # Extract OHLC data from v3 response
+            live_ohlc = quote.get('live_ohlc') or {}
+            prev_ohlc = quote.get('prev_ohlc') or {}
+
+            # Get bid/ask/OI from v2 data if available
+            v2_quote = v2_quotes.get(instrument_key, {})
+            depth = v2_quote.get('depth', {})
+            best_bid = depth.get('buy', [{}])[0] if depth.get('buy') else {}
+            best_ask = depth.get('sell', [{}])[0] if depth.get('sell') else {}
+
+            result_item = {
+                'symbol': original['symbol'],
+                'exchange': original['exchange'],
+                'data': {
+                    'ask': float(best_ask.get('price', 0)) if best_ask.get('price') else 0,
+                    'bid': float(best_bid.get('price', 0)) if best_bid.get('price') else 0,
+                    'high': float(live_ohlc.get('high', 0)) if live_ohlc.get('high') else 0,
+                    'low': float(live_ohlc.get('low', 0)) if live_ohlc.get('low') else 0,
+                    'ltp': float(quote.get('last_price', 0)) if quote.get('last_price') else 0,
+                    'open': float(live_ohlc.get('open', 0)) if live_ohlc.get('open') else 0,
+                    'prev_close': float(prev_ohlc.get('close', 0)) if prev_ohlc.get('close') else 0,
+                    'volume': int(live_ohlc.get('volume', 0)) if live_ohlc.get('volume') else 0,
+                    'oi': int(v2_quote.get('oi', 0)) if v2_quote.get('oi') else 0
+                }
+            }
+            results.append(result_item)
+
+        # Include skipped symbols in results
+        return skipped_symbols + results
 
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
@@ -356,7 +575,7 @@ class BrokerData:
                         
                         # Debug: Log sample raw candle data immediately
                         if intraday_candles:
-                            logger.info(f"Sample intraday candle: {intraday_candles[0]}")
+                            logger.debug(f"Sample intraday candle: {intraday_candles[0]}")
                         
                         # Filter candles to chunk date range
                         filtered_candles = self._filter_candles_by_date(intraday_candles, start_date, end_date)
@@ -386,7 +605,7 @@ class BrokerData:
                         
                         # Debug: Log sample raw candle data immediately
                         if historical_candles:
-                            logger.info(f"Sample historical candle: {historical_candles[0]}")
+                            logger.debug(f"Sample historical candle: {historical_candles[0]}")
                         
                         all_candles.extend(historical_candles)
                         logger.info(f"Total candles after historical: {len(all_candles)}")
@@ -425,24 +644,55 @@ class BrokerData:
                         try:
                             quotes = self.get_quotes(symbol, exchange)
                             logger.info(f"Quotes API response: {quotes}")
-                            
+
                             if quotes and quotes.get('ltp', 0) > 0:
-                                # Create today's daily candle with midnight timestamp
-                                today_ts = int((datetime.combine(today, datetime.min.time()) + timedelta(hours=5, minutes=30)).timestamp())
-                                today_candle = [
-                                    today_ts * 1000,  # Upstox uses milliseconds
-                                    quotes.get('open', quotes.get('ltp', 0)),
-                                    quotes.get('high', quotes.get('ltp', 0)),
-                                    quotes.get('low', quotes.get('ltp', 0)),
-                                    quotes.get('ltp', 0),
-                                    quotes.get('volume', 0),
-                                    quotes.get('oi', 0)
-                                ]
-                                all_candles.append(today_candle)
-                                logger.info("Added today's daily candle from quotes API")
+                                # Check if quotes data is stale by comparing with most recent historical candle
+                                is_stale = False
+                                if all_candles:
+                                    # Find the most recent candle by timestamp (candles may not be sorted yet)
+                                    last_candle = max(all_candles, key=lambda x: x[0])
+                                    # Compare OHLCV with last candle to detect stale quotes
+                                    # If quotes match the last candle exactly, it's likely stale data
+                                    last_open = last_candle[1]
+                                    last_high = last_candle[2]
+                                    last_low = last_candle[3]
+                                    last_close = last_candle[4]
+                                    last_volume = last_candle[5]
+
+                                    quotes_open = quotes.get('open', quotes.get('ltp', 0))
+                                    quotes_high = quotes.get('high', quotes.get('ltp', 0))
+                                    quotes_low = quotes.get('low', quotes.get('ltp', 0))
+                                    quotes_close = quotes.get('ltp', 0)
+                                    quotes_volume = quotes.get('volume', 0)
+
+                                    # Check if all OHLCV values match (indicating stale data)
+                                    if (last_open == quotes_open and
+                                        last_high == quotes_high and
+                                        last_low == quotes_low and
+                                        last_close == quotes_close and
+                                        last_volume == quotes_volume):
+                                        is_stale = True
+                                        logger.warning(f"Quotes data appears stale (identical to last candle). Skipping today's candle to avoid duplicates.")
+                                        logger.warning(f"Last candle: O={last_open}, H={last_high}, L={last_low}, C={last_close}, V={last_volume}")
+                                        logger.warning(f"Quotes data: O={quotes_open}, H={quotes_high}, L={quotes_low}, C={quotes_close}, V={quotes_volume}")
+
+                                if not is_stale:
+                                    # Create today's daily candle with midnight timestamp
+                                    today_ts = int((datetime.combine(today, datetime.min.time()) + timedelta(hours=5, minutes=30)).timestamp())
+                                    today_candle = [
+                                        today_ts * 1000,  # Upstox uses milliseconds
+                                        quotes.get('open', quotes.get('ltp', 0)),
+                                        quotes.get('high', quotes.get('ltp', 0)),
+                                        quotes.get('low', quotes.get('ltp', 0)),
+                                        quotes.get('ltp', 0),
+                                        quotes.get('volume', 0),
+                                        quotes.get('oi', 0)
+                                    ]
+                                    all_candles.append(today_candle)
+                                    logger.info("Added today's daily candle from quotes API")
                             else:
                                 logger.info("No valid quotes data available for today")
-                                
+
                         except Exception as e:
                             logger.info(f"Could not get today's data from quotes API: {e}")
                             logger.exception("Quotes API exception details:")
@@ -453,7 +703,7 @@ class BrokerData:
                 return pd.DataFrame(columns=['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi'])
             
             # Debug: Log sample candle data to understand structure
-            logger.info(f"Sample candle data (first 2): {all_candles[:2]}")
+            logger.debug(f"Sample candle data (first 2): {all_candles[:2]}")
             logger.info(f"Total candles for processing: {len(all_candles)}")
             
             # Convert to DataFrame
@@ -461,7 +711,7 @@ class BrokerData:
             
             # Debug: Check timestamp column before conversion
             logger.info(f"Timestamp column types before conversion: {df['timestamp'].dtype}")
-            logger.info(f"Sample timestamp values: {df['timestamp'].head(10).tolist()}")
+            logger.debug(f"Sample timestamp values: {df['timestamp'].head(10).tolist()}")
             logger.info(f"Unique timestamp types: {df['timestamp'].apply(type).unique()}")
             
             # Convert timestamp from ISO 8601 string to Unix timestamp (seconds since epoch)

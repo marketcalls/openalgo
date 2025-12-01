@@ -1,0 +1,353 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="mb-8">
+    <div class="flex items-center justify-between">
+        <div>
+            <h1 class="text-3xl font-bold text-base-content">Sandbox (API Analyzer) Configuration</h1>
+            <p class="text-base-content/60 mt-2">Configure sandbox environment settings</p>
+        </div>
+        <div class="flex gap-3">
+            <button onclick="openResetModal()" class="btn btn-warning">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Reset to Defaults
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Configuration Sections -->
+<div class="space-y-6">
+    {% for category_key, category in configs.items() %}
+    <div class="card bg-base-100 shadow-lg">
+        <div class="card-body">
+            <h2 class="card-title text-xl mb-4">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                {{ category.title }}
+            </h2>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {% for config_key, config_data in category.configs.items() %}
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-semibold">{{ format_config_label(config_key) }}</span>
+                    </label>
+                    <div class="flex gap-2">
+                        {% if config_key == 'reset_day' %}
+                        <select
+                            id="{{ config_key }}"
+                            class="select select-bordered flex-1"
+                            onchange="updateConfig('{{ config_key }}', this.value)">
+                            <option value="Monday" {% if config_data.value == 'Monday' %}selected{% endif %}>Monday</option>
+                            <option value="Tuesday" {% if config_data.value == 'Tuesday' %}selected{% endif %}>Tuesday</option>
+                            <option value="Wednesday" {% if config_data.value == 'Wednesday' %}selected{% endif %}>Wednesday</option>
+                            <option value="Thursday" {% if config_data.value == 'Thursday' %}selected{% endif %}>Thursday</option>
+                            <option value="Friday" {% if config_data.value == 'Friday' %}selected{% endif %}>Friday</option>
+                            <option value="Saturday" {% if config_data.value == 'Saturday' %}selected{% endif %}>Saturday</option>
+                            <option value="Sunday" {% if config_data.value == 'Sunday' %}selected{% endif %}>Sunday</option>
+                        </select>
+                        {% elif config_key == 'reset_time' or config_key.endswith('_square_off_time') %}
+                        <input
+                            type="time"
+                            id="{{ config_key }}"
+                            value="{{ config_data.value if config_data else '' }}"
+                            class="input input-bordered flex-1"
+                            onchange="updateConfig('{{ config_key }}', this.value)"
+                        />
+                        {% elif config_key.endswith('_leverage') %}
+                        <input
+                            type="number"
+                            id="{{ config_key }}"
+                            value="{{ config_data.value if config_data else '' }}"
+                            class="input input-bordered flex-1"
+                            min="1"
+                            max="50"
+                            step="0.1"
+                            onchange="updateConfig('{{ config_key }}', this.value)"
+                        />
+                        {% elif config_key == 'starting_capital' %}
+                        <select
+                            id="{{ config_key }}"
+                            class="select select-bordered flex-1"
+                            onchange="updateConfig('{{ config_key }}', this.value)">
+                            <option value="100000" {% if config_data.value == '100000' or config_data.value == '100000.00' %}selected{% endif %}>₹1,00,000 (1 Lakh)</option>
+                            <option value="500000" {% if config_data.value == '500000' or config_data.value == '500000.00' %}selected{% endif %}>₹5,00,000 (5 Lakhs)</option>
+                            <option value="1000000" {% if config_data.value == '1000000' or config_data.value == '1000000.00' %}selected{% endif %}>₹10,00,000 (10 Lakhs)</option>
+                            <option value="2500000" {% if config_data.value == '2500000' or config_data.value == '2500000.00' %}selected{% endif %}>₹25,00,000 (25 Lakhs)</option>
+                            <option value="5000000" {% if config_data.value == '5000000' or config_data.value == '5000000.00' %}selected{% endif %}>₹50,00,000 (50 Lakhs)</option>
+                            <option value="10000000" {% if config_data.value == '10000000' or config_data.value == '10000000.00' %}selected{% endif %}>₹1,00,00,000 (1 Crore)</option>
+                        </select>
+                        {% elif config_key == 'order_check_interval' %}
+                        <input
+                            type="number"
+                            id="{{ config_key }}"
+                            value="{{ config_data.value if config_data else '' }}"
+                            class="input input-bordered flex-1"
+                            min="1"
+                            max="30"
+                            step="1"
+                            onchange="updateConfig('{{ config_key }}', this.value)"
+                        />
+                        {% elif config_key == 'mtm_update_interval' %}
+                        <input
+                            type="number"
+                            id="{{ config_key }}"
+                            value="{{ config_data.value if config_data else '' }}"
+                            class="input input-bordered flex-1"
+                            min="0"
+                            max="60"
+                            step="1"
+                            onchange="updateConfig('{{ config_key }}', this.value)"
+                        />
+                        {% else %}
+                        <input
+                            type="text"
+                            id="{{ config_key }}"
+                            value="{{ config_data.value if config_data else '' }}"
+                            class="input input-bordered flex-1"
+                            onchange="updateConfig('{{ config_key }}', this.value)"
+                        />
+                        {% endif %}
+                        <button
+                            onclick="saveConfig('{{ config_key }}')"
+                            class="btn btn-primary"
+                            id="save-{{ config_key }}"
+                            style="display: none;">
+                            Save
+                        </button>
+                    </div>
+                    <label class="label">
+                        <span class="label-text-alt text-base-content/60">{{ config_data.description if config_data else '' }}</span>
+                    </label>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Toast Container -->
+<div id="toast-container" class="toast toast-top toast-end"></div>
+
+<script>
+// Track modified configs
+const modifiedConfigs = new Set();
+
+// Get CSRF token from meta tag
+function getCsrfToken() {
+    return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') || '';
+}
+
+function formatConfigLabel(key) {
+    // Format config key to readable label
+    return key
+        .split('_')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+}
+
+function updateConfig(configKey, value) {
+    // Mark config as modified
+    modifiedConfigs.add(configKey);
+
+    // Show save button
+    const saveBtn = document.getElementById(`save-${configKey}`);
+    if (saveBtn) {
+        saveBtn.style.display = 'inline-flex';
+    }
+}
+
+async function saveConfig(configKey) {
+    const input = document.getElementById(configKey);
+    const value = input.value;
+
+    try {
+        const response = await fetch('/sandbox/update', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCsrfToken()
+            },
+            body: JSON.stringify({
+                config_key: configKey,
+                config_value: value
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            showToast(data.message, 'success');
+
+            // Hide save button
+            const saveBtn = document.getElementById(`save-${configKey}`);
+            if (saveBtn) {
+                saveBtn.style.display = 'none';
+            }
+
+            // Remove from modified set
+            modifiedConfigs.delete(configKey);
+        } else {
+            showToast(data.message, 'error');
+        }
+    } catch (error) {
+        console.error('Error saving config:', error);
+        showToast('Failed to save configuration', 'error');
+    }
+}
+
+function openResetModal() {
+    document.getElementById('reset-config-modal').checked = true;
+}
+
+async function resetConfiguration() {
+    // Close the modal
+    document.getElementById('reset-config-modal').checked = false;
+
+    // Disable the confirm button and show loading state
+    const confirmBtn = document.getElementById('reset-confirm-btn');
+    if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.innerHTML = '<span class="loading loading-spinner"></span> Resetting...';
+    }
+
+    try {
+        const response = await fetch('/sandbox/reset', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCsrfToken()
+            }
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            showToast(data.message, 'success');
+
+            // Reload page after 2 seconds to show the message
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+        } else {
+            showToast(data.message, 'error');
+            // Re-enable button on error
+            if (confirmBtn) {
+                confirmBtn.disabled = false;
+                confirmBtn.innerHTML = 'Yes, Reset Everything';
+            }
+        }
+    } catch (error) {
+        console.error('Error resetting config:', error);
+        showToast('Failed to reset configuration', 'error');
+        // Re-enable button on error
+        if (confirmBtn) {
+            confirmBtn.disabled = false;
+            confirmBtn.innerHTML = 'Yes, Reset Everything';
+        }
+    }
+}
+
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toast-container');
+
+    const alertClass = {
+        'success': 'alert-success',
+        'error': 'alert-error',
+        'warning': 'alert-warning',
+        'info': 'alert-info'
+    }[type] || 'alert-info';
+
+    const icon = {
+        'success': '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>',
+        'error': '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>',
+        'warning': '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>',
+        'info': '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>'
+    }[type] || '';
+
+    const toast = document.createElement('div');
+    toast.className = `alert ${alertClass} shadow-lg mb-2`;
+    toast.innerHTML = `
+        <div class="flex items-center gap-2">
+            ${icon}
+            <span>${message}</span>
+        </div>
+    `;
+
+    container.appendChild(toast);
+
+    // Auto remove after 5 seconds
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transition = 'opacity 0.5s';
+        setTimeout(() => toast.remove(), 500);
+    }, 5000);
+}
+
+// Format config labels on page load
+document.addEventListener('DOMContentLoaded', () => {
+    // Add helper function to Jinja2 context isn't available in JS
+    // So we handle label formatting in the template itself
+});
+</script>
+
+<!-- DaisyUI Modal for Reset Configuration -->
+<input type="checkbox" id="reset-config-modal" class="modal-toggle" />
+<div class="modal" role="dialog">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg text-error mb-4">⚠️ WARNING: Reset ALL Sandbox Data</h3>
+
+        <div class="alert alert-warning mb-4">
+            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <span>This action cannot be undone!</span>
+        </div>
+
+        <div class="space-y-2 text-base-content">
+            <p class="font-semibold">This action will:</p>
+            <ul class="list-disc list-inside space-y-1 ml-4">
+                <li>Delete all orders, trades, positions, and holdings</li>
+                <li>Reset funds to starting capital (₹1.00 Crore)</li>
+                <li>Reset all configuration values to defaults</li>
+                <li>Clear all historical data</li>
+            </ul>
+        </div>
+
+        <div class="divider"></div>
+
+        <p class="text-base-content/70">Are you absolutely sure you want to reset everything?</p>
+
+        <div class="modal-action">
+            <label for="reset-config-modal" class="btn btn-ghost">Cancel</label>
+            <button id="reset-confirm-btn" onclick="resetConfiguration()" class="btn btn-error">
+                Yes, Reset Everything
+            </button>
+        </div>
+    </div>
+    <label class="modal-backdrop" for="reset-config-modal"></label>
+</div>
+
+{% endblock %}
+
+<!-- Helper macro for formatting config labels -->
+{% macro format_config_label(key) -%}
+    {% set label = key.replace('_', ' ').title() %}
+    {% set label = label.replace('Nse', 'NSE') %}
+    {% set label = label.replace('Bse', 'BSE') %}
+    {% set label = label.replace('Cds', 'CDS') %}
+    {% set label = label.replace('Bcd', 'BCD') %}
+    {% set label = label.replace('Mcx', 'MCX') %}
+    {% set label = label.replace('Ncdex', 'NCDEX') %}
+    {% set label = label.replace('Mis', 'MIS') %}
+    {% set label = label.replace('Cnc', 'CNC') %}
+    {% set label = label.replace('Nrml', 'NRML') %}
+    {{ label }}
+{%- endmacro %}

@@ -111,19 +111,142 @@ class BrokerData:
             
             return {
                 'bid': v.get('bid', 0),
-                'ask': v.get('ask', 0), 
+                'ask': v.get('ask', 0),
                 'open': v.get('open_price', 0),
                 'high': v.get('high_price', 0),
                 'low': v.get('low_price', 0),
                 'ltp': v.get('lp', 0),
                 'prev_close': v.get('prev_close_price', 0),
-                'volume': v.get('volume', 0)
+                'volume': v.get('volume', 0),
+                'oi': int(v.get('oi', 0))
             }
             
         except Exception as e:
             logger.exception(f"Error fetching quotes for {exchange}:{symbol}")
             raise Exception(f"Error fetching quotes: {e}")
 
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols with automatic batching
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            BATCH_SIZE = 50  # Fyers API limit per request
+            RATE_LIMIT_DELAY = 0.1  # Delay in seconds between batch API calls
+
+            # If symbols exceed batch size, process in batches
+            if len(symbols) > BATCH_SIZE:
+                logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                # Split symbols into batches
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.debug(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    # Process this batch
+                    batch_results = self._process_quotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                    # Rate limit delay between batches
+                    if i + BATCH_SIZE < len(symbols):
+                        time.sleep(RATE_LIMIT_DELAY)
+
+                logger.info(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
+                return all_results
+            else:
+                # Single batch processing
+                return self._process_quotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_quotes_batch(self, symbols: list) -> list:
+        """
+        Process a single batch of symbols (internal method)
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys (max 50)
+        Returns:
+            list: List of quote data for the batch
+        """
+        # Convert symbols to broker format and build comma-separated list
+        br_symbols = []
+        symbol_map = {}  # Map br_symbol back to original symbol/exchange
+        skipped_symbols = []  # Track symbols that couldn't be resolved
+
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+            br_symbol = get_br_symbol(symbol, exchange)
+
+            # Track symbols that couldn't be resolved
+            if not br_symbol:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve broker symbol")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': 'Could not resolve broker symbol'
+                })
+                continue
+
+            br_symbols.append(br_symbol)
+            symbol_map[br_symbol] = {'symbol': symbol, 'exchange': exchange}
+
+        # Return skipped symbols if no valid symbols
+        if not br_symbols:
+            logger.warning("No valid symbols to fetch quotes for")
+            return skipped_symbols
+
+        # Join all symbols with comma and URL encode
+        symbols_param = ','.join(br_symbols)
+        encoded_symbols = urllib.parse.quote(symbols_param)
+
+        # Make API call for this batch
+        response = get_api_response(f"/data/quotes?symbols={encoded_symbols}", self.auth_token)
+        logger.debug(f"Fyers multiquotes API response for batch: {response}")
+
+        if response.get('s') != 'ok':
+            error_msg = f"Error from Fyers API: {response.get('message', 'Unknown error')}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
+
+        # Parse response and build results
+        results = []
+        quotes_data = response.get('d', [])
+
+        for quote_item in quotes_data:
+            # Get the symbol from quote data
+            br_symbol = quote_item.get('n', '')
+            v = quote_item.get('v', {})
+
+            # Look up original symbol and exchange
+            original = symbol_map.get(br_symbol, {'symbol': br_symbol, 'exchange': 'UNKNOWN'})
+
+            result_item = {
+                'symbol': original['symbol'],
+                'exchange': original['exchange'],
+                'data': {
+                    'bid': v.get('bid', 0),
+                    'ask': v.get('ask', 0),
+                    'open': v.get('open_price', 0),
+                    'high': v.get('high_price', 0),
+                    'low': v.get('low_price', 0),
+                    'ltp': v.get('lp', 0),
+                    'prev_close': v.get('prev_close_price', 0),
+                    'volume': v.get('volume', 0),
+                    'oi': int(v.get('oi', 0))
+                }
+            }
+            results.append(result_item)
+
+        # Include skipped symbols in results
+        return skipped_symbols + results
 
     def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
         """
@@ -181,15 +304,25 @@ class BrokerData:
             # Validate date range
             if start_dt > end_dt:
                 raise Exception(f"Start date {start_dt.date()} cannot be after end date {end_dt.date()}")
-            
+
+            # Special validation for seconds data (only available for last 30 trading days)
+            if resolution.endswith('S'):
+                max_days_ago = current_dt - pd.Timedelta(days=30)
+                if start_dt < max_days_ago:
+                    logger.warning(f"Warning: Seconds data is only available for the last 30 trading days. "
+                                 f"Adjusting start date from {start_dt.date()} to {max_days_ago.date()}")
+                    start_dt = max_days_ago
+
             # Initialize empty list to store DataFrames
             dfs = []
             
             # Determine chunk size based on resolution
             if resolution == '1D':
-                chunk_days = 300  # Reduced from 200 to be safer
+                chunk_days = 300  # For daily data
+            elif resolution.endswith('S'):
+                chunk_days = 25   # For seconds data - max 30 trading days, use 25 to be safe
             else:
-                chunk_days = 60   # Reduced from 60 to be safer
+                chunk_days = 60   # For minute/hour data
             
             # Process data in chunks
             current_start = start_dt
@@ -321,7 +454,7 @@ class BrokerData:
             encoded_symbol = urllib.parse.quote(br_symbol)
             
             response = get_api_response(f"/data/depth?symbol={encoded_symbol}&ohlcv_flag=1", self.auth_token)
-            logger.debug(f"Fyers depth API response: {response}")
+            logger.debug(f"Fyers depth API FULL response: {json.dumps(response, indent=2)}")
 
             if response.get('s') != 'ok':
                 error_msg = f"Error from Fyers API: {response.get('message', 'Unknown error')}"
@@ -334,11 +467,16 @@ class BrokerData:
                 return {}
 
             bids = depth_data.get('bids', [])
-            asks = depth_data.get('asks', [])
-            
+            asks = depth_data.get('ask', [])  # Note: Fyers uses 'ask' (singular) not 'asks'
+
+            # Debug: Log the raw bids and asks structure
+            logger.debug(f"Raw bids data: {bids}")
+            logger.debug(f"Raw asks data: {asks}")
+
             empty_entry = {'price': 0, 'quantity': 0}
-            bids_formatted = [{'price': b['price'], 'quantity': b['volume']} for b in bids[:5]]
-            asks_formatted = [{'price': a['price'], 'quantity': a['volume']} for a in asks[:5]]
+            # Handle potential missing 'volume' key by using .get() with default 0
+            bids_formatted = [{'price': b.get('price', 0), 'quantity': b.get('volume', 0)} for b in bids[:5]]
+            asks_formatted = [{'price': a.get('price', 0), 'quantity': a.get('volume', 0)} for a in asks[:5]]
             
             while len(bids_formatted) < 5:
                 bids_formatted.append(empty_entry)

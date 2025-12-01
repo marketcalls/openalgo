@@ -29,6 +29,9 @@ from broker.ibulls.streaming.ibulls_adapter import IbullsWebSocketAdapter
 # Import the compositedge_adapter
 from broker.compositedge.streaming.compositedge_adapter import CompositedgeWebSocketAdapter
 
+# Import the fivepaisa_adapter
+from broker.fivepaisa.streaming.fivepaisa_adapter import FivepaisaWebSocketAdapter
+
 # Import the fivepaisaxts_adapter
 from broker.fivepaisaxts.streaming.fivepaisaxts_adapter import FivepaisaXTSWebSocketAdapter
 
@@ -47,6 +50,21 @@ from broker.kotak.streaming.kotak_adapter import KotakWebSocketAdapter
 # Import the fyers_adapter
 from broker.fyers.streaming.fyers_websocket_adapter import FyersWebSocketAdapter
 
+# Import the definedge_adapter
+from broker.definedge.streaming.definedge_adapter import DefinedgeWebSocketAdapter
+
+# Import the paytm_adapter
+from broker.paytm.streaming.paytm_adapter import PaytmWebSocketAdapter
+
+# Import the indmoney_adapter
+from broker.indmoney.streaming.indmoney_adapter import IndmoneyWebSocketAdapter
+
+# Import the mstock_adapter
+from broker.mstock.streaming.mstock_adapter import MstockWebSocketAdapter
+
+# Import the motilal_adapter
+from broker.motilal.streaming.motilal_adapter import MotilalWebSocketAdapter
+
 # AliceBlue adapter will be loaded dynamically
 
 # Register adapters
@@ -57,12 +75,18 @@ register_adapter("flattrade", FlattradeWebSocketAdapter)
 register_adapter("shoonya", ShoonyaWebSocketAdapter)
 register_adapter("ibulls", IbullsWebSocketAdapter)
 register_adapter("compositedge", CompositedgeWebSocketAdapter)
+register_adapter("fivepaisa", FivepaisaWebSocketAdapter)
 register_adapter("fivepaisaxts", FivepaisaXTSWebSocketAdapter)
 register_adapter("iifl", IiflWebSocketAdapter)
 register_adapter("wisdom", WisdomWebSocketAdapter)
 register_adapter("upstox", UpstoxWebSocketAdapter)
 register_adapter("kotak", KotakWebSocketAdapter)
 register_adapter("fyers", FyersWebSocketAdapter)
+register_adapter("definedge", DefinedgeWebSocketAdapter)
+register_adapter("paytm", PaytmWebSocketAdapter)
+register_adapter("indmoney", IndmoneyWebSocketAdapter)
+register_adapter("mstock", MstockWebSocketAdapter)
+register_adapter("motilal", MotilalWebSocketAdapter)
 
 # AliceBlue adapter will be registered dynamically when first used
 
@@ -78,6 +102,7 @@ __all__ = [
     'ShoonyaWebSocketAdapter',
     'IbullsWebSocketAdapter',
     'CompositedgeWebSocketAdapter',
+    'FivepaisaWebSocketAdapter',
     'FivepaisaXTSWebSocketAdapter',
     'IiflWebSocketAdapter',
     'JainamWebSocketAdapter',
@@ -85,5 +110,10 @@ __all__ = [
     'WisdomWebSocketAdapter',
     'UpstoxWebSocketAdapter',
     'KotakWebSocketAdapter',
-    'FyersWebSocketAdapter'
+    'FyersWebSocketAdapter',
+    'DefinedgeWebSocketAdapter',
+    'PaytmWebSocketAdapter',
+    'IndmoneyWebSocketAdapter',
+    'MstockWebSocketAdapter',
+    'MotilalWebSocketAdapter'
 ]

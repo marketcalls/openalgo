@@ -4,6 +4,7 @@ venopenalgo
 openalgo.db
 *.db-shm
 *.db-wal
+*.db-journal
 .env
 .flaskenv
 *.pyc
@@ -26,6 +27,9 @@ config.ini
 *.tmp
 checkpoint.txt
 checkpoints.json
+
+# Strategy encryption key
+db/strategy_encryption.key
 
 # CSV Files (except symbols.csv)
 *.csv

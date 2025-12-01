@@ -9,6 +9,7 @@ import json
 import jwt
 import base64
 import hashlib
+import os
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -28,7 +29,7 @@ def ratelimit_handler(e):
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def broker_callback(broker,para=None):
     logger.info(f'Broker callback initiated for: {broker}')
-    logger.info(f'Session contents: {dict(session)}')
+    logger.debug(f'Session contents: {dict(session)}')
     logger.info(f'Session has user key: {"user" in session}')
     
     # Special handling for Compositedge - it comes from external OAuth and might lose session
@@ -36,6 +37,10 @@ def broker_callback(broker,para=None):
         # For Compositedge OAuth callback, we'll handle authentication differently
         # The session will be established after successful auth token validation
         logger.info("Compositedge callback without session - will establish session after auth")
+    # Special handling for mstock POST - check session but provide better error instead of redirect
+    elif broker == 'mstock' and request.method == 'POST' and 'user' not in session:
+        # Redirect to broker selection page with error message instead of login
+        return redirect(url_for('auth.broker_login'))
     else:
         # Check if user is not in session first for other brokers
         if 'user' not in session:
@@ -80,6 +85,38 @@ def broker_callback(broker,para=None):
             user_id = clientcode
             auth_token, feed_token, error_message = auth_function(clientcode, broker_pin, totp_code)
             forward_url = 'angel.html'
+
+    elif broker == 'mstock':
+        if request.method == 'GET':
+            return render_template('mstock.html')
+
+        elif request.method == 'POST':
+            # Check if user session is lost
+            if 'user' not in session:
+                logger.error(f'mstock POST - Session lost! Cookies: {request.cookies}')
+                return render_template('mstock.html', error_message="Session expired. Please login again.")
+
+            # Import mstock TOTP authentication function
+            from broker.mstock.api.auth_api import authenticate_with_totp
+
+            # Get password and TOTP from form
+            password = request.form.get('password')
+            totp_code = request.form.get('totp')
+
+            if not password:
+                return render_template('mstock.html', error_message="Password is required.")
+            if not totp_code:
+                return render_template('mstock.html', error_message="TOTP code is required.")
+
+            # Single-step authentication with password + TOTP
+            auth_token, feed_token, error_message = authenticate_with_totp(password, totp_code)
+
+            if error_message:
+                return render_template('mstock.html', error_message=error_message)
+
+            # Authentication successful, redirect to dashboard
+            logger.info("mStock TOTP authentication successful, redirecting to dashboard")
+            return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token, user_id=None)
     
     elif broker == 'aliceblue':
         if request.method == 'GET':
@@ -263,23 +300,87 @@ def broker_callback(broker,para=None):
         forward_url = 'broker.html'
 
     elif broker=='dhan':
-        code = 'dhan'
-        logger.debug(f'Dhan broker - The code is {code}')
-        auth_token, error_message = auth_function(code)
-        
-        # Validate authentication by testing funds API before proceeding
-        if auth_token:
-            # Import the funds function to test authentication
-            from broker.dhan.api.funds import test_auth_token
-            is_valid, validation_error = test_auth_token(auth_token)
-            
-            if not is_valid:
-                logger.error(f"Dhan authentication validation failed: {validation_error}")
-                return handle_auth_failure(f"Authentication validation failed: {validation_error}", forward_url='broker.html')
-            
-            logger.info("Dhan authentication validation successful")
-        
+        auth_token = None
+        error_message = None
         forward_url = 'broker.html'
+
+        if request.method == 'GET':
+            # Handle OAuth callback with tokenId
+            # Log all incoming parameters to debug
+            logger.info(f"Dhan callback - GET parameters: {dict(request.args)}")
+            logger.info(f"Dhan callback - Full URL: {request.url}")
+            logger.info(f"Dhan callback - Request path: {request.path}")
+            logger.info(f"Dhan callback - Query string: {request.query_string.decode()}")
+
+            # Log if we're coming from a redirect
+            referrer = request.headers.get('Referer', 'No referrer')
+            logger.info(f"Dhan callback - Referrer: {referrer}")
+
+            # Check for tokenId in various possible parameter names
+            token_id = request.args.get('tokenId') or request.args.get('token_id') or request.args.get('token')
+
+            if token_id:
+                # Step 3: Consume consent with tokenId
+                logger.debug(f'Dhan broker - Received tokenId: {token_id}')
+                # auth_function now returns (auth_token, user_id, error_message)
+                auth_result = auth_function(token_id)
+
+                # Handle both old format (2 values) and new format (3 values)
+                if len(auth_result) == 3:
+                    auth_token, user_id, error_message = auth_result
+                else:
+                    auth_token, error_message = auth_result
+                    user_id = None
+
+                # Validate authentication by testing funds API before proceeding
+                if auth_token:
+                    # Import the funds function to test authentication
+                    from broker.dhan.api.funds import test_auth_token
+                    is_valid, validation_error = test_auth_token(auth_token)
+
+                    if not is_valid:
+                        logger.error(f"Dhan authentication validation failed: {validation_error}")
+                        return handle_auth_failure(f"Authentication validation failed: {validation_error}", forward_url='broker.html')
+
+                    logger.info("Dhan authentication validation successful")
+                    # Set forward_url for successful authentication
+                    forward_url = 'broker.html'
+                    # The auth_token will be handled by the common success flow below
+                else:
+                    # Authentication failed
+                    return handle_auth_failure(error_message or "Authentication failed", forward_url='broker.html')
+            else:
+                # First time coming from broker.html - redirect to initiate OAuth
+                # This avoids showing the form and directly starts OAuth if we have a stored client ID
+                return redirect('/dhan/initiate-oauth')
+
+        elif request.method == 'POST':
+            # This should only handle direct access token submission now
+            # OAuth flow is handled by /dhan/initiate-oauth
+            access_token = request.form.get('access_token')
+
+            if access_token:
+                # Direct token authentication
+                logger.info("Processing direct access token for Dhan")
+                auth_token, error_message = auth_function(access_token)
+
+                if auth_token:
+                    # Validate authentication by testing funds API
+                    from broker.dhan.api.funds import test_auth_token
+                    is_valid, validation_error = test_auth_token(auth_token)
+
+                    if is_valid:
+                        logger.info("Dhan direct token authentication successful")
+                        forward_url = 'broker.html'
+                        # The auth_token will be handled by the common success flow below
+                    else:
+                        logger.error(f"Dhan direct token validation failed: {validation_error}")
+                        return render_template('dhan.html', error_message=f"Token validation failed: {validation_error}")
+                else:
+                    return render_template('dhan.html', error_message=error_message or "Invalid access token")
+            else:
+                # If no access token provided, show the form again
+                return render_template('dhan.html', error_message="Please provide either Client ID for OAuth or Access Token for direct login")
     elif broker=='indmoney':
         code = 'indmoney'
         logger.debug(f'IndMoney broker - The code is {code}')
@@ -334,7 +435,7 @@ def broker_callback(broker,para=None):
     elif broker == 'firstock':
         if request.method == 'GET':
             return render_template('firstock.html')
-        
+
         elif request.method == 'POST':
             userid = request.form.get('userid')
             password = request.form.get('password')
@@ -342,6 +443,19 @@ def broker_callback(broker,para=None):
 
             auth_token, error_message = auth_function(userid, password, totp_code)
             forward_url = 'firstock.html'
+
+    elif broker == 'motilal':
+        if request.method == 'GET':
+            return render_template('motilal.html')
+
+        elif request.method == 'POST':
+            userid = request.form.get('userid')
+            password = request.form.get('password')
+            totp_code = request.form.get('totp')
+            date_of_birth = request.form.get('dob')
+
+            auth_token, feed_token, error_message = auth_function(userid, password, totp_code, date_of_birth)
+            forward_url = 'motilal.html'
 
     elif broker == 'flattrade':
         code = request.args.get('code')
@@ -354,22 +468,34 @@ def broker_callback(broker,para=None):
         logger.debug(f"Kotak broker - The Broker is {broker}")
         if request.method == 'GET':
             return render_template('kotak.html')
-        
+
         elif request.method == 'POST':
-            otp = request.form.get('otp')
-            token = request.form.get('token')
-            sid = request.form.get('sid')
-            userid = request.form.get('userid')
-            access_token = request.form.get('access_token')
-            hsServerId = request.form.get('hsServerId')
-            
-            auth_token, error_message = auth_function(otp,token,sid,userid,access_token,hsServerId)
+            # New TOTP authentication flow
+            mobile_number = request.form.get('mobilenumber')
+            totp = request.form.get('totp')
+            mpin = request.form.get('mpin')
+
+            # Validate inputs
+            if not mobile_number or not totp or not mpin:
+                error_message = "Please provide Mobile Number, TOTP, and MPIN"
+                return render_template('kotak.html', error_message=error_message)
+
+            logger.info(f"Kotak TOTP authentication initiated for mobile: {mobile_number[:5]}***")
+
+            # Call the new authenticate_broker function
+            auth_token, error_message = auth_function(mobile_number, totp, mpin)
             forward_url = 'kotak.html'
+
+            if auth_token:
+                logger.info(f"Kotak authentication successful, auth_token received")
+            else:
+                logger.error(f"Kotak authentication failed: {error_message}")
 
     elif broker == 'paytm':
          request_token = request.args.get('requestToken')
          logger.debug(f'Paytm broker - The request token is {request_token}')
-         auth_token, error_message = auth_function(request_token)
+         auth_token, feed_token, error_message = auth_function(request_token)
+         forward_url = 'broker.html'
 
     elif broker == 'pocketful':
         # Handle the OAuth2 authorization code from the callback
@@ -492,9 +618,9 @@ def broker_callback(broker,para=None):
             auth_token = f'{BROKER_API_KEY}:{auth_token}'
         if broker == 'dhan':
             auth_token = f'{auth_token}'
-        
+
         # For brokers that have user_id and feed_token from authenticate_broker
-        if broker =='angel' or broker == 'compositedge' or broker == 'pocketful' or broker == 'definedge':
+        if broker in ['angel', 'compositedge', 'pocketful', 'definedge', 'dhan']:
             # For Compositedge, handle missing session user
             if broker == 'compositedge' and 'user' not in session:
                 # Get the admin user from the database
@@ -508,115 +634,85 @@ def broker_callback(broker,para=None):
                 else:
                     logger.error("No admin user found in database for Compositedge callback")
                     return handle_auth_failure("No user account found. Please login first.", forward_url='broker.html')
-            
+
             # Pass the feed token and user_id to handle_auth_success
             return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token, user_id=user_id)
+        elif broker == 'paytm':
+            # Paytm has feed_token (public_access_token) but no user_id
+            return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token)
         else:
-            # Pass just the feed token to handle_auth_success (other brokers don't have user_id)
+            # Pass just the feed token to handle_auth_success (other brokers don't have feed_token or user_id)
             return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token)
     else:
         return handle_auth_failure(error_message, forward_url=forward_url)
     
 
-@brlogin_bp.route('/<broker>/loginflow', methods=['POST','GET'])
+@brlogin_bp.route('/dhan/initiate-oauth', methods=['GET', 'POST'])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
-def broker_loginflow(broker):
+def dhan_initiate_oauth():
+    """Handle Dhan OAuth initiation"""
     # Check if user is not in session first
     if 'user' not in session:
         return redirect(url_for('auth.login'))
 
-    if broker == 'kotak':
-        # Get form data
-        mobile_number = request.form.get('mobilenumber', '')
-        password = request.form.get('password')
+    # Get client_id from .env BROKER_API_KEY (format: client_id:::api_key)
+    BROKER_API_KEY = os.getenv('BROKER_API_KEY')
+    client_id = None
 
-        # Strip any existing prefix and add +91
-        mobile_number = mobile_number.replace('+91', '').strip()
-        if not mobile_number.startswith('+91'):
-            mobile_number = f'+91{mobile_number}'
-        
-        # First get the access token
-        api_secret = get_broker_api_secret()
-        auth_string = base64.b64encode(f"{BROKER_API_KEY}:{api_secret}".encode()).decode('utf-8')
-        # Define the connection
-        conn = http.client.HTTPSConnection("napi.kotaksecurities.com")
+    if ':::' in BROKER_API_KEY:
+        client_id, _ = BROKER_API_KEY.split(':::')
 
-        # Define the payload
-        payload = json.dumps({
-            'grant_type': 'client_credentials'
-        })
+    if not client_id:
+        error_message = "Client ID not found in BROKER_API_KEY. Please configure BROKER_API_KEY as 'client_id:::api_key' in .env"
+        logger.error(error_message)
+        return handle_auth_failure(error_message, forward_url='broker.html')
 
-        # Define the headers with Basic Auth
-        headers = {
-            'accept': '*/*',
-            'Content-Type': 'application/json',
-            'Authorization': f'Basic {auth_string}'
-        }
+    logger.info(f"Initiating Dhan OAuth flow with client ID from .env: {client_id}")
 
-        # Make API request
-        conn.request("POST", "/oauth2/token", payload, headers)
+    # Import the required functions
+    from broker.dhan.api.auth_api import generate_consent, get_login_url
 
-        # Get the response
-        res = conn.getresponse()
-        data = json.loads(res.read().decode("utf-8"))
+    # Generate consent with the client ID
+    consent_app_id, error = generate_consent(client_id)
 
-        if 'access_token' in data:
-            access_token = data['access_token']
-            # Login with mobile number and password
-            conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
-            payload = json.dumps({
-                "mobileNumber": mobile_number,
-                "password": password
-            })
-            headers = {
-                'accept': '*/*',
-                'Content-Type': 'application/json',
-                'Authorization': f'Bearer {access_token}'
-            }
-            conn.request("POST", "/login/1.0/login/v2/validate", payload, headers)
-            res = conn.getresponse()
-            data = res.read().decode("utf-8")
+    if consent_app_id:
+        # Store consent_app_id in session
+        session['consent_app_id'] = consent_app_id
 
-            data_dict = json.loads(data)
+        # Get the login URL
+        login_url = get_login_url(consent_app_id)
+        if login_url:
+            logger.info(f'Redirecting to Dhan OAuth login URL: {login_url}')
+            # Return a page that will redirect via JavaScript
+            # This ensures the browser properly redirects to the external URL
+            return f'''
+            <html>
+            <head>
+                <title>Redirecting to Dhan...</title>
+            </head>
+            <body>
+                <p>Redirecting to Dhan login page...</p>
+                <script>
+                    window.location.href = "{login_url}";
+                </script>
+            </body>
+            </html>
+            '''
+        else:
+            error_message = "Failed to generate login URL"
+            logger.error(error_message)
+            return handle_auth_failure(error_message, forward_url='broker.html')
+    else:
+        error_message = error or "Failed to generate consent. Please check your API credentials and Client ID."
+        logger.error(error_message)
+        return handle_auth_failure(error_message, forward_url='broker.html')
 
-            if 'data' in data_dict:
-                token = data_dict['data']['token']
-                sid = data_dict['data']['sid']
-                hsServerId = data_dict['data']['hsServerId']
-                decode_jwt = jwt.decode(token, options={"verify_signature": False})
-                userid = decode_jwt.get("sub")
-
-                para = {
-                    "access_token": access_token,
-                    "token": token,
-                    "sid": sid,
-                    "hsServerId": hsServerId,
-                    "userid": userid
-                }
-                getKotakOTP(userid, access_token)
-                return render_template('kotakotp.html', para=para)
-            else:
-                error_message = data_dict.get('message', 'Unknown error occurred')
-                return render_template('kotak.html', error_message=error_message)
-        
-    return
-
-
-def getKotakOTP(userid,access_token):
-    conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
-    payload = json.dumps({
-    "userId": userid,
-    "sendEmail": True,
-    "isWhitelisted": True
-    })
-    headers = {
-    'accept': '*/*',
-    'Content-Type': 'application/json',
-    'Authorization': f'Bearer {access_token}'
-    }
-    conn.request("POST", "/login/1.0/login/otp/generate", payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    
-    return 'success'
+# Old Kotak SMS OTP flow - deprecated in favor of TOTP authentication
+# Keeping this commented for reference if needed
+# @brlogin_bp.route('/<broker>/loginflow', methods=['POST','GET'])
+# @limiter.limit(LOGIN_RATE_LIMIT_MIN)
+# @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
+# def broker_loginflow(broker):
+#     # This function is no longer used for Kotak TOTP authentication
+#     pass

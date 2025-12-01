@@ -11,45 +11,47 @@ def transform_data(data,token):
     # Handle special characters in symbol
     if symbol and '&' in symbol:
         symbol = symbol.replace('&', '%26')
-        
-    # Basic mapping
+
+    # Basic mapping - ensure all numeric values are strings
     transformed = {
         "uid": data["apikey"],
         "actid": data["apikey"],
         "exch": data["exchange"],
         "tsym": symbol,
-        "qty": data["quantity"],
-        "prc": data.get("price", "0"),
-        "trgprc":  data.get("trigger_price", "0"),
-        "dscqty": data.get("disclosed_quantity", "0"),
+        "qty": str(data["quantity"]),
+        "prc": str(data.get("price", "0")),
+        "trgprc": str(data.get("trigger_price", "0")),
+        "dscqty": str(data.get("disclosed_quantity", "0")),
         "prd": map_product_type(data["product"]),
         "trantype": 'B' if data["action"] == "BUY" else 'S',
         "prctyp": map_order_type(data["pricetype"]),
-        "mkt_protection": "0", 
+        "mkt_protection": "0",
         "ret": "DAY",
         "ordersource": "API"
-        
+
     }
 
 
-    
-    
+
+
     return transformed
 
 
 def transform_modify_order_data(data, token):
+    # Handle special characters in symbol
+    symbol = data["symbol"]
+    if symbol and '&' in symbol:
+        symbol = symbol.replace('&', '%26')
+
     return {
+        "uid": data["apikey"],
         "exch": data["exchange"],
         "norenordno": data["orderid"],
         "prctyp": map_order_type(data["pricetype"]),
-        "prc": data["price"],
-        "qty": data["quantity"],
-        "tsym": data["symbol"],
-        "ret": "DAY",
-        "mkt_protection": "0",
-        "trdprc": data.get("trigger_price", "0"),
-        "dscqty": data.get("disclosed_quantity", "0"),
-        "uid": data["apikey"]
+        "prc": str(data["price"]),
+        "qty": str(data["quantity"]),
+        "tsym": symbol,
+        "ret": "DAY"
     }
 
 

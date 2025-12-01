@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timedelta
 import os
+import time
 from typing import Dict, Any, Optional
 import httpx
 import pytz
@@ -17,6 +18,32 @@ logger = get_logger(__name__)
 # Retrieve the BROKER_API_KEY environment variable
 broker_api_key = os.getenv('BROKER_API_KEY')
 api_key, user_id, client_id = broker_api_key.split(':::')
+
+
+def normalize_exchange_for_query(symbol: str, exchange: str) -> str:
+    """
+    Normalize exchange for symbol lookup in database.
+    Indices need to use NSE_INDEX or BSE_INDEX instead of NSE/BSE.
+
+    Args:
+        symbol: Trading symbol
+        exchange: Exchange (NSE, BSE, etc.)
+
+    Returns:
+        str: Normalized exchange for database query
+    """
+    # Common index symbols
+    index_symbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTYNXT50',
+                     'SENSEX', 'BANKEX', 'SENSEX50', 'INDIAVIX']
+
+    # Check if symbol is an index
+    if symbol.upper() in index_symbols or 'NIFTY' in symbol.upper() or 'SENSEX' in symbol.upper():
+        if exchange == 'NSE':
+            return 'NSE_INDEX'
+        elif exchange == 'BSE':
+            return 'BSE_INDEX'
+
+    return exchange
 
 # Base URL for 5Paisa API
 BASE_URL = "https://Openapi.5paisa.com"
@@ -93,9 +120,12 @@ class BrokerData:
             dict: Market depth data
         """
         try:
+            # Normalize exchange for index symbols
+            normalized_exchange = normalize_exchange_for_query(symbol, exchange)
+
             # Get token from symbol
-            token = get_token(symbol, exchange)
-            br_symbol = get_br_symbol(symbol, exchange)
+            token = get_token(symbol, normalized_exchange)
+            br_symbol = get_br_symbol(symbol, normalized_exchange)
 
             # Prepare request payload
             json_data = {
@@ -105,7 +135,7 @@ class BrokerData:
                 "body": {
                     "ClientCode": client_id,
                     "Exchange": map_exchange(exchange),
-                    "ExchangeType": map_exchange_type(exchange),
+                    "ExchangeType": map_exchange_type(normalized_exchange),
                     "ScripCode": token,
                     "ScripData": br_symbol if token == "0" else ""
                 }
@@ -128,7 +158,7 @@ class BrokerData:
             response = response.json()
 
             if response['head']['statusDescription'] != 'Success':
-                logger.info(f"Market Depth Error: {response['head']['statusDescription']}")
+                logger.debug(f"Market Depth Error: {response['head']['statusDescription']}")
                 return None
 
             depth_data = response['body']
@@ -151,7 +181,7 @@ class BrokerData:
                 # Get lowest sell price
                 ask = min(float(order['Price']) for order in sell_orders)
             
-            logger.info(f"Extracted Bid: {bid}, Ask: {ask}")
+            logger.debug(f"Extracted Bid: {bid}, Ask: {ask}")
             return {'bid': bid, 'ask': ask}
 
         except Exception as e:
@@ -171,9 +201,12 @@ class BrokerData:
             dict: Market depth data with OHLC, volume and open interest
         """
         try:
+            # Normalize exchange for index symbols
+            normalized_exchange = normalize_exchange_for_query(symbol, exchange)
+
             # Get token from symbol
-            token = get_token(symbol, exchange)
-            br_symbol = get_br_symbol(symbol, exchange)
+            token = get_token(symbol, normalized_exchange)
+            br_symbol = get_br_symbol(symbol, normalized_exchange)
 
             # Get market snapshot for overall data
             snapshot_data = {
@@ -185,7 +218,7 @@ class BrokerData:
                     "Data": [
                         {
                             "Exchange": map_exchange(exchange),
-                            "ExchangeType": map_exchange_type(exchange),
+                            "ExchangeType": map_exchange_type(normalized_exchange),
                             "ScripCode": token,
                             "ScripData": br_symbol if token == "0" else ""
                         }
@@ -212,6 +245,10 @@ class BrokerData:
             if snapshot_response['head']['statusDescription'] != 'Success':
                 raise Exception(f"Error from 5Paisa API: {snapshot_response['head']['statusDescription']}")
 
+            # Check if Data array exists and has elements
+            if not snapshot_response.get('body', {}).get('Data') or len(snapshot_response['body']['Data']) == 0:
+                raise Exception(f"No data returned for symbol {symbol} on exchange {exchange}")
+
             quote_data = snapshot_response['body']['Data'][0]
 
             # Get market depth data
@@ -222,7 +259,7 @@ class BrokerData:
                 "body": {
                     "ClientCode": client_id,
                     "Exchange": map_exchange(exchange),
-                    "ExchangeType": map_exchange_type(exchange),
+                    "ExchangeType": map_exchange_type(normalized_exchange),
                     "ScripCode": token,
                     "ScripData": br_symbol if token == "0" else ""
                 }
@@ -306,9 +343,15 @@ class BrokerData:
             dict: Quote data with bid, ask, ltp, open, high, low, prev_close, volume
         """
         try:
+            # Normalize exchange for index symbols
+            normalized_exchange = normalize_exchange_for_query(symbol, exchange)
+            logger.debug(f"Getting quotes for {symbol} on {exchange} (normalized: {normalized_exchange})")
+
             # Get token from symbol
-            token = get_token(symbol, exchange)
-            br_symbol = get_br_symbol(symbol, exchange)
+            token = get_token(symbol, normalized_exchange)
+            br_symbol = get_br_symbol(symbol, normalized_exchange)
+
+            logger.debug(f"Token for {symbol} on {normalized_exchange}: {token}, BR Symbol: {br_symbol}")
 
             # Prepare request payload
             json_data = {
@@ -320,13 +363,15 @@ class BrokerData:
                     "Data": [
                         {
                             "Exchange": map_exchange(exchange),
-                            "ExchangeType": map_exchange_type(exchange),
+                            "ExchangeType": map_exchange_type(normalized_exchange),
                             "ScripCode": token,
                             "ScripData": br_symbol if token == "0" else ""
                         }
                     ]
                 }
             }
+
+            logger.debug(f"API Request - Exchange: {map_exchange(exchange)}, ExchangeType: {map_exchange_type(normalized_exchange)}, ScripCode: {token}, ScripData: {br_symbol if token == '0' else ''}")
 
             # Get the shared httpx client
             client = get_httpx_client()
@@ -346,6 +391,13 @@ class BrokerData:
 
             # Check for successful response
             if response['head']['statusDescription'] != 'Success':
+                logger.error(f"API returned non-success status: {response['head']['statusDescription']}")
+                return None
+
+            # Check if Data array exists and has elements
+            if not response.get('body', {}).get('Data') or len(response['body']['Data']) == 0:
+                logger.error(f"No data returned for symbol {symbol} on exchange {exchange}")
+                logger.error(f"Response: {response}")
                 return None
 
             # Extract quote data
@@ -376,6 +428,200 @@ class BrokerData:
         except Exception as e:
             logger.error(f"Error in get_quotes: {e}")
             return None
+
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols using 5paisa's MarketSnapshot API
+        The API supports multiple symbols in a single request via the Data array
+
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            # 5paisa MarketSnapshot supports multiple symbols per request
+            # Note: API returns empty for large batches (100+), 50 works reliably
+            BATCH_SIZE = 50  # Symbols per API request
+            RATE_LIMIT_DELAY = 0.5  # 500ms delay between batches
+
+            if len(symbols) > BATCH_SIZE:
+                logger.debug(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.info(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    batch_results = self._process_quotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                    # Rate limit delay between batches
+                    if i + BATCH_SIZE < len(symbols):
+                        time.sleep(RATE_LIMIT_DELAY)
+
+                logger.debug(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
+                return all_results
+            else:
+                return self._process_quotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_quotes_batch(self, symbols: list) -> list:
+        """
+        Process a batch of symbols using 5paisa's MarketSnapshot endpoint
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+        Returns:
+            list: List of quote data for the batch
+        """
+        skipped_symbols = []
+        symbol_map = {}  # Map scrip_code to original symbol/exchange
+
+        # Build the Data array for multi-quote request
+        data_array = []
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            # Normalize exchange for index symbols
+            normalized_exchange = normalize_exchange_for_query(symbol, exchange)
+
+            # Get token and broker symbol
+            token = get_token(symbol, normalized_exchange)
+            br_symbol = get_br_symbol(symbol, normalized_exchange)
+
+            if not token:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve token")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': 'Could not resolve token'
+                })
+                continue
+
+            data_array.append({
+                "Exchange": map_exchange(exchange),
+                "ExchangeType": map_exchange_type(normalized_exchange),
+                "ScripCode": token,
+                "ScripData": br_symbol if token == "0" else ""
+            })
+
+            # Store mapping for response processing
+            # Use composite key (token + exchange + symbol) to handle token "0" cases
+            # where multiple symbols might have the same fallback token
+            if token == "0":
+                # For fallback cases, use ScripData (br_symbol) as key
+                map_key = f"scripdata:{br_symbol}"
+            else:
+                map_key = str(token)
+
+            symbol_map[map_key] = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'br_symbol': br_symbol,
+                'token': token
+            }
+
+        if not data_array:
+            logger.warning("No valid symbols to fetch quotes for")
+            return skipped_symbols
+
+        # Build request payload
+        json_data = {
+            "head": {
+                "key": api_key
+            },
+            "body": {
+                "ClientCode": client_id,
+                "Data": data_array
+            }
+        }
+
+        # Get the shared httpx client
+        client = get_httpx_client()
+
+        # Make API request
+        headers = {
+            'Authorization': f'bearer {self.auth_token}',
+            'Content-Type': 'application/json'
+        }
+
+        try:
+            response = client.post(
+                f"{BASE_URL}/VendorsAPI/Service1.svc/MarketSnapshot",
+                json=json_data,
+                headers=headers
+            )
+            response.raise_for_status()
+            response_data = response.json()
+
+            if response_data['head']['statusDescription'] != 'Success':
+                error_msg = response_data['head'].get('statusDescription', 'Unknown error')
+                logger.error(f"Error from 5Paisa MarketSnapshot API: {error_msg}")
+                raise Exception(f"Error from 5Paisa API: {error_msg}")
+
+            # Parse response and build results
+            results = []
+            quotes_data = response_data.get('body', {}).get('Data', [])
+
+            for quote_item in quotes_data:
+                # Get the scrip code from response
+                scrip_code = str(quote_item.get('ScripCode', ''))
+                scrip_data = quote_item.get('ScripData', '') or quote_item.get('Symbol', '')
+
+                # Look up original symbol and exchange
+                # First try by scrip_code, then by scripdata for token "0" cases
+                original = symbol_map.get(scrip_code)
+                if not original and scrip_code == "0" and scrip_data:
+                    original = symbol_map.get(f"scripdata:{scrip_data}")
+
+                if not original:
+                    # Try to find by matching broker symbol in values
+                    for key, info in symbol_map.items():
+                        if info.get('br_symbol') == scrip_data:
+                            original = info
+                            break
+
+                if not original:
+                    logger.warning(f"Could not map scrip code {scrip_code} (ScripData: {scrip_data}) to original symbol")
+                    continue
+
+                # Get previous close
+                prev_close = float(quote_item.get('PClose', 0))
+                if prev_close == 0:
+                    prev_close = float(quote_item.get('PreviousClose', 0))
+                    if prev_close == 0:
+                        prev_close = float(quote_item.get('Close', 0))
+
+                results.append({
+                    'symbol': original['symbol'],
+                    'exchange': original['exchange'],
+                    'data': {
+                        'bid': 0,  # MarketSnapshot doesn't include bid/ask
+                        'ask': 0,
+                        'open': float(quote_item.get('Open', 0)),
+                        'high': float(quote_item.get('High', 0)),
+                        'low': float(quote_item.get('Low', 0)),
+                        'ltp': float(quote_item.get('LastTradedPrice', 0)),
+                        'prev_close': prev_close,
+                        'volume': int(quote_item.get('Volume', 0)),
+                        'oi': int(quote_item.get('OpenInterest', 0))
+                    }
+                })
+
+            return skipped_symbols + results
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error in multiquotes: {e.response.status_code} - {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Error processing quotes batch: {e}")
+            raise
 
     def map_interval(self, interval: str) -> str:
         """Map openalgo interval to 5paisa interval"""
@@ -530,51 +776,52 @@ class BrokerData:
                             # Skip invalid candles
                             if len(candle) < 6:
                                 continue
-                                
+
                             # Parse date and values
                             dt = datetime.strptime(candle[0], "%Y-%m-%dT%H:%M:%S")
                             # Make the datetime timezone-aware (UTC)
                             dt = pytz.UTC.localize(dt)
-                            
+
                             open_price = float(candle[1])
                             high_price = float(candle[2])
                             low_price = float(candle[3])
                             close_price = float(candle[4])
                             volume = int(candle[5])
-                            
+
                             # Skip holidays and invalid data:
                             # 1. Zero volume
                             # 2. All prices are zero
                             # 3. High = Low (usually indicates no trading)
-                            if (volume == 0 or 
+                            if (volume == 0 or
                                 (open_price == 0 and high_price == 0 and low_price == 0 and close_price == 0) or
                                 (high_price == low_price)):
                                 continue
-                            
-                            # Make timezone-aware in UTC
-                            dt = dt.replace(tzinfo=pytz.UTC)
-                            
-                            # For all candles, we need proper market timing
-                            # Convert to IST timezone first
-                            ist = pytz.timezone('Asia/Kolkata')
-                            dt = dt.astimezone(ist)
-                            
-                            # For daily candles, always set time to 9:15 AM IST (market open)
+
+                            # For daily candles, create timestamp at midnight UTC like Angel does
                             if interval.upper() == 'D':
-                                dt = dt.replace(hour=9, minute=15, second=0)
+                                # Extract the date from the API timestamp
+                                date_only = dt.date()
+                                # Create datetime at midnight UTC (same as Angel broker)
+                                dt_midnight = datetime(date_only.year, date_only.month, date_only.day, 0, 0, 0)
+                                dt_midnight = pytz.UTC.localize(dt_midnight)
+                                timestamp_sec = int(dt_midnight.timestamp())
                             else:
-                                # For intraday, make sure we handle the timing correctly
+                                # For intraday candles, convert to IST and fix market hours
+                                ist = pytz.timezone('Asia/Kolkata')
+                                dt = dt.astimezone(ist)
+
+                                # Make sure we handle the timing correctly
                                 # Create a reference time at 9:15 AM on the same date
                                 market_open = dt.replace(hour=9, minute=15, second=0)
-                                
+
                                 # Check if the timestamp is outside of valid market hours
                                 if dt.hour < 9 or (dt.hour == 9 and dt.minute < 15) or dt.hour > 15 or (dt.hour == 15 and dt.minute > 30):
                                     # Shift to market hours by making it relative to market open
                                     minutes_offset = (dt.hour * 60 + dt.minute) % (6 * 60 + 15)  # 6h15m market duration
                                     dt = market_open + timedelta(minutes=minutes_offset)
-                            
-                            # Convert to Unix timestamp in seconds
-                            timestamp_sec = int(dt.timestamp())  # Simple Unix timestamp in seconds
+
+                                # Convert to Unix timestamp in seconds
+                                timestamp_sec = int(dt.timestamp())
                             
                             transformed_candle = {
                                 "timestamp": timestamp_sec,  # Store as integer seconds
@@ -616,134 +863,50 @@ class BrokerData:
             # Sort by timestamp and remove any duplicates
             df = df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
             
-            # A completely different approach to guarantee proper market hours
-            # Convert timestamps to datetime first
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-            
-            # Convert UTC to IST by adding 5:30
-            df['timestamp'] = df['timestamp'] + pd.Timedelta(hours=5, minutes=30)
-            
-            # Extract date component for reference
-            df['date'] = df['timestamp'].dt.date
-            
-            # Add trading day sequence within each date
-            df['seq'] = df.groupby('date').cumcount()
-            
-            # Handle daily vs intraday differently
-            if interval.upper() == 'D':
-                # For daily candles, always set to 9:15 AM
-                df['timestamp'] = df.apply(lambda row: pd.Timestamp(
-                    year=row['timestamp'].year,
-                    month=row['timestamp'].month,
-                    day=row['timestamp'].day,
-                    hour=9, minute=15, second=0), axis=1)
-            else:
-                # For intraday, calculate proper interval
-                interval_minutes = 5  # Default
-                if 'm' in interval.lower():
-                    try:
-                        interval_minutes = int(interval.lower().replace('m', ''))
-                    except:
-                        interval_minutes = 5
-                elif 'h' in interval.lower():
-                    try:
-                        interval_minutes = int(interval.lower().replace('h', '')) * 60
-                    except:
-                        interval_minutes = 60
-                
-                # Create properly sequenced timestamps within market hours
-                def create_market_timestamp(row):
-                    # Create base timestamp at 09:15 AM
-                    base = pd.Timestamp(
-                        year=row['timestamp'].year,
-                        month=row['timestamp'].month,
-                        day=row['timestamp'].day,
-                        hour=9, minute=15, second=0)
-                    
-                    # Add sequence interval
-                    minutes_to_add = row['seq'] * interval_minutes
-                    new_ts = base + pd.Timedelta(minutes=minutes_to_add)
-                    
-                    # Make sure it's within market hours (9:15 AM - 3:30 PM)
-                    market_close = base.replace(hour=15, minute=30)
-                    if new_ts > market_close:
-                        # If past market close, wrap to next day
-                        extra_minutes = (new_ts - market_close).total_seconds() / 60
-                        # Calculate how many trading days we need to add
-                        trading_day_minutes = 6 * 60 + 15  # 6h15m per trading day
-                        days_to_add = int(extra_minutes / trading_day_minutes) + 1
-                        
-                        # Start from 9:15 AM on the next day
-                        next_day_base = base + pd.Timedelta(days=days_to_add)
-                        next_day_base = next_day_base.replace(hour=9, minute=15)
-                        
-                        # Add remaining minutes
-                        remaining_minutes = extra_minutes % trading_day_minutes
-                        new_ts = next_day_base + pd.Timedelta(minutes=remaining_minutes)
-                        
-                        # Final check to ensure we're within market hours
-                        if new_ts.hour > 15 or (new_ts.hour == 15 and new_ts.minute > 30):
-                            new_ts = new_ts.replace(hour=15, minute=30)
-                    
-                    return new_ts
-                
-                # Apply the function to create proper timestamps
-                df['timestamp'] = df.apply(create_market_timestamp, axis=1)
-            
-            # Drop the temporary columns
-            df = df.drop(['date', 'seq'], axis=1)
-            
             # Sort by the new timestamps
             df = df.sort_values('timestamp').reset_index(drop=True)
-            
-            # For 10m interval, we directly get the API data now and fix the timestamps
-            # No need for resampling from 5m data anymore
-            if interval == '10m' and not df.empty:
-                # Apply our timestamp fixing function with appropriate time alignment
-                logger.debug("Debug: Fixing 10m timestamps")
-                df = self.fix_timestamps(df, '10m')
+
+            # For daily interval, normalize to date only (remove time component)
+            # This matches Upstox and other brokers' behavior for daily data
+            if original_interval.upper() == 'D' or original_interval == 'd':
+                logger.debug("Debug: Processing daily interval - normalizing to date only")
+                # Convert Unix timestamps to datetime
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+                # Add IST offset to get correct date
+                df['timestamp'] = df['timestamp'] + pd.Timedelta(hours=5, minutes=30)
+                # Extract only the date part, then convert back to datetime at midnight
+                df['timestamp'] = df['timestamp'].apply(lambda x: x.date())
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                # Convert to Unix timestamp (midnight)
+                df['timestamp'] = df['timestamp'].apply(lambda x: int(x.timestamp()))
+                logger.debug(f"Debug: First timestamp value: {df['timestamp'].iloc[0] if len(df) > 0 else 'empty'}")
             else:
-                # Apply our timestamp fixing function as a final step
-                logger.debug(f"Debug: Fixing timestamps for {interval}")
-                df = self.fix_timestamps(df, interval)
-                
-            # Check after timestamp fixing
-            if len(df) > 0:
-                logger.info(f"Debug: First timestamp after fixing: {pd.to_datetime(df['timestamp'].iloc[0], unit='s')}")
-            
-            # Final check for daily data with wrong timestamps (03:45 instead of 09:15)
-            # This is a direct fix for the case where uppercase D or lowercase d is used
-            if (original_interval.upper() == 'D' or original_interval == 'd') and len(df) > 0:
-                logger.debug("Debug: Applying final daily timestamp fix")
-                # Convert to datetime for fixing
-                temp_df = df.copy()
-                temp_df['timestamp'] = pd.to_datetime(temp_df['timestamp'], unit='s')
-                
-                # Check if we have any early morning timestamps (like 03:45)
-                early_morning = ((temp_df['timestamp'].dt.hour < 9) | 
-                               ((temp_df['timestamp'].dt.hour == 9) & (temp_df['timestamp'].dt.minute < 15)))
-                
-                if early_morning.any():
-                    logger.debug("Debug: Found early morning timestamps, fixing to 09:15")
-                    # Set all timestamps to 09:15
-                    temp_df['timestamp'] = temp_df['timestamp'].apply(lambda ts: 
-                        ts.replace(hour=9, minute=15, second=0))
-                    df['timestamp'] = temp_df['timestamp'].astype('int64') // 10**9
+                # For intraday data, apply timestamp fixing
+                if interval == '10m' and not df.empty:
+                    logger.debug("Debug: Fixing 10m timestamps")
+                    df = self.fix_timestamps(df, '10m')
                 else:
-                    # Convert back to Unix timestamp in seconds
-                    df['timestamp'] = df['timestamp'].astype('int64') // 10**9
-            else:
+                    logger.debug(f"Debug: Fixing timestamps for {interval}")
+                    df = self.fix_timestamps(df, interval)
+
                 # Convert back to Unix timestamp in seconds
                 df['timestamp'] = df['timestamp'].astype('int64') // 10**9
+
+            # Log first timestamp after processing
+            if len(df) > 0:
+                logger.debug(f"Debug: First timestamp after fixing: {pd.to_datetime(df['timestamp'].iloc[0], unit='s')}")
             
             # Ensure numeric columns are properly typed
             numeric_columns = ['open', 'high', 'low', 'close', 'volume']
             df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric)
-            
-            # Reorder columns to match expected format
-            df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
-            
-            logger.info(f"Returning {len(df)} total candles")
+
+            # Add OI column (always 0 for stocks, set to 0 for consistency with Angel broker)
+            df['oi'] = 0
+
+            # Reorder columns to match Angel broker REST API format
+            df = df[['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi']]
+
+            logger.debug(f"Returning {len(df)} total candles")
             return df
 
         except Exception as e:

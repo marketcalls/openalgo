@@ -321,8 +321,16 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Disconnect from Shoonya WebSocket endpoint"""
         self.running = False
         
+        # Clear all subscriptions and reference counts before disconnecting
+        with self.lock:
+            self.subscriptions.clear()
+            self.token_to_symbol.clear()
+            self.ws_subscription_refs.clear()
+            self.logger.info("Cleared all subscriptions and mappings")
+        
         if self.ws_client:
             self.ws_client.stop()
+            self.ws_client = None  # Clear the reference
         
         # Clean up market data cache
         self.market_cache.clear()
@@ -331,51 +339,110 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.cleanup_zmq()
         
         self.connected = False
-        self.logger.info("Disconnected from Shoonya WebSocket")
+        self.logger.info("Disconnected from Shoonya WebSocket and cleaned up all resources")
 
     def subscribe(self, symbol: str, exchange: str, mode: int = Config.MODE_QUOTE, depth_level: int = 5) -> Dict[str, Any]:
         """Subscribe to market data with improved error handling"""
         try:
+            self.logger.info(f"[SUBSCRIBE] Request for {symbol}.{exchange} mode={mode}")
+
             # Validate inputs
             if not self._validate_subscription_params(symbol, exchange, mode):
                 return self._create_error_response("INVALID_PARAMS", "Invalid subscription parameters")
-            
+
             # Get token information
             token_info = self._get_token_info(symbol, exchange)
             if not token_info:
                 return self._create_error_response("SYMBOL_NOT_FOUND", f"Symbol {symbol} not found")
-            
+
             # Create subscription
             subscription = self._create_subscription(symbol, exchange, mode, depth_level, token_info)
-            correlation_id = f"{symbol}_{exchange}_{mode}"
-            
-            # Store subscription and update mappings
-            self._store_subscription(correlation_id, subscription)
-            
-            # Subscribe via WebSocket
-            if self.connected:
-                self._websocket_subscribe(subscription)
-            
-            return self._create_success_response(f'Subscribed to {symbol}.{exchange}', 
+
+            # Generate a unique correlation_id for each subscription
+            # This allows multiple clients to subscribe to the same symbol
+            import uuid
+            unique_id = str(uuid.uuid4())[:8]
+            correlation_id = f"{symbol}_{exchange}_{mode}_{unique_id}"
+            base_correlation_id = f"{symbol}_{exchange}_{mode}"
+
+            # CRITICAL: Entire check-store-subscribe operation must be atomic to prevent race conditions
+            # with unsubscribe_all() or other concurrent operations
+            with self.lock:
+                # Check if we need to subscribe to WebSocket
+                already_ws_subscribed = any(
+                    cid.startswith(base_correlation_id)
+                    for cid in self.subscriptions.keys()
+                )
+
+                if already_ws_subscribed:
+                    self.logger.info(f"[SUBSCRIBE] WebSocket already subscribed for {base_correlation_id}, adding client subscription {correlation_id}")
+                else:
+                    self.logger.info(f"[SUBSCRIBE] New WebSocket subscription needed for {correlation_id}")
+
+                # Store the subscription (inline to avoid nested locks)
+                self.subscriptions[correlation_id] = subscription
+                self.token_to_symbol[subscription['token']] = (subscription['symbol'], subscription['exchange'])
+
+                # Subscribe via WebSocket if needed (reference counting will handle duplicates)
+                if self.connected and not already_ws_subscribed:
+                    self._websocket_subscribe(subscription)
+                    self.logger.info(f"[SUBSCRIBE] WebSocket subscription sent for {subscription['scrip']}")
+                elif not self.connected:
+                    self.logger.warning(f"[SUBSCRIBE] Not connected, cannot subscribe to {subscription['scrip']}")
+
+            # Log current ZMQ port and subscription state
+            self.logger.info(f"[SUBSCRIBE] Publishing to ZMQ port: {self.zmq_port}")
+            self.logger.info(f"[SUBSCRIBE] Total active subscriptions: {len(self.subscriptions)}")
+
+            return self._create_success_response(f'Subscribed to {symbol}.{exchange}',
                                                symbol=symbol, exchange=exchange, mode=mode)
-        
+
         except Exception as e:
             self.logger.error(f"Subscription error for {symbol}.{exchange}: {e}")
             return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
 
     def unsubscribe(self, symbol: str, exchange: str, mode: int = Config.MODE_QUOTE) -> Dict[str, Any]:
         """Unsubscribe from market data"""
-        correlation_id = f"{symbol}_{exchange}_{mode}"
-        
+        base_correlation_id = f"{symbol}_{exchange}_{mode}"
+
         with self.lock:
-            if correlation_id not in self.subscriptions:
-                return self._create_error_response("NOT_SUBSCRIBED", 
+            # Find the first matching subscription for this client
+            matching_subscriptions = [
+                (cid, sub) for cid, sub in self.subscriptions.items()
+                if cid.startswith(base_correlation_id)
+            ]
+
+            if not matching_subscriptions:
+                return self._create_error_response("NOT_SUBSCRIBED",
                                                   f"Not subscribed to {symbol}.{exchange}")
-            
-            subscription = self.subscriptions[correlation_id]
-            self._websocket_unsubscribe(subscription)
-            self._remove_subscription(correlation_id, subscription)
-        
+
+            # Remove the first matching subscription
+            correlation_id, subscription = matching_subscriptions[0]
+
+            # Check if this is the last subscription for this symbol/exchange/mode
+            is_last = len(matching_subscriptions) == 1
+
+            # Remove the subscription
+            del self.subscriptions[correlation_id]
+
+            # Clean up token mapping if no other subscriptions use it
+            token = subscription['token']
+            if not any(sub['token'] == token for sub in self.subscriptions.values()):
+                self.token_to_symbol.pop(token, None)
+
+            # Only unsubscribe from WebSocket if this was the last subscription
+            if is_last:
+                scrip = subscription['scrip']
+                if scrip in self.ws_subscription_refs:
+                    if mode in [Config.MODE_LTP, Config.MODE_QUOTE]:
+                        self.ws_subscription_refs[scrip]['touchline_count'] -= 1
+                        if self.ws_subscription_refs[scrip]['touchline_count'] <= 0:
+                            self._websocket_unsubscribe(subscription)
+                    elif mode == Config.MODE_DEPTH:
+                        self.ws_subscription_refs[scrip]['depth_count'] -= 1
+                        if self.ws_subscription_refs[scrip]['depth_count'] <= 0:
+                            self._websocket_unsubscribe(subscription)
+
         return self._create_success_response(
             f"Unsubscribed from {symbol}.{exchange}",
             symbol=symbol, exchange=exchange, mode=mode
@@ -420,21 +487,29 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Handle WebSocket subscription with reference counting"""
         scrip = subscription['scrip']
         mode = subscription['mode']
-        
+
         # Initialize reference count for this scrip if not exists
         if scrip not in self.ws_subscription_refs:
             self.ws_subscription_refs[scrip] = {'touchline_count': 0, 'depth_count': 0}
-        
+
         if mode in [Config.MODE_LTP, Config.MODE_QUOTE]:
             if self.ws_subscription_refs[scrip]['touchline_count'] == 0:
                 self.logger.info(f"First touchline subscription for {scrip}")
                 self.ws_client.subscribe_touchline(scrip)
-            self.ws_subscription_refs[scrip]['touchline_count'] += 1
+                self.ws_subscription_refs[scrip]['touchline_count'] = 1
+            else:
+                # Already subscribed, just increment the count
+                self.ws_subscription_refs[scrip]['touchline_count'] += 1
+                self.logger.info(f"Additional touchline subscription for {scrip}, count: {self.ws_subscription_refs[scrip]['touchline_count']}")
         elif mode == Config.MODE_DEPTH:
             if self.ws_subscription_refs[scrip]['depth_count'] == 0:
                 self.logger.info(f"First depth subscription for {scrip}")
                 self.ws_client.subscribe_depth(scrip)
-            self.ws_subscription_refs[scrip]['depth_count'] += 1
+                self.ws_subscription_refs[scrip]['depth_count'] = 1
+            else:
+                # Already subscribed, just increment the count
+                self.ws_subscription_refs[scrip]['depth_count'] += 1
+                self.logger.info(f"Additional depth subscription for {scrip}, count: {self.ws_subscription_refs[scrip]['depth_count']}")
 
     def _websocket_unsubscribe(self, subscription: Dict) -> None:
         """Handle WebSocket unsubscription with reference counting"""
@@ -463,17 +538,21 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         scrip = subscription['scrip']
         
         # Remove subscription
-        del self.subscriptions[correlation_id]
+        if correlation_id in self.subscriptions:
+            del self.subscriptions[correlation_id]
         
         # Clean up reference count if both counts are 0
         if scrip in self.ws_subscription_refs:
             if (self.ws_subscription_refs[scrip]['touchline_count'] <= 0 and 
                 self.ws_subscription_refs[scrip]['depth_count'] <= 0):
                 del self.ws_subscription_refs[scrip]
+                self.logger.debug(f"Removed reference counts for {scrip}")
         
         # Remove token mapping if no other subscriptions use it
-        if not any(sub['token'] == token for sub in self.subscriptions.values()):
-            self.token_to_symbol.pop(token, None)
+        if not any(sub.get('token') == token for sub in self.subscriptions.values()):
+            if token in self.token_to_symbol:
+                del self.token_to_symbol[token]
+                self.logger.debug(f"Removed token mapping for {token}")
             self.market_cache.clear(token)
 
     def _on_open(self, ws):
@@ -548,36 +627,38 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         with self.lock:
             # Reset reference counts
             self.ws_subscription_refs = {}
-            
+
             # Collect unique scrips for each subscription type
             touchline_scrips = set()
             depth_scrips = set()
-            
+
             for subscription in self.subscriptions.values():
                 scrip = subscription['scrip']
                 mode = subscription['mode']
-                
+
                 # Initialize reference count
                 if scrip not in self.ws_subscription_refs:
                     self.ws_subscription_refs[scrip] = {'touchline_count': 0, 'depth_count': 0}
-                
+
                 if mode in [Config.MODE_LTP, Config.MODE_QUOTE]:
-                    touchline_scrips.add(scrip)
+                    if scrip not in touchline_scrips:
+                        touchline_scrips.add(scrip)
                     self.ws_subscription_refs[scrip]['touchline_count'] += 1
                 elif mode == Config.MODE_DEPTH:
-                    depth_scrips.add(scrip)
+                    if scrip not in depth_scrips:
+                        depth_scrips.add(scrip)
                     self.ws_subscription_refs[scrip]['depth_count'] += 1
-            
+
             # Resubscribe in batches
             if touchline_scrips:
                 scrip_list = '#'.join(touchline_scrips)
                 self.ws_client.subscribe_touchline(scrip_list)
-                self.logger.info(f"Resubscribed to {len(touchline_scrips)} touchline scrips")
-            
+                self.logger.info(f"Resubscribed to {len(touchline_scrips)} touchline scrips with total {sum(self.ws_subscription_refs[s]['touchline_count'] for s in touchline_scrips)} subscriptions")
+
             if depth_scrips:
                 scrip_list = '#'.join(depth_scrips)
                 self.ws_client.subscribe_depth(scrip_list)
-                self.logger.info(f"Resubscribed to {len(depth_scrips)} depth scrips")
+                self.logger.info(f"Resubscribed to {len(depth_scrips)} depth scrips with total {sum(self.ws_subscription_refs[s]['depth_count'] for s in depth_scrips)} subscriptions")
 
     def _on_message(self, ws, message):
         """Handle incoming market data messages"""
@@ -693,6 +774,69 @@ class ShoonyaWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def clear_market_data_cache(self, token: str = None) -> None:
         """Clear market data cache"""
         self.market_cache.clear(token)
+
+    def unsubscribe_all(self) -> Dict[str, Any]:
+        """
+        Unsubscribe from all active data streams without disconnecting WebSocket.
+        This implements the persistent session model for Shoonya to avoid
+        server-side session cooldown issues.
+        
+        Returns:
+            Dict: Response indicating success/failure
+        """
+        try:
+            with self.lock:
+                if not self.connected or not self.ws_client:
+                    self.logger.warning("Cannot unsubscribe_all: WebSocket not connected")
+                    return self._create_error_response("NOT_CONNECTED", "WebSocket not connected")
+
+                # Collect all unique scrips for batch unsubscription
+                touchline_scrips = set()
+                depth_scrips = set()
+
+                # Group subscriptions by type
+                for subscription in self.subscriptions.values():
+                    scrip = subscription['scrip']
+                    mode = subscription['mode']
+
+                    if mode in [Config.MODE_LTP, Config.MODE_QUOTE]:
+                        touchline_scrips.add(scrip)
+                    elif mode == Config.MODE_DEPTH:
+                        depth_scrips.add(scrip)
+
+                # Unsubscribe from touchline data
+                if touchline_scrips:
+                    scrip_list = '#'.join(touchline_scrips)
+                    self.logger.info(f"Unsubscribing from {len(touchline_scrips)} touchline scrips")
+                    self.ws_client.unsubscribe_touchline(scrip_list)
+
+                # Unsubscribe from depth data
+                if depth_scrips:
+                    scrip_list = '#'.join(depth_scrips)
+                    self.logger.info(f"Unsubscribing from {len(depth_scrips)} depth scrips")
+                    self.ws_client.unsubscribe_depth(scrip_list)
+
+                # Clear all subscription tracking but keep WebSocket connection alive
+                subscription_count = len(self.subscriptions)
+                self.subscriptions.clear()
+                self.token_to_symbol.clear()
+                self.ws_subscription_refs.clear()
+                
+                # Clear market data cache
+                self.market_cache.clear()
+
+                self.logger.info(f"Unsubscribed from all {subscription_count} subscriptions. "
+                               f"WebSocket connection remains active for fast reconnection.")
+
+                return self._create_success_response(
+                    f"Unsubscribed from all {subscription_count} subscriptions. Connection kept alive.",
+                    unsubscribed_count=subscription_count,
+                    connection_status="active"
+                )
+
+        except Exception as e:
+            self.logger.error(f"Error in unsubscribe_all: {e}")
+            return self._create_error_response("UNSUBSCRIBE_ALL_ERROR", str(e))
 
 
 # Utility functions

@@ -14,29 +14,29 @@ logger = get_logger(__name__)
 
 
 
-def get_api_response(endpoint, auth, method="GET", payload=''):
+def get_api_response(endpoint, auth, method="GET", payload='', params=None):
 
     AUTH_TOKEN = auth
     api_key = os.getenv('BROKER_API_KEY')
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
-    
+
     headers = {
         'Authorization': AUTH_TOKEN,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
     }
-    
+
     url = get_url(endpoint)
-    
+
     try:
         if method == "GET":
-            response = client.get(url, headers=headers)
+            response = client.get(url, headers=headers, params=params)
         elif method == "POST":
-            response = client.post(url, headers=headers, content=payload)
+            response = client.post(url, headers=headers, content=payload, params=params)
         else:
-            response = client.request(method, url, headers=headers, content=payload)
+            response = client.request(method, url, headers=headers, content=payload, params=params)
         
         # Add status attribute for compatibility with existing codebase
         response.status = response.status_code
@@ -98,19 +98,130 @@ def get_order_book(auth):
         return []
 
 def get_trade_book(auth):
-    return get_api_response("/tradebook",auth)
+    """
+    Fetch all trades for the current trading day.
+    Fetches trades from both EQUITY and DERIVATIVE segments.
+    Enriches trade data with order book information (product type, transaction type).
+    """
+    try:
+        all_trades = []
+
+        # Fetch EQUITY trades
+        equity_result = get_api_response("/trade-book", auth, params={"segment": "EQUITY"})
+        if equity_result and isinstance(equity_result, list):
+            # Tag each trade with segment info for later mapping
+            for trade in equity_result:
+                if isinstance(trade, dict):
+                    trade['segment'] = 'EQUITY'
+            all_trades.extend(equity_result)
+        elif equity_result and isinstance(equity_result, dict) and equity_result.get('status') != 'error':
+            logger.warning(f"Unexpected EQUITY trade response format: {equity_result}")
+
+        # Fetch DERIVATIVE trades
+        derivative_result = get_api_response("/trade-book", auth, params={"segment": "DERIVATIVE"})
+        if derivative_result and isinstance(derivative_result, list):
+            # Tag each trade with segment info for later mapping
+            for trade in derivative_result:
+                if isinstance(trade, dict):
+                    trade['segment'] = 'DERIVATIVE'
+            all_trades.extend(derivative_result)
+        elif derivative_result and isinstance(derivative_result, dict) and derivative_result.get('status') != 'error':
+            logger.warning(f"Unexpected DERIVATIVE trade response format: {derivative_result}")
+
+        # Fetch order book to enrich trade data with product and transaction type
+        order_book = get_order_book(auth)
+        order_map = {}
+
+        if order_book and isinstance(order_book, list):
+            # Create a mapping of exchange order IDs to order details
+            for order in order_book:
+                if isinstance(order, dict):
+                    exch_order_id = order.get('exch_order_id') or order.get('id')
+                    if exch_order_id:
+                        order_map[exch_order_id] = {
+                            'txn_type': order.get('txn_type', ''),
+                            'product': order.get('product', ''),
+                            'segment': order.get('segment', '')
+                        }
+
+        # Enrich trades with order book data
+        for trade in all_trades:
+            if isinstance(trade, dict):
+                exch_order_id = trade.get('exch_order_id')
+                if exch_order_id and exch_order_id in order_map:
+                    order_info = order_map[exch_order_id]
+                    trade['txn_type'] = order_info['txn_type']
+                    trade['product'] = order_info['product']
+                    logger.debug(f"Enriched trade {exch_order_id} with txn_type={order_info['txn_type']}, product={order_info['product']}")
+
+        logger.info(f"Fetched {len(all_trades)} total trades (EQUITY + DERIVATIVE), enriched with order book data")
+        return all_trades
+    except Exception as e:
+        logger.error(f"Exception in get_trade_book: {e}")
+        return []
 
 def get_positions(auth):
+    """
+    Fetch all positions for the current trading day.
+    Fetches positions from all combinations of segment and product:
+    - Derivative: MARGIN, INTRADAY
+    - Equity: CNC, INTRADAY
+    """
     try:
-        result = get_api_response("/portfolio/positions", auth)
-        # Ensure we never return None
-        if result is None:
-            logger.warning("get_api_response returned None for positions, returning empty list")
-            return []
-        return result
+        all_positions = []
+
+        # Define all combinations of segment and product
+        position_queries = [
+            {"segment": "derivative", "product": "margin"},
+            {"segment": "derivative", "product": "intraday"},
+            {"segment": "equity", "product": "cnc"},
+            {"segment": "equity", "product": "intraday"}
+        ]
+
+        # Fetch positions for each combination
+        for query in position_queries:
+            result = get_api_response("/portfolio/positions", auth, params=query)
+
+            # Debug: Log the actual API response to understand the structure
+            logger.info(f"Positions API response for {query}: {result}")
+
+            if result and isinstance(result, dict):
+                # Extract net_positions and day_positions from the response
+                net_positions = result.get('net_positions', [])
+                day_positions = result.get('day_positions', [])
+
+                # Debug: Log sample position if available
+                if net_positions:
+                    logger.info(f"Sample net_position fields: {list(net_positions[0].keys()) if net_positions[0] else 'empty'}")
+                if day_positions:
+                    logger.info(f"Sample day_position fields: {list(day_positions[0].keys()) if day_positions[0] else 'empty'}")
+
+                if net_positions and isinstance(net_positions, list):
+                    # Tag positions with the query parameters for context
+                    for pos in net_positions:
+                        if isinstance(pos, dict):
+                            pos['query_segment'] = query['segment']
+                            pos['query_product'] = query['product']
+                    all_positions.extend(net_positions)
+
+                if day_positions and isinstance(day_positions, list):
+                    # Tag positions with the query parameters for context
+                    for pos in day_positions:
+                        if isinstance(pos, dict):
+                            pos['query_segment'] = query['segment']
+                            pos['query_product'] = query['product']
+                    all_positions.extend(day_positions)
+
+            elif result and isinstance(result, list):
+                # Fallback: if response is directly a list (legacy format)
+                all_positions.extend(result)
+
+        logger.info(f"Fetched {len(all_positions)} total positions (all segments and products)")
+        return all_positions
+
     except Exception as e:
         logger.error(f"Exception in get_positions: {e}")
-        return []
+        return []   
 
 def get_holdings(auth):
     try:

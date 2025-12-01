@@ -118,16 +118,15 @@ def place_smart_order(
         return f"Error placing smart order: {str(e)}"
 
 @mcp.tool()
-def place_basket_order(orders_json: str) -> str:
+def place_basket_order(orders: List[Dict[str, Any]]) -> str:
     """
     Place multiple orders in a basket.
-    
+
     Args:
-        orders_json: JSON string containing list of orders
-        Example: '[{"symbol": "BHEL", "exchange": "NSE", "action": "BUY", "quantity": 1, "pricetype": "MARKET", "product": "MIS"}]'
+        orders: List of order dictionaries
+        Example: [{"symbol": "BHEL", "exchange": "NSE", "action": "BUY", "quantity": 1, "pricetype": "MARKET", "product": "MIS"}]
     """
     try:
-        orders = json.loads(orders_json)
         response = client.basketorder(orders=orders)
         return json.dumps(response, indent=2)
     except Exception as e:
@@ -175,6 +174,111 @@ def place_split_order(
         return json.dumps(response, indent=2)
     except Exception as e:
         return f"Error placing split order: {str(e)}"
+
+@mcp.tool()
+def place_options_order(
+    underlying: str,
+    exchange: str,
+    expiry_date: str,
+    offset: str,
+    option_type: str,
+    action: str,
+    quantity: int,
+    strategy: str = "Python",
+    price_type: str = "MARKET",
+    product: str = "NRML",
+    price: Optional[float] = None
+) -> str:
+    """
+    Place an options order with ATM/ITM/OTM offset.
+
+    Args:
+        underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY')
+        exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX')
+        expiry_date: Expiry date in format 'DDMMMYY' (e.g., '28OCT25')
+        offset: Strike offset - 'ATM', 'ITM1'-'ITM10', 'OTM1'-'OTM10'
+        option_type: 'CE' for Call or 'PE' for Put
+        action: 'BUY' or 'SELL'
+        quantity: Number of lots
+        strategy: Strategy name
+        price_type: 'MARKET', 'LIMIT', 'SL', 'SL-M'
+        product: 'NRML', 'MIS', 'CNC'
+        price: Limit price (required for LIMIT orders)
+    """
+    try:
+        params = {
+            "strategy": strategy,
+            "underlying": underlying.upper(),
+            "exchange": exchange.upper(),
+            "expiry_date": expiry_date,
+            "offset": offset.upper(),
+            "option_type": option_type.upper(),
+            "action": action.upper(),
+            "quantity": quantity,
+            "pricetype": price_type.upper(),
+            "product": product.upper()
+        }
+
+        if price is not None:
+            params["price"] = price
+
+        response = client.optionsorder(**params)
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        return f"Error placing options order: {str(e)}"
+
+@mcp.tool()
+def place_options_multi_order(
+    strategy: str,
+    underlying: str,
+    exchange: str,
+    legs: List[Dict[str, Any]],
+    expiry_date: Optional[str] = None
+) -> str:
+    """
+    Place a multi-leg options order (spreads, iron condor, etc.).
+
+    Args:
+        strategy: Strategy name
+        underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY')
+        exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX')
+        legs: List of leg dictionaries, each containing:
+            - offset: Strike offset ('ATM', 'ITM1'-'ITM10', 'OTM1'-'OTM10')
+            - option_type: 'CE' for Call or 'PE' for Put
+            - action: 'BUY' or 'SELL'
+            - quantity: Number of lots
+            - expiry_date: (Optional) Expiry date for this leg if different from main expiry
+        expiry_date: Default expiry date in format 'DDMMMYY' (e.g., '25NOV25') for all legs
+
+    Example legs for Iron Condor (same expiry):
+        [
+            {"offset": "OTM6", "option_type": "CE", "action": "BUY", "quantity": 75},
+            {"offset": "OTM6", "option_type": "PE", "action": "BUY", "quantity": 75},
+            {"offset": "OTM4", "option_type": "CE", "action": "SELL", "quantity": 75},
+            {"offset": "OTM4", "option_type": "PE", "action": "SELL", "quantity": 75}
+        ]
+
+    Example legs for Diagonal Spread (different expiry):
+        [
+            {"offset": "ITM2", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "30DEC25"},
+            {"offset": "OTM2", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "25NOV25"}
+        ]
+    """
+    try:
+        params = {
+            "strategy": strategy,
+            "underlying": underlying.upper(),
+            "exchange": exchange.upper(),
+            "legs": legs
+        }
+
+        if expiry_date is not None:
+            params["expiry_date"] = expiry_date
+
+        response = client.optionsmultiorder(**params)
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        return f"Error placing options multi order: {str(e)}"
 
 @mcp.tool()
 def modify_order(
@@ -351,13 +455,34 @@ def get_funds() -> str:
     except Exception as e:
         return f"Error getting funds: {str(e)}"
 
+@mcp.tool()
+def calculate_margin(positions: List[Dict[str, Any]]) -> str:
+    """
+    Calculate margin requirements for positions.
+
+    Args:
+        positions: List of position dictionaries
+        Example: [{"symbol": "NIFTY25NOV2525000CE", "exchange": "NFO", "action": "BUY", "product": "NRML", "pricetype": "MARKET", "quantity": "75"}]
+
+        For Futures: [{"symbol": "NIFTY25NOV25FUT", "exchange": "NFO", "action": "BUY", "product": "NRML", "pricetype": "MARKET", "quantity": "25"}]
+        For Options: [{"symbol": "NIFTY25NOV2525500CE", "exchange": "NFO", "action": "BUY", "product": "NRML", "pricetype": "MARKET", "quantity": "75"}]
+
+    Returns:
+        JSON with total_margin_required, span_margin, and exposure_margin
+    """
+    try:
+        response = client.margin(positions=positions)
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        return f"Error calculating margin: {str(e)}"
+
 # MARKET DATA TOOLS
 
 @mcp.tool()
 def get_quote(symbol: str, exchange: str = "NSE") -> str:
     """
     Get current quote for a symbol.
-    
+
     Args:
         symbol: Stock symbol
         exchange: Exchange name
@@ -367,6 +492,79 @@ def get_quote(symbol: str, exchange: str = "NSE") -> str:
         return json.dumps(response, indent=2)
     except Exception as e:
         return f"Error getting quote: {str(e)}"
+
+@mcp.tool()
+def get_multi_quotes(symbols: List[Dict[str, str]]) -> str:
+    """
+    Get real-time quotes for multiple symbols in a single request.
+
+    Args:
+        symbols: List of symbol-exchange pairs
+        Example: [{"symbol": "RELIANCE", "exchange": "NSE"}, {"symbol": "INFY", "exchange": "NSE"}]
+
+    Returns:
+        JSON with quotes for all requested symbols including ltp, bid, ask, open, high, low, volume, oi
+    """
+    try:
+        # Normalize symbols to uppercase
+        normalized_symbols = [
+            {"symbol": s["symbol"].upper(), "exchange": s["exchange"].upper()}
+            for s in symbols
+        ]
+        response = client.multiquotes(symbols=normalized_symbols)
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        return f"Error getting multi quotes: {str(e)}"
+
+@mcp.tool()
+def get_option_chain(
+    underlying: str,
+    exchange: str,
+    expiry_date: str,
+    strike_count: Optional[int] = None
+) -> str:
+    """
+    Get option chain data with real-time quotes for all strikes.
+
+    Args:
+        underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY', 'RELIANCE')
+        exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX', 'NSE', 'BSE')
+        expiry_date: Expiry date in DDMMMYY format (e.g., '30DEC25')
+        strike_count: Number of strikes above and below ATM (1-100). If not provided, returns entire chain.
+
+    Returns:
+        JSON with:
+        - underlying: Base symbol
+        - underlying_ltp: Current price of underlying
+        - expiry_date: Expiry date
+        - atm_strike: At-The-Money strike price
+        - chain: Array of strikes with CE and PE data including:
+            - symbol, label (ATM/ITM1/OTM1 etc.), ltp, bid, ask, open, high, low, volume, oi, lotsize
+
+    Note: CE and PE have different labels at the same strike:
+        - Strikes below ATM: CE is ITM, PE is OTM
+        - Strikes above ATM: CE is OTM, PE is ITM
+
+    Example for 10 strikes around ATM:
+        get_option_chain("NIFTY", "NSE_INDEX", "30DEC25", 10)
+
+    Example for full chain:
+        get_option_chain("NIFTY", "NSE_INDEX", "30DEC25")
+    """
+    try:
+        params = {
+            "underlying": underlying.upper(),
+            "exchange": exchange.upper(),
+            "expiry_date": expiry_date.upper()
+        }
+
+        if strike_count is not None:
+            params["strike_count"] = strike_count
+
+        response = client.optionchain(**params)
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        return f"Error getting option chain: {str(e)}"
 
 @mcp.tool()
 def get_market_depth(symbol: str, exchange: str = "NSE") -> str:
@@ -504,20 +702,6 @@ def get_index_symbols(exchange: str = "NSE") -> str:
             "error": f"Unknown exchange: {exchange}. Use NSE or BSE."
         }, indent=2)
 
-@mcp.tool()
-def get_symbol_info(symbol: str, exchange: str = "NSE") -> str:
-    """
-    Get detailed information about a symbol.
-    
-    Args:
-        symbol: Stock symbol
-        exchange: Exchange name
-    """
-    try:
-        response = client.symbol(symbol=symbol.upper(), exchange=exchange.upper())
-        return json.dumps(response, indent=2)
-    except Exception as e:
-        return f"Error getting symbol info: {str(e)}"
 
 @mcp.tool()
 def get_expiry_dates(symbol: str, exchange: str = "NFO", instrument_type: str = "options") -> str:
@@ -547,6 +731,99 @@ def get_available_intervals() -> str:
         return json.dumps(response, indent=2)
     except Exception as e:
         return f"Error getting intervals: {str(e)}"
+
+@mcp.tool()
+def get_option_symbol(
+    underlying: str,
+    exchange: str,
+    expiry_date: str,
+    offset: str,
+    option_type: str
+) -> str:
+    """
+    Get option symbol for specific strike and expiry.
+
+    Args:
+        underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY')
+        exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX')
+        expiry_date: Expiry date in format 'DDMMMYY' (e.g., '28OCT25')
+        offset: Strike offset - 'ATM', 'ITM1'-'ITM10', 'OTM1'-'OTM10'
+        option_type: 'CE' for Call or 'PE' for Put
+
+    Returns:
+        JSON with symbol, exchange, lotsize, tick_size, underlying_ltp
+    """
+    try:
+        response = client.optionsymbol(
+            underlying=underlying.upper(),
+            exchange=exchange.upper(),
+            expiry_date=expiry_date,
+            offset=offset.upper(),
+            option_type=option_type.upper()
+        )
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        return f"Error getting option symbol: {str(e)}"
+
+@mcp.tool()
+def get_synthetic_future(
+    underlying: str,
+    exchange: str,
+    expiry_date: str
+) -> str:
+    """
+    Calculate synthetic future price using put-call parity.
+
+    Args:
+        underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY')
+        exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX')
+        expiry_date: Expiry date in format 'DDMMMYY' (e.g., '25NOV25')
+
+    Returns:
+        JSON with atm_strike, expiry, status, synthetic_future_price, underlying, underlying_ltp
+    """
+    try:
+        response = client.syntheticfuture(
+            underlying=underlying.upper(),
+            exchange=exchange.upper(),
+            expiry_date=expiry_date
+        )
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        return f"Error calculating synthetic future: {str(e)}"
+
+@mcp.tool()
+def get_option_greeks(
+    symbol: str,
+    exchange: str,
+    underlying_symbol: str,
+    underlying_exchange: str,
+    interest_rate: float = 0.0
+) -> str:
+    """
+    Calculate option Greeks (delta, gamma, theta, vega, rho).
+
+    Args:
+        symbol: Option symbol (e.g., 'NIFTY25NOV2526000CE')
+        exchange: Exchange name (typically 'NFO')
+        underlying_symbol: Underlying symbol (e.g., 'NIFTY')
+        underlying_exchange: Underlying exchange ('NSE_INDEX')
+        interest_rate: Risk-free interest rate (default: 0.0)
+
+    Returns:
+        JSON with Greeks, IV, spot price, strike, days to expiry
+    """
+    try:
+        response = client.optiongreeks(
+            symbol=symbol.upper(),
+            exchange=exchange.upper(),
+            interest_rate=interest_rate,
+            underlying_symbol=underlying_symbol.upper(),
+            underlying_exchange=underlying_exchange.upper()
+        )
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        return f"Error calculating option greeks: {str(e)}"
 
 # UTILITY TOOLS
 
@@ -592,6 +869,23 @@ def validate_order_constants() -> str:
     }
     return json.dumps(constants, indent=2)
 
+@mcp.tool()
+def send_telegram_alert(username: str, message: str) -> str:
+    """
+    Send a Telegram alert notification.
+
+    Args:
+        username: OpenAlgo login ID/username
+        message: Alert message to send
+
+    Returns:
+        JSON with status and message
+    """
+    try:
+        response = client.telegram(username=username, message=message)
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        return f"Error sending telegram alert: {str(e)}"
 
 # Tool to get analyzer status
 @mcp.tool()

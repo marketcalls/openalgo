@@ -90,21 +90,28 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self.logger.error(f"No authentication tokens found for user {user_id}")
                     raise ValueError(f"No authentication tokens found for user {user_id}")
                 
-                # Read BROKER_API_KEY from environment for client_id
+                # Read both BROKER_API_KEY and BROKER_API_SECRET from environment
                 load_dotenv()
-                broker_api_key = os.getenv('BROKER_API_KEY')
+                broker_api_key = os.getenv('BROKER_API_KEY')  # User ID (e.g., '1412368')
+                broker_api_secret = os.getenv('BROKER_API_SECRET')  # API Secret key
+
                 if not broker_api_key:
                     self.logger.error("BROKER_API_KEY not found in environment variables")
                     raise ValueError("BROKER_API_KEY not found in environment variables")
-                    
-                api_key = broker_api_key  # Use BROKER_API_KEY for api_key
+
+                if not broker_api_secret:
+                    self.logger.error("BROKER_API_SECRET not found in environment variables")
+                    raise ValueError("BROKER_API_SECRET not found in environment variables")
+
+                api_key = broker_api_secret  # Use BROKER_API_SECRET for X-API-KEY header
                 # For AliceBlue, session_id is the auth_token (JWT)
                 session_id = auth_token
-                # For WebSocket auth, client_id should be the BROKER_API_KEY value
+                # For WebSocket auth, client_id should be the BROKER_API_KEY value (user ID)
                 self.client_id = broker_api_key
                 # Store session_id (JWT) for WebSocket authentication
                 self.session_id = session_id
-                self.logger.info(f"Using BROKER_API_KEY as client_id: {self.client_id}")
+                self.logger.info(f"Using BROKER_API_KEY as client_id (user_id): {self.client_id}")
+                self.logger.info(f"Using BROKER_API_SECRET for X-API-KEY header")
                 self.logger.info(f"Using auth_token as session_id for auth")
             
             self.logger.info(f"Final values: client_id={self.client_id}, session_id={self.session_id}")
@@ -125,7 +132,7 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def connect(self):
         """
         Establish WebSocket connection
-        
+
         Returns:
             None: If successful, or dict with error info if failed
         """
@@ -134,19 +141,63 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if self.running:
                     self.logger.warning("WebSocket already running")
                     return None
-                
+
                 self.running = True
                 self.reconnect_attempts = 0
-            
-            # AliceBlue WebSocket session flow:
-            # Note: The WebSocket session creation is not required for authentication
-            # The official client invalidates and creates session but doesn't use it for auth
-            # We'll skip this step as it's not necessary for WebSocket authentication
-            self.logger.info("Skipping WebSocket session creation - not required for authentication")
-            
+
+            # AliceBlue WebSocket session flow (matching official SDK):
+            # STAGE 1: Invalidate any previous WebSocket session
+            # STAGE 2: Create new WebSocket session
+            # This registers the API credentials with AliceBlue's server
+            self.logger.info("STAGE 1: Invalidating previous WebSocket session")
+            try:
+                session_data = {"loginType": "API"}
+                # Invalidate previous session
+                invalid_response = self.aliceblue_client._request("ws/invalidateSocketSess", "A", session_data)
+
+                if invalid_response and invalid_response.get('stat') == 'Ok':
+                    self.logger.info(f"Previous session invalidated successfully")
+                else:
+                    self.logger.warning(f"Session invalidation response: {invalid_response}")
+                    # Continue anyway - might be first time connection
+
+                # STAGE 2: Create new WebSocket session
+                self.logger.info("STAGE 2: Creating new WebSocket session")
+                session_response = self.aliceblue_client._request("ws/createSocketSess", "A", session_data)
+
+                self.logger.info(f"createSocketSess response: {session_response}")
+
+                if session_response is None:
+                    self.logger.error("createSocketSess returned None - API call may have failed")
+                    with self.lock:
+                        self.running = False
+                    return {'success': False, 'error': 'WebSocket session creation returned None'}
+
+                if session_response.get('stat') == 'Ok':
+                    # Try to get wsSess from response - handle different response formats
+                    if 'result' in session_response:
+                        if isinstance(session_response['result'], dict):
+                            self.ws_session = session_response['result'].get('wsSess')
+                        else:
+                            self.ws_session = session_response.get('wsSess')
+                    else:
+                        self.ws_session = session_response.get('wsSess')
+
+                    self.logger.info(f"WebSocket session created successfully: {self.ws_session}")
+                else:
+                    self.logger.error(f"WebSocket session creation failed: {session_response}")
+                    with self.lock:
+                        self.running = False
+                    return {'success': False, 'error': f'WebSocket session creation failed: {session_response}'}
+            except Exception as e:
+                self.logger.error(f"Error in WebSocket session setup: {e}")
+                with self.lock:
+                    self.running = False
+                return {'success': False, 'error': f'Error in WebSocket session setup: {e}'}
+
             # Start WebSocket connection
             success = self._start_websocket()
-            
+
             if success:
                 self.logger.info("AliceBlue WebSocket connected successfully")
                 self.connected = True
@@ -156,7 +207,7 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 with self.lock:
                     self.running = False
                 return {'success': False, 'error': 'Failed to connect to AliceBlue WebSocket'}
-                
+
         except Exception as e:
             self.logger.error(f"Error connecting to AliceBlue WebSocket: {e}")
             with self.lock:
@@ -212,19 +263,20 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if not self.session_id:
                 self.logger.warning("No session_id (JWT) available, skipping authentication")
                 return
-                
+
             # Create authentication message - use JWT session_id for susertoken generation
             # This matches the official AliceBlue client implementation
             # First SHA256 hash of session_id
             sha256_encryption1 = hashlib.sha256(self.session_id.encode('utf-8')).hexdigest()
             # Second SHA256 hash of the first hash
             susertoken = hashlib.sha256(sha256_encryption1.encode('utf-8')).hexdigest()
-            
+
             self.logger.info(f"Generating susertoken from session_id (JWT)")
+            self.logger.info(f"Session ID (first 50 chars): {self.session_id[:50]}...")
             self.logger.info(f"Session ID length: {len(self.session_id)}")
             self.logger.info(f"First SHA256: {sha256_encryption1}")
             self.logger.info(f"Final susertoken: {susertoken}")
-            
+
             auth_msg = {
                 "susertoken": susertoken,
                 "t": "c",
@@ -232,11 +284,11 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "uid": f"{self.client_id}_API",
                 "source": "API"
             }
-            
+
             self.logger.info(f"Sending authentication message: {auth_msg}")
             ws.send(json.dumps(auth_msg))
             self.logger.info("Authentication message sent to AliceBlue WebSocket")
-            
+
         except Exception as e:
             self.logger.error(f"Error authenticating WebSocket: {e}")
     
@@ -284,16 +336,24 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Wait a bit for connection to stabilize
                 import time
                 time.sleep(1)
-            # Convert exchange to AliceBlue format
+            # Convert exchange to AliceBlue format for sending to websocket
             ab_exchange = self.exchange_mapper.to_broker_exchange(exchange)
-            
-            # Get token for the symbol
-            self.logger.info(f"Subscribe: Looking up token for symbol: {symbol}, ab_exchange: {ab_exchange}")
-            token = get_token(symbol, ab_exchange)
-            self.logger.info(f"Subscribe: Token lookup result: {token}")
+
+            # Get token for the symbol - use original exchange for token lookup
+            # This is important for indices where NSE_INDEX/BSE_INDEX are stored in DB
+            self.logger.info(f"Subscribe: Looking up token for symbol: {symbol}, exchange: {exchange}")
+            token = get_token(symbol, exchange)
+            self.logger.debug(f"Subscribe: Token lookup result: {token}")
             if not token:
                 self.logger.error(f"Token not found for {symbol} on {exchange}")
                 return self._create_error_response("TOKEN_NOT_FOUND", f"Token not found for {symbol} on {exchange}")
+
+            # Handle AliceBlue index token format
+            # If token starts with "999" for indices, remove it as websocket expects actual token
+            if exchange in ['NSE_INDEX', 'BSE_INDEX', 'MCX_INDEX'] and str(token).startswith('999'):
+                original_token = token
+                token = str(token)[3:]  # Remove '999' prefix
+                self.logger.info(f"Adjusted index token from {original_token} to {token}")
             
             # Determine feed type based on mode
             feed_type = AliceBlueFeedType.DEPTH if mode == 3 else AliceBlueFeedType.MARKET_DATA
@@ -434,14 +494,14 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             Dict[str, Any]: Response with status and message
         """
         try:
-            # Convert exchange to AliceBlue format
-            ab_exchange = self.exchange_mapper.to_broker_exchange(exchange)
-            
-            # Get token for the symbol
-            token = get_token(symbol, ab_exchange)
+            # Get token for the symbol using original exchange (before conversion)
+            token = get_token(symbol, exchange)
             if not token:
                 self.logger.error(f"Token not found for {symbol} on {exchange}")
                 return self._create_error_response("TOKEN_NOT_FOUND", f"Token not found for {symbol} on {exchange}")
+
+            # Convert exchange to AliceBlue format for the unsubscription message
+            ab_exchange = self.exchange_mapper.to_broker_exchange(exchange)
             
             # Create unsubscription message
             unsub_msg = self.message_mapper.create_unsubsciption_message(ab_exchange, token)
@@ -555,9 +615,9 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
             
             elif msg_type == 'tk':
                 # Acknowledgment message - contains initial market data
-                self.logger.info(f"Received acknowledgment with data: {data}")
+                self.logger.debug(f"Received acknowledgment with data: {data}")
                 parsed_data = self.message_mapper.parse_tick_data(data)
-                self.logger.info(f"Parsed acknowledgment data: {parsed_data}")
+                self.logger.debug(f"Parsed acknowledgment data: {parsed_data}")
                 if parsed_data.get('type') != 'error':
                     self._on_data_received(parsed_data)
                 else:
@@ -795,10 +855,8 @@ class AliceblueWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 else:
                     self.logger.debug(f"Subscription not found for key: {sub_key}, using parsed values")
             
-            # Special handling for NIFTY index based on token (26000 is NIFTY token)
-            if token == '26000' and broker_exchange == 'NSE':
-                original_symbol = 'NIFTY'
-                # Update the parsed_data with correct symbol
+            # Update parsed_data with the correct original symbol if we found it
+            if original_symbol and original_symbol != parsed_data.get('symbol'):
                 parsed_data['symbol'] = original_symbol
                 
             # Use the original subscription exchange and symbol for topic generation

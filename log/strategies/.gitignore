@@ -1,0 +1,7 @@
+# Ignore all strategy log files
+*.log
+
+# Keep this .gitignore file
+!.gitignore
+
+# This ensures the log/strategies folder exists in git but log files are not tracked

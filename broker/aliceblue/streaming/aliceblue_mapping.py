@@ -20,13 +20,15 @@ class AliceBlueExchangeMapper(ExchangeMapper):
         # Map from standard exchange codes to AliceBlue exchange codes
         self._exchange_mapping = {
             "NSE": "NSE",
-            "NSE_INDEX": "NSE",  # NSE indices map to NSE
-            "BSE": "BSE", 
-            "NFO": "NFO",  # NSE F&O
-            "BFO": "BFO",  # BSE F&O
-            "CDS": "CDS",  # Currency Derivatives
-            "BCD": "BCD",  # BSE Currency Derivatives
-            "MCX": "MCX"   # Multi Commodity Exchange
+            "NSE_INDEX": "NSE",    # NSE indices map to NSE
+            "BSE": "BSE",
+            "BSE_INDEX": "BSE",    # BSE indices map to BSE
+            "NFO": "NFO",          # NSE F&O
+            "BFO": "BFO",          # BSE F&O
+            "CDS": "CDS",          # Currency Derivatives
+            "BCD": "BCD",          # BSE Currency Derivatives
+            "MCX": "MCX",          # Multi Commodity Exchange
+            "MCX_INDEX": "MCX"     # MCX indices map to MCX
         }
         
         # Reverse mapping for AliceBlue to standard
@@ -129,9 +131,9 @@ class AliceBlueMessageMapper:
                 # Log the raw symbol for debugging
                 import logging
                 logger = logging.getLogger("aliceblue_mapping")
-                logger.info(f"Raw symbol from AliceBlue: '{raw_symbol}'")
+                logger.debug(f"Raw symbol from AliceBlue: '{raw_symbol}'")
                 clean_symbol = raw_symbol.split("-")[0] if raw_symbol else ""
-                logger.info(f"Cleaned symbol: '{clean_symbol}'")
+                logger.debug(f"Cleaned symbol: '{clean_symbol}'")
                 parsed.update({
                     "symbol": clean_symbol,
                     "ltp": float(message.get("lp", 0)) if message.get("lp") else 0.0,

@@ -304,7 +304,12 @@ def process_shoonya_cds_data(output_path):
         if row['instrumenttype'] == 'FUT':
             return f"{row['name']}{compact_expiry}FUT"
         else:
-            return f"{row['name']}{compact_expiry}{row['strike']}{row['instrumenttype']}"
+            # Format strike price: remove .0 if it's a whole number
+            strike = row['strike']
+            if isinstance(strike, (int, float)):
+                if float(strike).is_integer():
+                    strike = int(float(strike))
+            return f"{row['name']}{compact_expiry}{strike}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
 
@@ -353,7 +358,7 @@ def process_shoonya_mcx_data(output_path):
     # Define a function to format the expiry date as DD-MMM-YY
     def format_expiry_date(date_str):
         try:
-            return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d-%b-%Y').upper()
+            return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d-%b-%y').upper()
         except ValueError:
             logger.info(f"Invalid expiry date format: {date_str}")
             return None
@@ -379,7 +384,12 @@ def process_shoonya_mcx_data(output_path):
         if row['instrumenttype'] == 'FUT':
             return f"{row['name']}{compact_expiry}FUT"
         else:
-            return f"{row['name']}{compact_expiry}{row['strike']}{row['instrumenttype']}"
+            # Format strike price: remove .0 if it's a whole number
+            strike = row['strike']
+            if isinstance(strike, (int, float)):
+                if float(strike).is_integer():
+                    strike = int(float(strike))
+            return f"{row['name']}{compact_expiry}{strike}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
 

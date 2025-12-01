@@ -40,16 +40,16 @@ class TradejiniWebSocket:
             # Format the auth token exactly as per TradeJini requirements
             if ':' not in auth_token and api_key:
                 auth_header = f"{api_key}:{auth_token}"
-                logger.info("Using API key from BROKER_API_SECRET environment variable")
+                logger.debug("Using API key from BROKER_API_SECRET environment variable")
             elif ':' in auth_token:
                 auth_header = auth_token
-                logger.info("Using provided API key and access token")
+                logger.debug("Using provided API key and access token")
             else:
                 error_msg = "Invalid auth token format. Expected 'api_key:access_token' or set BROKER_API_SECRET"
                 logger.error(error_msg)
                 raise ValueError(error_msg)
             
-            logger.info(f"Connecting to Tradejini WebSocket using official SDK")
+            logger.debug(f"Connecting to Tradejini WebSocket using official SDK")
             
             # Create NxtradStream instance with callbacks using official SDK
             self.nx_stream = NxtradStream(
@@ -59,7 +59,7 @@ class TradejiniWebSocket:
             )
             
             # Connect with formatted auth token
-            logger.info(f"Connecting with auth token format: {auth_header.split(':')[0][:4]}***:{auth_header.split(':')[1][:4]}***")
+            logger.debug(f"Connecting with auth token format: {auth_header.split(':')[0][:4]}***:{auth_header.split(':')[1][:4]}***")
             self.nx_stream.connect(auth_header)
             
             # Wait for connection
@@ -72,7 +72,7 @@ class TradejiniWebSocket:
                     logger.info(f"Still waiting for connection... ({wait_count}/{max_wait})")
             
             if self.connected:
-                logger.info("Successfully connected to Tradejini WebSocket")
+                logger.debug("Successfully connected to Tradejini WebSocket")
                 return True
             else:
                 logger.error("Failed to connect to Tradejini WebSocket within timeout")
@@ -85,7 +85,7 @@ class TradejiniWebSocket:
     def _on_connection(self, nx_stream, event):
         """Handle connection events from official SDK"""
         try:
-            logger.info(f"Connection event: {event}")
+            logger.debug(f"Connection event: {event}")
             
             if event.get('s') == "connected":
                 self.connected = True
@@ -129,13 +129,13 @@ class TradejiniWebSocket:
                     # Store quote data exactly like original SDK
                     self.L1_dict[symbol] = data
                     self.last_quote = data
-                    logger.info(f"Updated L1 data for {symbol}: LTP={data.get('ltp', 0)}")
+                    logger.debug(f"Updated L1 data for {symbol}: LTP={data.get('ltp', 0)}")
                     
                 elif msg_type == 'L5':
                     # Store depth data
                     self.L5_dict[symbol] = data
                     self.last_depth = data
-                    logger.info(f"Updated L5 data for {symbol}")
+                    logger.debug(f"Updated L5 data for {symbol}")
                     
         except Exception as e:
             logger.error(f"Error processing data: {str(e)}", exc_info=True)
@@ -256,7 +256,7 @@ class BrokerData:
         """Format quote data from Tradejini to OpenAlgo standard format"""
         try:
             logger.debug(f"Formatting quote data for {symbol}")
-            
+
             # Extract values with defaults - matching OpenAlgo format
             ltp = float(quote_data.get('ltp', 0))
             open_price = float(quote_data.get('open', 0))
@@ -264,11 +264,12 @@ class BrokerData:
             low = float(quote_data.get('low', 0))
             prev_close = float(quote_data.get('close', 0))  # Use 'close' as prev_close
             volume = int(quote_data.get('vol', 0) or 0)
-            
+            oi = int(quote_data.get('OI', 0) or 0)  # Add Open Interest
+
             # Get bid/ask data
             bid = float(quote_data.get('bidPrice', 0))
             ask = float(quote_data.get('askPrice', 0))
-            
+
             # Format the quote to match OpenAlgo response exactly
             formatted_quote = {
                 'ask': ask,
@@ -278,12 +279,13 @@ class BrokerData:
                 'ltp': ltp,
                 'open': open_price,
                 'prev_close': prev_close,
-                'volume': volume
+                'volume': volume,
+                'oi': oi  # Include OI in the response
             }
-            
-            logger.debug(f"Formatted quote for {symbol}: LTP={ltp}, Volume={volume}")
+
+            logger.debug(f"Formatted quote for {symbol}: LTP={ltp}, Volume={volume}, OI={oi}")
             return formatted_quote
-            
+
         except Exception as e:
             logger.error(f"Error formatting quote data: {str(e)}", exc_info=True)
             # Return minimal valid quote data in OpenAlgo format
@@ -295,7 +297,8 @@ class BrokerData:
                 'ltp': 0.0,
                 'open': 0.0,
                 'prev_close': 0.0,
-                'volume': 0
+                'volume': 0,
+                'oi': 0  # Include OI with default value
             }
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
@@ -320,18 +323,18 @@ class BrokerData:
                     raise ConnectionError(error_msg)
 
             # Wait a moment for any initial setup messages to be processed
-            logger.info("Waiting for initial setup to complete...")
+            logger.debug("Waiting for initial setup to complete...")
             time.sleep(3)
 
             # Clear existing quote data
             with self.ws.lock:
                 self.ws.last_quote = None
                 self.ws.L1_dict.clear()  # Clear all cached data
-                logger.info("Cleared all cached quote data")
+                logger.debug("Cleared all cached quote data")
 
             # Subscribe to quotes - format as per Tradejini requirements
             symbol_key = f"{token}_{exchange}"
-            logger.info(f"Subscribing to quotes for: {symbol_key}")
+            logger.debug(f"Subscribing to quotes for: {symbol_key}")
             subscription_success = self.ws.subscribe_quotes([symbol_key])
             
             if not subscription_success:
@@ -339,7 +342,7 @@ class BrokerData:
                 logger.error(error_msg)
                 raise ConnectionError(error_msg)
             
-            logger.info("Quote subscription sent successfully, waiting for data...")
+            logger.debug("Quote subscription sent successfully, waiting for data...")
             
             # Wait for quote data with retries
             max_retries = 40
@@ -355,7 +358,7 @@ class BrokerData:
                 f"NSE_{token}",
             ]
             
-            logger.info(f"Will look for data with these symbol keys: {symbol_keys}")
+            logger.debug(f"Will look for data with these symbol keys: {symbol_keys}")
             
             while retry_count < max_retries:
                 time.sleep(1.0)
@@ -365,33 +368,33 @@ class BrokerData:
                     for check_key in symbol_keys:
                         if check_key in self.ws.L1_dict:
                             quote_data = self.ws.L1_dict[check_key]
-                            logger.info(f"Found quote in L1 cache with key '{check_key}': LTP={quote_data.get('ltp', 0)}")
+                            logger.debug(f"Found quote in L1 cache with key '{check_key}': LTP={quote_data.get('ltp', 0)}")
                             return self._format_quote(quote_data, symbol, exchange)
                     
                     # Check last_quote as fallback
                     if self.ws.last_quote is not None:
                         quote_data = self.ws.last_quote
                         quote_symbol = quote_data.get('symbol', '')
-                        logger.info(f"Found quote in last_quote with symbol: '{quote_symbol}'")
+                        logger.debug(f"Found quote in last_quote with symbol: '{quote_symbol}'")
                         # Check if it matches any of our expected keys
                         if any(quote_symbol == key for key in symbol_keys):
-                            logger.info(f"Quote matches expected symbol, LTP={quote_data.get('ltp', 0)}")
+                            logger.debug(f"Quote matches expected symbol, LTP={quote_data.get('ltp', 0)}")
                             return self._format_quote(quote_data, symbol, exchange)
                         else:
                             logger.debug(f"Quote symbol '{quote_symbol}' doesn't match expected keys: {symbol_keys}")
                 
                 retry_count += 1
                 if retry_count % 10 == 0:  # Log every 10 attempts
-                    logger.info(f"Still waiting for quote data... (attempt {retry_count}/{max_retries})")
-                    logger.info(f"L1 cache keys: {list(self.ws.L1_dict.keys())}")
+                    logger.debug(f"Still waiting for quote data... (attempt {retry_count}/{max_retries})")
+                    logger.debug(f"L1 cache keys: {list(self.ws.L1_dict.keys())}")
                     if self.ws.last_quote:
-                        logger.info(f"Last quote symbol: '{self.ws.last_quote.get('symbol', 'None')}'")
+                        logger.debug(f"Last quote symbol: '{self.ws.last_quote.get('symbol', 'None')}'")
                     else:
-                        logger.info(f"Last quote: None")
+                        logger.debug(f"Last quote: None")
 
             # If no data received, return default quote in OpenAlgo format
             logger.warning(f"No quote data received for {symbol} after {max_retries} attempts")
-            logger.info(f"Final L1 cache keys: {list(self.ws.L1_dict.keys())}")
+            logger.debug(f"Final L1 cache keys: {list(self.ws.L1_dict.keys())}")
             
             return {
                 'ask': 0.0,
@@ -417,6 +420,169 @@ class BrokerData:
                 'volume': 0
             }
 
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols using WebSocket
+        Tradejini WebSocket supports up to 3,000 instruments per connection
+
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            # Tradejini WebSocket can handle up to 3000 instruments
+            # Using batch size of 100 for practical response times
+            BATCH_SIZE = 100
+            WAIT_TIME_PER_SYMBOL = 0.1  # 100ms per symbol for data arrival
+
+            if len(symbols) > BATCH_SIZE:
+                logger.debug(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.info(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    batch_results = self._process_multiquotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                logger.debug(f"Successfully processed {len(all_results)} quotes")
+                return all_results
+            else:
+                return self._process_multiquotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_multiquotes_batch(self, symbols: list) -> list:
+        """
+        Process a batch of symbols using WebSocket subscription
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+        Returns:
+            list: List of quote data for the batch
+        """
+        results = []
+        skipped_symbols = []
+        symbol_keys = []  # For WebSocket subscription
+        symbol_map = {}   # Map symbol_key to original symbol/exchange
+
+        # Connect to WebSocket if not already connected
+        if not self.ws.connected:
+            logger.info("WebSocket not connected, attempting to connect...")
+            if not self.connect_websocket():
+                raise ConnectionError("Failed to connect to WebSocket")
+
+        # Wait for initial setup
+        time.sleep(2)
+
+        # Clear existing quote data
+        with self.ws.lock:
+            self.ws.L1_dict.clear()
+            logger.debug("Cleared all cached quote data")
+
+        # Step 1: Prepare all symbol keys
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            token = get_token(symbol, exchange)
+            if not token:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve token")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': 'Could not resolve token'
+                })
+                continue
+
+            # Format as per Tradejini requirements: token_exchange
+            symbol_key = f"{token}_{exchange}"
+            symbol_keys.append(symbol_key)
+
+            # Store mapping for response processing
+            symbol_map[symbol_key] = {
+                'symbol': symbol,
+                'exchange': exchange,
+                'token': token
+            }
+
+        if not symbol_keys:
+            logger.warning("No valid symbols to fetch quotes for")
+            return skipped_symbols
+
+        # Step 2: Subscribe to all symbols at once
+        logger.info(f"Subscribing to {len(symbol_keys)} symbols via WebSocket")
+        subscription_success = self.ws.subscribe_quotes(symbol_keys)
+
+        if not subscription_success:
+            logger.error("Failed to send subscription request")
+            # Return errors for all symbols
+            for symbol_key, info in symbol_map.items():
+                results.append({
+                    'symbol': info['symbol'],
+                    'exchange': info['exchange'],
+                    'error': 'Subscription failed'
+                })
+            return skipped_symbols + results
+
+        # Step 3: Wait for data to arrive
+        # Dynamic wait time based on number of symbols
+        wait_time = min(max(len(symbol_keys) * 0.05, 2), 10)  # Between 2-10 seconds
+        logger.debug(f"Waiting {wait_time:.1f}s for quote data...")
+        time.sleep(wait_time)
+
+        # Step 4: Collect results from L1 cache
+        with self.ws.lock:
+            for symbol_key, info in symbol_map.items():
+                # Try different key formats that Tradejini WebSocket might use
+                possible_keys = [
+                    symbol_key,                                # token_exchange (e.g., "1234_NSE")
+                    f"{info['exchange']}_{info['token']}",     # exchange_token (e.g., "NSE_1234")
+                    f"{info['token']}_NSE",                    # token_NSE fallback
+                    f"{info['token']}_{info['exchange']}",     # token_exchange format
+                    f"NSE_{info['token']}",                    # NSE_token format
+                    str(info['token']),                        # just token
+                ]
+
+                quote_data = None
+                for key in possible_keys:
+                    if key in self.ws.L1_dict:
+                        quote_data = self.ws.L1_dict[key]
+                        logger.debug(f"Found quote data for {info['symbol']} using key: {key}")
+                        break
+
+                if quote_data:
+                    results.append({
+                        'symbol': info['symbol'],
+                        'exchange': info['exchange'],
+                        'data': {
+                            'bid': float(quote_data.get('bidPrice', 0)),
+                            'ask': float(quote_data.get('askPrice', 0)),
+                            'open': float(quote_data.get('open', 0)),
+                            'high': float(quote_data.get('high', 0)),
+                            'low': float(quote_data.get('low', 0)),
+                            'ltp': float(quote_data.get('ltp', 0)),
+                            'prev_close': float(quote_data.get('close', 0)),
+                            'volume': int(quote_data.get('vol', 0) or 0),
+                            'oi': int(quote_data.get('OI', 0) or 0)
+                        }
+                    })
+                else:
+                    # No data received for this symbol
+                    results.append({
+                        'symbol': info['symbol'],
+                        'exchange': info['exchange'],
+                        'error': 'No data received'
+                    })
+
+        logger.info(f"Retrieved quotes for {len([r for r in results if 'data' in r])}/{len(symbol_map)} symbols")
+        return skipped_symbols + results
+
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """Get market depth for given symbol"""
         try:
@@ -438,7 +604,7 @@ class BrokerData:
                 self.ws.L5_dict.clear()
             
             # Subscribe to market depth
-            logger.info(f"Subscribing to depth for {symbol} (token: {token})")
+            logger.debug(f"Subscribing to depth for {symbol} (token: {token})")
             success = self.ws.subscribe_depth(symbol, exchange, token)
             
             if not success:
@@ -458,17 +624,17 @@ class BrokerData:
                     # Check L5 cache
                     if symbol_key in self.ws.L5_dict:
                         depth_data = self.ws.L5_dict[symbol_key]
-                        logger.info(f"Found depth data for {symbol}")
+                        logger.debug(f"Found depth data for {symbol}")
                         return self._format_depth(depth_data, symbol, exchange)
                     
                     # Check last_depth as fallback
                     if self.ws.last_depth is not None:
-                        logger.info(f"Found depth data in last_depth for {symbol}")
+                        logger.debug(f"Found depth data in last_depth for {symbol}")
                         return self._format_depth(self.ws.last_depth, symbol, exchange)
                 
                 retry_count += 1
                 if retry_count % 5 == 0:
-                    logger.info(f"Still waiting for depth data... (attempt {retry_count}/{max_retries})")
+                    logger.debug(f"Still waiting for depth data... (attempt {retry_count}/{max_retries})")
 
             # Return default depth structure if no data received
             logger.warning(f"No depth data received for {symbol}")

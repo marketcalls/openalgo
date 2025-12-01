@@ -109,6 +109,28 @@ class BrokerData:
             'D': 'DAY'    # Daily data
         }
 
+    def _format_quote_data(self, quote_item: dict) -> dict:
+        """
+        Format raw quote data from Firstock API into standardized format.
+        Shared by both get_quotes and get_multiquotes.
+
+        Args:
+            quote_item: Raw quote data from Firstock API
+        Returns:
+            dict: Formatted quote data
+        """
+        return {
+            'bid': float(quote_item.get('bestBuyPrice1', 0)),
+            'ask': float(quote_item.get('bestSellPrice1', 0)),
+            'open': float(quote_item.get('dayOpenPrice', 0)),
+            'high': float(quote_item.get('dayHighPrice', 0)),
+            'low': float(quote_item.get('dayLowPrice', 0)),
+            'ltp': float(quote_item.get('lastTradedPrice', 0)),
+            'prev_close': float(quote_item.get('dayClosePrice', 0)),
+            'volume': int(quote_item.get('volume', 0)),
+            'oi': int(float(quote_item.get('openInterest', 0)))
+        }
+
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
         Get real-time quotes for given symbol
@@ -121,45 +143,163 @@ class BrokerData:
         try:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
-            
+
             # Map exchange to Firstock format (NSE_INDEX -> NSE)
             firstock_exchange = 'NSE' if exchange == 'NSE_INDEX' else exchange
-            
+
             payload = {
                 "userId": os.getenv('BROKER_API_KEY')[:-4],
                 "exchange": firstock_exchange,
                 "tradingSymbol": br_symbol,
                 "jKey": self.auth_token
             }
-            
+
             response = get_api_response("/getQuote", self.auth_token, payload=payload)
-            
+
             if response.get('status') != 'success':
                 raise Exception(f"Error from Firstock API: {response.get('error', {}).get('message', 'Unknown error')}")
-            
+
             quote_data = response.get('data', {})
-            
+
             # Debug logging to check response structure
             if not quote_data:
                 logger.warning(f"Empty quote data received for {br_symbol} on {firstock_exchange}")
                 logger.debug(f"Full response: {response}")
-            
-            # Create the quote data without any wrapping - let the API handle the wrapping
-            return {
-                "ask": float(quote_data.get('bestSellPrice1', 0)),
-                "bid": float(quote_data.get('bestBuyPrice1', 0)),
-                "high": float(quote_data.get('dayHighPrice', 0)),
-                "low": float(quote_data.get('dayLowPrice', 0)),
-                "ltp": float(quote_data.get('lastTradedPrice', 0)),
-                "open": float(quote_data.get('dayOpenPrice', 0)),
-                "prev_close": float(quote_data.get('dayClosePrice', 0)),
-                "volume": int(quote_data.get('volume', 0)),
-                "oi": int(float(quote_data.get('openInterest', 0)))
-            }
-            
+
+            # Use shared formatting method
+            return self._format_quote_data(quote_data)
+
         except Exception as e:
             logger.error(f"Error fetching quotes: {e}")
             return {"status": "error", "message": str(e)}
+
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols using Firstock's getMultiQuotes API
+        Firstock Quote API Rate Limit: 1 request/second
+
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            # Firstock rate limit: 1 request per second for quotes
+            RATE_LIMIT_DELAY = 1.0  # 1 second between batch requests
+            BATCH_SIZE = 50  # Symbols per API request
+
+            if len(symbols) > BATCH_SIZE:
+                logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.debug(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    batch_results = self._process_quotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                    # Rate limit delay between batches
+                    if i + BATCH_SIZE < len(symbols):
+                        time.sleep(RATE_LIMIT_DELAY)
+
+                logger.info(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
+                return all_results
+            else:
+                return self._process_quotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_quotes_batch(self, symbols: list) -> list:
+        """
+        Process a batch of symbols using Firstock's getMultiQuotes endpoint
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+        Returns:
+            list: List of quote data for the batch
+        """
+        skipped_symbols = []
+        symbol_map = {}  # Map br_symbol to original symbol/exchange
+
+        api_key = os.getenv('BROKER_API_KEY')
+        if not api_key:
+            raise Exception("BROKER_API_KEY not found in environment variables")
+        api_key = api_key[:-4]  # Firstock specific requirement
+
+        # Build the data array for multi-quote request
+        data_array = []
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            # Convert symbol to broker format
+            br_symbol = get_br_symbol(symbol, exchange)
+
+            if not br_symbol:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve broker symbol")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': 'Could not resolve broker symbol'
+                })
+                continue
+
+            # Map exchange to Firstock format (NSE_INDEX -> NSE)
+            firstock_exchange = 'NSE' if exchange == 'NSE_INDEX' else ('BSE' if exchange == 'BSE_INDEX' else exchange)
+
+            data_array.append({
+                "exchange": firstock_exchange,
+                "tradingSymbol": br_symbol
+            })
+
+            # Store mapping for response processing
+            symbol_map[f"{firstock_exchange}:{br_symbol}"] = {
+                'symbol': symbol,
+                'exchange': exchange
+            }
+
+        if not data_array:
+            logger.warning("No valid symbols to fetch quotes for")
+            return skipped_symbols
+
+        # Make multi-quote API request
+        payload = {
+            "userId": api_key,
+            "jKey": self.auth_token,
+            "data": data_array
+        }
+
+        response = get_api_response("/getMultiQuotes", self.auth_token, payload=payload)
+
+        if response.get('status') != 'success':
+            error_msg = response.get('error', {}).get('message', response.get('message', 'Unknown error'))
+            logger.error(f"Error from Firstock Multi-Quote API: {error_msg}")
+            raise Exception(f"Error from Firstock API: {error_msg}")
+
+        # Parse response and build results
+        results = []
+        quotes_data = response.get('data', [])
+
+        for quote_item in quotes_data:
+            # Get the symbol identifier from response
+            resp_exchange = quote_item.get('exchange', '')
+            resp_symbol = quote_item.get('tradingSymbol', '')
+            key = f"{resp_exchange}:{resp_symbol}"
+
+            # Look up original symbol and exchange
+            original = symbol_map.get(key, {'symbol': resp_symbol, 'exchange': resp_exchange})
+
+            results.append({
+                'symbol': original['symbol'],
+                'exchange': original['exchange'],
+                'data': self._format_quote_data(quote_item)
+            })
+
+        return skipped_symbols + results
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
@@ -226,12 +366,12 @@ class BrokerData:
             logger.error(f"Error fetching market depth: {e}")
             return {"status": "error", "message": str(e)}
 
-    def get_history_chunked(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str, max_days: int = None) -> pd.DataFrame:
+    def get_history_chunked(self, symbol: str, exchange: str, interval: str, start_date, end_date, max_days: int = None) -> pd.DataFrame:
         """
         Get historical data for given symbol using chunked loading for periods longer than max_days.
         This is especially useful for 1-minute data which Firstock provides for 10 years but limits to 30 days per request.
         Optimized for Jupyter notebooks with better timeout handling.
-        
+
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE)
@@ -239,16 +379,31 @@ class BrokerData:
                      Minutes: 1m, 3m, 5m, 10m, 15m, 30m
                      Hours: 1h, 2h, 4h
                      Days: D
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
+            start_date: Start date (YYYY-MM-DD string or datetime.date/datetime object)
+            end_date: End date (YYYY-MM-DD string or datetime.date/datetime object)
             max_days: Maximum days per chunk (default: auto-determined based on interval)
         Returns:
             pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume]
         """
         try:
-            # Convert dates to datetime objects
-            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            # Convert dates to datetime objects - handle both string and date/datetime inputs
+            if isinstance(start_date, str):
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            elif hasattr(start_date, 'date'):
+                # datetime object
+                start_dt = start_date if isinstance(start_date, datetime) else datetime.combine(start_date, datetime.min.time())
+            else:
+                # date object
+                start_dt = datetime.combine(start_date, datetime.min.time())
+
+            if isinstance(end_date, str):
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            elif hasattr(end_date, 'date'):
+                # datetime object
+                end_dt = end_date if isinstance(end_date, datetime) else datetime.combine(end_date, datetime.min.time())
+            else:
+                # date object
+                end_dt = datetime.combine(end_date, datetime.min.time())
             
             # Auto-determine optimal chunk size based on interval if not specified
             # Smaller chunks for Jupyter notebooks to avoid timeouts
@@ -357,24 +512,39 @@ class BrokerData:
             logger.error(f"Traceback: {traceback.format_exc()}")
             raise Exception(f"Error fetching chunked historical data: {str(e)}")
 
-    def get_history_intraday_chunks(self, symbol: str, exchange: str, start_date: str, end_date: str) -> pd.DataFrame:
+    def get_history_intraday_chunks(self, symbol: str, exchange: str, start_date, end_date) -> pd.DataFrame:
         """
         Special handler for 1-minute data that chunks by hours within each day to avoid timeouts.
-        
+
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE)
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
+            start_date: Start date (YYYY-MM-DD string or datetime.date/datetime object)
+            end_date: End date (YYYY-MM-DD string or datetime.date/datetime object)
         Returns:
             pd.DataFrame: Historical 1-minute data
         """
         try:
             logger.info(f"Using intraday chunking for 1m data from {start_date} to {end_date}")
-            
-            # Convert dates
-            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+
+            # Convert dates - handle both string and date/datetime inputs
+            if isinstance(start_date, str):
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            elif hasattr(start_date, 'date'):
+                # datetime object
+                start_dt = start_date if isinstance(start_date, datetime) else datetime.combine(start_date, datetime.min.time())
+            else:
+                # date object
+                start_dt = datetime.combine(start_date, datetime.min.time())
+
+            if isinstance(end_date, str):
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            elif hasattr(end_date, 'date'):
+                # datetime object
+                end_dt = end_date if isinstance(end_date, datetime) else datetime.combine(end_date, datetime.min.time())
+            else:
+                # date object
+                end_dt = datetime.combine(end_date, datetime.min.time())
             
             all_data = []
             current_date = start_dt
@@ -465,13 +635,13 @@ class BrokerData:
             logger.error(f"Error in get_history_intraday_chunks: {e}")
             raise Exception(f"Error fetching 1m historical data: {str(e)}")
 
-    def get_history(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
+    def get_history(self, symbol: str, exchange: str, interval: str, start_date, end_date) -> pd.DataFrame:
         """
         Get historical data for given symbol using new Firstock API
-        
+
         Automatically switches to chunked loading for large date ranges to prevent timeouts.
         This ensures compatibility with existing code while handling large requests efficiently.
-        
+
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE)
@@ -479,15 +649,30 @@ class BrokerData:
                      Minutes: 1m, 3m, 5m, 10m, 15m, 30m
                      Hours: 1h, 2h, 4h
                      Days: D
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
+            start_date: Start date (YYYY-MM-DD string or datetime.date/datetime object)
+            end_date: End date (YYYY-MM-DD string or datetime.date/datetime object)
         Returns:
             pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume]
         """
         try:
-            # Convert dates to datetime objects for validation
-            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            # Convert dates to datetime objects for validation - handle both string and date/datetime inputs
+            if isinstance(start_date, str):
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            elif hasattr(start_date, 'date'):
+                # datetime object
+                start_dt = start_date if isinstance(start_date, datetime) else datetime.combine(start_date, datetime.min.time())
+            else:
+                # date object
+                start_dt = datetime.combine(start_date, datetime.min.time())
+
+            if isinstance(end_date, str):
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            elif hasattr(end_date, 'date'):
+                # datetime object
+                end_dt = end_date if isinstance(end_date, datetime) else datetime.combine(end_date, datetime.min.time())
+            else:
+                # date object
+                end_dt = datetime.combine(end_date, datetime.min.time())
             
             # Calculate date range in days
             date_range_days = (end_dt - start_dt).days + 1
@@ -581,7 +766,7 @@ class BrokerData:
             logger.error(f"Error in get_history: {str(e)}")
             return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-    def _get_single_history_chunk(self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str) -> pd.DataFrame:
+    def _get_single_history_chunk(self, symbol: str, exchange: str, interval: str, start_date, end_date) -> pd.DataFrame:
         """
         Get historical data for given symbol using new Firstock API
         Args:
@@ -591,18 +776,33 @@ class BrokerData:
                      Minutes: 1m, 3m, 5m, 10m, 15m, 30m
                      Hours: 1h, 2h, 4h
                      Days: D
-            start_date: Start date (YYYY-MM-DD)
-            end_date: End date (YYYY-MM-DD)
+            start_date: Start date (YYYY-MM-DD string or datetime.date/datetime object)
+            end_date: End date (YYYY-MM-DD string or datetime.date/datetime object)
         Returns:
             pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume]
         """
         try:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
-            
-            # Convert dates to datetime objects
-            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+
+            # Convert dates to datetime objects - handle both string and date/datetime inputs
+            if isinstance(start_date, str):
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            elif hasattr(start_date, 'date'):
+                # datetime object
+                start_dt = start_date if isinstance(start_date, datetime) else datetime.combine(start_date, datetime.min.time())
+            else:
+                # date object
+                start_dt = datetime.combine(start_date, datetime.min.time())
+
+            if isinstance(end_date, str):
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            elif hasattr(end_date, 'date'):
+                # datetime object
+                end_dt = end_date if isinstance(end_date, datetime) else datetime.combine(end_date, datetime.min.time())
+            else:
+                # date object
+                end_dt = datetime.combine(end_date, datetime.min.time())
             
             # Check if date range exceeds 30 days and warn user
             total_days = (end_dt - start_dt).days + 1

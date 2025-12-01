@@ -582,8 +582,8 @@ def process_groww_data(path):
         
         # Swap lot_size and strike as they're reversed in the input data
         # Store the correctly mapped values using a temporary column
-        df_mapped['temp_strike'] = pd.to_numeric(df_mapped['lotsize'], errors='coerce').fillna(0)
-        df_mapped['lotsize'] = pd.to_numeric(df_mapped['strike'], errors='coerce').fillna(1).astype(int)
+        df_mapped['temp_strike'] = pd.to_numeric(df_mapped['strike'], errors='coerce').fillna(0)
+        df_mapped['lotsize'] = pd.to_numeric(df_mapped['lotsize'], errors='coerce').fillna(1).astype(int)
         df_mapped['strike'] = df_mapped['temp_strike']
         df_mapped.drop('temp_strike', axis=1, inplace=True)
         df_mapped['tick_size'] = pd.to_numeric(df_mapped['tick_size'], errors='coerce').fillna(0.05)

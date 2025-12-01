@@ -88,6 +88,17 @@ def hook_into_master_contract_download(broker: str):
         # Load symbols into cache
         load_symbols_to_cache(broker)
         
+        # After successful master contract download, restore Python strategies
+        try:
+            from blueprints.python_strategy import restore_strategies_after_login
+            logger.info("Attempting to restore Python strategies after master contract download")
+            success, message = restore_strategies_after_login()
+            logger.info(f"Python strategy restoration result: {message}")
+        except ImportError:
+            logger.debug("Python strategy module not available")
+        except Exception as strategy_error:
+            logger.error(f"Error restoring Python strategies: {strategy_error}")
+        
     except Exception as e:
         logger.error(f"Error in master contract cache hook: {e}")
 

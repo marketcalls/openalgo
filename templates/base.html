@@ -4,10 +4,16 @@
     <!-- Add blocking script to set theme before any content loads -->
     <script>
         (function() {
-            const savedTheme = localStorage.getItem('theme');
-            if (savedTheme) {
-                document.documentElement.setAttribute('data-theme', savedTheme);
+            // Check if we're in analyze mode first
+            const analyzeMode = sessionStorage.getItem('analyzeMode') || localStorage.getItem('analyzeMode');
+            if (analyzeMode === 'true') {
+                document.documentElement.setAttribute('data-theme', 'dracula');
+                return;
             }
+
+            // Otherwise use saved theme or default
+            const savedTheme = sessionStorage.getItem('theme') || localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', savedTheme);
         })();
     </script>
     <meta charset="UTF-8">
@@ -26,10 +32,10 @@
     
     <!-- Compiled Tailwind CSS with DaisyUI -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
-    
-    <!-- Socket.IO -->
-    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
-    
+
+    <!-- Socket.IO (Local) -->
+    <script src="{{ url_for('static', filename='js/socket.io.min.js') }}"></script>
+
     <!-- Audio for alerts -->
     <audio id="alert-sound" src="{{ url_for('static', filename='sounds/alert.mp3') }}" preload="auto"></audio>
 
@@ -106,10 +112,12 @@
             </div>
 
             <!-- Main Content -->
-            <main class="flex-grow bg-base-100 mt-6">
+            <main class="flex-grow bg-base-100 {% block main_class %}mt-6{% endblock %}">
+                {% block content_wrapper %}
                 <div class="container mx-auto px-4">
                     {% block content %}{% endblock %}
                 </div>
+                {% endblock %}
             </main>
 
             <!-- Footer -->
@@ -159,38 +167,50 @@
                         </a>
                     </li>
                     <li>
-                        <a href="{{ url_for('tv_json_bp.tradingview_json') }}" 
-                           class="{{ 'active' if request.endpoint == 'tv_json_bp.tradingview_json' }}">
-                            Tradingview
+                        <a href="{{ url_for('python_strategy_bp.index') }}" 
+                           class="{{ 'active' if request.endpoint.startswith('python_strategy_bp.') }}">
+                            Python Strategies
                         </a>
                     </li>
                     <li>
-                        <a href="{{ url_for('chartink_bp.index') }}" 
-                           class="{{ 'active' if request.endpoint.startswith('chartink_bp.') }}">
-                            Chartink
+                        <a href="{{ url_for('platforms_bp.index') }}"
+                           class="{{ 'active' if request.endpoint == 'platforms_bp.index' or request.endpoint == 'tv_json_bp.tradingview_json' or request.endpoint == 'gc_json_bp.gocharting_json' or request.endpoint.startswith('chartink_bp.') }}">
+                            Platforms
                         </a>
                     </li>
                     <li>
-                        <a href="{{ url_for('strategy_bp.index') }}" 
+                        <a href="{{ url_for('strategy_bp.index') }}"
                            class="{{ 'active' if request.endpoint.startswith('strategy_bp.') }}">
                             Strategy
                         </a>
                     </li>
                     <div class="divider"></div>
                     <li>
-                        <a href="{{ url_for('auth.change_password') }}" 
+                        <a href="{{ url_for('auth.change_password') }}"
                            class="{{ 'active' if request.endpoint == 'auth.change_password' }}">
                             Profile
                         </a>
                     </li>
                     <li>
-                        <a href="{{ url_for('api_key_bp.manage_api_key') }}" 
+                        <a href="{{ url_for('sandbox_bp.sandbox_config') }}"
+                           class="{{ 'active' if request.endpoint.startswith('sandbox_bp.') }}">
+                            Sandbox Config
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('api_key_bp.manage_api_key') }}"
                            class="{{ 'active' if request.endpoint == 'api_key_bp.manage_api_key' }}">
                             API Key
                         </a>
                     </li>
                     <li>
-                        <a href="{{ url_for('log_bp.view_logs') }}" 
+                        <a href="{{ url_for('telegram_bp.index') }}"
+                           class="{{ 'active' if request.endpoint.startswith('telegram_bp.') }}">
+                            Telegram Bot
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('log_bp.view_logs') }}"
                            class="{{ 'active' if request.endpoint == 'log_bp.view_logs' }}">
                             Logs
                         </a>
@@ -205,6 +225,12 @@
                         <a href="{{ url_for('search_bp.token') }}" 
                            class="{{ 'active' if request.endpoint == 'search_bp.token' }}">
                             Search
+                        </a>
+                    </li>
+                    <li>
+                        <a href="{{ url_for('analyzer_bp.analyzer') }}"
+                           class="{{ 'active' if request.endpoint == 'analyzer_bp.analyzer' }}">
+                            API Analyzer
                         </a>
                     </li>
                     <li>
@@ -229,13 +255,19 @@
 
     <!-- Toast notification function -->
     <script>
-        function showToast(message, type = 'info') {
+        function showToast(message, type = 'info', duration = 3000) {
+            // Play sound
+            const alertSound = document.getElementById('alert-sound');
+            if (alertSound) {
+                alertSound.play().catch(() => {});
+            }
+
             const toast = document.createElement('div');
             toast.className = `alert alert-${type} shadow-lg mb-4`;
-            
+
             const content = document.createElement('div');
             content.className = 'flex items-center';
-            
+
             // Icon based on type
             let icon = '';
             switch(type) {
@@ -248,23 +280,23 @@
                 default:
                     icon = '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>';
             }
-            
+
             content.innerHTML = `
                 ${icon}
                 <span>${message}</span>
                 <button onclick="this.parentElement.parentElement.remove()" class="btn btn-ghost btn-sm btn-circle ml-auto">✕</button>
             `;
-            
+
             toast.appendChild(content);
             document.querySelector('.toast').appendChild(toast);
 
-            // Remove toast after 3 seconds
+            // Remove toast after specified duration
             setTimeout(() => {
                 toast.classList.add('animate-out');
                 setTimeout(() => {
                     toast.remove();
                 }, 300);
-            }, 3000);
+            }, duration);
         }
     </script>
 </body>

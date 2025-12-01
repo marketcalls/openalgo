@@ -40,18 +40,18 @@
                 </div>
 
                 <!-- Strategy Type -->
-                <div class="form-control">
+                <div class="form-control w-full">
                     <label class="label">
                         <span class="label-text">Strategy Type</span>
                     </label>
-                    <select name="type" class="select select-bordered" id="strategyType">
+                    <select name="type" class="select select-bordered w-full" id="strategyType">
                         <option value="intraday">Intraday</option>
                         <option value="positional">Positional</option>
                     </select>
                 </div>
 
                 <!-- Trading Mode -->
-                <div class="form-control">
+                <div class="form-control w-full">
                     <label class="label">
                         <span class="label-text">Trading Mode</span>
                         <span class="label-text-alt">
@@ -60,7 +60,7 @@
                             </div>
                         </span>
                     </label>
-                    <select name="trading_mode" class="select select-bordered" id="tradingMode">
+                    <select name="trading_mode" class="select select-bordered w-full" id="tradingMode">
                         <option value="LONG">LONG Only</option>
                         <option value="SHORT">SHORT Only</option>
                         <option value="BOTH">BOTH (Long & Short)</option>
@@ -73,26 +73,26 @@
                 <!-- Trading Times (for intraday) -->
                 <div id="tradingTimes" class="space-y-4">
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div class="form-control">
+                        <div class="form-control w-full">
                             <label class="label">
                                 <span class="label-text">Start Time</span>
                             </label>
-                            <input type="time" name="start_time" class="input input-bordered" value="09:15">
+                            <input type="time" name="start_time" class="input input-bordered w-full" value="09:15">
                         </div>
-                        
-                        <div class="form-control">
+
+                        <div class="form-control w-full">
                             <label class="label">
                                 <span class="label-text">End Time</span>
                             </label>
-                            <input type="time" name="end_time" class="input input-bordered" value="15:00">
+                            <input type="time" name="end_time" class="input input-bordered w-full" value="15:00">
                         </div>
                     </div>
-                    
-                    <div class="form-control">
+
+                    <div class="form-control w-full">
                         <label class="label">
                             <span class="label-text">Square Off Time</span>
                         </label>
-                        <input type="time" name="squareoff_time" class="input input-bordered" value="15:15">
+                        <input type="time" name="squareoff_time" class="input input-bordered w-full" value="15:15">
                     </div>
                 </div>
 

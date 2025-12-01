@@ -60,14 +60,25 @@ def get_order_book(auth):
     return get_api_response("/rest/AliceBlueAPIService/api/placeOrder/fetchOrderBook",auth)
 
 def get_trade_book(auth):
+    response = get_api_response("/rest/AliceBlueAPIService/api/placeOrder/fetchTradeBook", auth)
 
-    return get_api_response("/rest/AliceBlueAPIService/api/placeOrder/fetchTradeBook",auth)
+    # Log the raw tradebook response from AliceBlue API
+    logger.info(f"AliceBlue tradebook API response type: {type(response)}")
+    if response:
+        if isinstance(response, list) and len(response) > 0:
+            logger.info(f"First trade from AliceBlue API: {response[0]}")
+        elif isinstance(response, dict):
+            logger.info(f"AliceBlue API returned dict with keys: {list(response.keys())}")
+            if response.get('stat') == 'Ok':
+                logger.info(f"Success response, checking data field...")
+
+    return response
 
 def get_positions(auth):
     payload = json.dumps({
     "ret": "NET"
     })
-    
+
     return get_api_response("/rest/AliceBlueAPIService/api/positionAndHoldings/positionBook",auth,"POST",payload=payload)
 
 def get_holdings(auth):
@@ -77,7 +88,7 @@ def get_open_position(tradingsymbol, exchange, product,auth):
 
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol,exchange)
-    
+
 
     position_data = get_positions(auth)
 

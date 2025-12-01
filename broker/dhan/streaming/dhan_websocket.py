@@ -96,7 +96,7 @@ class DhanWebSocket:
             }
         
         self.ws_url = f"{base_url}?{urlencode(params)}"
-        self.logger.info(f"Dhan WebSocket URL constructed: {self.ws_url[:100]}...")  # Log first 100 chars for security
+        self.logger.debug(f"Dhan WebSocket URL constructed: {self.ws_url[:100]}...")  # Log first 100 chars for security
     
     def connect(self):
         """Establish WebSocket connection"""
@@ -133,12 +133,17 @@ class DhanWebSocket:
             # Continue anyway, the thread isolation should handle most cases
     
     def _run_websocket(self):
-        """Run the WebSocket connection in a separate thread"""
+        """Run the WebSocket connection in a separate thread with exponential backoff"""
+        reconnect_attempt = 0
+        max_reconnect_attempts = 10
+        base_delay = 5
+        max_delay = 60
+
         while self.running:
             try:
-                self.logger.info(f"Connecting to Dhan WebSocket ({'20-depth' if self.is_20_depth else '5-depth'})...")
-                self.logger.info(f"WebSocket URL: {self.ws_url}")
-                
+                #self.logger.info(f"Connecting to Dhan WebSocket ({'20-depth' if self.is_20_depth else '5-depth'})...")
+                #self.logger.info(f"WebSocket URL: {self.ws_url}")
+
                 self.ws = websocket.WebSocketApp(
                     self.ws_url,
                     on_open=self._on_open,
@@ -148,25 +153,40 @@ class DhanWebSocket:
                     on_ping=lambda ws, msg: self.logger.debug("Received ping"),
                     on_pong=lambda ws, msg: self.logger.debug("Received pong")
                 )
-                
+
                 # Run the WebSocket with ping interval
-                self.ws.run_forever(ping_interval=10, ping_timeout=5)
-                
+                self.ws.run_forever(ping_interval=30, ping_timeout=10)
+
             except Exception as e:
                 self.logger.error(f"WebSocket connection error: {e}", exc_info=True)
                 self.connected = False
-                
+
                 if self.running:
-                    self.logger.info("Reconnecting in 5 seconds...")
-                    time.sleep(5)
+                    reconnect_attempt += 1
+                    if reconnect_attempt >= max_reconnect_attempts:
+                        self.logger.error(f"Maximum reconnection attempts ({max_reconnect_attempts}) reached. Stopping.")
+                        self.running = False
+                        break
+
+                    # Calculate delay with exponential backoff
+                    delay = min(base_delay * (2 ** (reconnect_attempt - 1)), max_delay)
+                    self.logger.info(f"Reconnecting in {delay} seconds... (attempt {reconnect_attempt}/{max_reconnect_attempts})")
+                    time.sleep(delay)
+            else:
+                # Reset reconnect attempt counter on successful connection
+                if self.connected:
+                    reconnect_attempt = 0
     
     def disconnect(self):
         """Disconnect from WebSocket"""
+        # Store connected state before clearing
+        was_connected = self.connected
+
         self.running = False
         self.connected = False
-        
-        # Send disconnect message if connected
-        if self.ws and self.connected:
+
+        # Send disconnect message if was connected
+        if self.ws and was_connected:
             try:
                 disconnect_msg = json.dumps({
                     "RequestCode": self.REQUEST_CODES['DISCONNECT']
@@ -174,11 +194,19 @@ class DhanWebSocket:
                 if hasattr(self.ws, 'send') and callable(self.ws.send):
                     self.ws.send(disconnect_msg)
             except Exception as e:
-                self.logger.error(f"Error sending disconnect message: {e}")
-        
+                self.logger.debug(f"Error sending disconnect message: {e}")
+
         # Close WebSocket
         if self.ws:
-            self.ws.close()
+            try:
+                self.ws.close()
+            except Exception as e:
+                self.logger.debug(f"Error closing WebSocket: {e}")
+
+        # Wait for WebSocket thread to finish
+        if self.ws_thread and self.ws_thread.is_alive():
+            self.ws_thread.join(timeout=2)
+            self.logger.debug(f"WebSocket thread {'stopped' if not self.ws_thread.is_alive() else 'timeout'}")
     
     def subscribe(self, instruments: List[Dict[str, str]], mode: str = 'FULL'):
         """
@@ -235,7 +263,7 @@ class DhanWebSocket:
                                 'instrument': inst
                             }
                     
-                    self.logger.info(f"Subscribed to {len(batch)} instruments in {mode} mode")
+                    self.logger.debug(f"Subscribed to {len(batch)} instruments in {mode} mode")
                 else:
                     self.logger.error("WebSocket not properly initialized for sending")
                     return False
@@ -255,13 +283,13 @@ class DhanWebSocket:
                 if key in self.subscriptions:
                     del self.subscriptions[key]
         
-        self.logger.info(f"Unsubscribed from {len(instruments)} instruments")
+        self.logger.debug(f"Unsubscribed from {len(instruments)} instruments")
         return True
     
     def _on_open(self, ws):
         """Handle WebSocket connection open"""
         self.connected = True
-        self.logger.info("WebSocket connection established")
+        self.logger.debug("WebSocket connection established")
         
         if self.on_open:
             self.on_open(self)
@@ -276,8 +304,19 @@ class DhanWebSocket:
     def _on_close(self, ws, close_status_code, close_msg):
         """Handle WebSocket connection close"""
         self.connected = False
-        self.logger.info(f"WebSocket connection closed: {close_status_code} - {close_msg}")
-        
+
+        # Only log warning for unexpected disconnects (not during intentional shutdown)
+        if self.running and (close_status_code is None or close_status_code == 1000):
+            self.logger.warning(
+                f"WebSocket closed unexpectedly: status={close_status_code}, "
+                f"message='{close_msg}'. This may indicate: 1) Multiple concurrent connections "
+                f"with same credentials, 2) Invalid/expired token, or 3) Server-side rate limiting."
+            )
+        elif not self.running:
+            self.logger.debug(f"WebSocket closed during shutdown: status={close_status_code}")
+        else:
+            self.logger.debug(f"WebSocket connection closed: {close_status_code} - {close_msg}")
+
         if self.on_close:
             self.on_close(self)
     
@@ -286,7 +325,7 @@ class DhanWebSocket:
         try:
             # All Dhan responses are binary
             if isinstance(message, (bytes, bytearray)):
-                self.logger.info(f"Received binary message of length: {len(message)} bytes")
+                self.logger.debug(f"Received binary message of length: {len(message)} bytes")
                 self._parse_binary_message(message)
             else:
                 self.logger.warning(f"Received non-binary message: {type(message)}: {message}")
@@ -315,7 +354,7 @@ class DhanWebSocket:
             exchange_segment = struct.unpack('<B', data[offset+3:offset+4])[0]
             security_id = struct.unpack('<I', data[offset+4:offset+8])[0]
             
-            self.logger.info(f"Parsed header - Code: {feed_response_code}, Length: {message_length}, Exchange: {exchange_segment}, Security: {security_id}")
+            self.logger.debug(f"Parsed header - Code: {feed_response_code}, Length: {message_length}, Exchange: {exchange_segment}, Security: {security_id}")
             
             # Parse payload based on response code
             payload_start = offset + 8
@@ -331,28 +370,28 @@ class DhanWebSocket:
             parsed_data = None
             
             if feed_response_code == 2:  # Ticker
-                self.logger.info("Parsing TICKER packet")
+                self.logger.debug("Parsing TICKER packet")
                 parsed_data = self._parse_ticker_packet(payload, exchange_segment, security_id)
             elif feed_response_code == 4:  # Quote
-                self.logger.info("Parsing QUOTE packet")
+                self.logger.debug("Parsing QUOTE packet")
                 parsed_data = self._parse_quote_packet(payload, exchange_segment, security_id)
             elif feed_response_code == 5:  # OI
-                self.logger.info("Parsing OI packet")
+                self.logger.debug("Parsing OI packet")
                 parsed_data = self._parse_oi_packet(payload, exchange_segment, security_id)
             elif feed_response_code == 6:  # Prev Close
-                self.logger.info("Parsing PREV_CLOSE packet")
+                self.logger.debug("Parsing PREV_CLOSE packet")
                 parsed_data = self._parse_prev_close_packet(payload, exchange_segment, security_id)
             elif feed_response_code == 8:  # Full
-                self.logger.info("Parsing FULL packet")
+                self.logger.debug("Parsing FULL packet")
                 parsed_data = self._parse_full_packet(payload, exchange_segment, security_id)
             elif feed_response_code == 50:  # Disconnect
-                self.logger.info("Parsing DISCONNECT packet")
+                self.logger.debug("Parsing DISCONNECT packet")
                 self._handle_disconnect_packet(payload)
             else:
                 self.logger.warning(f"Unknown feed response code: {feed_response_code}")
             
             if parsed_data and self.on_data:
-                self.logger.info(f"Sending parsed data to callback: {parsed_data.get('type')}")
+                self.logger.debug(f"Sending parsed data to callback: {parsed_data.get('type')}")
                 self.on_data(self, parsed_data)
             elif parsed_data:
                 self.logger.warning("Parsed data available but no callback set")
@@ -364,7 +403,7 @@ class DhanWebSocket:
         """Parse 20-level depth binary message"""
         offset = 0
         
-        self.logger.info(f"Parsing 20-depth message with {len(data)} bytes")
+        #self.logger.info(f"Parsing 20-depth message with {len(data)} bytes")
         
         while offset < len(data):
             if offset + 12 > len(data):
@@ -390,7 +429,7 @@ class DhanWebSocket:
             # Parse based on feed response code
             if feed_response_code in [41, 51]:  # 20-depth bid/ask
                 side = 'BID' if feed_response_code == 41 else 'ASK'
-                self.logger.info(f"Parsing 20-depth {side} packet for security {security_id}")
+                #self.logger.info(f"Parsing 20-depth {side} packet for security {security_id}")
                 
                 parsed_data = self._parse_20_depth_packet(
                     payload, exchange_segment, security_id, 
@@ -398,7 +437,7 @@ class DhanWebSocket:
                 )
                 
                 if parsed_data and self.on_data:
-                    self.logger.info(f"Sending 20-depth {side} data to callback")
+                    #self.logger.info(f"Sending 20-depth {side} data to callback")
                     self.on_data(self, parsed_data)
                 else:
                     self.logger.warning(f"Failed to parse 20-depth {side} data")
@@ -478,7 +517,7 @@ class DhanWebSocket:
             self.logger.warning(f"FULL packet payload too short: {len(payload)} bytes, expected 154")
             return None
         
-        self.logger.info(f"Parsing FULL packet with payload length: {len(payload)}")
+        self.logger.debug(f"Parsing FULL packet with payload length: {len(payload)}")
         
         result = {
             'type': 'full',
@@ -528,7 +567,7 @@ class DhanWebSocket:
                 'orders': ask_orders
             })
         
-        self.logger.info(f"FULL packet parsed successfully: LTP={result.get('ltp')}, Volume={result.get('volume')}")
+        self.logger.debug(f"FULL packet parsed successfully: LTP={result.get('ltp')}, Volume={result.get('volume')}")
         return result
     
     def _parse_20_depth_packet(self, payload: bytes, exchange_segment: int, security_id: int, is_bid: bool) -> Dict[str, Any]:
