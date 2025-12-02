@@ -93,6 +93,50 @@ class BrokerData:
         """Get market start and end times for given exchange"""
         return self.market_timings.get(exchange, self.default_market_timings)
 
+    def _prepare_symbol_for_api(self, symbol: str, exchange: str) -> dict:
+        """
+        Prepare symbol data for Paytm API calls.
+
+        Args:
+            symbol: Trading symbol
+            exchange: Exchange (e.g., NSE, BSE, NFO)
+
+        Returns:
+            dict: Contains token, br_symbol, opt_type, request_exchange
+        """
+        token = get_token(symbol, exchange)
+        br_symbol = get_br_symbol(symbol, exchange)
+
+        # Determine opt_type based on exchange and symbol format
+        if exchange in ['NSE_INDEX', 'BSE_INDEX']:
+            opt_type = 'INDEX'
+        else:
+            parts = br_symbol.split('-') if br_symbol else []
+            if len(parts) > 2:
+                if parts[-1] in ['CE', 'PE']:
+                    opt_type = 'OPTION'
+                elif 'FUT' in parts[-1]:
+                    opt_type = 'FUTURE'
+                else:
+                    opt_type = 'EQUITY'
+            else:
+                opt_type = 'EQUITY'
+
+        # Map exchange for API
+        if exchange in ['NFO', 'NSE_INDEX']:
+            request_exchange = 'NSE'
+        elif exchange in ['BFO', 'BSE_INDEX']:
+            request_exchange = 'BSE'
+        else:
+            request_exchange = exchange
+
+        return {
+            'token': token,
+            'br_symbol': br_symbol,
+            'opt_type': opt_type,
+            'request_exchange': request_exchange
+        }
+
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
         Get real-time quotes for given symbol
@@ -103,38 +147,16 @@ class BrokerData:
             dict: Quote data with required fields
         """
         try:
-            # Convert symbol to broker format
-            token = get_token(symbol, exchange)
+            # Prepare symbol for API
+            sym_data = self._prepare_symbol_for_api(symbol, exchange)
+            token = sym_data['token']
+            request_exchange = sym_data['request_exchange']
+            opt_type = sym_data['opt_type']
+
             logger.debug(f"Fetching quotes for {exchange}:{token}")
 
-            br_symbol = get_br_symbol(symbol, exchange)
-
-            # Determine opt_type based on exchange and symbol format
-            if exchange in ['NSE_INDEX', 'BSE_INDEX']:
-                opt_type = 'INDEX'
-            else:
-                # Determine opt_type based on symbol format
-                parts = br_symbol.split('-')
-                if len(parts) > 2:
-                    if parts[-1] in ['CE', 'PE']:
-                        opt_type = 'OPTION'
-                    elif 'FUT' in parts[-1]:
-                        opt_type = 'FUTURE'
-                    else:
-                        opt_type = 'EQUITY'
-                else:
-                    opt_type = 'EQUITY'
-            
             # URL encode the symbol to handle special characters
-            # Paytm expects the symbol to be in the format "exchange:symbol" E,g: NSE:335:EQUITY
-            # 	INDEX, EQUITY, ETF, FUTURE, OPTION
-            # Before the encoded_symbol line, add:
-            if exchange == 'NFO' or exchange == 'NSE_INDEX':
-                request_exchange = 'NSE'
-            elif exchange == 'BFO' or exchange == 'BSE_INDEX':
-                request_exchange = 'BSE'
-            else:
-                request_exchange = exchange
+            # Paytm expects the symbol to be in the format "exchange:token:opt_type" E.g: NSE:335:EQUITY
             encoded_symbol = urllib.parse.quote(f"{request_exchange}:{token}:{opt_type}")
             
             response = get_api_response(f"/data/v1/price/live?mode=QUOTE&pref={encoded_symbol}", self.auth_token)
@@ -236,8 +258,11 @@ class BrokerData:
                 continue
 
             try:
-                token = get_token(symbol, exchange)
-                br_symbol = get_br_symbol(symbol, exchange)
+                # Use common helper for symbol preparation
+                sym_data = self._prepare_symbol_for_api(symbol, exchange)
+                token = sym_data['token']
+                request_exchange = sym_data['request_exchange']
+                opt_type = sym_data['opt_type']
 
                 if not token:
                     logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve token")
@@ -248,29 +273,6 @@ class BrokerData:
                         'error': 'Could not resolve token'
                     })
                     continue
-
-                # Determine opt_type based on exchange and symbol format
-                if exchange in ['NSE_INDEX', 'BSE_INDEX']:
-                    opt_type = 'INDEX'
-                else:
-                    parts = br_symbol.split('-') if br_symbol else []
-                    if len(parts) > 2:
-                        if parts[-1] in ['CE', 'PE']:
-                            opt_type = 'OPTION'
-                        elif 'FUT' in parts[-1]:
-                            opt_type = 'FUTURE'
-                        else:
-                            opt_type = 'EQUITY'
-                    else:
-                        opt_type = 'EQUITY'
-
-                # Map exchange for API
-                if exchange == 'NFO' or exchange == 'NSE_INDEX':
-                    request_exchange = 'NSE'
-                elif exchange == 'BFO' or exchange == 'BSE_INDEX':
-                    request_exchange = 'BSE'
-                else:
-                    request_exchange = exchange
 
                 pref_str = f"{request_exchange}:{token}:{opt_type}"
                 pref_list.append(pref_str)
@@ -366,38 +368,16 @@ class BrokerData:
             dict: Market depth data
         """
         try:
-            # Convert symbol to broker format
-            token = get_token(symbol, exchange)
+            # Prepare symbol for API
+            sym_data = self._prepare_symbol_for_api(symbol, exchange)
+            token = sym_data['token']
+            request_exchange = sym_data['request_exchange']
+            opt_type = sym_data['opt_type']
+
             logger.debug(f"Fetching market depth for {exchange}:{token}")
 
-            br_symbol = get_br_symbol(symbol, exchange)
-
-            # Determine opt_type based on exchange and symbol format
-            if exchange in ['NSE_INDEX', 'BSE_INDEX']:
-                opt_type = 'INDEX'
-            else:
-                # Determine opt_type based on symbol format
-                parts = br_symbol.split('-')
-                if len(parts) > 2:
-                    if parts[-1] in ['CE', 'PE']:
-                        opt_type = 'OPTION'
-                    elif 'FUT' in parts[-1]:
-                        opt_type = 'FUTURE'
-                    else:
-                        opt_type = 'EQUITY'
-                else:
-                    opt_type = 'EQUITY'
-            
             # URL encode the symbol to handle special characters
-            # Paytm expects the symbol to be in the format "exchange:symbol" E,g: NSE:335:EQUITY
-            # 	INDEX, EQUITY, ETF, FUTURE, OPTION
-            # Before the encoded_symbol line, add:
-            if exchange == 'NFO' or exchange == 'NSE_INDEX':
-                request_exchange = 'NSE'
-            elif exchange == 'BFO' or exchange == 'BSE_INDEX':
-                request_exchange = 'BSE'
-            else:
-                request_exchange = exchange
+            # Paytm expects the symbol to be in the format "exchange:token:opt_type" E.g: NSE:335:EQUITY
             encoded_symbol = urllib.parse.quote(f"{request_exchange}:{token}:{opt_type}")
             
             response = get_api_response(f"/data/v1/price/live?mode=FULL&pref={encoded_symbol}", self.auth_token)
