@@ -37,6 +37,7 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.max_reconnect_attempts = 10
         self.running = False
         self.lock = threading.Lock()
+        self.last_values = {}  # Cache for retaining last known values
 
     def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> None:
         """
@@ -234,9 +235,17 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         correlation_id = f"{symbol}_{exchange}_{mode}"
 
         # Remove from subscriptions
+        should_disconnect = False
         with self.lock:
             if correlation_id in self.subscriptions:
                 del self.subscriptions[correlation_id]
+            # Check if all subscriptions are removed
+            if len(self.subscriptions) == 0:
+                should_disconnect = True
+            # Clear cached values for this symbol
+            cache_key = f"{symbol}_{exchange}"
+            if cache_key in self.last_values:
+                del self.last_values[cache_key]
 
         # Unsubscribe if connected
         if self.connected and self.ws_client:
@@ -249,6 +258,11 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             except Exception as e:
                 self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
                 return self._create_error_response("UNSUBSCRIPTION_ERROR", str(e))
+
+        # Disconnect from broker if no subscriptions remain
+        if should_disconnect:
+            self.logger.info("No subscriptions remaining, disconnecting from broker")
+            self.disconnect()
 
         return self._create_success_response(
             f"Unsubscribed from {symbol}.{exchange}",
@@ -374,8 +388,9 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             mode_str = 'LTP' if mode == 'ltp' else 'QUOTE'
             topic = f"{exchange}_{symbol}_{mode_str}"
 
-            # Normalize the data
-            market_data = self._normalize_market_data(message, mode)
+            # Normalize the data with caching for value retention
+            cache_key = f"{symbol}_{exchange}"
+            market_data = self._normalize_market_data(message, mode, cache_key)
 
             # Add metadata
             market_data.update({
@@ -392,13 +407,15 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception as e:
             self.logger.error(f"Error processing market data: {e}", exc_info=True)
 
-    def _normalize_market_data(self, message: Dict[str, Any], mode: str) -> Dict[str, Any]:
+    def _normalize_market_data(self, message: Dict[str, Any], mode: str, cache_key: str) -> Dict[str, Any]:
         """
-        Normalize broker-specific data format to a common format
+        Normalize broker-specific data format to a common format.
+        Retains previous values if new value is 0 or missing.
 
         Args:
             message: The raw message from the broker
             mode: Subscription mode ('ltp' or 'quote')
+            cache_key: Key for caching values (symbol_exchange)
 
         Returns:
             Dict: Normalized market data
@@ -406,30 +423,47 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         data = message.get('data', {})
         timestamp = message.get('timestamp', int(time.time() * 1000))
 
+        # Get cached values for this symbol
+        cached = self.last_values.get(cache_key, {})
+
+        def get_value(key: str, default=0):
+            """Get new value if non-zero, otherwise return cached value"""
+            new_val = data.get(key, 0)
+            if new_val != 0:
+                return new_val
+            return cached.get(key, default)
+
         if mode == 'ltp':
-            return {
-                'ltp': data.get('ltp', 0),
+            result = {
+                'ltp': get_value('ltp'),
                 'ltt': timestamp
             }
         elif mode == 'quote':
-            # Quote mode provides more detailed information
-            # Structure depends on what INDmoney actually sends
-            # Based on typical quote data structure:
-            return {
-                'ltp': data.get('ltp', 0),
+            result = {
+                'ltp': get_value('ltp'),
                 'ltt': timestamp,
-                'open': data.get('open', 0),
-                'high': data.get('high', 0),
-                'low': data.get('low', 0),
-                'close': data.get('close', 0),
-                'volume': data.get('volume', 0),
-                'bid_price': data.get('bid_price', 0),
-                'bid_qty': data.get('bid_qty', 0),
-                'ask_price': data.get('ask_price', 0),
-                'ask_qty': data.get('ask_qty', 0),
-                'average_price': data.get('average_price', 0),
-                'oi': data.get('oi', 0),
-                'oi_change': data.get('oi_change', 0)
+                'open': get_value('open'),
+                'high': get_value('high'),
+                'low': get_value('low'),
+                'close': get_value('close'),
+                'volume': get_value('volume'),
+                'bid_price': get_value('bid_price'),
+                'bid_qty': get_value('bid_qty'),
+                'ask_price': get_value('ask_price'),
+                'ask_qty': get_value('ask_qty'),
+                'average_price': get_value('average_price'),
+                'oi': get_value('oi'),
+                'oi_change': get_value('oi_change')
             }
         else:
-            return {}
+            result = {}
+
+        # Update cache with current values (only non-zero values)
+        if result:
+            if cache_key not in self.last_values:
+                self.last_values[cache_key] = {}
+            for key, val in result.items():
+                if val != 0 and key != 'ltt':
+                    self.last_values[cache_key][key] = val
+
+        return result
