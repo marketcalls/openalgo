@@ -423,8 +423,9 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         data = message.get('data', {})
         timestamp = message.get('timestamp', int(time.time() * 1000))
 
-        # Get cached values for this symbol
-        cached = self.last_values.get(cache_key, {})
+        # Get cached values for this symbol - thread-safe copy
+        with self.lock:
+            cached = self.last_values.get(cache_key, {}).copy()
 
         def get_value(key: str, default=0):
             """Get new value if non-zero, otherwise return cached value"""
@@ -458,12 +459,13 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
         else:
             result = {}
 
-        # Update cache with current values (only non-zero values)
+        # Update cache with current values (only non-zero values) - thread-safe
         if result:
-            if cache_key not in self.last_values:
-                self.last_values[cache_key] = {}
-            for key, val in result.items():
-                if val != 0 and key != 'ltt':
-                    self.last_values[cache_key][key] = val
+            with self.lock:
+                if cache_key not in self.last_values:
+                    self.last_values[cache_key] = {}
+                for key, val in result.items():
+                    if val != 0 and key != 'ltt':
+                        self.last_values[cache_key][key] = val
 
         return result
