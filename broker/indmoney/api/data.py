@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from datetime import datetime, timedelta
 import pandas as pd
 from database.token_db import get_token
@@ -362,6 +363,147 @@ class BrokerData:
                 'oi': 0,
                 'error': str(e)
             }
+
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols with automatic batching
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            BATCH_SIZE = 500  # Indmoney API batch size limit
+            RATE_LIMIT_DELAY = 0.3  # Delay in seconds between batch API calls
+
+            # If symbols exceed batch size, process in batches
+            if len(symbols) > BATCH_SIZE:
+                logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                # Split symbols into batches
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.debug(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    # Process this batch
+                    batch_results = self._process_multiquotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                    # Rate limit delay between batches
+                    if i + BATCH_SIZE < len(symbols):
+                        time.sleep(RATE_LIMIT_DELAY)
+
+                logger.info(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
+                return all_results
+            else:
+                # Single batch processing
+                return self._process_multiquotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_multiquotes_batch(self, symbols: list) -> list:
+        """
+        Process a single batch of symbols (internal method)
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+        Returns:
+            list: List of quote data for the batch
+        """
+        results = []
+        skipped_symbols = []
+        scrip_codes = []
+        symbol_map = {}  # Map scrip_code back to original symbol/exchange
+
+        for item in symbols:
+            symbol = item.get('symbol')
+            exchange = item.get('exchange')
+
+            if not symbol or not exchange:
+                logger.warning(f"Skipping entry due to missing symbol/exchange: {item}")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'data': None,
+                    'error': 'Missing required symbol or exchange'
+                })
+                continue
+
+            try:
+                scrip_code = self._get_scrip_code(symbol, exchange)
+                scrip_codes.append(scrip_code)
+                symbol_map[scrip_code] = {'symbol': symbol, 'exchange': exchange}
+            except Exception as e:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'data': None,
+                    'error': str(e)
+                })
+
+        # Return skipped symbols if no valid symbols
+        if not scrip_codes:
+            logger.warning("No valid symbols to fetch quotes for")
+            return skipped_symbols
+
+        # Join all scrip codes with comma
+        scrip_codes_param = ','.join(scrip_codes)
+
+        try:
+            params = {'scrip-codes': scrip_codes_param}
+            response = get_api_response("/market/quotes/full", self.auth_token, "GET", params)
+            logger.debug(f"Indmoney multiquotes API response received")
+
+            quotes_data = response.get('data', {})
+            logger.debug(f"Multiquotes response keys: {list(quotes_data.keys())}")
+
+            # Process each scrip code in the response
+            for scrip_code, original in symbol_map.items():
+                quote = quotes_data.get(scrip_code, {})
+                logger.debug(f"Quote for {scrip_code}: keys={list(quote.keys()) if quote else 'None'}")
+
+                if quote and any(key in quote for key in ['ltp', 'live_price', 'day_open', 'day_high', 'day_low']):
+                    results.append({
+                        'symbol': original['symbol'],
+                        'exchange': original['exchange'],
+                        'data': {
+                            'bid': 0,  # Will be 0 unless we fetch depth
+                            'ask': 0,
+                            'open': self._clean_number(quote.get('day_open', 0)),
+                            'high': self._clean_number(quote.get('day_high', 0)),
+                            'low': self._clean_number(quote.get('day_low', 0)),
+                            'ltp': self._clean_number(quote.get('live_price', quote.get('ltp', 0))),
+                            'prev_close': self._clean_number(quote.get('prev_close', quote.get('close', 0))),
+                            'volume': self._clean_number(quote.get('volume', 0)),
+                            'oi': self._clean_number(quote.get('oi', quote.get('open_interest', 0)))
+                        }
+                    })
+                else:
+                    results.append({
+                        'symbol': original['symbol'],
+                        'exchange': original['exchange'],
+                        'data': None,
+                        'error': 'No data received'
+                    })
+
+        except Exception as e:
+            logger.error(f"Error calling quotes API: {str(e)}")
+            # Return error for all symbols in the batch
+            for scrip_code, original in symbol_map.items():
+                results.append({
+                    'symbol': original['symbol'],
+                    'exchange': original['exchange'],
+                    'data': None,
+                    'error': str(e)
+                })
+
+        logger.info(f"Retrieved quotes for {len([r for r in results if r.get('data')])} / {len(symbols)} symbols")
+        return skipped_symbols + results
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
