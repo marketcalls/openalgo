@@ -989,6 +989,7 @@ sudo mkdir -p $OPENALGO_PATH/db
 sudo mkdir -p $OPENALGO_PATH/tmp
 # Create directories for Python strategy feature
 sudo mkdir -p $OPENALGO_PATH/strategies/scripts
+sudo mkdir -p $OPENALGO_PATH/strategies/examples
 sudo mkdir -p $OPENALGO_PATH/log/strategies
 sudo mkdir -p $OPENALGO_PATH/keys
 # Set ownership and permissions

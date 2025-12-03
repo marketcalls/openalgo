@@ -14,9 +14,9 @@ services:
     volumes:
       - openalgo_db:/app/db
       - openalgo_logs:/app/logs          # Use named volume for logs
-      - ./log:/app/log                   # ← Application logs
-      - ./strategies:/app/strategies     # ← Python strategies (MAIN FIX)
-      - ./keys:/app/keys                 # ← API keys/certificates
+      - openalgo_log:/app/log            # Application logs (named volume)
+      - openalgo_strategies:/app/strategies  # Python strategies (named volume - fixes permission issues)
+      - openalgo_keys:/app/keys          # API keys/certificates (named volume)
       - ./.env:/app/.env:ro
 
     # (optional) extra env-vars that are NOT in .env
@@ -31,4 +31,10 @@ volumes:
   openalgo_db:
     driver: local
   openalgo_logs:
+    driver: local
+  openalgo_log:
+    driver: local
+  openalgo_strategies:
+    driver: local
+  openalgo_keys:
     driver: local

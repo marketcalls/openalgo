@@ -354,8 +354,15 @@ for ((i=1; i<=INSTANCES; i++)); do
     log_message "Setting permissions..." "$BLUE"
     sudo mkdir -p "$INSTANCE_DIR/db"
     sudo mkdir -p "$INSTANCE_DIR/tmp"
+    # Create directories for Python strategy feature
+    sudo mkdir -p "$INSTANCE_DIR/strategies/scripts"
+    sudo mkdir -p "$INSTANCE_DIR/strategies/examples"
+    sudo mkdir -p "$INSTANCE_DIR/log/strategies"
+    sudo mkdir -p "$INSTANCE_DIR/keys"
     sudo chown -R www-data:www-data "$INSTANCE_DIR"
     sudo chmod -R 755 "$INSTANCE_DIR"
+    # Set more restrictive permissions for sensitive directories
+    sudo chmod 700 "$INSTANCE_DIR/keys"
     [ -S "$SOCKET_FILE" ] && sudo rm -f "$SOCKET_FILE"
 
     # Configure Nginx (initial for SSL)

@@ -35,9 +35,11 @@ WORKDIR /app
 COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
 COPY --chown=appuser:appuser . .
 
-# 3 – create required directories with proper ownership
-RUN mkdir -p /app/log /app/log/strategies /app/db /app/strategies /app/strategies/scripts /app/keys /app/logs && \
-    chown -R appuser:appuser /app/log /app/db /app/strategies /app/keys /app/logs
+# 3 – create required directories with proper ownership and permissions
+RUN mkdir -p /app/log /app/log/strategies /app/db /app/strategies /app/strategies/scripts /app/strategies/examples /app/keys /app/logs && \
+    chown -R appuser:appuser /app/log /app/db /app/strategies /app/keys /app/logs && \
+    chmod -R 755 /app/strategies /app/log && \
+    chmod 700 /app/keys
 
 # 4 – entrypoint script and fix line endings
 COPY --chown=appuser:appuser start.sh /app/start.sh
