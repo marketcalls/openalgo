@@ -1205,8 +1205,8 @@ class BrokerData:
                             if 'lower_circuit_limit' in response:
                                 quote_item['lower_circuit'] = safe_float(response.get('lower_circuit_limit'))
                             
-                            # Add market depth if available
-                            if 'depth' in response:
+                            # Add market depth if available (check depth is not None)
+                            if response.get('depth'):
                                 depth_data = response['depth']
                                 buy_depth = depth_data.get('buy', [])
                                 sell_depth = depth_data.get('sell', [])
