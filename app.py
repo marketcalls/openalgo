@@ -468,6 +468,20 @@ app = create_app()
 # Explicitly call the setup environment function
 setup_environment(app)
 
+# Restore caches from database on startup (enables restart without re-login)
+with app.app_context():
+    try:
+        from database.cache_restoration import restore_all_caches
+        cache_result = restore_all_caches()
+
+        if cache_result['success']:
+            symbol_count = cache_result['symbol_cache'].get('symbols_loaded', 0)
+            auth_count = cache_result['auth_cache'].get('tokens_loaded', 0)
+            if symbol_count > 0 or auth_count > 0:
+                logger.info(f"Cache restoration: {symbol_count} symbols, {auth_count} auth tokens")
+    except Exception as e:
+        logger.debug(f"Cache restoration skipped: {e}")
+
 # Auto-start execution engine and squareoff scheduler if in analyzer mode (parallel startup)
 with app.app_context():
     try:

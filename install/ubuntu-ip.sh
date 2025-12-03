@@ -405,6 +405,7 @@ sudo mkdir -p $BASE_PATH/db
 sudo mkdir -p $BASE_PATH/tmp
 # Create directories for Python strategy feature
 sudo mkdir -p $BASE_PATH/strategies/scripts
+sudo mkdir -p $BASE_PATH/strategies/examples
 sudo mkdir -p $BASE_PATH/log/strategies
 sudo mkdir -p $BASE_PATH/keys
 
