@@ -444,6 +444,16 @@ def broker_callback(broker,para=None):
             auth_token, error_message = auth_function(userid, password, totp_code)
             forward_url = 'firstock.html'
 
+    elif broker == 'samco':
+        if request.method == 'GET':
+            return render_template('samco.html')
+
+        elif request.method == 'POST':
+            yob = request.form.get('yob')
+
+            auth_token, error_message = auth_function(yob)
+            forward_url = 'samco.html'
+
     elif broker == 'motilal':
         if request.method == 'GET':
             return render_template('motilal.html')

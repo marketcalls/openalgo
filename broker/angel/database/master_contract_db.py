@@ -216,7 +216,13 @@ def process_angel_json(path):
     'SNSX50': 'SENSEX50'
     })
 
- 
+    # Convert instrumenttype from OPTIDX/OPTSTK to CE/PE (to match Zerodha format)
+    # This ensures consistency across brokers for option chain queries
+    df.loc[(df['instrumenttype'] == 'OPTIDX') & (df['symbol'].str.endswith('CE', na=False)), 'instrumenttype'] = 'CE'
+    df.loc[(df['instrumenttype'] == 'OPTIDX') & (df['symbol'].str.endswith('PE', na=False)), 'instrumenttype'] = 'PE'
+    df.loc[(df['instrumenttype'] == 'OPTSTK') & (df['symbol'].str.endswith('CE', na=False)), 'instrumenttype'] = 'CE'
+    df.loc[(df['instrumenttype'] == 'OPTSTK') & (df['symbol'].str.endswith('PE', na=False)), 'instrumenttype'] = 'PE'
+
     # Return the processed DataFrame
     return df
 
