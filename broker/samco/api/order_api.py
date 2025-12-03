@@ -1,0 +1,339 @@
+import json
+import os
+import httpx
+from database.token_db import get_token, get_br_symbol, get_symbol
+from broker.samco.mapping.transform_data import transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data
+from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+# Samco API base URL
+BASE_URL = "https://tradeapi.samco.in"
+
+
+def get_api_response(endpoint, auth, method="GET", payload=None):
+    """
+    Generic API response handler for Samco endpoints.
+    """
+    client = get_httpx_client()
+
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'x-session-token': auth
+    }
+
+    url = f"{BASE_URL}{endpoint}"
+
+    if method == "GET":
+        response = client.get(url, headers=headers)
+    elif method == "POST":
+        response = client.post(url, headers=headers, json=payload)
+    else:
+        response = client.request(method, url, headers=headers, json=payload)
+
+    response.status = response.status_code
+
+    if not response.text:
+        return {}
+
+    try:
+        return json.loads(response.text)
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse JSON response from {endpoint}: {response.text}")
+        return {}
+
+
+def get_order_book(auth):
+    """Get order book from Samco."""
+    return get_api_response("/order/orderBook", auth)
+
+
+def get_trade_book(auth):
+    """Get trade book from Samco."""
+    return get_api_response("/trade/tradeBook", auth)
+
+
+def get_positions(auth):
+    """Get positions from Samco."""
+    return get_api_response("/position/positions", auth)
+
+
+def get_holdings(auth):
+    """Get holdings from Samco."""
+    return get_api_response("/holding/holdings", auth)
+
+
+def get_open_position(tradingsymbol, exchange, producttype, auth):
+    """
+    Get open position for a specific symbol.
+    """
+    tradingsymbol = get_br_symbol(tradingsymbol, exchange)
+    positions_data = get_positions(auth)
+
+    logger.debug(f"{positions_data}")
+
+    net_qty = '0'
+
+    if positions_data and positions_data.get('status') == 'Success' and positions_data.get('positionDetails'):
+        for position in positions_data['positionDetails']:
+            if (position.get('tradingSymbol') == tradingsymbol and
+                position.get('exchange') == exchange and
+                position.get('productCode') == producttype):
+                net_qty = position.get('netQuantity', '0')
+                break
+
+    return net_qty
+
+
+def place_order_api(data, auth):
+    """
+    Place an order with Samco.
+    """
+    token = get_token(data['symbol'], data['exchange'])
+    newdata = transform_data(data, token)
+
+    client = get_httpx_client()
+
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'x-session-token': auth
+    }
+
+    payload = {
+        "symbolName": newdata['symbolName'],
+        "exchange": newdata['exchange'],
+        "transactionType": newdata['transactionType'],
+        "orderType": newdata['orderType'],
+        "quantity": newdata['quantity'],
+        "disclosedQuantity": newdata.get('disclosedQuantity', '0'),
+        "orderValidity": newdata.get('orderValidity', 'DAY'),
+        "productType": newdata['productType'],
+        "afterMarketOrderFlag": newdata.get('afterMarketOrderFlag', 'NO')
+    }
+
+    # Add price for limit orders
+    if 'price' in newdata:
+        payload['price'] = newdata['price']
+
+    # Add trigger price for stop loss orders
+    if 'triggerPrice' in newdata:
+        payload['triggerPrice'] = newdata['triggerPrice']
+
+    logger.debug(f"Samco place order payload: {payload}")
+
+    response = client.post(
+        f"{BASE_URL}/order/placeOrder",
+        headers=headers,
+        json=payload
+    )
+
+    response.status = response.status_code
+
+    response_data = response.json()
+    logger.debug(f"Samco place order response: {response_data}")
+
+    if response_data.get('status') == 'Success':
+        orderid = response_data.get('orderNumber')
+    else:
+        orderid = None
+
+    return response, response_data, orderid
+
+
+def place_smartorder_api(data, auth):
+    """
+    Place a smart order that manages position sizing automatically.
+    """
+    res = None
+
+    symbol = data.get("symbol")
+    exchange = data.get("exchange")
+    product = data.get("product")
+    position_size = int(data.get("position_size", "0"))
+
+    current_position = int(get_open_position(symbol, exchange, map_product_type(product), auth))
+
+    logger.info(f"position_size : {position_size}")
+    logger.info(f"Open Position : {current_position}")
+
+    action = None
+    quantity = 0
+
+    # If both position_size and current_position are 0, place order if quantity > 0
+    if position_size == 0 and current_position == 0 and int(data['quantity']) != 0:
+        action = data['action']
+        quantity = data['quantity']
+        res, response, orderid = place_order_api(data, auth)
+        return res, response, orderid
+
+    elif position_size == current_position:
+        if int(data['quantity']) == 0:
+            response = {"status": "success", "message": "No OpenPosition Found. Not placing Exit order."}
+        else:
+            response = {"status": "success", "message": "No action needed. Position size matches current position"}
+        orderid = None
+        return res, response, orderid
+
+    if position_size == 0 and current_position > 0:
+        action = "SELL"
+        quantity = abs(current_position)
+    elif position_size == 0 and current_position < 0:
+        action = "BUY"
+        quantity = abs(current_position)
+    elif current_position == 0:
+        action = "BUY" if position_size > 0 else "SELL"
+        quantity = abs(position_size)
+    else:
+        if position_size > current_position:
+            action = "BUY"
+            quantity = position_size - current_position
+        elif position_size < current_position:
+            action = "SELL"
+            quantity = current_position - position_size
+
+    if action:
+        order_data = data.copy()
+        order_data["action"] = action
+        order_data["quantity"] = str(quantity)
+
+        res, response, orderid = place_order_api(order_data, auth)
+        logger.info(f"{response}")
+        logger.info(f"{orderid}")
+
+        return res, response, orderid
+
+
+def close_all_positions(current_api_key, auth):
+    """
+    Close all open positions.
+    """
+    positions_response = get_positions(auth)
+
+    if not positions_response.get('positionDetails'):
+        return {"message": "No Open Positions Found"}, 200
+
+    if positions_response.get('status') == 'Success':
+        for position in positions_response['positionDetails']:
+            net_qty = int(position.get('netQuantity', 0))
+            if net_qty == 0:
+                continue
+
+            action = 'SELL' if net_qty > 0 else 'BUY'
+            quantity = abs(net_qty)
+
+            # Get OpenAlgo symbol
+            symbol = get_symbol(position.get('symbolToken'), position.get('exchange'))
+            logger.info(f"The Symbol is {symbol}")
+
+            place_order_payload = {
+                "apikey": current_api_key,
+                "strategy": "Squareoff",
+                "symbol": symbol,
+                "action": action,
+                "exchange": position['exchange'],
+                "pricetype": "MARKET",
+                "product": reverse_map_product_type(position.get('productCode')),
+                "quantity": str(quantity)
+            }
+
+            logger.info(f"{place_order_payload}")
+
+            res, response, orderid = place_order_api(place_order_payload, auth)
+
+    return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
+
+
+def cancel_order(orderid, auth):
+    """
+    Cancel an order by order ID.
+    """
+    client = get_httpx_client()
+
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'x-session-token': auth
+    }
+
+    payload = {
+        "orderNumber": orderid
+    }
+
+    response = client.post(
+        f"{BASE_URL}/order/cancelOrder",
+        headers=headers,
+        json=payload
+    )
+
+    response.status = response.status_code
+
+    data = json.loads(response.text)
+
+    if data.get("status") == "Success":
+        return {"status": "success", "orderid": orderid}, 200
+    else:
+        return {"status": "error", "message": data.get("statusMessage", "Failed to cancel order")}, response.status
+
+
+def modify_order(data, auth):
+    """
+    Modify an existing order.
+    """
+    client = get_httpx_client()
+
+    token = get_token(data['symbol'], data['exchange'])
+    transformed_data = transform_modify_order_data(data, token)
+
+    headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'x-session-token': auth
+    }
+
+    payload = json.dumps(transformed_data)
+
+    response = client.post(
+        f"{BASE_URL}/order/modifyOrder",
+        headers=headers,
+        content=payload
+    )
+
+    response.status = response.status_code
+
+    data = json.loads(response.text)
+
+    if data.get("status") == "Success":
+        return {"status": "success", "orderid": data.get("orderNumber")}, 200
+    else:
+        return {"status": "error", "message": data.get("statusMessage", "Failed to modify order")}, response.status
+
+
+def cancel_all_orders_api(data, auth):
+    """
+    Cancel all open orders.
+    """
+    order_book_response = get_order_book(auth)
+
+    if order_book_response.get('status') != 'Success':
+        return [], []
+
+    orders_to_cancel = [
+        order for order in order_book_response.get('orderBookDetails', [])
+        if order.get('orderStatus') in ['open', 'trigger pending', 'PENDING', 'pending']
+    ]
+
+    canceled_orders = []
+    failed_cancellations = []
+
+    for order in orders_to_cancel:
+        orderid = order['orderNumber']
+        cancel_response, status_code = cancel_order(orderid, auth)
+        if status_code == 200:
+            canceled_orders.append(orderid)
+        else:
+            failed_cancellations.append(orderid)
+
+    return canceled_orders, failed_cancellations
