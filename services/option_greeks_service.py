@@ -282,6 +282,30 @@ def calculate_greeks(
         # Set option flag for py_vollib ('c' for call, 'p' for put)
         flag = 'c' if opt_type == 'CE' else 'p'
 
+        # Calculate intrinsic value to validate option price
+        if opt_type == 'CE':
+            intrinsic_value = max(spot_price - strike, 0)
+        else:  # PE
+            intrinsic_value = max(strike - spot_price, 0)
+
+        # Check if option price is below intrinsic value (arbitrage condition)
+        if option_price < intrinsic_value:
+            moneyness = "ITM" if intrinsic_value > 0 else "OTM"
+            return False, {
+                'status': 'error',
+                'message': f'Option price ({option_price:.2f}) is below intrinsic value ({intrinsic_value:.2f}). '
+                           f'This {moneyness} {opt_type} option may have stale pricing or liquidity issues. '
+                           f'IV calculation requires option price >= intrinsic value.',
+                'details': {
+                    'option_price': round(option_price, 2),
+                    'intrinsic_value': round(intrinsic_value, 2),
+                    'spot_price': round(spot_price, 2),
+                    'strike': round(strike, 2),
+                    'option_type': opt_type,
+                    'moneyness': moneyness
+                }
+            }, 400
+
         # Calculate Implied Volatility using Black-76 model
         try:
             # black_iv(price, F, K, r, t, flag)
@@ -299,9 +323,24 @@ def calculate_greeks(
 
         except Exception as e:
             logger.error(f"Error calculating IV: {e}")
+            # Provide more context in error message
+            error_msg = str(e)
+            if "intrinsic" in error_msg.lower() or "below" in error_msg.lower():
+                return False, {
+                    'status': 'error',
+                    'message': f'IV calculation failed. Option price ({option_price:.2f}) may be too close to '
+                               f'intrinsic value ({intrinsic_value:.2f}) for numerical convergence. '
+                               f'This often happens with deep ITM options or illiquid contracts.',
+                    'details': {
+                        'option_price': round(option_price, 2),
+                        'intrinsic_value': round(intrinsic_value, 2),
+                        'spot_price': round(spot_price, 2),
+                        'strike': round(strike, 2)
+                    }
+                }, 400
             return False, {
                 'status': 'error',
-                'message': f'Failed to calculate Implied Volatility: {str(e)}'
+                'message': f'Failed to calculate Implied Volatility: {error_msg}'
             }, 500
 
         # Calculate Greeks using Black-76 model
