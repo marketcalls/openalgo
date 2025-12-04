@@ -1,11 +1,73 @@
 import importlib
 import traceback
-from typing import Tuple, Dict, Any, Optional, Union
+from typing import Tuple, Dict, Any, Optional, Union, List
 from database.auth_db import get_auth_token_broker
+from database.token_db import get_token
+from utils.constants import VALID_EXCHANGES
 from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
+
+
+def validate_symbol_exchange(symbol: str, exchange: str) -> Tuple[bool, Optional[str]]:
+    """
+    Validate that a symbol exists for the given exchange.
+
+    Args:
+        symbol: Trading symbol
+        exchange: Exchange (e.g., NSE, NFO)
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    # Validate exchange
+    exchange_upper = exchange.upper()
+    if exchange_upper not in VALID_EXCHANGES:
+        return False, f"Invalid exchange '{exchange}'. Must be one of: {', '.join(VALID_EXCHANGES)}"
+
+    # Validate symbol exists in master contract
+    token = get_token(symbol, exchange_upper)
+    if token is None:
+        return False, f"Symbol '{symbol}' not found for exchange '{exchange}'. Please verify the symbol name and ensure master contracts are downloaded."
+
+    return True, None
+
+
+def validate_symbols_bulk(symbols: List[Dict[str, str]]) -> Tuple[bool, List[Dict[str, Any]], Optional[str]]:
+    """
+    Validate multiple symbols and their exchanges.
+
+    Args:
+        symbols: List of dicts with 'symbol' and 'exchange' keys
+
+    Returns:
+        Tuple of (all_valid, validated_symbols_with_errors, first_error_message)
+    """
+    all_valid = True
+    validated = []
+    first_error = None
+
+    for item in symbols:
+        symbol = item.get('symbol', '')
+        exchange = item.get('exchange', '')
+
+        if not symbol or not exchange:
+            error = f"Missing symbol or exchange in request"
+            validated.append({**item, 'valid': False, 'error': error})
+            if all_valid:
+                first_error = error
+                all_valid = False
+            continue
+
+        is_valid, error = validate_symbol_exchange(symbol, exchange)
+        validated.append({**item, 'valid': is_valid, 'error': error})
+
+        if not is_valid and all_valid:
+            first_error = error
+            all_valid = False
+
+    return all_valid, validated, first_error
 
 def import_broker_module(broker_name: str) -> Optional[Any]:
     """
@@ -28,20 +90,28 @@ def import_broker_module(broker_name: str) -> Optional[Any]:
 def get_quotes_with_auth(auth_token: str, feed_token: Optional[str], broker: str, symbol: str, exchange: str) -> Tuple[bool, Dict[str, Any], int]:
     """
     Get real-time quotes for a symbol using provided auth tokens.
-    
+
     Args:
         auth_token: Authentication token for the broker API
         feed_token: Feed token for market data (if required by broker)
         broker: Name of the broker
         symbol: Trading symbol
         exchange: Exchange (e.g., NSE, BSE)
-        
+
     Returns:
         Tuple containing:
         - Success status (bool)
         - Response data (dict)
         - HTTP status code (int)
     """
+    # Validate symbol and exchange before making broker API call
+    is_valid, error_msg = validate_symbol_exchange(symbol, exchange)
+    if not is_valid:
+        return False, {
+            'status': 'error',
+            'message': error_msg
+        }, 400
+
     broker_module = import_broker_module(broker)
     if broker_module is None:
         return False, {
@@ -153,6 +223,21 @@ def get_multiquotes_with_auth(auth_token: str, feed_token: Optional[str], broker
         - Response data (dict)
         - HTTP status code (int)
     """
+    # Validate all symbols before making broker API calls
+    all_valid, validated_symbols, first_error = validate_symbols_bulk(symbols)
+
+    # Separate valid and invalid symbols
+    valid_symbols = [item for item in validated_symbols if item.get('valid', False)]
+    invalid_symbols = [item for item in validated_symbols if not item.get('valid', False)]
+
+    # If no valid symbols, return error
+    if not valid_symbols:
+        return False, {
+            'status': 'error',
+            'message': first_error or 'No valid symbols provided',
+            'invalid_symbols': [{'symbol': s.get('symbol'), 'exchange': s.get('exchange'), 'error': s.get('error')} for s in invalid_symbols]
+        }, 400
+
     broker_module = import_broker_module(broker)
     if broker_module is None:
         return False, {
@@ -173,12 +258,20 @@ def get_multiquotes_with_auth(auth_token: str, feed_token: Optional[str], broker
             # Fallback to just auth token if we can't inspect
             data_handler = broker_module.BrokerData(auth_token)
 
+        # Build results list starting with invalid symbols (marked as errors)
+        results = []
+        for item in invalid_symbols:
+            results.append({
+                'symbol': item.get('symbol'),
+                'exchange': item.get('exchange'),
+                'error': item.get('error')
+            })
+
         # Check if broker supports multiquotes
         if not hasattr(data_handler, 'get_multiquotes'):
-            # Fallback: fetch quotes one by one
+            # Fallback: fetch quotes one by one for valid symbols only
             logger.debug(f"Broker {broker} doesn't support multiquotes, falling back to individual quotes")
-            results = []
-            for item in symbols:
+            for item in valid_symbols:
                 try:
                     quote = data_handler.get_quotes(item['symbol'], item['exchange'])
                     results.append({
@@ -199,8 +292,10 @@ def get_multiquotes_with_auth(auth_token: str, feed_token: Optional[str], broker
                 'results': results
             }, 200
 
-        # Use broker's native multiquotes method
-        multiquotes = data_handler.get_multiquotes(symbols)
+        # Use broker's native multiquotes method with only valid symbols
+        # Strip validation metadata before passing to broker
+        clean_symbols = [{'symbol': s['symbol'], 'exchange': s['exchange']} for s in valid_symbols]
+        multiquotes = data_handler.get_multiquotes(clean_symbols)
 
         if multiquotes is None:
             return False, {
@@ -208,9 +303,12 @@ def get_multiquotes_with_auth(auth_token: str, feed_token: Optional[str], broker
                 'message': 'Failed to fetch multiquotes'
             }, 500
 
+        # Combine broker results with invalid symbol errors
+        combined_results = results + (multiquotes if isinstance(multiquotes, list) else [])
+
         return True, {
             'status': 'success',
-            'results': multiquotes
+            'results': combined_results
         }, 200
     except Exception as e:
         # Check if this is a permission error
