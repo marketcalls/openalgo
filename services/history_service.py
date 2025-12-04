@@ -3,10 +3,36 @@ import traceback
 import pandas as pd
 from typing import Tuple, Dict, Any, Optional, List, Union
 from database.auth_db import get_auth_token_broker
+from database.token_db import get_token
+from utils.constants import VALID_EXCHANGES
 from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
+
+
+def validate_symbol_exchange(symbol: str, exchange: str) -> Tuple[bool, Optional[str]]:
+    """
+    Validate that a symbol exists for the given exchange.
+
+    Args:
+        symbol: Trading symbol
+        exchange: Exchange (e.g., NSE, NFO)
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    # Validate exchange
+    exchange_upper = exchange.upper()
+    if exchange_upper not in VALID_EXCHANGES:
+        return False, f"Invalid exchange '{exchange}'. Must be one of: {', '.join(VALID_EXCHANGES)}"
+
+    # Validate symbol exists in master contract
+    token = get_token(symbol, exchange_upper)
+    if token is None:
+        return False, f"Symbol '{symbol}' not found for exchange '{exchange}'. Please verify the symbol name and ensure master contracts are downloaded."
+
+    return True, None
 
 def import_broker_module(broker_name: str) -> Optional[Any]:
     """
@@ -27,18 +53,18 @@ def import_broker_module(broker_name: str) -> Optional[Any]:
         return None
 
 def get_history_with_auth(
-    auth_token: str, 
-    feed_token: Optional[str], 
-    broker: str, 
-    symbol: str, 
-    exchange: str, 
-    interval: str, 
-    start_date: str, 
+    auth_token: str,
+    feed_token: Optional[str],
+    broker: str,
+    symbol: str,
+    exchange: str,
+    interval: str,
+    start_date: str,
     end_date: str
 ) -> Tuple[bool, Dict[str, Any], int]:
     """
     Get historical data for a symbol using provided auth tokens.
-    
+
     Args:
         auth_token: Authentication token for the broker API
         feed_token: Feed token for market data (if required by broker)
@@ -48,14 +74,21 @@ def get_history_with_auth(
         interval: Time interval (e.g., 1m, 5m, 15m, 1h, 1d)
         start_date: Start date in YYYY-MM-DD format
         end_date: End date in YYYY-MM-DD format
-        include_oi: Whether to include Open Interest data (if supported by broker)
-        
+
     Returns:
         Tuple containing:
         - Success status (bool)
         - Response data (dict)
         - HTTP status code (int)
     """
+    # Validate symbol and exchange before making broker API call
+    is_valid, error_msg = validate_symbol_exchange(symbol, exchange)
+    if not is_valid:
+        return False, {
+            'status': 'error',
+            'message': error_msg
+        }, 400
+
     broker_module = import_broker_module(broker)
     if broker_module is None:
         return False, {

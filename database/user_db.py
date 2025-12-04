@@ -19,7 +19,22 @@ ph = PasswordHasher()
 
 # Database connection details
 DATABASE_URL = os.getenv('DATABASE_URL')
-PASSWORD_PEPPER = os.getenv('API_KEY_PEPPER')  # We'll use the same pepper for consistency
+
+# Security: Require API_KEY_PEPPER environment variable (fail fast if missing)
+# Pepper must be at least 32 bytes (64 hex characters) for cryptographic security
+_pepper_value = os.getenv('API_KEY_PEPPER')
+if not _pepper_value:
+    raise RuntimeError(
+        "CRITICAL: API_KEY_PEPPER environment variable is not set. "
+        "This is required for secure password hashing. "
+        "Generate one using: python -c \"import secrets; print(secrets.token_hex(32))\""
+    )
+if len(_pepper_value) < 32:
+    raise RuntimeError(
+        f"CRITICAL: API_KEY_PEPPER must be at least 32 characters (got {len(_pepper_value)}). "
+        "Generate a secure pepper using: python -c \"import secrets; print(secrets.token_hex(32))\""
+    )
+PASSWORD_PEPPER = _pepper_value
 
 # Engine and session setup
 # Conditionally create engine based on DB type
