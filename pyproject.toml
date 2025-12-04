@@ -103,7 +103,7 @@ dependencies = [
   "pydantic-core==2.41.5",
   "pydantic-settings==2.10.1",
   "Pygments==2.18.0",
-  "PyJWT==2.8.0",
+  "PyJWT==2.10.1",
   "pyngrok==7.1.6",
   "pyotp==2.9.0",
   "pytest==8.4.2",
