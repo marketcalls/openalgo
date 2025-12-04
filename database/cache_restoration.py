@@ -155,20 +155,9 @@ def restore_auth_cache() -> dict:
                     cache_key_feed = f"feed-{name}"
                     feed_token_cache[cache_key_feed] = auth_record
 
-                # Populate broker cache
-                # Use a hash of some identifier for broker cache key
-                # For now, we'll use the user_id if available
-                if auth_record.user_id:
-                    from database.auth_db import get_hashed_api_key
-                    from database.auth_db import ApiKeys
-
-                    # Get API key for this user to populate broker cache
-                    api_key_record = ApiKeys.query.filter_by(user_id=auth_record.user_id).first()
-                    if api_key_record:
-                        # The broker cache uses hashed API key as key
-                        # We can't reconstruct this without the actual API key
-                        # So we skip broker cache for now - it will be populated on first API call
-                        pass
+                # Note: Broker cache is not restored here because it uses hashed API key as key,
+                # which we can't reconstruct without the actual API key.
+                # It will be populated on first API call.
 
                 tokens_loaded += 1
                 users.append(name)
