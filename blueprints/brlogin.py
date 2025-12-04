@@ -299,6 +299,14 @@ def broker_callback(broker,para=None):
         auth_token, feed_token, user_id, error_message = auth_function(code)
         forward_url = 'broker.html'
 
+    elif broker=='jainamxts':
+        code = 'jainamxts'
+        logger.debug(f'JainamXTS broker - code: {code}')  
+               
+        # Fetch auth token, feed token and user ID
+        auth_token, feed_token, user_id, error_message = auth_function(code)
+        forward_url = 'broker.html'
+
     elif broker=='dhan':
         auth_token = None
         error_message = None

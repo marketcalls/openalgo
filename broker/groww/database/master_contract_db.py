@@ -595,7 +595,7 @@ def process_groww_data(path):
             try:
                 expiry_date = pd.to_datetime(expiry_val)
                 return expiry_date.strftime('%d-%b-%y').upper()
-            except:
+            except Exception:
                 return expiry_val
 
         df_mapped['expiry'] = df_mapped['expiry'].apply(convert_expiry_format)

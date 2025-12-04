@@ -52,7 +52,7 @@ generate_hex() {
 # Function to validate broker
 validate_broker() {
     local broker=$1
-    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,kotak,motilal,mstock,paytm,pocketful,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
+    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
     if [[ $valid_brokers == *"$broker"* ]]; then
         return 0
     else
@@ -63,7 +63,7 @@ validate_broker() {
 # Function to check XTS broker
 is_xts_broker() {
     local broker=$1
-    local xts_brokers="fivepaisaxts,compositedge,iifl,jainam,jainampro,wisdom"
+    local xts_brokers="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,wisdom"
     if [[ $xts_brokers == *"$broker"* ]]; then
         return 0
     else
@@ -208,7 +208,7 @@ log_message "----------------------------------------" "$BLUE"
 
 # Get broker name
 while true; do
-    log_message "\nValid brokers: fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,iifl,kotak,jainam,jainampro,paytm,pocketful,shoonya,tradejini,upstox,wisdom,zebu,zerodha" "$BLUE"
+    log_message "\nValid brokers: fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha" "$BLUE"
     read -p "Enter your broker name: " BROKER_NAME
     if validate_broker "$BROKER_NAME"; then
         break
