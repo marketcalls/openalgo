@@ -67,7 +67,7 @@ markdown-it-py==3.0.0
 MarkupSafe==2.1.5
 marshmallow==3.22.0
 matplotlib-inline==0.1.7
-mcp==1.11.0
+mcp==1.23.0
 mdurl==0.1.2
 py_lets_be_rational==1.0.1
 py_vollib==1.0.1
