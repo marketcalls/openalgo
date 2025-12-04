@@ -288,23 +288,39 @@ def calculate_greeks(
         else:  # PE
             intrinsic_value = max(strike - spot_price, 0)
 
-        # Check if option price is below intrinsic value (arbitrage condition)
-        if option_price < intrinsic_value:
-            moneyness = "ITM" if intrinsic_value > 0 else "OTM"
-            return False, {
-                'status': 'error',
-                'message': f'Option price ({option_price:.2f}) is below intrinsic value ({intrinsic_value:.2f}). '
-                           f'This {moneyness} {opt_type} option may have stale pricing or liquidity issues. '
-                           f'IV calculation requires option price >= intrinsic value.',
-                'details': {
-                    'option_price': round(option_price, 2),
-                    'intrinsic_value': round(intrinsic_value, 2),
-                    'spot_price': round(spot_price, 2),
-                    'strike': round(strike, 2),
-                    'option_type': opt_type,
-                    'moneyness': moneyness
-                }
-            }, 400
+        # Check if option price is at or below intrinsic value (deep ITM with no time value)
+        # In this case, return theoretical deep ITM Greeks instead of error (like Opstra does)
+        time_value = option_price - intrinsic_value
+        if time_value <= 0 or (intrinsic_value > 0 and time_value < 0.01):
+            # Deep ITM option with no/negligible time value
+            # Return theoretical Greeks: IV=0, Delta=+/-1, Gamma=0, Theta=0, Vega=0
+            logger.info(f"Deep ITM option with no time value - returning theoretical Greeks")
+
+            response = {
+                'status': 'success',
+                'symbol': option_symbol,
+                'exchange': exchange,
+                'underlying': base_symbol,
+                'strike': round(strike, 2),
+                'option_type': opt_type,
+                'expiry_date': expiry.strftime('%d-%b-%Y'),
+                'days_to_expiry': round(time_to_expiry_days, 4),
+                'spot_price': round(spot_price, 2),
+                'option_price': round(option_price, 2),
+                'intrinsic_value': round(intrinsic_value, 2),
+                'time_value': round(max(time_value, 0), 2),
+                'interest_rate': round(interest_rate, 2),
+                'implied_volatility': 0,  # No IV for deep ITM
+                'greeks': {
+                    'delta': 1.0 if opt_type == 'CE' else -1.0,  # Deep ITM delta
+                    'gamma': 0,
+                    'theta': 0,
+                    'vega': 0,
+                    'rho': 0
+                },
+                'note': 'Deep ITM option with no time value - theoretical Greeks returned'
+            }
+            return True, response, 200
 
         # Calculate Implied Volatility using Black-76 model
         try:
@@ -323,21 +339,35 @@ def calculate_greeks(
 
         except Exception as e:
             logger.error(f"Error calculating IV: {e}")
-            # Provide more context in error message
             error_msg = str(e)
-            if "intrinsic" in error_msg.lower() or "below" in error_msg.lower():
-                return False, {
-                    'status': 'error',
-                    'message': f'IV calculation failed. Option price ({option_price:.2f}) may be too close to '
-                               f'intrinsic value ({intrinsic_value:.2f}) for numerical convergence. '
-                               f'This often happens with deep ITM options or illiquid contracts.',
-                    'details': {
-                        'option_price': round(option_price, 2),
-                        'intrinsic_value': round(intrinsic_value, 2),
-                        'spot_price': round(spot_price, 2),
-                        'strike': round(strike, 2)
-                    }
-                }, 400
+            # If IV calculation fails due to numerical issues, return theoretical deep ITM Greeks
+            if "intrinsic" in error_msg.lower() or "below" in error_msg.lower() or "convergence" in error_msg.lower():
+                logger.info(f"IV calculation failed - returning theoretical Greeks for deep ITM option")
+                response = {
+                    'status': 'success',
+                    'symbol': option_symbol,
+                    'exchange': exchange,
+                    'underlying': base_symbol,
+                    'strike': round(strike, 2),
+                    'option_type': opt_type,
+                    'expiry_date': expiry.strftime('%d-%b-%Y'),
+                    'days_to_expiry': round(time_to_expiry_days, 4),
+                    'spot_price': round(spot_price, 2),
+                    'option_price': round(option_price, 2),
+                    'intrinsic_value': round(intrinsic_value, 2),
+                    'time_value': round(max(time_value, 0), 2),
+                    'interest_rate': round(interest_rate, 2),
+                    'implied_volatility': 0,  # No IV calculable
+                    'greeks': {
+                        'delta': 1.0 if opt_type == 'CE' else -1.0,
+                        'gamma': 0,
+                        'theta': 0,
+                        'vega': 0,
+                        'rho': 0
+                    },
+                    'note': 'IV calculation not possible - theoretical deep ITM Greeks returned'
+                }
+                return True, response, 200
             return False, {
                 'status': 'error',
                 'message': f'Failed to calculate Implied Volatility: {error_msg}'
