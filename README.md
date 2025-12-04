@@ -46,11 +46,13 @@
 - IBulls
 - IIFL
 - Indmoney
+- JainamXTS
 - Kotak Neo
 - Motilal Oswal
 - Mstock
 - Paytm Money
 - Pocketful
+- Samco
 - Shoonya (Finvasia)
 - Tradejini
 - Upstox
