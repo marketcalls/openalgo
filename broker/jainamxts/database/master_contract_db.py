@@ -136,7 +136,7 @@ def fetch_index_list():
         response = client.get(url, headers=headers)
 
         if response.status_code != 200:
-            logger.error(f"Failed to fetch index list for segment {{segment}}. Status: {response.status_code}")
+            logger.error(f"Failed to fetch index list for segment {segment}. Status: {response.status_code}")
             continue
 
         data = response.json()
