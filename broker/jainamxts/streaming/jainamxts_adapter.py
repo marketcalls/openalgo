@@ -617,54 +617,56 @@ class JainamXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 
             self.logger.debug(f"Found symbol: {symbol} for token {exchange_instrument_id} on exchange {exchange}")
             
-            # Determine mode based on MessageCode
-            message_code = data.get('MessageCode')
-            if message_code == 1512:  # LTP
-                mode = 1
-                mode_str = 'LTP'
-            elif message_code == 1501:  # Quote  
-                mode = 2
-                mode_str = 'QUOTE'
-            elif message_code == 1502:  # Depth
-                mode = 3
-                mode_str = 'DEPTH'
-            else:
-                self.logger.warning(f"Unknown MessageCode: {message_code}")
-                return
-                
-            self.logger.debug(f"Determined mode {mode} ({mode_str}) from MessageCode {message_code}")
-            
-            # Check if we have an active subscription for this symbol and mode (optional check)
-            check_correlation_id = f"{symbol}_{exchange}_{mode}"
-            if check_correlation_id not in self.subscriptions:
-                self.logger.warning(f"No active subscription found for {check_correlation_id}, but publishing anyway")
-                # We'll publish the data anyway since we received it
-            
-            # Create topic for ZeroMQ
-            # Use standard topic format without broker prefix for WebSocket proxy routing
-            topic = f"{exchange}_{symbol}_{mode_str}"
-            
-            # Normalize the data
-            market_data = self._normalize_market_data(data, mode)
-            
-            # Add metadata
-            market_data.update({
-                'symbol': symbol,
-                'exchange': exchange,
-                'mode': mode,
-                'timestamp': int(time.time() * 1000)
-            })
-            
-            self.logger.debug(f"Publishing market data: {market_data}")
-            self.logger.debug(f"Publishing to topic: {topic} on ZMQ port: {self.zmq_port}")
-            
-            # Log the socket state before publishing
-            self.logger.debug(f"ZMQ Socket State - Port: {getattr(self, 'zmq_port', 'Unknown')}, Connected: {getattr(self, 'connected', False)}")
-            self.logger.debug(f"Environment ZMQ_PORT: {os.environ.get('ZMQ_PORT', 'Not Set')}")
-            
-            # Publish to ZeroMQ
-            self.publish_market_data(topic, market_data)
-            self.logger.debug(f"Published data successfully to ZMQ - Topic: {topic}, Data: {market_data}")
+            # Find all active subscriptions for this symbol and exchange
+            # JainamXTS sends 1502 data even for LTP subscriptions, so publish to all matching modes
+            active_modes = []
+            mode_to_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}
+
+            for correlation_id, sub in self.subscriptions.items():
+                if sub.get('symbol') == symbol and sub.get('exchange') == exchange:
+                    active_modes.append(sub.get('mode'))
+
+            # If no active subscriptions found, try to derive mode from message code as fallback
+            if not active_modes:
+                message_code = data.get('MessageCode')
+                if message_code == 1512:
+                    active_modes = [1]
+                elif message_code == 1501:
+                    active_modes = [2]
+                elif message_code in (1502, 1505):
+                    # 1502 contains LTP+OHLC, can serve LTP and QUOTE subscriptions
+                    active_modes = [1, 2]
+                elif message_code == 1510:
+                    active_modes = [2]
+                else:
+                    self.logger.warning(f"Unknown MessageCode: {message_code}")
+                    return
+
+            self.logger.debug(f"Publishing to modes {active_modes} for {symbol}.{exchange}")
+
+            # Publish to each subscribed mode
+            for mode in active_modes:
+                mode_str = mode_to_str.get(mode, 'LTP')
+
+                # Create topic for ZeroMQ
+                topic = f"{exchange}_{symbol}_{mode_str}"
+
+                # Normalize the data
+                market_data = self._normalize_market_data(data, mode)
+
+                # Add metadata
+                market_data.update({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'mode': mode,
+                    'timestamp': int(time.time() * 1000)
+                })
+
+                self.logger.debug(f"Publishing to topic: {topic}")
+
+                # Publish to ZeroMQ
+                self.publish_market_data(topic, market_data)
+                self.logger.info(f"Published {mode_str} data for {symbol}.{exchange}: LTP={market_data.get('ltp')}")
             
         except Exception as e:
             self.logger.error(f"Error processing JSON data: {e}", exc_info=True)

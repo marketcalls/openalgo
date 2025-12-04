@@ -18,7 +18,7 @@ class JainamXTSWebSocketClient:
     BASE_URL = BASE_URL
     
     # Socket.IO endpoints - Updated based on XTS API documentation
-    
+    # JainamXTS only has /apibinarymarketdata endpoint (no /apimarketdata)
     SOCKET_PATH = "/apibinarymarketdata/socket.io"
     API_BASE_URL = f"{MARKET_DATA_URL}/instruments/subscription"
     API_UNSUBSCRIBE_URL = f"{MARKET_DATA_URL}/instruments/subscription"  # Same endpoint, different method
@@ -82,13 +82,14 @@ class JainamXTSWebSocketClient:
     
     def _setup_socketio(self):
         """Setup Socket.IO client with event handlers"""
+        # Disable verbose Socket.IO logging (set to True for debugging)
         self.sio = socketio.Client(logger=False, engineio_logger=False)
-        
+
         # Register event handlers
         self.sio.on('connect', self._on_connect)
         self.sio.on('disconnect', self._on_disconnect)
         self.sio.on('message', self._on_message_handler)
-        
+
         # Register XTS specific message handlers
         self.sio.on('1501-json-full', self._on_message_1501_json_full)
         self.sio.on('1501-json-partial', self._on_message_1501_json_partial)
@@ -100,13 +101,19 @@ class JainamXTSWebSocketClient:
         self.sio.on('1510-json-partial', self._on_message_1510_json_partial)
         self.sio.on('1512-json-full', self._on_message_1512_json_full)
         self.sio.on('1512-json-partial', self._on_message_1512_json_partial)
-        
+
         # Register handler for 1105 events (binary market data)
         self.sio.on('1105-json-partial', self._on_message_1105_json_partial)
         self.sio.on('1105-json-full', self._on_message_1105_json_full)
-        
+
+        # Register handler for xts-binary-packet (JainamXTS specific binary format)
+        # This is the main event for binary market data from JainamXTS
+        self.sio.on('xts-binary-packet', self._on_xts_binary_packet)
+        self.logger.info("[SETUP] Registered xts-binary-packet handler")
+
         # Add catch-all handler for any unhandled events
         self.sio.on('*', self._on_catch_all)
+        self.logger.info("[SETUP] Socket.IO handlers registered")
     
     def marketdata_login(self):
         """
@@ -169,16 +176,18 @@ class JainamXTSWebSocketClient:
             # First, login to market data API to get proper tokens
             if not self.marketdata_login():
                 raise Exception("Market data login failed")
-            
+
             # Build connection URL with proper market data token and user ID
+            # Use JSON format like fivepaisaxts - the socket sends JSON events (1512-json-full, etc.)
             publish_format = 'JSON'
             broadcast_mode = 'FULL'  # or 'PARTIAL'
-            
+
             # Use the market data token and actual user ID from login response
             connection_url = f"{self.base_url}/?token={self.market_data_token}&userID={self.actual_user_id}&publishFormat={publish_format}&broadcastMode={broadcast_mode}"
-            
-            self.logger.debug(f"Connecting to JainamXTS Socket.IO: {connection_url}")
-            
+
+            self.logger.info(f"Connecting to JainamXTS Socket.IO: {connection_url}")
+            self.logger.info(f"Socket path: {self.SOCKET_PATH}")
+
             # Connect to Socket.IO server
             self.sio.connect(
                 connection_url,
@@ -187,9 +196,9 @@ class JainamXTSWebSocketClient:
                 namespaces=None,
                 socketio_path=self.SOCKET_PATH
             )
-            
+
             self.running = True
-            
+
         except Exception as e:
             self.logger.error(f"Failed to connect to JainamXTS Socket.IO: {e}")
             if self.on_error:
@@ -259,29 +268,44 @@ class JainamXTSWebSocketClient:
                 'Authorization': self.market_data_token,
                 'Content-Type': 'application/json'
             }
-            
+
+            self.logger.info(f"[SUBSCRIPTION REQUEST] URL: {self.API_BASE_URL}")
+            self.logger.info(f"[SUBSCRIPTION REQUEST] Headers: Authorization={self.market_data_token[:20]}...")
+            self.logger.info(f"[SUBSCRIPTION REQUEST] Payload: {subscription_request}")
+
             response = requests.post(
                 self.API_BASE_URL,
                 json=subscription_request,
                 headers=headers,
                 timeout=10
             )
-            
+
+            self.logger.info(f"[SUBSCRIPTION RESPONSE] Status: {response.status_code}")
+            self.logger.info(f"[SUBSCRIPTION RESPONSE] Raw: {response.text}")
+
             if response.status_code == 200:
                 result = response.json()
-                self.logger.debug(f"[SUBSCRIPTION SUCCESS] Code: {xts_message_code}, Instruments: {len(instruments)}, Response: {result}")
-                
+                self.logger.info(f"[SUBSCRIPTION SUCCESS] Code: {xts_message_code}, Instruments: {len(instruments)}")
+                self.logger.info(f"[SUBSCRIPTION SUCCESS] Full Response: {json.dumps(result, indent=2)}")
+
                 # Process initial quote data from listQuotes if available
                 if result.get('type') == 'success' and 'result' in result:
                     list_quotes = result['result'].get('listQuotes', [])
-                    for quote_str in list_quotes:
+                    self.logger.info(f"[INITIAL QUOTES] Found {len(list_quotes)} quotes in response")
+                    for i, quote_str in enumerate(list_quotes):
+                        self.logger.info(f"[INITIAL QUOTE {i}] Raw: {quote_str}")
                         try:
                             quote_data = json.loads(quote_str)
-                            self.logger.debug(f"[INITIAL QUOTE] Processing initial quote: {quote_data}")
+                            self.logger.info(f"[INITIAL QUOTE {i}] Parsed: {quote_data}")
+                            # Add MessageCode based on subscription mode
+                            if 'MessageCode' not in quote_data:
+                                quote_data['MessageCode'] = xts_message_code
                             if self.on_data:
                                 self.on_data(self, quote_data)
                         except json.JSONDecodeError as e:
                             self.logger.error(f"Error parsing initial quote: {e}")
+                else:
+                    self.logger.warning(f"[SUBSCRIPTION] Response type: {result.get('type')}, no listQuotes found")
             else:
                 self.logger.error(f"[SUBSCRIPTION ERROR] Status: {response.status_code}, Response: {response.text}")
                 
@@ -345,8 +369,10 @@ class JainamXTSWebSocketClient:
     def _on_connect(self):
         """Socket.IO connect event handler"""
         self.connected = True
-        self.logger.debug("Connected to JainamXTS Socket.IO")
-        
+        self.logger.info("[SOCKET.IO] Connected successfully!")
+        self.logger.info(f"[SOCKET.IO] UserID: {self.actual_user_id}")
+        self.logger.info(f"[SOCKET.IO] Token: {self.market_data_token[:30] if self.market_data_token else 'None'}...")
+
         # Call external callback
         if self.on_open:
             self.on_open(self)
@@ -368,78 +394,81 @@ class JainamXTSWebSocketClient:
     
     # XTS specific message handlers for different market data types
     def _on_message_1501_json_full(self, data):
-        """Handle 1501 JSON full messages (LTP)"""
-        self.logger.debug(f"[1501-JSON-FULL] Received LTP data: {data}")
-        if self.on_data:
-            self.on_data(self, data)
-    
+        """Handle 1501 JSON full messages (Touchline/Quote)"""
+        self.logger.info(f"[1501-JSON-FULL] Received Quote data: {str(data)[:500]}")
+        self._process_xts_data(data, 1501)
+
     def _on_message_1501_json_partial(self, data):
         """Handle 1501 JSON partial messages"""
-        self.logger.debug(f"[1501-JSON-PARTIAL] Received LTP partial: {data}")
-        if self.on_data:
-            self.on_data(self, data)
-    
+        self.logger.info(f"[1501-JSON-PARTIAL] Received Quote partial: {str(data)[:500]}")
+        self._process_xts_data(data, 1501)
+
     def _on_message_1502_json_full(self, data):
         """Handle 1502 JSON full messages (Market Depth)"""
-        self.logger.debug(f"[1502-JSON-FULL] Received Market Depth data: {data}")
-        # Parse JSON string if needed
-        if isinstance(data, str):
-            try:
-                data = json.loads(data)
-                self.logger.debug(f"[1502-JSON-FULL] Parsed depth data: {data}")
-            except json.JSONDecodeError as e:
-                self.logger.error(f"[1502-JSON-FULL] Failed to parse JSON: {e}")
-                return
-        if self.on_data:
-            self.on_data(self, data)
-    
+        self.logger.info(f"[1502-JSON-FULL] Received Market Depth data: {str(data)[:500]}")
+        self._process_xts_data(data, 1502)
+
     def _on_message_1502_json_partial(self, data):
         """Handle 1502 JSON partial messages (Market Depth updates)"""
-        self.logger.debug(f"[1502-JSON-PARTIAL] Received Market Depth partial: {data}")
+        self.logger.info(f"[1502-JSON-PARTIAL] Received Market Depth partial: {str(data)[:500]}")
+        self._process_xts_data(data, 1502)
+
+    def _on_message_1505_json_full(self, data):
+        """Handle 1505 JSON full messages (Market depth)"""
+        self.logger.info(f"[1505-JSON-FULL] Received Market depth: {str(data)[:500]}")
+        self._process_xts_data(data, 1505)
+
+    def _on_message_1505_json_partial(self, data):
+        """Handle 1505 JSON partial messages"""
+        self.logger.info(f"[1505-JSON-PARTIAL] Received Depth partial: {str(data)[:500]}")
+        self._process_xts_data(data, 1505)
+
+    def _on_message_1510_json_full(self, data):
+        """Handle 1510 JSON full messages (Open interest)"""
+        self.logger.info(f"[1510-JSON-FULL] Received Open interest: {str(data)[:500]}")
+        self._process_xts_data(data, 1510)
+
+    def _on_message_1510_json_partial(self, data):
+        """Handle 1510 JSON partial messages"""
+        self.logger.info(f"[1510-JSON-PARTIAL] Received OI partial: {str(data)[:500]}")
+        self._process_xts_data(data, 1510)
+
+    def _on_message_1512_json_full(self, data):
+        """Handle 1512 JSON full messages (LTP)"""
+        self.logger.info(f"[1512-JSON-FULL] Received LTP data: {str(data)[:500]}")
+        self._process_xts_data(data, 1512)
+
+    def _on_message_1512_json_partial(self, data):
+        """Handle 1512 JSON partial messages"""
+        self.logger.info(f"[1512-JSON-PARTIAL] Received LTP partial: {str(data)[:500]}")
+        self._process_xts_data(data, 1512)
+
+    def _process_xts_data(self, data, message_code):
+        """
+        Process XTS data and ensure MessageCode is present
+
+        Args:
+            data: Raw data from websocket (can be string or dict)
+            message_code: The XTS message code (1501, 1502, 1512, etc.)
+        """
         # Parse JSON string if needed
         if isinstance(data, str):
             try:
                 data = json.loads(data)
-                self.logger.debug(f"[1502-JSON-PARTIAL] Parsed depth update: {data}")
             except json.JSONDecodeError as e:
-                self.logger.error(f"[1502-JSON-PARTIAL] Failed to parse JSON: {e}")
+                self.logger.error(f"Failed to parse JSON for message code {message_code}: {e}")
                 return
-        if self.on_data:
-            self.on_data(self, data)
-    
-    def _on_message_1505_json_full(self, data):
-        """Handle 1505 JSON full messages (Market depth)"""
-        self.logger.debug(f"[1505-JSON-FULL] Received Market depth: {data}")
-        if self.on_data:
-            self.on_data(self, data)
-    
-    def _on_message_1505_json_partial(self, data):
-        """Handle 1505 JSON partial messages"""
-        self.logger.debug(f"[1505-JSON-PARTIAL] Received Depth partial: {data}")
-        if self.on_data:
-            self.on_data(self, data)
-    
-    def _on_message_1510_json_full(self, data):
-        """Handle 1510 JSON full messages (Open interest)"""
-        self.logger.debug(f"[1510-JSON-FULL] Received Open interest: {data}")
-        if self.on_data:
-            self.on_data(self, data)
-    
-    def _on_message_1510_json_partial(self, data):
-        """Handle 1510 JSON partial messages"""
-        self.logger.debug(f"[1510-JSON-PARTIAL] Received OI partial: {data}")
-        if self.on_data:
-            self.on_data(self, data)
-    
-    def _on_message_1512_json_full(self, data):
-        """Handle 1512 JSON full messages (Full market data)"""
-        self.logger.debug(f"[1512-JSON-FULL] Received Full market data: {data}")
-        if self.on_data:
-            self.on_data(self, data)
-    
-    def _on_message_1512_json_partial(self, data):
-        """Handle 1512 JSON partial messages"""
-        self.logger.debug(f"[1512-JSON-PARTIAL] Received Full data partial: {data}")
+
+        # Ensure data is a dict
+        if not isinstance(data, dict):
+            self.logger.warning(f"Unexpected data type for message code {message_code}: {type(data)}")
+            return
+
+        # Add MessageCode if not present
+        if 'MessageCode' not in data:
+            data['MessageCode'] = message_code
+
+        # Call the data handler
         if self.on_data:
             self.on_data(self, data)
     
@@ -480,8 +509,11 @@ class JainamXTSWebSocketClient:
             for sub in self.subscriptions.values():
                 # Get instruments from the subscription
                 for instrument in sub.get('instruments', []):
-                    if (instrument.get('exchangeSegment') == exchange_segment_int and 
-                        instrument.get('exchangeInstrumentID') == instrument_id_int):
+                    # Compare as strings to handle type mismatch (token may be stored as string)
+                    sub_segment = instrument.get('exchangeSegment')
+                    sub_instrument_id = str(instrument.get('exchangeInstrumentID', ''))
+                    if (sub_segment == exchange_segment_int and
+                        sub_instrument_id == str(instrument_id_int)):
                         is_subscribed = True
                         break
                 if is_subscribed:
@@ -492,9 +524,11 @@ class JainamXTSWebSocketClient:
                 return
             
             # Parse field-value pairs only for subscribed instruments
+            # Add MessageCode 1512 (LTP) for compatibility with adapter processing
             market_data = {
                 'ExchangeSegment': exchange_segment_int,
-                'ExchangeInstrumentID': instrument_id_int
+                'ExchangeInstrumentID': instrument_id_int,
+                'MessageCode': 1512  # 1105 data is essentially LTP data
             }
             
             # Map common field codes to standard names
@@ -529,14 +563,220 @@ class JainamXTSWebSocketClient:
         except Exception as e:
             self.logger.error(f"Error processing 1105 data '{data}': {e}")
     
+    def _on_xts_binary_packet(self, data):
+        """
+        Handle xts-binary-packet events (JainamXTS binary format)
+
+        XTS Binary Packet Structure (from official documentation):
+        Header:
+        - Byte 0: isGzipCompressed (int8) - 0=compressed, 1=uncompressed
+        - Bytes 1-3: Header MessageCode (uint16)
+        - Bytes 3-5: Header ExchangeSegment (int16)
+        - Bytes 5-9: Header ExchangeInstrumentID (int32)
+        - Bytes 9-11: BookType (int16)
+        - Bytes 11-13: XMarketType (int16)
+        - Bytes 13-15: uncompressedPacketSize (uint16)
+        - Bytes 15-17: compressedPacketSize (uint16)
+        - Bytes 17-19: MessageCode (uint16) - actual data message code
+
+        For 1501 (Touchline): LTP at offset 101-109
+        For 1502 (MarketDepth): LTP at offset 289-297
+        """
+        self.logger.info(f"[XTS-BINARY] Received packet, type={type(data)}, len={len(data) if isinstance(data, bytes) else 'N/A'}")
+
+        try:
+            if not isinstance(data, bytes) or len(data) < 17:
+                self.logger.warning(f"[XTS-BINARY] Invalid data: {type(data)}, len={len(data) if isinstance(data, bytes) else 'N/A'}")
+                return
+
+            import struct
+            import zlib
+
+            # Log raw hex
+            self.logger.info(f"[XTS-BINARY] Raw hex ({len(data)} bytes): {data[:100].hex()}")
+
+            # Parse outer header (always uncompressed)
+            # Based on actual packet analysis (16-byte header):
+            # Bytes 0-1: Packet type/version (uint16) - value 4 observed
+            # Bytes 2-3: Header MessageCode (uint16) - e.g., 1502
+            # Bytes 4-5: ExchangeSegment (int16) - e.g., 1=NSECM
+            # Bytes 6-9: ExchangeInstrumentID (int32) - e.g., 11536=TCS
+            # Bytes 10-11: BookType (int16)
+            # Bytes 12-13: XMarketType (int16)
+            # Bytes 14-15: uncompressedPacketSize (uint16)
+            # Bytes 16+: Payload starts (inner MessageCode at bytes 16-17)
+            packet_type = struct.unpack('<H', data[0:2])[0]
+            header_msg_code = struct.unpack('<H', data[2:4])[0]
+            exchange_segment = struct.unpack('<h', data[4:6])[0]
+            instrument_id = struct.unpack('<i', data[6:10])[0]
+            book_type = struct.unpack('<h', data[10:12])[0]
+            x_market_type = struct.unpack('<h', data[12:14])[0]
+            uncompressed_size = struct.unpack('<H', data[14:16])[0]
+
+            self.logger.info(f"[XTS-BINARY] Header: PktType={packet_type}, Code={header_msg_code}, Seg={exchange_segment}, InstID={instrument_id}, Book={book_type}, Market={x_market_type}, UncompSize={uncompressed_size}")
+
+            # Check if subscribed
+            is_subscribed = False
+            for sub in self.subscriptions.values():
+                for instrument in sub.get('instruments', []):
+                    if (instrument.get('exchangeSegment') == exchange_segment and
+                        str(instrument.get('exchangeInstrumentID', '')) == str(instrument_id)):
+                        is_subscribed = True
+                        break
+                if is_subscribed:
+                    break
+
+            if not is_subscribed:
+                self.logger.debug(f"[XTS-BINARY] Skipping unsubscribed instrument: {exchange_segment}:{instrument_id}")
+                return
+
+            # Payload starts at byte 16 (after 16-byte header)
+            HEADER_SIZE = 16
+            payload = data[HEADER_SIZE:]
+            self.logger.debug(f"[XTS-BINARY] Payload size: {len(payload)} bytes")
+
+            # Parse the payload based on message code
+            # Payload starts with: MessageCode(2) + CommonDataA
+            if len(payload) < 2:
+                self.logger.warning(f"[XTS-BINARY] Payload too short: {len(payload)}")
+                return
+
+            actual_msg_code = struct.unpack('<H', payload[0:2])[0]
+            self.logger.info(f"[XTS-BINARY] Payload MessageCode: {actual_msg_code}")
+
+            market_data = {
+                'ExchangeSegment': exchange_segment,
+                'ExchangeInstrumentID': instrument_id,
+                'MessageCode': actual_msg_code
+            }
+
+            # Parse based on message code from OUTER header (more reliable)
+            # Use header_msg_code instead of actual_msg_code from payload
+            # Based on packet analysis, LTP is at payload offset 164 for 1502
+
+            if header_msg_code == 1501:  # Touchline
+                # LTP at doc offset 101 -> payload offset = 101 - 16 = 85
+                ltp_offset = 85
+                self.logger.info(f"[XTS-BINARY] 1501 Touchline: trying LTP at payload offset {ltp_offset}")
+                if len(payload) >= ltp_offset + 80:
+                    self._parse_touchline(payload, market_data, ltp_offset)
+                else:
+                    self._scan_and_parse(payload, market_data)
+            elif header_msg_code == 1502:  # Market Depth
+                # Based on scan results, LTP is at payload offset 166 for JainamXTS
+                ltp_offset = 166
+                self.logger.info(f"[XTS-BINARY] 1502 MarketDepth: trying LTP at payload offset {ltp_offset}")
+                if len(payload) >= ltp_offset + 80:
+                    self._parse_touchline(payload, market_data, ltp_offset)
+                else:
+                    self._scan_and_parse(payload, market_data)
+            elif header_msg_code == 1510:  # Open Interest
+                self.logger.info(f"[XTS-BINARY] 1510 OpenInterest: scanning for prices")
+                self._scan_and_parse(payload, market_data)
+            else:
+                self.logger.info(f"[XTS-BINARY] Message code {header_msg_code}: scanning for prices")
+                self._scan_and_parse(payload, market_data)
+
+            # Send data to adapter
+            if 'LastTradedPrice' in market_data:
+                self.logger.info(f"[XTS-BINARY] Sending: {market_data}")
+                if self.on_data:
+                    self.on_data(self, market_data)
+
+        except Exception as e:
+            self.logger.error(f"[XTS-BINARY] Error: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+
+    def _parse_touchline(self, payload, market_data, ltp_offset):
+        """Parse touchline/price data from payload at given offset"""
+        import struct
+        try:
+            # LastTradedPrice (double, 8 bytes) at ltp_offset
+            ltp = struct.unpack('<d', payload[ltp_offset:ltp_offset+8])[0]
+            self.logger.info(f"[XTS-BINARY] LTP at offset {ltp_offset}: {ltp}")
+
+            if not (0.01 < ltp < 500000):
+                self.logger.warning(f"[XTS-BINARY] Invalid LTP at offset {ltp_offset}: {ltp} - scanning for valid price")
+                # Try scanning for first valid price
+                self._scan_and_parse(payload, market_data)
+                return
+
+            market_data['LastTradedPrice'] = round(ltp, 2)
+
+            # For JainamXTS 1502 packets, based on scan analysis:
+            # LTP at offset 164
+            # OHLC appear at offsets around 358, 382, 390, 398
+            # But structure varies, so scan for OHLC prices separately
+
+            # Try to find OHLC by scanning known offset ranges
+            # OHLC typically appear after LTP with some gap for quantities/timestamps
+            ohlc_base = ltp_offset + 194  # ~358 for 1502 packets
+
+            if ohlc_base + 48 <= len(payload):
+                # Try to extract OHLC starting from ohlc_base
+                try:
+                    # First price after base could be Open or AvgPrice
+                    val1 = struct.unpack('<d', payload[ohlc_base:ohlc_base+8])[0]
+
+                    # Look for Low, High, Close at specific offsets found in scan
+                    # For 1502: Low at ~382, High at ~390, Close at ~398
+                    low_offset = ohlc_base + 24  # 358 + 24 = 382
+                    high_offset = ohlc_base + 32  # 358 + 32 = 390
+                    close_offset = ohlc_base + 40  # 358 + 40 = 398
+
+                    if close_offset + 8 <= len(payload):
+                        low = struct.unpack('<d', payload[low_offset:low_offset+8])[0]
+                        high = struct.unpack('<d', payload[high_offset:high_offset+8])[0]
+                        close = struct.unpack('<d', payload[close_offset:close_offset+8])[0]
+
+                        # Validate and assign
+                        if 0 < low < 500000:
+                            market_data['Low'] = round(low, 2)
+                        if 0 < high < 500000:
+                            market_data['High'] = round(high, 2)
+                        if 0 < close < 500000:
+                            market_data['Close'] = round(close, 2)
+
+                        # Use first value as Open if valid
+                        if 0 < val1 < 500000:
+                            market_data['Open'] = round(val1, 2)
+
+                except Exception:
+                    pass  # OHLC extraction failed, continue with just LTP
+
+            self.logger.info(f"[XTS-BINARY] Parsed: LTP={ltp:.2f}, O={market_data.get('Open', 0)}, H={market_data.get('High', 0)}, L={market_data.get('Low', 0)}, C={market_data.get('Close', 0)}")
+
+        except Exception as e:
+            self.logger.error(f"[XTS-BINARY] Error parsing touchline at offset {ltp_offset}: {e}")
+
+    def _scan_and_parse(self, payload, market_data):
+        """Scan payload for prices and parse the first valid LTP found"""
+        import struct
+        self.logger.info(f"[XTS-BINARY] Scanning {len(payload)}-byte payload for prices...")
+        found_prices = {}
+        for off in range(0, min(len(payload) - 7, 400)):
+            try:
+                val = struct.unpack('<d', payload[off:off+8])[0]
+                if 1 < val < 500000:
+                    found_prices[off] = round(val, 2)
+            except:
+                pass
+        self.logger.info(f"[XTS-BINARY] Found {len(found_prices)} prices at offsets: {found_prices}")
+
+        # Try to parse from the first valid offset found
+        if found_prices:
+            first_offset = min(found_prices.keys())
+            self.logger.info(f"[XTS-BINARY] Trying to parse from offset {first_offset}")
+            self._parse_touchline(payload, market_data, first_offset)
+
     def _on_catch_all(self, event, *args):
         """Catch-all handler for any unhandled Socket.IO events"""
-        # Don't log connect/disconnect/joined events as they are handled separately
-        if event not in ['connect', 'disconnect', 'joined', 'message']:
-            self.logger.debug(f"[CATCH-ALL] Unhandled event: {event}")
-            if args:
-                for i, arg in enumerate(args):
-                    self.logger.debug(f"  Arg[{i}]: Type={type(arg)}, Value={str(arg)[:200]}...")
+        # Log ALL events to help debug
+        self.logger.info(f"[SOCKET.IO EVENT] Event: {event}")
+        if args:
+            for i, arg in enumerate(args):
+                self.logger.info(f"[SOCKET.IO EVENT] Arg[{i}]: Type={type(arg)}, Value={str(arg)[:500]}")
     
     def resubscribe_all(self):
         """Resubscribe to all stored subscriptions after reconnection"""
