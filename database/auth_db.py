@@ -23,7 +23,22 @@ logger = get_logger(__name__)
 ph = PasswordHasher()
 
 DATABASE_URL = os.getenv('DATABASE_URL')
-PEPPER = os.getenv('API_KEY_PEPPER', 'default-pepper-change-in-production')
+
+# Security: Require API_KEY_PEPPER environment variable (fail fast if missing)
+# Pepper must be at least 32 bytes (64 hex characters) for cryptographic security
+_pepper_value = os.getenv('API_KEY_PEPPER')
+if not _pepper_value:
+    raise RuntimeError(
+        "CRITICAL: API_KEY_PEPPER environment variable is not set. "
+        "This is required for secure password and API key hashing. "
+        "Generate one using: python -c \"import secrets; print(secrets.token_hex(32))\""
+    )
+if len(_pepper_value) < 32:
+    raise RuntimeError(
+        f"CRITICAL: API_KEY_PEPPER must be at least 32 characters (got {len(_pepper_value)}). "
+        "Generate a secure pepper using: python -c \"import secrets; print(secrets.token_hex(32))\""
+    )
+PEPPER = _pepper_value
 
 # Setup Fernet encryption for auth tokens
 def get_encryption_key():
@@ -168,7 +183,7 @@ def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=
     """Store encrypted auth token and feed token if provided"""
     encrypted_token = encrypt_token(auth_token)
     encrypted_feed_token = encrypt_token(feed_token) if feed_token else None
-    
+
     auth_obj = Auth.query.filter_by(name=name).first()
     if auth_obj:
         auth_obj.auth = encrypted_token
@@ -176,20 +191,29 @@ def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=
         auth_obj.broker = broker
         auth_obj.user_id = user_id
         auth_obj.is_revoked = revoke
-        
-        # Clear cache entries when revoking
-        if revoke:
-            cache_key_auth = f"auth-{name}"
-            cache_key_feed = f"feed-{name}"
-            if cache_key_auth in auth_cache:
-                del auth_cache[cache_key_auth]
-            if cache_key_feed in feed_token_cache:
-                del feed_token_cache[cache_key_feed]
-            logger.info(f"Cleared cache entries for revoked tokens of user: {name}")
     else:
         auth_obj = Auth(name=name, auth=encrypted_token, feed_token=encrypted_feed_token, broker=broker, user_id=user_id, is_revoked=revoke)
         db_session.add(auth_obj)
     db_session.commit()
+
+    # Update cache after successful database operation
+    cache_key_auth = f"auth-{name}"
+    cache_key_feed = f"feed-{name}"
+
+    if revoke:
+        # Clear cache entries when revoking
+        if cache_key_auth in auth_cache:
+            del auth_cache[cache_key_auth]
+        if cache_key_feed in feed_token_cache:
+            del feed_token_cache[cache_key_feed]
+        logger.info(f"Cleared cache entries for revoked tokens of user: {name}")
+    else:
+        # Populate cache immediately on login/update for faster subsequent access
+        auth_cache[cache_key_auth] = auth_obj
+        if auth_obj.feed_token:
+            feed_token_cache[cache_key_feed] = auth_obj
+        logger.debug(f"Auth cache populated for user: {name}")
+
     return auth_obj.id
 
 def get_auth_token(name):
