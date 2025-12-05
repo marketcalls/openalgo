@@ -54,34 +54,51 @@ def get_positions(auth):
 def get_holdings(auth):
     return get_api_response("/portfolio/holdings",auth)
 
-def get_open_position(tradingsymbol, exchange, producttype,auth):
+def get_open_position(tradingsymbol, exchange, producttype, auth):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
-    
-    tradingsymbol = get_br_symbol(tradingsymbol,exchange)
+    tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     positions_data = get_positions(auth)
+
+    # Map exchange from OpenAlgo format to XTS format
+    exchange_mapping = {
+        "NSE": "NSECM",
+        "BSE": "BSECM",
+        "NFO": "NSEFO",
+        "BFO": "BSEFO",
+        "MCX": "MCXFO",
+        "CDS": "NSECD"
+    }
+    xts_exchange = exchange_mapping.get(exchange, exchange)
 
     net_qty = '0'
 
-    if positions_data and positions_data.get('status') and positions_data.get('data'):
-        for position in positions_data['data']:
-            if position.get('tradingsymbol') == tradingsymbol and position.get('exchange') == exchange and position.get('producttype') == producttype:
-                net_qty = position.get('Quantity', '0')
-                #logger.info(f"Net Quantity: {net_qty}")
-                break  # Assuming you need the first match
-        
+    logger.info(f"Looking for position: symbol={tradingsymbol}, exchange={xts_exchange}, product={producttype}")
+    logger.info(f"Positions data: {positions_data}")
+
+    # XTS returns {"type": "success", "result": {"positionList": [...]}}
+    if positions_data and positions_data.get('type') == 'success':
+        position_list = positions_data.get('result', {}).get('positionList', [])
+        for position in position_list:
+            pos_symbol = position.get('TradingSymbol', '')
+            pos_exchange = position.get('ExchangeSegment', '')
+            pos_product = position.get('ProductType', '')
+            logger.info(f"Checking position: symbol={pos_symbol}, exchange={pos_exchange}, product={pos_product}")
+            if pos_symbol == tradingsymbol and pos_exchange == xts_exchange and pos_product == producttype:
+                net_qty = str(position.get('Quantity', 0))
+                logger.info(f"Found matching position. Net Quantity: {net_qty}")
+                break
+
     return net_qty
 
 def place_order_api(data,auth):
     AUTH_TOKEN = auth   
-    logger.info(f"Data: {data}")
-
+    
     # Check if this is a direct instrument ID payload or needs transformation
     if all(key in data for key in ['exchangeSegment', 'exchangeInstrumentID', 'productType', 'orderType']):
         newdata = data
     else:
         # Traditional symbol-based payload that needs transformation
         token = get_token(data['symbol'], data['exchange'])
-        logger.info(f"token: {token}")
         newdata = transform_data(data, token)
 
     headers = {
@@ -129,9 +146,11 @@ def place_smartorder_api(data,auth):
     
 
     # Get current open position for the symbol
-    current_position = int(get_open_position(symbol, exchange, map_product_type(product),AUTH_TOKEN))
+    current_position = int(get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN))
 
-    
+    logger.info(f"position_size : {position_size}")
+    logger.info(f"Open Position : {current_position}")
+
     # Determine action based on position_size and current_position
     action = None
     quantity = 0
@@ -190,8 +209,8 @@ def place_smartorder_api(data,auth):
         # Place the order
         res, response, orderid = place_order_api(order_data,auth)
         #logger.info(f"{res}")
-        logger.info(f"Placing order with payload: {order_data}")
-        logger.info(f"API Response: {response}")
+        logger.debug(f"Placing order with payload: {order_data}")
+        logger.debug(f"API Response: {response}")
         logger.info(f"Order ID: {orderid}")
         
         return res , response, orderid
@@ -338,7 +357,7 @@ def cancel_all_orders_api(data,auth):
     
 
     order_book_response = get_order_book(AUTH_TOKEN)
-    logger.info(f"Order book response: {order_book_response}")
+    logger.debug(f"Order book response: {order_book_response}")
     if order_book_response.get("type") != "success":
         return [], []  # Return empty lists indicating failure to retrieve the order book
     

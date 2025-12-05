@@ -28,7 +28,7 @@ def transform_data(data,token):
         "stopPrice": data.get("trigger_price", "0"),
         "orderUniqueIdentifier": "openalgo"
     }
-    logger.info(f"transformed data: {transformed}")
+    logger.debug(f"transformed data: {transformed}")
     return transformed
 
 

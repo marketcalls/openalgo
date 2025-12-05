@@ -21,7 +21,8 @@ from broker.jainamxts.baseurl import MARKET_DATA_URL
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
-
+#Supportive segments for master contract download
+# NSECM , NSEFO , BSECM , BSEFO AND index segments 1 and 11
 
 DATABASE_URL = os.getenv('DATABASE_URL')  # Replace with your database path
 
@@ -82,7 +83,7 @@ def copy_from_dataframe(df):
 
 def download_csv_jainamxts_data(output_path):
     logger.info("Downloading Master Contract CSV Files")
-    exchange_segments = ["NSECM", "NSECD", "NSEFO", "BSECM", "BSEFO", "MCXFO"]
+    exchange_segments = ["NSECM", "NSEFO", "BSECM", "BSEFO"]
     headers_equity = "ExchangeSegment,ExchangeInstrumentID,InstrumentType,Name,Description,Series,NameWithSeries,InstrumentID,PriceBand.High,PriceBand.Low, FreezeQty,TickSize,LotSize,Multiplier,DisplayName,ISIN,PriceNumerator,PriceDenominator,DetailedDescription,ExtendedSurvIndicator,CautionIndicator,GSMIndicator\n"
     headers_fo = "ExchangeSegment,ExchangeInstrumentID,InstrumentType,Name,Description,Series,NameWithSeries,InstrumentID,PriceBand.High,PriceBand.Low,FreezeQty,TickSize,LotSize,Multiplier,UnderlyingInstrumentId,UnderlyingIndexName,ContractExpiration,StrikePrice,OptionType,DisplayName, PriceNumerator,PriceDenominator,DetailedDescription\n"
 
@@ -140,9 +141,10 @@ def fetch_index_list():
             continue
 
         data = response.json()
+        logger.debug(f"Index list response for segment {segment}: {data}")
 
         if "result" not in data or "indexList" not in data["result"]:
-            logger.info(f"Invalid response format for segment {segment}")
+            logger.error(f"Invalid response format for segment {segment}: {data}")
             continue
 
         for index_entry in data["result"]["indexList"]:
@@ -281,6 +283,10 @@ def process_jainamxts_cds_csv(path):
 
     df = df.dropna(subset=['OptionType'])
 
+    if df.empty:
+        logger.info("No CDS data available, skipping")
+        return pd.DataFrame()
+
         # Convert 'Expiry Date' column to datetime format
     df['ContractExpiration'] = pd.to_datetime(df['ContractExpiration'])
 
@@ -390,6 +396,10 @@ def process_jainamxts_mcx_csv(path):
     # Drop rows where the 'Exch Seg' column has the value 'COMTDY'
     df = df[df['ContractExpiration'] != '1']
 
+    if df.empty:
+        logger.info("No MCX data available, skipping")
+        return pd.DataFrame()
+
     df['ContractExpiration'] = pd.to_datetime(df['ContractExpiration'])
     df["StrikePrice"] = pd.to_numeric(df["StrikePrice"], errors='coerce').fillna(1.0)
     
@@ -466,38 +476,54 @@ def delete_jainamxts_temp_data(output_path):
 
 def master_contract_download():
     logger.info("Downloading Master Contract")
-    
+
 
     output_path = 'tmp'
     try:
         download_csv_jainamxts_data(output_path)
         delete_symtoken_table()
-        token_df = process_jainamxts_nse_csv(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_jainamxts_bse_csv(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_jainamxts_nfo_csv(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_jainamxts_cds_csv(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_jainamxts_mcx_csv(output_path)
-        copy_from_dataframe(token_df)
-        token_df = process_jainamxts_bfo_csv(output_path)
-        copy_from_dataframe(token_df)
+
+        # Process each segment with individual error handling
+        try:
+            token_df = process_jainamxts_nse_csv(output_path)
+            copy_from_dataframe(token_df)
+        except Exception as e:
+            logger.error(f"Error processing NSE CSV: {e}")
+
+        try:
+            token_df = process_jainamxts_bse_csv(output_path)
+            copy_from_dataframe(token_df)
+        except Exception as e:
+            logger.error(f"Error processing BSE CSV: {e}")
+
+        try:
+            token_df = process_jainamxts_nfo_csv(output_path)
+            copy_from_dataframe(token_df)
+        except Exception as e:
+            logger.error(f"Error processing NFO CSV: {e}")
+
+        try:
+            token_df = process_jainamxts_bfo_csv(output_path)
+            copy_from_dataframe(token_df)
+        except Exception as e:
+            logger.error(f"Error processing BFO CSV: {e}")
 
         # Fetch and Process Index Data
-        index_data = fetch_index_list()
-        if index_data:
-            index_df = process_index_data(index_data)
-            copy_from_dataframe(index_df)
-        
+        try:
+            index_data = fetch_index_list()
+            if index_data:
+                index_df = process_index_data(index_data)
+                copy_from_dataframe(index_df)
+        except Exception as e:
+            logger.error(f"Error processing Index data: {e}")
+
         delete_jainamxts_temp_data(output_path)
-        
+
         return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
 
-    
+
     except Exception as e:
-        logger.info(f"{e}")
+        logger.error(f"Master contract download failed: {e}")
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})
 
 
