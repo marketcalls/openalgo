@@ -3,12 +3,13 @@ import os
 import urllib.parse
 from database.token_db import get_br_symbol, get_oa_symbol, get_brexchange
 from broker.jainamxts.database.master_contract_db import SymToken, db_session
-from flask import session  
+from flask import session
 import pandas as pd
 from datetime import datetime, timedelta
 from utils.httpx_client import get_httpx_client
 from database.auth_db import get_feed_token
 from broker.jainamxts.baseurl import MARKET_DATA_URL
+from broker.jainamxts.api.auth_api import get_feed_token as refresh_feed_token
 import pytz
 from utils.logging import get_logger
 
@@ -82,13 +83,27 @@ class BrokerData:
         self.feed_token = feed_token
         self.user_id = user_id
         logger.info(f"BrokerData initialized - auth_token: {auth_token[:20] if auth_token else 'None'}..., feed_token: {feed_token[:20] if feed_token else 'None'}...")
-        
+
         # Map common timeframe format to JainamXTS intervals
         self.timeframe_map = {
             "1s": "1", "1m": "60", "2m": "120", "3m": "180", "5m": "300",
                 "10m": "600", "15m": "900", "30m": "1800", "60m": "3600",
                 "D": "D"
         }
+
+    def _refresh_feed_token(self):
+        """Refresh the feed token when it expires"""
+        try:
+            new_feed_token, user_id, error = refresh_feed_token()
+            if error:
+                logger.error(f"Failed to refresh feed token: {error}")
+                return False
+            self.feed_token = new_feed_token
+            logger.info("Feed token refreshed successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Error refreshing feed token: {e}")
+            return False
         
 
     def _get_instrument_token(self, symbol: str, exchange: str) -> tuple:
@@ -131,12 +146,13 @@ class BrokerData:
             
             return symbol_info, brexchange
 
-    def _fetch_market_data(self, token: dict, message_code: int) -> dict:
+    def _fetch_market_data(self, token: dict, message_code: int, retry_on_invalid_token: bool = True) -> dict:
         """
         Helper method to fetch market data from JainamXTS API
         Args:
             token: Dictionary containing exchangeSegment and exchangeInstrumentID
             message_code: XTS message code (e.g., 1502 for market data, 1510 for OI)
+            retry_on_invalid_token: Whether to retry with refreshed token on "Invalid Token" error
         Returns:
             dict: Parsed market data
         """
@@ -147,7 +163,7 @@ class BrokerData:
                 "publishFormat": "JSON"
             }
 
-            logger.info(f"Market data request - payload: {payload}, using feed_token: {self.feed_token[:20] if self.feed_token else 'None'}...")
+            logger.debug(f"Market data request - payload: {payload}")
 
             response = get_api_response(
                 "/instruments/quotes",
@@ -157,24 +173,34 @@ class BrokerData:
                 feed_token=self.feed_token
             )
 
-            logger.info(f"Market data response: {response}")
+            logger.debug(f"Market data response: {response}")
 
             if not response or response.get('type') != 'success':
                 error_msg = response.get('description', 'Unknown error') if response else 'No response'
+
+                # Check if token expired and retry with refreshed token
+                if retry_on_invalid_token and 'Invalid Token' in error_msg:
+                    logger.info("Feed token expired, attempting to refresh...")
+                    if self._refresh_feed_token():
+                        # Retry the request with new token (only once)
+                        return self._fetch_market_data(token, message_code, retry_on_invalid_token=False)
+                    else:
+                        logger.error("Failed to refresh feed token")
+
                 logger.warning(f"Error fetching market data (code {message_code}): {error_msg}")
                 return None
-                
+
             # Handle empty listQuotes array
             list_quotes = response.get('result', {}).get('listQuotes', [])
             if not list_quotes:
                 logger.warning(f"Empty listQuotes in response (code {message_code})")
                 return None
-                
+
             raw_data = list_quotes[0]
             if not raw_data:
                 logger.warning(f"No data in response (code {message_code})")
                 return None
-                
+
             return json.loads(raw_data) if isinstance(raw_data, str) else raw_data
             
         except Exception as e:
