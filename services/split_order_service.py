@@ -1,8 +1,9 @@
 import importlib
 import traceback
 import copy
+import time
+import os
 from typing import Tuple, Dict, Any, Optional, List
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from database.auth_db import get_auth_token_broker
 from database.apilog_db import async_log_order, executor as log_executor
@@ -25,6 +26,16 @@ logger = get_logger(__name__)
 
 # Maximum number of orders allowed
 MAX_ORDERS = 100
+
+# Get rate limit from environment (default: 10 per second)
+def get_order_rate_limit():
+    """Parse ORDER_RATE_LIMIT and return delay in seconds between orders"""
+    rate_limit_str = os.getenv('ORDER_RATE_LIMIT', '10 per second')
+    try:
+        rate = int(rate_limit_str.split()[0])
+        return 1.0 / rate if rate > 0 else 0.1
+    except (ValueError, IndexError):
+        return 0.1  # Default 100ms delay
 
 def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dict[str, Any]:
     """
@@ -83,22 +94,22 @@ def import_broker_module(broker_name: str) -> Optional[Any]:
         return None
 
 def place_single_order(
-    order_data: Dict[str, Any], 
-    broker_module: Any, 
-    auth_token: str, 
-    order_num: int, 
+    order_data: Dict[str, Any],
+    broker_module: Any,
+    auth_token: str,
+    order_num: int,
     total_orders: int
 ) -> Dict[str, Any]:
     """
-    Place a single order and emit event
-    
+    Place a single order (no per-order event emission - summary event emitted at end)
+
     Args:
         order_data: Order data
         broker_module: Broker module
         auth_token: Authentication token
         order_num: Order number in the sequence
         total_orders: Total number of orders
-        
+
     Returns:
         Order result dictionary
     """
@@ -107,25 +118,7 @@ def place_single_order(
         res, response_data, order_id = broker_module.place_order_api(order_data, auth_token)
 
         if res.status == 200:
-            # Emit order event for toast notification with batch info asynchronously (non-blocking)
-            socketio.start_background_task(
-                socketio.emit,
-                'order_event',
-                {
-                    'symbol': order_data['symbol'],
-                    'action': order_data['action'],
-                    'orderid': order_id,
-                    'exchange': order_data.get('exchange', 'Unknown'),
-                    'price_type': order_data.get('pricetype', 'Unknown'),
-                    'product_type': order_data.get('product', 'Unknown'),
-                'mode': 'live',
-                'order_num': order_num,
-                'quantity': int(order_data['quantity']),
-                'batch_order': True,
-                'is_last_order': order_num == total_orders
-            })
-
-            # Return response without batch info
+            # No per-order event emission - a summary event is emitted at the end of all orders
             return {
                 'order_num': order_num,
                 'quantity': int(order_data['quantity']),
@@ -313,66 +306,72 @@ def split_order_with_auth(
         log_executor.submit(async_log_order, 'splitorder', original_data, error_response)
         return False, error_response, 404
 
-    # Process orders concurrently
+    # Process orders sequentially with rate limiting
     results = []
-    
-    # Create a ThreadPoolExecutor for concurrent order placement
-    with ThreadPoolExecutor(max_workers=10) as order_executor:
-        # Prepare orders for concurrent execution
-        futures = []
-        
-        # Submit full-size orders
-        for i in range(num_full_orders):
-            order_data = copy.deepcopy(split_data)
-            order_data['quantity'] = str(split_size)
-            futures.append(
-                order_executor.submit(
-                    place_single_order,
-                    order_data,
-                    broker_module,
-                    auth_token,
-                    i + 1,
-                    total_orders
-                )
-            )
+    order_delay = get_order_rate_limit()
 
-        # Submit remaining quantity order if any
-        if remaining_qty > 0:
-            order_data = copy.deepcopy(split_data)
-            order_data['quantity'] = str(remaining_qty)
-            futures.append(
-                order_executor.submit(
-                    place_single_order,
-                    order_data,
-                    broker_module,
-                    auth_token,
-                    total_orders,
-                    total_orders
-                )
-            )
+    # Place full-size orders
+    for i in range(num_full_orders):
+        if i > 0:
+            time.sleep(order_delay)  # Rate limit delay between orders
+        order_data = copy.deepcopy(split_data)
+        order_data['quantity'] = str(split_size)
+        result = place_single_order(
+            order_data,
+            broker_module,
+            auth_token,
+            i + 1,
+            total_orders
+        )
+        results.append(result)
 
-        # Collect results as they complete
-        for future in as_completed(futures):
-            result = future.result()
-            results.append(result)
+    # Place remaining quantity order if any
+    if remaining_qty > 0:
+        if num_full_orders > 0:
+            time.sleep(order_delay)  # Rate limit delay
+        order_data = copy.deepcopy(split_data)
+        order_data['quantity'] = str(remaining_qty)
+        result = place_single_order(
+            order_data,
+            broker_module,
+            auth_token,
+            total_orders,
+            total_orders
+        )
+        results.append(result)
 
-        # Sort results by order_num to maintain order in response
-        results.sort(key=lambda x: x['order_num'])
+    # Log the split order results
+    response_data = {
+        'status': 'success',
+        'total_quantity': total_quantity,
+        'split_size': split_size,
+        'results': results
+    }
+    log_executor.submit(async_log_order, 'splitorder', split_request_data, response_data)
 
-        # Log the split order results
-        response_data = {
-            'status': 'success',
-            'total_quantity': total_quantity,
-            'split_size': split_size,
-            'results': results
+    # Emit single summary order event at the end (page refreshes only once)
+    successful_orders = sum(1 for r in results if r.get('status') == 'success')
+    socketio.start_background_task(
+        socketio.emit,
+        'order_event',
+        {
+            'symbol': split_data.get('symbol', 'Split'),
+            'action': split_data.get('action', 'SPLIT'),
+            'orderid': f"{successful_orders}/{len(results)} orders",
+            'exchange': split_data.get('exchange', 'Unknown'),
+            'price_type': split_data.get('pricetype', 'MARKET'),
+            'product_type': split_data.get('product', 'MIS'),
+            'mode': 'live',
+            'batch_order': True,
+            'is_last_order': True
         }
-        log_executor.submit(async_log_order, 'splitorder', split_request_data, response_data)
+    )
 
-        # Send Telegram alert for live mode
-        # Note: Use original_data to get apikey for consistency with other services
-        telegram_alert_service.send_order_alert('splitorder', split_data, response_data, original_data.get('apikey'))
+    # Send Telegram alert for live mode
+    # Note: Use original_data to get apikey for consistency with other services
+    telegram_alert_service.send_order_alert('splitorder', split_data, response_data, original_data.get('apikey'))
 
-        return True, response_data, 200
+    return True, response_data, 200
 
 def split_order(
     split_data: Dict[str, Any],
