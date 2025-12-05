@@ -828,10 +828,10 @@ class JainamXTSWebSocketClient:
             asks = []
 
             # XTS 1502 depth structure based on hex dump analysis:
-            # Each level is 28 bytes: Price(8) + Qty(4) + Pad(2) + Orders(2) + Pad(12)
+            # Each level is 22 bytes: Price(8) + Qty(4) + Pad(2) + Orders(2) + Pad(6)
             # Depth data starts at offset 52 (after MessageCode and common data)
             DEPTH_START = 52
-            LEVEL_SIZE = 28
+            LEVEL_SIZE = 22
 
             # Parse 5 bid levels
             for i in range(5):
@@ -857,8 +857,8 @@ class JainamXTSWebSocketClient:
                 except Exception as e:
                     self.logger.debug(f"[XTS-DEPTH] Error parsing bid {i+1} at offset {off}: {e}")
 
-            # Parse 5 ask levels (after bids at offset 52 + 5*28 = 192)
-            # Scan for ask prices since structure may vary
+            # Parse 5 ask levels (after bids at offset 52 + 5*22 = 162)
+            # Scan for ask prices since there may be a small gap between bids and asks
             ASK_START = DEPTH_START + (5 * LEVEL_SIZE)
 
             # Scan for ask prices (prices > LTP)
