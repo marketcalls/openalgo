@@ -568,43 +568,27 @@ class JainamXTSWebSocketClient:
         Handle xts-binary-packet events (JainamXTS binary format)
 
         XTS Binary Packet Structure (from official documentation):
-        Header:
-        - Byte 0: isGzipCompressed (int8) - 0=compressed, 1=uncompressed
-        - Bytes 1-3: Header MessageCode (uint16)
-        - Bytes 3-5: Header ExchangeSegment (int16)
-        - Bytes 5-9: Header ExchangeInstrumentID (int32)
-        - Bytes 9-11: BookType (int16)
-        - Bytes 11-13: XMarketType (int16)
-        - Bytes 13-15: uncompressedPacketSize (uint16)
-        - Bytes 15-17: compressedPacketSize (uint16)
-        - Bytes 17-19: MessageCode (uint16) - actual data message code
+        Header (16 bytes):
+        - Bytes 0-1: Packet type/version (uint16) - 4=uncompressed, 260(0x104)=LZ4 compressed
+        - Bytes 2-3: Header MessageCode (uint16) - e.g., 1501, 1502
+        - Bytes 4-5: ExchangeSegment (int16) - e.g., 1=NSECM
+        - Bytes 6-9: ExchangeInstrumentID (int32) - e.g., 11536=TCS
+        - Bytes 10-11: BookType (int16)
+        - Bytes 12-13: XMarketType (int16)
+        - Bytes 14-15: uncompressedPacketSize (uint16)
+        - Bytes 16+: Payload (may be LZ4 compressed if PktType=260)
 
-        For 1501 (Touchline): LTP at offset 101-109
-        For 1502 (MarketDepth): LTP at offset 289-297
+        For 1501 (Touchline): LTP at payload offset 85
+        For 1502 (MarketDepth): LTP at payload offset 166
         """
-        self.logger.info(f"[XTS-BINARY] Received packet, type={type(data)}, len={len(data) if isinstance(data, bytes) else 'N/A'}")
-
         try:
             if not isinstance(data, bytes) or len(data) < 17:
                 self.logger.warning(f"[XTS-BINARY] Invalid data: {type(data)}, len={len(data) if isinstance(data, bytes) else 'N/A'}")
                 return
 
             import struct
-            import zlib
 
-            # Log raw hex
-            self.logger.info(f"[XTS-BINARY] Raw hex ({len(data)} bytes): {data[:100].hex()}")
-
-            # Parse outer header (always uncompressed)
-            # Based on actual packet analysis (16-byte header):
-            # Bytes 0-1: Packet type/version (uint16) - value 4 observed
-            # Bytes 2-3: Header MessageCode (uint16) - e.g., 1502
-            # Bytes 4-5: ExchangeSegment (int16) - e.g., 1=NSECM
-            # Bytes 6-9: ExchangeInstrumentID (int32) - e.g., 11536=TCS
-            # Bytes 10-11: BookType (int16)
-            # Bytes 12-13: XMarketType (int16)
-            # Bytes 14-15: uncompressedPacketSize (uint16)
-            # Bytes 16+: Payload starts (inner MessageCode at bytes 16-17)
+            # Parse outer header (always uncompressed, 16 bytes)
             packet_type = struct.unpack('<H', data[0:2])[0]
             header_msg_code = struct.unpack('<H', data[2:4])[0]
             exchange_segment = struct.unpack('<h', data[4:6])[0]
@@ -613,7 +597,10 @@ class JainamXTSWebSocketClient:
             x_market_type = struct.unpack('<h', data[12:14])[0]
             uncompressed_size = struct.unpack('<H', data[14:16])[0]
 
-            self.logger.info(f"[XTS-BINARY] Header: PktType={packet_type}, Code={header_msg_code}, Seg={exchange_segment}, InstID={instrument_id}, Book={book_type}, Market={x_market_type}, UncompSize={uncompressed_size}")
+            # Check if payload is LZ4 compressed (PktType 260 = 0x104, bit 0x100 indicates compression)
+            is_compressed = (packet_type & 0x100) != 0
+
+            self.logger.debug(f"[XTS-BINARY] Header: PktType={packet_type}, Compressed={is_compressed}, Code={header_msg_code}, Seg={exchange_segment}, InstID={instrument_id}")
 
             # Check if subscribed
             is_subscribed = False
@@ -632,8 +619,15 @@ class JainamXTSWebSocketClient:
 
             # Payload starts at byte 16 (after 16-byte header)
             HEADER_SIZE = 16
-            payload = data[HEADER_SIZE:]
-            self.logger.debug(f"[XTS-BINARY] Payload size: {len(payload)} bytes")
+            compressed_payload = data[HEADER_SIZE:]
+
+            # Skip compressed packets (LZ4 not available)
+            if is_compressed:
+                self.logger.debug(f"[XTS-BINARY] Skipping compressed packet (PktType={packet_type})")
+                return
+
+            payload = compressed_payload
+            self.logger.debug(f"[XTS-BINARY] Uncompressed payload: {len(payload)} bytes")
 
             # Parse the payload based on message code
             # Payload starts with: MessageCode(2) + CommonDataA
@@ -647,29 +641,38 @@ class JainamXTSWebSocketClient:
             market_data = {
                 'ExchangeSegment': exchange_segment,
                 'ExchangeInstrumentID': instrument_id,
-                'MessageCode': actual_msg_code
+                'MessageCode': actual_msg_code,
+                '_header_code': header_msg_code  # For OHLC parsing
             }
 
             # Parse based on message code from OUTER header (more reliable)
             # Use header_msg_code instead of actual_msg_code from payload
             # Based on packet analysis, LTP is at payload offset 164 for 1502
 
-            if header_msg_code == 1501:  # Touchline
-                # LTP at doc offset 101 -> payload offset = 101 - 16 = 85
-                ltp_offset = 85
-                self.logger.info(f"[XTS-BINARY] 1501 Touchline: trying LTP at payload offset {ltp_offset}")
-                if len(payload) >= ltp_offset + 80:
+            if header_msg_code == 1512:  # LTP
+                # 1512 LTP packets are simple - try LTP at offset 2 (after MessageCode)
+                # or scan for the first valid price
+                self.logger.info(f"[XTS-BINARY] 1512 LTP: parsing LTP packet")
+                self._parse_ltp_packet(payload, market_data)
+            elif header_msg_code == 1501:  # Touchline
+                # Based on scan analysis: LTP at offset 48 for stocks, 92 for indices
+                # Try 48 first, fallback to scanning
+                ltp_offset = 48
+                self.logger.debug(f"[XTS-BINARY] 1501 Touchline: trying LTP at payload offset {ltp_offset}")
+                if len(payload) >= 188:  # Need enough for OHLC at offset 180
                     self._parse_touchline(payload, market_data, ltp_offset)
                 else:
                     self._scan_and_parse(payload, market_data)
             elif header_msg_code == 1502:  # Market Depth
                 # Based on scan results, LTP is at payload offset 166 for JainamXTS
                 ltp_offset = 166
-                self.logger.info(f"[XTS-BINARY] 1502 MarketDepth: trying LTP at payload offset {ltp_offset}")
+                self.logger.debug(f"[XTS-BINARY] 1502 MarketDepth: trying LTP at payload offset {ltp_offset}")
                 if len(payload) >= ltp_offset + 80:
                     self._parse_touchline(payload, market_data, ltp_offset)
                 else:
                     self._scan_and_parse(payload, market_data)
+                # Parse depth data (bids/asks) from binary
+                self._parse_depth(payload, market_data)
             elif header_msg_code == 1510:  # Open Interest
                 self.logger.info(f"[XTS-BINARY] 1510 OpenInterest: scanning for prices")
                 self._scan_and_parse(payload, market_data)
@@ -679,6 +682,8 @@ class JainamXTSWebSocketClient:
 
             # Send data to adapter
             if 'LastTradedPrice' in market_data:
+                # Remove internal field before sending
+                market_data.pop('_header_code', None)
                 self.logger.info(f"[XTS-BINARY] Sending: {market_data}")
                 if self.on_data:
                     self.on_data(self, market_data)
@@ -694,56 +699,39 @@ class JainamXTSWebSocketClient:
         try:
             # LastTradedPrice (double, 8 bytes) at ltp_offset
             ltp = struct.unpack('<d', payload[ltp_offset:ltp_offset+8])[0]
-            self.logger.info(f"[XTS-BINARY] LTP at offset {ltp_offset}: {ltp}")
+            self.logger.debug(f"[XTS-BINARY] LTP at offset {ltp_offset}: {ltp}")
 
             if not (0.01 < ltp < 500000):
                 self.logger.warning(f"[XTS-BINARY] Invalid LTP at offset {ltp_offset}: {ltp} - scanning for valid price")
-                # Try scanning for first valid price
                 self._scan_and_parse(payload, market_data)
                 return
 
             market_data['LastTradedPrice'] = round(ltp, 2)
 
-            # For JainamXTS 1502 packets, based on scan analysis:
-            # LTP at offset 164
-            # OHLC appear at offsets around 358, 382, 390, 398
-            # But structure varies, so scan for OHLC prices separately
+            # For 1501 (Touchline/Quote) packets, OHLC are at fixed offsets after LTP
+            # Based on scan analysis of 1501 packets:
+            # Prices found at: 48, 70, 92, 132, 156, 164, 172, 180
+            # Pattern: LTP at 48 or 92, Open~156, High~164, Low~172, Close~180
 
-            # Try to find OHLC by scanning known offset ranges
-            # OHLC typically appear after LTP with some gap for quantities/timestamps
-            ohlc_base = ltp_offset + 194  # ~358 for 1502 packets
+            msg_code = market_data.get('MessageCode', 0)
+            header_code = market_data.get('_header_code', msg_code)
 
-            if ohlc_base + 48 <= len(payload):
-                # Try to extract OHLC starting from ohlc_base
-                try:
-                    # First price after base could be Open or AvgPrice
-                    val1 = struct.unpack('<d', payload[ohlc_base:ohlc_base+8])[0]
+            # OHLC offsets based on packet type
+            if header_code == 1501:
+                # 1501 Touchline - OHLC at offsets 156, 164, 172, 180
+                ohlc_offsets = {'Open': 156, 'High': 164, 'Low': 172, 'Close': 180}
+            else:
+                # 1502 MarketDepth - scan for OHLC
+                ohlc_offsets = None
 
-                    # Look for Low, High, Close at specific offsets found in scan
-                    # For 1502: Low at ~382, High at ~390, Close at ~398
-                    low_offset = ohlc_base + 24  # 358 + 24 = 382
-                    high_offset = ohlc_base + 32  # 358 + 32 = 390
-                    close_offset = ohlc_base + 40  # 358 + 40 = 398
-
-                    if close_offset + 8 <= len(payload):
-                        low = struct.unpack('<d', payload[low_offset:low_offset+8])[0]
-                        high = struct.unpack('<d', payload[high_offset:high_offset+8])[0]
-                        close = struct.unpack('<d', payload[close_offset:close_offset+8])[0]
-
-                        # Validate and assign
-                        if 0 < low < 500000:
-                            market_data['Low'] = round(low, 2)
-                        if 0 < high < 500000:
-                            market_data['High'] = round(high, 2)
-                        if 0 < close < 500000:
-                            market_data['Close'] = round(close, 2)
-
-                        # Use first value as Open if valid
-                        if 0 < val1 < 500000:
-                            market_data['Open'] = round(val1, 2)
-
-                except Exception:
-                    pass  # OHLC extraction failed, continue with just LTP
+            if ohlc_offsets and max(ohlc_offsets.values()) + 8 <= len(payload):
+                for field, offset in ohlc_offsets.items():
+                    try:
+                        val = struct.unpack('<d', payload[offset:offset+8])[0]
+                        if 0.01 < val < 500000:
+                            market_data[field] = round(val, 2)
+                    except:
+                        pass
 
             self.logger.info(f"[XTS-BINARY] Parsed: LTP={ltp:.2f}, O={market_data.get('Open', 0)}, H={market_data.get('High', 0)}, L={market_data.get('Low', 0)}, C={market_data.get('Close', 0)}")
 
@@ -753,7 +741,7 @@ class JainamXTSWebSocketClient:
     def _scan_and_parse(self, payload, market_data):
         """Scan payload for prices and parse the first valid LTP found"""
         import struct
-        self.logger.info(f"[XTS-BINARY] Scanning {len(payload)}-byte payload for prices...")
+        self.logger.debug(f"[XTS-BINARY] Scanning {len(payload)}-byte payload for prices...")
         found_prices = {}
         for off in range(0, min(len(payload) - 7, 400)):
             try:
@@ -762,13 +750,185 @@ class JainamXTSWebSocketClient:
                     found_prices[off] = round(val, 2)
             except:
                 pass
-        self.logger.info(f"[XTS-BINARY] Found {len(found_prices)} prices at offsets: {found_prices}")
+        self.logger.debug(f"[XTS-BINARY] Found {len(found_prices)} prices at offsets: {found_prices}")
 
         # Try to parse from the first valid offset found
         if found_prices:
             first_offset = min(found_prices.keys())
-            self.logger.info(f"[XTS-BINARY] Trying to parse from offset {first_offset}")
+            self.logger.debug(f"[XTS-BINARY] Trying to parse from offset {first_offset}")
             self._parse_touchline(payload, market_data, first_offset)
+
+    def _parse_ltp_packet(self, payload, market_data):
+        """Parse 1512 LTP packet - simplified structure with just LTP"""
+        import struct
+        try:
+            # 1512 LTP packet structure is simpler than Touchline
+            # Try common offsets for LTP: 2 (after MessageCode), 10, 18, 26
+            # Also log hex dump for debugging
+            self.logger.info(f"[XTS-LTP] Payload hex (first 100 bytes): {payload[:100].hex()}")
+            self.logger.info(f"[XTS-LTP] Payload length: {len(payload)}")
+
+            ltp = None
+            ltp_offset = None
+
+            # Try known offsets first
+            for off in [2, 10, 18, 26, 34, 42]:
+                if off + 8 <= len(payload):
+                    try:
+                        val = struct.unpack('<d', payload[off:off+8])[0]
+                        if 0.01 < val < 500000:
+                            ltp = val
+                            ltp_offset = off
+                            self.logger.info(f"[XTS-LTP] Found LTP={val:.2f} at offset {off}")
+                            break
+                    except:
+                        pass
+
+            # Fallback: scan for first valid price
+            if ltp is None:
+                self.logger.debug(f"[XTS-LTP] Known offsets failed, scanning...")
+                for off in range(0, min(len(payload) - 7, 100)):
+                    try:
+                        val = struct.unpack('<d', payload[off:off+8])[0]
+                        if 0.01 < val < 500000:
+                            ltp = val
+                            ltp_offset = off
+                            self.logger.info(f"[XTS-LTP] Scan found LTP={val:.2f} at offset {off}")
+                            break
+                    except:
+                        pass
+
+            if ltp and ltp_offset is not None:
+                market_data['LastTradedPrice'] = round(ltp, 2)
+                self.logger.info(f"[XTS-LTP] Parsed LTP={ltp:.2f} at offset {ltp_offset}")
+            else:
+                self.logger.warning(f"[XTS-LTP] Could not find valid LTP in payload")
+
+        except Exception as e:
+            self.logger.error(f"[XTS-LTP] Error parsing LTP packet: {e}")
+
+    def _parse_depth(self, payload, market_data):
+        """Parse market depth (bid/ask) data from 1502 packet"""
+        import struct
+        try:
+            ltp = market_data.get('LastTradedPrice', 0)
+            if ltp <= 0:
+                return
+
+            # Log first 200 bytes of payload for analysis
+            self.logger.info(f"[XTS-DEPTH] Payload hex (first 200 bytes): {payload[:200].hex()}")
+            self.logger.info(f"[XTS-DEPTH] LTP={ltp}, Payload len={len(payload)}")
+
+            # XTS 1502 MarketDepth structure:
+            # Based on XTS SDK, the depth data starts after MessageCode(2)
+            # Each Bid/Ask level: Price(8) + Size(8) + TotalOrders(4) + NumOrders(2) = 22 bytes
+            # Or: Price(8) + Size(8) + Orders(2) = 18 bytes
+
+            bids = []
+            asks = []
+
+            # XTS 1502 depth structure based on hex dump analysis:
+            # Each level is 28 bytes: Price(8) + Qty(4) + Pad(2) + Orders(2) + Pad(12)
+            # Depth data starts at offset 52 (after MessageCode and common data)
+            DEPTH_START = 52
+            LEVEL_SIZE = 28
+
+            # Parse 5 bid levels
+            for i in range(5):
+                off = DEPTH_START + (i * LEVEL_SIZE)
+                if off + LEVEL_SIZE > len(payload):
+                    break
+                try:
+                    price = struct.unpack('<d', payload[off:off+8])[0]
+                    if not (0.01 < price < 500000):
+                        continue
+
+                    qty = struct.unpack('<I', payload[off+8:off+12])[0]  # uint32 at offset 8
+                    orders = struct.unpack('<H', payload[off+14:off+16])[0]  # uint16 at offset 14
+
+                    # Validate
+                    if qty > 100000000:
+                        qty = 0
+                    if orders > 50000:
+                        orders = 0
+
+                    bids.append({'Price': round(price, 2), 'Size': int(qty), 'TotalOrders': int(orders)})
+                    self.logger.debug(f"[XTS-DEPTH] Bid {i+1}: Price={price:.2f}, Qty={qty}, Orders={orders}")
+                except Exception as e:
+                    self.logger.debug(f"[XTS-DEPTH] Error parsing bid {i+1} at offset {off}: {e}")
+
+            # Parse 5 ask levels (after bids at offset 52 + 5*28 = 192)
+            # Scan for ask prices since structure may vary
+            ASK_START = DEPTH_START + (5 * LEVEL_SIZE)
+
+            # Scan for ask prices (prices > LTP)
+            for scan_off in range(ASK_START, min(len(payload) - 20, ASK_START + 100)):
+                if len(asks) >= 5:
+                    break
+                try:
+                    price = struct.unpack('<d', payload[scan_off:scan_off+8])[0]
+                    if 0.01 < price < 500000 and price > ltp:
+                        qty = struct.unpack('<I', payload[scan_off+8:scan_off+12])[0]
+                        orders = struct.unpack('<H', payload[scan_off+14:scan_off+16])[0]
+
+                        if qty > 100000000:
+                            qty = 0
+                        if orders > 50000:
+                            orders = 0
+
+                        asks.append({'Price': round(price, 2), 'Size': int(qty), 'TotalOrders': int(orders)})
+                        self.logger.debug(f"[XTS-DEPTH] Ask found at {scan_off}: Price={price:.2f}, Qty={qty}, Orders={orders}")
+                except:
+                    pass
+
+            self.logger.debug(f"[XTS-DEPTH] Found {len(bids)} bids, {len(asks)} asks")
+
+            # If fixed offset didn't work, fall back to scanning
+            if len(bids) < 2 or len(asks) < 1:
+                self.logger.debug(f"[XTS-BINARY] Fixed offset failed, scanning for depth prices...")
+                bids, asks = self._scan_depth_prices(payload, ltp)
+
+            # Sort bids descending, asks ascending
+            bids.sort(key=lambda x: x['Price'], reverse=True)
+            asks.sort(key=lambda x: x['Price'])
+
+            # Take top 5 levels
+            bids = bids[:5]
+            asks = asks[:5]
+
+            # Ensure we have both bids and asks
+            if not bids:
+                bids = [{'Price': round(ltp * 0.999, 2), 'Size': 0, 'TotalOrders': 0}]
+            if not asks:
+                asks = [{'Price': round(ltp * 1.001, 2), 'Size': 0, 'TotalOrders': 0}]
+
+            market_data['Bids'] = bids
+            market_data['Asks'] = asks
+
+            self.logger.info(f"[XTS-BINARY] Depth: {len(bids)} bids, {len(asks)} asks")
+
+        except Exception as e:
+            self.logger.error(f"[XTS-BINARY] Error parsing depth: {e}")
+
+    def _scan_depth_prices(self, payload, ltp):
+        """Fallback: scan for depth prices near LTP"""
+        import struct
+        bids = []
+        asks = []
+
+        for off in range(0, min(len(payload) - 7, 200)):
+            try:
+                price = struct.unpack('<d', payload[off:off+8])[0]
+                if 0.01 < price < 500000 and abs(price - ltp) / ltp < 0.05:
+                    level = {'Price': round(price, 2), 'Size': 0, 'TotalOrders': 0}
+                    if price <= ltp:
+                        bids.append(level)
+                    else:
+                        asks.append(level)
+            except:
+                pass
+
+        return bids, asks
 
     def _on_catch_all(self, event, *args):
         """Catch-all handler for any unhandled Socket.IO events"""
