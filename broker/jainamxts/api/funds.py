@@ -22,12 +22,12 @@ def get_margin_data(auth_token):
         'authorization': auth_token ,
         'Content-Type': 'application/json'
     }
-    logger.info(f"Fetching funds with headers: {headers}")
+    logger.debug(f"Fetching funds with headers")
     response = client.get(f"{INTERACTIVE_URL}/user/balance", headers=headers)
     
     margin_data = response.json()
 
-    logger.info(f"Funds Details: {margin_data}")
+    logger.debug(f"Funds Details fetched successfully")
 
     if (
         margin_data.get("result") and 

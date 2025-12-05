@@ -92,15 +92,13 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
 
 def place_order_api(data,auth):
     AUTH_TOKEN = auth   
-    logger.info(f"Data: {data}")
-
+    
     # Check if this is a direct instrument ID payload or needs transformation
     if all(key in data for key in ['exchangeSegment', 'exchangeInstrumentID', 'productType', 'orderType']):
         newdata = data
     else:
         # Traditional symbol-based payload that needs transformation
         token = get_token(data['symbol'], data['exchange'])
-        logger.info(f"token: {token}")
         newdata = transform_data(data, token)
 
     headers = {
@@ -211,8 +209,8 @@ def place_smartorder_api(data,auth):
         # Place the order
         res, response, orderid = place_order_api(order_data,auth)
         #logger.info(f"{res}")
-        logger.info(f"Placing order with payload: {order_data}")
-        logger.info(f"API Response: {response}")
+        logger.debug(f"Placing order with payload: {order_data}")
+        logger.debug(f"API Response: {response}")
         logger.info(f"Order ID: {orderid}")
         
         return res , response, orderid
@@ -359,7 +357,7 @@ def cancel_all_orders_api(data,auth):
     
 
     order_book_response = get_order_book(AUTH_TOKEN)
-    logger.info(f"Order book response: {order_book_response}")
+    logger.debug(f"Order book response: {order_book_response}")
     if order_book_response.get("type") != "success":
         return [], []  # Return empty lists indicating failure to retrieve the order book
     

@@ -157,7 +157,7 @@ def transform_order_data(orders):
             "order_status": mapped_order_status,
             "timestamp": order.get("LastUpdateDateTime", "")
         }
-        logger.info(f"Transformed order: {transformed_order}")
+        logger.debug(f"Transformed order: {transformed_order}")
         transformed_orders.append(transformed_order)
         
 
@@ -207,7 +207,7 @@ def map_trade_data(trade_data):
                 trade['TradingSymbol'] = symbol_from_db
 
 
-    logger.info(f"trade_data: {trade_data}")
+    logger.debug(f"trade_data: {trade_data}")
    
     return trade_data
 
@@ -277,7 +277,7 @@ def map_position_data(position_data):
 
 
 def transform_positions_data(positions_data):
-    logger.info(f"positions_data: {positions_data}")
+    #logger.info(f"positions_data: {positions_data}")
     positions_data = positions_data.get("positionList", [])
     transformed_data = []
     # Define exchange mappings

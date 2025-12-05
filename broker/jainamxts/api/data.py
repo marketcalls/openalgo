@@ -22,7 +22,7 @@ def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, 
     AUTH_TOKEN = auth
     # Use feed_token if provided, otherwise fall back to auth_token
     FEED_TOKEN = feed_token if feed_token else AUTH_TOKEN
-    logger.debug(f"Using token for request: {FEED_TOKEN[:20]}..." if FEED_TOKEN else "No token available")
+    logger.debug(f"Using token for request: " if FEED_TOKEN else "No token available")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()

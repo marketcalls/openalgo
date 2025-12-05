@@ -269,9 +269,9 @@ class JainamXTSWebSocketClient:
                 'Content-Type': 'application/json'
             }
 
-            self.logger.info(f"[SUBSCRIPTION REQUEST] URL: {self.API_BASE_URL}")
-            self.logger.info(f"[SUBSCRIPTION REQUEST] Headers: Authorization={self.market_data_token[:20]}...")
-            self.logger.info(f"[SUBSCRIPTION REQUEST] Payload: {subscription_request}")
+            self.logger.debug(f"[SUBSCRIPTION REQUEST] URL: {self.API_BASE_URL}")
+            self.logger.debug(f"[SUBSCRIPTION REQUEST] Headers: Authorization={self.market_data_token[:20]}...")
+            self.logger.debug(f"[SUBSCRIPTION REQUEST] Payload: {subscription_request}")
 
             response = requests.post(
                 self.API_BASE_URL,
@@ -280,23 +280,23 @@ class JainamXTSWebSocketClient:
                 timeout=10
             )
 
-            self.logger.info(f"[SUBSCRIPTION RESPONSE] Status: {response.status_code}")
-            self.logger.info(f"[SUBSCRIPTION RESPONSE] Raw: {response.text}")
+            self.logger.debug(f"[SUBSCRIPTION RESPONSE] Status: {response.status_code}")
+            self.logger.debug(f"[SUBSCRIPTION RESPONSE] Raw: {response.text}")
 
             if response.status_code == 200:
                 result = response.json()
-                self.logger.info(f"[SUBSCRIPTION SUCCESS] Code: {xts_message_code}, Instruments: {len(instruments)}")
-                self.logger.info(f"[SUBSCRIPTION SUCCESS] Full Response: {json.dumps(result, indent=2)}")
+                self.logger.debug(f"[SUBSCRIPTION SUCCESS] Code: {xts_message_code}, Instruments: {len(instruments)}")
+                self.logger.debug(f"[SUBSCRIPTION SUCCESS] Full Response: {json.dumps(result, indent=2)}")
 
                 # Process initial quote data from listQuotes if available
                 if result.get('type') == 'success' and 'result' in result:
                     list_quotes = result['result'].get('listQuotes', [])
-                    self.logger.info(f"[INITIAL QUOTES] Found {len(list_quotes)} quotes in response")
+                    self.logger.debug(f"[INITIAL QUOTES] Found {len(list_quotes)} quotes in response")
                     for i, quote_str in enumerate(list_quotes):
-                        self.logger.info(f"[INITIAL QUOTE {i}] Raw: {quote_str}")
+                        self.logger.debug(f"[INITIAL QUOTE {i}] Raw: {quote_str}")
                         try:
                             quote_data = json.loads(quote_str)
-                            self.logger.info(f"[INITIAL QUOTE {i}] Parsed: {quote_data}")
+                            self.logger.debug(f"[INITIAL QUOTE {i}] Parsed: {quote_data}")
                             # Add MessageCode based on subscription mode
                             if 'MessageCode' not in quote_data:
                                 quote_data['MessageCode'] = xts_message_code
@@ -369,9 +369,9 @@ class JainamXTSWebSocketClient:
     def _on_connect(self):
         """Socket.IO connect event handler"""
         self.connected = True
-        self.logger.info("[SOCKET.IO] Connected successfully!")
-        self.logger.info(f"[SOCKET.IO] UserID: {self.actual_user_id}")
-        self.logger.info(f"[SOCKET.IO] Token: {self.market_data_token[:30] if self.market_data_token else 'None'}...")
+        self.logger.debug("[SOCKET.IO] Connected successfully!")
+        self.logger.debug(f"[SOCKET.IO] UserID: {self.actual_user_id}")
+        self.logger.debug(f"[SOCKET.IO] Token: {self.market_data_token[:30] if self.market_data_token else 'None'}...")
 
         # Call external callback
         if self.on_open:
@@ -395,52 +395,52 @@ class JainamXTSWebSocketClient:
     # XTS specific message handlers for different market data types
     def _on_message_1501_json_full(self, data):
         """Handle 1501 JSON full messages (Touchline/Quote)"""
-        self.logger.info(f"[1501-JSON-FULL] Received Quote data: {str(data)[:500]}")
+        self.logger.debug(f"[1501-JSON-FULL] Received Quote data: {str(data)[:500]}")
         self._process_xts_data(data, 1501)
 
     def _on_message_1501_json_partial(self, data):
         """Handle 1501 JSON partial messages"""
-        self.logger.info(f"[1501-JSON-PARTIAL] Received Quote partial: {str(data)[:500]}")
+        self.logger.debug(f"[1501-JSON-PARTIAL] Received Quote partial: {str(data)[:500]}")
         self._process_xts_data(data, 1501)
 
     def _on_message_1502_json_full(self, data):
         """Handle 1502 JSON full messages (Market Depth)"""
-        self.logger.info(f"[1502-JSON-FULL] Received Market Depth data: {str(data)[:500]}")
+        self.logger.debug(f"[1502-JSON-FULL] Received Market Depth data: {str(data)[:500]}")
         self._process_xts_data(data, 1502)
 
     def _on_message_1502_json_partial(self, data):
         """Handle 1502 JSON partial messages (Market Depth updates)"""
-        self.logger.info(f"[1502-JSON-PARTIAL] Received Market Depth partial: {str(data)[:500]}")
+        self.logger.debug(f"[1502-JSON-PARTIAL] Received Market Depth partial: {str(data)[:500]}")
         self._process_xts_data(data, 1502)
 
     def _on_message_1505_json_full(self, data):
         """Handle 1505 JSON full messages (Market depth)"""
-        self.logger.info(f"[1505-JSON-FULL] Received Market depth: {str(data)[:500]}")
+        self.logger.debug(f"[1505-JSON-FULL] Received Market depth: {str(data)[:500]}")
         self._process_xts_data(data, 1505)
 
     def _on_message_1505_json_partial(self, data):
         """Handle 1505 JSON partial messages"""
-        self.logger.info(f"[1505-JSON-PARTIAL] Received Depth partial: {str(data)[:500]}")
+        self.logger.debug(f"[1505-JSON-PARTIAL] Received Depth partial: {str(data)[:500]}")
         self._process_xts_data(data, 1505)
 
     def _on_message_1510_json_full(self, data):
         """Handle 1510 JSON full messages (Open interest)"""
-        self.logger.info(f"[1510-JSON-FULL] Received Open interest: {str(data)[:500]}")
+        self.logger.debug(f"[1510-JSON-FULL] Received Open interest: {str(data)[:500]}")
         self._process_xts_data(data, 1510)
 
     def _on_message_1510_json_partial(self, data):
         """Handle 1510 JSON partial messages"""
-        self.logger.info(f"[1510-JSON-PARTIAL] Received OI partial: {str(data)[:500]}")
+        self.logger.debug(f"[1510-JSON-PARTIAL] Received OI partial: {str(data)[:500]}")
         self._process_xts_data(data, 1510)
 
     def _on_message_1512_json_full(self, data):
         """Handle 1512 JSON full messages (LTP)"""
-        self.logger.info(f"[1512-JSON-FULL] Received LTP data: {str(data)[:500]}")
+        self.logger.debug(f"[1512-JSON-FULL] Received LTP data: {str(data)[:500]}")
         self._process_xts_data(data, 1512)
 
     def _on_message_1512_json_partial(self, data):
         """Handle 1512 JSON partial messages"""
-        self.logger.info(f"[1512-JSON-PARTIAL] Received LTP partial: {str(data)[:500]}")
+        self.logger.debug(f"[1512-JSON-PARTIAL] Received LTP partial: {str(data)[:500]}")
         self._process_xts_data(data, 1512)
 
     def _process_xts_data(self, data, message_code):
@@ -636,7 +636,7 @@ class JainamXTSWebSocketClient:
                 return
 
             actual_msg_code = struct.unpack('<H', payload[0:2])[0]
-            self.logger.info(f"[XTS-BINARY] Payload MessageCode: {actual_msg_code}")
+            self.logger.debug(f"[XTS-BINARY] Payload MessageCode: {actual_msg_code}")
 
             market_data = {
                 'ExchangeSegment': exchange_segment,
@@ -652,7 +652,7 @@ class JainamXTSWebSocketClient:
             if header_msg_code == 1512:  # LTP
                 # 1512 LTP packets are simple - try LTP at offset 2 (after MessageCode)
                 # or scan for the first valid price
-                self.logger.info(f"[XTS-BINARY] 1512 LTP: parsing LTP packet")
+                self.logger.debug(f"[XTS-BINARY] 1512 LTP: parsing LTP packet")
                 self._parse_ltp_packet(payload, market_data)
             elif header_msg_code == 1501:  # Touchline
                 # For 1501, parse OHLC first to get reference range, then find LTP within that range
@@ -728,7 +728,7 @@ class JainamXTSWebSocketClient:
                     except:
                         pass
 
-            self.logger.info(f"[XTS-BINARY] Parsed: LTP={ltp:.2f}, O={market_data.get('Open', 0)}, H={market_data.get('High', 0)}, L={market_data.get('Low', 0)}, C={market_data.get('Close', 0)}")
+            self.logger.debug(f"[XTS-BINARY] Parsed: LTP={ltp:.2f}, O={market_data.get('Open', 0)}, H={market_data.get('High', 0)}, L={market_data.get('Low', 0)}, C={market_data.get('Close', 0)}")
 
         except Exception as e:
             self.logger.error(f"[XTS-BINARY] Error parsing touchline at offset {ltp_offset}: {e}")
@@ -760,8 +760,8 @@ class JainamXTSWebSocketClient:
             # 1512 LTP packet structure is simpler than Touchline
             # Try common offsets for LTP: 2 (after MessageCode), 10, 18, 26
             # Also log hex dump for debugging
-            self.logger.info(f"[XTS-LTP] Payload hex (first 100 bytes): {payload[:100].hex()}")
-            self.logger.info(f"[XTS-LTP] Payload length: {len(payload)}")
+            self.logger.debug(f"[XTS-LTP] Payload hex (first 100 bytes): {payload[:100].hex()}")
+            self.logger.debug(f"[XTS-LTP] Payload length: {len(payload)}")
 
             ltp = None
             ltp_offset = None
@@ -774,7 +774,7 @@ class JainamXTSWebSocketClient:
                         if 0.01 < val < 500000:
                             ltp = val
                             ltp_offset = off
-                            self.logger.info(f"[XTS-LTP] Found LTP={val:.2f} at offset {off}")
+                            self.logger.debug(f"[XTS-LTP] Found LTP={val:.2f} at offset {off}")
                             break
                     except:
                         pass
@@ -788,14 +788,14 @@ class JainamXTSWebSocketClient:
                         if 0.01 < val < 500000:
                             ltp = val
                             ltp_offset = off
-                            self.logger.info(f"[XTS-LTP] Scan found LTP={val:.2f} at offset {off}")
+                            self.logger.debug(f"[XTS-LTP] Scan found LTP={val:.2f} at offset {off}")
                             break
                     except:
                         pass
 
             if ltp and ltp_offset is not None:
                 market_data['LastTradedPrice'] = round(ltp, 2)
-                self.logger.info(f"[XTS-LTP] Parsed LTP={ltp:.2f} at offset {ltp_offset}")
+                self.logger.debug(f"[XTS-LTP] Parsed LTP={ltp:.2f} at offset {ltp_offset}")
             else:
                 self.logger.warning(f"[XTS-LTP] Could not find valid LTP in payload")
 
@@ -869,7 +869,7 @@ class JainamXTSWebSocketClient:
 
             if ltp:
                 market_data['LastTradedPrice'] = round(ltp, 2)
-                self.logger.info(f"[XTS-TOUCHLINE] Parsed: LTP={ltp:.2f}, O={market_data.get('Open', 0)}, H={market_data.get('High', 0)}, L={market_data.get('Low', 0)}, C={market_data.get('Close', 0)}")
+                self.logger.debug(f"[XTS-TOUCHLINE] Parsed: LTP={ltp:.2f}, O={market_data.get('Open', 0)}, H={market_data.get('High', 0)}, L={market_data.get('Low', 0)}, C={market_data.get('Close', 0)}")
 
         except Exception as e:
             self.logger.error(f"[XTS-TOUCHLINE] Error: {e}")
@@ -883,8 +883,8 @@ class JainamXTSWebSocketClient:
                 return
 
             # Log first 200 bytes of payload for analysis
-            self.logger.info(f"[XTS-DEPTH] Payload hex (first 200 bytes): {payload[:200].hex()}")
-            self.logger.info(f"[XTS-DEPTH] LTP={ltp}, Payload len={len(payload)}")
+            self.logger.debug(f"[XTS-DEPTH] Payload hex (first 200 bytes): {payload[:200].hex()}")
+            self.logger.debug(f"[XTS-DEPTH] LTP={ltp}, Payload len={len(payload)}")
 
             # XTS 1502 MarketDepth structure:
             # Based on XTS SDK, the depth data starts after MessageCode(2)
@@ -972,7 +972,7 @@ class JainamXTSWebSocketClient:
             market_data['Bids'] = bids
             market_data['Asks'] = asks
 
-            self.logger.info(f"[XTS-BINARY] Depth: {len(bids)} bids, {len(asks)} asks")
+            self.logger.debug(f"[XTS-BINARY] Depth: {len(bids)} bids, {len(asks)} asks")
 
         except Exception as e:
             self.logger.error(f"[XTS-BINARY] Error parsing depth: {e}")
@@ -1000,10 +1000,10 @@ class JainamXTSWebSocketClient:
     def _on_catch_all(self, event, *args):
         """Catch-all handler for any unhandled Socket.IO events"""
         # Log ALL events to help debug
-        self.logger.info(f"[SOCKET.IO EVENT] Event: {event}")
+        self.logger.debug(f"[SOCKET.IO EVENT] Event: {event}")
         if args:
             for i, arg in enumerate(args):
-                self.logger.info(f"[SOCKET.IO EVENT] Arg[{i}]: Type={type(arg)}, Value={str(arg)[:500]}")
+                self.logger.debug(f"[SOCKET.IO EVENT] Arg[{i}]: Type={type(arg)}, Value={str(arg)[:500]}")
     
     def resubscribe_all(self):
         """Resubscribe to all stored subscriptions after reconnection"""

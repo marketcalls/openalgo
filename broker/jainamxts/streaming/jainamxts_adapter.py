@@ -305,7 +305,7 @@ class JainamXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 )
                 is_fallback = True
                 
-                self.logger.info(
+                self.logger.debug(
                     f"Depth level {depth_level} not supported for {exchange}, "
                     f"using {actual_depth} instead"
                 )
@@ -445,7 +445,7 @@ class JainamXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Unsubscribe if connected
         if self.connected and self.ws_client:
             try:
-                self.logger.info(f"Sending unsubscribe request for {symbol}.{exchange} to XTS server")
+                self.logger.debug(f"Sending unsubscribe request for {symbol}.{exchange} to XTS server")
                 self.ws_client.unsubscribe(correlation_id, mode, instruments)
                 self.logger.info(f"Successfully sent unsubscribe request for {symbol}.{exchange}")
                 
@@ -666,7 +666,7 @@ class JainamXTSWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                 # Publish to ZeroMQ
                 self.publish_market_data(topic, market_data)
-                self.logger.info(f"Published {mode_str} data for {symbol}.{exchange}: LTP={market_data.get('ltp')}")
+                self.logger.debug(f"Published {mode_str} data for {symbol}.{exchange}: LTP={market_data.get('ltp')}")
             
         except Exception as e:
             self.logger.error(f"Error processing JSON data: {e}", exc_info=True)

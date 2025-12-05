@@ -43,7 +43,7 @@ def authenticate_broker(request_token):
                 feed_token, user_id, feed_error = get_feed_token()
                 if feed_error:
                     return token, None, None, f"Feed token error: {feed_error}"
-                logger.info(f"Token: {token}, User ID: {user_id}")
+                
                 return token, feed_token, user_id, None
 
             else:
