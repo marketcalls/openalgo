@@ -725,7 +725,7 @@ class JainamXTSWebSocketClient:
                         val = struct.unpack('<d', payload[offset:offset+8])[0]
                         if 0.01 < val < 500000:
                             market_data[field] = round(val, 2)
-                    except:
+                    except Exception:
                         pass
 
             self.logger.debug(f"[XTS-BINARY] Parsed: LTP={ltp:.2f}, O={market_data.get('Open', 0)}, H={market_data.get('High', 0)}, L={market_data.get('Low', 0)}, C={market_data.get('Close', 0)}")
@@ -743,7 +743,7 @@ class JainamXTSWebSocketClient:
                 val = struct.unpack('<d', payload[off:off+8])[0]
                 if 1 < val < 500000:
                     found_prices[off] = round(val, 2)
-            except:
+            except Exception:
                 pass
         self.logger.debug(f"[XTS-BINARY] Found {len(found_prices)} prices at offsets: {found_prices}")
 
@@ -776,7 +776,7 @@ class JainamXTSWebSocketClient:
                             ltp_offset = off
                             self.logger.debug(f"[XTS-LTP] Found LTP={val:.2f} at offset {off}")
                             break
-                    except:
+                    except Exception:
                         pass
 
             # Fallback: scan for first valid price
@@ -790,7 +790,7 @@ class JainamXTSWebSocketClient:
                             ltp_offset = off
                             self.logger.debug(f"[XTS-LTP] Scan found LTP={val:.2f} at offset {off}")
                             break
-                    except:
+                    except Exception:
                         pass
 
             if ltp and ltp_offset is not None:
@@ -817,7 +817,7 @@ class JainamXTSWebSocketClient:
                         if 0.01 < val < 500000:
                             market_data[field] = round(val, 2)
                             ohlc_values.append(val)
-                    except:
+                    except Exception:
                         pass
 
             # Determine valid LTP range from OHLC
@@ -846,7 +846,7 @@ class JainamXTSWebSocketClient:
                             ltp_offset = off
                             self.logger.debug(f"[XTS-TOUCHLINE] Found LTP={val:.2f} at offset {off}")
                             break
-                    except:
+                    except Exception:
                         pass
 
             # Fallback: scan for price within OHLC range
@@ -859,7 +859,7 @@ class JainamXTSWebSocketClient:
                             ltp_offset = off
                             self.logger.debug(f"[XTS-TOUCHLINE] Scan found LTP={val:.2f} at offset {off}")
                             break
-                    except:
+                    except Exception:
                         pass
 
             # Last resort: use Close price as LTP
@@ -945,7 +945,7 @@ class JainamXTSWebSocketClient:
 
                         asks.append({'Price': round(price, 2), 'Size': int(qty), 'TotalOrders': int(orders)})
                         self.logger.debug(f"[XTS-DEPTH] Ask found at {scan_off}: Price={price:.2f}, Qty={qty}, Orders={orders}")
-                except:
+                except Exception:
                     pass
 
             self.logger.debug(f"[XTS-DEPTH] Found {len(bids)} bids, {len(asks)} asks")
@@ -992,7 +992,7 @@ class JainamXTSWebSocketClient:
                         bids.append(level)
                     else:
                         asks.append(level)
-            except:
+            except Exception:
                 pass
 
         return bids, asks

@@ -82,7 +82,7 @@ class BrokerData:
         self.auth_token = auth_token
         self.feed_token = feed_token
         self.user_id = user_id
-        logger.info(f"BrokerData initialized - auth_token: {auth_token[:20] if auth_token else 'None'}..., feed_token: {feed_token[:20] if feed_token else 'None'}...")
+        logger.debug(f"BrokerData initialized - auth_token present: {bool(auth_token)}, feed_token present: {bool(feed_token)}")
 
         # Map common timeframe format to JainamXTS intervals
         self.timeframe_map = {
