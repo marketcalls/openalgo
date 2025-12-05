@@ -19,15 +19,15 @@ logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth, method="GET", payload='', feed_token=None, params=None):
     AUTH_TOKEN = auth
-    if feed_token:
-        FEED_TOKEN = feed_token if feed_token else AUTH_TOKEN
-    logger.debug(f"Feed Token: {FEED_TOKEN}")
-    
+    # Use feed_token if provided, otherwise fall back to auth_token
+    FEED_TOKEN = feed_token if feed_token else AUTH_TOKEN
+    logger.debug(f"Using token for request: {FEED_TOKEN[:20]}..." if FEED_TOKEN else "No token available")
+
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
-    
+
     headers = {
-        'authorization': FEED_TOKEN if feed_token else AUTH_TOKEN,
+        'authorization': FEED_TOKEN,
         'Content-Type': 'application/json'
     }
 
@@ -81,6 +81,7 @@ class BrokerData:
         self.auth_token = auth_token
         self.feed_token = feed_token
         self.user_id = user_id
+        logger.info(f"BrokerData initialized - auth_token: {auth_token[:20] if auth_token else 'None'}..., feed_token: {feed_token[:20] if feed_token else 'None'}...")
         
         # Map common timeframe format to JainamXTS intervals
         self.timeframe_map = {
@@ -145,7 +146,9 @@ class BrokerData:
                 "xtsMessageCode": message_code,
                 "publishFormat": "JSON"
             }
-            
+
+            logger.info(f"Market data request - payload: {payload}, using feed_token: {self.feed_token[:20] if self.feed_token else 'None'}...")
+
             response = get_api_response(
                 "/instruments/quotes",
                 self.auth_token,
@@ -153,7 +156,9 @@ class BrokerData:
                 payload=payload,
                 feed_token=self.feed_token
             )
-            
+
+            logger.info(f"Market data response: {response}")
+
             if not response or response.get('type') != 'success':
                 error_msg = response.get('description', 'Unknown error') if response else 'No response'
                 logger.warning(f"Error fetching market data (code {message_code}): {error_msg}")
@@ -189,11 +194,13 @@ class BrokerData:
             # Get instrument token and exchange segment
             symbol_info, brexchange = self._get_instrument_token(symbol, exchange)
 
-            # Prepare token for API requests
+            # Prepare token for API requests - ensure exchangeInstrumentID is integer
             token = {
                 "exchangeSegment": brexchange,
-                "exchangeInstrumentID": symbol_info.token
+                "exchangeInstrumentID": int(symbol_info.token)
             }
+
+            logger.info(f"Fetching quotes for {symbol}:{exchange} with token: {token}")
 
             # Fetch market data (xtsMessageCode 1502)
             market_data = self._fetch_market_data(token, 1502)
