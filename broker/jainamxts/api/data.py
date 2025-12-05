@@ -568,8 +568,23 @@ class BrokerData:
                 response = get_api_response("/instruments/ohlc", self.auth_token, method="GET", feed_token=self.feed_token, params=params)
 
                 if not response or response.get('type') != 'success':
-                    logger.error(f"API Response: {response}")
-                    raise Exception(f"Error from JainamXTS API: {response.get('description', 'Unknown error')}")
+                    error_msg = response.get('description', 'Unknown error') if response else 'No response'
+
+                    # Check if token expired and retry with refreshed token
+                    if 'Invalid Token' in error_msg:
+                        logger.info("Feed token expired during historical data fetch, attempting to refresh...")
+                        if self._refresh_feed_token():
+                            # Retry the request with new token
+                            response = get_api_response("/instruments/ohlc", self.auth_token, method="GET", feed_token=self.feed_token, params=params)
+                            if not response or response.get('type') != 'success':
+                                logger.error(f"API Response after token refresh: {response}")
+                                raise Exception(f"Error from JainamXTS API: {response.get('description', 'Unknown error') if response else 'No response'}")
+                        else:
+                            logger.error("Failed to refresh feed token")
+                            raise Exception(f"Error from JainamXTS API: {error_msg}")
+                    else:
+                        logger.error(f"API Response: {response}")
+                        raise Exception(f"Error from JainamXTS API: {error_msg}")
 
                 # Parse dataResponse (pipe-delimited string)
                 raw_data = response.get('result', {}).get('dataReponse', '')
@@ -632,9 +647,21 @@ class BrokerData:
                     }
                     
                     response = get_api_response("/instruments/quotes", self.auth_token, method="POST", payload=payload, feed_token=self.feed_token)
-                    
+
                     if not response or response.get('type') != 'success':
-                        raise Exception(f"Error from JainamXTS API: {response.get('description', 'Unknown error')}")
+                        error_msg = response.get('description', 'Unknown error') if response else 'No response'
+
+                        # Check if token expired and retry with refreshed token
+                        if 'Invalid Token' in error_msg:
+                            logger.info("Feed token expired during today's candle fetch, attempting to refresh...")
+                            if self._refresh_feed_token():
+                                response = get_api_response("/instruments/quotes", self.auth_token, method="POST", payload=payload, feed_token=self.feed_token)
+                                if not response or response.get('type') != 'success':
+                                    raise Exception(f"Error from JainamXTS API: {response.get('description', 'Unknown error') if response else 'No response'}")
+                            else:
+                                raise Exception(f"Error from JainamXTS API: {error_msg}")
+                        else:
+                            raise Exception(f"Error from JainamXTS API: {error_msg}")
             
                     # Parse quote data from response
                     raw_quotes = response.get('result', {}).get('listQuotes', [])
