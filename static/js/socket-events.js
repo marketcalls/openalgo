@@ -354,8 +354,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Cancel order notification
     socket.on('cancel_order_event', function(data) {
-        playAlertSound('cancel_order_event', { orderid: data.orderid });
-        showToast(`Cancel Order ID: ${data.orderid}`, 'warning');
+        // For batch cancel (cancelallorder), skip toast - API response already shows it
+        // Only show toast for single cancel order events
+        if (!data.batch_order) {
+            playAlertSound('cancel_order_event', { orderid: data.orderid });
+            showToast(`Cancel Order ID: ${data.orderid}`, 'warning');
+        }
         if (isOnAnalyzerPage) {
             refreshAnalyzer();
         } else {

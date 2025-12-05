@@ -12,6 +12,7 @@ class OrderSchema(Schema):
     price = fields.Float(missing=0.0, validate=validate.Range(min=0, error="Price must be a non-negative number."))
     trigger_price = fields.Float(missing=0.0, validate=validate.Range(min=0, error="Trigger price must be a non-negative number."))
     disclosed_quantity = fields.Int(missing=0, validate=validate.Range(min=0, error="Disclosed quantity must be a non-negative integer."))
+    underlying_ltp = fields.Float(missing=None, allow_none=True)  # Optional: passed from options order for execution reference
 
 class SmartOrderSchema(Schema):
     apikey = fields.Str(required=True)
@@ -95,6 +96,7 @@ class OptionsOrderSchema(Schema):
     option_type = fields.Str(required=True, validate=validate.OneOf(["CE", "PE", "ce", "pe"]))  # Call or Put
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
     quantity = fields.Int(required=True, validate=validate.Range(min=1, error="Quantity must be a positive integer."))
+    splitsize = fields.Int(missing=0, validate=validate.Range(min=0, error="Split size must be a non-negative integer."), allow_none=True)  # Optional: If > 0, splits order into multiple orders of this size
     pricetype = fields.Str(missing='MARKET', validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"]))
     product = fields.Str(missing='MIS', validate=validate.OneOf(["MIS", "NRML"]))  # Options only support MIS and NRML
     price = fields.Float(missing=0.0, validate=validate.Range(min=0, error="Price must be a non-negative number."))
@@ -107,6 +109,7 @@ class OptionsMultiOrderLegSchema(Schema):
     option_type = fields.Str(required=True, validate=validate.OneOf(["CE", "PE", "ce", "pe"]))  # Call or Put
     action = fields.Str(required=True, validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
     quantity = fields.Int(required=True, validate=validate.Range(min=1, error="Quantity must be a positive integer."))
+    splitsize = fields.Int(missing=0, validate=validate.Range(min=0, error="Split size must be a non-negative integer."), allow_none=True)  # Optional: If > 0, splits leg into multiple orders of this size
     expiry_date = fields.Str(required=False)  # Optional per-leg expiry (DDMMMYY format) - for diagonal/calendar spreads
     pricetype = fields.Str(missing='MARKET', validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"]))
     product = fields.Str(missing='MIS', validate=validate.OneOf(["MIS", "NRML"]))  # Options only support MIS and NRML
