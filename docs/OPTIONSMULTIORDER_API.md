@@ -20,31 +20,38 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsmultiorder
     "strategy": "Iron Condor",
     "underlying": "NIFTY",
     "exchange": "NSE_INDEX",
-    "expiry_date": "25NOV25",
     "legs": [
         {
             "offset": "OTM10",
             "option_type": "CE",
             "action": "BUY",
-            "quantity": 75
+            "quantity": 75,
+            "expiry_date": "30DEC25",
+            "splitsize": 0
         },
         {
             "offset": "OTM10",
             "option_type": "PE",
             "action": "BUY",
-            "quantity": 75
+            "quantity": 75,
+            "expiry_date": "30DEC25",
+            "splitsize": 0
         },
         {
             "offset": "OTM5",
             "option_type": "CE",
             "action": "SELL",
-            "quantity": 75
+            "quantity": 75,
+            "expiry_date": "30DEC25",
+            "splitsize": 0
         },
         {
             "offset": "OTM5",
             "option_type": "PE",
             "action": "SELL",
-            "quantity": 75
+            "quantity": 75,
+            "expiry_date": "30DEC25",
+            "splitsize": 0
         }
     ]
 }
@@ -62,7 +69,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsmultiorder
     "results": [
         {
             "leg": 1,
-            "symbol": "NIFTY25NOV2424650CE",
+            "symbol": "NIFTY30DEC2524650CE",
             "exchange": "NFO",
             "offset": "OTM10",
             "option_type": "CE",
@@ -72,7 +79,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsmultiorder
         },
         {
             "leg": 2,
-            "symbol": "NIFTY25NOV2423650PE",
+            "symbol": "NIFTY30DEC2523650PE",
             "exchange": "NFO",
             "offset": "OTM10",
             "option_type": "PE",
@@ -82,7 +89,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsmultiorder
         },
         {
             "leg": 3,
-            "symbol": "NIFTY25NOV2424400CE",
+            "symbol": "NIFTY30DEC2524400CE",
             "exchange": "NFO",
             "offset": "OTM5",
             "option_type": "CE",
@@ -92,7 +99,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsmultiorder
         },
         {
             "leg": 4,
-            "symbol": "NIFTY25NOV2423900PE",
+            "symbol": "NIFTY30DEC2523900PE",
             "exchange": "NFO",
             "offset": "OTM5",
             "option_type": "PE",
@@ -117,7 +124,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsmultiorder
     "results": [
         {
             "leg": 1,
-            "symbol": "NIFTY25NOV2424650CE",
+            "symbol": "NIFTY30DEC2524650CE",
             "exchange": "NFO",
             "offset": "OTM10",
             "option_type": "CE",
@@ -127,7 +134,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsmultiorder
         },
         {
             "leg": 2,
-            "symbol": "NIFTY25NOV2423650PE",
+            "symbol": "NIFTY30DEC2523650PE",
             "exchange": "NFO",
             "offset": "OTM10",
             "option_type": "PE",
@@ -137,7 +144,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsmultiorder
         },
         {
             "leg": 3,
-            "symbol": "NIFTY25NOV2424400CE",
+            "symbol": "NIFTY30DEC2524400CE",
             "exchange": "NFO",
             "offset": "OTM5",
             "option_type": "CE",
@@ -147,7 +154,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsmultiorder
         },
         {
             "leg": 4,
-            "symbol": "NIFTY25NOV2423900PE",
+            "symbol": "NIFTY30DEC2523900PE",
             "exchange": "NFO",
             "offset": "OTM5",
             "option_type": "PE",
@@ -169,25 +176,28 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsmultiorder
     "strategy": "Long Straddle",
     "underlying": "BANKNIFTY",
     "exchange": "NSE_INDEX",
-    "expiry_date": "25NOV25",
     "legs": [
         {
             "offset": "ATM",
             "option_type": "CE",
             "action": "BUY",
             "quantity": 30,
+            "expiry_date": "30DEC25",
             "pricetype": "LIMIT",
             "product": "MIS",
-            "price": 250.0
+            "price": 250.0,
+            "splitsize": 0
         },
         {
             "offset": "ATM",
             "option_type": "PE",
             "action": "BUY",
             "quantity": 30,
+            "expiry_date": "30DEC25",
             "pricetype": "LIMIT",
             "product": "MIS",
-            "price": 250.0
+            "price": 250.0,
+            "splitsize": 0
         }
     ]
 }
@@ -201,23 +211,26 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsmultiorder
 {
     "apikey": "<your_app_apikey>",
     "strategy": "Bull Call Spread",
-    "underlying": "NIFTY25NOV25FUT",
+    "underlying": "NIFTY30DEC25FUT",
     "exchange": "NFO",
-    "expiry_date": "25NOV25",
     "legs": [
         {
             "offset": "ATM",
             "option_type": "CE",
             "action": "BUY",
             "quantity": 75,
-            "product": "NRML"
+            "expiry_date": "30DEC25",
+            "product": "NRML",
+            "splitsize": 0
         },
         {
             "offset": "OTM3",
             "option_type": "CE",
             "action": "SELL",
             "quantity": 75,
-            "product": "NRML"
+            "expiry_date": "30DEC25",
+            "product": "NRML",
+            "splitsize": 0
         }
     ]
 }
@@ -231,13 +244,11 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsmultiorder
 | ------------ | ---------------------------------------------------------- | ------------------ | ------------- |
 | apikey       | App API key                                                | Mandatory          | -             |
 | strategy     | Strategy name                                              | Mandatory          | -             |
-| underlying   | Underlying symbol (NIFTY, BANKNIFTY, NIFTY28OCT25FUT)      | Mandatory          | -             |
+| underlying   | Underlying symbol (NIFTY, BANKNIFTY, NIFTY30DEC25FUT)      | Mandatory          | -             |
 | exchange     | Exchange code (NSE\_INDEX, NSE, NFO, BSE\_INDEX, BSE, BFO) | Mandatory          | -             |
-| expiry\_date | Expiry date in DDMMMYY format (e.g., 25NOV25)              | Optional\*         | -             |
-| strike\_int  | Strike interval (50 for NIFTY, 100 for BANKNIFTY)          | Optional           | Auto-detect   |
 | legs         | Array of leg objects (1-20 legs)                           | Mandatory          | -             |
 
-\*Note: expiry\_date is optional if underlying includes expiry (e.g., NIFTY28OCT25FUT)
+\*Note: expiry\_date should be specified per-leg to support calendar and diagonal spreads
 
 ####
 
@@ -249,7 +260,8 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsmultiorder
 | option\_type        | Option type (CE for Call, PE for Put)       | Mandatory          | -             |
 | action              | Action (BUY/SELL)                           | Mandatory          | -             |
 | quantity            | Quantity (must be multiple of lot size)     | Mandatory          | -             |
-| expiry\_date        | Per-leg expiry (DDMMMYY) for diagonal/calendar spreads | Optional | Request-level |
+| expiry\_date        | Expiry date in DDMMMYY format (e.g., 30DEC25) | Mandatory        | -             |
+| splitsize           | Auto-split order into chunks of this size (0=no split) | Optional | 0             |
 | pricetype           | Price type (MARKET/LIMIT/SL/SL-M)           | Optional           | MARKET        |
 | product             | Product type (MIS/NRML)\*\*                 | Optional           | MIS           |
 | price               | Limit price                                 | Optional           | 0             |
@@ -258,7 +270,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/optionsmultiorder
 
 \*\*Note: Options only support MIS and NRML products (CNC not supported)
 
-\*\*\*Note: Per-leg expiry\_date overrides the request-level expiry\_date, enabling diagonal and calendar spreads in a single API call
+\*\*\*Note: Per-leg expiry\_date enables diagonal and calendar spreads with different expiries in a single API call
 
 ####
 
@@ -339,12 +351,11 @@ This order ensures:
     "strategy": "Iron Condor",
     "underlying": "NIFTY",
     "exchange": "NSE_INDEX",
-    "expiry_date": "25NOV25",
     "legs": [
-        {"offset": "OTM10", "option_type": "CE", "action": "BUY", "quantity": 75},
-        {"offset": "OTM10", "option_type": "PE", "action": "BUY", "quantity": 75},
-        {"offset": "OTM5", "option_type": "CE", "action": "SELL", "quantity": 75},
-        {"offset": "OTM5", "option_type": "PE", "action": "SELL", "quantity": 75}
+        {"offset": "OTM10", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0},
+        {"offset": "OTM10", "option_type": "PE", "action": "BUY", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0},
+        {"offset": "OTM5", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0},
+        {"offset": "OTM5", "option_type": "PE", "action": "SELL", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0}
     ]
 }
 ```
@@ -356,10 +367,10 @@ This order ensures:
     "underlying": "NIFTY",
     "underlying_ltp": 24150.50,
     "results": [
-        {"leg": 1, "symbol": "NIFTY25NOV2424650CE", "exchange": "NFO", "offset": "OTM10", "option_type": "CE", "action": "BUY", "status": "success", "orderid": "240123000001234"},
-        {"leg": 2, "symbol": "NIFTY25NOV2423650PE", "exchange": "NFO", "offset": "OTM10", "option_type": "PE", "action": "BUY", "status": "success", "orderid": "240123000001235"},
-        {"leg": 3, "symbol": "NIFTY25NOV2424400CE", "exchange": "NFO", "offset": "OTM5", "option_type": "CE", "action": "SELL", "status": "success", "orderid": "240123000001236"},
-        {"leg": 4, "symbol": "NIFTY25NOV2423900PE", "exchange": "NFO", "offset": "OTM5", "option_type": "PE", "action": "SELL", "status": "success", "orderid": "240123000001237"}
+        {"leg": 1, "symbol": "NIFTY30DEC2524650CE", "exchange": "NFO", "offset": "OTM10", "option_type": "CE", "action": "BUY", "status": "success", "orderid": "240123000001234"},
+        {"leg": 2, "symbol": "NIFTY30DEC2523650PE", "exchange": "NFO", "offset": "OTM10", "option_type": "PE", "action": "BUY", "status": "success", "orderid": "240123000001235"},
+        {"leg": 3, "symbol": "NIFTY30DEC2524400CE", "exchange": "NFO", "offset": "OTM5", "option_type": "CE", "action": "SELL", "status": "success", "orderid": "240123000001236"},
+        {"leg": 4, "symbol": "NIFTY30DEC2523900PE", "exchange": "NFO", "offset": "OTM5", "option_type": "PE", "action": "SELL", "status": "success", "orderid": "240123000001237"}
     ]
 }
 ```
@@ -433,10 +444,9 @@ This order ensures:
     "strategy": "Short Strangle",
     "underlying": "NIFTY",
     "exchange": "NSE_INDEX",
-    "expiry_date": "25NOV25",
     "legs": [
-        {"offset": "OTM3", "option_type": "CE", "action": "SELL", "quantity": 75},
-        {"offset": "OTM3", "option_type": "PE", "action": "SELL", "quantity": 75}
+        {"offset": "OTM3", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0},
+        {"offset": "OTM3", "option_type": "PE", "action": "SELL", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0}
     ]
 }
 ```
@@ -448,8 +458,8 @@ This order ensures:
     "underlying": "NIFTY",
     "underlying_ltp": 24150.50,
     "results": [
-        {"leg": 1, "symbol": "NIFTY25NOV2524300CE", "exchange": "NFO", "offset": "OTM3", "option_type": "CE", "action": "SELL", "status": "success", "orderid": "240123000001242"},
-        {"leg": 2, "symbol": "NIFTY25NOV2524000PE", "exchange": "NFO", "offset": "OTM3", "option_type": "PE", "action": "SELL", "status": "success", "orderid": "240123000001243"}
+        {"leg": 1, "symbol": "NIFTY30DEC2524300CE", "exchange": "NFO", "offset": "OTM3", "option_type": "CE", "action": "SELL", "status": "success", "orderid": "240123000001242"},
+        {"leg": 2, "symbol": "NIFTY30DEC2524000PE", "exchange": "NFO", "offset": "OTM3", "option_type": "PE", "action": "SELL", "status": "success", "orderid": "240123000001243"}
     ]
 }
 ```
@@ -463,10 +473,9 @@ This order ensures:
     "strategy": "Bull Call Spread",
     "underlying": "NIFTY",
     "exchange": "NSE_INDEX",
-    "expiry_date": "25NOV25",
     "legs": [
-        {"offset": "ATM", "option_type": "CE", "action": "BUY", "quantity": 75},
-        {"offset": "OTM3", "option_type": "CE", "action": "SELL", "quantity": 75}
+        {"offset": "ATM", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0},
+        {"offset": "OTM3", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0}
     ]
 }
 ```
@@ -478,8 +487,8 @@ This order ensures:
     "underlying": "NIFTY",
     "underlying_ltp": 24150.50,
     "results": [
-        {"leg": 1, "symbol": "NIFTY25NOV2524150CE", "exchange": "NFO", "offset": "ATM", "option_type": "CE", "action": "BUY", "status": "success", "orderid": "240123000001244"},
-        {"leg": 2, "symbol": "NIFTY25NOV2524300CE", "exchange": "NFO", "offset": "OTM3", "option_type": "CE", "action": "SELL", "status": "success", "orderid": "240123000001245"}
+        {"leg": 1, "symbol": "NIFTY30DEC2524150CE", "exchange": "NFO", "offset": "ATM", "option_type": "CE", "action": "BUY", "status": "success", "orderid": "240123000001244"},
+        {"leg": 2, "symbol": "NIFTY30DEC2524300CE", "exchange": "NFO", "offset": "OTM3", "option_type": "CE", "action": "SELL", "status": "success", "orderid": "240123000001245"}
     ]
 }
 ```
@@ -493,10 +502,9 @@ This order ensures:
     "strategy": "Bear Put Spread",
     "underlying": "NIFTY",
     "exchange": "NSE_INDEX",
-    "expiry_date": "25NOV25",
     "legs": [
-        {"offset": "ATM", "option_type": "PE", "action": "BUY", "quantity": 75},
-        {"offset": "OTM3", "option_type": "PE", "action": "SELL", "quantity": 75}
+        {"offset": "ATM", "option_type": "PE", "action": "BUY", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0},
+        {"offset": "OTM3", "option_type": "PE", "action": "SELL", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0}
     ]
 }
 ```
@@ -508,8 +516,8 @@ This order ensures:
     "underlying": "NIFTY",
     "underlying_ltp": 24150.50,
     "results": [
-        {"leg": 1, "symbol": "NIFTY25NOV2524150PE", "exchange": "NFO", "offset": "ATM", "option_type": "PE", "action": "BUY", "status": "success", "orderid": "240123000001246"},
-        {"leg": 2, "symbol": "NIFTY25NOV2524000PE", "exchange": "NFO", "offset": "OTM3", "option_type": "PE", "action": "SELL", "status": "success", "orderid": "240123000001247"}
+        {"leg": 1, "symbol": "NIFTY30DEC2524150PE", "exchange": "NFO", "offset": "ATM", "option_type": "PE", "action": "BUY", "status": "success", "orderid": "240123000001246"},
+        {"leg": 2, "symbol": "NIFTY30DEC2524000PE", "exchange": "NFO", "offset": "OTM3", "option_type": "PE", "action": "SELL", "status": "success", "orderid": "240123000001247"}
     ]
 }
 ```
@@ -523,12 +531,11 @@ This order ensures:
     "strategy": "Iron Butterfly",
     "underlying": "NIFTY",
     "exchange": "NSE_INDEX",
-    "expiry_date": "25NOV25",
     "legs": [
-        {"offset": "OTM5", "option_type": "CE", "action": "BUY", "quantity": 75},
-        {"offset": "OTM5", "option_type": "PE", "action": "BUY", "quantity": 75},
-        {"offset": "ATM", "option_type": "CE", "action": "SELL", "quantity": 75},
-        {"offset": "ATM", "option_type": "PE", "action": "SELL", "quantity": 75}
+        {"offset": "OTM5", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0},
+        {"offset": "OTM5", "option_type": "PE", "action": "BUY", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0},
+        {"offset": "ATM", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0},
+        {"offset": "ATM", "option_type": "PE", "action": "SELL", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0}
     ]
 }
 ```
@@ -540,10 +547,10 @@ This order ensures:
     "underlying": "NIFTY",
     "underlying_ltp": 24150.50,
     "results": [
-        {"leg": 1, "symbol": "NIFTY25NOV2524400CE", "exchange": "NFO", "offset": "OTM5", "option_type": "CE", "action": "BUY", "status": "success", "orderid": "240123000001248"},
-        {"leg": 2, "symbol": "NIFTY25NOV2523900PE", "exchange": "NFO", "offset": "OTM5", "option_type": "PE", "action": "BUY", "status": "success", "orderid": "240123000001249"},
-        {"leg": 3, "symbol": "NIFTY25NOV2524150CE", "exchange": "NFO", "offset": "ATM", "option_type": "CE", "action": "SELL", "status": "success", "orderid": "240123000001250"},
-        {"leg": 4, "symbol": "NIFTY25NOV2524150PE", "exchange": "NFO", "offset": "ATM", "option_type": "PE", "action": "SELL", "status": "success", "orderid": "240123000001251"}
+        {"leg": 1, "symbol": "NIFTY30DEC2524400CE", "exchange": "NFO", "offset": "OTM5", "option_type": "CE", "action": "BUY", "status": "success", "orderid": "240123000001248"},
+        {"leg": 2, "symbol": "NIFTY30DEC2523900PE", "exchange": "NFO", "offset": "OTM5", "option_type": "PE", "action": "BUY", "status": "success", "orderid": "240123000001249"},
+        {"leg": 3, "symbol": "NIFTY30DEC2524150CE", "exchange": "NFO", "offset": "ATM", "option_type": "CE", "action": "SELL", "status": "success", "orderid": "240123000001250"},
+        {"leg": 4, "symbol": "NIFTY30DEC2524150PE", "exchange": "NFO", "offset": "ATM", "option_type": "PE", "action": "SELL", "status": "success", "orderid": "240123000001251"}
     ]
 }
 ```
@@ -619,11 +626,10 @@ This order ensures:
     "strategy": "Jade Lizard",
     "underlying": "NIFTY",
     "exchange": "NSE_INDEX",
-    "expiry_date": "25NOV25",
     "legs": [
-        {"offset": "OTM5", "option_type": "CE", "action": "BUY", "quantity": 75},
-        {"offset": "OTM2", "option_type": "CE", "action": "SELL", "quantity": 75},
-        {"offset": "OTM3", "option_type": "PE", "action": "SELL", "quantity": 75}
+        {"offset": "OTM5", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0},
+        {"offset": "OTM2", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0},
+        {"offset": "OTM3", "option_type": "PE", "action": "SELL", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0}
     ]
 }
 ```
@@ -635,9 +641,9 @@ This order ensures:
     "underlying": "NIFTY",
     "underlying_ltp": 24150.50,
     "results": [
-        {"leg": 1, "symbol": "NIFTY25NOV2524400CE", "exchange": "NFO", "offset": "OTM5", "option_type": "CE", "action": "BUY", "status": "success", "orderid": "240123000001257"},
-        {"leg": 2, "symbol": "NIFTY25NOV2524250CE", "exchange": "NFO", "offset": "OTM2", "option_type": "CE", "action": "SELL", "status": "success", "orderid": "240123000001258"},
-        {"leg": 3, "symbol": "NIFTY25NOV2524000PE", "exchange": "NFO", "offset": "OTM3", "option_type": "PE", "action": "SELL", "status": "success", "orderid": "240123000001259"}
+        {"leg": 1, "symbol": "NIFTY30DEC2524400CE", "exchange": "NFO", "offset": "OTM5", "option_type": "CE", "action": "BUY", "status": "success", "orderid": "240123000001257"},
+        {"leg": 2, "symbol": "NIFTY30DEC2524250CE", "exchange": "NFO", "offset": "OTM2", "option_type": "CE", "action": "SELL", "status": "success", "orderid": "240123000001258"},
+        {"leg": 3, "symbol": "NIFTY30DEC2524000PE", "exchange": "NFO", "offset": "OTM3", "option_type": "PE", "action": "SELL", "status": "success", "orderid": "240123000001259"}
     ]
 }
 ```
@@ -684,8 +690,8 @@ This order ensures:
     "underlying": "NIFTY",
     "exchange": "NSE_INDEX",
     "legs": [
-        {"offset": "ATM", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "30DEC25"},
-        {"offset": "ATM", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "25NOV25"}
+        {"offset": "ATM", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "30JAN26", "splitsize": 0},
+        {"offset": "ATM", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0}
     ]
 }
 ```
@@ -697,8 +703,8 @@ This order ensures:
     "underlying": "NIFTY",
     "underlying_ltp": 24150.50,
     "results": [
-        {"leg": 1, "symbol": "NIFTY30DEC2524150CE", "exchange": "NFO", "offset": "ATM", "option_type": "CE", "action": "BUY", "status": "success", "orderid": "240123000001262"},
-        {"leg": 2, "symbol": "NIFTY25NOV2524150CE", "exchange": "NFO", "offset": "ATM", "option_type": "CE", "action": "SELL", "status": "success", "orderid": "240123000001263"}
+        {"leg": 1, "symbol": "NIFTY30JAN2624150CE", "exchange": "NFO", "offset": "ATM", "option_type": "CE", "action": "BUY", "status": "success", "orderid": "240123000001262"},
+        {"leg": 2, "symbol": "NIFTY30DEC2524150CE", "exchange": "NFO", "offset": "ATM", "option_type": "CE", "action": "SELL", "status": "success", "orderid": "240123000001263"}
     ]
 }
 ```
@@ -715,8 +721,8 @@ This order ensures:
     "underlying": "NIFTY",
     "exchange": "NSE_INDEX",
     "legs": [
-        {"offset": "ITM2", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "30DEC25"},
-        {"offset": "OTM2", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "25NOV25"}
+        {"offset": "ITM2", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "30JAN26", "splitsize": 0},
+        {"offset": "OTM2", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "30DEC25", "splitsize": 0}
     ]
 }
 ```
@@ -728,8 +734,8 @@ This order ensures:
     "underlying": "NIFTY",
     "underlying_ltp": 24150.50,
     "results": [
-        {"leg": 1, "symbol": "NIFTY30DEC2524050CE", "exchange": "NFO", "offset": "ITM2", "option_type": "CE", "action": "BUY", "status": "success", "orderid": "240123000001264"},
-        {"leg": 2, "symbol": "NIFTY25NOV2524250CE", "exchange": "NFO", "offset": "OTM2", "option_type": "CE", "action": "SELL", "status": "success", "orderid": "240123000001265"}
+        {"leg": 1, "symbol": "NIFTY30JAN2624050CE", "exchange": "NFO", "offset": "ITM2", "option_type": "CE", "action": "BUY", "status": "success", "orderid": "240123000001264"},
+        {"leg": 2, "symbol": "NIFTY30DEC2524250CE", "exchange": "NFO", "offset": "OTM2", "option_type": "CE", "action": "SELL", "status": "success", "orderid": "240123000001265"}
     ]
 }
 ```
@@ -746,22 +752,6 @@ This order ensures:
 | NRML    | Normal (Carry Forward) | Higher | Manual         | Overnight positions |
 
 **Note**: CNC (Cash & Carry) is not supported for options trading.
-
-####
-
-### Lot Size Reference
-
-| Underlying | Lot Size | Strike Interval | Exchange   |
-| ---------- | -------- | --------------- | ---------- |
-| NIFTY      | 75       | 50              | NSE\_INDEX |
-| BANKNIFTY  | 35       | 100             | NSE\_INDEX |
-| FINNIFTY   | 65       | 50              | NSE\_INDEX |
-| MIDCPNIFTY | 140      | 25              | NSE\_INDEX |
-| NIFTYNXT50 | 25       | 50              | NSE\_INDEX |
-| SENSEX     | 20       | 100             | BSE\_INDEX |
-| BANKEX     | 30       | 100             | BSE\_INDEX |
-
-**Note**: For equity options, lot size varies. Check contract specifications.
 
 ####
 
@@ -789,7 +779,7 @@ This order ensures:
     "results": [
         {
             "leg": 1,
-            "symbol": "NIFTY25NOV2424650CE",
+            "symbol": "NIFTY30DEC2524650CE",
             "exchange": "NFO",
             "offset": "OTM10",
             "option_type": "CE",
@@ -816,7 +806,7 @@ This order ensures:
 | Error Message                       | Cause                           | Solution                     |
 | ----------------------------------- | ------------------------------- | ---------------------------- |
 | Invalid openalgo apikey             | API key is incorrect or expired | Check API key in settings    |
-| Option symbol not found             | Calculated strike doesn't exist | Check strike\_int and offset |
+| Option symbol not found             | Calculated strike doesn't exist | Check offset and expiry\_date |
 | Quantity must be a positive integer | Invalid quantity value          | Provide valid quantity       |
 | Insufficient funds                  | Not enough margin (Live mode)   | Add funds or reduce quantity |
 | Master contract needs update        | Symbol database is outdated     | Update master contract data  |
@@ -851,7 +841,7 @@ This order ensures:
 
 1. **Test in Analyze Mode First**: Enable Analyze Mode to test strategies without real money
 2. **Verify Lot Sizes**: Ensure all leg quantities are multiples of lot size
-3. **Check Strike Intervals**: Use correct strike\_int for each underlying
+3. **Verify Offset**: Ensure offset value is valid (ATM, ITM1-ITM50, OTM1-OTM50)
 4. **Use Appropriate Product**: MIS for intraday, NRML for overnight
 5. **Handle Partial Failures**: Check status of each leg in response
 6. **Monitor Margin**: Check available margin before placing multi-leg orders
@@ -881,23 +871,3 @@ This order ensures:
 3. **Income Strategies**: Iron condors, jade lizards
 4. **Hedging**: Multi-leg protective positions
 5. **Complex Combos**: Custom multi-leg strategies
-
-####
-
-### Webhook Integration
-
-The optionsmultiorder API works seamlessly with TradingView webhooks for automated strategy execution:
-
-```json
-{
-    "apikey": "{{strategy.apikey}}",
-    "strategy": "{{strategy.order.id}}",
-    "underlying": "NIFTY",
-    "exchange": "NSE_INDEX",
-    "expiry_date": "25NOV25",
-    "legs": [
-        {"offset": "ATM", "option_type": "CE", "action": "{{strategy.order.action}}", "quantity": 75},
-        {"offset": "ATM", "option_type": "PE", "action": "{{strategy.order.action}}", "quantity": 75}
-    ]
-}
-```

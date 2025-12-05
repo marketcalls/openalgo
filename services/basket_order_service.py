@@ -1,6 +1,8 @@
 import importlib
 import traceback
 import copy
+import time
+import os
 from typing import Tuple, Dict, Any, Optional, List, Union
 from database.auth_db import get_auth_token_broker
 from database.apilog_db import async_log_order, executor as log_executor
@@ -21,6 +23,16 @@ from services.telegram_alert_service import telegram_alert_service
 
 # Initialize logger
 logger = get_logger(__name__)
+
+# Get rate limit from environment (default: 10 per second)
+def get_order_rate_limit():
+    """Parse ORDER_RATE_LIMIT and return delay in seconds between orders"""
+    rate_limit_str = os.getenv('ORDER_RATE_LIMIT', '10 per second')
+    try:
+        rate = int(rate_limit_str.split()[0])
+        return 1.0 / rate if rate > 0 else 0.1
+    except (ValueError, IndexError):
+        return 0.1  # Default 100ms delay
 
 def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dict[str, Any]:
     """
@@ -116,22 +128,22 @@ def validate_order(order_data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
     return True, None
 
 def place_single_order(
-    order_data: Dict[str, Any], 
-    broker_module: Any, 
-    auth_token: str, 
-    total_orders: int, 
+    order_data: Dict[str, Any],
+    broker_module: Any,
+    auth_token: str,
+    total_orders: int,
     order_index: int
 ) -> Dict[str, Any]:
     """
-    Place a single order and emit event
-    
+    Place a single order (no per-order event emission - summary event emitted at end)
+
     Args:
         order_data: Order data
         broker_module: Broker module
         auth_token: Authentication token
         total_orders: Total number of orders in the basket
         order_index: Index of the current order
-        
+
     Returns:
         Order result dictionary
     """
@@ -140,22 +152,7 @@ def place_single_order(
         res, response_data, order_id = broker_module.place_order_api(order_data, auth_token)
 
         if res.status == 200:
-            # Emit order event for toast notification asynchronously (non-blocking)
-            socketio.start_background_task(
-                socketio.emit,
-                'order_event',
-                {
-                    'symbol': order_data['symbol'],
-                    'action': order_data['action'],
-                    'orderid': order_id,
-                    'exchange': order_data.get('exchange', 'Unknown'),
-                    'price_type': order_data.get('pricetype', 'Unknown'),
-                    'product_type': order_data.get('product', 'Unknown'),
-                'mode': 'live',
-                'batch_order': True,
-                'is_last_order': order_index == total_orders - 1
-            })
-
+            # No per-order event emission - a summary event is emitted at the end of all orders
             return {
                 'symbol': order_data['symbol'],
                 'status': 'success',
@@ -295,58 +292,45 @@ def process_basket_order_with_auth(
     buy_orders = [order for order in basket_data['orders'] if order.get('action', '').upper() == 'BUY']
     sell_orders = [order for order in basket_data['orders'] if order.get('action', '').upper() == 'SELL']
     sorted_orders = buy_orders + sell_orders
-    
+
     results = []
     total_orders = len(sorted_orders)
-    
-    # Process BUY orders first
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        # Process all BUY orders first
-        buy_futures = []
-        for i, order in enumerate(buy_orders):
-            # Create order with authentication fields without modifying original
-            order_with_auth = {**order, 'apikey': api_key, 'strategy': basket_data['strategy']}
-            buy_futures.append(
-                executor.submit(
-                    place_single_order,
-                    order_with_auth,
-                    broker_module,
-                    auth_token,
-                    total_orders,
-                    i
-                )
-            )
-        
-        # Wait for all BUY orders to complete
-        for future in as_completed(buy_futures):
-            result = future.result()
-            if result:
-                results.append(result)
-        
-        # Then process SELL orders
-        sell_futures = []
-        for i, order in enumerate(sell_orders, start=len(buy_orders)):
-            # Create order with authentication fields without modifying original
-            order_with_auth = {**order, 'apikey': api_key, 'strategy': basket_data['strategy']}
-            sell_futures.append(
-                executor.submit(
-                    place_single_order,
-                    order_with_auth,
-                    broker_module,
-                    auth_token,
-                    total_orders,
-                    i
-                )
-            )
-        
-        # Wait for all SELL orders to complete
-        for future in as_completed(sell_futures):
-            result = future.result()
-            if result:
-                results.append(result)
+    order_delay = get_order_rate_limit()
+    order_count = 0
 
-    # Sort results to maintain order consistency
-    results.sort(key=lambda x: 0 if x.get('action', '').upper() == 'BUY' else 1)
+    # Process BUY orders first (sequentially with rate limiting)
+    for i, order in enumerate(buy_orders):
+        if order_count > 0:
+            time.sleep(order_delay)  # Rate limit delay between orders
+        # Create order with authentication fields without modifying original
+        order_with_auth = {**order, 'apikey': api_key, 'strategy': basket_data['strategy']}
+        result = place_single_order(
+            order_with_auth,
+            broker_module,
+            auth_token,
+            total_orders,
+            i
+        )
+        if result:
+            results.append(result)
+        order_count += 1
+
+    # Then process SELL orders (sequentially with rate limiting)
+    for i, order in enumerate(sell_orders, start=len(buy_orders)):
+        if order_count > 0:
+            time.sleep(order_delay)  # Rate limit delay between orders
+        # Create order with authentication fields without modifying original
+        order_with_auth = {**order, 'apikey': api_key, 'strategy': basket_data['strategy']}
+        result = place_single_order(
+            order_with_auth,
+            broker_module,
+            auth_token,
+            total_orders,
+            i
+        )
+        if result:
+            results.append(result)
+        order_count += 1
 
     # Log the basket order results
     response_data = {
@@ -354,6 +338,24 @@ def process_basket_order_with_auth(
         'results': results
     }
     log_executor.submit(async_log_order, 'basketorder', basket_request_data, response_data)
+
+    # Emit single summary order event at the end (page refreshes only once)
+    successful_orders = sum(1 for r in results if r.get('status') == 'success')
+    socketio.start_background_task(
+        socketio.emit,
+        'order_event',
+        {
+            'symbol': basket_data.get('strategy', 'Basket'),
+            'action': f"{successful_orders}/{len(results)} orders",
+            'orderid': f"basket_{successful_orders}",
+            'exchange': 'MULTI',
+            'price_type': 'BASKET',
+            'product_type': 'BASKET',
+            'mode': 'live',
+            'batch_order': True,
+            'is_last_order': True
+        }
+    )
 
     # Send Telegram alert for live basket order
     # Note: Use original_data to get apikey for consistency with other services

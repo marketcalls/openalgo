@@ -5,6 +5,7 @@ POST /api/v1/optionsorder
 
 Places option orders by resolving option symbol based on underlying and offset,
 then placing the order. Works in both live and analyze (sandbox) mode.
+Supports order splitting via optional splitsize parameter.
 
 Request Body:
 {
@@ -18,6 +19,7 @@ Request Body:
     "option_type": "CE",  // CE or PE
     "action": "BUY",  // or "SELL"
     "quantity": 75,
+    "splitsize": 0,  // Optional: If > 0, splits order into multiple orders of this size
     "pricetype": "MARKET",  // or "LIMIT", "SL", "SL-M"
     "product": "MIS",  // or "NRML"
     "price": 0.0,  // For LIMIT orders
@@ -25,7 +27,7 @@ Request Body:
     "disclosed_quantity": 0
 }
 
-Response (Success - Live Mode):
+Response (Success - Live Mode - Regular Order):
 {
     "status": "success",
     "orderid": "240123000001234",
@@ -35,6 +37,24 @@ Response (Success - Live Mode):
     "underlying_ltp": 23587.50,
     "offset": "ITM2",
     "option_type": "CE"
+}
+
+Response (Success - Split Order):
+{
+    "status": "success",
+    "symbol": "NIFTY28NOV2423500CE",
+    "exchange": "NFO",
+    "underlying": "NIFTY",
+    "underlying_ltp": 23587.50,
+    "offset": "ITM2",
+    "option_type": "CE",
+    "total_quantity": 150,
+    "split_size": 50,
+    "results": [
+        {"order_num": 1, "quantity": 50, "status": "success", "orderid": "240123000001234"},
+        {"order_num": 2, "quantity": 50, "status": "success", "orderid": "240123000001235"},
+        {"order_num": 3, "quantity": 50, "status": "success", "orderid": "240123000001236"}
+    ]
 }
 
 Response (Success - Analyze Mode):

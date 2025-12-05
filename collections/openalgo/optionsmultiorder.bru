@@ -16,31 +16,38 @@ body:json {
       "strategy": "Iron Condor",
       "underlying": "NIFTY",
       "exchange": "NSE_INDEX",
-      "expiry_date": "25NOV25",
       "legs": [
           {
               "offset": "OTM10",
               "option_type": "CE",
               "action": "BUY",
-              "quantity": 75
+              "quantity": 75,
+              "expiry_date": "30DEC25",
+              "splitsize": 0
           },
           {
               "offset": "OTM10",
               "option_type": "PE",
               "action": "BUY",
-              "quantity": 75
+              "quantity": 75,
+              "expiry_date": "30DEC25",
+              "splitsize": 0
           },
           {
               "offset": "OTM5",
               "option_type": "CE",
               "action": "SELL",
-              "quantity": 75
+              "quantity": 75,
+              "expiry_date": "30DEC25",
+              "splitsize": 0
           },
           {
               "offset": "OTM5",
               "option_type": "PE",
               "action": "SELL",
-              "quantity": 75
+              "quantity": 75,
+              "expiry_date": "30DEC25",
+              "splitsize": 0
           }
       ]
   }

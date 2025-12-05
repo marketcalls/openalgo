@@ -289,10 +289,7 @@ function cancelAllOrders() {
     
     // Close the modal
     document.getElementById('cancel-all-modal').checked = false;
-    
-    // Show processing message
-    showToast('Canceling all orders... Please wait', 'info');
-    
+
     // Call the cancel_all_orders endpoint
     fetch('/cancel_all_orders', {
         method: 'POST',

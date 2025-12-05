@@ -5,6 +5,7 @@ POST /api/v1/optionsmultiorder
 
 Places multiple option legs with common underlying, resolving symbols based on offset.
 BUY legs are executed first, then SELL legs for margin efficiency.
+Each leg supports optional splitsize parameter to split large orders.
 
 Request Body:
 {
@@ -18,13 +19,15 @@ Request Body:
             "offset": "OTM10",
             "option_type": "CE",
             "action": "BUY",
-            "quantity": 75
+            "quantity": 75,
+            "splitsize": 0  // Optional: If > 0, splits this leg into multiple orders of this size
         },
         {
             "offset": "OTM10",
             "option_type": "PE",
             "action": "BUY",
-            "quantity": 75
+            "quantity": 150,
+            "splitsize": 75  // Example: splits 150 qty into 2 orders of 75 each
         },
         {
             "offset": "OTM5",
@@ -41,7 +44,7 @@ Request Body:
     ]
 }
 
-Response (Success):
+Response (Success - Regular Legs):
 {
     "status": "success",
     "underlying": "NIFTY",
@@ -56,6 +59,41 @@ Response (Success):
             "action": "BUY",
             "status": "success",
             "orderid": "240123000001234"
+        },
+        ...
+    ]
+}
+
+Response (Success - With Split Leg):
+{
+    "status": "success",
+    "underlying": "NIFTY",
+    "underlying_ltp": 26000.50,
+    "results": [
+        {
+            "leg": 1,
+            "symbol": "NIFTY25NOV2526000CE",
+            "exchange": "NFO",
+            "offset": "OTM10",
+            "option_type": "CE",
+            "action": "BUY",
+            "status": "success",
+            "orderid": "240123000001234"
+        },
+        {
+            "leg": 2,
+            "symbol": "NIFTY25NOV2526000PE",
+            "exchange": "NFO",
+            "offset": "OTM10",
+            "option_type": "PE",
+            "action": "BUY",
+            "status": "success",
+            "total_quantity": 150,
+            "split_size": 75,
+            "split_results": [
+                {"order_num": 1, "quantity": 75, "status": "success", "orderid": "240123000001235"},
+                {"order_num": 2, "quantity": 75, "status": "success", "orderid": "240123000001236"}
+            ]
         },
         ...
     ]
