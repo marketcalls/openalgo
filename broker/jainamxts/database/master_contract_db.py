@@ -141,7 +141,7 @@ def fetch_index_list():
             continue
 
         data = response.json()
-        logger.info(f"Index list response for segment {segment}: {data}")
+        logger.debug(f"Index list response for segment {segment}: {data}")
 
         if "result" not in data or "indexList" not in data["result"]:
             logger.error(f"Invalid response format for segment {segment}: {data}")
