@@ -655,14 +655,9 @@ class JainamXTSWebSocketClient:
                 self.logger.info(f"[XTS-BINARY] 1512 LTP: parsing LTP packet")
                 self._parse_ltp_packet(payload, market_data)
             elif header_msg_code == 1501:  # Touchline
-                # Based on scan analysis: LTP at offset 48 for stocks, 92 for indices
-                # Try 48 first, fallback to scanning
-                ltp_offset = 48
-                self.logger.debug(f"[XTS-BINARY] 1501 Touchline: trying LTP at payload offset {ltp_offset}")
-                if len(payload) >= 188:  # Need enough for OHLC at offset 180
-                    self._parse_touchline(payload, market_data, ltp_offset)
-                else:
-                    self._scan_and_parse(payload, market_data)
+                # For 1501, parse OHLC first to get reference range, then find LTP within that range
+                self.logger.debug(f"[XTS-BINARY] 1501 Touchline: parsing with OHLC validation")
+                self._parse_touchline_with_ohlc(payload, market_data)
             elif header_msg_code == 1502:  # Market Depth
                 # Based on scan results, LTP is at payload offset 166 for JainamXTS
                 ltp_offset = 166
@@ -806,6 +801,78 @@ class JainamXTSWebSocketClient:
 
         except Exception as e:
             self.logger.error(f"[XTS-LTP] Error parsing LTP packet: {e}")
+
+    def _parse_touchline_with_ohlc(self, payload, market_data):
+        """Parse 1501 Touchline packet - OHLC first, then find LTP within OHLC range"""
+        import struct
+        try:
+            # First parse OHLC at fixed offsets to get reference range
+            ohlc_offsets = {'Open': 156, 'High': 164, 'Low': 172, 'Close': 180}
+            ohlc_values = []
+
+            for field, offset in ohlc_offsets.items():
+                if offset + 8 <= len(payload):
+                    try:
+                        val = struct.unpack('<d', payload[offset:offset+8])[0]
+                        if 0.01 < val < 500000:
+                            market_data[field] = round(val, 2)
+                            ohlc_values.append(val)
+                    except:
+                        pass
+
+            # Determine valid LTP range from OHLC
+            if ohlc_values:
+                min_price = min(ohlc_values) * 0.95  # 5% below low
+                max_price = max(ohlc_values) * 1.05  # 5% above high
+                close_price = market_data.get('Close', 0)
+            else:
+                min_price = 0.01
+                max_price = 500000
+                close_price = 0
+
+            self.logger.debug(f"[XTS-TOUCHLINE] OHLC range: {min_price:.2f} - {max_price:.2f}, Close={close_price}")
+
+            # Scan for LTP within the valid range
+            ltp = None
+            ltp_offset = None
+
+            # Try common offsets first
+            for off in [2, 10, 18, 26, 34, 42, 48, 52]:
+                if off + 8 <= len(payload):
+                    try:
+                        val = struct.unpack('<d', payload[off:off+8])[0]
+                        if min_price < val < max_price:
+                            ltp = val
+                            ltp_offset = off
+                            self.logger.debug(f"[XTS-TOUCHLINE] Found LTP={val:.2f} at offset {off}")
+                            break
+                    except:
+                        pass
+
+            # Fallback: scan for price within OHLC range
+            if ltp is None:
+                for off in range(0, min(len(payload) - 7, 150)):
+                    try:
+                        val = struct.unpack('<d', payload[off:off+8])[0]
+                        if min_price < val < max_price:
+                            ltp = val
+                            ltp_offset = off
+                            self.logger.debug(f"[XTS-TOUCHLINE] Scan found LTP={val:.2f} at offset {off}")
+                            break
+                    except:
+                        pass
+
+            # Last resort: use Close price as LTP
+            if ltp is None and close_price > 0:
+                ltp = close_price
+                self.logger.debug(f"[XTS-TOUCHLINE] Using Close as LTP={ltp:.2f}")
+
+            if ltp:
+                market_data['LastTradedPrice'] = round(ltp, 2)
+                self.logger.info(f"[XTS-TOUCHLINE] Parsed: LTP={ltp:.2f}, O={market_data.get('Open', 0)}, H={market_data.get('High', 0)}, L={market_data.get('Low', 0)}, C={market_data.get('Close', 0)}")
+
+        except Exception as e:
+            self.logger.error(f"[XTS-TOUCHLINE] Error: {e}")
 
     def _parse_depth(self, payload, market_data):
         """Parse market depth (bid/ask) data from 1502 packet"""
