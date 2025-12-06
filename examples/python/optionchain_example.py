@@ -2,7 +2,7 @@ from openalgo import api
 
 # Initialize client
 client = api(
-    api_key="c32eb9dee6673190bb9dfab5f18ef0a96b0d76ba484cd36bc5ca5f7ebc8745bf",
+    api_key="83ad96143dd5081d033abcfd20e9108daee5708fbea404121a762bed1e498dd0",
     host="http://127.0.0.1:5000"
 )
 
@@ -12,7 +12,8 @@ client = api(
 expiry_result = client.expiry(
     symbol="NIFTY",
     exchange="NFO",
-    instrumenttype="options"
+    instrumenttype="options",
+    strike_count= 10
 )
 
 if expiry_result["status"] == "success":
