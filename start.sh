@@ -4,7 +4,14 @@ echo "[OpenAlgo] Starting up..."
 # ============================================
 # RAILWAY/CLOUD ENVIRONMENT DETECTION & .env GENERATION
 # ============================================
-if [ ! -f /app/.env ]; then
+
+# Determine writable .env location
+ENV_FILE="/app/.env"
+
+# Check if .env exists and is readable
+if [ -f "$ENV_FILE" ] && [ -r "$ENV_FILE" ]; then
+    echo "[OpenAlgo] Using existing .env file"
+else
     echo "[OpenAlgo] No .env file found. Checking for environment variables..."
     
     # Check if we're on Railway or have env vars set
@@ -15,7 +22,13 @@ if [ ! -f /app/.env ]; then
         HOST_DOMAIN="${HOST_SERVER#https://}"
         HOST_DOMAIN="${HOST_DOMAIN#http://}"
         
-        cat > /app/.env << EOF
+        # Try to write to /app/.env, fallback to /tmp/.env if permission denied
+        if ! touch "$ENV_FILE" 2>/dev/null; then
+            echo "[OpenAlgo] Cannot write to /app/.env, using /tmp/.env"
+            ENV_FILE="/tmp/.env"
+        fi
+        
+        cat > "$ENV_FILE" << EOF
 # OpenAlgo Environment Configuration File
 # Auto-generated from environment variables
 ENV_CONFIG_VERSION = '1.0.4'
@@ -124,8 +137,14 @@ SESSION_COOKIE_NAME = 'session'
 CSRF_COOKIE_NAME = 'csrf_token'
 EOF
 
-        echo "[OpenAlgo] .env file generated successfully!"
+        echo "[OpenAlgo] .env file generated at $ENV_FILE"
         echo "[OpenAlgo] Configuration: HOST_SERVER=${HOST_SERVER}, BROKER=${BROKER_NAME}"
+        
+        # If we wrote to /tmp, create symlink to /app/.env (or copy if symlink fails)
+        if [ "$ENV_FILE" = "/tmp/.env" ]; then
+            ln -sf /tmp/.env /app/.env 2>/dev/null || cp /tmp/.env /app/.env 2>/dev/null || true
+            echo "[OpenAlgo] Linked .env to /app/.env"
+        fi
     else
         echo "============================================"
         echo "Error: .env file not found."
@@ -141,8 +160,6 @@ EOF
         echo "============================================"
         exit 1
     fi
-else
-    echo "[OpenAlgo] Using existing .env file"
 fi
 
 # ============================================
@@ -197,6 +214,18 @@ trap cleanup SIGTERM SIGINT
 # ============================================
 # Use PORT env var if set (Railway/cloud), otherwise default to 5000
 APP_PORT="${PORT:-5000}"
+
+# Export the .env file location for Python to find
+export OPENALGO_ENV_FILE="$ENV_FILE"
+
+# Also ensure all env vars are available to the Python process
+# This helps if the Python app reads from os.environ instead of .env
+export HOST_SERVER="${HOST_SERVER}"
+export BROKER_NAME="${BROKER_NAME}"
+export BROKER_API_KEY="${BROKER_API_KEY}"
+export BROKER_API_SECRET="${BROKER_API_SECRET}"
+export APP_KEY="${APP_KEY}"
+export API_KEY_PEPPER="${API_KEY_PEPPER}"
 
 echo "[OpenAlgo] Starting application on port ${APP_PORT} with eventlet..."
 exec /app/.venv/bin/gunicorn \
