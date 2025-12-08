@@ -235,17 +235,45 @@ def map_position_data(position_data):
 def transform_positions_data(positions_data):
     """
     Transforms Samco positions data to OpenAlgo standardized format.
+    Samco returns netQuantity as positive and uses transactionType to indicate direction.
     """
     transformed_data = []
     for position in positions_data:
+        # Handle lastTradedPrice which may have comma formatting like "1,550.00"
+        ltp = position.get('lastTradedPrice', '0')
+        if isinstance(ltp, str):
+            ltp = ltp.replace(',', '')
+
+        # Use averageBuyPrice or averageSellPrice based on transaction type
+        transaction_type = position.get('transactionType', '')
+        if transaction_type == 'SELL':
+            avg_price = position.get('averageSellPrice', '0')
+        else:
+            avg_price = position.get('averageBuyPrice', '0')
+        if isinstance(avg_price, str):
+            avg_price = avg_price.replace(',', '')
+
+        # Format average_price to 2 decimal places like Zerodha
+        average_price_formatted = "{:.2f}".format(float(avg_price) if avg_price else 0.0)
+
+        # Calculate total P&L (realized + unrealized) and round to 2 decimals
+        realized_pnl = float(position.get('realizedGainAndLoss', 0) or 0)
+        unrealized_pnl = float(position.get('unrealizedGainAndLoss', 0) or 0)
+        total_pnl = round(realized_pnl + unrealized_pnl, 2)
+
+        # Make quantity negative for SELL (short) positions
+        qty = int(position.get('netQuantity', 0))
+        if transaction_type == 'SELL' and qty > 0:
+            qty = -qty
+
         transformed_position = {
             "symbol": position.get('tradingSymbol', ''),
             "exchange": position.get('exchange', ''),
             "product": position.get('productCode', ''),
-            "quantity": position.get('netQuantity', 0),
-            "average_price": position.get('averagePrice', 0.0),
-            "ltp": position.get('lastTradedPrice', 0.0),
-            "pnl": position.get('realizedProfitLoss', 0.0),
+            "quantity": str(qty),
+            "average_price": average_price_formatted,
+            "ltp": round(float(ltp) if ltp else 0.0, 2),
+            "pnl": total_pnl,
         }
         transformed_data.append(transformed_position)
     return transformed_data

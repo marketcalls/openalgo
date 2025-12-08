@@ -61,9 +61,19 @@ def get_trade_book(auth):
 
 def get_positions(auth):
     """Get positions from Samco."""
-    response = get_api_response("/position/positions", auth)
-    logger.info(f"Samco positions response: {response}")
-    return response
+    client = get_httpx_client()
+    headers = {
+        'Accept': 'application/json',
+        'x-session-token': auth
+    }
+    response = client.get(
+        f"{BASE_URL}/position/getPositions",
+        headers=headers,
+        params={"positionType": "DAY"}
+    )
+    response_data = response.json() if response.text else {}
+    logger.info(f"Samco positions response: {response_data}")
+    return response_data
 
 
 def get_holdings(auth):
@@ -74,6 +84,7 @@ def get_holdings(auth):
 def get_open_position(tradingsymbol, exchange, producttype, auth):
     """
     Get open position for a specific symbol.
+    Samco returns netQuantity as positive and uses transactionType to indicate direction.
     """
     br_symbol = get_br_symbol(tradingsymbol, exchange)
     positions_data = get_positions(auth)
@@ -88,8 +99,13 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
             if (position.get('tradingSymbol') == br_symbol and
                 position.get('exchange') == exchange and
                 position.get('productCode') == producttype):
-                net_qty = position.get('netQuantity', '0')
-                logger.info(f"Found position with netQuantity: {net_qty}")
+                qty = int(position.get('netQuantity', 0))
+                transaction_type = position.get('transactionType', '')
+                # Make quantity negative for SELL (short) positions
+                if transaction_type == 'SELL' and qty > 0:
+                    qty = -qty
+                net_qty = str(qty)
+                logger.info(f"Found position: netQuantity={qty}, transactionType={transaction_type}")
                 break
 
     return net_qty
