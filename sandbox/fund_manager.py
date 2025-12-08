@@ -458,3 +458,154 @@ def reset_all_user_funds():
 
     except Exception as e:
         logger.error(f"Error in scheduled auto-reset: {e}")
+
+
+def reconcile_margin(user_id, auto_fix=True):
+    """
+    Reconcile used_margin in funds with actual margin blocked in positions.
+
+    This function detects and optionally fixes margin discrepancies that can occur
+    when position closures don't properly release margin.
+
+    Args:
+        user_id: User ID to reconcile
+        auto_fix: If True, automatically fix discrepancies. If False, only report.
+
+    Returns:
+        tuple: (has_discrepancy: bool, discrepancy_amount: Decimal, message: str)
+    """
+    try:
+        # Calculate total margin blocked across all open positions
+        positions = SandboxPositions.query.filter_by(user_id=user_id).all()
+        total_position_margin = sum(
+            Decimal(str(pos.margin_blocked or 0))
+            for pos in positions
+            if pos.quantity != 0  # Only count open positions
+        )
+
+        # Get current used_margin from funds
+        funds = SandboxFunds.query.filter_by(user_id=user_id).first()
+        if not funds:
+            return False, Decimal('0'), "No funds record found for user"
+
+        current_used_margin = Decimal(str(funds.used_margin or 0))
+
+        # Calculate discrepancy
+        discrepancy = current_used_margin - total_position_margin
+
+        if discrepancy == 0:
+            return False, Decimal('0'), "No margin discrepancy detected"
+
+        # Log the discrepancy
+        logger.warning(
+            f"Margin discrepancy detected for user {user_id}: "
+            f"used_margin={current_used_margin}, position_margin={total_position_margin}, "
+            f"discrepancy={discrepancy}"
+        )
+
+        if auto_fix:
+            # Fix the discrepancy by adjusting used_margin and available_balance
+            funds.used_margin = total_position_margin
+            funds.available_balance += discrepancy  # Release the stuck margin
+            db_session.commit()
+
+            logger.info(
+                f"Margin reconciled for user {user_id}: "
+                f"Released {discrepancy} stuck margin, "
+                f"new used_margin={total_position_margin}"
+            )
+
+            return True, discrepancy, f"Margin reconciled. Released {discrepancy} stuck margin."
+        else:
+            return True, discrepancy, f"Discrepancy of {discrepancy} detected but not fixed (auto_fix=False)"
+
+    except Exception as e:
+        logger.error(f"Error reconciling margin for user {user_id}: {e}")
+        db_session.rollback()
+        return False, Decimal('0'), f"Error during reconciliation: {str(e)}"
+
+
+def reconcile_all_users_margin():
+    """
+    Reconcile margin for all users.
+
+    Returns:
+        dict: Summary of reconciliation results
+    """
+    try:
+        logger.info("=== Starting margin reconciliation for all users ===")
+
+        all_funds = SandboxFunds.query.all()
+
+        if not all_funds:
+            logger.info("No user funds to reconcile")
+            return {"users_checked": 0, "discrepancies_found": 0, "total_released": 0}
+
+        users_checked = 0
+        discrepancies_found = 0
+        total_released = Decimal('0')
+
+        for fund in all_funds:
+            has_discrepancy, amount, message = reconcile_margin(fund.user_id, auto_fix=True)
+            users_checked += 1
+
+            if has_discrepancy:
+                discrepancies_found += 1
+                total_released += amount
+                logger.info(f"User {fund.user_id}: {message}")
+
+        logger.info(
+            f"=== Margin reconciliation complete: "
+            f"{users_checked} users checked, {discrepancies_found} discrepancies fixed, "
+            f"total margin released: {total_released} ==="
+        )
+
+        return {
+            "users_checked": users_checked,
+            "discrepancies_found": discrepancies_found,
+            "total_released": float(total_released)
+        }
+
+    except Exception as e:
+        logger.error(f"Error in margin reconciliation: {e}")
+        return {"error": str(e)}
+
+
+def validate_margin_consistency(user_id):
+    """
+    Validate that used_margin equals sum of position margins.
+    Call this after position updates to detect issues early.
+
+    Returns:
+        tuple: (is_consistent: bool, discrepancy: Decimal)
+    """
+    try:
+        # Calculate total margin blocked across all open positions
+        positions = SandboxPositions.query.filter_by(user_id=user_id).all()
+        total_position_margin = sum(
+            Decimal(str(pos.margin_blocked or 0))
+            for pos in positions
+            if pos.quantity != 0  # Only count open positions
+        )
+
+        # Get current used_margin from funds
+        funds = SandboxFunds.query.filter_by(user_id=user_id).first()
+        if not funds:
+            return True, Decimal('0')  # No funds = no discrepancy to report
+
+        current_used_margin = Decimal(str(funds.used_margin or 0))
+        discrepancy = current_used_margin - total_position_margin
+
+        if discrepancy != 0:
+            logger.warning(
+                f"Margin inconsistency for user {user_id}: "
+                f"used_margin={current_used_margin}, position_margin={total_position_margin}, "
+                f"discrepancy={discrepancy}"
+            )
+            return False, discrepancy
+
+        return True, Decimal('0')
+
+    except Exception as e:
+        logger.error(f"Error validating margin for user {user_id}: {e}")
+        return True, Decimal('0')  # Don't block operations on validation error

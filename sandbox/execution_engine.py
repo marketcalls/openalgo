@@ -26,7 +26,7 @@ from database.sandbox_db import (
     SandboxOrders, SandboxTrades, SandboxPositions,
     db_session
 )
-from sandbox.fund_manager import FundManager
+from sandbox.fund_manager import FundManager, validate_margin_consistency, reconcile_margin
 from services.quotes_service import get_quotes, get_multiquotes
 from database.auth_db import get_auth_token_broker
 from utils.logging import get_logger
@@ -522,6 +522,16 @@ class ExecutionEngine:
                     logger.info(f"Partial close: {order.symbol}, New qty: {final_quantity}, Realized P&L: ₹{realized_pnl}")
 
             db_session.commit()
+
+            # Validate margin consistency after position update
+            is_consistent, discrepancy = validate_margin_consistency(order.user_id)
+            if not is_consistent:
+                logger.warning(
+                    f"Margin inconsistency detected after position update for {order.symbol}: "
+                    f"discrepancy={discrepancy}. Auto-reconciling..."
+                )
+                # Auto-reconcile to prevent margin leaks
+                reconcile_margin(order.user_id, auto_fix=True)
 
         except Exception as e:
             db_session.rollback()
