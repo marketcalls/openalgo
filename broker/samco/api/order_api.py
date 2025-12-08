@@ -54,12 +54,16 @@ def get_order_book(auth):
 
 def get_trade_book(auth):
     """Get trade book from Samco."""
-    return get_api_response("/trade/tradeBook", auth)
+    response = get_api_response("/trade/tradeBook", auth)
+    logger.info(f"Samco trade book response: {response}")
+    return response
 
 
 def get_positions(auth):
     """Get positions from Samco."""
-    return get_api_response("/position/positions", auth)
+    response = get_api_response("/position/positions", auth)
+    logger.info(f"Samco positions response: {response}")
+    return response
 
 
 def get_holdings(auth):
@@ -71,19 +75,21 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
     """
     Get open position for a specific symbol.
     """
-    tradingsymbol = get_br_symbol(tradingsymbol, exchange)
+    br_symbol = get_br_symbol(tradingsymbol, exchange)
     positions_data = get_positions(auth)
 
-    logger.debug(f"{positions_data}")
+    logger.info(f"Looking for position: symbol={br_symbol}, exchange={exchange}, product={producttype}")
+    logger.debug(f"Positions data: {positions_data}")
 
     net_qty = '0'
 
     if positions_data and positions_data.get('status') == 'Success' and positions_data.get('positionDetails'):
         for position in positions_data['positionDetails']:
-            if (position.get('tradingSymbol') == tradingsymbol and
+            if (position.get('tradingSymbol') == br_symbol and
                 position.get('exchange') == exchange and
                 position.get('productCode') == producttype):
                 net_qty = position.get('netQuantity', '0')
+                logger.info(f"Found position with netQuantity: {net_qty}")
                 break
 
     return net_qty
@@ -156,10 +162,11 @@ def place_smartorder_api(data, auth):
     product = data.get("product")
     position_size = int(data.get("position_size", "0"))
 
+    # Get current open position for the symbol
     current_position = int(get_open_position(symbol, exchange, map_product_type(product), auth))
 
-    logger.info(f"position_size : {position_size}")
-    logger.info(f"Open Position : {current_position}")
+    logger.info(f"SmartOrder - Symbol: {symbol}, Exchange: {exchange}, Product: {product}")
+    logger.info(f"SmartOrder - Target position_size: {position_size}, Current position: {current_position}")
 
     action = None
     quantity = 0
@@ -168,6 +175,7 @@ def place_smartorder_api(data, auth):
     if position_size == 0 and current_position == 0 and int(data['quantity']) != 0:
         action = data['action']
         quantity = data['quantity']
+        logger.info(f"SmartOrder - No position, placing new order: {action} {quantity}")
         res, response, orderid = place_order_api(data, auth)
         return res, response, orderid
 
@@ -176,9 +184,11 @@ def place_smartorder_api(data, auth):
             response = {"status": "success", "message": "No OpenPosition Found. Not placing Exit order."}
         else:
             response = {"status": "success", "message": "No action needed. Position size matches current position"}
+        logger.info(f"SmartOrder - {response['message']}")
         orderid = None
         return res, response, orderid
 
+    # Determine action based on position_size and current_position
     if position_size == 0 and current_position > 0:
         action = "SELL"
         quantity = abs(current_position)
@@ -197,13 +207,14 @@ def place_smartorder_api(data, auth):
             quantity = current_position - position_size
 
     if action:
+        logger.info(f"SmartOrder - Calculated action: {action}, quantity: {quantity}")
         order_data = data.copy()
         order_data["action"] = action
         order_data["quantity"] = str(quantity)
 
         res, response, orderid = place_order_api(order_data, auth)
-        logger.info(f"{response}")
-        logger.info(f"{orderid}")
+        logger.info(f"SmartOrder response: {response}")
+        logger.info(f"SmartOrder orderid: {orderid}")
 
         return res, response, orderid
 

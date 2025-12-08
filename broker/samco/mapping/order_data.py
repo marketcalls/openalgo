@@ -191,10 +191,10 @@ def transform_tradebook_data(tradebook_data):
             "product": trade.get('productCode', ''),
             "action": trade.get('transactionType', ''),
             "quantity": trade.get('filledQuantity', 0),
-            "average_price": trade.get('fillPrice', 0.0),
-            "trade_value": trade.get('tradeValue', 0),
+            "average_price": trade.get('tradePrice', 0.0),
+            "trade_value": trade.get('orderValue', 0),
             "orderid": trade.get('orderNumber', ''),
-            "timestamp": trade.get('exchangeConfirmationTime', '')
+            "timestamp": trade.get('tradeTime', '')
         }
         transformed_data.append(transformed_trade)
     return transformed_data
