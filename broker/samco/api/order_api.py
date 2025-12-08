@@ -307,7 +307,7 @@ def cancel_order(orderid, auth):
 
     response.status = response.status_code
 
-    data = json.loads(response.text)
+    data = json.loads(response.text) if response.text else {}
     logger.info(f"Samco cancel order response: {data}")
 
     if data.get("status") == "Success":
@@ -341,7 +341,7 @@ def modify_order(data, auth):
 
     response.status = response.status_code
 
-    response_data = json.loads(response.text)
+    response_data = json.loads(response.text) if response.text else {}
     logger.info(f"Samco modify order response: {response_data}")
 
     if response_data.get("status") == "Success":
