@@ -33,25 +33,31 @@ def transform_data(data, token):
     return transformed
 
 
-def transform_modify_order_data(data, token):
+def transform_modify_order_data(data):
     """
     Transforms the OpenAlgo modify order request to Samco expected structure.
+    Only includes fields that can be modified (orderNumber goes in URL).
     """
-    symbol = get_br_symbol(data["symbol"], data["exchange"])
-
-    return {
-        "orderNumber": data["orderid"],
-        "symbolName": symbol,
-        "exchange": data["exchange"],
-        "transactionType": data.get("action", "BUY").upper(),
+    transformed = {
         "orderType": map_order_type(data["pricetype"]),
         "quantity": str(data["quantity"]),
-        "disclosedQuantity": str(data.get("disclosed_quantity", "0")),
-        "orderValidity": "DAY",
-        "productType": map_product_type(data["product"]),
-        "price": str(data.get("price", "0")),
-        "triggerPrice": str(data.get("trigger_price", "0"))
+        "orderValidity": "DAY"
     }
+
+    # Only add disclosedQuantity if provided and > 0 (must be min 10% of quantity)
+    disclosed_qty = data.get("disclosed_quantity")
+    if disclosed_qty and int(disclosed_qty) > 0:
+        transformed["disclosedQuantity"] = str(disclosed_qty)
+
+    # Add price for LIMIT and SL orders
+    if data["pricetype"] in ["LIMIT", "SL"]:
+        transformed["price"] = str(data.get("price", "0"))
+
+    # Add trigger price for SL and SL-M orders
+    if data["pricetype"] in ["SL", "SL-M"]:
+        transformed["triggerPrice"] = str(data.get("trigger_price", "0"))
+
+    return transformed
 
 
 def map_order_type(pricetype):
