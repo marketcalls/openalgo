@@ -288,32 +288,48 @@ def holdings():
 @limiter.limit(API_RATE_LIMIT)
 def export_orderbook():
     try:
-        broker = session.get('broker')
-        if not broker:
-            logger.error("Broker not set in session")
-            return "Broker not set in session", 400
-
-        api_funcs = dynamic_import(broker, 'api.order_api', ['get_order_book'])
-        mapping_funcs = dynamic_import(broker, 'mapping.order_data', ['map_order_data', 'transform_order_data'])
-
-        if not api_funcs or not mapping_funcs:
-            logger.error(f"Error loading broker-specific modules for {broker}")
-            return "Error loading broker-specific modules", 500
-
         login_username = session['user']
         auth_token = get_auth_token(login_username)
+        broker = session.get('broker')
 
         if auth_token is None:
             logger.warning(f"No auth token found for user {login_username}")
             return redirect(url_for('auth.logout'))
 
-        order_data = api_funcs['get_order_book'](auth_token)
-        if 'status' in order_data and order_data['status'] == 'error':
-            logger.error("Error in order data response")
-            return redirect(url_for('auth.logout'))
+        # Check if in analyze mode and route accordingly
+        if get_analyze_mode():
+            # Get API key for sandbox mode
+            api_key = get_api_key_for_tradingview(login_username)
+            if api_key:
+                success, response, status_code = get_orderbook(api_key=api_key)
+                if not success:
+                    logger.error(f"Failed to get orderbook data in analyze mode")
+                    return "Error getting orderbook data", 500
+                data = response.get('data', {})
+                order_data = data.get('orders', [])
+            else:
+                logger.error("No API key found for analyze mode")
+                return "API key required for analyze mode", 400
+        else:
+            # Use live broker
+            if not broker:
+                logger.error("Broker not set in session")
+                return "Broker not set in session", 400
 
-        order_data = mapping_funcs['map_order_data'](order_data=order_data)
-        order_data = mapping_funcs['transform_order_data'](order_data)
+            api_funcs = dynamic_import(broker, 'api.order_api', ['get_order_book'])
+            mapping_funcs = dynamic_import(broker, 'mapping.order_data', ['map_order_data', 'transform_order_data'])
+
+            if not api_funcs or not mapping_funcs:
+                logger.error(f"Error loading broker-specific modules for {broker}")
+                return "Error loading broker-specific modules", 500
+
+            order_data = api_funcs['get_order_book'](auth_token)
+            if 'status' in order_data and order_data['status'] == 'error':
+                logger.error("Error in order data response")
+                return redirect(url_for('auth.logout'))
+
+            order_data = mapping_funcs['map_order_data'](order_data=order_data)
+            order_data = mapping_funcs['transform_order_data'](order_data)
 
         csv_data = generate_orderbook_csv(order_data)
         return Response(
@@ -330,32 +346,47 @@ def export_orderbook():
 @limiter.limit(API_RATE_LIMIT)
 def export_tradebook():
     try:
-        broker = session.get('broker')
-        if not broker:
-            logger.error("Broker not set in session")
-            return "Broker not set in session", 400
-
-        api_funcs = dynamic_import(broker, 'api.order_api', ['get_trade_book'])
-        mapping_funcs = dynamic_import(broker, 'mapping.order_data', ['map_trade_data', 'transform_tradebook_data'])
-
-        if not api_funcs or not mapping_funcs:
-            logger.error(f"Error loading broker-specific modules for {broker}")
-            return "Error loading broker-specific modules", 500
-
         login_username = session['user']
         auth_token = get_auth_token(login_username)
+        broker = session.get('broker')
 
         if auth_token is None:
             logger.warning(f"No auth token found for user {login_username}")
             return redirect(url_for('auth.logout'))
 
-        tradebook_data = api_funcs['get_trade_book'](auth_token)
-        if 'status' in tradebook_data and tradebook_data['status'] == 'error':
-            logger.error("Error in tradebook data response")
-            return redirect(url_for('auth.logout'))
+        # Check if in analyze mode and route accordingly
+        if get_analyze_mode():
+            # Get API key for sandbox mode
+            api_key = get_api_key_for_tradingview(login_username)
+            if api_key:
+                success, response, status_code = get_tradebook(api_key=api_key)
+                if not success:
+                    logger.error(f"Failed to get tradebook data in analyze mode")
+                    return "Error getting tradebook data", 500
+                tradebook_data = response.get('data', [])
+            else:
+                logger.error("No API key found for analyze mode")
+                return "API key required for analyze mode", 400
+        else:
+            # Use live broker
+            if not broker:
+                logger.error("Broker not set in session")
+                return "Broker not set in session", 400
 
-        tradebook_data = mapping_funcs['map_trade_data'](tradebook_data)
-        tradebook_data = mapping_funcs['transform_tradebook_data'](tradebook_data)
+            api_funcs = dynamic_import(broker, 'api.order_api', ['get_trade_book'])
+            mapping_funcs = dynamic_import(broker, 'mapping.order_data', ['map_trade_data', 'transform_tradebook_data'])
+
+            if not api_funcs or not mapping_funcs:
+                logger.error(f"Error loading broker-specific modules for {broker}")
+                return "Error loading broker-specific modules", 500
+
+            tradebook_data = api_funcs['get_trade_book'](auth_token)
+            if 'status' in tradebook_data and tradebook_data['status'] == 'error':
+                logger.error("Error in tradebook data response")
+                return redirect(url_for('auth.logout'))
+
+            tradebook_data = mapping_funcs['map_trade_data'](tradebook_data)
+            tradebook_data = mapping_funcs['transform_tradebook_data'](tradebook_data)
 
         csv_data = generate_tradebook_csv(tradebook_data)
         return Response(
@@ -372,34 +403,49 @@ def export_tradebook():
 @limiter.limit(API_RATE_LIMIT)
 def export_positions():
     try:
-        broker = session.get('broker')
-        if not broker:
-            logger.error("Broker not set in session")
-            return "Broker not set in session", 400
-
-        api_funcs = dynamic_import(broker, 'api.order_api', ['get_positions'])
-        mapping_funcs = dynamic_import(broker, 'mapping.order_data', [
-            'map_position_data', 'transform_positions_data'
-        ])
-
-        if not api_funcs or not mapping_funcs:
-            logger.error(f"Error loading broker-specific modules for {broker}")
-            return "Error loading broker-specific modules", 500
-
         login_username = session['user']
         auth_token = get_auth_token(login_username)
+        broker = session.get('broker')
 
         if auth_token is None:
             logger.warning(f"No auth token found for user {login_username}")
             return redirect(url_for('auth.logout'))
 
-        positions_data = api_funcs['get_positions'](auth_token)
-        if 'status' in positions_data and positions_data['status'] == 'error':
-            logger.error("Error in positions data response")
-            return redirect(url_for('auth.logout'))
+        # Check if in analyze mode and route accordingly
+        if get_analyze_mode():
+            # Get API key for sandbox mode
+            api_key = get_api_key_for_tradingview(login_username)
+            if api_key:
+                success, response, status_code = get_positionbook(api_key=api_key)
+                if not success:
+                    logger.error(f"Failed to get positions data in analyze mode")
+                    return "Error getting positions data", 500
+                positions_data = response.get('data', [])
+            else:
+                logger.error("No API key found for analyze mode")
+                return "API key required for analyze mode", 400
+        else:
+            # Use live broker
+            if not broker:
+                logger.error("Broker not set in session")
+                return "Broker not set in session", 400
 
-        positions_data = mapping_funcs['map_position_data'](positions_data)
-        positions_data = mapping_funcs['transform_positions_data'](positions_data)
+            api_funcs = dynamic_import(broker, 'api.order_api', ['get_positions'])
+            mapping_funcs = dynamic_import(broker, 'mapping.order_data', [
+                'map_position_data', 'transform_positions_data'
+            ])
+
+            if not api_funcs or not mapping_funcs:
+                logger.error(f"Error loading broker-specific modules for {broker}")
+                return "Error loading broker-specific modules", 500
+
+            positions_data = api_funcs['get_positions'](auth_token)
+            if 'status' in positions_data and positions_data['status'] == 'error':
+                logger.error("Error in positions data response")
+                return redirect(url_for('auth.logout'))
+
+            positions_data = mapping_funcs['map_position_data'](positions_data)
+            positions_data = mapping_funcs['transform_positions_data'](positions_data)
 
         csv_data = generate_positions_csv(positions_data)
         return Response(
