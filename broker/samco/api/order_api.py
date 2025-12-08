@@ -78,7 +78,9 @@ def get_positions(auth):
 
 def get_holdings(auth):
     """Get holdings from Samco."""
-    return get_api_response("/holding/holdings", auth)
+    response = get_api_response("/holding/getHoldings", auth)
+    logger.info(f"Samco holdings response: {response}")
+    return response
 
 
 def get_open_position(tradingsymbol, exchange, producttype, auth):

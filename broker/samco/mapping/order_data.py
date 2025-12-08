@@ -316,13 +316,24 @@ def transform_holdings_data(holdings_data):
     holdings = holdings_data.get('holdings', [])
 
     for holding in holdings:
+        # Get quantity and pnl
+        quantity = int(holding.get('holdingsQuantity', 0) or 0)
+        pnl = float(holding.get('totalGainAndLoss', 0) or 0)
+
+        # Calculate pnl percentage from holdingsValue and pnl
+        holdings_value = float(holding.get('holdingsValue', 0) or 0)
+        if holdings_value > 0:
+            pnl_percent = round((pnl / (holdings_value - pnl)) * 100, 2) if (holdings_value - pnl) != 0 else 0.0
+        else:
+            pnl_percent = 0.0
+
         transformed_holding = {
             "symbol": holding.get('tradingSymbol', ''),
             "exchange": holding.get('exchange', 'NSE'),
-            "quantity": holding.get('holdingQuantity', 0),
+            "quantity": quantity,
             "product": holding.get('product', 'CNC'),
-            "pnl": holding.get('profitAndLoss', 0.0),
-            "pnlpercent": holding.get('pnlPercentage', 0.0)
+            "pnl": round(pnl, 2),
+            "pnlpercent": pnl_percent
         }
         transformed_data.append(transformed_holding)
     return transformed_data
@@ -342,9 +353,19 @@ def calculate_portfolio_statistics(holdings_data):
             'totalpnlpercentage': 0
         }
 
+    # Samco holdingSummary fields
+    portfolio_value = float(totalholding.get('portfolioValue', 0) or 0)
+    total_pnl = float(totalholding.get('totalGainAndLossAmount', 0) or 0)
+
+    # Calculate investment value (portfolio value - pnl)
+    total_inv_value = portfolio_value - total_pnl
+
+    # Calculate pnl percentage
+    pnl_percentage = round((total_pnl / total_inv_value) * 100, 2) if total_inv_value != 0 else 0
+
     return {
-        'totalholdingvalue': totalholding.get('totalHoldingValue', 0),
-        'totalinvvalue': totalholding.get('totalInvestmentValue', 0),
-        'totalprofitandloss': totalholding.get('totalProfitAndLoss', 0),
-        'totalpnlpercentage': totalholding.get('totalPnlPercentage', 0)
+        'totalholdingvalue': round(portfolio_value, 2),
+        'totalinvvalue': round(total_inv_value, 2),
+        'totalprofitandloss': round(total_pnl, 2),
+        'totalpnlpercentage': pnl_percentage
     }
