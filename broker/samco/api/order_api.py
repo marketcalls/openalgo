@@ -255,24 +255,22 @@ def cancel_order(orderid, auth):
     client = get_httpx_client()
 
     headers = {
-        'Content-Type': 'application/json',
         'Accept': 'application/json',
         'x-session-token': auth
     }
 
-    payload = {
-        "orderNumber": orderid
-    }
+    logger.info(f"Samco cancel order request for orderid: {orderid}")
 
-    response = client.post(
+    response = client.delete(
         f"{BASE_URL}/order/cancelOrder",
         headers=headers,
-        json=payload
+        params={"orderNumber": orderid}
     )
 
     response.status = response.status_code
 
     data = json.loads(response.text)
+    logger.info(f"Samco cancel order response: {data}")
 
     if data.get("status") == "Success":
         return {"status": "success", "orderid": orderid}, 200
@@ -323,10 +321,13 @@ def cancel_all_orders_api(data, auth):
     if order_book_response.get('status') != 'Success':
         return [], []
 
+    # Filter orders that are in open or pending state (handle different casing)
     orders_to_cancel = [
         order for order in order_book_response.get('orderBookDetails', [])
-        if order.get('orderStatus') in ['open', 'trigger pending', 'PENDING', 'pending']
+        if order.get('orderStatus', '').lower() in ['open', 'pending', 'trigger pending']
     ]
+
+    logger.info(f"Orders to cancel: {[order['orderNumber'] for order in orders_to_cancel]}")
 
     canceled_orders = []
     failed_cancellations = []
