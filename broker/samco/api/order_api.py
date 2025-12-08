@@ -1,7 +1,7 @@
 import json
 import os
 import httpx
-from database.token_db import get_token, get_br_symbol, get_symbol
+from database.token_db import get_token, get_br_symbol, get_symbol, get_oa_symbol
 from broker.samco.mapping.transform_data import transform_data, map_product_type, reverse_map_product_type, transform_modify_order_data
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -246,16 +246,25 @@ def close_all_positions(current_api_key, auth):
 
     if positions_response.get('status') == 'Success':
         for position in positions_response['positionDetails']:
+            # Get net quantity and handle Samco's direction via transactionType
             net_qty = int(position.get('netQuantity', 0))
             if net_qty == 0:
                 continue
 
-            action = 'SELL' if net_qty > 0 else 'BUY'
+            transaction_type = position.get('transactionType', '')
+
+            # Samco returns positive qty with transactionType indicating direction
+            # BUY position -> SELL to close, SELL position -> BUY to close
+            if transaction_type == 'SELL':
+                action = 'BUY'  # Close short position
+            else:
+                action = 'SELL'  # Close long position
+
             quantity = abs(net_qty)
 
-            # Get OpenAlgo symbol
-            symbol = get_symbol(position.get('symbolToken'), position.get('exchange'))
-            logger.info(f"The Symbol is {symbol}")
+            # Get OpenAlgo symbol using tradingSymbol and exchange
+            symbol = get_oa_symbol(position.get('tradingSymbol'), position.get('exchange'))
+            logger.info(f"Close position: symbol={symbol}, action={action}, qty={quantity}")
 
             place_order_payload = {
                 "apikey": current_api_key,
@@ -268,7 +277,7 @@ def close_all_positions(current_api_key, auth):
                 "quantity": str(quantity)
             }
 
-            logger.info(f"{place_order_payload}")
+            logger.info(f"Close position payload: {place_order_payload}")
 
             res, response, orderid = place_order_api(place_order_payload, auth)
 
