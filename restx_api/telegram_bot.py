@@ -267,28 +267,74 @@ class StopBot(Resource):
             }), 500)
 
 
+def get_webhook_secret():
+    """
+    Get or generate webhook secret for Telegram webhook verification.
+    Uses TELEGRAM_WEBHOOK_SECRET env var, or derives from bot token if not set.
+    """
+    # First check for explicit webhook secret
+    secret = os.getenv('TELEGRAM_WEBHOOK_SECRET')
+    if secret:
+        return secret
+
+    # Fall back to deriving from bot token (first 32 chars of token hash)
+    config = get_bot_config()
+    bot_token = config.get('bot_token')
+    if bot_token:
+        import hashlib
+        return hashlib.sha256(bot_token.encode()).hexdigest()[:32]
+
+    return None
+
+
 @api.route('/webhook', strict_slashes=False)
 class WebhookHandler(Resource):
     def post(self):
-        """Handle Telegram webhook updates"""
+        """
+        Handle Telegram webhook updates.
+
+        Security: Verifies X-Telegram-Bot-Api-Secret-Token header to ensure
+        requests are genuinely from Telegram and not from attackers.
+        """
         try:
+            # Verify webhook secret token (Telegram sends this header when secret_token is configured)
+            expected_secret = get_webhook_secret()
+
+            if expected_secret:
+                received_secret = request.headers.get('X-Telegram-Bot-Api-Secret-Token')
+
+                if not received_secret:
+                    logger.warning("Webhook request missing secret token header")
+                    # Return 401 Unauthorized for missing token
+                    return make_response('Unauthorized', 401)
+
+                if received_secret != expected_secret:
+                    logger.warning("Webhook request with invalid secret token")
+                    # Return 403 Forbidden for invalid token
+                    return make_response('Forbidden', 403)
+
             # Get update data from Telegram
             update_data = request.json
 
             if not update_data:
                 return make_response('', 200)
 
+            # Basic structure validation - Telegram updates must have update_id
+            if not isinstance(update_data, dict) or 'update_id' not in update_data:
+                logger.warning("Invalid webhook payload structure")
+                return make_response('Bad Request', 400)
+
             # Process update asynchronously
             # Note: process_webhook_update method needs to be implemented in the new service
             # For now, return success
-            logger.info(f"Webhook update received: {update_data}")
+            logger.info(f"Webhook update received: update_id={update_data.get('update_id')}")
 
-            # Always return 200 to Telegram
+            # Always return 200 to Telegram for valid requests
             return make_response('', 200)
 
         except Exception as e:
             logger.error(f"Error processing webhook: {str(e)}")
-            # Still return 200 to avoid Telegram retries
+            # Still return 200 to avoid Telegram retries for processing errors
             return make_response('', 200)
 
 

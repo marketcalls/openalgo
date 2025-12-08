@@ -47,6 +47,23 @@ class TelegramBotService:
         self.bot_loop = None
         self.sdk_clients = {}  # Cache for OpenAlgo SDK clients per user
 
+    def _get_webhook_secret(self) -> str:
+        """
+        Get or generate webhook secret for Telegram webhook verification.
+        Uses TELEGRAM_WEBHOOK_SECRET env var, or derives from bot token if not set.
+        """
+        import hashlib
+        # First check for explicit webhook secret
+        secret = os.getenv('TELEGRAM_WEBHOOK_SECRET')
+        if secret:
+            return secret
+
+        # Fall back to deriving from bot token (first 32 chars of token hash)
+        if self.bot_token:
+            return hashlib.sha256(self.bot_token.encode()).hexdigest()[:32]
+
+        return None
+
     def _get_sdk_client(self, telegram_id: int) -> Optional[openalgo_api]:
         """Get or create OpenAlgo SDK client for a user"""
         try:
@@ -404,7 +421,13 @@ class TelegramBotService:
                 await self.application.updater.start_polling()
             else:
                 logger.info(f"Setting webhook to: {self.webhook_url}")
-                await self.application.bot.set_webhook(self.webhook_url)
+                # Generate webhook secret for verification
+                webhook_secret = self._get_webhook_secret()
+                await self.application.bot.set_webhook(
+                    self.webhook_url,
+                    secret_token=webhook_secret
+                )
+                logger.info("Webhook set with secret token for security")
 
             self.is_running = True
             update_bot_config({'is_active': True})
