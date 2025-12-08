@@ -105,8 +105,14 @@ def transform_order_data(orders):
             continue
 
         # Map Samco order type to OpenAlgo format
+        # Samco converts MKT orders to L with marketProtection, so check for that
         ordertype = order.get("orderType", "")
-        if ordertype == 'L':
+        market_protection = order.get("marketProtection")
+
+        if ordertype == 'L' and market_protection:
+            # Market order converted to Limit with market protection
+            ordertype = 'MARKET'
+        elif ordertype == 'L':
             ordertype = 'LIMIT'
         elif ordertype == 'MKT':
             ordertype = 'MARKET'
@@ -119,8 +125,8 @@ def transform_order_data(orders):
             "symbol": order.get("tradingSymbol", ""),
             "exchange": order.get("exchange", ""),
             "action": order.get("transactionType", ""),
-            "quantity": order.get("quantity", 0),
-            "price": order.get("averagePrice", 0.0),
+            "quantity": order.get("totalQuanity", 0),
+            "price": order.get("orderPrice", 0.0),
             "trigger_price": order.get("triggerPrice", 0.0),
             "pricetype": ordertype,
             "product": order.get("productCode", ""),

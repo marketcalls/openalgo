@@ -47,7 +47,9 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
 
 def get_order_book(auth):
     """Get order book from Samco."""
-    return get_api_response("/order/orderBook", auth)
+    response = get_api_response("/order/orderBook", auth)
+    logger.info(f"Samco order book response: {response}")
+    return response
 
 
 def get_trade_book(auth):
@@ -122,7 +124,7 @@ def place_order_api(data, auth):
     if 'triggerPrice' in newdata:
         payload['triggerPrice'] = newdata['triggerPrice']
 
-    logger.debug(f"Samco place order payload: {payload}")
+    logger.info(f"Samco place order payload: {payload}")
 
     response = client.post(
         f"{BASE_URL}/order/placeOrder",
@@ -133,7 +135,7 @@ def place_order_api(data, auth):
     response.status = response.status_code
 
     response_data = response.json()
-    logger.debug(f"Samco place order response: {response_data}")
+    logger.info(f"Samco place order response: {response_data}")
 
     if response_data.get('status') == 'Success':
         orderid = response_data.get('orderNumber')
@@ -284,8 +286,8 @@ def modify_order(data, auth):
     """
     client = get_httpx_client()
 
-    token = get_token(data['symbol'], data['exchange'])
-    transformed_data = transform_modify_order_data(data, token)
+    orderid = data['orderid']
+    transformed_data = transform_modify_order_data(data)
 
     headers = {
         'Content-Type': 'application/json',
@@ -293,22 +295,23 @@ def modify_order(data, auth):
         'x-session-token': auth
     }
 
-    payload = json.dumps(transformed_data)
+    logger.info(f"Samco modify order payload: {transformed_data}")
 
-    response = client.post(
-        f"{BASE_URL}/order/modifyOrder",
+    response = client.put(
+        f"{BASE_URL}/order/modifyOrder/{orderid}",
         headers=headers,
-        content=payload
+        json=transformed_data
     )
 
     response.status = response.status_code
 
-    data = json.loads(response.text)
+    response_data = json.loads(response.text)
+    logger.info(f"Samco modify order response: {response_data}")
 
-    if data.get("status") == "Success":
-        return {"status": "success", "orderid": data.get("orderNumber")}, 200
+    if response_data.get("status") == "Success":
+        return {"status": "success", "orderid": response_data.get("orderNumber")}, 200
     else:
-        return {"status": "error", "message": data.get("statusMessage", "Failed to modify order")}, response.status
+        return {"status": "error", "message": response_data.get("statusMessage", "Failed to modify order")}, response.status
 
 
 def cancel_all_orders_api(data, auth):
