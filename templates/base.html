@@ -30,22 +30,22 @@
     <link rel="manifest" href="{{ url_for('static', filename='favicon/site.webmanifest') }}">
     <link rel="mask-icon" href="{{ url_for('static', filename='favicon/safari-pinned-tab.svg') }}" color="#5bbad5">
     
+    <!-- Preload critical CSS -->
+    <link rel="preload" href="{{ url_for('static', filename='css/main.css') }}" as="style">
     <!-- Compiled Tailwind CSS with DaisyUI -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
-
-    <!-- Socket.IO (Local) -->
-    <script src="{{ url_for('static', filename='js/socket.io.min.js') }}"></script>
-
-    <!-- Audio for alerts -->
-    <audio id="alert-sound" src="{{ url_for('static', filename='sounds/alert.mp3') }}" preload="auto"></audio>
 
     <!-- Meta tags for color settings -->
     <meta name="msapplication-TileColor" content="#da532c">
     <meta name="theme-color" content="#ffffff">
 
-    <!-- Theme and Mode Scripts -->
-    <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/mode-toggle.js') }}"></script>
+    <!-- Audio for alerts (lazy load) -->
+    <audio id="alert-sound" src="{{ url_for('static', filename='sounds/alert.mp3') }}" preload="none"></audio>
+
+    <!-- Deferred Scripts - won't block rendering -->
+    <script defer src="{{ url_for('static', filename='js/socket.io.min.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/theme.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/mode-toggle.js') }}"></script>
 
     <!-- CSRF Token Helper -->
     <script>
@@ -64,9 +64,9 @@
         }
     </script>
 
-    <!-- Other Custom Scripts -->
-    <script src="{{ url_for('static', filename='js/socket-events.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/mobile-menu.js') }}"></script>
+    <!-- Other Custom Scripts (deferred) -->
+    <script defer src="{{ url_for('static', filename='js/socket-events.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/mobile-menu.js') }}"></script>
 
     {% block head %}{% endblock %}
 </head>
