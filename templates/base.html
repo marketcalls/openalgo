@@ -131,10 +131,15 @@
             <label for="main-drawer" aria-label="close sidebar" class="drawer-overlay"></label>
             <div class="menu p-4 w-80 min-h-full bg-base-200 text-base-content">
                 <!-- Sidebar content here -->
-                <div class="flex items-center gap-2 mb-8">
+                <div class="flex items-center gap-2 mb-4">
                     <img src="{{ url_for('static', filename='favicon/logo.png') }}" alt="OpenAlgo" class="h-8 w-8">
                     <span class="text-xl font-semibold">OpenAlgo</span>
                 </div>
+                {% if session.broker %}
+                <div class="mb-4">
+                    <span class="badge badge-ghost text-base-content/70">{{ session.broker|title }}</span>
+                </div>
+                {% endif %}
                 <ul class="menu menu-lg gap-2">
                     <li>
                         <a href="{{ url_for('dashboard_bp.dashboard') }}" 

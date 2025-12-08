@@ -72,6 +72,10 @@
         
         <!-- Mode Badge and Toggle Container -->
         <div class="mode-controller-container flex items-center gap-2">
+            <!-- Broker Badge -->
+            {% if session.broker %}
+            <div class="badge badge-ghost badge-lg text-base-content/70">{{ session.broker|title }}</div>
+            {% endif %}
             <!-- Mode Badge -->
             <div class="badge badge-lg" id="mode-badge" style="opacity: 0;"></div>
 
