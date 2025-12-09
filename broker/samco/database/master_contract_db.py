@@ -69,6 +69,59 @@ def copy_from_dataframe(df):
         db_session.rollback()
 
 
+def get_index_data():
+    """
+    Returns a DataFrame with index data for Samco.
+    Since Samco's ScripMaster.csv doesn't include indices, we manually define them.
+    """
+    # NSE Indices
+    nse_indices = [
+        {'symbol': 'NIFTY', 'brsymbol': 'Nifty 50', 'name': 'Nifty 50', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_50', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BANKNIFTY', 'brsymbol': 'Nifty Bank', 'name': 'Nifty Bank', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_BANK', 'instrumenttype': 'INDEX'},
+        {'symbol': 'FINNIFTY', 'brsymbol': 'Nifty Fin Service', 'name': 'Nifty Fin Service', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_FIN_SERVICE', 'instrumenttype': 'INDEX'},
+        {'symbol': 'MIDCPNIFTY', 'brsymbol': 'NIFTY MID SELECT', 'name': 'Nifty Mid Select', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_MID_SELECT', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYNXT50', 'brsymbol': 'Nifty Next 50', 'name': 'Nifty Next 50', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_NEXT_50', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTY100', 'brsymbol': 'Nifty 100', 'name': 'Nifty 100', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_100', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTY200', 'brsymbol': 'Nifty 200', 'name': 'Nifty 200', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_200', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTY500', 'brsymbol': 'Nifty 500', 'name': 'Nifty 500', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_500', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYIT', 'brsymbol': 'Nifty IT', 'name': 'Nifty IT', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_IT', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYAUTO', 'brsymbol': 'Nifty Auto', 'name': 'Nifty Auto', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_AUTO', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYPHARMA', 'brsymbol': 'Nifty Pharma', 'name': 'Nifty Pharma', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_PHARMA', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYMETAL', 'brsymbol': 'Nifty Metal', 'name': 'Nifty Metal', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_METAL', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYFMCG', 'brsymbol': 'Nifty FMCG', 'name': 'Nifty FMCG', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_FMCG', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYREALTY', 'brsymbol': 'Nifty Realty', 'name': 'Nifty Realty', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_REALTY', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYENERGY', 'brsymbol': 'Nifty Energy', 'name': 'Nifty Energy', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_ENERGY', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYMEDIA', 'brsymbol': 'Nifty Media', 'name': 'Nifty Media', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_MEDIA', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYPSUBANK', 'brsymbol': 'Nifty PSU Bank', 'name': 'Nifty PSU Bank', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_PSU_BANK', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYPVTBANK', 'brsymbol': 'Nifty Pvt Bank', 'name': 'Nifty Pvt Bank', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_PVT_BANK', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYMIDCAP50', 'brsymbol': 'Nifty Midcap 50', 'name': 'Nifty Midcap 50', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_MIDCAP_50', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYINFRA', 'brsymbol': 'Nifty Infra', 'name': 'Nifty Infra', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_INFRA', 'instrumenttype': 'INDEX'},
+        {'symbol': 'INDIAVIX', 'brsymbol': 'India VIX', 'name': 'India VIX', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'INDIA_VIX', 'instrumenttype': 'INDEX'},
+    ]
+
+    # BSE Indices
+    bse_indices = [
+        {'symbol': 'SENSEX', 'brsymbol': 'SENSEX', 'name': 'S&P BSE SENSEX', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'SENSEX', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BANKEX', 'brsymbol': 'BANKEX', 'name': 'S&P BSE BANKEX', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BANKEX', 'instrumenttype': 'INDEX'},
+        {'symbol': 'SENSEX50', 'brsymbol': 'SENSEX 50', 'name': 'S&P BSE SENSEX 50', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'SENSEX_50', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSE100', 'brsymbol': 'BSE 100', 'name': 'S&P BSE 100', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_100', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSE200', 'brsymbol': 'BSE 200', 'name': 'S&P BSE 200', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_200', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSE500', 'brsymbol': 'BSE 500', 'name': 'S&P BSE 500', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_500', 'instrumenttype': 'INDEX'},
+    ]
+
+    # Combine all indices
+    all_indices = nse_indices + bse_indices
+
+    # Add default values for other required columns
+    for idx in all_indices:
+        idx['expiry'] = None
+        idx['strike'] = 0.0
+        idx['lotsize'] = 1
+        idx['tick_size'] = 0.05
+
+    return pd.DataFrame(all_indices)
+
+
 def master_contract_download():
     """
     Download and process Samco master contract data.
@@ -100,6 +153,11 @@ def master_contract_download():
 
         # Process the data
         token_df = process_samco_data(df)
+
+        # Add index data (not included in ScripMaster.csv)
+        index_df = get_index_data()
+        logger.info(f"Adding {len(index_df)} index records")
+        token_df = pd.concat([token_df, index_df], ignore_index=True)
 
         # Delete temp file
         if os.path.exists(output_path):
