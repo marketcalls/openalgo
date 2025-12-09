@@ -205,7 +205,7 @@ class BrokerData:
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
-        Get market depth for given symbol
+        Get market depth for given symbol using Samco /marketDepth API
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX)
@@ -213,68 +213,106 @@ class BrokerData:
             dict: Market depth data with bids, asks and other details
         """
         try:
+            # Index symbols don't have market depth - return quote data with empty depth
+            if exchange in ['NSE_INDEX', 'BSE_INDEX']:
+                quote_data = self._get_index_quotes(symbol, exchange)
+                return {
+                    'bids': [{'price': 0, 'quantity': 0} for _ in range(5)],
+                    'asks': [{'price': 0, 'quantity': 0} for _ in range(5)],
+                    'high': quote_data.get('high', 0),
+                    'low': quote_data.get('low', 0),
+                    'ltp': quote_data.get('ltp', 0),
+                    'ltq': 0,
+                    'open': quote_data.get('open', 0),
+                    'prev_close': quote_data.get('prev_close', 0),
+                    'volume': quote_data.get('volume', 0),
+                    'oi': 0,
+                    'totalbuyqty': 0,
+                    'totalsellqty': 0
+                }
+
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
 
-            # Build query parameters
-            params = f"symbolName={br_symbol}"
+            # Build payload for market depth API
+            payload = {
+                "symbolName": br_symbol
+            }
+            # Add exchange if not NSE (NSE is default)
             if exchange and exchange != 'NSE':
-                params += f"&exchange={exchange}"
+                payload["exchange"] = exchange
 
-            response = get_api_response(f"/quote/getQuote?{params}",
+            response = get_api_response("/marketDepth",
                                        self.auth_token,
-                                       "GET")
+                                       "POST",
+                                       payload)
 
             if response.get('status') != 'Success':
                 raise Exception(f"Error from Samco API: {response.get('statusMessage', 'Unknown error')}")
 
-            # Extract quote data
-            quote = response.get('quoteDetails', {})
-            if not quote:
+            # Extract market depth data
+            market_depth_details = response.get('MarketDepthDetails', {})
+            depth = market_depth_details.get('marketDepth', {})
+            if not depth:
                 raise Exception("No depth data received")
 
             # Format bids and asks with exactly 5 entries each
             bids = []
             asks = []
 
-            # Process buy orders (top 5)
-            buy_orders = quote.get('bestBids', [])
+            # Process buy orders (top 5) - bestFiveBid
+            buy_orders = depth.get('bestFiveBid', [])
             for i in range(5):
                 if i < len(buy_orders):
                     bid = buy_orders[i]
                     bids.append({
-                        'price': safe_float(bid.get('price')),
-                        'quantity': safe_int(bid.get('quantity'))
+                        'price': safe_float(bid.get('bidPrice')),
+                        'quantity': safe_int(bid.get('bidSize'))
                     })
                 else:
                     bids.append({'price': 0, 'quantity': 0})
 
-            # Process sell orders (top 5)
-            sell_orders = quote.get('bestAsks', [])
+            # Process sell orders (top 5) - bestFiveAsk
+            sell_orders = depth.get('bestFiveAsk', [])
             for i in range(5):
                 if i < len(sell_orders):
                     ask = sell_orders[i]
                     asks.append({
-                        'price': safe_float(ask.get('price')),
-                        'quantity': safe_int(ask.get('quantity'))
+                        'price': safe_float(ask.get('askPrice')),
+                        'quantity': safe_int(ask.get('askSize'))
                     })
                 else:
                     asks.append({'price': 0, 'quantity': 0})
+
+            # Get LTP from quote API since marketDepth doesn't provide OHLC
+            # We'll fetch additional quote data for complete response
+            try:
+                quote_data = self.get_quotes(symbol, exchange)
+                ltp = quote_data.get('ltp', 0)
+                open_price = quote_data.get('open', 0)
+                high = quote_data.get('high', 0)
+                low = quote_data.get('low', 0)
+                prev_close = quote_data.get('prev_close', 0)
+                volume = quote_data.get('volume', 0)
+                oi = quote_data.get('oi', 0)
+            except Exception:
+                # If quote fetch fails, use zeros
+                ltp = open_price = high = low = prev_close = volume = oi = 0
 
             # Return depth data in common format matching REST API response
             return {
                 'bids': bids,
                 'asks': asks,
-                'high': safe_float(quote.get('highValue')),
-                'low': safe_float(quote.get('lowValue')),
-                'ltp': safe_float(quote.get('lastTradedPrice')),
-                'ltq': safe_int(quote.get('lastTradedQuantity')),
-                'open': safe_float(quote.get('openValue')),
-                'prev_close': safe_float(quote.get('previousClose')),
-                'volume': safe_int(quote.get('totalTradedVolume')),
-                'oi': safe_int(quote.get('openInterest')),
-                'totalbuyqty': safe_int(quote.get('totalBuyQuantity')),
-                'totalsellqty': safe_int(quote.get('totalSellQuantity'))
+                'high': high,
+                'low': low,
+                'ltp': ltp,
+                'ltq': 0,  # Not available in marketDepth response
+                'open': open_price,
+                'prev_close': prev_close,
+                'volume': volume,
+                'oi': oi,
+                'totalbuyqty': safe_int(depth.get('tBuyQty')),
+                'totalsellqty': safe_int(depth.get('tSellQty'))
             }
 
         except Exception as e:
