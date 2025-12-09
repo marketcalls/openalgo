@@ -280,6 +280,230 @@ class BrokerData:
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
 
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols with automatic batching
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            BATCH_SIZE = 25  # Samco API limit per request
+            RATE_LIMIT_DELAY = 0.2  # Rate limit: 5 requests per second
+
+            # Separate index symbols from regular symbols
+            index_symbols = []
+            regular_symbols = []
+
+            for item in symbols:
+                if item['exchange'] in ['NSE_INDEX', 'BSE_INDEX']:
+                    index_symbols.append(item)
+                else:
+                    regular_symbols.append(item)
+
+            results = []
+
+            # Process regular symbols via multiQuote API with batching
+            if regular_symbols:
+                if len(regular_symbols) > BATCH_SIZE:
+                    logger.info(f"Processing {len(regular_symbols)} symbols in batches of {BATCH_SIZE}")
+
+                    for i in range(0, len(regular_symbols), BATCH_SIZE):
+                        batch = regular_symbols[i:i + BATCH_SIZE]
+                        logger.debug(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(regular_symbols))}")
+
+                        batch_results = self._process_multiquotes_batch(batch)
+                        results.extend(batch_results)
+
+                        # Rate limit delay between batches
+                        if i + BATCH_SIZE < len(regular_symbols):
+                            time.sleep(RATE_LIMIT_DELAY)
+
+                    logger.info(f"Successfully processed {len(results)} quotes in {(len(regular_symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
+                else:
+                    regular_results = self._process_multiquotes_batch(regular_symbols)
+                    results.extend(regular_results)
+
+            # Process index symbols individually (multiQuote INDEX key needs index names)
+            if index_symbols:
+                index_results = self._process_index_quotes_batch(index_symbols)
+                results.extend(index_results)
+
+            return results
+
+        except Exception as e:
+            logger.exception("Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_multiquotes_batch(self, symbols: list) -> list:
+        """
+        Process a batch of regular symbols using Samco multiQuote API
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+        Returns:
+            list: List of quote data for the batch
+        """
+        # Group symbols by exchange
+        exchange_symbols = {}  # {exchange: [br_symbol1, br_symbol2, ...]}
+        symbol_map = {}  # {exchange:br_symbol -> {symbol, exchange}}
+        skipped_symbols = []
+
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            try:
+                br_symbol = get_br_symbol(symbol, exchange)
+
+                if not br_symbol:
+                    logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve broker symbol")
+                    skipped_symbols.append({
+                        'symbol': symbol,
+                        'exchange': exchange,
+                        'error': 'Could not resolve broker symbol'
+                    })
+                    continue
+
+                # Map exchange for API (MFO is separate in Samco)
+                api_exchange = exchange
+
+                if api_exchange not in exchange_symbols:
+                    exchange_symbols[api_exchange] = []
+                exchange_symbols[api_exchange].append(br_symbol)
+
+                # Store mapping for response parsing
+                symbol_map[f"{api_exchange}:{br_symbol}"] = {
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'br_symbol': br_symbol
+                }
+
+            except Exception as e:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': str(e)
+                })
+                continue
+
+        # Return skipped symbols if no valid symbols
+        if not exchange_symbols:
+            logger.warning("No valid symbols to fetch quotes for")
+            return skipped_symbols
+
+        # Build payload for Samco multiQuote API
+        payload = {}
+        for exchange, br_symbols in exchange_symbols.items():
+            payload[exchange] = br_symbols
+
+        logger.info(f"Requesting multiquotes for {sum(len(s) for s in exchange_symbols.values())} instruments across {len(exchange_symbols)} exchanges")
+        logger.debug(f"Payload: {payload}")
+
+        # Make API call
+        response = get_api_response("/quote/multiQuote",
+                                   self.auth_token,
+                                   "POST",
+                                   payload)
+
+        if response.get('status') != 'Success':
+            error_msg = f"Error from Samco API: {response.get('statusMessage', 'Unknown error')}"
+            logger.error(error_msg)
+            logger.debug(f"Full API response: {response}")
+            raise Exception(error_msg)
+
+        # Parse response and build results
+        results = []
+        multi_quotes = response.get('multiQuotes', [])
+
+        # Create a lookup by exchange:tradingSymbol for quick access
+        quotes_by_symbol = {}
+        for quote in multi_quotes:
+            exchange = quote.get('exchange')
+            trading_symbol = quote.get('tradingSymbol')
+            symbol_name = quote.get('symbolName')
+            if exchange and trading_symbol:
+                quotes_by_symbol[f"{exchange}:{trading_symbol}"] = quote
+                # Also map by symbolName for equity
+                if symbol_name:
+                    quotes_by_symbol[f"{exchange}:{symbol_name}"] = quote
+
+        # Build results from symbol_map
+        for key, original in symbol_map.items():
+            quote = quotes_by_symbol.get(key)
+
+            # Try alternate key formats
+            if not quote:
+                # Try with just the broker symbol
+                for qkey, qval in quotes_by_symbol.items():
+                    if original['br_symbol'] in qkey:
+                        quote = qval
+                        break
+
+            if not quote:
+                logger.warning(f"No quote data found for {original['symbol']} ({key})")
+                results.append({
+                    'symbol': original['symbol'],
+                    'exchange': original['exchange'],
+                    'error': 'No quote data available'
+                })
+                continue
+
+            # Parse and format quote data
+            result_item = {
+                'symbol': original['symbol'],
+                'exchange': original['exchange'],
+                'data': {
+                    'bid': safe_float(quote.get('bidPrice')),
+                    'ask': safe_float(quote.get('askPrice')),
+                    'open': safe_float(quote.get('open')),
+                    'high': safe_float(quote.get('high')),
+                    'low': safe_float(quote.get('low')),
+                    'ltp': safe_float(quote.get('lastTradePrice')),
+                    'prev_close': safe_float(quote.get('previousClose')),
+                    'volume': safe_int(quote.get('totalTradeVolume')),
+                    'oi': safe_int(quote.get('openInterest'))
+                }
+            }
+            results.append(result_item)
+
+        # Include skipped symbols in results
+        return skipped_symbols + results
+
+    def _process_index_quotes_batch(self, symbols: list) -> list:
+        """
+        Process index symbols using Samco indexQuote API
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys for indices
+        Returns:
+            list: List of quote data for index symbols
+        """
+        results = []
+
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            try:
+                quote_data = self._get_index_quotes(symbol, exchange)
+                results.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'data': quote_data
+                })
+            except Exception as e:
+                logger.warning(f"Error fetching index quote for {symbol}: {str(e)}")
+                results.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': str(e)
+                })
+
+        return results
+
     def get_history(self, symbol: str, exchange: str, interval: str,
                    start_date: str, end_date: str) -> pd.DataFrame:
         """
