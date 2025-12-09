@@ -701,12 +701,18 @@ class BrokerData:
             pd.DataFrame: Intraday data
         """
         try:
+            from urllib.parse import quote
+
             # Set time components for the date range
             from_datetime = from_date.replace(hour=0, minute=0, second=0, microsecond=0)
             to_datetime = to_date.replace(hour=23, minute=59, second=59, microsecond=0)
 
             from_date_str = from_datetime.strftime('%Y-%m-%d %H:%M:%S')
             to_date_str = to_datetime.strftime('%Y-%m-%d %H:%M:%S')
+
+            # URL encode the date strings (spaces become %20)
+            from_date_encoded = quote(from_date_str)
+            to_date_encoded = quote(to_date_str)
 
             # Map interval (default is 1 minute if not specified)
             interval_param = ""
@@ -727,12 +733,12 @@ class BrokerData:
             if is_index:
                 # Use index intraday endpoint
                 index_name = self._get_index_name(symbol)
-                params = f"indexName={index_name}&fromDate={from_date_str}&toDate={to_date_str}{interval_param}"
+                params = f"indexName={quote(index_name)}&fromDate={from_date_encoded}&toDate={to_date_encoded}{interval_param}"
                 endpoint = f"/intraday/indexCandleData?{params}"
                 data_key = 'indexIntraDayCandleData'
             else:
                 # Use regular intraday endpoint
-                params = f"symbolName={br_symbol}&fromDate={from_date_str}&toDate={to_date_str}{interval_param}"
+                params = f"symbolName={quote(br_symbol)}&fromDate={from_date_encoded}&toDate={to_date_encoded}{interval_param}"
                 if exchange and exchange != 'NSE':
                     params += f"&exchange={exchange}"
                 endpoint = f"/intraday/candleData?{params}"
