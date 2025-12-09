@@ -300,6 +300,18 @@ def process_mstock_json(json_data):
     # Keep original broker exchange
     df['brexchange'] = df['exchange']
 
+    # -------------------------------------------------------------------
+    # Map Currency Derivatives Exchange
+    # MStock API returns NSE/BSE for currency, but OpenAlgo uses CDS/BCD
+    # -------------------------------------------------------------------
+    # NSE Currency Derivatives → CDS (brexchange stays NSE)
+    mask_nse_currency = (df['instrumenttype'].isin(['OPTCUR', 'FUTCUR', 'OPTIRC', 'FUTIRC'])) & (df['exchange'] == 'NSE')
+    df.loc[mask_nse_currency, 'exchange'] = 'CDS'
+
+    # BSE Currency Derivatives → BCD (brexchange stays BSE)
+    mask_bse_currency = (df['instrumenttype'].isin(['OPTCUR', 'FUTCUR', 'OPTIRC', 'FUTIRC'])) & (df['exchange'] == 'BSE')
+    df.loc[mask_bse_currency, 'exchange'] = 'BCD'
+
     # Clean up equity symbols (remove -EQ, -BE suffixes)
     df['symbol'] = df['symbol'].str.replace(r'-EQ$|-BZ$', '', regex=True)
 
@@ -432,13 +444,34 @@ def process_mstock_json(json_data):
         'PE'
     )
 
-    # Currency Futures: USDINR10MAY24FUT
+    # Currency Futures (CDS - NSE): USDINR10MAY24FUT
     mask = (df['instrumenttype'].isin(['FUTCUR', 'FUTIRC'])) & (df['exchange'] == 'CDS') & (df['expiry'].str.len() > 0)
     df.loc[mask, 'symbol'] = df.loc[mask, 'name'] + df.loc[mask, 'expiry'].str.replace('-', '', regex=False) + 'FUT'
 
-    # Currency Options: USDINR19APR2482CE
+    # Currency Options (CDS - NSE): USDINR19APR2482CE
     mask_ce = (df['instrumenttype'].isin(['OPTCUR', 'OPTIRC'])) & (df['exchange'] == 'CDS') & (df['brsymbol'].str.endswith('CE', na=False))
     mask_pe = (df['instrumenttype'].isin(['OPTCUR', 'OPTIRC'])) & (df['exchange'] == 'CDS') & (df['brsymbol'].str.endswith('PE', na=False))
+
+    df.loc[mask_ce, 'symbol'] = (
+        df.loc[mask_ce, 'name'] +
+        df.loc[mask_ce, 'expiry'].str.replace('-', '', regex=False) +
+        df.loc[mask_ce, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
+        'CE'
+    )
+    df.loc[mask_pe, 'symbol'] = (
+        df.loc[mask_pe, 'name'] +
+        df.loc[mask_pe, 'expiry'].str.replace('-', '', regex=False) +
+        df.loc[mask_pe, 'strike'].astype(str).str.replace(r'\.0$', '', regex=True) +
+        'PE'
+    )
+
+    # Currency Futures (BCD - BSE): USDINR10MAY24FUT
+    mask = (df['instrumenttype'].isin(['FUTCUR', 'FUTIRC'])) & (df['exchange'] == 'BCD') & (df['expiry'].str.len() > 0)
+    df.loc[mask, 'symbol'] = df.loc[mask, 'name'] + df.loc[mask, 'expiry'].str.replace('-', '', regex=False) + 'FUT'
+
+    # Currency Options (BCD - BSE): USDINR19APR2482CE
+    mask_ce = (df['instrumenttype'].isin(['OPTCUR', 'OPTIRC'])) & (df['exchange'] == 'BCD') & (df['brsymbol'].str.endswith('CE', na=False))
+    mask_pe = (df['instrumenttype'].isin(['OPTCUR', 'OPTIRC'])) & (df['exchange'] == 'BCD') & (df['brsymbol'].str.endswith('PE', na=False))
 
     df.loc[mask_ce, 'symbol'] = (
         df.loc[mask_ce, 'name'] +
