@@ -548,12 +548,247 @@ class BrokerData:
         Get historical data for given symbol
         Args:
             symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX)
+            exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX)
             interval: Candle interval (1m, 5m, 10m, 15m, 30m, 1h, D)
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
         Returns:
             pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume, oi]
         """
-        # Placeholder - historical data endpoint to be implemented based on Samco docs
-        raise NotImplementedError("Historical data not yet implemented for Samco broker")
+        try:
+            # Convert symbol to broker format
+            br_symbol = get_br_symbol(symbol, exchange)
+            logger.debug(f"Debug - Symbol: {symbol}, Exchange: {exchange}, Broker Symbol: {br_symbol}")
+
+            # Convert dates to datetime objects
+            from_date = pd.to_datetime(start_date)
+            to_date = pd.to_datetime(end_date)
+            current_date = pd.Timestamp.now().normalize()
+
+            # Determine if this is an index symbol
+            is_index = exchange in ['NSE_INDEX', 'BSE_INDEX']
+
+            # For daily timeframe, use historical endpoint
+            if interval == 'D':
+                # Check if end_date is today - need to combine historical + intraday
+                if to_date.date() == current_date.date() and from_date.date() < current_date.date():
+                    logger.debug("Debug - Daily data including today - fetching historical + intraday")
+
+                    yesterday = current_date - pd.Timedelta(days=1)
+                    historical_df = self._get_historical_data(
+                        symbol, br_symbol, exchange, interval,
+                        from_date, yesterday, is_index
+                    )
+
+                    # For daily, we can skip intraday as historical usually has yesterday's data
+                    return historical_df
+                else:
+                    return self._get_historical_data(symbol, br_symbol, exchange, interval, from_date, to_date, is_index)
+
+            # For intraday timeframes (1m, 5m, etc.), use intraday endpoint
+            # Samco intraday endpoint supports date range
+            return self._get_intraday_data_range(symbol, br_symbol, exchange, interval, from_date, to_date, is_index)
+
+        except Exception as e:
+            logger.error(f"Debug - Error: {str(e)}")
+            raise Exception(f"Error fetching historical data: {str(e)}")
+
+    def _get_historical_data(self, symbol: str, br_symbol: str, exchange: str, interval: str,
+                             from_date: pd.Timestamp, to_date: pd.Timestamp, is_index: bool) -> pd.DataFrame:
+        """
+        Helper method to fetch historical data from Samco historical endpoint
+        Args:
+            symbol: Trading symbol (OpenAlgo format)
+            br_symbol: Broker symbol
+            exchange: Exchange
+            interval: Candle interval
+            from_date: Start datetime
+            to_date: End datetime
+            is_index: Whether this is an index symbol
+        Returns:
+            pd.DataFrame: Historical data
+        """
+        try:
+            # Check for unsupported timeframes - Samco historical only supports daily
+            if interval != 'D':
+                logger.debug(f"Debug - Historical endpoint only supports daily data, interval '{interval}' not available")
+                return pd.DataFrame(columns=['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi'])
+
+            # Format dates for Samco API (yyyy-MM-dd)
+            from_date_str = from_date.strftime('%Y-%m-%d')
+            to_date_str = to_date.strftime('%Y-%m-%d')
+
+            if is_index:
+                # Use index historical endpoint
+                index_name = self._get_index_name(symbol)
+                params = f"indexName={index_name}&fromDate={from_date_str}&toDate={to_date_str}"
+                endpoint = f"/history/indexCandleData?{params}"
+                data_key = 'indexCandleData'
+            else:
+                # Use regular historical endpoint
+                params = f"symbolName={br_symbol}&fromDate={from_date_str}&toDate={to_date_str}"
+                if exchange and exchange != 'NSE':
+                    params += f"&exchange={exchange}"
+                endpoint = f"/history/candleData?{params}"
+                data_key = 'historicalCandleData'
+
+            logger.debug(f"Debug - Historical API endpoint: {endpoint}")
+
+            response = get_api_response(endpoint, self.auth_token, "GET")
+
+            if response.get('status') != 'Success':
+                logger.warning(f"Debug - Historical API error: {response.get('statusMessage', 'Unknown error')}")
+                return pd.DataFrame(columns=['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi'])
+
+            # Extract candle data
+            candles = response.get(data_key, [])
+            if not candles:
+                logger.debug("Debug - No historical data received")
+                return pd.DataFrame(columns=['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi'])
+
+            # Convert to DataFrame
+            df = pd.DataFrame(candles)
+            logger.debug(f"Debug - Received {len(candles)} historical candles")
+
+            # Rename date column to timestamp
+            if 'date' in df.columns:
+                df.rename(columns={'date': 'timestamp'}, inplace=True)
+
+            # Parse timestamp
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+            # For daily timeframe, normalize to midnight (date only, no time component)
+            df['timestamp'] = df['timestamp'].dt.normalize()
+
+            # Convert to Unix epoch (UTC midnight for the date)
+            df['timestamp'] = df['timestamp'].astype('int64') // 10**9
+
+            # Ensure numeric columns
+            numeric_columns = ['open', 'high', 'low', 'close', 'volume']
+            for col in numeric_columns:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+
+            # Add OI column if not present
+            if 'oi' not in df.columns:
+                df['oi'] = 0
+
+            # Sort by timestamp and remove duplicates
+            df = df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
+
+            # Reorder columns to match OpenAlgo format
+            df = df[['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi']]
+
+            return df
+
+        except Exception as e:
+            logger.error(f"Debug - Error in _get_historical_data: {str(e)}")
+            raise
+
+    def _get_intraday_data_range(self, symbol: str, br_symbol: str, exchange: str, interval: str,
+                                   from_date: pd.Timestamp, to_date: pd.Timestamp, is_index: bool) -> pd.DataFrame:
+        """
+        Get intraday data for a date range using Samco intraday endpoint
+        Args:
+            symbol: Trading symbol (OpenAlgo format)
+            br_symbol: Broker symbol
+            exchange: Exchange
+            interval: Candle interval
+            from_date: Start date
+            to_date: End date
+            is_index: Whether this is an index symbol
+        Returns:
+            pd.DataFrame: Intraday data
+        """
+        try:
+            # Set time components for the date range
+            from_datetime = from_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            to_datetime = to_date.replace(hour=23, minute=59, second=59, microsecond=0)
+
+            from_date_str = from_datetime.strftime('%Y-%m-%d %H:%M:%S')
+            to_date_str = to_datetime.strftime('%Y-%m-%d %H:%M:%S')
+
+            # Map interval (default is 1 minute if not specified)
+            interval_param = ""
+            if interval and interval != '1m':
+                # Samco accepts interval as minutes
+                interval_map = {
+                    '1m': '1',
+                    '5m': '5',
+                    '10m': '10',
+                    '15m': '15',
+                    '30m': '30',
+                    '1h': '60'
+                }
+                interval_val = interval_map.get(interval)
+                if interval_val:
+                    interval_param = f"&interval={interval_val}"
+
+            if is_index:
+                # Use index intraday endpoint
+                index_name = self._get_index_name(symbol)
+                params = f"indexName={index_name}&fromDate={from_date_str}&toDate={to_date_str}{interval_param}"
+                endpoint = f"/intraday/indexCandleData?{params}"
+                data_key = 'indexIntraDayCandleData'
+            else:
+                # Use regular intraday endpoint
+                params = f"symbolName={br_symbol}&fromDate={from_date_str}&toDate={to_date_str}{interval_param}"
+                if exchange and exchange != 'NSE':
+                    params += f"&exchange={exchange}"
+                endpoint = f"/intraday/candleData?{params}"
+                data_key = 'intradayCandleData'
+
+            logger.debug(f"Debug - Intraday API endpoint: {endpoint}")
+
+            response = get_api_response(endpoint, self.auth_token, "GET")
+
+            if response.get('status') != 'Success':
+                logger.warning(f"Debug - Intraday API error: {response.get('statusMessage', 'Unknown error')}")
+                return pd.DataFrame(columns=['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi'])
+
+            # Extract candle data
+            candles = response.get(data_key, [])
+            if not candles:
+                logger.debug("Debug - No intraday data received")
+                return pd.DataFrame(columns=['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi'])
+
+            # Convert to DataFrame
+            df = pd.DataFrame(candles)
+            logger.debug(f"Debug - Received {len(candles)} intraday candles")
+
+            # Rename dateTime column to timestamp
+            if 'dateTime' in df.columns:
+                df.rename(columns={'dateTime': 'timestamp'}, inplace=True)
+
+            # Parse timestamp (format: "2019-11-11 10:01:00")
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+            # Convert to IST and then to UTC for epoch
+            df['timestamp'] = df['timestamp'].dt.tz_localize('Asia/Kolkata')
+            df['timestamp'] = df['timestamp'].dt.tz_convert('UTC')
+            df['timestamp'] = df['timestamp'].dt.tz_localize(None)
+
+            # Convert to Unix epoch
+            df['timestamp'] = df['timestamp'].astype('int64') // 10**9
+
+            # Ensure numeric columns
+            numeric_columns = ['open', 'high', 'low', 'close', 'volume']
+            for col in numeric_columns:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+
+            # Add OI column if not present
+            if 'oi' not in df.columns:
+                df['oi'] = 0
+
+            # Sort by timestamp and remove duplicates
+            df = df.sort_values('timestamp').drop_duplicates(subset=['timestamp']).reset_index(drop=True)
+
+            # Reorder columns to match OpenAlgo format
+            df = df[['close', 'high', 'low', 'open', 'timestamp', 'volume', 'oi']]
+
+            return df
+
+        except Exception as e:
+            logger.error(f"Debug - Error fetching intraday data: {str(e)}")
+            raise Exception(f"Error fetching intraday data: {str(e)}")
