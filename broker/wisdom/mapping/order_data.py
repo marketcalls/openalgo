@@ -255,10 +255,10 @@ def transform_tradebook_data(tradebook_data):
 def map_position_data(position_data):
     """
      Processes and modifies a list of order dictionaries based on specific conditions.
-     
+
      Parameters:
      - order_data: A list of dictionaries, where each dictionary represents an order.
-     
+
      Returns:
      - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
@@ -266,19 +266,24 @@ def map_position_data(position_data):
     #logger.info(f"order_data: {order_data}")
     if 'result' not in position_data or not position_data['result']:
         logger.info("No data available.")
-        return []  # Return an empty list if no orders are available
-    
+        return {"positionList": []}  # Return empty structure for consistency
+
     position_data = position_data['result']
- 
+
     #logger.info(f"position_data: {position_data}")
-    
- 
+
+
     return position_data
 
 
 def transform_positions_data(positions_data):
     logger.info(f"positions_data: {positions_data}")
-    positions_data = positions_data.get("positionList", [])
+
+    # Handle case where positions_data is already a list (legacy/error case)
+    if isinstance(positions_data, list):
+        positions_data = positions_data
+    else:
+        positions_data = positions_data.get("positionList", [])
     transformed_data = []
     # Define exchange mappings
     exchange_mapping = {
