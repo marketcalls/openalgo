@@ -278,12 +278,7 @@ def map_position_data(position_data):
 
 def transform_positions_data(positions_data):
     logger.info(f"positions_data: {positions_data}")
-
-    # Handle case where positions_data is already a list (legacy/error case)
-    if isinstance(positions_data, list):
-        positions_data = positions_data
-    else:
-        positions_data = positions_data.get("positionList", [])
+    positions_data = positions_data.get("positionList", [])
     transformed_data = []
     # Define exchange mappings
     exchange_mapping = {
