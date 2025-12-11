@@ -502,30 +502,72 @@ def transform_holdings_data(holdings_data):
     """
     Transforms mStock Type B holdings data to OpenAlgo format.
 
+    Can handle two input formats:
+    1. Raw API response: {"status": "true", "data": [...]}
+    2. Mapped data from map_portfolio_data: {"holdings": [...], "totalholding": ...}
+
+    mStock Type B holdings fields:
+    - tradingsymbol, exchange, quantity, averageprice, ltp
+    - profitandloss, pnlpercentage, isin, symboltoken, etc.
+
     Parameters:
-    - holdings_data: Response from holdings API
+    - holdings_data: Response from holdings API or mapped portfolio data
 
     Returns:
     - List of holdings in OpenAlgo format
     """
     transformed_data = []
 
-    if 'data' in holdings_data and holdings_data['data']:
-        for holding in holdings_data['data']:
-            # Map product type
-            producttype = holding.get('product', '')
-            if producttype == 'DELIVERY':
-                producttype = 'CNC'
+    # Handle mapped data format (from map_portfolio_data)
+    if 'holdings' in holdings_data and holdings_data['holdings']:
+        holdings_list = holdings_data['holdings']
+    # Handle raw API response format
+    elif 'data' in holdings_data and holdings_data['data']:
+        holdings_list = holdings_data['data']
+    else:
+        logger.info("No holdings data to transform")
+        return transformed_data
 
-            transformed_holding = {
-                "symbol": holding.get('trading_symbol') or holding.get('tradingsymbol', ''),
-                "exchange": holding.get('exchange', ''),
-                "quantity": holding.get('quantity', 0),
-                "product": producttype,
-                "pnl": holding.get('pnl', 0.0),
-                "pnlpercent": holding.get('pnl_percentage') or holding.get('pnlpercentage', 0.0)
-            }
-            transformed_data.append(transformed_holding)
+    for holding in holdings_list:
+        # Get symbol (already mapped by map_portfolio_data or raw)
+        symbol = holding.get('tradingsymbol', '')
+
+        # Get exchange, default to NSE for equity holdings
+        exchange = holding.get('exchange') or 'NSE'
+
+        # Map product type - mStock Type B returns DELIVERY or null for holdings
+        producttype = holding.get('product', '')
+        if producttype == 'DELIVERY' or not producttype:
+            producttype = 'CNC'
+
+        # Get quantity
+        quantity = holding.get('quantity', 0)
+        if isinstance(quantity, str):
+            try:
+                quantity = int(quantity)
+            except (ValueError, TypeError):
+                quantity = 0
+
+        # Get P&L - mStock Type B uses 'profitandloss' and 'pnlpercentage'
+        try:
+            pnl = float(holding.get('profitandloss', 0) or 0)
+        except (ValueError, TypeError):
+            pnl = 0.0
+
+        try:
+            pnl_percent = float(holding.get('pnlpercentage', 0) or 0)
+        except (ValueError, TypeError):
+            pnl_percent = 0.0
+
+        transformed_holding = {
+            "symbol": symbol,
+            "exchange": exchange,
+            "quantity": quantity,
+            "product": producttype,
+            "pnl": round(pnl, 2),
+            "pnlpercent": round(pnl_percent, 2)
+        }
+        transformed_data.append(transformed_holding)
 
     return transformed_data
 
@@ -534,20 +576,69 @@ def map_portfolio_data(portfolio_data):
     """
     Processes portfolio/holdings data from mStock Type B API.
 
+    mStock Type B holdings API returns:
+    {
+        "status": "true",
+        "message": "SUCCESS",
+        "data": [
+            {
+                "tradingsymbol": "RELIANCE-EQ",
+                "exchange": "NSE",
+                "quantity": 10,
+                "averageprice": 2500.50,
+                "ltp": 2550.00,
+                "profitandloss": 495.00,
+                "pnlpercentage": 1.98,
+                ...
+            }
+        ]
+    }
+
     Parameters:
     - portfolio_data: Response from holdings API
 
     Returns:
-    - Processed portfolio data
+    - Processed portfolio data with 'holdings' key for compatibility
     """
+    logger.debug(f"map_portfolio_data received: {portfolio_data}")
+
     if portfolio_data.get('data') is None:
         logger.info("No portfolio data available.")
         return {}
 
     data = portfolio_data['data']
 
-    if 'holdings' in data and data['holdings']:
-        for holding in data['holdings']:
+    # mStock Type B returns data as a flat array, not nested under 'holdings'
+    # Convert to expected format for compatibility with OpenAlgo
+    if isinstance(data, list):
+        # Process each holding in the flat array
+        holdings = []
+        for holding in data:
+            symbol = holding.get('tradingsymbol', '')
+            exchange = holding.get('exchange') or 'NSE'
+
+            # Get OpenAlgo symbol from broker symbol
+            if symbol:
+                oa_symbol = get_oa_symbol(symbol, exchange)
+                if oa_symbol:
+                    holding['tradingsymbol'] = oa_symbol
+
+            # Map product type - mStock Type B returns DELIVERY or null for holdings
+            product = holding.get('product', '')
+            if product == 'DELIVERY' or not product:
+                holding['product'] = 'CNC'
+
+            holdings.append(holding)
+
+        # Return in expected format with 'holdings' key
+        return {
+            'holdings': holdings,
+            'totalholding': None  # mStock doesn't provide summary in same response
+        }
+
+    # Fallback for nested structure (if API changes)
+    if isinstance(data, dict) and 'holdings' in data:
+        for holding in data.get('holdings', []):
             symbol = holding.get('trading_symbol') or holding.get('tradingsymbol')
             exchange = holding.get('exchange')
             if symbol and exchange:
@@ -555,19 +646,22 @@ def map_portfolio_data(portfolio_data):
                 if oa_symbol:
                     holding['tradingsymbol'] = oa_symbol
 
-            # Map product type
             if holding.get('product') == 'DELIVERY':
                 holding['product'] = 'CNC'
+        return data
 
-    return data
+    logger.warning(f"Unexpected portfolio data format: {type(data)}")
+    return {}
 
 
 def calculate_portfolio_statistics(holdings_data):
     """
     Calculates portfolio statistics from holdings data.
 
+    mStock Type B doesn't provide a summary endpoint, so we calculate from holdings.
+
     Parameters:
-    - holdings_data: Holdings response data
+    - holdings_data: Holdings response data (mapped or raw)
 
     Returns:
     - Dictionary with portfolio statistics
@@ -577,16 +671,41 @@ def calculate_portfolio_statistics(holdings_data):
     totalprofitandloss = 0
     totalpnlpercentage = 0
 
-    if 'data' in holdings_data and 'total_holding' in holdings_data['data']:
-        total_holding = holdings_data['data']['total_holding']
-        totalholdingvalue = total_holding.get('total_holding_value', 0)
-        totalinvvalue = total_holding.get('total_investment_value', 0)
-        totalprofitandloss = total_holding.get('total_pnl', 0)
-        totalpnlpercentage = total_holding.get('total_pnl_percentage', 0)
+    # Get holdings list from different formats
+    holdings_list = []
+    if 'holdings' in holdings_data and holdings_data['holdings']:
+        holdings_list = holdings_data['holdings']
+    elif 'data' in holdings_data and isinstance(holdings_data['data'], list):
+        holdings_list = holdings_data['data']
+
+    # Calculate totals from individual holdings
+    if holdings_list:
+        for holding in holdings_list:
+            try:
+                # Get quantity and prices
+                quantity = float(holding.get('quantity', 0) or 0)
+                avg_price = float(holding.get('averageprice', 0) or 0)
+                ltp = float(holding.get('ltp', 0) or 0)
+                pnl = float(holding.get('profitandloss', 0) or 0)
+
+                # Calculate values
+                inv_value = quantity * avg_price
+                holding_value = quantity * ltp
+
+                totalinvvalue += inv_value
+                totalholdingvalue += holding_value
+                totalprofitandloss += pnl
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Error calculating holding stats: {e}")
+                continue
+
+        # Calculate overall P&L percentage
+        if totalinvvalue > 0:
+            totalpnlpercentage = round((totalprofitandloss / totalinvvalue) * 100, 2)
 
     return {
-        'totalholdingvalue': totalholdingvalue,
-        'totalinvvalue': totalinvvalue,
-        'totalprofitandloss': totalprofitandloss,
+        'totalholdingvalue': round(totalholdingvalue, 2),
+        'totalinvvalue': round(totalinvvalue, 2),
+        'totalprofitandloss': round(totalprofitandloss, 2),
         'totalpnlpercentage': totalpnlpercentage
     }
