@@ -367,12 +367,159 @@ After installation completes, verify each deployment:
      sudo pacman -Syu
      ```
 
+## Updating OpenAlgo
+
+OpenAlgo can be updated to the latest version using multiple methods:
+
+### Method 1: Using the Update Script (Recommended)
+
+The update script provides a safe and comprehensive update process:
+
+```bash
+# Update all installations interactively (run the script once; choose "all")
+sudo bash /var/python/openalgo-flask/yourdomain-broker/openalgo/install/update.sh
+
+# Update a specific installation
+sudo bash /var/python/openalgo-flask/yourdomain-broker/openalgo/install/update.sh /var/python/openalgo-flask/yourdomain-broker
+```
+
+The update script will:
+- Detect all OpenAlgo installations automatically
+- Show current commit and available updates
+- Create backups before updating
+- Handle uncommitted changes (stash and restore)
+- Update Python dependencies if requirements changed
+- Restart services automatically after successful update
+
+### Method 2: Manual Git Pull
+
+For quick updates without dependency checks:
+
+```bash
+# Navigate to your installation directory
+cd /var/python/openalgo-flask/yourdomain-broker/openalgo
+
+# Pull latest changes
+sudo -u www-data git pull origin main
+
+# Restart the service
+sudo systemctl restart openalgo-yourdomain-broker
+```
+
+### Method 3: Automated Daily Updates
+
+During installation, you can opt-in to automated daily updates. The installer creates:
+
+1. **Update Script**: `/var/python/openalgo-flask/yourdomain-broker/update-openalgo.sh`
+   - Checks for updates daily
+   - Updates dependencies if requirements changed
+   - Restarts service automatically
+
+2. **Systemd Timer**: `openalgo-update-yourdomain-broker.timer`
+   - Runs daily at a random time (to avoid server load spikes)
+   - Persistent across reboots
+
+**Managing Automated Updates:**
+
+```bash
+# Check timer status
+sudo systemctl status openalgo-update-yourdomain-broker.timer
+
+# View last update run
+sudo journalctl -u openalgo-update-yourdomain-broker.service -n 20
+
+# Enable automated updates (if not enabled during install)
+sudo systemctl enable openalgo-update-yourdomain-broker.timer
+sudo systemctl start openalgo-update-yourdomain-broker.timer
+
+# Disable automated updates
+sudo systemctl stop openalgo-update-yourdomain-broker.timer
+sudo systemctl disable openalgo-update-yourdomain-broker.timer
+```
+
+### Update During Re-Installation
+
+If you run the installation script again on an existing installation:
+
+1. The script detects the existing installation
+2. Prompts whether to update or start fresh
+3. If updating: pulls latest changes, preserves configuration
+4. If starting fresh: offers to backup existing installation
+
+### Update Best Practices
+
+1. **Backup First**: Always backup your `.env` file and database before major updates
+   ```bash
+   cp /var/python/openalgo-flask/yourdomain-broker/openalgo/.env ~/openalgo.env.backup
+   ```
+
+2. **Check Changelog**: Review what changed before updating
+   ```bash
+   cd /var/python/openalgo-flask/yourdomain-broker/openalgo
+   sudo -u www-data git log origin/main --oneline -10
+   ```
+
+3. **Test After Update**: Verify the application works correctly
+   ```bash
+   sudo systemctl status openalgo-yourdomain-broker
+   # Visit your domain and test key functions
+   ```
+
+4. **Monitor Logs**: Check for any errors after update
+   ```bash
+   sudo journalctl -u openalgo-yourdomain-broker -n 50
+   ```
+
+### Troubleshooting Updates
+
+**Issue: Update fails with "uncommitted changes"**
+```bash
+# View what files changed
+cd /var/python/openalgo-flask/yourdomain-broker/openalgo
+sudo -u www-data git status
+
+# Option 1: Stash changes
+sudo -u www-data git stash
+sudo -u www-data git pull origin main
+sudo -u www-data git stash pop
+
+# Option 2: Discard local changes (WARNING: will lose modifications)
+sudo -u www-data git reset --hard origin/main
+```
+
+**Issue: Service fails to start after update**
+```bash
+# Check service logs
+sudo journalctl -u openalgo-yourdomain-broker -n 100
+
+# Check if dependencies need updating
+cd /var/python/openalgo-flask/yourdomain-broker/openalgo
+sudo uv pip install --python /var/python/openalgo-flask/yourdomain-broker/venv/bin/python -r requirements-nginx.txt
+
+# Restart service
+sudo systemctl restart openalgo-yourdomain-broker
+```
+
+**Issue: Automated update not running**
+```bash
+# Check timer status
+sudo systemctl status openalgo-update-yourdomain-broker.timer
+
+# Check if timer is enabled
+sudo systemctl is-enabled openalgo-update-yourdomain-broker.timer
+
+# Manually trigger update service to test
+sudo systemctl start openalgo-update-yourdomain-broker.service
+sudo journalctl -u openalgo-update-yourdomain-broker.service
+```
+
 ## Post-Installation
 
 1. Configure your broker settings in the web interface
 2. Set up monitoring and alerts if needed
 3. Regularly check logs for any issues
 4. Keep the system updated with security patches
+5. Enable automated updates for hassle-free maintenance
 
 ## Support
 
