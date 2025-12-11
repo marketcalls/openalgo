@@ -33,7 +33,7 @@ class ExecutionEngineThread(threading.Thread):
         """Main thread loop"""
         from sandbox.execution_engine import ExecutionEngine
 
-        logger.info("Sandbox Execution Engine thread started")
+        logger.debug("Sandbox Execution Engine thread started")
         engine = ExecutionEngine()
 
         while not self.stop_event.is_set():
@@ -70,7 +70,7 @@ def start_execution_engine():
         try:
             _execution_thread = ExecutionEngineThread()
             _execution_thread.start()
-            logger.info("Execution engine thread started successfully")
+            logger.debug("Execution engine thread started successfully")
             return True, "Execution engine started"
         except Exception as e:
             logger.error(f"Failed to start execution engine thread: {e}")

@@ -73,7 +73,7 @@ def restore_symbol_cache() -> dict:
             result['success'] = True
             result['symbols_loaded'] = cache.stats.total_symbols
             result['time_ms'] = (time.time() - start_time) * 1000
-            logger.info(f"Symbol cache already loaded: {cache.stats.total_symbols} symbols")
+            logger.debug(f"Symbol cache already loaded: {cache.stats.total_symbols} symbols")
             return result
 
         # Load symbols from database
@@ -82,7 +82,7 @@ def restore_symbol_cache() -> dict:
         if success:
             result['success'] = True
             result['symbols_loaded'] = cache.stats.total_symbols
-            logger.info(
+            logger.debug(
                 f"Symbol cache restored: {cache.stats.total_symbols} symbols "
                 f"for broker '{broker}' in {(time.time() - start_time)*1000:.0f}ms"
             )
@@ -171,7 +171,7 @@ def restore_auth_cache() -> dict:
         result['users'] = users
 
         if tokens_loaded > 0:
-            logger.info(f"Auth cache restored: {tokens_loaded} tokens for users: {users}")
+            logger.debug(f"Auth cache restored: {tokens_loaded} tokens for users: {users}")
 
     except Exception as e:
         result['error'] = str(e)

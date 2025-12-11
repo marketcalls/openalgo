@@ -970,7 +970,7 @@ def catchup_missed_settlements():
         ).all()
 
         if not cnc_positions:
-            logger.info("No CNC positions for catch-up settlement")
+            logger.debug("No CNC positions for catch-up settlement")
             return
 
         logger.info(f"Found {len(cnc_positions)} CNC positions that need catch-up settlement")

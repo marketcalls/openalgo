@@ -48,7 +48,7 @@ def _schedule_square_off_jobs(scheduler):
         'NCDEX': get_config('ncdex_square_off_time', '17:00'),
     }
 
-    logger.info("Scheduling MIS square-off jobs (IST timezone):")
+    logger.debug("Scheduling MIS square-off jobs (IST timezone):")
 
     for config_name, time_str in square_off_configs.items():
         try:
@@ -71,7 +71,7 @@ def _schedule_square_off_jobs(scheduler):
                 misfire_grace_time=300  # Allow 5 minutes grace time
             )
 
-            logger.info(f"  {config_name}: {time_str} IST (Job ID: {job.id})")
+            logger.debug(f"  {config_name}: {time_str} IST (Job ID: {job.id})")
 
         except Exception as e:
             logger.error(f"Failed to schedule square-off for {config_name}: {e}")
@@ -93,7 +93,7 @@ def _schedule_square_off_jobs(scheduler):
         timezone=IST
     )
 
-    logger.info(f"  Backup check: Every 1 minute (Job ID: {backup_job.id})")
+    logger.debug(f"  Backup check: Every 1 minute (Job ID: {backup_job.id})")
     logger.debug("  Note: APScheduler logs have been set to WARNING level to reduce verbosity")
 
     # Schedule T+1 settlement job at midnight (00:00 IST)
@@ -116,7 +116,7 @@ def _schedule_square_off_jobs(scheduler):
             misfire_grace_time=300
         )
 
-        logger.info(f"  T+1 Settlement: 00:00 IST (Job ID: {settlement_job.id})")
+        logger.debug(f"  T+1 Settlement: 00:00 IST (Job ID: {settlement_job.id})")
 
     except Exception as e:
         logger.error(f"Failed to schedule T+1 settlement: {e}")
@@ -157,7 +157,7 @@ def _schedule_square_off_jobs(scheduler):
                 misfire_grace_time=300
             )
 
-            logger.info(f"  Auto-Reset: {reset_day} {reset_time_str} IST (Job ID: {reset_job.id})")
+            logger.debug(f"  Auto-Reset: {reset_day} {reset_time_str} IST (Job ID: {reset_job.id})")
 
     except Exception as e:
         logger.error(f"Failed to schedule auto-reset: {e}")
@@ -192,7 +192,7 @@ def start_squareoff_scheduler():
             # Start the scheduler
             _scheduler.start()
 
-            logger.info("Square-off scheduler started successfully")
+            logger.debug("Square-off scheduler started successfully")
             return True, "Square-off scheduler started"
 
         except Exception as e:
