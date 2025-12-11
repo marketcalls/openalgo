@@ -335,22 +335,26 @@ def transform_positions_data(positions_data):
 
 def transform_holdings_data(holdings_data):
     transformed_data = []
-    
+
     # Return empty list if holdings_data is not a list
     if not isinstance(holdings_data, list):
         logger.warning(f"Holdings data is not a list: {type(holdings_data)}")
         return []
-    
+
     for holdings in holdings_data:
         # Skip if holdings is not a dictionary
         if not isinstance(holdings, dict):
             logger.warning(f"Skipping invalid holdings item: {holdings}")
             continue
-            
+
         try:
             ltp = float(holdings.get('Ltp', 0))
             price = float(holdings.get('Price', 0.0))
-            quantity = int(holdings.get('Holdqty', holdings.get('HUqty', 0)))
+            # HUqty = Holding Unsettled Qty, Holdqty = Holding Qty
+            # Use HUqty if Holdqty is 0 or empty
+            holdqty = int(holdings.get('Holdqty', 0) or 0)
+            huqty = int(holdings.get('HUqty', 0) or 0)
+            quantity = holdqty if holdqty > 0 else huqty
 
             pnl = round((ltp - price) * quantity, 2) if quantity else 0
             pnlpercent = round(((ltp - price) / price * 100), 2) if price else 0
@@ -429,13 +433,19 @@ def calculate_portfolio_statistics(holdings_data):
             'totalpnlpercentage': 0
         }
     
+    def get_quantity(item):
+        """Get holding quantity - prefer Holdqty if > 0, else HUqty"""
+        holdqty = int(item.get('Holdqty', 0) or 0)
+        huqty = int(item.get('HUqty', 0) or 0)
+        return holdqty if holdqty > 0 else huqty
+
     try:
-        totalholdingvalue = sum(float(item.get('Ltp', 0)) * int(item.get('HUqty', item.get('Holdqty', 0))) for item in holdings_data)
-        totalinvvalue = sum(float(item.get('Price', 0)) * int(item.get('HUqty', item.get('Holdqty', 0))) for item in holdings_data)
-        totalprofitandloss = sum((float(item.get('Ltp', 0)) - float(item.get('Price', 0))) * int(item.get('HUqty', item.get('Holdqty', 0))) for item in holdings_data)
-        
+        totalholdingvalue = sum(float(item.get('Ltp', 0)) * get_quantity(item) for item in holdings_data)
+        totalinvvalue = sum(float(item.get('Price', 0)) * get_quantity(item) for item in holdings_data)
+        totalprofitandloss = sum((float(item.get('Ltp', 0)) - float(item.get('Price', 0))) * get_quantity(item) for item in holdings_data)
+
         for item in holdings_data:
-            logger.info(f"Holdings item: LTP={item.get('Ltp')}, Price={item.get('Price')}, Qty={item.get('HUqty', item.get('Holdqty'))}")
+            logger.info(f"Holdings item: LTP={item.get('Ltp')}, Price={item.get('Price')}, Holdqty={item.get('Holdqty')}, HUqty={item.get('HUqty')}, Used={get_quantity(item)}")
         # To avoid division by zero in the case when totalinvvalue is 0
         totalpnlpercentage = (totalprofitandloss / totalinvvalue * 100) if totalinvvalue else 0
     except (KeyError, TypeError, ValueError) as e:
