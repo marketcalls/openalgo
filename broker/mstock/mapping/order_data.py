@@ -600,7 +600,7 @@ def map_portfolio_data(portfolio_data):
     Returns:
     - Processed portfolio data with 'holdings' key for compatibility
     """
-    logger.info(f"map_portfolio_data received: {portfolio_data}")
+    logger.debug(f"map_portfolio_data received: {portfolio_data}")
 
     if portfolio_data.get('data') is None:
         logger.info("No portfolio data available.")
