@@ -59,7 +59,7 @@ def restore_symbol_cache() -> dict:
 
         if not auth_record:
             result['error'] = 'No active broker session found in database'
-            logger.info("Symbol cache restoration skipped: No active broker session")
+            logger.debug("Symbol cache restoration skipped: No active broker session")
             return result
 
         broker = auth_record.broker
@@ -136,7 +136,7 @@ def restore_auth_cache() -> dict:
 
         if not auth_records:
             result['error'] = 'No active auth tokens found in database'
-            logger.info("Auth cache restoration skipped: No active sessions")
+            logger.debug("Auth cache restoration skipped: No active sessions")
             return result
 
         tokens_loaded = 0
@@ -195,7 +195,7 @@ def restore_all_caches() -> dict:
             - auth_cache: dict with auth cache stats
             - total_time_ms: float
     """
-    logger.info("Starting cache restoration from database...")
+    logger.debug("Starting cache restoration from database...")
 
     total_start = time.time()
 
@@ -226,13 +226,13 @@ def restore_all_caches() -> dict:
     symbol_count = result['symbol_cache'].get('symbols_loaded', 0)
 
     if result['success']:
-        logger.info(
+        logger.debug(
             f"Cache restoration complete: "
             f"{auth_count} auth tokens, {symbol_count} symbols "
             f"in {result['total_time_ms']:.0f}ms"
         )
     else:
-        logger.info(
+        logger.debug(
             f"Cache restoration skipped: No active sessions found. "
             f"Caches will be populated on user login."
         )

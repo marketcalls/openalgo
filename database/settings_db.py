@@ -68,7 +68,7 @@ def init_db():
     # Create default settings only if no settings exist (with race condition protection)
     try:
         if not Settings.query.first():
-            logger.info("Settings DB: Creating default configuration (Live Mode)")
+            logger.debug("Settings DB: Creating default configuration (Live Mode)")
             default_settings = Settings(analyze_mode=False)
             db_session.add(default_settings)
             db_session.commit()
