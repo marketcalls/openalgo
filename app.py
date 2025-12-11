@@ -478,7 +478,7 @@ with app.app_context():
             symbol_count = cache_result['symbol_cache'].get('symbols_loaded', 0)
             auth_count = cache_result['auth_cache'].get('tokens_loaded', 0)
             if symbol_count > 0 or auth_count > 0:
-                logger.info(f"Cache restoration: {symbol_count} symbols, {auth_count} auth tokens")
+                logger.debug(f"Cache restoration: {symbol_count} symbols, {auth_count} auth tokens")
     except Exception as e:
         logger.debug(f"Cache restoration skipped: {e}")
 

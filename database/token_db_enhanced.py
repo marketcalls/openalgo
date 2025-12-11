@@ -86,7 +86,7 @@ class BrokerSymbolCache:
         self.session_start: Optional[datetime] = None
         self.next_reset_time: Optional[datetime] = None
         
-        logger.info("BrokerSymbolCache initialized")
+        logger.debug("BrokerSymbolCache initialized")
     
     def load_all_symbols(self, broker: str) -> bool:
         """
@@ -97,7 +97,7 @@ class BrokerSymbolCache:
             from database.symbol import SymToken
             
             start_time = time.time()
-            logger.info(f"Loading all symbols for broker: {broker}")
+            logger.debug(f"Loading all symbols for broker: {broker}")
             
             # Clear existing cache
             self.clear_cache()
@@ -148,7 +148,7 @@ class BrokerSymbolCache:
             ) / (1024 * 1024)
             
             load_time = time.time() - start_time
-            logger.info(
+            logger.debug(
                 f"Successfully loaded {self.stats.total_symbols} symbols "
                 f"in {load_time:.2f} seconds. "
                 f"Memory usage: {self.stats.memory_usage_mb:.2f} MB"
@@ -183,7 +183,7 @@ class BrokerSymbolCache:
             next_reset += timedelta(days=1)
         
         self.next_reset_time = next_reset
-        logger.info(f"Cache valid until: {self.next_reset_time} (Session expiry: {expiry_time})")
+        logger.debug(f"Cache valid until: {self.next_reset_time} (Session expiry: {expiry_time})")
     
     def is_cache_valid(self) -> bool:
         """Check if cache is still valid (before session expiry reset)"""
@@ -339,7 +339,7 @@ class BrokerSymbolCache:
         self.by_token.clear()
         self.cache_loaded = False
         self.active_broker = None
-        logger.info("Cache cleared")
+        logger.debug("Cache cleared")
     
     def get_cache_info(self) -> dict:
         """Get cache information for monitoring"""

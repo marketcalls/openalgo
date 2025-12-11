@@ -311,7 +311,7 @@ def init_default_config():
                 config_obj = SandboxConfig(**config)
                 db_session.add(config_obj)
                 db_session.commit()
-                logger.info(f"Added default config: {config['config_key']}")
+                logger.debug(f"Added default config: {config['config_key']}")
         except IntegrityError:
             db_session.rollback()
             logger.debug(f"Config already exists: {config['config_key']}")

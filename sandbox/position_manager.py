@@ -31,12 +31,265 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def parse_expiry_from_symbol(symbol, exchange):
+    """
+    Parse expiry date from F&O symbol name.
+
+    Supports formats like:
+    - NIFTY09DEC2526000CE -> 09-Dec-2025
+    - BANKNIFTY31JUL25FUT -> 31-Jul-2025
+    - RELIANCE25DEC24FUT -> 25-Dec-2024
+
+    Args:
+        symbol: Trading symbol (e.g., NIFTY09DEC2526000CE)
+        exchange: Exchange (NFO, BFO, MCX, CDS, etc.)
+
+    Returns:
+        datetime.date or None if not an F&O instrument or parsing fails
+    """
+    import re
+
+    # Only process F&O exchanges
+    fo_exchanges = ['NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NCDEX']
+    if exchange not in fo_exchanges:
+        return None
+
+    # Pattern to extract date from symbol: DDMMMYY (e.g., 09DEC25, 31JUL25)
+    # This pattern looks for 2 digits + 3 letters (month) + 2 digits (year)
+    pattern = r'(\d{2})([A-Z]{3})(\d{2})'
+
+    match = re.search(pattern, symbol)
+    if not match:
+        return None
+
+    try:
+        day = int(match.group(1))
+        month_str = match.group(2)
+        year_short = int(match.group(3))
+
+        # Convert 2-digit year to 4-digit (assuming 20xx)
+        year = 2000 + year_short
+
+        # Parse month
+        month_map = {
+            'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4,
+            'MAY': 5, 'JUN': 6, 'JUL': 7, 'AUG': 8,
+            'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12
+        }
+
+        month = month_map.get(month_str)
+        if not month:
+            return None
+
+        # Create date object
+        from datetime import date
+        expiry_date = date(year, month, day)
+
+        return expiry_date
+
+    except (ValueError, KeyError) as e:
+        logger.debug(f"Could not parse expiry from symbol {symbol}: {e}")
+        return None
+
+
+def get_expiry_from_database(symbol, exchange):
+    """
+    Get expiry date from SymToken database as fallback.
+
+    Args:
+        symbol: Trading symbol
+        exchange: Exchange
+
+    Returns:
+        datetime.date or None
+    """
+    try:
+        from database.symbol import SymToken
+        from datetime import datetime
+
+        sym_token = SymToken.query.filter_by(
+            symbol=symbol,
+            exchange=exchange
+        ).first()
+
+        if sym_token and sym_token.expiry:
+            # Expiry format in DB is typically "DD-MMM-YY" (e.g., "09-DEC-25")
+            try:
+                expiry_date = datetime.strptime(sym_token.expiry, "%d-%b-%y").date()
+                return expiry_date
+            except ValueError:
+                try:
+                    # Try alternative format "DD-MMM-YYYY"
+                    expiry_date = datetime.strptime(sym_token.expiry, "%d-%b-%Y").date()
+                    return expiry_date
+                except ValueError:
+                    logger.debug(f"Could not parse expiry '{sym_token.expiry}' for {symbol}")
+                    return None
+
+        return None
+
+    except Exception as e:
+        logger.debug(f"Error fetching expiry from DB for {symbol}: {e}")
+        return None
+
+
+def get_contract_expiry(symbol, exchange):
+    """
+    Get contract expiry date for a symbol.
+    First tries to parse from symbol name, then falls back to database lookup.
+
+    Args:
+        symbol: Trading symbol
+        exchange: Exchange
+
+    Returns:
+        datetime.date or None if not an F&O instrument
+    """
+    # First try parsing from symbol name (faster, no DB query)
+    expiry = parse_expiry_from_symbol(symbol, exchange)
+
+    if expiry:
+        return expiry
+
+    # Fallback to database lookup
+    return get_expiry_from_database(symbol, exchange)
+
+
 class PositionManager:
     """Manages positions and MTM calculations"""
 
     def __init__(self, user_id):
         self.user_id = user_id
         self.fund_manager = FundManager(user_id)
+
+    def _check_and_close_expired_positions(self, positions):
+        """
+        Check for expired F&O contracts and auto-close them.
+
+        For expired contracts:
+        - Options expire worthless (value = 0) if not ITM
+        - Uses last available P&L for settlement
+        - Releases blocked margin back to available balance
+        - Marks position as closed (quantity = 0)
+
+        Args:
+            positions: List of SandboxPositions objects to check
+
+        Returns:
+            list: Positions that are still valid (not expired)
+        """
+        from datetime import date
+
+        today = date.today()
+        valid_positions = []
+        expired_count = 0
+
+        for position in positions:
+            # Skip already closed positions
+            if position.quantity == 0:
+                valid_positions.append(position)
+                continue
+
+            # Get contract expiry date
+            expiry_date = get_contract_expiry(position.symbol, position.exchange)
+
+            # If no expiry found (equity or couldn't parse), keep the position
+            if expiry_date is None:
+                valid_positions.append(position)
+                continue
+
+            # Check if contract has expired (day after expiry)
+            # We don't close on expiry day itself - traders want to see P&L that day
+            # Auto-close happens on the next day after expiry
+            if today > expiry_date:
+                # Contract has expired - auto-close it
+                logger.info(
+                    f"Expired contract detected: {position.symbol} "
+                    f"(expiry: {expiry_date}, today: {today}, user: {position.user_id})"
+                )
+
+                try:
+                    self._settle_expired_position(position)
+                    expired_count += 1
+                except Exception as e:
+                    logger.error(f"Error settling expired position {position.symbol}: {e}")
+                    # Keep the position in list if settlement fails
+                    valid_positions.append(position)
+            else:
+                # Contract is still valid
+                valid_positions.append(position)
+
+        if expired_count > 0:
+            logger.info(f"Auto-closed {expired_count} expired contract(s) for user {self.user_id}")
+
+        return valid_positions
+
+    def _settle_expired_position(self, position):
+        """
+        Settle an expired position.
+
+        - Uses last available LTP for settlement (frozen at last traded price)
+        - If no LTP available, falls back to average price
+        - Releases margin and updates realized P&L
+
+        Args:
+            position: SandboxPositions object to settle
+        """
+        from decimal import Decimal
+
+        symbol = position.symbol
+        quantity = position.quantity
+        avg_price = Decimal(str(position.average_price))
+        margin_blocked = Decimal(str(position.margin_blocked or 0))
+
+        # Use last available LTP for settlement
+        # This freezes the P&L at the last traded price before expiry
+        # Falls back to average price if LTP is not available
+        if position.ltp and Decimal(str(position.ltp)) > 0:
+            settlement_price = Decimal(str(position.ltp))
+            logger.info(f"Expired contract {symbol} settling at last LTP: {settlement_price}")
+        else:
+            # Fallback to average price if no LTP available
+            settlement_price = avg_price
+            logger.info(f"Expired contract {symbol} settling at avg price (no LTP): {settlement_price}")
+
+        # Calculate realized P&L for this closure
+        if quantity > 0:
+            # Long position: P&L = (settlement - avg) * qty
+            close_pnl = (settlement_price - avg_price) * Decimal(str(quantity))
+        else:
+            # Short position: P&L = (avg - settlement) * abs(qty)
+            close_pnl = (avg_price - settlement_price) * Decimal(str(abs(quantity)))
+
+        # Get accumulated realized P&L from position
+        accumulated_realized = Decimal(str(position.accumulated_realized_pnl or 0))
+
+        # Total realized P&L for this position
+        total_realized_pnl = accumulated_realized + close_pnl
+
+        logger.info(
+            f"Settling expired {symbol}: qty={quantity}, avg={avg_price}, "
+            f"settlement={settlement_price}, close_pnl={close_pnl}, "
+            f"total_realized={total_realized_pnl}, margin_to_release={margin_blocked}"
+        )
+
+        # Release margin and update funds
+        self.fund_manager.release_margin(
+            amount=margin_blocked,
+            realized_pnl=close_pnl,
+            description=f"Expired contract settlement: {symbol}"
+        )
+
+        # Update position to closed state
+        position.quantity = 0
+        position.ltp = settlement_price
+        position.pnl = total_realized_pnl
+        position.accumulated_realized_pnl = total_realized_pnl
+        position.margin_blocked = Decimal('0')
+
+        db_session.commit()
+
+        logger.info(f"Expired position {symbol} settled successfully for user {position.user_id}")
 
     def get_open_positions(self, update_mtm=True):
         """
@@ -95,6 +348,10 @@ class PositionManager:
                 elif position.product == 'NRML' and position.quantity != 0:
                     positions.append(position)
                 # Skip MIS and CNC positions from previous session
+
+            # Check for and auto-close expired F&O contracts
+            # This handles NRML positions where the contract has expired
+            positions = self._check_and_close_expired_positions(positions)
 
             if update_mtm:
                 self._update_positions_mtm(positions)
@@ -713,7 +970,7 @@ def catchup_missed_settlements():
         ).all()
 
         if not cnc_positions:
-            logger.info("No CNC positions for catch-up settlement")
+            logger.debug("No CNC positions for catch-up settlement")
             return
 
         logger.info(f"Found {len(cnc_positions)} CNC positions that need catch-up settlement")

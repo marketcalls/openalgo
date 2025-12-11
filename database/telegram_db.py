@@ -177,7 +177,7 @@ def init_db():
         # Create default bot config if not exists
         config = db_session.query(BotConfig).filter_by(id=1).first()
         if not config:
-            logger.info("Telegram DB: Creating default bot configuration")
+            logger.debug("Telegram DB: Creating default bot configuration")
             default_config = BotConfig(id=1)
             db_session.add(default_config)
             db_session.commit()
