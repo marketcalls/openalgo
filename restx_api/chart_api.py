@@ -56,6 +56,10 @@ class ChartPreferencesResource(Resource):
             logger.warning("[ChartAPI] POST: No data provided")
             return {'message': 'No data provided'}, 400
 
+        if not isinstance(data, dict):
+            logger.warning(f"[ChartAPI] POST: Invalid data type: {type(data).__name__}, expected dict")
+            return {'message': 'Invalid data format: expected JSON object'}, 400
+
         logger.info(f"[ChartAPI] POST: Saving {len(data)} preferences: {list(data.keys())}")
         
         success = update_chart_prefs(api_key, data)
@@ -65,4 +69,3 @@ class ChartPreferencesResource(Resource):
         else:
             logger.error("[ChartAPI] POST: Failed to update preferences")
             return {'message': 'Failed to update preferences'}, 500
-
