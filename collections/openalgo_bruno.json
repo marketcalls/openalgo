@@ -505,6 +505,61 @@
           "mode": "none"
         }
       }
+    },
+    {
+      "type": "http",
+      "name": "chart_get",
+      "seq": 22,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/chart?api_key=a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00",
+        "method": "GET",
+        "headers": [],
+        "params": [
+          {
+            "name": "api_key",
+            "value": "a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00"
+          }
+        ],
+        "body": {
+          "mode": "none"
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
+    },
+    {
+      "type": "http",
+      "name": "chart_update",
+      "seq": 23,
+      "request": {
+        "url": "http://127.0.0.1:5000/api/v1/chart",
+        "method": "POST",
+        "headers": [
+          {
+            "name": "X-API-KEY",
+            "value": "a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00"
+          }
+        ],
+        "params": [],
+        "body": {
+          "mode": "json",
+          "json": "{\n    \"tv_watchlist_data\": \"[{\\\"name\\\":\\\"Watchlist 1\\\",\\\"symbols\\\":[\\\"NSE:RELIANCE\\\",\\\"NSE:INFY\\\"]}]\",\n    \"tv_chart_layout\": \"{\\\"timeframe\\\":\\\"1D\\\"}\",\n    \"tv_theme\": \"dark\"\n}",
+          "formUrlEncoded": [],
+          "multipartForm": []
+        },
+        "script": {},
+        "vars": {},
+        "assertions": [],
+        "tests": "",
+        "auth": {
+          "mode": "none"
+        }
+      }
     }
   ],
   "environments": [],

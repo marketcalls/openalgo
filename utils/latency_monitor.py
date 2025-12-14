@@ -266,7 +266,8 @@ def init_latency_monitoring(app):
         'synthetic_future': 'SYNTHETIC',
         'ticker': 'TICKER',
         'ping': 'PING',
-        'analyzer': 'ANALYZER'
+        'analyzer': 'ANALYZER',
+        'chart': 'CHART'
     }
 
     # Order types that should be kept forever (not purged)
