@@ -1715,6 +1715,27 @@ class TelegramBotService:
                 logger.error("Bot not initialized or not running")
                 return False
 
+            # If we are in a different loop than the bot's loop, bridge it
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
+
+            if self.bot_loop and current_loop != self.bot_loop:
+                logger.debug("Cross-thread notification detected, bridging to bot loop")
+                future = asyncio.run_coroutine_threadsafe(
+                    self.application.bot.send_message(
+                        chat_id=telegram_id,
+                        text=message,
+                        parse_mode='Markdown'
+                    ),
+                    self.bot_loop
+                )
+                # Await the result in the current loop
+                await asyncio.wrap_future(future)
+                logger.debug(f"Notification sent to telegram_id: {telegram_id}")
+                return True
+
             # Get the bot from the application
             bot = self.application.bot
 
