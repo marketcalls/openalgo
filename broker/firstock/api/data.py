@@ -66,14 +66,34 @@ def get_api_response(endpoint, auth, method="POST", payload=None, custom_timeout
         
         # Debug print
         response_text = response.text
-        logger.info(f"Raw Response: {response_text}")
-        
+        logger.debug(f"Raw Response: {response_text}")
+
         if not response_text:
             return {"status": "error", "message": "Empty response from server"}
-            
+
+        # Handle rate limit response (plain text, not JSON) - auto retry after delay
+        if "rate limit" in response_text.lower():
+            logger.warning("Firstock API rate limit exceeded - retrying after 1 second")
+            time.sleep(1)
+            # Retry the request
+            if endpoint == "/timePriceSeries" or custom_timeout:
+                with httpx.Client(
+                    timeout=httpx.Timeout(custom_timeout or 600, connect=30.0),
+                    limits=httpx.Limits(max_keepalive_connections=10, max_connections=20),
+                    http1=True,
+                    http2=False
+                ) as temp_client:
+                    response = temp_client.request(method, url, json=data, headers=headers)
+            else:
+                response = client.request(method, url, json=data, headers=headers)
+            response_text = response.text
+            logger.debug(f"Retry Response: {response_text}")
+            if "rate limit" in response_text.lower():
+                return {"status": "error", "message": "Rate limit exceeded. Please wait and try again."}
+
         response_data = response.json()
         logger.info(f"Response: {json.dumps(response_data, indent=2)}")
-        
+
         return response_data
 
     except Exception as e:
@@ -127,7 +147,7 @@ class BrokerData:
             'low': float(quote_item.get('dayLowPrice', 0)),
             'ltp': float(quote_item.get('lastTradedPrice', 0)),
             'prev_close': float(quote_item.get('dayClosePrice', 0)),
-            'volume': int(quote_item.get('volume', 0)),
+            'volume': int(float(quote_item.get('volume', 0))),
             'oi': int(float(quote_item.get('openInterest', 0)))
         }
 
@@ -334,18 +354,18 @@ class BrokerData:
             # Format bids and asks data
             bids = []
             asks = []
-            
+
             # Process top 5 bids and asks
             for i in range(1, 6):
                 bids.append({
                     'price': float(quote_data.get(f'bestBuyPrice{i}', 0)),
-                    'quantity': int(quote_data.get(f'bestBuyQuantity{i}', 0))
+                    'quantity': int(float(quote_data.get(f'bestBuyQuantity{i}', 0)))
                 })
                 asks.append({
                     'price': float(quote_data.get(f'bestSellPrice{i}', 0)),
-                    'quantity': int(quote_data.get(f'bestSellQuantity{i}', 0))
+                    'quantity': int(float(quote_data.get(f'bestSellQuantity{i}', 0)))
                 })
-            
+
             # Return just the data - let the API handle the wrapping
             return {
                 'asks': asks,
@@ -353,13 +373,13 @@ class BrokerData:
                 'high': float(quote_data.get('dayHighPrice', 0)),
                 'low': float(quote_data.get('dayLowPrice', 0)),
                 'ltp': float(quote_data.get('lastTradedPrice', 0)),
-                'ltq': int(quote_data.get('lastTradedQuantity', 0)),
-                'oi': float(quote_data.get('openInterest', 0)),
+                'ltq': int(float(quote_data.get('lastTradedQuantity', 0))),
+                'oi': int(float(quote_data.get('openInterest', 0))),
                 'open': float(quote_data.get('dayOpenPrice', 0)),
                 'prev_close': float(quote_data.get('dayClosePrice', 0)),
-                'totalbuyqty': int(quote_data.get('totalBuyQuantity', 0)),
-                'totalsellqty': int(quote_data.get('totalSellQuantity', 0)),
-                'volume': int(quote_data.get('volume', 0))
+                'totalbuyqty': int(float(quote_data.get('totalBuyQuantity', 0))),
+                'totalsellqty': int(float(quote_data.get('totalSellQuantity', 0))),
+                'volume': int(float(quote_data.get('volume', 0)))
             }
             
         except Exception as e:
