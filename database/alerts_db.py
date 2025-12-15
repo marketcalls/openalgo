@@ -11,6 +11,11 @@ logger = get_logger(__name__)
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 
+# --- FIX 1: Validate Database URL ---
+if not DATABASE_URL:
+    # This stops the app immediately with a clear message if the config is missing
+    raise ValueError("CRITICAL: DATABASE_URL is not set in environment variables.")
+
 # Create engine (reuse existing connection pattern)
 # If using SQLite, we need to be careful with threads
 if DATABASE_URL and 'sqlite' in DATABASE_URL:

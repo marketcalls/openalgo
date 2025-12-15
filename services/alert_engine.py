@@ -12,11 +12,16 @@ class AlertEngine:
         """
         market_data is a dictionary: {'INFY': 1505.00, 'RELIANCE': 2400.00}
         """
+        # 1. Get all active alerts
         try:
-            # 1. Get all active alerts
             active_alerts = Alert.query.filter_by(status="ACTIVE").all()
+        except Exception as e:
+            logger.error(f"Failed to fetch active alerts: {e}")
+            return
 
-            for alert in active_alerts:
+        for alert in active_alerts:
+            # --- FIX 6: Isolate Errors per Alert ---
+            try:
                 # 2. Get current price for this symbol
                 current_price = market_data.get(alert.symbol)
 
@@ -40,8 +45,11 @@ class AlertEngine:
                     
                     # 5. Mark as Triggered
                     alert.status = "TRIGGERED"
+                    # Commit ONLY this alert's change
                     db_session.commit()
                     
-        except Exception as e:
-            logger.error(f"Error in AlertEngine.check_market: {e}")
-            db_session.rollback()
+            except Exception as e:
+                # If THIS alert fails, log it and rollback ONLY this session state
+                logger.error(f"Failed to process alert {alert.id}: {e}")
+                db_session.rollback()
+                # 'continue' happens automatically here, moving to the next alert

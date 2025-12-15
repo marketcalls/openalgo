@@ -9,12 +9,23 @@ alerts_bp = Blueprint('alerts_bp', __name__)
 @alerts_bp.route('/add', methods=['POST'])
 def add_alert():
     try:
-        data = request.json
-        # data expects: {"symbol": "INFY", "condition": "ABOVE", "price": 1500}
+        # Use get_json(silent=True) to return None instead of raising 400/415 if body is bad
+        data = request.get_json(silent=True)
         
-        if not all(k in data for k in ('symbol', 'condition', 'price')):
-            return jsonify({"error": "Missing required fields: symbol, condition, price"}), 400
-            
+        # --- FIX 2: Check if JSON exists ---
+        if not data:
+            return jsonify({"error": "Invalid request. JSON body is missing."}), 400
+
+        # --- FIX 3: Validate Required Fields ---
+        required_fields = ['symbol', 'condition', 'price']
+        if not all(k in data for k in required_fields):
+            return jsonify({"error": f"Missing required fields. Needed: {required_fields}"}), 400
+
+        # --- FIX 4: Validate Condition Values ---
+        valid_conditions = ['ABOVE', 'BELOW']
+        if data['condition'] not in valid_conditions:
+            return jsonify({"error": f"Invalid condition. Must be one of: {valid_conditions}"}), 400
+
         new_alert = Alert(
             symbol=data['symbol'],
             condition=data['condition'],
@@ -24,11 +35,14 @@ def add_alert():
         db_session.commit()
         
         logger.info(f"Created new alert for {data['symbol']}")
-        return jsonify({"message": "Alert Created", "id": new_alert.id}), 201
+        return jsonify({"message": "Alert created successfully", "id": new_alert.id}), 201
+
     except Exception as e:
-        logger.error(f"Error creating alert: {e}")
-        db_session.rollback()
-        return jsonify({"error": str(e)}), 500
+        # --- FIX 5: Secure Error Handling ---
+        # Log the real error for developers
+        logger.error(f"Internal Error in /add: {e}") 
+        # Send a generic error to the user to hide system details
+        return jsonify({"error": "Internal Server Error. Please contact support."}), 500
 
 @alerts_bp.route('/list', methods=['GET'])
 def get_alerts():
