@@ -87,40 +87,47 @@ class BrokerData:
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
-        Get real-time quotes for given symbol
+        Get real-time quotes for given symbol using depth endpoint to include OI
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE)
         Returns:
-            dict: Simplified quote data with required fields
+            dict: Simplified quote data with required fields including OI
         """
         try:
             br_symbol = get_br_symbol(symbol, exchange)
             encoded_symbol = urllib.parse.quote(br_symbol)
-            
-            response = get_api_response(f"/data/quotes?symbols={encoded_symbol}", self.auth_token)
+
+            # Use depth endpoint to get quotes with OI data
+            response = get_api_response(f"/data/depth?symbol={encoded_symbol}&ohlcv_flag=1", self.auth_token)
             logger.debug(f"Fyers quotes API response: {response}")
 
             if response.get('s') != 'ok':
                 error_msg = f"Error from Fyers API: {response.get('message', 'Unknown error')}"
                 logger.error(error_msg)
                 raise Exception(error_msg)
-            
-            quote_data = response.get('d', [{}])[0]
-            v = quote_data.get('v', {})
-            
+
+            depth_data = response.get('d', {}).get(br_symbol, {})
+
+            # Get bid/ask from depth data
+            bids = depth_data.get('bids', [])
+            asks = depth_data.get('ask', [])  # Fyers uses 'ask' (singular)
+
+            bid_price = bids[0].get('price', 0) if bids else 0
+            ask_price = asks[0].get('price', 0) if asks else 0
+
             return {
-                'bid': v.get('bid', 0),
-                'ask': v.get('ask', 0),
-                'open': v.get('open_price', 0),
-                'high': v.get('high_price', 0),
-                'low': v.get('low_price', 0),
-                'ltp': v.get('lp', 0),
-                'prev_close': v.get('prev_close_price', 0),
-                'volume': v.get('volume', 0),
-                'oi': int(v.get('oi', 0))
+                'bid': bid_price,
+                'ask': ask_price,
+                'open': depth_data.get('o', 0),
+                'high': depth_data.get('h', 0),
+                'low': depth_data.get('l', 0),
+                'ltp': depth_data.get('ltp', 0),
+                'prev_close': depth_data.get('c', 0),
+                'volume': depth_data.get('v', 0),
+                'oi': int(depth_data.get('oi', 0))
             }
-            
+
         except Exception as e:
             logger.exception(f"Error fetching quotes for {exchange}:{symbol}")
             raise Exception(f"Error fetching quotes: {e}")
