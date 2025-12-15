@@ -108,6 +108,9 @@ class BrokerData:
                 raise Exception(error_msg)
 
             depth_data = response.get('d', {}).get(br_symbol, {})
+            if not depth_data:
+                logger.warning(f"No depth data found for {br_symbol} in API response.")
+                raise Exception(f"No quote data available for {exchange}:{symbol}")
 
             # Get bid/ask from depth data
             bids = depth_data.get('bids', [])
