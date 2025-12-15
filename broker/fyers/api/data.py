@@ -87,40 +87,50 @@ class BrokerData:
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
-        Get real-time quotes for given symbol
+        Get real-time quotes for given symbol using depth endpoint to include OI
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE)
         Returns:
-            dict: Simplified quote data with required fields
+            dict: Simplified quote data with required fields including OI
         """
         try:
             br_symbol = get_br_symbol(symbol, exchange)
             encoded_symbol = urllib.parse.quote(br_symbol)
-            
-            response = get_api_response(f"/data/quotes?symbols={encoded_symbol}", self.auth_token)
+
+            # Use depth endpoint to get quotes with OI data
+            response = get_api_response(f"/data/depth?symbol={encoded_symbol}&ohlcv_flag=1", self.auth_token)
             logger.debug(f"Fyers quotes API response: {response}")
 
             if response.get('s') != 'ok':
                 error_msg = f"Error from Fyers API: {response.get('message', 'Unknown error')}"
                 logger.error(error_msg)
                 raise Exception(error_msg)
-            
-            quote_data = response.get('d', [{}])[0]
-            v = quote_data.get('v', {})
-            
+
+            depth_data = response.get('d', {}).get(br_symbol, {})
+            if not depth_data:
+                logger.warning(f"No depth data found for {br_symbol} in API response.")
+                raise Exception(f"No quote data available for {exchange}:{symbol}")
+
+            # Get bid/ask from depth data
+            bids = depth_data.get('bids', [])
+            asks = depth_data.get('ask', [])  # Fyers uses 'ask' (singular)
+
+            bid_price = bids[0].get('price', 0) if bids else 0
+            ask_price = asks[0].get('price', 0) if asks else 0
+
             return {
-                'bid': v.get('bid', 0),
-                'ask': v.get('ask', 0),
-                'open': v.get('open_price', 0),
-                'high': v.get('high_price', 0),
-                'low': v.get('low_price', 0),
-                'ltp': v.get('lp', 0),
-                'prev_close': v.get('prev_close_price', 0),
-                'volume': v.get('volume', 0),
-                'oi': int(v.get('oi', 0))
+                'bid': bid_price,
+                'ask': ask_price,
+                'open': depth_data.get('o', 0),
+                'high': depth_data.get('h', 0),
+                'low': depth_data.get('l', 0),
+                'ltp': depth_data.get('ltp', 0),
+                'prev_close': depth_data.get('c', 0),
+                'volume': depth_data.get('v', 0),
+                'oi': int(depth_data.get('oi', 0))
             }
-            
+
         except Exception as e:
             logger.exception(f"Error fetching quotes for {exchange}:{symbol}")
             raise Exception(f"Error fetching quotes: {e}")
@@ -169,11 +179,11 @@ class BrokerData:
 
     def _process_quotes_batch(self, symbols: list) -> list:
         """
-        Process a single batch of symbols (internal method)
+        Process a single batch of symbols using depth endpoint for OI data (internal method)
         Args:
             symbols: List of dicts with 'symbol' and 'exchange' keys (max 50)
         Returns:
-            list: List of quote data for the batch
+            list: List of quote data for the batch including OI
         """
         # Convert symbols to broker format and build comma-separated list
         br_symbols = []
@@ -207,8 +217,8 @@ class BrokerData:
         symbols_param = ','.join(br_symbols)
         encoded_symbols = urllib.parse.quote(symbols_param)
 
-        # Make API call for this batch
-        response = get_api_response(f"/data/quotes?symbols={encoded_symbols}", self.auth_token)
+        # Use depth endpoint with multiple symbols for OI data
+        response = get_api_response(f"/data/depth?symbol={encoded_symbols}&ohlcv_flag=1", self.auth_token)
         logger.debug(f"Fyers multiquotes API response for batch: {response}")
 
         if response.get('s') != 'ok':
@@ -218,12 +228,22 @@ class BrokerData:
 
         # Parse response and build results
         results = []
-        quotes_data = response.get('d', [])
+        depth_data = response.get('d', {})
 
-        for quote_item in quotes_data:
-            # Get the symbol from quote data
-            br_symbol = quote_item.get('n', '')
-            v = quote_item.get('v', {})
+        for br_symbol in br_symbols:
+            symbol_depth = depth_data.get(br_symbol, {})
+
+            # Skip if no data for this symbol
+            if not symbol_depth:
+                logger.warning(f"No depth data found for {br_symbol}")
+                continue
+
+            # Get bid/ask from depth data
+            bids = symbol_depth.get('bids', [])
+            asks = symbol_depth.get('ask', [])  # Fyers uses 'ask' (singular)
+
+            bid_price = bids[0].get('price', 0) if bids else 0
+            ask_price = asks[0].get('price', 0) if asks else 0
 
             # Look up original symbol and exchange
             original = symbol_map.get(br_symbol, {'symbol': br_symbol, 'exchange': 'UNKNOWN'})
@@ -232,15 +252,15 @@ class BrokerData:
                 'symbol': original['symbol'],
                 'exchange': original['exchange'],
                 'data': {
-                    'bid': v.get('bid', 0),
-                    'ask': v.get('ask', 0),
-                    'open': v.get('open_price', 0),
-                    'high': v.get('high_price', 0),
-                    'low': v.get('low_price', 0),
-                    'ltp': v.get('lp', 0),
-                    'prev_close': v.get('prev_close_price', 0),
-                    'volume': v.get('volume', 0),
-                    'oi': int(v.get('oi', 0))
+                    'bid': bid_price,
+                    'ask': ask_price,
+                    'open': symbol_depth.get('o', 0),
+                    'high': symbol_depth.get('h', 0),
+                    'low': symbol_depth.get('l', 0),
+                    'ltp': symbol_depth.get('ltp', 0),
+                    'prev_close': symbol_depth.get('c', 0),
+                    'volume': symbol_depth.get('v', 0),
+                    'oi': int(symbol_depth.get('oi', 0))
                 }
             }
             results.append(result_item)
