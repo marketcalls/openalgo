@@ -32,7 +32,7 @@ def get_api_response(endpoint, auth, method="POST", payload=None, custom_timeout
 
         # Debug print
         logger.info(f"Endpoint: {endpoint}")
-        logger.info(f"Payload: {json.dumps(data, indent=2)}")
+        logger.debug(f"Payload: {json.dumps(data, indent=2)}")
         
         headers = {
             'Content-Type': 'application/json',
@@ -88,11 +88,13 @@ def get_api_response(endpoint, auth, method="POST", payload=None, custom_timeout
                 response = client.request(method, url, json=data, headers=headers)
             response_text = response.text
             logger.debug(f"Retry Response: {response_text}")
+            if not response_text:
+                return {"status": "error", "message": "Empty response from server after retry"}
             if "rate limit" in response_text.lower():
                 return {"status": "error", "message": "Rate limit exceeded. Please wait and try again."}
 
         response_data = response.json()
-        logger.info(f"Response: {json.dumps(response_data, indent=2)}")
+        logger.debug(f"Response: {json.dumps(response_data, indent=2)}")
 
         return response_data
 
