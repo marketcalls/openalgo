@@ -15,7 +15,7 @@ def calculate_total_collateral(holdings):
     """
     Calculate total potential collateral value from holdings.
 
-    Formula: Σ (quantity × close_price × (1 - haircut))
+    Formula: Σ (quantity × average_price × (1 - haircut))
 
     Args:
         holdings: List of holding dictionaries from Upstox API
@@ -27,7 +27,7 @@ def calculate_total_collateral(holdings):
 
     for h in holdings:
         qty = h.get("quantity", 0)
-        price = h.get("close_price", 0.0)
+        price = h.get("average_price", 0.0)
         haircut = h.get("haircut", 0.0)
 
         holding_value = qty * price
