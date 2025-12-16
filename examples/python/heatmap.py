@@ -6,7 +6,7 @@ import plotly.express as px
 # OpenAlgo Client
 # ---------------------------------------------------
 client = api(
-    api_key="10c68486a5ad64b1f93f02e38b44e90a736282c4619e96505237b437893b513d",
+    api_key="7371cc58b9d30204e5fee1d143dc8cd926bcad90c24218201ad81735384d2752",
     host="http://127.0.0.1:5000"
 )
 
