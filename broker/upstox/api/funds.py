@@ -4,11 +4,38 @@ import os
 import json
 import httpx
 from utils.httpx_client import get_httpx_client
-from broker.upstox.api.order_api import get_positions
+from broker.upstox.api.order_api import get_positions, get_holdings
 from broker.upstox.mapping.order_data import map_order_data
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def calculate_total_collateral(holdings):
+    """
+    Calculate total potential collateral value from holdings.
+
+    Formula: Σ (quantity × average_price × (1 - haircut))
+
+    Args:
+        holdings: List of holding dictionaries from Upstox API
+
+    Returns:
+        float: Total potential collateral value
+    """
+    total = 0.0
+
+    for h in holdings:
+        qty = h.get("quantity", 0)
+        price = h.get("average_price", 0.0)
+        haircut = h.get("haircut", 0.0)
+
+        holding_value = qty * price
+        collateral_value = holding_value * (1 - haircut)
+
+        total += collateral_value
+
+    return round(total, 2)
 
 
 def get_margin_data(auth_token):
@@ -61,10 +88,21 @@ def get_margin_data(auth_token):
 
         total_realised, total_unrealised = sum_realised_unrealised(position_book)
 
+        # Get holdings and calculate collateral
+        holdings_response = get_holdings(auth_token)
+        logger.debug(f"Holdings response: {holdings_response}")
+
+        total_collateral = 0.0
+        if holdings_response.get('status') == 'success' and holdings_response.get('data'):
+            holdings_data = holdings_response['data']
+            logger.info(f"Holdings data for collateral calculation: {json.dumps(holdings_data, indent=2)}")
+            total_collateral = calculate_total_collateral(holdings_data)
+            logger.info(f"Calculated total collateral: {total_collateral}")
+
         # Construct and return the processed margin data
         processed_margin_data = {
             "availablecash": "{:.2f}".format(total_available_margin),
-            "collateral": "0.00",
+            "collateral": "{:.2f}".format(total_collateral),
             "m2munrealized": "{:.2f}".format(total_unrealised),
             "m2mrealized": "{:.2f}".format(total_realised),
             "utiliseddebits": "{:.2f}".format(total_used_margin),
