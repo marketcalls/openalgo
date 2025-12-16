@@ -58,7 +58,6 @@ def get_margin_data(auth_token: str) -> Dict[str, str]:
         response.raise_for_status()
         
         funds_data = response.json()
-        logger.info(f"Successfully fetched Fyers funds data{funds_data}")
         logger.debug(f"Fyers funds API response: {json.dumps(funds_data, indent=2)}")
         
         if funds_data.get('code') != 200:
