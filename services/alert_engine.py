@@ -30,23 +30,38 @@ class AlertEngine:
 
                 # 3. Check Condition
                 triggered = False
+                
+                # A. Simple State Checks (Triggers immediately if condition is met)
                 if alert.condition == "ABOVE" and current_price > alert.price:
                     triggered = True
                 elif alert.condition == "BELOW" and current_price < alert.price:
                     triggered = True
+                    
+                # B. Crossing Checks (Requires History/Memory)
+                # We need a previous price to know if it 'crossed'
+                elif alert.last_price is not None:
+                    
+                    # CROSS_ABOVE: Was below or at target, now above
+                    if alert.condition == 'CROSS_ABOVE':
+                        if alert.last_price <= alert.price and current_price > alert.price:
+                            triggered = True
+                            
+                    # CROSS_BELOW: Was above or at target, now below
+                    elif alert.condition == 'CROSS_BELOW':
+                        if alert.last_price >= alert.price and current_price < alert.price:
+                            triggered = True
 
                 # 4. Fire Alert
                 if triggered:
-                    message = f"🚨 ALERT: {alert.symbol} is {alert.condition} {alert.price}. Current: {current_price}"
+                    message = f"🚀 **ALERT TRIGGERED**\n\nSymbol: `{alert.symbol}`\nCondition: `{alert.condition}`\nPrice: `{current_price}`"
                     logger.info(message)
-                    
-                    # Use broadcast method to send to all enabled users
                     telegram_alert_service.send_broadcast_alert(message)
-                    
-                    # 5. Mark as Triggered
                     alert.status = "TRIGGERED"
-                    # Commit ONLY this alert's change
-                    db_session.commit()
+                
+                # CRITICAL: Save the current price as 'last_price' for the next run
+                # This ensures we have memory for the next check
+                alert.last_price = current_price
+                db_session.commit()
                     
             except Exception as e:
                 # If THIS alert fails, log it and rollback ONLY this session state

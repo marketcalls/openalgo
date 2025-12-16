@@ -44,6 +44,7 @@ class Alert(Base):
     symbol = Column(String(20), nullable=False)   # e.g. "INFY"
     condition = Column(String(10), nullable=False) # "ABOVE" or "BELOW"
     price = Column(Float, nullable=False)          # e.g. 1500.00
+    last_price = Column(Float, nullable=True)      # Track previous price for crossover
     status = Column(String(20), default="ACTIVE")  # ACTIVE, TRIGGERED
     created_at = Column(DateTime, default=datetime.now)
 
