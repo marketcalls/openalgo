@@ -37,19 +37,19 @@ class AlertEngine:
                 elif alert.condition == "BELOW" and current_price < alert.price:
                     triggered = True
                     
-                # B. Crossing Checks (Requires History/Memory)
-                # We need a previous price to know if it 'crossed'
-                elif alert.last_price is not None:
+                # B. Smart "CROSS" Check (Requires History)
+                elif alert.condition == 'CROSS' and alert.last_price is not None:
                     
-                    # CROSS_ABOVE: Was below or at target, now above
-                    if alert.condition == 'CROSS_ABOVE':
-                        if alert.last_price <= alert.price and current_price > alert.price:
-                            triggered = True
-                            
-                    # CROSS_BELOW: Was above or at target, now below
-                    elif alert.condition == 'CROSS_BELOW':
-                        if alert.last_price >= alert.price and current_price < alert.price:
-                            triggered = True
+                    # Logic: Did the price line pass through the target?
+                    
+                    # Case A: Crossed Up (Prev < Target <= Curr)
+                    crossed_up = (alert.last_price < alert.price) and (current_price >= alert.price)
+                    
+                    # Case B: Crossed Down (Prev > Target >= Curr)
+                    crossed_down = (alert.last_price > alert.price) and (current_price <= alert.price)
+                    
+                    if crossed_up or crossed_down:
+                        triggered = True
 
                 # 4. Fire Alert
                 if triggered:

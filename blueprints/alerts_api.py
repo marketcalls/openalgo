@@ -22,7 +22,7 @@ def add_alert():
             return jsonify({"error": f"Missing required fields. Needed: {required_fields}"}), 400
 
         # --- FIX 4: Validate Condition Values ---
-        valid_conditions = ['ABOVE', 'BELOW', 'CROSS_ABOVE', 'CROSS_BELOW']
+        valid_conditions = ['ABOVE', 'BELOW', 'CROSS']
         if data['condition'] not in valid_conditions:
             return jsonify({"error": f"Invalid condition. Must be one of: {valid_conditions}"}), 400
 
