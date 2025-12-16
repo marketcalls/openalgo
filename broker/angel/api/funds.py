@@ -41,21 +41,25 @@ def get_margin_data(auth_token):
     logger.info(f"Margin Data: {margin_data}")
 
     if margin_data.get('data'):
-        required_keys = [
-            "availablecash", 
-            "collateral", 
-            "m2mrealized", 
-            "m2munrealized", 
-            "utiliseddebits"
-        ]
-        filtered_data = {}
-        for key in required_keys:
-            value = margin_data['data'].get(key, 0)
-            try:
-                formatted_value = "{:.2f}".format(float(value))
-            except (ValueError, TypeError):
-                formatted_value = value
-            filtered_data[key] = formatted_value
+        data = margin_data['data']
+
+        # Calculate collateral as availablecash - utilisedpayout
+        try:
+            availablecash = float(data.get('availablecash', 0) or 0)
+            utilisedpayout = float(data.get('utilisedpayout', 0) or 0)
+            calculated_collateral = availablecash - utilisedpayout
+        except (ValueError, TypeError):
+            calculated_collateral = 0.0
+
+        filtered_data = {
+            "availablecash": "{:.2f}".format(availablecash),
+            "collateral": "{:.2f}".format(calculated_collateral),
+            "m2mrealized": "{:.2f}".format(float(data.get('m2mrealized', 0) or 0)),
+            "m2munrealized": "{:.2f}".format(float(data.get('m2munrealized', 0) or 0)),
+            "utiliseddebits": "{:.2f}".format(float(data.get('utiliseddebits', 0) or 0))
+        }
+
+        logger.info(f"Calculated collateral (availablecash - utilisedpayout): {calculated_collateral}")
         return filtered_data
     else:
         return {}
