@@ -61,7 +61,7 @@ def get_margin_data(auth_token):
         response.raise_for_status()
         
         margin_data = response.json()
-        logger.debug(f"Received funds and margin data: {margin_data}")
+        logger.info(f"Received funds and margin data: {margin_data}")
 
         if margin_data.get('status') == 'error':
             error_details = margin_data.get('errors', 'Unknown error')
@@ -95,7 +95,7 @@ def get_margin_data(auth_token):
         total_collateral = 0.0
         if holdings_response.get('status') == 'success' and holdings_response.get('data'):
             holdings_data = holdings_response['data']
-            logger.info(f"Holdings data for collateral calculation: {json.dumps(holdings_data, indent=2)}")
+            logger.debug(f"Holdings data for collateral calculation: {json.dumps(holdings_data, indent=2)}")
             total_collateral = calculate_total_collateral(holdings_data)
             logger.info(f"Calculated total collateral: {total_collateral}")
 

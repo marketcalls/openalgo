@@ -44,12 +44,14 @@ def get_margin_data(auth_token):
         data = margin_data['data']
 
         # Calculate collateral as availablecash - utilisedpayout
+        availablecash = 0.0
+        calculated_collateral = 0.0
         try:
             availablecash = float(data.get('availablecash', 0) or 0)
             utilisedpayout = float(data.get('utilisedpayout', 0) or 0)
             calculated_collateral = availablecash - utilisedpayout
         except (ValueError, TypeError):
-            calculated_collateral = 0.0
+            pass
 
         filtered_data = {
             "availablecash": "{:.2f}".format(availablecash),
