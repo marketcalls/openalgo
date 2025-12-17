@@ -38,8 +38,8 @@ def safe_int(value, default=0):
         return default
 
 
-def get_api_response(endpoint, auth, method="GET", payload=None):
-    """Helper function to make API calls to Samco"""
+def get_api_response(endpoint, auth, method="GET", payload=None, max_retries=3):
+    """Helper function to make API calls to Samco with retry logic for rate limits"""
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
@@ -51,27 +51,48 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
 
     url = f"{BASE_URL}{endpoint}"
 
-    try:
-        if method == "GET":
-            response = client.get(url, headers=headers)
-        elif method == "POST":
-            response = client.post(url, headers=headers, json=payload)
-        else:
-            response = client.request(method, url, headers=headers, json=payload)
+    for attempt in range(max_retries + 1):
+        try:
+            if method == "GET":
+                response = client.get(url, headers=headers)
+            elif method == "POST":
+                response = client.post(url, headers=headers, json=payload)
+            else:
+                response = client.request(method, url, headers=headers, json=payload)
 
-        # Add status attribute for compatibility with the existing codebase
-        response.status = response.status_code
+            # Add status attribute for compatibility with the existing codebase
+            response.status = response.status_code
 
-        if response.status_code == 403:
-            logger.debug(f"Debug - API returned 403 Forbidden. Headers: {headers}")
+            # Handle specific HTTP error codes before parsing JSON
+            if response.status_code == 403:
+                logger.debug(f"Debug - API returned 403 Forbidden. Headers: {headers}")
+                logger.debug(f"Debug - Response text: {response.text}")
+                raise Exception("Authentication failed. Please check your session token.")
+
+            if response.status_code == 429:
+                if attempt < max_retries:
+                    # Exponential backoff: 1s, 2s, 4s
+                    delay = 2 ** attempt
+                    logger.warning(f"Rate limit hit (429), retrying in {delay}s... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"Rate limit exceeded after {max_retries} retries. Endpoint: {endpoint}")
+                    raise Exception("Rate limit exceeded. Please reduce request frequency.")
+
+            if response.status_code >= 500:
+                logger.error(f"Server error ({response.status_code}). Endpoint: {endpoint}")
+                raise Exception(f"Samco server error ({response.status_code}). Please try again later.")
+
+            return json.loads(response.text)
+
+        except json.JSONDecodeError:
+            logger.error(f"Debug - Failed to parse response. Status code: {response.status_code}")
             logger.debug(f"Debug - Response text: {response.text}")
-            raise Exception("Authentication failed. Please check your session token.")
+            raise Exception(f"Failed to parse API response (status {response.status_code})")
 
-        return json.loads(response.text)
-    except json.JSONDecodeError:
-        logger.error(f"Debug - Failed to parse response. Status code: {response.status_code}")
-        logger.debug(f"Debug - Response text: {response.text}")
-        raise Exception(f"Failed to parse API response (status {response.status_code})")
+    # Should not reach here, but just in case
+    raise Exception("Max retries exceeded")
 
 
 class BrokerData:
@@ -105,6 +126,43 @@ class BrokerData:
             'MIDCPNIFTY': 'NIFTY MID SELECT'
         }
         return index_map.get(symbol.upper(), symbol)
+
+    def get_index_listing_id(self, symbol: str, exchange: str) -> str:
+        """
+        Get the listingId for an index symbol from Samco's indexQuote API.
+        This listingId is required for WebSocket streaming of index quotes.
+
+        Args:
+            symbol: Index symbol (e.g., NIFTY, BANKNIFTY)
+            exchange: Exchange (NSE_INDEX or BSE_INDEX)
+
+        Returns:
+            str: The listingId for streaming (e.g., '-23' for NIFTY)
+        """
+        try:
+            index_name = self._get_index_name(symbol)
+
+            response = get_api_response(f"/quote/indexQuote?indexName={index_name}",
+                                       self.auth_token,
+                                       "GET")
+
+            if response.get('status') != 'Success':
+                raise Exception(f"Error from Samco API: {response.get('statusMessage', 'Unknown error')}")
+
+            index_details = response.get('indexDetails', [])
+            if not index_details:
+                raise Exception(f"No index data received for {symbol}")
+
+            listing_id = index_details[0].get('listingId')
+            if listing_id is None:
+                raise Exception(f"No listingId found for {symbol}")
+
+            logger.info(f"Index {symbol} listingId: {listing_id}")
+            return str(listing_id)
+
+        except Exception as e:
+            logger.error(f"Error getting index listingId for {symbol}: {e}")
+            raise
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
@@ -182,6 +240,7 @@ class BrokerData:
 
             # Extract index details
             index_details = response.get('indexDetails', [])
+            logger.info(f"Debug - Index details for {symbol}: {index_details}")
             if not index_details:
                 raise Exception("No index data received")
 

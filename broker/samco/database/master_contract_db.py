@@ -72,41 +72,97 @@ def copy_from_dataframe(df):
 def get_index_data():
     """
     Returns a DataFrame with index data for Samco.
-    Since Samco's ScripMaster.csv doesn't include indices, we manually define them.
+    Since Samco's ScripMaster.csv doesn't include indices, we define them based on Samco API docs.
+    brsymbol must match exact index names supported by Samco's /quote/indexQuote API.
+    Total 68 indices as per Samco API documentation.
     """
-    # NSE Indices
+    # NSE Indices - brsymbol values from Samco API documentation
     nse_indices = [
-        {'symbol': 'NIFTY', 'brsymbol': 'Nifty 50', 'name': 'Nifty 50', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_50', 'instrumenttype': 'INDEX'},
-        {'symbol': 'BANKNIFTY', 'brsymbol': 'Nifty Bank', 'name': 'Nifty Bank', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_BANK', 'instrumenttype': 'INDEX'},
-        {'symbol': 'FINNIFTY', 'brsymbol': 'Nifty Fin Service', 'name': 'Nifty Fin Service', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_FIN_SERVICE', 'instrumenttype': 'INDEX'},
+        # Major Indices
+        {'symbol': 'NIFTY', 'brsymbol': 'NIFTY 50', 'name': 'Nifty 50', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_50', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BANKNIFTY', 'brsymbol': 'NIFTY BANK', 'name': 'Nifty Bank', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_BANK', 'instrumenttype': 'INDEX'},
+        {'symbol': 'FINNIFTY', 'brsymbol': 'NIFTY FIN SERVICE', 'name': 'Nifty Fin Service', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_FIN_SERVICE', 'instrumenttype': 'INDEX'},
         {'symbol': 'MIDCPNIFTY', 'brsymbol': 'NIFTY MID SELECT', 'name': 'Nifty Mid Select', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_MID_SELECT', 'instrumenttype': 'INDEX'},
-        {'symbol': 'NIFTYNXT50', 'brsymbol': 'Nifty Next 50', 'name': 'Nifty Next 50', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_NEXT_50', 'instrumenttype': 'INDEX'},
-        {'symbol': 'NIFTY100', 'brsymbol': 'Nifty 100', 'name': 'Nifty 100', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_100', 'instrumenttype': 'INDEX'},
-        {'symbol': 'NIFTY200', 'brsymbol': 'Nifty 200', 'name': 'Nifty 200', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_200', 'instrumenttype': 'INDEX'},
-        {'symbol': 'NIFTY500', 'brsymbol': 'Nifty 500', 'name': 'Nifty 500', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_500', 'instrumenttype': 'INDEX'},
-        {'symbol': 'NIFTYIT', 'brsymbol': 'Nifty IT', 'name': 'Nifty IT', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_IT', 'instrumenttype': 'INDEX'},
-        {'symbol': 'NIFTYAUTO', 'brsymbol': 'Nifty Auto', 'name': 'Nifty Auto', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_AUTO', 'instrumenttype': 'INDEX'},
-        {'symbol': 'NIFTYPHARMA', 'brsymbol': 'Nifty Pharma', 'name': 'Nifty Pharma', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_PHARMA', 'instrumenttype': 'INDEX'},
-        {'symbol': 'NIFTYMETAL', 'brsymbol': 'Nifty Metal', 'name': 'Nifty Metal', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_METAL', 'instrumenttype': 'INDEX'},
-        {'symbol': 'NIFTYFMCG', 'brsymbol': 'Nifty FMCG', 'name': 'Nifty FMCG', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_FMCG', 'instrumenttype': 'INDEX'},
-        {'symbol': 'NIFTYREALTY', 'brsymbol': 'Nifty Realty', 'name': 'Nifty Realty', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_REALTY', 'instrumenttype': 'INDEX'},
-        {'symbol': 'NIFTYENERGY', 'brsymbol': 'Nifty Energy', 'name': 'Nifty Energy', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_ENERGY', 'instrumenttype': 'INDEX'},
-        {'symbol': 'NIFTYMEDIA', 'brsymbol': 'Nifty Media', 'name': 'Nifty Media', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_MEDIA', 'instrumenttype': 'INDEX'},
-        {'symbol': 'NIFTYPSUBANK', 'brsymbol': 'Nifty PSU Bank', 'name': 'Nifty PSU Bank', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_PSU_BANK', 'instrumenttype': 'INDEX'},
-        {'symbol': 'NIFTYPVTBANK', 'brsymbol': 'Nifty Pvt Bank', 'name': 'Nifty Pvt Bank', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_PVT_BANK', 'instrumenttype': 'INDEX'},
-        {'symbol': 'NIFTYMIDCAP50', 'brsymbol': 'Nifty Midcap 50', 'name': 'Nifty Midcap 50', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_MIDCAP_50', 'instrumenttype': 'INDEX'},
-        {'symbol': 'NIFTYINFRA', 'brsymbol': 'Nifty Infra', 'name': 'Nifty Infra', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_INFRA', 'instrumenttype': 'INDEX'},
-        {'symbol': 'INDIAVIX', 'brsymbol': 'India VIX', 'name': 'India VIX', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'INDIA_VIX', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYNXT50', 'brsymbol': 'NIFTY NEXT 50', 'name': 'Nifty Next 50', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_NEXT_50', 'instrumenttype': 'INDEX'},
+        # Broad Market Indices
+        {'symbol': 'NIFTY100', 'brsymbol': 'NIFTY 100', 'name': 'Nifty 100', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_100', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTY200', 'brsymbol': 'NIFTY 200', 'name': 'Nifty 200', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_200', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTY500', 'brsymbol': 'NIFTY 500', 'name': 'Nifty 500', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_500', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYMIDCAP50', 'brsymbol': 'NIFTY MIDCAP 50', 'name': 'Nifty Midcap 50', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_MIDCAP_50', 'instrumenttype': 'INDEX'},
+        # Sectoral Indices
+        {'symbol': 'NIFTYIT', 'brsymbol': 'NIFTY IT', 'name': 'Nifty IT', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_IT', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYAUTO', 'brsymbol': 'NIFTY AUTO', 'name': 'Nifty Auto', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_AUTO', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYPHARMA', 'brsymbol': 'NIFTY PHARMA', 'name': 'Nifty Pharma', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_PHARMA', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYMETAL', 'brsymbol': 'NIFTY METAL', 'name': 'Nifty Metal', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_METAL', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYFMCG', 'brsymbol': 'NIFTY FMCG', 'name': 'Nifty FMCG', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_FMCG', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYREALTY', 'brsymbol': 'NIFTY REALTY', 'name': 'Nifty Realty', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_REALTY', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYENERGY', 'brsymbol': 'NIFTY ENERGY', 'name': 'Nifty Energy', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_ENERGY', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYMEDIA', 'brsymbol': 'NIFTY MEDIA', 'name': 'Nifty Media', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_MEDIA', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYPSUBANK', 'brsymbol': 'NIFTY PSU BANK', 'name': 'Nifty PSU Bank', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_PSU_BANK', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYPVTBANK', 'brsymbol': 'NIFTY PVT BANK', 'name': 'Nifty Pvt Bank', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_PVT_BANK', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYINFRA', 'brsymbol': 'NIFTY INFRA', 'name': 'Nifty Infra', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_INFRA', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYCPSE', 'brsymbol': 'NIFTY CPSE', 'name': 'Nifty CPSE', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_CPSE', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYCOMMODITIES', 'brsymbol': 'NIFTY COMMODITIES', 'name': 'Nifty Commodities', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_COMMODITIES', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYCONSUMPTION', 'brsymbol': 'NIFTY CONSUMPTION', 'name': 'Nifty Consumption', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_CONSUMPTION', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYMNC', 'brsymbol': 'NIFTY MNC', 'name': 'Nifty MNC', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_MNC', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYPSE', 'brsymbol': 'NIFTY PSE', 'name': 'Nifty PSE', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_PSE', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYSERVSECTOR', 'brsymbol': 'NIFTY SERV SECTOR', 'name': 'Nifty Services Sector', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_SERV_SECTOR', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYGROWSECT15', 'brsymbol': 'NIFTY GROWSECT 15', 'name': 'Nifty Growth Sectors 15', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_GROWSECT_15', 'instrumenttype': 'INDEX'},
+        # Thematic Indices
+        {'symbol': 'NIFTYDIVOPPS50', 'brsymbol': 'NIFTY DIV OPPS 50', 'name': 'Nifty Dividend Opportunities 50', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_DIV_OPPS_50', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTY50VALUE20', 'brsymbol': 'NIFTY50 VALUE 20', 'name': 'Nifty50 Value 20', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY50_VALUE_20', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYQUALITY30', 'brsymbol': 'NIFTY Quality 30', 'name': 'Nifty Quality 30', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_QUALITY_30', 'instrumenttype': 'INDEX'},
+        # Liquidity Indices
+        {'symbol': 'NIFTYMIDLIQ15', 'brsymbol': 'NIFTY Mid LIQ 15', 'name': 'Nifty Midcap Liquid 15', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_MID_LIQ_15', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTY100LIQ15', 'brsymbol': 'NIFTY100 LIQ 15', 'name': 'Nifty100 Liquid 15', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY100_LIQ_15', 'instrumenttype': 'INDEX'},
+        # Free Float Indices
+        {'symbol': 'NIFTYMID100FREE', 'brsymbol': 'NIFTY MID100 FREE', 'name': 'Nifty Midcap 100 Free Float', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_MID100_FREE', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTYSML100FREE', 'brsymbol': 'NIFTY SML100 FREE', 'name': 'Nifty Smallcap 100 Free Float', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY_SML100_FREE', 'instrumenttype': 'INDEX'},
+        # Strategy Indices (Leveraged/Inverse)
+        {'symbol': 'NIFTY50PR1XINV', 'brsymbol': 'NIFTY50 PR 1x INV', 'name': 'Nifty50 PR 1x Inverse', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY50_PR_1X_INV', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTY50PR2XLEV', 'brsymbol': 'NIFTY50 PR 2x LEV', 'name': 'Nifty50 PR 2x Leverage', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY50_PR_2X_LEV', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTY50TR1XINV', 'brsymbol': 'NIFTY50 TR 1x INV', 'name': 'Nifty50 TR 1x Inverse', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY50_TR_1X_INV', 'instrumenttype': 'INDEX'},
+        {'symbol': 'NIFTY50TR2XLEV', 'brsymbol': 'NIFTY50 TR 2x LEV', 'name': 'Nifty50 TR 2x Leverage', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'NIFTY50_TR_2X_LEV', 'instrumenttype': 'INDEX'},
+        # Volatility Index
+        {'symbol': 'INDIAVIX', 'brsymbol': 'INDIA VIX', 'name': 'India VIX', 'exchange': 'NSE_INDEX', 'brexchange': 'NSE', 'token': 'INDIA_VIX', 'instrumenttype': 'INDEX'},
     ]
 
-    # BSE Indices
+    # BSE Indices - brsymbol values from Samco API documentation
     bse_indices = [
+        # Major Indices
         {'symbol': 'SENSEX', 'brsymbol': 'SENSEX', 'name': 'S&P BSE SENSEX', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'SENSEX', 'instrumenttype': 'INDEX'},
         {'symbol': 'BANKEX', 'brsymbol': 'BANKEX', 'name': 'S&P BSE BANKEX', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BANKEX', 'instrumenttype': 'INDEX'},
-        {'symbol': 'SENSEX50', 'brsymbol': 'SENSEX 50', 'name': 'S&P BSE SENSEX 50', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'SENSEX_50', 'instrumenttype': 'INDEX'},
-        {'symbol': 'BSE100', 'brsymbol': 'BSE 100', 'name': 'S&P BSE 100', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_100', 'instrumenttype': 'INDEX'},
-        {'symbol': 'BSE200', 'brsymbol': 'BSE 200', 'name': 'S&P BSE 200', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_200', 'instrumenttype': 'INDEX'},
-        {'symbol': 'BSE500', 'brsymbol': 'BSE 500', 'name': 'S&P BSE 500', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_500', 'instrumenttype': 'INDEX'},
+        {'symbol': 'SENSEX50', 'brsymbol': 'SNSX50', 'name': 'S&P BSE SENSEX 50', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'SENSEX_50', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSENXT50', 'brsymbol': 'SNXT50', 'name': 'S&P BSE SENSEX Next 50', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_NXT_50', 'instrumenttype': 'INDEX'},
+        # Sectoral Indices
+        {'symbol': 'BSEIT', 'brsymbol': 'BSE IT', 'name': 'S&P BSE IT', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_IT', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSEHC', 'brsymbol': 'BSE HC', 'name': 'S&P BSE Healthcare', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_HC', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSECG', 'brsymbol': 'BSE CG', 'name': 'S&P BSE Capital Goods', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_CG', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSECD', 'brsymbol': 'BSE CD', 'name': 'S&P BSE Consumer Durables', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_CD', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSEPSU', 'brsymbol': 'BSEPSU', 'name': 'S&P BSE PSU', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_PSU', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSEFMC', 'brsymbol': 'BSEFMC', 'name': 'S&P BSE Fast Moving Consumer Goods', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_FMC', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSEMETAL', 'brsymbol': 'METAL', 'name': 'S&P BSE Metal', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_METAL', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSEOILGAS', 'brsymbol': 'OILGAS', 'name': 'S&P BSE Oil & Gas', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_OILGAS', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSEAUTO', 'brsymbol': 'AUTO', 'name': 'S&P BSE Auto', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_AUTO', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSEPOWER', 'brsymbol': 'POWER', 'name': 'S&P BSE Power', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_POWER', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSEREALTY', 'brsymbol': 'REALTY', 'name': 'S&P BSE Realty', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_REALTY', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSETECK', 'brsymbol': 'TECK', 'name': 'S&P BSE Teck', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_TECK', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSECDGS', 'brsymbol': 'CDGS', 'name': 'S&P BSE Consumer Discretionary Goods & Services', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_CDGS', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSEBASMTR', 'brsymbol': 'BASMTR', 'name': 'S&P BSE Basic Materials', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_BASMTR', 'instrumenttype': 'INDEX'},
+        # Thematic Indices
+        {'symbol': 'BSEGREENX', 'brsymbol': 'GREENX', 'name': 'S&P BSE Greenex', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_GREENX', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSECARBON', 'brsymbol': 'CARBON', 'name': 'S&P BSE Carbonex', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_CARBON', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSEIPO', 'brsymbol': 'BSEIPO', 'name': 'S&P BSE IPO', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_IPO', 'instrumenttype': 'INDEX'},
+        {'symbol': 'SMEIPO', 'brsymbol': 'SMEIPO', 'name': 'S&P BSE SME IPO', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'SME_IPO', 'instrumenttype': 'INDEX'},
+        # Market Cap Indices
+        {'symbol': 'BSEALLCAP', 'brsymbol': 'ALLCAP', 'name': 'S&P BSE AllCap', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_ALLCAP', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSELRGCAP', 'brsymbol': 'LRGCAP', 'name': 'S&P BSE LargeCap', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_LRGCAP', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSEMIDSEL', 'brsymbol': 'MIDSEL', 'name': 'S&P BSE MidCap Select', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_MIDSEL', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSESMLSEL', 'brsymbol': 'SMLSEL', 'name': 'S&P BSE SmallCap Select', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_SMLSEL', 'instrumenttype': 'INDEX'},
+        # Dollex Indices
+        {'symbol': 'BSEDOL30', 'brsymbol': 'DOL30', 'name': 'S&P BSE Dollex 30', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_DOL30', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSEDOL100', 'brsymbol': 'DOL100', 'name': 'S&P BSE Dollex 100', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_DOL100', 'instrumenttype': 'INDEX'},
+        {'symbol': 'BSEDOL200', 'brsymbol': 'DOL200', 'name': 'S&P BSE Dollex 200', 'exchange': 'BSE_INDEX', 'brexchange': 'BSE', 'token': 'BSE_DOL200', 'instrumenttype': 'INDEX'},
     ]
 
     # Combine all indices
@@ -408,6 +464,17 @@ def process_samco_data(df):
         'SENSEX': 'SENSEX',
         'BANKEX': 'BANKEX'
     })
+
+    # ============ Instrument Type Normalization ============
+    # Convert instrumenttype from OPTIDX/OPTSTK/OPTFUT/OPTCUR/OPTIRC to CE/PE
+    # This ensures consistency across brokers for option chain queries
+    option_types = ['OPTIDX', 'OPTSTK', 'OPTFUT', 'OPTCUR', 'OPTIRC']
+    df.loc[(df['instrumenttype'].isin(option_types)) & (df['symbol'].str.endswith('CE', na=False)), 'instrumenttype'] = 'CE'
+    df.loc[(df['instrumenttype'].isin(option_types)) & (df['symbol'].str.endswith('PE', na=False)), 'instrumenttype'] = 'PE'
+
+    # Convert futures instrumenttype to FUT for consistency
+    futures_types = ['FUTIDX', 'FUTSTK', 'FUTCOM', 'FUTCUR', 'FUTIRC']
+    df.loc[df['instrumenttype'].isin(futures_types), 'instrumenttype'] = 'FUT'
 
     logger.info(f"Processed {len(df)} records")
     return df[required_cols]
