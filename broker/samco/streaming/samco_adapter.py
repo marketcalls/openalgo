@@ -249,14 +249,31 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Returns:
             Dict: Response with status
         """
-        # Map symbol to token
-        token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
-        if not token_info:
-            return self._create_error_response("SYMBOL_NOT_FOUND",
-                                               f"Symbol {symbol} not found for exchange {exchange}")
+        # Handle index symbols - need to use listingId for streaming
+        if exchange in ['NSE_INDEX', 'BSE_INDEX']:
+            try:
+                auth_token = get_auth_token(self.user_id)
+                if not auth_token:
+                    return self._create_error_response("AUTH_ERROR",
+                                                       "Authentication token not found")
+                broker_data = BrokerData(auth_token)
+                listing_id = broker_data.get_index_listing_id(symbol, exchange)
+                token = listing_id  # e.g., '-21' for NIFTY
+                brexchange = 'NSE' if exchange == 'NSE_INDEX' else 'BSE'
+                self.logger.info(f"Samco index unsubscribe: symbol={symbol}, exchange={exchange}, listingId={listing_id}")
+            except Exception as e:
+                self.logger.error(f"Error getting index listingId for unsubscribe: {e}")
+                return self._create_error_response("INDEX_ERROR",
+                                                   f"Failed to get index listingId: {str(e)}")
+        else:
+            # Map symbol to token for non-index symbols
+            token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
+            if not token_info:
+                return self._create_error_response("SYMBOL_NOT_FOUND",
+                                                   f"Symbol {symbol} not found for exchange {exchange}")
 
-        token = token_info['token']
-        brexchange = token_info['brexchange']
+            token = token_info['token']
+            brexchange = token_info['brexchange']
 
         # Create token list for Samco API
         token_list = [{
@@ -361,61 +378,74 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.debug("Received message without symbol, skipping")
                 return
 
-            # Find the subscription that matches this symbol
-            # symbol_key format from Samco: "scripCode_exchange" e.g., "11536_NSE"
-            subscription = None
+            # Get the message's subscription mode (from streaming_type)
+            # Mode 2 = "quote" (LTP/Quote data), Mode 3 = "quote2" (Depth data)
+            msg_mode = message.get('subscription_mode', 2)
+
+            # Determine which subscription modes this message should go to
+            # "quote" messages (mode 2) should go to LTP (1) and Quote (2) subscribers
+            # "quote2" messages (mode 3) should go to Depth (3) subscribers
+            if msg_mode == 3:
+                target_modes = [3]  # Depth data only goes to depth subscribers
+            else:
+                target_modes = [1, 2]  # Quote data goes to LTP and Quote subscribers
+
+            # Find ALL subscriptions that match this symbol and have compatible modes
+            matching_subscriptions = []
             with self.lock:
                 for sub in self.subscriptions.values():
+                    # Check if mode is compatible
+                    if sub['mode'] not in target_modes:
+                        continue
+
                     # Match by token (may be "11536_NSE" or "11536")
                     if sub['token'] == symbol_key or sub['symbol'] == symbol_key:
-                        subscription = sub
-                        break
+                        matching_subscriptions.append(sub)
+                        continue
 
                     # Try matching with exchange suffix (if token doesn't have it)
                     token_with_exchange = f"{sub['token']}_{sub['brexchange']}"
                     if symbol_key == token_with_exchange:
-                        subscription = sub
-                        break
+                        matching_subscriptions.append(sub)
+                        continue
 
                     # Try matching by extracting scripCode from symbol_key (handle "11536_NSE" -> "11536")
                     if '_' in symbol_key:
                         scripcode = symbol_key.split('_')[0]
                         if sub['token'] == scripcode:
-                            subscription = sub
-                            break
+                            matching_subscriptions.append(sub)
+                            continue
 
-            if not subscription:
-                self.logger.warning(f"Received data for unsubscribed symbol: {symbol_key}")
+            if not matching_subscriptions:
+                self.logger.debug(f"No matching subscription for symbol: {symbol_key}, msg_mode: {msg_mode}")
                 return
 
-            self.logger.info(f"Found subscription: {subscription['symbol']}.{subscription['exchange']}")
+            # Publish to all matching subscriptions
+            for subscription in matching_subscriptions:
+                symbol = subscription['symbol']
+                exchange = subscription['exchange']
+                mode = subscription['mode']
 
-            # Create topic for ZeroMQ
-            symbol = subscription['symbol']
-            exchange = subscription['exchange']
-            mode = subscription['mode']
+                # Use subscription mode for topic
+                mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}.get(mode, 'QUOTE')
+                topic = f"{exchange}_{symbol}_{mode_str}"
 
-            # Use subscription mode for topic (not message mode) to match client expectations
-            # LTP subscription should publish to LTP topic even if Samco returns QUOTE data
-            mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}.get(mode, 'QUOTE')
-            topic = f"{exchange}_{symbol}_{mode_str}"
+                # Normalize the data based on subscription mode
+                market_data = self._normalize_market_data(message, mode)
 
-            # Normalize the data based on subscription mode
-            market_data = self._normalize_market_data(message, mode)
+                # Add metadata
+                market_data.update({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'mode': mode,
+                    'timestamp': int(time.time() * 1000)  # Current timestamp in ms
+                })
 
-            # Add metadata
-            market_data.update({
-                'symbol': symbol,
-                'exchange': exchange,
-                'mode': mode,
-                'timestamp': int(time.time() * 1000)  # Current timestamp in ms
-            })
+                # Log the market data we're sending
+                self.logger.info(f"Publishing to topic {topic}: ltp={market_data.get('ltp')}, depth={bool(market_data.get('depth'))}")
 
-            # Log the market data we're sending
-            self.logger.info(f"Publishing to topic {topic}: ltp={market_data.get('ltp')}, depth={bool(market_data.get('depth'))}")
-
-            # Publish to ZeroMQ
-            self.publish_market_data(topic, market_data)
+                # Publish to ZeroMQ
+                self.publish_market_data(topic, market_data)
 
         except Exception as e:
             self.logger.error(f"Error processing market data: {e}", exc_info=True)
