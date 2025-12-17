@@ -93,16 +93,93 @@ class BrokerData:
         }
 
     def _get_index_name(self, symbol: str) -> str:
-        """Map OpenAlgo index symbols to Samco index names"""
+        """Map OpenAlgo index symbols to Samco index names (exact format from Samco API docs)"""
         index_map = {
-            'NIFTY': 'Nifty 50',
-            'BANKNIFTY': 'Nifty Bank',
-            'NIFTY 50': 'Nifty 50',
-            'NIFTY BANK': 'Nifty Bank',
+            # NSE Major Indices
+            'NIFTY': 'NIFTY 50',
+            'NIFTY50': 'NIFTY 50',
+            'BANKNIFTY': 'NIFTY BANK',
+            'FINNIFTY': 'NIFTY FIN SERVICE',
+            'MIDCPNIFTY': 'NIFTY MID SELECT',
+            'NIFTYNXT50': 'NIFTY NEXT 50',
+            # NSE Broad Market Indices
+            'NIFTY100': 'NIFTY 100',
+            'NIFTY200': 'NIFTY 200',
+            'NIFTY500': 'NIFTY 500',
+            'NIFTYMIDCAP50': 'NIFTY MIDCAP 50',
+            # NSE Sectoral Indices
+            'NIFTYIT': 'NIFTY IT',
+            'NIFTYAUTO': 'NIFTY AUTO',
+            'NIFTYPHARMA': 'NIFTY PHARMA',
+            'NIFTYMETAL': 'NIFTY METAL',
+            'NIFTYFMCG': 'NIFTY FMCG',
+            'NIFTYREALTY': 'NIFTY REALTY',
+            'NIFTYENERGY': 'NIFTY ENERGY',
+            'NIFTYMEDIA': 'NIFTY MEDIA',
+            'NIFTYPSUBANK': 'NIFTY PSU BANK',
+            'NIFTYPVTBANK': 'NIFTY PVT BANK',
+            'NIFTYINFRA': 'NIFTY INFRA',
+            'NIFTYCPSE': 'NIFTY CPSE',
+            'NIFTYCOMMODITIES': 'NIFTY COMMODITIES',
+            'NIFTYCONSUMPTION': 'NIFTY CONSUMPTION',
+            'NIFTYMNC': 'NIFTY MNC',
+            'NIFTYPSE': 'NIFTY PSE',
+            'NIFTYSERVSECTOR': 'NIFTY SERV SECTOR',
+            'NIFTYGROWSECT15': 'NIFTY GROWSECT 15',
+            # NSE Thematic Indices
+            'NIFTYDIVOPPS50': 'NIFTY DIV OPPS 50',
+            'NIFTY50VALUE20': 'NIFTY50 VALUE 20',
+            'NIFTYQUALITY30': 'NIFTY Quality 30',
+            # NSE Liquidity Indices
+            'NIFTYMIDLIQ15': 'NIFTY Mid LIQ 15',
+            'NIFTY100LIQ15': 'NIFTY100 LIQ 15',
+            # NSE Free Float Indices
+            'NIFTYMID100FREE': 'NIFTY MID100 FREE',
+            'NIFTYSML100FREE': 'NIFTY SML100 FREE',
+            # NSE Strategy Indices
+            'NIFTY50PR1XINV': 'NIFTY50 PR 1x INV',
+            'NIFTY50PR2XLEV': 'NIFTY50 PR 2x LEV',
+            'NIFTY50TR1XINV': 'NIFTY50 TR 1x INV',
+            'NIFTY50TR2XLEV': 'NIFTY50 TR 2x LEV',
+            # NSE Volatility Index
+            'INDIAVIX': 'INDIA VIX',
+            # BSE Major Indices
             'SENSEX': 'SENSEX',
             'BANKEX': 'BANKEX',
-            'FINNIFTY': 'Nifty Fin Service',
-            'MIDCPNIFTY': 'NIFTY MID SELECT'
+            'SENSEX50': 'SNSX50',
+            'BSENXT50': 'SNXT50',
+            # BSE Sectoral Indices
+            'BSEIT': 'BSE IT',
+            'BSEHC': 'BSE HC',
+            'BSECG': 'BSE CG',
+            'BSECD': 'BSE CD',
+            'BSEPSU': 'BSEPSU',
+            'BSEFMC': 'BSEFMC',
+            'BSEMETAL': 'METAL',
+            'BSEOILGAS': 'OILGAS',
+            'BSEAUTO': 'AUTO',
+            'BSEPOWER': 'POWER',
+            'BSEREALTY': 'REALTY',
+            'BSETECK': 'TECK',
+            'BSECDGS': 'CDGS',
+            'BSEBASMTR': 'BASMTR',
+            # BSE Thematic Indices
+            'BSEGREENX': 'GREENX',
+            'BSECARBON': 'CARBON',
+            'BSEIPO': 'BSEIPO',
+            'SMEIPO': 'SMEIPO',
+            # BSE Market Cap Indices
+            'BSEALLCAP': 'ALLCAP',
+            'BSELRGCAP': 'LRGCAP',
+            'BSEMIDSEL': 'MIDSEL',
+            'BSESMLSEL': 'SMLSEL',
+            # BSE Dollex Indices
+            'BSEDOL30': 'DOL30',
+            'BSEDOL100': 'DOL100',
+            'BSEDOL200': 'DOL200',
+            # Direct mappings (already in correct format)
+            'NIFTY 50': 'NIFTY 50',
+            'NIFTY BANK': 'NIFTY BANK',
         }
         return index_map.get(symbol.upper(), symbol)
 
