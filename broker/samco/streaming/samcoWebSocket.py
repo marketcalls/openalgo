@@ -24,7 +24,7 @@ class SamcoWebSocket:
     """
 
     # WebSocket URL - Official Samco streaming endpoint
-    WS_URL = "wss://stream.stocknote.com"
+    WS_URL = "wss://stream.samco.in"
 
     # Connection constants
     CONNECTION_TIMEOUT = 15
@@ -41,7 +41,7 @@ class SamcoWebSocket:
     QUOTE_MODE = 2
     DEPTH_MODE = 3
 
-    # Streaming types - Samco uses "quote2" for streaming
+    # Streaming types - Samco uses "quote2" for quote data and "marketDepth" for market depth
     STREAMING_TYPE_QUOTE = "quote2"
     STREAMING_TYPE_MARKETDATA = "marketDepth"
 
@@ -294,16 +294,21 @@ class SamcoWebSocket:
                 response = data['response']
                 streaming_type = response.get('streaming_type', '')
 
-                if streaming_type in ['quote', 'marketDepth']:
+                if streaming_type in ['quote', 'quote2', 'marketDepth']:
                     # Market data - normalize and pass to data callback
                     market_data = response.get('data', {})
                     normalized = self._normalize_market_data(market_data, streaming_type)
 
+                    self.logger.info(f"Normalized data: symbol={normalized.get('symbol')}, has_callback={self._on_data_callback is not None}")
+
                     if self._on_data_callback:
                         try:
                             self._on_data_callback(ws, normalized)
+                            self.logger.info("Data callback invoked successfully")
                         except Exception as e:
-                            self.logger.error(f"Error in on_data callback: {e}")
+                            self.logger.error(f"Error in on_data callback: {e}", exc_info=True)
+                    else:
+                        self.logger.warning("No on_data callback registered!")
                     return
 
             # Other messages - pass to message callback
@@ -347,13 +352,61 @@ class SamcoWebSocket:
         - sym: Symbol
         - vol: Volume
         """
-        mode = self.DEPTH_MODE if streaming_type == 'marketDepth' else self.QUOTE_MODE
+        # Determine mode: quote2 has depth data, quote has OHLC data
+        if streaming_type in ['quote2', 'marketDepth']:
+            mode = self.DEPTH_MODE  # quote2 has bidValues/askValues (depth data)
+        else:
+            mode = self.QUOTE_MODE  # quote has ltp, ohlc, vol
 
-        return {
+        # Extract bid/ask values - quote2 has bidValues/askValues arrays
+        bid_values = data.get('bidValues', [])
+        ask_values = data.get('askValues', [])
+
+        # Get best bid/ask from first level (quote2) or direct fields (quote)
+        best_bid_price = 0.0
+        best_bid_qty = 0
+        best_ask_price = 0.0
+        best_ask_qty = 0
+
+        if bid_values and len(bid_values) > 0:
+            # quote2 format with depth arrays
+            best_bid_price = self._safe_float(bid_values[0].get('price', 0))
+            best_bid_qty = self._safe_int(bid_values[0].get('qty', 0))
+        else:
+            # quote format with direct fields: bPr, bSz
+            best_bid_price = self._safe_float(data.get('bPr', 0))
+            best_bid_qty = self._safe_int(data.get('bSz', 0))
+
+        if ask_values and len(ask_values) > 0:
+            # quote2 format with depth arrays
+            best_ask_price = self._safe_float(ask_values[0].get('price', 0))
+            best_ask_qty = self._safe_int(ask_values[0].get('qty', 0))
+        else:
+            # quote format with direct fields: aPr, aSz
+            best_ask_price = self._safe_float(data.get('aPr', 0))
+            best_ask_qty = self._safe_int(data.get('aSz', 0))
+
+        # Build depth data
+        depth_buy = []
+        depth_sell = []
+        for bid in bid_values:
+            depth_buy.append({
+                'price': self._safe_float(bid.get('price', 0)),
+                'quantity': self._safe_int(bid.get('qty', 0)),
+                'orders': self._safe_int(bid.get('no', 0))
+            })
+        for ask in ask_values:
+            depth_sell.append({
+                'price': self._safe_float(ask.get('price', 0)),
+                'quantity': self._safe_int(ask.get('qty', 0)),
+                'orders': self._safe_int(ask.get('no', 0))
+            })
+
+        result = {
             'subscription_mode': mode,
             'subscription_mode_val': 'DEPTH' if mode == self.DEPTH_MODE else 'QUOTE',
-            'token': data.get('sym', ''),
-            'symbol': data.get('sym', ''),
+            'token': data.get('symbol', '') or data.get('sym', ''),
+            'symbol': data.get('symbol', '') or data.get('sym', ''),
             'last_traded_price': self._safe_float(data.get('ltp', 0)),
             'open_price_of_the_day': self._safe_float(data.get('o', 0)),
             'high_price_of_the_day': self._safe_float(data.get('h', 0)),
@@ -364,14 +417,25 @@ class SamcoWebSocket:
             'average_traded_price': self._safe_float(data.get('avgPr', 0)),
             'change': self._safe_float(data.get('ch', 0)),
             'change_percentage': self._safe_float(data.get('chPer', 0)),
-            'best_bid_price': self._safe_float(data.get('bPr', 0)),
-            'best_bid_quantity': self._safe_int(data.get('bSz', 0)),
-            'best_ask_price': self._safe_float(data.get('aPr', 0)),
-            'best_ask_quantity': self._safe_int(data.get('aSz', 0)),
+            'best_bid_price': best_bid_price,
+            'best_bid_quantity': best_bid_qty,
+            'best_ask_price': best_ask_price,
+            'best_ask_quantity': best_ask_qty,
+            'total_bid_quantity': self._safe_int(data.get('tbq', 0)),
+            'total_ask_quantity': self._safe_int(data.get('taq', 0)),
             'open_interest': self._safe_int(data.get('oI', 0)),
             'last_traded_time': data.get('lTrdT', '') or data.get('ltt', ''),
             'exchange_timestamp': int(time.time() * 1000)
         }
+
+        # Add depth data if available
+        if depth_buy or depth_sell:
+            result['depth'] = {
+                'buy': depth_buy,
+                'sell': depth_sell
+            }
+
+        return result
 
     def _safe_float(self, value) -> float:
         """Safely convert value to float"""
@@ -503,13 +567,21 @@ class SamcoWebSocket:
                 tokens = token_group.get('tokens', [])
 
                 for token in tokens:
-                    # Samco uses format like "SYMBOL_EXCHANGE" e.g. "RELIANCE_NSE", "532826_BSE"
-                    symbol_key = f"{token}_{exchange}"
+                    # Samco streaming uses format: scripCode_segment (e.g., "11536_NSE", "464925_MFO")
+                    # Check if token already has segment suffix, if not append exchange
+                    if '_' in str(token):
+                        # Token already has format like "11536_NSE"
+                        symbol_key = token
+                    else:
+                        # Token is just scripCode like "11536", need to append segment
+                        symbol_key = f"{token}_{exchange}"
+
                     symbols_list.append({"symbol": symbol_key})
+                    self.logger.debug(f"Samco subscription symbol: {symbol_key}")
 
                     # Track subscription
                     self.subscribed_symbols[symbol_key] = {
-                        'symbol': token,
+                        'symbol': symbol_key,
                         'exchange': exchange,
                         'mode': mode,
                         'correlation_id': correlation_id
@@ -527,15 +599,28 @@ class SamcoWebSocket:
                 else:
                     self.input_request_dict[mode][exchange] = list(tokens)
 
-            # Determine streaming type based on mode
-            streaming_type = self.STREAMING_TYPE_MARKETDATA if mode == self.DEPTH_MODE else self.STREAMING_TYPE_QUOTE
+            # Samco streaming types: "quote" for LTP/Quote, "quote2" for depth data
+            if mode == self.DEPTH_MODE:
+                streaming_type = self.STREAMING_TYPE_QUOTE  # "quote2" for depth
+            else:
+                streaming_type = "quote"  # "quote" for LTP and Quote modes
 
-            # Build Samco subscription request
+            # Build full symbols list from ALL subscribed symbols for this streaming_type
+            # This ensures we always send the complete subscription state to Samco
+            all_symbols_for_mode = []
+            for sym_key, sym_info in self.subscribed_symbols.items():
+                # Include all symbols that use the same streaming type
+                sym_mode = sym_info.get('mode', 2)
+                sym_streaming_type = self.STREAMING_TYPE_QUOTE if sym_mode == self.DEPTH_MODE else "quote"
+                if sym_streaming_type == streaming_type:
+                    all_symbols_for_mode.append({"symbol": sym_key})
+
+            # Build Samco subscription request with all symbols for this mode
             request_data = {
                 "request": {
                     "streaming_type": streaming_type,
                     "data": {
-                        "symbols": symbols_list
+                        "symbols": all_symbols_for_mode
                     },
                     "request_type": self.REQUEST_SUBSCRIBE,
                     "response_format": "json"
@@ -547,7 +632,7 @@ class SamcoWebSocket:
             self.logger.info(f"Sending subscription: {request_json}")
             self.ws.send(request_json)
             self.ws.send("\n")
-            self.logger.info(f"Subscribed to {len(symbols_list)} symbols with mode {mode}")
+            self.logger.info(f"Subscribed to {len(all_symbols_for_mode)} symbols with mode {mode}")
             self.RESUBSCRIBE_FLAG = True
             return True
 
@@ -578,7 +663,12 @@ class SamcoWebSocket:
                 tokens = token_group.get('tokens', [])
 
                 for token in tokens:
-                    symbol_key = f"{token}_{exchange}"
+                    # Build symbol key same way as subscribe
+                    if '_' in str(token):
+                        symbol_key = token
+                    else:
+                        symbol_key = f"{token}_{exchange}"
+
                     symbols_list.append({"symbol": symbol_key})
 
                     # Remove from tracking
@@ -591,8 +681,11 @@ class SamcoWebSocket:
                             if token in self.input_request_dict[mode][exchange]:
                                 self.input_request_dict[mode][exchange].remove(token)
 
-            # Determine streaming type
-            streaming_type = self.STREAMING_TYPE_MARKETDATA if mode == self.DEPTH_MODE else self.STREAMING_TYPE_QUOTE
+            # Samco streaming types: "quote" for LTP/Quote, "quote2" for depth data
+            if mode == self.DEPTH_MODE:
+                streaming_type = self.STREAMING_TYPE_QUOTE  # "quote2" for depth
+            else:
+                streaming_type = "quote"  # "quote" for LTP and Quote modes
 
             # Build unsubscribe request
             request_data = {

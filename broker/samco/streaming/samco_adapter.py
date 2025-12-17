@@ -147,6 +147,9 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         token = token_info['token']
         brexchange = token_info['brexchange']
 
+        # Debug log the token format
+        self.logger.info(f"Samco subscribe: symbol={symbol}, exchange={exchange}, token={token}, brexchange={brexchange}")
+
         # Check if the requested depth level is supported for this exchange
         is_fallback = False
         actual_depth = depth_level
@@ -265,13 +268,38 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.connected = True
 
         # Resubscribe to existing subscriptions if reconnecting
+        # Group subscriptions by mode and batch them into single requests
         with self.lock:
+            subscriptions_by_mode = {}
             for correlation_id, sub in self.subscriptions.items():
+                mode = sub["mode"]
+                if mode not in subscriptions_by_mode:
+                    subscriptions_by_mode[mode] = []
+                # Collect all token_lists for this mode
+                subscriptions_by_mode[mode].extend(sub["token_list"])
+
+            # Send batched subscriptions for each mode
+            for mode, token_list in subscriptions_by_mode.items():
                 try:
-                    self.ws_client.subscribe(correlation_id, sub["mode"], sub["token_list"])
-                    self.logger.info(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
+                    # Merge all tokens by exchange
+                    merged_tokens = {}
+                    for token_group in token_list:
+                        exchange = token_group.get('exchangeType', 'NSE')
+                        tokens = token_group.get('tokens', [])
+                        if exchange not in merged_tokens:
+                            merged_tokens[exchange] = []
+                        merged_tokens[exchange].extend(tokens)
+
+                    # Build merged token_list
+                    merged_token_list = [
+                        {"exchangeType": ex, "tokens": list(set(toks))}  # Remove duplicates
+                        for ex, toks in merged_tokens.items()
+                    ]
+
+                    self.ws_client.subscribe(f"batch_mode_{mode}", mode, merged_token_list)
+                    self.logger.info(f"Batch resubscribed mode {mode} with {len(merged_token_list)} exchange groups")
                 except Exception as e:
-                    self.logger.error(f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}")
+                    self.logger.error(f"Error batch resubscribing mode {mode}: {e}")
 
     def _on_error(self, wsapp, error) -> None:
         """Callback for WebSocket errors"""
@@ -293,8 +321,8 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_data(self, wsapp, message) -> None:
         """Callback for market data from the WebSocket"""
         try:
-            # Debug log the raw message data
-            self.logger.debug(f"RAW SAMCO DATA: Type: {type(message)}, Data: {message}")
+            # Log the raw message data
+            self.logger.info(f"SAMCO ADAPTER received data: {message}")
 
             if not isinstance(message, dict):
                 self.logger.warning(f"Received message is not a dictionary: {type(message)}")
@@ -303,36 +331,52 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Extract symbol from the message
             symbol_key = message.get('symbol', '') or message.get('token', '')
 
+            # Skip if no symbol (non-data message)
+            if not symbol_key:
+                self.logger.debug("Received message without symbol, skipping")
+                return
+
             # Find the subscription that matches this symbol
+            # symbol_key format from Samco: "scripCode_exchange" e.g., "11536_NSE"
             subscription = None
             with self.lock:
                 for sub in self.subscriptions.values():
-                    # Match by token or symbol
+                    # Match by token (may be "11536_NSE" or "11536")
                     if sub['token'] == symbol_key or sub['symbol'] == symbol_key:
                         subscription = sub
                         break
-                    # Try matching with exchange suffix
+
+                    # Try matching with exchange suffix (if token doesn't have it)
                     token_with_exchange = f"{sub['token']}_{sub['brexchange']}"
                     if symbol_key == token_with_exchange:
                         subscription = sub
                         break
 
+                    # Try matching by extracting scripCode from symbol_key (handle "11536_NSE" -> "11536")
+                    if '_' in symbol_key:
+                        scripcode = symbol_key.split('_')[0]
+                        if sub['token'] == scripcode:
+                            subscription = sub
+                            break
+
             if not subscription:
                 self.logger.warning(f"Received data for unsubscribed symbol: {symbol_key}")
                 return
+
+            self.logger.info(f"Found subscription: {subscription['symbol']}.{subscription['exchange']}")
 
             # Create topic for ZeroMQ
             symbol = subscription['symbol']
             exchange = subscription['exchange']
             mode = subscription['mode']
 
-            # Get the actual mode from the message
-            actual_msg_mode = message.get('subscription_mode', mode)
-            mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}.get(actual_msg_mode, 'QUOTE')
+            # Use subscription mode for topic (not message mode) to match client expectations
+            # LTP subscription should publish to LTP topic even if Samco returns QUOTE data
+            mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}.get(mode, 'QUOTE')
             topic = f"{exchange}_{symbol}_{mode_str}"
 
-            # Normalize the data based on mode
-            market_data = self._normalize_market_data(message, actual_msg_mode)
+            # Normalize the data based on subscription mode
+            market_data = self._normalize_market_data(message, mode)
 
             # Add metadata
             market_data.update({
@@ -343,7 +387,7 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
             })
 
             # Log the market data we're sending
-            self.logger.debug(f"Publishing market data: {market_data}")
+            self.logger.info(f"Publishing to topic {topic}: ltp={market_data.get('ltp')}, depth={bool(market_data.get('depth'))}")
 
             # Publish to ZeroMQ
             self.publish_market_data(topic, market_data)
@@ -353,14 +397,17 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _normalize_market_data(self, message, mode) -> Dict[str, Any]:
         """
-        Normalize broker-specific data format to a common format
+        Normalize broker-specific data format to a common format.
+
+        Note: The data is already normalized by samcoWebSocket, so we just
+        pass through the relevant fields based on mode.
 
         Args:
-            message: The raw message from the broker
+            message: The normalized message from samcoWebSocket
             mode: Subscription mode
 
         Returns:
-            Dict: Normalized market data
+            Dict: Market data for publishing
         """
         if mode == 1:  # LTP mode
             return {
@@ -398,12 +445,9 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 'change_percentage': message.get('change_percentage', 0)
             }
 
-            # Add depth data if available
-            if 'best_5_buy_data' in message and 'best_5_sell_data' in message:
-                result['depth'] = {
-                    'buy': self._extract_depth_data(message, is_buy=True),
-                    'sell': self._extract_depth_data(message, is_buy=False)
-                }
+            # Pass through depth data from samcoWebSocket normalization
+            if 'depth' in message:
+                result['depth'] = message['depth']
 
             return result
         else:
