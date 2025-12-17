@@ -160,22 +160,27 @@ class BrokerData:
             
             # Get quote data for the symbol
             quote_data = response.get('data', {})
+            logger.debug(f"V3 OHLC raw response data: {quote_data}")
             if not quote_data:
                 raise Exception(f"No data received for instrument key: {instrument_key}")
-            
+
             # Find the quote data - v3 OHLC uses the original instrument key format
             quote = None
             for key, value in quote_data.items():
+                logger.debug(f"Checking key: {key}, instrument_token: {value.get('instrument_token')}")
                 if value.get('instrument_token') == instrument_key:
                     quote = value
                     break
-                    
+
             if not quote:
                 raise Exception(f"No quote data found for instrument key: {instrument_key}")
-            
+
+            logger.debug(f"Quote data found: {quote}")
+
             # Extract OHLC data from v3 response
             live_ohlc = quote.get('live_ohlc', {})
             prev_ohlc = quote.get('prev_ohlc', {})
+            logger.info(f"live_ohlc: {live_ohlc}, prev_ohlc: {prev_ohlc}")
             
             # Handle None values
             if live_ohlc is None:
@@ -183,12 +188,13 @@ class BrokerData:
             if prev_ohlc is None:
                 prev_ohlc = {}
             
-            # Try to get bid/ask and OI from v2 quotes endpoint as fallback
+            # Try to get bid/ask, OI and prev_close from v2 quotes endpoint
             bid_price = 0
             ask_price = 0
             oi_value = 0
+            prev_close_v2 = 0
             try:
-                # Use v2 quotes endpoint for bid/ask and OI data
+                # Use v2 quotes endpoint for bid/ask, OI and prev_close data
                 v2_url = f"/v2/market-quote/quotes?instrument_key={encoded_symbol}"
                 client = get_httpx_client()
                 headers = {
@@ -198,7 +204,8 @@ class BrokerData:
                 full_url = f"https://api.upstox.com{v2_url}"
                 v2_response = client.get(full_url, headers=headers)
                 v2_data = v2_response.json()
-                
+                logger.debug(f"V2 quotes response: {v2_data}")
+
                 if v2_data.get('status') == 'success':
                     v2_quote_data = v2_data.get('data', {})
                     for key, value in v2_quote_data.items():
@@ -210,11 +217,19 @@ class BrokerData:
                                 bid_price = best_bid.get('price', 0)
                                 ask_price = best_ask.get('price', 0)
                             oi_value = value.get('oi', 0)
+                            # Get prev_close from v2 ohlc.close (previous day's close)
+                            ohlc = value.get('ohlc', {})
+                            if ohlc:
+                                prev_close_v2 = ohlc.get('close', 0)
+                                logger.info(f"Got prev_close from v2 ohlc: {prev_close_v2}")
                             break
             except Exception as e:
-                logger.debug(f"Could not get bid/ask/OI from v2 endpoint: {e}")
+                logger.debug(f"Could not get bid/ask/OI/prev_close from v2 endpoint: {e}")
             
             # Return standard quote data format using live_ohlc for current data
+            # Use prev_close from v2 ohlc.close, fallback to v3 prev_ohlc.close
+            prev_close_final = prev_close_v2 if prev_close_v2 else (prev_ohlc.get('close', 0) if prev_ohlc.get('close') else 0)
+
             return {
                 'ask': float(ask_price) if ask_price else 0,
                 'bid': float(bid_price) if bid_price else 0,
@@ -222,7 +237,7 @@ class BrokerData:
                 'low': float(live_ohlc.get('low', 0)) if live_ohlc.get('low') else 0,
                 'ltp': float(quote.get('last_price', 0)) if quote.get('last_price') else 0,
                 'open': float(live_ohlc.get('open', 0)) if live_ohlc.get('open') else 0,
-                'prev_close': float(prev_ohlc.get('close', 0)) if prev_ohlc.get('close') else 0,
+                'prev_close': float(prev_close_final) if prev_close_final else 0,
                 'volume': int(live_ohlc.get('volume', 0)) if live_ohlc.get('volume') else 0,
                 'oi': int(oi_value) if oi_value else 0
             }
