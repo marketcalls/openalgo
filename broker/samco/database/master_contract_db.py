@@ -465,6 +465,17 @@ def process_samco_data(df):
         'BANKEX': 'BANKEX'
     })
 
+    # ============ Instrument Type Normalization ============
+    # Convert instrumenttype from OPTIDX/OPTSTK/OPTFUT/OPTCUR/OPTIRC to CE/PE
+    # This ensures consistency across brokers for option chain queries
+    option_types = ['OPTIDX', 'OPTSTK', 'OPTFUT', 'OPTCUR', 'OPTIRC']
+    df.loc[(df['instrumenttype'].isin(option_types)) & (df['symbol'].str.endswith('CE', na=False)), 'instrumenttype'] = 'CE'
+    df.loc[(df['instrumenttype'].isin(option_types)) & (df['symbol'].str.endswith('PE', na=False)), 'instrumenttype'] = 'PE'
+
+    # Convert futures instrumenttype to FUT for consistency
+    futures_types = ['FUTIDX', 'FUTSTK', 'FUTCOM', 'FUTCUR', 'FUTIRC']
+    df.loc[df['instrumenttype'].isin(futures_types), 'instrumenttype'] = 'FUT'
+
     logger.info(f"Processed {len(df)} records")
     return df[required_cols]
 

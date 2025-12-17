@@ -38,8 +38,8 @@ def safe_int(value, default=0):
         return default
 
 
-def get_api_response(endpoint, auth, method="GET", payload=None):
-    """Helper function to make API calls to Samco"""
+def get_api_response(endpoint, auth, method="GET", payload=None, max_retries=3):
+    """Helper function to make API calls to Samco with retry logic for rate limits"""
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
@@ -51,27 +51,48 @@ def get_api_response(endpoint, auth, method="GET", payload=None):
 
     url = f"{BASE_URL}{endpoint}"
 
-    try:
-        if method == "GET":
-            response = client.get(url, headers=headers)
-        elif method == "POST":
-            response = client.post(url, headers=headers, json=payload)
-        else:
-            response = client.request(method, url, headers=headers, json=payload)
+    for attempt in range(max_retries + 1):
+        try:
+            if method == "GET":
+                response = client.get(url, headers=headers)
+            elif method == "POST":
+                response = client.post(url, headers=headers, json=payload)
+            else:
+                response = client.request(method, url, headers=headers, json=payload)
 
-        # Add status attribute for compatibility with the existing codebase
-        response.status = response.status_code
+            # Add status attribute for compatibility with the existing codebase
+            response.status = response.status_code
 
-        if response.status_code == 403:
-            logger.debug(f"Debug - API returned 403 Forbidden. Headers: {headers}")
+            # Handle specific HTTP error codes before parsing JSON
+            if response.status_code == 403:
+                logger.debug(f"Debug - API returned 403 Forbidden. Headers: {headers}")
+                logger.debug(f"Debug - Response text: {response.text}")
+                raise Exception("Authentication failed. Please check your session token.")
+
+            if response.status_code == 429:
+                if attempt < max_retries:
+                    # Exponential backoff: 1s, 2s, 4s
+                    delay = 2 ** attempt
+                    logger.warning(f"Rate limit hit (429), retrying in {delay}s... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"Rate limit exceeded after {max_retries} retries. Endpoint: {endpoint}")
+                    raise Exception("Rate limit exceeded. Please reduce request frequency.")
+
+            if response.status_code >= 500:
+                logger.error(f"Server error ({response.status_code}). Endpoint: {endpoint}")
+                raise Exception(f"Samco server error ({response.status_code}). Please try again later.")
+
+            return json.loads(response.text)
+
+        except json.JSONDecodeError:
+            logger.error(f"Debug - Failed to parse response. Status code: {response.status_code}")
             logger.debug(f"Debug - Response text: {response.text}")
-            raise Exception("Authentication failed. Please check your session token.")
+            raise Exception(f"Failed to parse API response (status {response.status_code})")
 
-        return json.loads(response.text)
-    except json.JSONDecodeError:
-        logger.error(f"Debug - Failed to parse response. Status code: {response.status_code}")
-        logger.debug(f"Debug - Response text: {response.text}")
-        raise Exception(f"Failed to parse API response (status {response.status_code})")
+    # Should not reach here, but just in case
+    raise Exception("Max retries exceeded")
 
 
 class BrokerData:
