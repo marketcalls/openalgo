@@ -283,7 +283,7 @@ class SamcoWebSocket:
         self._update_last_message_time()
 
         # Log all incoming messages for debugging
-        self.logger.info(f"Received WebSocket message: {message[:500] if len(message) > 500 else message}")
+        self.logger.debug(f"Received WebSocket message: {message[:500] if len(message) > 500 else message}")
 
         try:
             # Try to parse as JSON
@@ -299,12 +299,12 @@ class SamcoWebSocket:
                     market_data = response.get('data', {})
                     normalized = self._normalize_market_data(market_data, streaming_type)
 
-                    self.logger.info(f"Normalized data: symbol={normalized.get('symbol')}, has_callback={self._on_data_callback is not None}")
+                    self.logger.debug(f"Normalized data: symbol={normalized.get('symbol')}, has_callback={self._on_data_callback is not None}")
 
                     if self._on_data_callback:
                         try:
                             self._on_data_callback(ws, normalized)
-                            self.logger.info("Data callback invoked successfully")
+                            self.logger.debug("Data callback invoked successfully")
                         except Exception as e:
                             self.logger.error(f"Error in on_data callback: {e}", exc_info=True)
                     else:

@@ -363,8 +363,8 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_data(self, wsapp, message) -> None:
         """Callback for market data from the WebSocket"""
         try:
-            # Log the raw message data
-            self.logger.info(f"SAMCO ADAPTER received data: {message}")
+            # Log the raw message data (DEBUG level to avoid flooding logs)
+            self.logger.debug(f"SAMCO ADAPTER received data: {message}")
 
             if not isinstance(message, dict):
                 self.logger.warning(f"Received message is not a dictionary: {type(message)}")
@@ -441,8 +441,8 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     'timestamp': int(time.time() * 1000)  # Current timestamp in ms
                 })
 
-                # Log the market data we're sending
-                self.logger.info(f"Publishing to topic {topic}: ltp={market_data.get('ltp')}, depth={bool(market_data.get('depth'))}")
+                # Log the market data we're sending (DEBUG level to avoid flooding logs)
+                self.logger.debug(f"Publishing to topic {topic}: ltp={market_data.get('ltp')}, depth={bool(market_data.get('depth'))}")
 
                 # Publish to ZeroMQ
                 self.publish_market_data(topic, market_data)
