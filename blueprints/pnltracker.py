@@ -41,7 +41,8 @@ def parse_trade_timestamp(timestamp_str, fallback_date=None):
             if dt.tz is None:
                 return dt.tz_localize('UTC').tz_convert(ist)
             return dt.tz_convert(ist)
-        except:
+        except Exception as e:
+            logger.warning(f"Failed to parse numeric timestamp {timestamp_str}: {e}")
             return None
     
     if not isinstance(timestamp_str, str):
@@ -88,8 +89,8 @@ def parse_trade_timestamp(timestamp_str, fallback_date=None):
         if dt.tz is None:
             return dt.tz_localize(ist)
         return dt.tz_convert(ist)
-    except:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to auto-parse timestamp '{timestamp_str}': {e}")
     
     return None
 
