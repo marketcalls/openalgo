@@ -5,6 +5,7 @@ import time
 from typing import Dict, Any, Optional, List
 
 from broker.samco.streaming.samcoWebSocket import SamcoWebSocket
+from broker.samco.api.data import BrokerData
 from database.auth_db import get_auth_token
 
 import sys
@@ -138,17 +139,41 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
             return self._create_error_response("INVALID_DEPTH",
                                                f"Invalid depth level {depth_level}. Must be 5")
 
-        # Map symbol to token using symbol mapper
-        token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
-        if not token_info:
-            return self._create_error_response("SYMBOL_NOT_FOUND",
-                                               f"Symbol {symbol} not found for exchange {exchange}")
+        # Handle index symbols - fetch listingId from API
+        if exchange in ['NSE_INDEX', 'BSE_INDEX']:
+            try:
+                # Get auth token for API call
+                auth_token = get_auth_token(self.user_id)
+                if not auth_token:
+                    return self._create_error_response("AUTH_ERROR",
+                                                       f"No auth token found for user {self.user_id}")
 
-        token = token_info['token']
-        brexchange = token_info['brexchange']
+                # Create BrokerData instance and fetch listingId
+                broker_data = BrokerData(auth_token)
+                listing_id = broker_data.get_index_listing_id(symbol, exchange)
 
-        # Debug log the token format
-        self.logger.info(f"Samco subscribe: symbol={symbol}, exchange={exchange}, token={token}, brexchange={brexchange}")
+                # For index, use listingId as token (e.g., '-23' for NIFTY)
+                token = listing_id
+                brexchange = 'NSE' if exchange == 'NSE_INDEX' else 'BSE'
+
+                self.logger.info(f"Samco index subscribe: symbol={symbol}, exchange={exchange}, listingId={listing_id}")
+
+            except Exception as e:
+                self.logger.error(f"Error getting index listingId for {symbol}: {e}")
+                return self._create_error_response("INDEX_ERROR",
+                                                   f"Error getting index listingId: {str(e)}")
+        else:
+            # Map symbol to token using symbol mapper for non-index symbols
+            token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
+            if not token_info:
+                return self._create_error_response("SYMBOL_NOT_FOUND",
+                                                   f"Symbol {symbol} not found for exchange {exchange}")
+
+            token = token_info['token']
+            brexchange = token_info['brexchange']
+
+            # Debug log the token format
+            self.logger.info(f"Samco subscribe: symbol={symbol}, exchange={exchange}, token={token}, brexchange={brexchange}")
 
         # Check if the requested depth level is supported for this exchange
         is_fallback = False

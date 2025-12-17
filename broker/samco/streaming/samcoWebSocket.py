@@ -568,13 +568,17 @@ class SamcoWebSocket:
 
                 for token in tokens:
                     # Samco streaming uses format: scripCode_segment (e.g., "11536_NSE", "464925_MFO")
-                    # Check if token already has segment suffix, if not append exchange
-                    if '_' in str(token):
+                    # Index tokens start with '-' (e.g., "-23" for NIFTY) and should NOT have exchange suffix
+                    token_str = str(token)
+                    if token_str.startswith('-'):
+                        # Index token - use as-is without exchange suffix
+                        symbol_key = token_str
+                    elif '_' in token_str:
                         # Token already has format like "11536_NSE"
-                        symbol_key = token
+                        symbol_key = token_str
                     else:
                         # Token is just scripCode like "11536", need to append segment
-                        symbol_key = f"{token}_{exchange}"
+                        symbol_key = f"{token_str}_{exchange}"
 
                     symbols_list.append({"symbol": symbol_key})
                     self.logger.debug(f"Samco subscription symbol: {symbol_key}")
@@ -664,10 +668,14 @@ class SamcoWebSocket:
 
                 for token in tokens:
                     # Build symbol key same way as subscribe
-                    if '_' in str(token):
-                        symbol_key = token
+                    token_str = str(token)
+                    if token_str.startswith('-'):
+                        # Index token - use as-is without exchange suffix
+                        symbol_key = token_str
+                    elif '_' in token_str:
+                        symbol_key = token_str
                     else:
-                        symbol_key = f"{token}_{exchange}"
+                        symbol_key = f"{token_str}_{exchange}"
 
                     symbols_list.append({"symbol": symbol_key})
 

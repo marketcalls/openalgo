@@ -106,6 +106,43 @@ class BrokerData:
         }
         return index_map.get(symbol.upper(), symbol)
 
+    def get_index_listing_id(self, symbol: str, exchange: str) -> str:
+        """
+        Get the listingId for an index symbol from Samco's indexQuote API.
+        This listingId is required for WebSocket streaming of index quotes.
+
+        Args:
+            symbol: Index symbol (e.g., NIFTY, BANKNIFTY)
+            exchange: Exchange (NSE_INDEX or BSE_INDEX)
+
+        Returns:
+            str: The listingId for streaming (e.g., '-23' for NIFTY)
+        """
+        try:
+            index_name = self._get_index_name(symbol)
+
+            response = get_api_response(f"/quote/indexQuote?indexName={index_name}",
+                                       self.auth_token,
+                                       "GET")
+
+            if response.get('status') != 'Success':
+                raise Exception(f"Error from Samco API: {response.get('statusMessage', 'Unknown error')}")
+
+            index_details = response.get('indexDetails', [])
+            if not index_details:
+                raise Exception(f"No index data received for {symbol}")
+
+            listing_id = index_details[0].get('listingId')
+            if listing_id is None:
+                raise Exception(f"No listingId found for {symbol}")
+
+            logger.info(f"Index {symbol} listingId: {listing_id}")
+            return str(listing_id)
+
+        except Exception as e:
+            logger.error(f"Error getting index listingId for {symbol}: {e}")
+            raise
+
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
         Get real-time quotes for given symbol
@@ -182,6 +219,7 @@ class BrokerData:
 
             # Extract index details
             index_details = response.get('indexDetails', [])
+            logger.info(f"Debug - Index details for {symbol}: {index_details}")
             if not index_details:
                 raise Exception("No index data received")
 
