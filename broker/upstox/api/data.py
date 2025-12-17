@@ -160,14 +160,14 @@ class BrokerData:
             
             # Get quote data for the symbol
             quote_data = response.get('data', {})
-            logger.info(f"V3 OHLC raw response data: {quote_data}")
+            logger.debug(f"V3 OHLC raw response data: {quote_data}")
             if not quote_data:
                 raise Exception(f"No data received for instrument key: {instrument_key}")
 
             # Find the quote data - v3 OHLC uses the original instrument key format
             quote = None
             for key, value in quote_data.items():
-                logger.info(f"Checking key: {key}, instrument_token: {value.get('instrument_token')}")
+                logger.debug(f"Checking key: {key}, instrument_token: {value.get('instrument_token')}")
                 if value.get('instrument_token') == instrument_key:
                     quote = value
                     break
@@ -175,7 +175,7 @@ class BrokerData:
             if not quote:
                 raise Exception(f"No quote data found for instrument key: {instrument_key}")
 
-            logger.info(f"Quote data found: {quote}")
+            logger.debug(f"Quote data found: {quote}")
 
             # Extract OHLC data from v3 response
             live_ohlc = quote.get('live_ohlc', {})
@@ -204,7 +204,7 @@ class BrokerData:
                 full_url = f"https://api.upstox.com{v2_url}"
                 v2_response = client.get(full_url, headers=headers)
                 v2_data = v2_response.json()
-                logger.info(f"V2 quotes response: {v2_data}")
+                logger.debug(f"V2 quotes response: {v2_data}")
 
                 if v2_data.get('status') == 'success':
                     v2_quote_data = v2_data.get('data', {})
