@@ -450,7 +450,11 @@ class BrokerData:
                 
                 # Move to next chunk
                 current_start = current_end + timedelta(days=1)
-                
+
+                # Rate limit delay between chunks (0.5 seconds)
+                if current_start <= to_date:
+                    time.sleep(0.5)
+
             # If no data was found, return empty DataFrame
             if not dfs:
                 logger.debug("Debug - No data received from API")
@@ -599,7 +603,11 @@ class BrokerData:
                 
                 # Move to next chunk
                 current_start = current_end + timedelta(days=1)
-            
+
+                # Rate limit delay between chunks (0.5 seconds)
+                if current_start <= to_date:
+                    time.sleep(0.5)
+
             # If no data was found, return empty DataFrame
             if not dfs:
                 return pd.DataFrame(columns=['timestamp', 'oi'])
