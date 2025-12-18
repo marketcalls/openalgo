@@ -241,14 +241,16 @@ def get_option_chain(
                 'message': f"Failed to fetch LTP for {quote_symbol}: {quote_response.get('message', 'Unknown error')}"
             }, status_code
 
-        underlying_ltp = quote_response.get('data', {}).get('ltp')
+        underlying_data = quote_response.get('data', {})
+        underlying_ltp = underlying_data.get('ltp')
+        underlying_prev_close = underlying_data.get('prev_close', 0)
         if underlying_ltp is None:
             return False, {
                 'status': 'error',
                 'message': f'Could not determine LTP for {quote_symbol}'
             }, 500
 
-        logger.info(f"Underlying LTP: {underlying_ltp}")
+        logger.info(f"Underlying LTP: {underlying_ltp}, Prev Close: {underlying_prev_close}")
 
         # Step 4: Get options exchange and available strikes
         options_exchange = get_option_exchange(quote_exchange)
@@ -374,6 +376,7 @@ def get_option_chain(
             'status': 'success',
             'underlying': base_symbol,
             'underlying_ltp': underlying_ltp,
+            'underlying_prev_close': underlying_prev_close,
             'expiry_date': final_expiry,
             'atm_strike': atm_strike,
             'chain': chain
