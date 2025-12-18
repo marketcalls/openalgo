@@ -549,42 +549,51 @@ class BrokerData:
         try:
             security_id = get_token(symbol, exchange)
             exchange_type = self._get_exchange_segment(exchange)  # Use the correct method for exchange type
-            
-            #logger.info(f"Getting quotes for symbol: {symbol}, exchange: {exchange}")
-            #logger.info(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
-            
+
+            logger.debug(f"Getting quotes for symbol: {symbol}, exchange: {exchange}")
+            logger.debug(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
+
             payload = {
                 exchange_type: [int(security_id)]  # Use the proper exchange type for indices
             }
-            
+
             try:
                 response = get_api_response("/v2/marketfeed/quote", self.auth_token, "POST", json.dumps(payload))
                 logger.debug(f"Quotes_Response: {response}")
                 quote_data = response.get('data', {}).get(exchange_type, {}).get(str(security_id), {})
-                
+
                 if not quote_data:
+                    logger.warning(f"No quote data found for {symbol} ({exchange_type}:{security_id})")
                     return {
                         'ltp': 0,
                         'open': 0,
                         'high': 0,
                         'low': 0,
                         'volume': 0,
+                        'oi': 0,
                         'bid': 0,
                         'ask': 0,
                         'prev_close': 0
                     }
-                
+
+                # Debug: Log actual quote_data keys to verify field names
+                logger.debug(f"Quote data keys for {symbol}: {list(quote_data.keys())}")
+
+                # Handle both last_price (documented) and lastPrice (potential camelCase)
+                last_price = quote_data.get('last_price') or quote_data.get('lastPrice') or 0
+                ohlc = quote_data.get('ohlc', {})
+
                 # Transform to expected format
                 result = {
-                    'ltp': float(quote_data.get('last_price', 0)),
-                    'open': float(quote_data.get('ohlc', {}).get('open', 0)),
-                    'high': float(quote_data.get('ohlc', {}).get('high', 0)),
-                    'low': float(quote_data.get('ohlc', {}).get('low', 0)),
-                    'volume': int(quote_data.get('volume', 0)),
-                    'oi': int(quote_data.get('oi', 0)),
+                    'ltp': float(last_price),
+                    'open': float(ohlc.get('open', 0)),
+                    'high': float(ohlc.get('high', 0)),
+                    'low': float(ohlc.get('low', 0)),
+                    'volume': int(float(quote_data.get('volume', 0))),
+                    'oi': int(float(quote_data.get('oi') or quote_data.get('open_interest') or 0)),
                     'bid': 0,  # Will be updated from depth
                     'ask': 0,  # Will be updated from depth
-                    'prev_close': float(quote_data.get('ohlc', {}).get('close', 0))
+                    'prev_close': float(ohlc.get('close', 0))
                 }
                 
                 # Update bid/ask from depth if available
@@ -712,12 +721,17 @@ class BrokerData:
             return []
 
         logger.info(f"Requesting quotes for {sum(len(s) for s in exchange_securities.values())} instruments across {len(exchange_securities)} exchange segments")
-        logger.debug(f"Exchange securities: {exchange_securities}")
+        logger.info(f"Exchange securities request: {exchange_securities}")
 
         # Make API call
         try:
             response = get_api_response("/v2/marketfeed/quote", self.auth_token, "POST", json.dumps(exchange_securities))
-            logger.debug(f"Multiquotes response: {response}")
+            logger.info(f"Multiquotes raw response status: {response.get('status')}")
+            logger.info(f"Multiquotes response data keys: {list(response.get('data', {}).keys()) if response.get('data') else 'No data'}")
+            # Log first few security IDs from response for each segment
+            for seg, seg_data in response.get('data', {}).items():
+                sample_ids = list(seg_data.keys())[:3] if isinstance(seg_data, dict) else []
+                logger.info(f"Response segment '{seg}' has {len(seg_data) if isinstance(seg_data, dict) else 0} instruments, sample IDs: {sample_ids}")
         except Exception as e:
             logger.error(f"API Error: {str(e)}")
             raise Exception(f"API Error: {str(e)}")
@@ -726,13 +740,21 @@ class BrokerData:
         results = []
         response_data = response.get('data', {})
 
+        logger.debug(f"Response data keys: {response_data.keys()}")
+        logger.debug(f"Security map keys: {list(security_map.keys())}")
+
         # Build results from security_map
         for key, original in security_map.items():
             exchange_segment, security_id = key.split(':')
-            quote_data = response_data.get(exchange_segment, {}).get(str(security_id), {})
+            segment_data = response_data.get(exchange_segment, {})
+            quote_data = segment_data.get(str(security_id), {})
+
+            # Check if security_id exists in segment_data
+            security_id_found = str(security_id) in segment_data if segment_data else False
+            logger.debug(f"Looking for {exchange_segment}:{security_id} - segment has {len(segment_data) if segment_data else 0} items, security_id found: {security_id_found}")
 
             if not quote_data:
-                logger.warning(f"No quote data found for {original['symbol']} ({key})")
+                logger.warning(f"No quote data found for {original['symbol']} (requested: {exchange_segment}:{security_id})")
                 results.append({
                     'symbol': original['symbol'],
                     'exchange': original['exchange'],
@@ -740,11 +762,20 @@ class BrokerData:
                 })
                 continue
 
-            # Parse and format quote data
+            # Debug: Log the actual quote_data structure to identify field names
+            raw_last_price = quote_data.get('last_price') or quote_data.get('lastPrice')
+            logger.debug(f"Quote data for {original['symbol']}: keys={list(quote_data.keys())}, last_price={raw_last_price}, volume={quote_data.get('volume')}")
+
+            # Parse and format quote data - handle both snake_case and camelCase
             ohlc = quote_data.get('ohlc', {})
             depth = quote_data.get('depth') or {}  # Guard against null depth
             buy_orders = depth.get('buy', [])
             sell_orders = depth.get('sell', [])
+
+            # Handle both last_price (documented) and lastPrice (potential camelCase)
+            last_price = quote_data.get('last_price') or quote_data.get('lastPrice') or 0
+            volume = quote_data.get('volume') or 0
+            oi = quote_data.get('oi') or quote_data.get('open_interest') or 0
 
             result_item = {
                 'symbol': original['symbol'],
@@ -755,10 +786,10 @@ class BrokerData:
                     'open': float(ohlc.get('open', 0)),
                     'high': float(ohlc.get('high', 0)),
                     'low': float(ohlc.get('low', 0)),
-                    'ltp': float(quote_data.get('last_price', 0)),
+                    'ltp': float(last_price),
                     'prev_close': float(ohlc.get('close', 0)),
-                    'volume': int(quote_data.get('volume', 0)),
-                    'oi': int(quote_data.get('oi', 0))
+                    'volume': int(float(volume)),
+                    'oi': int(float(oi))
                 }
             }
             results.append(result_item)
