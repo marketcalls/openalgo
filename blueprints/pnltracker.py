@@ -16,6 +16,84 @@ import threading
 
 logger = get_logger(__name__)
 
+def parse_trade_timestamp(timestamp_str, fallback_date=None):
+    """
+    Safely parse trade timestamp from various broker formats.
+    
+    Supported formats:
+    - "17-Dec-2025 10:54:03" (AngelOne)
+    - "09:41:01 17-12-2025" (Flattrade)
+    - "10:30:52" (Time only)
+    - Unix timestamp (int/float)
+    - ISO format strings
+    
+    Returns: timezone-aware datetime in IST, or None if parsing fails
+    """
+    ist = pytz.timezone('Asia/Kolkata')
+    
+    if timestamp_str is None:
+        return None
+    
+    # Handle numeric timestamps (Unix epoch)
+    if isinstance(timestamp_str, (int, float)):
+        try:
+            dt = pd.to_datetime(timestamp_str, unit='s')
+            if dt.tz is None:
+                return dt.tz_localize('UTC').tz_convert(ist)
+            return dt.tz_convert(ist)
+        except Exception as e:
+            logger.warning(f"Failed to parse numeric timestamp {timestamp_str}: {e}")
+            return None
+    
+    if not isinstance(timestamp_str, str):
+        return None
+    
+    timestamp_str = timestamp_str.strip()
+    if not timestamp_str:
+        return None
+    
+    # List of formats to try (order matters - more specific first)
+    formats = [
+        '%d-%b-%Y %H:%M:%S',   # AngelOne: "17-Dec-2025 10:54:03"
+        '%H:%M:%S %d-%m-%Y',   # Flattrade: "09:41:01 17-12-2025"
+        '%d-%m-%Y %H:%M:%S',   # "17-12-2025 09:41:01"
+        '%Y-%m-%d %H:%M:%S',   # ISO-like: "2025-12-17 10:30:00"
+        '%Y-%m-%dT%H:%M:%S',   # ISO: "2025-12-17T10:30:00"
+    ]
+    
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(timestamp_str, fmt)
+            return ist.localize(dt)
+        except ValueError:
+            continue
+    
+    # Try time-only format: "HH:MM:SS"
+    if ':' in timestamp_str and ' ' not in timestamp_str:
+        try:
+            time_parts = timestamp_str.split(':')
+            if len(time_parts) >= 2 and len(time_parts[0]) <= 2:
+                today = fallback_date or datetime.now(ist).date()
+                dt = datetime.combine(today, dt_time(
+                    int(time_parts[0]),
+                    int(time_parts[1]),
+                    int(time_parts[2]) if len(time_parts) > 2 else 0
+                ))
+                return ist.localize(dt)
+        except (ValueError, IndexError):
+            pass
+    
+    # Fallback: try pandas auto-parsing
+    try:
+        dt = pd.to_datetime(timestamp_str)
+        if dt.tz is None:
+            return dt.tz_localize(ist)
+        return dt.tz_convert(ist)
+    except Exception as e:
+        logger.warning(f"Failed to auto-parse timestamp '{timestamp_str}': {e}")
+    
+    return None
+
 # Rate limiter for historical data API calls
 class RateLimiter:
     """Thread-safe rate limiter for API calls"""
@@ -220,68 +298,28 @@ def get_pnl_data():
         
         # Find the earliest trade time
         for trade in trades:
-            # Try to parse trade timestamp - prioritize timestamp field which appears to be in HH:MM:SS format
             trade_timestamp = trade.get('timestamp') or trade.get('fill_timestamp') or trade.get('fill_time')
             if trade_timestamp:
-                try:
-                    # Check if it's a time string in HH:MM:SS format
-                    if isinstance(trade_timestamp, str) and ':' in trade_timestamp and len(trade_timestamp.split(':')[0]) <= 2:
-                        # Parse as time string (e.g., "10:30:52")
-                        ist = pytz.timezone('Asia/Kolkata')
-                        today = datetime.now(ist).date()
-                        time_parts = trade_timestamp.split(':')
-                        trade_time = ist.localize(datetime.combine(today, dt_time(
-                            int(time_parts[0]),
-                            int(time_parts[1]),
-                            int(time_parts[2]) if len(time_parts) > 2 else 0
-                        )))
-                    elif isinstance(trade_timestamp, (int, float)):
-                        # Unix timestamp
-                        trade_time = pd.to_datetime(trade_timestamp, unit='s')
-                        ist = pytz.timezone('Asia/Kolkata')
-                        if trade_time.tz is None:
-                            trade_time = trade_time.tz_localize('UTC').tz_convert(ist)
-                        else:
-                            trade_time = trade_time.tz_convert(ist)
-                    else:
-                        # String timestamp in datetime format
-                        trade_time = pd.to_datetime(trade_timestamp)
-                        ist = pytz.timezone('Asia/Kolkata')
-                        if trade_time.tz is None:
-                            # Assume it's already in IST
-                            trade_time = trade_time.tz_localize(ist)
-                        else:
-                            trade_time = trade_time.tz_convert(ist)
-                    
-                    # Track the earliest trade time
+                trade_time = parse_trade_timestamp(trade_timestamp)
+                if trade_time:
                     if first_trade_time is None or trade_time < first_trade_time:
                         first_trade_time = trade_time
                         logger.info(f"Found trade at {trade_time.strftime('%H:%M:%S')} for {trade['symbol']}")
-                except Exception as e:
-                    logger.warning(f"Could not parse trade timestamp {trade_timestamp}: {e}")
+                else:
+                    logger.warning(f"Could not parse trade timestamp {trade_timestamp}")
         
         # If we couldn't determine first trade time from timestamps, try from fill_time field
         if first_trade_time is None and trades:
-            # Look for fill_time in format HH:MM:SS or timestamp
             for trade in trades:
                 fill_time_str = trade.get('fill_time', '')
                 if fill_time_str:
-                    try:
-                        # Try parsing as time string (e.g., "10:30:52")
-                        if ':' in str(fill_time_str):
-                            ist = pytz.timezone('Asia/Kolkata')
-                            today = datetime.now(ist).date()
-                            time_parts = str(fill_time_str).split(':')
-                            trade_time = ist.localize(datetime.combine(today, dt_time(
-                                int(time_parts[0]),
-                                int(time_parts[1]),
-                                int(time_parts[2]) if len(time_parts) > 2 else 0
-                            )))
-                            if first_trade_time is None or trade_time < first_trade_time:
-                                first_trade_time = trade_time
-                                logger.info(f"Found trade at {trade_time.strftime('%H:%M:%S')} from fill_time for {trade['symbol']}")
-                    except Exception as e:
-                        logger.warning(f"Could not parse fill_time {fill_time_str}: {e}")
+                    trade_time = parse_trade_timestamp(fill_time_str)
+                    if trade_time:
+                        if first_trade_time is None or trade_time < first_trade_time:
+                            first_trade_time = trade_time
+                            logger.info(f"Found trade at {trade_time.strftime('%H:%M:%S')} from fill_time for {trade['symbol']}")
+                    else:
+                        logger.warning(f"Could not parse fill_time {fill_time_str}")
         
         # Log the first trade time
         if first_trade_time:
@@ -311,29 +349,11 @@ def get_pnl_data():
                 if symbol_key not in symbol_trades:
                     symbol_trades[symbol_key] = []
                 
-                # Parse trade time
+                # Parse trade time using universal parser
                 trade_timestamp = trade.get('timestamp') or trade.get('fill_timestamp') or trade.get('fill_time')
-                trade_time = None
-                if trade_timestamp:
-                    try:
-                        if isinstance(trade_timestamp, str) and ':' in trade_timestamp and len(trade_timestamp.split(':')[0]) <= 2:
-                            ist = pytz.timezone('Asia/Kolkata')
-                            today = datetime.now(ist).date()
-                            time_parts = trade_timestamp.split(':')
-                            trade_time = ist.localize(datetime.combine(today, dt_time(
-                                int(time_parts[0]),
-                                int(time_parts[1]),
-                                int(time_parts[2]) if len(time_parts) > 2 else 0
-                            )))
-                        else:
-                            trade_time = pd.to_datetime(trade_timestamp)
-                            ist = pytz.timezone('Asia/Kolkata')
-                            if trade_time.tz is None:
-                                trade_time = trade_time.tz_localize(ist)
-                            else:
-                                trade_time = trade_time.tz_convert(ist)
-                    except Exception as e:
-                        logger.warning(f"Could not parse trade time for {trade}: {e}")
+                trade_time = parse_trade_timestamp(trade_timestamp) if trade_timestamp else None
+                if trade_timestamp and trade_time is None:
+                    logger.warning(f"Could not parse trade time for {trade['symbol']}: {trade_timestamp}")
                 
                 trade['parsed_time'] = trade_time
                 symbol_trades[symbol_key].append(trade)
