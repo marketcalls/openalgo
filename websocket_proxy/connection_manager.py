@@ -20,6 +20,21 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Thread-local storage for pooled adapter creation context
+# This allows BaseBrokerWebSocketAdapter to detect when it's being created
+# within a ConnectionPool and skip its own ZMQ socket creation
+_pooled_creation_context = threading.local()
+
+
+def is_pooled_creation() -> bool:
+    """Check if we're currently creating an adapter within a ConnectionPool"""
+    return getattr(_pooled_creation_context, 'active', False)
+
+
+def get_shared_publisher_for_pooled_creation():
+    """Get the shared publisher during pooled adapter creation"""
+    return getattr(_pooled_creation_context, 'shared_publisher', None)
+
 # Default configuration - can be overridden via environment variables
 DEFAULT_MAX_SYMBOLS_PER_WEBSOCKET = 1000
 DEFAULT_MAX_WEBSOCKET_CONNECTIONS = 3
@@ -224,21 +239,31 @@ class ConnectionPool:
         # Ensure shared publisher is bound
         self.shared_publisher.bind()
 
-        # Create adapter instance
-        adapter = self.adapter_class()
+        # Set context flag so BaseBrokerWebSocketAdapter knows to skip ZMQ creation
+        _pooled_creation_context.active = True
+        _pooled_creation_context.shared_publisher = self.shared_publisher
 
-        # Override the adapter's publish method to use shared publisher
-        original_publish = adapter.publish_market_data
+        try:
+            # Create adapter instance
+            # BaseBrokerWebSocketAdapter will detect the context and skip ZMQ socket creation
+            adapter = self.adapter_class()
 
-        def shared_publish(topic: str, data: dict):
-            self.shared_publisher.publish(topic, data)
+            # Override the adapter's publish method to use shared publisher
+            def shared_publish(topic: str, data: dict):
+                self.shared_publisher.publish(topic, data)
 
-        adapter.publish_market_data = shared_publish
+            adapter.publish_market_data = shared_publish
 
-        # Mark that this adapter uses shared ZMQ (to skip individual cleanup)
-        adapter._uses_shared_zmq = True
+            # Mark that this adapter uses shared ZMQ (to skip individual cleanup)
+            adapter._uses_shared_zmq = True
+            adapter._shared_publisher = self.shared_publisher
 
-        return adapter
+            return adapter
+
+        finally:
+            # Clear context flag
+            _pooled_creation_context.active = False
+            _pooled_creation_context.shared_publisher = None
 
     def _get_adapter_with_capacity(self) -> Tuple[int, Any]:
         """

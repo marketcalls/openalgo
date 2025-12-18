@@ -109,6 +109,17 @@ class BaseBrokerWebSocketAdapter(ABC):
         self.logger = get_logger("broker_adapter")
         self.logger.info("BaseBrokerWebSocketAdapter initializing")
 
+        # Check if being created within a ConnectionPool context
+        # This handles the case where broker adapters don't forward kwargs to super().__init__()
+        try:
+            from .connection_manager import is_pooled_creation, get_shared_publisher_for_pooled_creation
+            if is_pooled_creation():
+                use_shared_zmq = True
+                shared_publisher = get_shared_publisher_for_pooled_creation()
+                self.logger.info("Detected pooled creation context - using shared ZMQ")
+        except ImportError:
+            pass  # connection_manager not available, use provided params
+
         # Track if using shared ZMQ (for connection pooling)
         self._uses_shared_zmq = use_shared_zmq
         self._shared_publisher = shared_publisher
