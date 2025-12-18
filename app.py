@@ -367,6 +367,7 @@ def setup_environment(app):
         import time
 
         from database.chart_prefs_db import ensure_chart_prefs_tables_exists
+        from database.market_calendar_db import ensure_market_calendar_tables_exists
 
         db_init_functions = [
             ('Auth DB', ensure_auth_tables_exists),
@@ -382,10 +383,11 @@ def setup_environment(app):
             ('Sandbox DB', ensure_sandbox_tables_exists),
             ('Action Center DB', ensure_action_center_tables_exists),
             ('Chart Prefs DB', ensure_chart_prefs_tables_exists),
+            ('Market Calendar DB', ensure_market_calendar_tables_exists),
         ]
 
         db_init_start = time.time()
-        with ThreadPoolExecutor(max_workers=12) as executor:
+        with ThreadPoolExecutor(max_workers=14) as executor:
             # Submit all database initialization tasks
             futures = {executor.submit(func): name for name, func in db_init_functions}
 

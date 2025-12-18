@@ -267,7 +267,9 @@ def init_latency_monitoring(app):
         'ticker': 'TICKER',
         'ping': 'PING',
         'analyzer': 'ANALYZER',
-        'chart': 'CHART'
+        'chart': 'CHART',
+        'market/holidays': 'MARKET_HOLIDAYS',
+        'market/timings': 'MARKET_TIMINGS'
     }
 
     # Order types that should be kept forever (not purged)

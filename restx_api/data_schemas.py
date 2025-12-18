@@ -126,3 +126,11 @@ class OptionChainSchema(Schema):
     exchange = fields.Str(required=True)    # Exchange (NSE_INDEX, NSE, NFO, BSE_INDEX, BSE, BFO, MCX, CDS)
     expiry_date = fields.Str(required=True)  # Expiry date in DDMMMYY format (e.g., 28NOV25) - MANDATORY
     strike_count = fields.Int(required=False, validate=validate.Range(min=1, max=100), allow_none=True)  # Number of strikes above/below ATM. If not provided, returns entire chain
+
+class MarketHolidaysSchema(Schema):
+    apikey = fields.Str(required=True)      # API Key for authentication
+    year = fields.Int(required=False, validate=validate.Range(min=2020, max=2050))  # Year to get holidays for (defaults to current year)
+
+class MarketTimingsSchema(Schema):
+    apikey = fields.Str(required=True)      # API Key for authentication
+    date = fields.Str(required=True)        # Date in YYYY-MM-DD format
