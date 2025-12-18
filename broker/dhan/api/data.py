@@ -751,7 +751,7 @@ class BrokerData:
 
             # Check if security_id exists in segment_data
             security_id_found = str(security_id) in segment_data if segment_data else False
-            logger.info(f"Looking for {exchange_segment}:{security_id} - segment has {len(segment_data) if segment_data else 0} items, security_id found: {security_id_found}")
+            logger.debug(f"Looking for {exchange_segment}:{security_id} - segment has {len(segment_data) if segment_data else 0} items, security_id found: {security_id_found}")
 
             if not quote_data:
                 logger.warning(f"No quote data found for {original['symbol']} (requested: {exchange_segment}:{security_id})")
@@ -764,7 +764,7 @@ class BrokerData:
 
             # Debug: Log the actual quote_data structure to identify field names
             raw_last_price = quote_data.get('last_price') or quote_data.get('lastPrice')
-            logger.info(f"Quote data for {original['symbol']}: keys={list(quote_data.keys())}, last_price={raw_last_price}, volume={quote_data.get('volume')}")
+            logger.debug(f"Quote data for {original['symbol']}: keys={list(quote_data.keys())}, last_price={raw_last_price}, volume={quote_data.get('volume')}")
 
             # Parse and format quote data - handle both snake_case and camelCase
             ohlc = quote_data.get('ohlc', {})
