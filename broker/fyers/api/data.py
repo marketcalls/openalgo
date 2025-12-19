@@ -238,11 +238,15 @@ class BrokerData:
                 if quote_item.get('s') == 'ok':
                     symbol_name = quote_item.get('n', '')
                     quotes_map[symbol_name] = quote_item.get('v', {})
+        else:
+            logger.warning(f"Quotes API error: {quotes_response.get('message', 'Unknown error')}")
 
         # Parse depth response - dict format (only for OI)
         depth_map = {}
         if depth_response.get('s') == 'ok':
             depth_map = depth_response.get('d', {})
+        else:
+            logger.warning(f"Depth API error: {depth_response.get('message', 'Unknown error')}")
 
         # Build results by merging data from both endpoints
         results = []
