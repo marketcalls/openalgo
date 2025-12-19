@@ -47,6 +47,7 @@ from blueprints.telegram import telegram_bp  # Import the telegram blueprint
 from blueprints.security import security_bp  # Import the security blueprint
 from blueprints.sandbox import sandbox_bp  # Import the sandbox blueprint
 from blueprints.playground import playground_bp  # Import the API playground blueprint
+from blueprints.alerts_api import alerts_bp  # Import alerts blueprint
 from services.telegram_bot_service import telegram_bot_service
 from database.telegram_db import get_bot_config
 
@@ -64,6 +65,7 @@ from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.strategy_db import init_db as ensure_strategy_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.action_center_db import init_db as ensure_action_center_tables_exists
+from database.alerts_db import init_db as ensure_alerts_tables_exists
 
 from utils.plugin_loader import load_broker_auth_functions
 
@@ -215,6 +217,7 @@ def create_app():
     app.register_blueprint(security_bp)  # Register Security blueprint
     app.register_blueprint(sandbox_bp)  # Register Sandbox blueprint
     app.register_blueprint(playground_bp)  # Register API playground blueprint
+    app.register_blueprint(alerts_bp, url_prefix='/api/alerts')  # Register Alerts blueprint
 
 
     # Exempt webhook endpoints from CSRF protection after app initialization
@@ -382,6 +385,7 @@ def setup_environment(app):
             ('Strategy DB', ensure_strategy_tables_exists),
             ('Sandbox DB', ensure_sandbox_tables_exists),
             ('Action Center DB', ensure_action_center_tables_exists),
+            ('Alerts DB', ensure_alerts_tables_exists),
             ('Chart Prefs DB', ensure_chart_prefs_tables_exists),
             ('Market Calendar DB', ensure_market_calendar_tables_exists),
         ]
