@@ -313,22 +313,144 @@ class BrokerSymbolCache:
         """
         query = query.upper()
         matches = []
-        
+
         for symbol_data in self.symbols.values():
             # Skip if exchange filter doesn't match
             if exchange and symbol_data.exchange != exchange:
                 continue
-            
+
             # Check for match in symbol, brsymbol, or name
-            if (query in symbol_data.symbol.upper() or 
-                query in symbol_data.brsymbol.upper() or 
+            if (query in symbol_data.symbol.upper() or
+                query in symbol_data.brsymbol.upper() or
                 (symbol_data.name and query in symbol_data.name.upper())):
                 matches.append(symbol_data)
-                
+
                 if len(matches) >= limit:
                     break
-        
+
         return matches
+
+    def fno_search_symbols(
+        self,
+        query: Optional[str] = None,
+        exchange: Optional[str] = None,
+        expiry: Optional[str] = None,
+        instrumenttype: Optional[str] = None,
+        strike_min: Optional[float] = None,
+        strike_max: Optional[float] = None,
+        underlying: Optional[str] = None,
+        limit: int = 500
+    ) -> List[SymbolData]:
+        """
+        FNO-specific search with advanced filters - in-memory cache search
+
+        Args:
+            query: Optional search query string
+            exchange: Exchange filter (NFO, BFO, MCX, CDS)
+            expiry: Expiry date filter (e.g., "26-DEC-24")
+            instrumenttype: "FUT", "CE", or "PE" (based on symbol suffix)
+            strike_min: Minimum strike price
+            strike_max: Maximum strike price
+            underlying: Underlying symbol name (e.g., "NIFTY")
+            limit: Maximum results to return
+
+        Returns:
+            List of matching SymbolData objects
+        """
+        matches = []
+        query_upper = query.upper() if query else None
+        underlying_upper = underlying.strip().upper() if underlying else None
+        expiry_stripped = expiry.strip() if expiry else None
+        inst_type = instrumenttype.strip().upper() if instrumenttype else None
+
+        # Parse numeric terms from query for strike matching
+        query_terms = []
+        query_nums = []
+        if query_upper:
+            for term in query_upper.split():
+                term = term.strip()
+                if term:
+                    query_terms.append(term)
+                    try:
+                        query_nums.append(float(term))
+                    except ValueError:
+                        pass
+
+        for symbol_data in self.symbols.values():
+            # Exchange filter
+            if exchange and symbol_data.exchange != exchange:
+                continue
+
+            # Underlying filter (match name field)
+            if underlying_upper and (not symbol_data.name or symbol_data.name.upper() != underlying_upper):
+                continue
+
+            # Expiry filter
+            if expiry_stripped and symbol_data.expiry != expiry_stripped:
+                continue
+
+            # Instrument type filter (based on symbol suffix)
+            if inst_type:
+                symbol_upper = symbol_data.symbol.upper()
+                if inst_type == "FUT" and not symbol_upper.endswith("FUT"):
+                    continue
+                elif inst_type == "CE" and not symbol_upper.endswith("CE"):
+                    continue
+                elif inst_type == "PE" and not symbol_upper.endswith("PE"):
+                    continue
+
+            # Strike range filter
+            if strike_min is not None and (symbol_data.strike is None or symbol_data.strike < strike_min):
+                continue
+            if strike_max is not None and (symbol_data.strike is None or symbol_data.strike > strike_max):
+                continue
+
+            # Query text search (if provided)
+            if query_terms:
+                # All terms must match
+                all_match = True
+                for term in query_terms:
+                    term_match = (
+                        term in symbol_data.symbol.upper() or
+                        term in symbol_data.brsymbol.upper() or
+                        (symbol_data.name and term in symbol_data.name.upper()) or
+                        (symbol_data.token and term in symbol_data.token)
+                    )
+                    if not term_match:
+                        all_match = False
+                        break
+
+                # Also check numeric terms against strike
+                if not all_match and query_nums and symbol_data.strike:
+                    for num in query_nums:
+                        if symbol_data.strike == num:
+                            all_match = True
+                            break
+
+                if not all_match:
+                    continue
+
+            matches.append(symbol_data)
+
+        # Smart sorting: prioritize exact underlying matches, then alphabetical
+        # Extract the primary search term (first term) for relevance scoring
+        primary_term = query_terms[0] if query_terms else None
+
+        def sort_key(s):
+            # Priority 1: Exact match on name/underlying (e.g., "NIFTY" matches name="NIFTY" exactly)
+            name_exact = 0 if (primary_term and s.name and s.name.upper() == primary_term) else 1
+
+            # Priority 2: Name starts with search term (e.g., "NIFTY" before "BANKNIFTY")
+            name_starts = 0 if (primary_term and s.name and s.name.upper().startswith(primary_term)) else 1
+
+            # Priority 3: Symbol starts with search term
+            symbol_starts = 0 if (primary_term and s.symbol.upper().startswith(primary_term)) else 1
+
+            # Priority 4: Alphabetical by symbol
+            return (name_exact, name_starts, symbol_starts, s.symbol)
+
+        matches.sort(key=sort_key)
+        return matches[:limit]
     
     def clear_cache(self):
         """Clear all cached data"""
@@ -631,7 +753,7 @@ def search_symbols(query: str, exchange: Optional[str] = None, limit: int = 50) 
         query_obj = SymToken.query.filter(SymToken.symbol.like(f'%{query}%'))
         if exchange:
             query_obj = query_obj.filter_by(exchange=exchange)
-        
+
         results = query_obj.limit(limit).all()
         return [
             {
@@ -646,4 +768,158 @@ def search_symbols(query: str, exchange: Optional[str] = None, limit: int = 50) 
         ]
     except Exception as e:
         logger.error(f"Error searching symbols: {e}")
+        return []
+
+
+def fno_search_symbols(
+    query: Optional[str] = None,
+    exchange: Optional[str] = None,
+    expiry: Optional[str] = None,
+    instrumenttype: Optional[str] = None,
+    strike_min: Optional[float] = None,
+    strike_max: Optional[float] = None,
+    underlying: Optional[str] = None,
+    limit: int = 500
+) -> List[dict]:
+    """
+    FNO-specific search with advanced filters - uses cache for fast in-memory search
+    Falls back to database if cache is not available
+
+    Args:
+        query: Optional search query string
+        exchange: Exchange filter (NFO, BFO, MCX, CDS)
+        expiry: Expiry date filter (e.g., "26-DEC-24")
+        instrumenttype: "FUT", "CE", or "PE" (based on symbol suffix)
+        strike_min: Minimum strike price
+        strike_max: Maximum strike price
+        underlying: Underlying symbol name (e.g., "NIFTY")
+        limit: Maximum results to return
+
+    Returns:
+        List of symbol dictionaries with all fields
+    """
+    cache = get_cache()
+
+    if cache.cache_loaded and cache.is_cache_valid():
+        results = cache.fno_search_symbols(
+            query=query,
+            exchange=exchange,
+            expiry=expiry,
+            instrumenttype=instrumenttype,
+            strike_min=strike_min,
+            strike_max=strike_max,
+            underlying=underlying,
+            limit=limit
+        )
+        return [
+            {
+                'symbol': s.symbol,
+                'brsymbol': s.brsymbol,
+                'name': s.name,
+                'exchange': s.exchange,
+                'brexchange': s.brexchange,
+                'token': s.token,
+                'expiry': s.expiry,
+                'strike': s.strike,
+                'lotsize': s.lotsize,
+                'instrumenttype': s.instrumenttype,
+                'tick_size': s.tick_size
+            }
+            for s in results
+        ]
+
+    # Fallback to database search (import the DB-based function)
+    logger.debug("Cache not available, falling back to database FNO search")
+    cache.stats.db_queries += 1
+
+    try:
+        from database.symbol import fno_search_symbols_db
+        return fno_search_symbols_db(
+            query=query,
+            exchange=exchange,
+            expiry=expiry,
+            instrumenttype=instrumenttype,
+            strike_min=strike_min,
+            strike_max=strike_max,
+            underlying=underlying,
+            limit=limit
+        )
+    except Exception as e:
+        logger.error(f"Error in FNO search fallback: {e}")
+        return []
+
+
+def get_distinct_expiries_cached(exchange: Optional[str] = None, underlying: Optional[str] = None) -> List[str]:
+    """
+    Get distinct expiry dates from cache - fast in-memory lookup
+    Falls back to database if cache is not available
+    """
+    cache = get_cache()
+
+    if cache.cache_loaded and cache.is_cache_valid():
+        from datetime import datetime
+        expiries = set()
+        underlying_upper = underlying.strip().upper() if underlying else None
+
+        for symbol_data in cache.symbols.values():
+            # Filter by exchange
+            if exchange and symbol_data.exchange != exchange:
+                continue
+
+            # Filter by underlying
+            if underlying_upper and (not symbol_data.name or symbol_data.name.upper() != underlying_upper):
+                continue
+
+            # Collect non-empty expiries
+            if symbol_data.expiry:
+                expiries.add(symbol_data.expiry)
+
+        # Sort expiries chronologically
+        def parse_expiry(exp_str):
+            try:
+                return datetime.strptime(exp_str, "%d-%b-%y")
+            except ValueError:
+                try:
+                    return datetime.strptime(exp_str, "%d-%b-%Y")
+                except ValueError:
+                    return datetime.max
+
+        return sorted(list(expiries), key=parse_expiry)
+
+    # Fallback to database
+    try:
+        from database.symbol import get_distinct_expiries
+        return get_distinct_expiries(exchange=exchange, underlying=underlying)
+    except Exception as e:
+        logger.error(f"Error getting expiries: {e}")
+        return []
+
+
+def get_distinct_underlyings_cached(exchange: Optional[str] = None) -> List[str]:
+    """
+    Get distinct underlying names from cache - fast in-memory lookup
+    Falls back to database if cache is not available
+    """
+    cache = get_cache()
+
+    if cache.cache_loaded and cache.is_cache_valid():
+        underlyings = set()
+
+        for symbol_data in cache.symbols.values():
+            # Filter by exchange
+            if exchange and symbol_data.exchange != exchange:
+                continue
+
+            # Collect non-empty names
+            if symbol_data.name:
+                underlyings.add(symbol_data.name)
+
+        return sorted(list(underlyings))
+
+    # Fallback to database
+    try:
+        from database.symbol import get_distinct_underlyings
+        return get_distinct_underlyings(exchange=exchange)
+    except Exception as e:
+        logger.error(f"Error getting underlyings: {e}")
         return []

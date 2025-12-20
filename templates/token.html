@@ -174,12 +174,12 @@
                 <div class="form-control w-full">
                     <label class="label">
                         <span class="label-text font-medium text-base">Symbol, Name, or Token</span>
+                        <span class="label-text-alt text-xs" id="symbolHint">(Required)</span>
                     </label>
                     <div class="search-input-wrapper">
                         <input type="text"
                                name="symbol"
                                id="symbolSearch"
-                               required
                                class="input input-bordered w-full text-base h-12"
                                placeholder="e.g., nifty, RELIANCE, 2885"
                                autocomplete="off">
@@ -206,6 +206,67 @@
                         <option value="NSE_INDEX">NSE_INDEX - National Stock Exchange Index</option>
                         <option value="BSE_INDEX">BSE_INDEX - Bombay Stock Exchange Index</option>
                     </select>
+                </div>
+
+                <!-- FNO Filters (shown only for derivatives exchanges) -->
+                <div id="fnoFilters" class="space-y-4" style="display: none;">
+                    <div class="divider text-sm text-base-content/50">F&O Filters</div>
+
+                    <!-- Row 1: Underlying and Instrument Type -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <!-- Underlying Select -->
+                        <div class="form-control w-full">
+                            <label class="label">
+                                <span class="label-text font-medium text-base">Underlying</span>
+                            </label>
+                            <select name="underlying" id="underlyingSelect" class="select select-bordered w-full text-base h-12">
+                                <option value="">All Underlyings</option>
+                            </select>
+                        </div>
+
+                        <!-- Instrument Type Select -->
+                        <div class="form-control w-full">
+                            <label class="label">
+                                <span class="label-text font-medium text-base">Instrument Type</span>
+                            </label>
+                            <select name="instrumenttype" id="instrumentTypeSelect" class="select select-bordered w-full text-base h-12">
+                                <option value="">All Types</option>
+                                <option value="FUT">Futures</option>
+                                <option value="CE">Call Options (CE)</option>
+                                <option value="PE">Put Options (PE)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Row 2: Expiry -->
+                    <div class="form-control w-full">
+                        <label class="label">
+                            <span class="label-text font-medium text-base">Expiry Date</span>
+                        </label>
+                        <select name="expiry" id="expirySelect" class="select select-bordered w-full text-base h-12">
+                            <option value="">All Expiries</option>
+                        </select>
+                    </div>
+
+                    <!-- Row 3: Strike Range (shown only for options) -->
+                    <div id="strikeRangeContainer" class="grid grid-cols-2 gap-4" style="display: none;">
+                        <div class="form-control w-full">
+                            <label class="label">
+                                <span class="label-text font-medium text-base">Min Strike</span>
+                            </label>
+                            <input type="number" name="strike_min" id="strikeMin"
+                                   class="input input-bordered w-full text-base h-12"
+                                   placeholder="e.g., 24000" step="any">
+                        </div>
+                        <div class="form-control w-full">
+                            <label class="label">
+                                <span class="label-text font-medium text-base">Max Strike</span>
+                            </label>
+                            <input type="number" name="strike_max" id="strikeMax"
+                                   class="input input-bordered w-full text-base h-12"
+                                   placeholder="e.g., 26000" step="any">
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Search Button -->
@@ -261,21 +322,168 @@
     const searchForm = document.getElementById('searchForm');
     const loadingIndicator = document.querySelector('.search-loading');
 
+    // FNO filter elements
+    const fnoFilters = document.getElementById('fnoFilters');
+    const underlyingSelect = document.getElementById('underlyingSelect');
+    const instrumentTypeSelect = document.getElementById('instrumentTypeSelect');
+    const expirySelect = document.getElementById('expirySelect');
+    const strikeRangeContainer = document.getElementById('strikeRangeContainer');
+    const strikeMin = document.getElementById('strikeMin');
+    const strikeMax = document.getElementById('strikeMax');
+    const symbolHint = document.getElementById('symbolHint');
+
+    // FNO exchanges that support advanced filters
+    const FNO_EXCHANGES = ['NFO', 'BFO', 'MCX', 'CDS'];
+
     let debounceTimer = null;
+
+    // Check if current exchange is FNO
+    function isFnoExchange(exchange) {
+        return FNO_EXCHANGES.includes(exchange);
+    }
+
+    // Check if any FNO filter is applied
+    function hasFnoFilters() {
+        return underlyingSelect.value ||
+               expirySelect.value ||
+               instrumentTypeSelect.value ||
+               strikeMin.value ||
+               strikeMax.value;
+    }
+
+    // Update symbol hint based on whether filters are applied
+    function updateSymbolHint() {
+        if (isFnoExchange(exchangeSelect.value) && hasFnoFilters()) {
+            symbolHint.textContent = '(Optional with filters)';
+            symbolHint.classList.add('text-success');
+            symbolHint.classList.remove('text-error');
+        } else {
+            symbolHint.textContent = '(Required)';
+            symbolHint.classList.remove('text-success');
+            symbolHint.classList.remove('text-error');
+        }
+    }
+
+    // Show/hide FNO filters based on exchange
+    function toggleFnoFilters(exchange) {
+        if (isFnoExchange(exchange)) {
+            fnoFilters.style.display = 'block';
+            fetchUnderlyings(exchange);
+            fetchExpiries(exchange, underlyingSelect.value);
+        } else {
+            fnoFilters.style.display = 'none';
+            resetFnoFilters();
+        }
+        updateSymbolHint();
+    }
+
+    // Reset FNO filter values
+    function resetFnoFilters() {
+        underlyingSelect.innerHTML = '<option value="">All Underlyings</option>';
+        expirySelect.innerHTML = '<option value="">All Expiries</option>';
+        instrumentTypeSelect.value = '';
+        strikeMin.value = '';
+        strikeMax.value = '';
+        strikeRangeContainer.style.display = 'none';
+    }
+
+    // Fetch underlyings from API
+    async function fetchUnderlyings(exchange) {
+        try {
+            const url = new URL('{{ url_for("search_bp.api_underlyings") }}', window.location.origin);
+            url.searchParams.append('exchange', exchange);
+
+            const response = await fetch(url);
+            const data = await response.json();
+
+            if (data.status === 'success') {
+                underlyingSelect.innerHTML = '<option value="">All Underlyings</option>';
+                data.underlyings.forEach(underlying => {
+                    const option = document.createElement('option');
+                    option.value = underlying;
+                    option.textContent = underlying;
+                    underlyingSelect.appendChild(option);
+                });
+            }
+        } catch (error) {
+            console.error('Error fetching underlyings:', error);
+        }
+    }
+
+    // Fetch expiries from API
+    async function fetchExpiries(exchange, underlying) {
+        try {
+            const url = new URL('{{ url_for("search_bp.api_expiries") }}', window.location.origin);
+            if (exchange) url.searchParams.append('exchange', exchange);
+            if (underlying) url.searchParams.append('underlying', underlying);
+
+            const response = await fetch(url);
+            const data = await response.json();
+
+            if (data.status === 'success') {
+                expirySelect.innerHTML = '<option value="">All Expiries</option>';
+                data.expiries.forEach(expiry => {
+                    const option = document.createElement('option');
+                    option.value = expiry;
+                    option.textContent = expiry;
+                    expirySelect.appendChild(option);
+                });
+            }
+        } catch (error) {
+            console.error('Error fetching expiries:', error);
+        }
+    }
+
+    // Show/hide strike range based on instrument type
+    function toggleStrikeRange(instrumentType) {
+        if (instrumentType === 'CE' || instrumentType === 'PE') {
+            strikeRangeContainer.style.display = 'grid';
+        } else {
+            strikeRangeContainer.style.display = 'none';
+            strikeMin.value = '';
+            strikeMax.value = '';
+        }
+    }
+
+    // Get current FNO filter values
+    function getFnoFilterParams() {
+        const params = {};
+        if (underlyingSelect.value) params.underlying = underlyingSelect.value;
+        if (expirySelect.value) params.expiry = expirySelect.value;
+        if (instrumentTypeSelect.value) params.instrumenttype = instrumentTypeSelect.value;
+        if (strikeMin.value) params.strike_min = strikeMin.value;
+        if (strikeMax.value) params.strike_max = strikeMax.value;
+        return params;
+    }
 
     // Debounced search function
     function handleInput() {
         clearTimeout(debounceTimer);
         const query = symbolInput.value.trim();
+        const exchange = exchangeSelect.value;
 
-        if (query.length < 2) {
+        // Allow filter-only search for FNO exchanges
+        const canSearchWithFilters = isFnoExchange(exchange) && hasFnoFilters();
+
+        if (query.length < 2 && !canSearchWithFilters) {
             searchResults.style.display = 'none';
             return;
         }
 
         debounceTimer = setTimeout(() => {
-            performSearch(query, exchangeSelect.value);
+            performSearch(query, exchange);
         }, 300);
+    }
+
+    // Update hint when filters change (don't auto-search)
+    function onFilterChange() {
+        updateSymbolHint();
+
+        // Only trigger search if user has already typed something
+        const query = symbolInput.value.trim();
+        if (query.length >= 2) {
+            performSearch(query, exchangeSelect.value);
+        }
     }
 
     // Perform AJAX search
@@ -284,9 +492,19 @@
             loadingIndicator.style.display = 'block';
 
             const url = new URL('{{ url_for("search_bp.api_search") }}', window.location.origin);
-            url.searchParams.append('q', query);
+            if (query) {
+                url.searchParams.append('q', query);
+            }
             if (exchange) {
                 url.searchParams.append('exchange', exchange);
+            }
+
+            // Add FNO filters if applicable
+            if (isFnoExchange(exchange)) {
+                const fnoParams = getFnoFilterParams();
+                Object.entries(fnoParams).forEach(([key, value]) => {
+                    url.searchParams.append(key, value);
+                });
             }
 
             const response = await fetch(url);
@@ -338,14 +556,22 @@
 
             const name = document.createElement('div');
             name.className = 'result-name';
-            name.textContent = result.name || '';
+            // Show expiry and strike for FNO symbols
+            let nameText = result.name || '';
+            if (result.expiry) {
+                nameText += (nameText ? ' | ' : '') + result.expiry;
+            }
+            if (result.strike && result.strike > 0) {
+                nameText += ' | Strike: ' + result.strike;
+            }
+            name.textContent = nameText;
 
             const token = document.createElement('div');
             token.className = 'result-token';
             token.textContent = 'Token: ' + (result.token || '');
 
             left.appendChild(symbol);
-            if (result.name) {
+            if (nameText) {
                 left.appendChild(name);
             }
             left.appendChild(token);
@@ -362,6 +588,8 @@
                 symbolInput.value = result.symbol;
                 exchangeSelect.value = result.exchange;
                 searchResults.style.display = 'none';
+                // Trigger FNO filter toggle
+                toggleFnoFilters(result.exchange);
             });
 
             searchResults.appendChild(item);
@@ -372,12 +600,37 @@
 
     // Event listeners
     symbolInput.addEventListener('input', handleInput);
+
     exchangeSelect.addEventListener('change', () => {
+        const exchange = exchangeSelect.value;
+        toggleFnoFilters(exchange);
+
         const query = symbolInput.value.trim();
         if (query.length >= 2) {
-            performSearch(query, exchangeSelect.value);
+            performSearch(query, exchange);
         }
     });
+
+    // FNO filter change handlers (don't auto-show dropdown)
+    underlyingSelect.addEventListener('change', () => {
+        const exchange = exchangeSelect.value;
+        const underlying = underlyingSelect.value;
+        fetchExpiries(exchange, underlying);
+        onFilterChange();
+    });
+
+    instrumentTypeSelect.addEventListener('change', () => {
+        toggleStrikeRange(instrumentTypeSelect.value);
+        onFilterChange();
+    });
+
+    expirySelect.addEventListener('change', () => {
+        onFilterChange();
+    });
+
+    // Strike range change handlers
+    strikeMin.addEventListener('change', onFilterChange);
+    strikeMax.addEventListener('change', onFilterChange);
 
     // Close dropdown when clicking outside
     document.addEventListener('click', (e) => {
@@ -386,14 +639,30 @@
         }
     });
 
-    // Close dropdown on form submit
-    searchForm.addEventListener('submit', () => {
+    // Form validation and submit
+    searchForm.addEventListener('submit', (e) => {
         searchResults.style.display = 'none';
+
+        const query = symbolInput.value.trim();
+        const exchange = exchangeSelect.value;
+
+        // For FNO exchanges with filters, query is optional
+        if (!query && !(isFnoExchange(exchange) && hasFnoFilters())) {
+            e.preventDefault();
+            symbolHint.textContent = '(Required - enter a search term)';
+            symbolHint.classList.add('text-error');
+            symbolInput.focus();
+            return false;
+        }
     });
 
     // Reopen dropdown on focus if there are results
     symbolInput.addEventListener('focus', () => {
-        if (symbolInput.value.trim().length >= 2 && searchResults.children.length > 0) {
+        const query = symbolInput.value.trim();
+        const hasResults = searchResults.children.length > 0;
+        const canShowWithFilters = isFnoExchange(exchangeSelect.value) && hasFnoFilters();
+
+        if ((query.length >= 2 || canShowWithFilters) && hasResults) {
             searchResults.style.display = 'block';
         }
     });
