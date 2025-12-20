@@ -31,10 +31,11 @@ checkpoints.json
 # Strategy encryption key
 db/strategy_encryption.key
 
-# CSV Files (except symbols.csv)
+# CSV Files (except specific data files)
 *.csv
 !symbols.csv
 !all_symbols.csv
+!data/qtyfreeze.csv
 
 # Environments 
 .env 

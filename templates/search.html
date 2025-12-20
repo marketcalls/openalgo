@@ -143,6 +143,14 @@
                                 </svg>
                             </div>
                         </th>
+                        <th class="sortable w-24" data-sort="freeze_qty">
+                            <div class="flex items-center gap-1">
+                                Freeze Qty
+                                <svg xmlns="http://www.w3.org/2000/svg" class="sort-icon h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+                                </svg>
+                            </div>
+                        </th>
                     </tr>
                 </thead>
                 <tbody>
@@ -164,6 +172,7 @@
                         <td class="w-32"><div class="badge badge-secondary badge-outline badge-sm">{{ row.brexchange }}</div></td>
                         <td class="token-cell w-36">{{ row.token }}</td>
                         <td class="w-20">{{ row.lotsize or '-' }}</td>
+                        <td class="w-24">{{ row.freeze_qty or '-' }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -241,7 +250,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 let aValue = a.children[index].textContent.trim();
                 let bValue = b.children[index].textContent.trim();
 
-                if (['lotsize', 'token'].includes(sortKey)) {
+                if (['lotsize', 'token', 'freeze_qty'].includes(sortKey)) {
                     aValue = parseFloat(aValue.replace(/[^0-9.-]/g, '')) || 0;
                     bValue = parseFloat(bValue.replace(/[^0-9.-]/g, '')) || 0;
                     return newDirection === 'asc' ? aValue - bValue : bValue - aValue;

@@ -308,21 +308,52 @@ class BrokerSymbolCache:
     
     def search_symbols(self, query: str, exchange: Optional[str] = None, limit: int = 50) -> List[SymbolData]:
         """
-        Search symbols by partial match
+        Search symbols by partial match with multi-term support.
+        All terms must match (AND logic).
         Returns list of matching SymbolData objects
         """
-        query = query.upper()
+        # Split query into terms
+        terms = [term.strip().upper() for term in query.split() if term.strip()]
+        if not terms:
+            return []
+
         matches = []
+
+        # Parse numeric terms for strike matching
+        num_terms = []
+        for term in terms:
+            try:
+                num_terms.append(float(term))
+            except ValueError:
+                pass
 
         for symbol_data in self.symbols.values():
             # Skip if exchange filter doesn't match
             if exchange and symbol_data.exchange != exchange:
                 continue
 
-            # Check for match in symbol, brsymbol, or name
-            if (query in symbol_data.symbol.upper() or
-                query in symbol_data.brsymbol.upper() or
-                (symbol_data.name and query in symbol_data.name.upper())):
+            # All terms must match
+            all_match = True
+            for term in terms:
+                term_match = (
+                    term in symbol_data.symbol.upper() or
+                    term in symbol_data.brsymbol.upper() or
+                    (symbol_data.name and term in symbol_data.name.upper()) or
+                    (symbol_data.token and term in symbol_data.token)
+                )
+                # Also check numeric terms against strike
+                if not term_match and num_terms and symbol_data.strike:
+                    try:
+                        if float(term) == symbol_data.strike:
+                            term_match = True
+                    except ValueError:
+                        pass
+
+                if not term_match:
+                    all_match = False
+                    break
+
+            if all_match:
                 matches.append(symbol_data)
 
                 if len(matches) >= limit:
@@ -800,6 +831,9 @@ def fno_search_symbols(
     """
     cache = get_cache()
 
+    # Import freeze qty function
+    from database.qty_freeze_db import get_freeze_qty_for_option
+
     if cache.cache_loaded and cache.is_cache_valid():
         results = cache.fno_search_symbols(
             query=query,
@@ -823,7 +857,8 @@ def fno_search_symbols(
                 'strike': s.strike,
                 'lotsize': s.lotsize,
                 'instrumenttype': s.instrumenttype,
-                'tick_size': s.tick_size
+                'tick_size': s.tick_size,
+                'freeze_qty': get_freeze_qty_for_option(s.symbol, s.exchange)
             }
             for s in results
         ]

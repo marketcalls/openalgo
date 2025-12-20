@@ -611,13 +611,18 @@ def get_option_symbol(
                 'message': f'Option symbol {option_symbol} not found in {options_exchange}. Symbol may not exist or master contract needs update.'
             }, 404
 
-        # Step 8: Return success response with simplified format
+        # Step 8: Get freeze quantity
+        from database.qty_freeze_db import get_freeze_qty_for_option
+        freeze_qty = get_freeze_qty_for_option(option_details['symbol'], option_details['exchange'])
+
+        # Step 9: Return success response with simplified format
         return True, {
             'status': 'success',
             'symbol': option_details['symbol'],
             'exchange': option_details['exchange'],
             'lotsize': option_details['lotsize'],
             'tick_size': option_details['tick_size'],
+            'freeze_qty': freeze_qty,
             'underlying_ltp': ltp
         }, 200
 

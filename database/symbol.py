@@ -206,6 +206,9 @@ def fno_search_symbols_db(
         # Execute query (fetch more for sorting, then limit)
         results = base_query.all()
 
+        # Import freeze qty function
+        from database.qty_freeze_db import get_freeze_qty_for_option
+
         # Convert to dictionaries
         results_dicts = [{
             'symbol': r.symbol,
@@ -218,7 +221,8 @@ def fno_search_symbols_db(
             'strike': r.strike,
             'lotsize': r.lotsize,
             'instrumenttype': r.instrumenttype,
-            'tick_size': r.tick_size
+            'tick_size': r.tick_size,
+            'freeze_qty': get_freeze_qty_for_option(r.symbol, r.exchange)
         } for r in results]
 
         # Smart sorting: prioritize exact underlying matches, then alphabetical

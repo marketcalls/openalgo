@@ -67,6 +67,8 @@ def search():
     else:
         logger.info(f"Standard search: query={query}, exchange={exchange}")
         results = enhanced_search_symbols(query, exchange)
+        # Import freeze qty function for non-FNO exchanges
+        from database.qty_freeze_db import get_freeze_qty_for_option
         # Convert SymToken objects to dicts
         results_dicts = [{
             'symbol': result.symbol,
@@ -79,7 +81,8 @@ def search():
             'strike': result.strike,
             'lotsize': result.lotsize,
             'instrumenttype': result.instrumenttype,
-            'tick_size': result.tick_size
+            'tick_size': result.tick_size,
+            'freeze_qty': get_freeze_qty_for_option(result.symbol, result.exchange)
         } for result in results]
 
     if not results_dicts:
@@ -129,7 +132,7 @@ def api_search():
             strike_max=strike_max,
             underlying=underlying
         )
-        # Reduce fields for API response
+        # Reduce fields for API response (freeze_qty already in results)
         results_dicts = [{
             'symbol': r['symbol'],
             'brsymbol': r['brsymbol'],
@@ -138,11 +141,14 @@ def api_search():
             'token': r['token'],
             'expiry': r['expiry'],
             'strike': r['strike'],
-            'instrumenttype': r['instrumenttype']
+            'instrumenttype': r['instrumenttype'],
+            'freeze_qty': r.get('freeze_qty', 1)
         } for r in results_dicts]
     else:
         logger.debug(f"Standard API search: query={query}, exchange={exchange}")
         results = enhanced_search_symbols(query, exchange)
+        # Import freeze qty function for non-FNO exchanges
+        from database.qty_freeze_db import get_freeze_qty_for_option
         # Convert SymToken objects to dicts
         results_dicts = [{
             'symbol': result.symbol,
@@ -152,7 +158,8 @@ def api_search():
             'token': result.token,
             'expiry': result.expiry,
             'strike': result.strike,
-            'instrumenttype': result.instrumenttype
+            'instrumenttype': result.instrumenttype,
+            'freeze_qty': get_freeze_qty_for_option(result.symbol, result.exchange)
         } for result in results]
 
     logger.debug(f"API search found {len(results_dicts)} results")
