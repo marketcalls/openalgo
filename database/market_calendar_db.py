@@ -101,6 +101,21 @@ class HolidayExchange(Base):
     )
 
 
+class MarketTiming(Base):
+    """
+    Stores custom market timings for each exchange.
+    Allows overriding the default hardcoded timings.
+    """
+    __tablename__ = 'market_timings'
+
+    id = Column(Integer, primary_key=True)
+    exchange_code = Column(String(10), nullable=False, unique=True, index=True)
+    start_time = Column(String(5), nullable=False)  # HH:MM format
+    end_time = Column(String(5), nullable=False)    # HH:MM format
+    start_offset = Column(BigInteger, nullable=False)  # milliseconds from midnight
+    end_offset = Column(BigInteger, nullable=False)    # milliseconds from midnight
+
+
 def init_db():
     """Initialize the market calendar database and seed holiday data"""
     from database.db_init_helper import init_db_with_logging
@@ -525,6 +540,26 @@ def get_holidays_by_year(year: int) -> List[Dict[str, Any]]:
         return []
 
 
+def _get_timing_offsets() -> Dict[str, Dict[str, int]]:
+    """
+    Get timing offsets from database or fallback to defaults.
+    This ensures edited timings from admin page are used.
+    """
+    try:
+        timings = MarketTiming.query.all()
+        if timings:
+            return {
+                t.exchange_code: {
+                    'start_offset': t.start_offset,
+                    'end_offset': t.end_offset
+                } for t in timings
+            }
+    except Exception as e:
+        logger.debug(f"Error fetching timing offsets from DB, using defaults: {e}")
+
+    return DEFAULT_MARKET_TIMINGS
+
+
 def get_market_timings_for_date(query_date: date) -> List[Dict[str, Any]]:
     """
     Get market timings for a specific date
@@ -552,6 +587,9 @@ def get_market_timings_for_date(query_date: date) -> List[Dict[str, Any]]:
         # Calculate midnight timestamp for the date in IST
         midnight_ist = datetime.combine(query_date, datetime.min.time())
         midnight_epoch = int(midnight_ist.timestamp() * 1000)
+
+        # Get timing offsets from database (or defaults if not in DB)
+        timing_offsets = _get_timing_offsets()
 
         # Check if it's a holiday
         holiday = Holiday.query.filter(Holiday.holiday_date == query_date).first()
@@ -583,12 +621,13 @@ def get_market_timings_for_date(query_date: date) -> List[Dict[str, Any]]:
             if holiday.holiday_type == 'SETTLEMENT_HOLIDAY':
                 result = []
                 for exchange in SUPPORTED_EXCHANGES:
-                    timings = DEFAULT_MARKET_TIMINGS[exchange]
-                    result.append({
-                        'exchange': exchange,
-                        'start_time': midnight_epoch + timings['start_offset'],
-                        'end_time': midnight_epoch + timings['end_offset']
-                    })
+                    timings = timing_offsets.get(exchange, DEFAULT_MARKET_TIMINGS.get(exchange, {}))
+                    if timings:
+                        result.append({
+                            'exchange': exchange,
+                            'start_time': midnight_epoch + timings['start_offset'],
+                            'end_time': midnight_epoch + timings['end_offset']
+                        })
                 _timings_cache[cache_key] = result
                 return result
 
@@ -602,15 +641,16 @@ def get_market_timings_for_date(query_date: date) -> List[Dict[str, Any]]:
             _timings_cache[cache_key] = result
             return result
 
-        # Normal trading day - return default timings for all exchanges
+        # Normal trading day - return timings for all exchanges from DB
         result = []
         for exchange in SUPPORTED_EXCHANGES:
-            timings = DEFAULT_MARKET_TIMINGS[exchange]
-            result.append({
-                'exchange': exchange,
-                'start_time': midnight_epoch + timings['start_offset'],
-                'end_time': midnight_epoch + timings['end_offset']
-            })
+            timings = timing_offsets.get(exchange, DEFAULT_MARKET_TIMINGS.get(exchange, {}))
+            if timings:
+                result.append({
+                    'exchange': exchange,
+                    'start_time': midnight_epoch + timings['start_offset'],
+                    'end_time': midnight_epoch + timings['end_offset']
+                })
 
         _timings_cache[cache_key] = result
         return result
@@ -716,3 +756,174 @@ def ensure_market_calendar_tables_exists():
     init_db()
     # Check and update if needed
     check_and_update_holidays()
+    # Seed market timings if not present
+    seed_market_timings()
+
+
+def seed_market_timings():
+    """Seed default market timings if table is empty"""
+    try:
+        if MarketTiming.query.count() == 0:
+            for exchange, timings in DEFAULT_MARKET_TIMINGS.items():
+                start_offset = timings['start_offset']
+                end_offset = timings['end_offset']
+
+                # Convert offset to HH:MM
+                start_hours = start_offset // 3600000
+                start_mins = (start_offset % 3600000) // 60000
+                end_hours = end_offset // 3600000
+                end_mins = (end_offset % 3600000) // 60000
+
+                timing = MarketTiming(
+                    exchange_code=exchange,
+                    start_time=f'{start_hours:02d}:{start_mins:02d}',
+                    end_time=f'{end_hours:02d}:{end_mins:02d}',
+                    start_offset=start_offset,
+                    end_offset=end_offset
+                )
+                db_session.add(timing)
+
+            db_session.commit()
+            logger.debug("Market Calendar DB: Market timings seeded successfully")
+    except Exception as e:
+        db_session.rollback()
+        logger.debug(f"Market Calendar DB: Timing seeding may have race condition: {e}")
+
+
+def get_all_market_timings() -> List[Dict[str, Any]]:
+    """Get all market timings from database or defaults"""
+    try:
+        timings = MarketTiming.query.order_by(MarketTiming.exchange_code).all()
+
+        if timings:
+            return [{
+                'id': t.id,
+                'exchange': t.exchange_code,
+                'start_time': t.start_time,
+                'end_time': t.end_time,
+                'start_offset': t.start_offset,
+                'end_offset': t.end_offset
+            } for t in timings]
+
+        # Fallback to defaults if no DB entries
+        result = []
+        for exchange, timing in DEFAULT_MARKET_TIMINGS.items():
+            start_offset = timing['start_offset']
+            end_offset = timing['end_offset']
+            start_hours = start_offset // 3600000
+            start_mins = (start_offset % 3600000) // 60000
+            end_hours = end_offset // 3600000
+            end_mins = (end_offset % 3600000) // 60000
+
+            result.append({
+                'id': None,
+                'exchange': exchange,
+                'start_time': f'{start_hours:02d}:{start_mins:02d}',
+                'end_time': f'{end_hours:02d}:{end_mins:02d}',
+                'start_offset': start_offset,
+                'end_offset': end_offset
+            })
+        return result
+
+    except Exception as e:
+        logger.error(f"Error fetching market timings: {e}")
+        return []
+
+
+def update_market_timing(exchange: str, start_time: str, end_time: str) -> bool:
+    """
+    Update market timing for an exchange.
+
+    Args:
+        exchange: Exchange code (e.g., 'NSE', 'MCX')
+        start_time: Start time in HH:MM format
+        end_time: End time in HH:MM format
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Parse times to calculate offsets
+        start_parts = start_time.split(':')
+        end_parts = end_time.split(':')
+
+        start_offset = int(start_parts[0]) * 3600000 + int(start_parts[1]) * 60000
+        end_offset = int(end_parts[0]) * 3600000 + int(end_parts[1]) * 60000
+
+        # Update or create timing
+        timing = MarketTiming.query.filter_by(exchange_code=exchange.upper()).first()
+
+        if timing:
+            timing.start_time = start_time
+            timing.end_time = end_time
+            timing.start_offset = start_offset
+            timing.end_offset = end_offset
+        else:
+            timing = MarketTiming(
+                exchange_code=exchange.upper(),
+                start_time=start_time,
+                end_time=end_time,
+                start_offset=start_offset,
+                end_offset=end_offset
+            )
+            db_session.add(timing)
+
+        db_session.commit()
+
+        # Clear cache
+        clear_market_calendar_cache()
+
+        # Update DEFAULT_MARKET_TIMINGS for current session
+        DEFAULT_MARKET_TIMINGS[exchange.upper()] = {
+            'start_offset': start_offset,
+            'end_offset': end_offset
+        }
+
+        logger.info(f"Updated market timing for {exchange}: {start_time} - {end_time}")
+        return True
+
+    except Exception as e:
+        db_session.rollback()
+        logger.error(f"Error updating market timing: {e}")
+        return False
+
+
+def get_market_timing(exchange: str) -> Optional[Dict[str, Any]]:
+    """Get market timing for a specific exchange"""
+    try:
+        timing = MarketTiming.query.filter_by(exchange_code=exchange.upper()).first()
+
+        if timing:
+            return {
+                'id': timing.id,
+                'exchange': timing.exchange_code,
+                'start_time': timing.start_time,
+                'end_time': timing.end_time,
+                'start_offset': timing.start_offset,
+                'end_offset': timing.end_offset
+            }
+
+        # Fallback to default
+        if exchange.upper() in DEFAULT_MARKET_TIMINGS:
+            timing_data = DEFAULT_MARKET_TIMINGS[exchange.upper()]
+            start_offset = timing_data['start_offset']
+            end_offset = timing_data['end_offset']
+            start_hours = start_offset // 3600000
+            start_mins = (start_offset % 3600000) // 60000
+            end_hours = end_offset // 3600000
+            end_mins = (end_offset % 3600000) // 60000
+
+            return {
+                'id': None,
+                'exchange': exchange.upper(),
+                'start_time': f'{start_hours:02d}:{start_mins:02d}',
+                'end_time': f'{end_hours:02d}:{end_mins:02d}',
+                'start_offset': start_offset,
+                'end_offset': end_offset
+            }
+
+        return None
+
+    except Exception as e:
+        logger.error(f"Error fetching market timing for {exchange}: {e}")
+        return None

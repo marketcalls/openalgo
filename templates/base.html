@@ -203,6 +203,12 @@
                         </a>
                     </li>
                     <li>
+                        <a href="{{ url_for('admin_bp.index') }}"
+                           class="{{ 'active' if request.endpoint.startswith('admin_bp.') }}">
+                            Admin
+                        </a>
+                    </li>
+                    <li>
                         <a href="{{ url_for('api_key_bp.manage_api_key') }}"
                            class="{{ 'active' if request.endpoint == 'api_key_bp.manage_api_key' }}">
                             API Key

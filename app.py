@@ -48,6 +48,7 @@ from blueprints.security import security_bp  # Import the security blueprint
 from blueprints.sandbox import sandbox_bp  # Import the sandbox blueprint
 from blueprints.logging import logging_bp  # Import the logging blueprint
 from blueprints.playground import playground_bp  # Import the API playground blueprint
+from blueprints.admin import admin_bp  # Import the admin blueprint
 from services.telegram_bot_service import telegram_bot_service
 from database.telegram_db import get_bot_config
 
@@ -217,6 +218,7 @@ def create_app():
     app.register_blueprint(sandbox_bp)  # Register Sandbox blueprint
     app.register_blueprint(playground_bp)  # Register API playground blueprint
     app.register_blueprint(logging_bp)  # Register Logging blueprint
+    app.register_blueprint(admin_bp)  # Register Admin blueprint
 
 
     # Exempt webhook endpoints from CSRF protection after app initialization
