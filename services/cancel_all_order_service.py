@@ -128,8 +128,11 @@ def cancel_all_orders_with_auth(
             }
         )
 
-        # Send Telegram alert for analyze mode
-        telegram_alert_service.send_order_alert('cancelallorder', order_data, response_data, order_data.get('apikey'))
+        # Send Telegram alert in background task (non-blocking)
+        socketio.start_background_task(
+            telegram_alert_service.send_order_alert,
+            'cancelallorder', order_data, response_data, order_data.get('apikey')
+        )
         return success, response_data, status_code
 
     broker_module = import_broker_module(broker)
@@ -180,9 +183,11 @@ def cancel_all_orders_with_auth(
     # Log the action asynchronously
     executor.submit(async_log_order, 'cancelallorder', order_request_data, response_data)
 
-    # Send Telegram alert for live mode
-    # Note: Use original_data to get apikey because broker module may overwrite order_data['apikey']
-    telegram_alert_service.send_order_alert('cancelallorder', order_data, response_data, original_data.get('apikey'))
+    # Send Telegram alert in background task (non-blocking)
+    socketio.start_background_task(
+        telegram_alert_service.send_order_alert,
+        'cancelallorder', order_data, response_data, original_data.get('apikey')
+    )
 
     return True, response_data, 200
 

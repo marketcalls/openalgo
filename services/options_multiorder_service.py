@@ -596,8 +596,11 @@ def process_multiorder_with_auth(
             del request_log['apikey']
         log_executor.submit(async_log_order, 'optionsmultiorder', request_log, response_data)
 
-    # Send Telegram alert
-    telegram_alert_service.send_order_alert('optionsmultiorder', multiorder_data, response_data, api_key)
+    # Send Telegram alert in background task (non-blocking)
+    socketio.start_background_task(
+        telegram_alert_service.send_order_alert,
+        'optionsmultiorder', multiorder_data, response_data, api_key
+    )
 
     return True, response_data, 200
 

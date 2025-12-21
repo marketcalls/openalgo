@@ -340,8 +340,11 @@ def place_options_order(
             else:
                 log_executor.submit(async_log_order, 'optionsorder', request_log, response_data)
 
-            # Send Telegram alert
-            telegram_alert_service.send_order_alert('optionsorder', options_data, response_data, api_key)
+            # Send Telegram alert in background task (non-blocking)
+            socketio.start_background_task(
+                telegram_alert_service.send_order_alert,
+                'optionsorder', options_data, response_data, api_key
+            )
 
             logger.info(f"Split options order completed: {successful_orders}/{len(results)} successful")
             return True, response_data, 200

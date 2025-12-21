@@ -187,8 +187,11 @@ def place_smart_order_with_auth(
             }
         )
 
-        # Send Telegram alert for analyze mode
-        telegram_alert_service.send_order_alert('placesmartorder', order_data, response_data, order_data.get('apikey'))
+        # Send Telegram alert in background task (non-blocking)
+        socketio.start_background_task(
+            telegram_alert_service.send_order_alert,
+            'placesmartorder', order_data, response_data, order_data.get('apikey')
+        )
         return success, response_data, status_code
 
     # Live Mode - Proceed with actual order placement
@@ -223,18 +226,22 @@ def place_smart_order_with_auth(
                     'message': ' Positions Already Matched. No Action needed.'
                 }
             )
-            # Send Telegram alert
-            # Note: Use original_data to get apikey because broker module may overwrite order_data['apikey']
-            telegram_alert_service.send_order_alert('placesmartorder', order_data, order_response_data, original_data.get('apikey'))
+            # Send Telegram alert in background task (non-blocking)
+            socketio.start_background_task(
+                telegram_alert_service.send_order_alert,
+                'placesmartorder', order_data, order_response_data, original_data.get('apikey')
+            )
             return True, order_response_data, 200
 
         # Log successful order immediately after placement
         if res and res.status == 200:
             order_response_data = {'status': 'success', 'orderid': order_id}
             executor.submit(async_log_order, 'placesmartorder', order_request_data, order_response_data)
-            # Send Telegram alert
-            # Note: Use original_data to get apikey because broker module may overwrite order_data['apikey']
-            telegram_alert_service.send_order_alert('placesmartorder', order_data, order_response_data, original_data.get('apikey'))
+            # Send Telegram alert in background task (non-blocking)
+            socketio.start_background_task(
+                telegram_alert_service.send_order_alert,
+                'placesmartorder', order_data, order_response_data, original_data.get('apikey')
+            )
             # Emit SocketIO event asynchronously (non-blocking)
             socketio.start_background_task(
                 socketio.emit,

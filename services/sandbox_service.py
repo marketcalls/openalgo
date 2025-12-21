@@ -109,8 +109,11 @@ def sandbox_place_order(
         }
         )
 
-        # Send Telegram alert
-        telegram_alert_service.send_order_alert('placeorder', order_data, response, api_key)
+        # Send Telegram alert in background task (non-blocking)
+        socketio.start_background_task(
+            telegram_alert_service.send_order_alert,
+            'placeorder', order_data, response, api_key
+        )
 
         return success, response, status_code
 

@@ -274,8 +274,11 @@ def process_basket_order_with_auth(
             }
         )
 
-        # Send Telegram alert for analyze mode
-        telegram_alert_service.send_order_alert('basketorder', basket_data, response_data, basket_data.get('apikey'))
+        # Send Telegram alert in background task (non-blocking)
+        socketio.start_background_task(
+            telegram_alert_service.send_order_alert,
+            'basketorder', basket_data, response_data, basket_data.get('apikey')
+        )
         return True, response_data, 200
 
     # Live mode - process actual orders
@@ -357,9 +360,11 @@ def process_basket_order_with_auth(
         }
     )
 
-    # Send Telegram alert for live basket order
-    # Note: Use original_data to get apikey for consistency with other services
-    telegram_alert_service.send_order_alert('basketorder', basket_data, response_data, original_data.get('apikey'))
+    # Send Telegram alert in background task (non-blocking)
+    socketio.start_background_task(
+        telegram_alert_service.send_order_alert,
+        'basketorder', basket_data, response_data, original_data.get('apikey')
+    )
 
     return True, response_data, 200
 
