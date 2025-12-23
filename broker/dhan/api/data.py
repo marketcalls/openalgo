@@ -24,14 +24,20 @@ DHAN_MIN_REQUEST_INTERVAL = 1.0  # seconds between requests
 def _apply_rate_limit():
     """Apply rate limiting to avoid Dhan API error 805 (too many requests)"""
     global _last_api_call_time
+    sleep_time = 0
+
     with _rate_limit_lock:
         current_time = time.time()
         time_since_last_call = current_time - _last_api_call_time
         if time_since_last_call < DHAN_MIN_REQUEST_INTERVAL:
             sleep_time = DHAN_MIN_REQUEST_INTERVAL - time_since_last_call
-            logger.debug(f"Rate limiting: sleeping {sleep_time:.2f}s before Dhan API call")
-            time.sleep(sleep_time)
-        _last_api_call_time = time.time()
+        # Update timestamp immediately to reserve this slot
+        _last_api_call_time = current_time + sleep_time
+
+    # Sleep outside the lock to avoid blocking other threads
+    if sleep_time > 0:
+        logger.debug(f"Rate limiting: sleeping {sleep_time:.2f}s before Dhan API call")
+        time.sleep(sleep_time)
 
 
 def get_api_response(endpoint, auth, method="POST", payload='', retry_count=0):
