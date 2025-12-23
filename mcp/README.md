@@ -136,8 +136,10 @@ The MCP server provides the following categories of tools:
 
 ### Market Data
 - `get_quote` - Get current price quotes
+- `get_multi_quotes` - Get quotes for multiple symbols at once
 - `get_market_depth` - Get order book depth
 - `get_historical_data` - Retrieve historical price data
+- `get_option_chain` - Get option chain with real-time quotes for all strikes
 
 ### Instrument Search
 - `search_instruments` - Search for trading instruments
@@ -147,11 +149,15 @@ The MCP server provides the following categories of tools:
 - `get_option_symbol` - Get option symbol for specific strike and expiry
 - `get_synthetic_future` - Calculate synthetic future price using put-call parity
 - `get_option_greeks` - Calculate option Greeks (delta, gamma, theta, vega, rho)
+- `get_instruments` - Download all instruments for an exchange
+- `get_index_symbols` - Get common index symbols for NSE or BSE
 
 ### Utilities
 - `get_openalgo_version` - Check OpenAlgo version
 - `validate_order_constants` - Display valid order parameters
 - `send_telegram_alert` - Send Telegram notifications
+- `get_holidays` - Get trading holidays for a year
+- `get_timings` - Get exchange trading timings for a date
 - `analyzer_status` - Get current analyzer mode status
 - `analyzer_toggle` - Toggle between analyze (simulated) and live trading mode
 - `calculate_margin` - Calculate margin requirements for positions
@@ -163,11 +169,16 @@ Once configured, you can ask your AI assistant to:
 - "Place a buy order for 100 shares of RELIANCE at market price"
 - "Show me my current positions"
 - "Get the latest quote for NIFTY"
+- "Get quotes for RELIANCE, INFY, and TCS"
 - "Cancel all my pending orders"
 - "What are my account funds?"
 - "Place an iron condor on NIFTY with 25NOV25 expiry using OTM4 and OTM6 strikes"
 - "Calculate the synthetic future price for NIFTY 25NOV25 expiry"
 - "Get option Greeks for NIFTY 26000 CE expiring on 25NOV25"
+- "Show me the option chain for NIFTY with 30DEC25 expiry"
+- "What are the trading holidays in 2025?"
+- "What are the market timings for today?"
+- "Get all instruments for NSE"
 
 ## Supported Exchanges
 

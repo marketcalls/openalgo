@@ -118,16 +118,32 @@ def place_smart_order(
         return f"Error placing smart order: {str(e)}"
 
 @mcp.tool()
-def place_basket_order(orders: List[Dict[str, Any]]) -> str:
+def place_basket_order(orders: List[Dict[str, Any]], strategy: str = "Python") -> str:
     """
     Place multiple orders in a basket.
 
     Args:
-        orders: List of order dictionaries
-        Example: [{"symbol": "BHEL", "exchange": "NSE", "action": "BUY", "quantity": 1, "pricetype": "MARKET", "product": "MIS"}]
+        orders: List of order dictionaries. Each order should contain:
+            - symbol (str): Trading symbol. Required.
+            - exchange (str): Exchange code. Required.
+            - action (str): BUY or SELL. Required.
+            - quantity (int/str): Quantity to trade. Required.
+            - pricetype (str): MARKET, LIMIT, SL, SL-M. Optional, defaults to MARKET.
+            - product (str): MIS, CNC, NRML. Optional, defaults to MIS.
+            - price (str): Required for LIMIT orders.
+            - trigger_price (str): Required for SL orders.
+        strategy: Strategy name (default: Python)
+
+        Example: [
+            {"symbol": "BHEL", "exchange": "NSE", "action": "BUY", "quantity": 1, "pricetype": "MARKET", "product": "MIS"},
+            {"symbol": "ZOMATO", "exchange": "NSE", "action": "SELL", "quantity": 1, "pricetype": "MARKET", "product": "MIS"}
+        ]
+
+    Returns:
+        JSON with results for each order including orderid, status, and symbol
     """
     try:
-        response = client.basketorder(orders=orders)
+        response = client.basketorder(strategy=strategy, orders=orders)
         return json.dumps(response, indent=2)
     except Exception as e:
         return f"Error placing basket order: {str(e)}"
@@ -141,23 +157,37 @@ def place_split_order(
     exchange: str = "NSE",
     price_type: str = "MARKET",
     product: str = "MIS",
-    price: Optional[float] = None
+    strategy: str = "Python",
+    price: Optional[float] = None,
+    trigger_price: Optional[float] = None,
+    disclosed_quantity: Optional[int] = None
 ) -> str:
     """
-    Place an order split into smaller chunks.
-    
+    Place a large order split into smaller chunks.
+
     Args:
-        symbol: Stock symbol
+        symbol: Stock symbol (e.g., 'YESBANK')
         quantity: Total quantity to trade
         split_size: Size of each split order
         action: 'BUY' or 'SELL'
-        exchange: Exchange name
-        price_type: Order type
-        product: Product type
-        price: Limit price (optional)
+        exchange: Exchange name (default: NSE)
+        price_type: 'MARKET', 'LIMIT', 'SL', 'SL-M' (default: MARKET)
+        product: 'MIS', 'CNC', 'NRML' (default: MIS)
+        strategy: Strategy name (default: Python)
+        price: Limit price (required for LIMIT orders)
+        trigger_price: Trigger price (required for SL orders)
+        disclosed_quantity: Disclosed quantity (optional)
+
+    Returns:
+        JSON with results array containing each split order's orderid, quantity, and status
+
+    Example:
+        # Split 105 shares into orders of 20 each (5 orders of 20 + 1 order of 5)
+        place_split_order("YESBANK", 105, 20, "SELL", "NSE")
     """
     try:
         params = {
+            "strategy": strategy,
             "symbol": symbol.upper(),
             "exchange": exchange.upper(),
             "action": action.upper(),
@@ -166,10 +196,14 @@ def place_split_order(
             "price_type": price_type.upper(),
             "product": product.upper()
         }
-        
+
         if price is not None:
             params["price"] = price
-            
+        if trigger_price is not None:
+            params["trigger_price"] = trigger_price
+        if disclosed_quantity is not None:
+            params["disclosed_quantity"] = disclosed_quantity
+
         response = client.splitorder(**params)
         return json.dumps(response, indent=2)
     except Exception as e:
@@ -179,48 +213,67 @@ def place_split_order(
 def place_options_order(
     underlying: str,
     exchange: str,
-    expiry_date: str,
     offset: str,
     option_type: str,
     action: str,
     quantity: int,
+    expiry_date: Optional[str] = None,
     strategy: str = "Python",
     price_type: str = "MARKET",
-    product: str = "NRML",
-    price: Optional[float] = None
+    product: str = "MIS",
+    price: Optional[float] = None,
+    trigger_price: Optional[float] = None,
+    disclosed_quantity: Optional[int] = None
 ) -> str:
     """
     Place an options order with ATM/ITM/OTM offset.
 
     Args:
-        underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY')
-        exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX')
-        expiry_date: Expiry date in format 'DDMMMYY' (e.g., '28OCT25')
-        offset: Strike offset - 'ATM', 'ITM1'-'ITM10', 'OTM1'-'OTM10'
+        underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY', 'NIFTY28OCT25FUT')
+        exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX', 'NFO')
+        offset: Strike offset - 'ATM', 'ITM1'-'ITM50', 'OTM1'-'OTM50'
         option_type: 'CE' for Call or 'PE' for Put
         action: 'BUY' or 'SELL'
-        quantity: Number of lots
-        strategy: Strategy name
-        price_type: 'MARKET', 'LIMIT', 'SL', 'SL-M'
-        product: 'NRML', 'MIS', 'CNC'
+        quantity: Number of lots (must be multiple of lot size)
+        expiry_date: Expiry date in format 'DDMMMYY' (e.g., '28OCT25'). Optional if underlying includes expiry.
+        strategy: Strategy name (default: Python)
+        price_type: 'MARKET', 'LIMIT', 'SL', 'SL-M' (default: MARKET)
+        product: 'MIS', 'NRML' (default: MIS). Note: CNC not supported for options.
         price: Limit price (required for LIMIT orders)
+        trigger_price: Trigger price (required for SL and SL-M orders)
+        disclosed_quantity: Disclosed quantity (optional)
+
+    Returns:
+        JSON with orderid, symbol, underlying_ltp, offset, option_type, mode
+
+    Example:
+        # Basic ATM call order
+        place_options_order("NIFTY", "NSE_INDEX", "ATM", "CE", "BUY", 75, "28NOV25")
+
+        # Using future as underlying (expiry auto-detected)
+        place_options_order("NIFTY28OCT25FUT", "NFO", "ITM2", "CE", "BUY", 75)
     """
     try:
         params = {
             "strategy": strategy,
             "underlying": underlying.upper(),
             "exchange": exchange.upper(),
-            "expiry_date": expiry_date,
             "offset": offset.upper(),
             "option_type": option_type.upper(),
             "action": action.upper(),
             "quantity": quantity,
-            "pricetype": price_type.upper(),
+            "price_type": price_type.upper(),
             "product": product.upper()
         }
 
+        if expiry_date is not None:
+            params["expiry_date"] = expiry_date
         if price is not None:
             params["price"] = price
+        if trigger_price is not None:
+            params["trigger_price"] = trigger_price
+        if disclosed_quantity is not None:
+            params["disclosed_quantity"] = disclosed_quantity
 
         response = client.optionsorder(**params)
         return json.dumps(response, indent=2)
@@ -236,32 +289,56 @@ def place_options_multi_order(
     expiry_date: Optional[str] = None
 ) -> str:
     """
-    Place a multi-leg options order (spreads, iron condor, etc.).
+    Place a multi-leg options order (spreads, iron condor, straddles, etc.).
+    BUY legs are executed first for margin efficiency, then SELL legs.
 
     Args:
-        strategy: Strategy name
-        underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY')
-        exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX')
-        legs: List of leg dictionaries, each containing:
-            - offset: Strike offset ('ATM', 'ITM1'-'ITM10', 'OTM1'-'OTM10')
+        strategy: Strategy name (required)
+        underlying: Underlying symbol (e.g., 'NIFTY', 'BANKNIFTY', 'NIFTY28OCT25FUT')
+        exchange: Exchange for underlying ('NSE_INDEX', 'BSE_INDEX', 'NFO')
+        legs: List of leg dictionaries (1-20 legs). Each leg must contain:
+            Required:
+            - offset: Strike offset ('ATM', 'ITM1'-'ITM50', 'OTM1'-'OTM50')
             - option_type: 'CE' for Call or 'PE' for Put
             - action: 'BUY' or 'SELL'
-            - quantity: Number of lots
-            - expiry_date: (Optional) Expiry date for this leg if different from main expiry
+            - quantity: Number of lots (must be multiple of lot size)
+            Optional:
+            - expiry_date: Per-leg expiry in DDMMMYY format for diagonal/calendar spreads
+            - pricetype: 'MARKET', 'LIMIT', 'SL', 'SL-M' (default: MARKET)
+            - product: 'MIS', 'NRML' (default: MIS)
+            - price: Limit price for LIMIT orders
+            - trigger_price: Trigger price for SL orders
+            - disclosed_quantity: Disclosed quantity
         expiry_date: Default expiry date in format 'DDMMMYY' (e.g., '25NOV25') for all legs
 
-    Example legs for Iron Condor (same expiry):
+    Returns:
+        JSON with underlying, underlying_ltp, mode, and results array containing each leg's
+        orderid, symbol, offset, option_type, action, and status
+
+    Example - Iron Condor (same expiry):
         [
-            {"offset": "OTM6", "option_type": "CE", "action": "BUY", "quantity": 75},
-            {"offset": "OTM6", "option_type": "PE", "action": "BUY", "quantity": 75},
-            {"offset": "OTM4", "option_type": "CE", "action": "SELL", "quantity": 75},
-            {"offset": "OTM4", "option_type": "PE", "action": "SELL", "quantity": 75}
+            {"offset": "OTM10", "option_type": "CE", "action": "BUY", "quantity": 75},
+            {"offset": "OTM10", "option_type": "PE", "action": "BUY", "quantity": 75},
+            {"offset": "OTM5", "option_type": "CE", "action": "SELL", "quantity": 75},
+            {"offset": "OTM5", "option_type": "PE", "action": "SELL", "quantity": 75}
         ]
 
-    Example legs for Diagonal Spread (different expiry):
+    Example - Bull Call Spread with NRML:
+        [
+            {"offset": "ATM", "option_type": "CE", "action": "BUY", "quantity": 75, "product": "NRML"},
+            {"offset": "OTM1", "option_type": "CE", "action": "SELL", "quantity": 75, "product": "NRML"}
+        ]
+
+    Example - Diagonal Spread (different expiry):
         [
             {"offset": "ITM2", "option_type": "CE", "action": "BUY", "quantity": 75, "expiry_date": "30DEC25"},
             {"offset": "OTM2", "option_type": "CE", "action": "SELL", "quantity": 75, "expiry_date": "25NOV25"}
+        ]
+
+    Example - Long Straddle with LIMIT orders:
+        [
+            {"offset": "ATM", "option_type": "CE", "action": "BUY", "quantity": 30, "pricetype": "LIMIT", "price": 250.0},
+            {"offset": "ATM", "option_type": "PE", "action": "BUY", "quantity": 30, "pricetype": "LIMIT", "price": 250.0}
         ]
     """
     try:
@@ -663,7 +740,7 @@ def get_symbol_info(symbol: str, exchange: str = "NSE", instrument_type: str = N
         elif symbol.upper() in bse_indices and exchange.upper() == "BSE":
             exchange = "BSE_INDEX"
         
-        response = client.get_symbol_info(symbol=symbol, exchange=exchange.upper())
+        response = client.symbol(symbol=symbol.upper(), exchange=exchange.upper())
         return json.dumps(response, indent=2)
     except Exception as e:
         return f"Error getting symbol info: {str(e)}"
@@ -886,6 +963,84 @@ def send_telegram_alert(username: str, message: str) -> str:
         return json.dumps(response, indent=2)
     except Exception as e:
         return f"Error sending telegram alert: {str(e)}"
+
+@mcp.tool()
+def get_holidays(year: int) -> str:
+    """
+    Get trading holidays for a specific year.
+
+    Args:
+        year: Year to get holidays for (e.g., 2025)
+
+    Returns:
+        JSON with list of trading holidays including:
+        - date: Holiday date (YYYY-MM-DD)
+        - description: Holiday name/reason
+        - holiday_type: TRADING_HOLIDAY or SPECIAL_SESSION
+        - closed_exchanges: List of closed exchanges
+        - open_exchanges: List of exchanges with special timings
+
+    Example:
+        get_holidays(2025)
+    """
+    try:
+        response = client.holidays(year=year)
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        return f"Error getting holidays: {str(e)}"
+
+@mcp.tool()
+def get_timings(date: str) -> str:
+    """
+    Get exchange trading timings for a specific date.
+
+    Args:
+        date: Date in YYYY-MM-DD format (e.g., '2025-12-23')
+
+    Returns:
+        JSON with exchange timings including:
+        - exchange: Exchange name (NSE, BSE, NFO, BFO, MCX, CDS, BCD)
+        - start_time: Market open time in epoch milliseconds
+        - end_time: Market close time in epoch milliseconds
+
+    Example:
+        get_timings("2025-12-23")
+    """
+    try:
+        response = client.timings(date=date)
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        return f"Error getting timings: {str(e)}"
+
+@mcp.tool()
+def get_instruments(exchange: str) -> str:
+    """
+    Download all instruments for an exchange.
+
+    Args:
+        exchange: Exchange name (NSE, BSE, NFO, BFO, MCX, CDS, BCD, NCDEX)
+
+    Returns:
+        JSON with list of all instruments including:
+        - symbol: Trading symbol
+        - name: Instrument name
+        - exchange: Exchange
+        - lotsize: Lot size
+        - instrumenttype: Type of instrument
+        - expiry: Expiry date (for derivatives)
+        - strike: Strike price (for options)
+        - token: Exchange token
+
+    Note: This can return a large dataset. Use search_instruments for specific queries.
+
+    Example:
+        get_instruments("NSE")
+    """
+    try:
+        response = client.instruments(exchange=exchange.upper())
+        return json.dumps(response, indent=2)
+    except Exception as e:
+        return f"Error getting instruments: {str(e)}"
 
 # Tool to get analyzer status
 @mcp.tool()
