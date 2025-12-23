@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import threading
 from datetime import datetime, timedelta
 import pandas as pd
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
@@ -14,8 +15,33 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Rate limiter for Dhan API - max 1 request per second
+_last_api_call_time = 0
+_rate_limit_lock = threading.Lock()
+DHAN_MIN_REQUEST_INTERVAL = 1.0  # seconds between requests
 
-def get_api_response(endpoint, auth, method="POST", payload=''):
+
+def _apply_rate_limit():
+    """Apply rate limiting to avoid Dhan API error 805 (too many requests)"""
+    global _last_api_call_time
+    with _rate_limit_lock:
+        current_time = time.time()
+        time_since_last_call = current_time - _last_api_call_time
+        if time_since_last_call < DHAN_MIN_REQUEST_INTERVAL:
+            sleep_time = DHAN_MIN_REQUEST_INTERVAL - time_since_last_call
+            logger.debug(f"Rate limiting: sleeping {sleep_time:.2f}s before Dhan API call")
+            time.sleep(sleep_time)
+        _last_api_call_time = time.time()
+
+
+def get_api_response(endpoint, auth, method="POST", payload='', retry_count=0):
+    """Make API request to Dhan with rate limiting and retry logic"""
+    MAX_RETRIES = 3
+    RETRY_DELAY = 2.0  # Base delay for exponential backoff
+
+    # Apply rate limiting before making the request
+    _apply_rate_limit()
+
     AUTH_TOKEN = auth
 
     # Get client_id from BROKER_API_KEY environment variable
@@ -66,18 +92,26 @@ def get_api_response(endpoint, auth, method="POST", payload=''):
     
     # Handle Dhan API error codes
     if response.get('status') == 'failed':
-        error_data = response.get('data', {})  
+        error_data = response.get('data', {})
         error_code = list(error_data.keys())[0] if error_data else 'unknown'
         error_message = error_data.get(error_code, 'Unknown error')
-        
+
+        # Handle rate limit error (805) with retry
+        if error_code == '805' and retry_count < MAX_RETRIES:
+            retry_delay = RETRY_DELAY * (2 ** retry_count)  # Exponential backoff
+            logger.warning(f"Rate limit hit (805). Retrying in {retry_delay}s... (attempt {retry_count + 1}/{MAX_RETRIES})")
+            time.sleep(retry_delay)
+            return get_api_response(endpoint, auth, method, payload, retry_count + 1)
+
         error_mapping = {
+            '805': "Rate limit exceeded. Please wait before making more requests.",
             '806': "Data APIs not subscribed. Please subscribe to Dhan's market data service.",
             '810': "Authentication failed: Invalid client ID",
             '401': "Invalid or expired access token",
             '820': "Market data subscription required",
             '821': "Market data subscription required"
         }
-        
+
         error_msg = error_mapping.get(error_code, f"Dhan API Error {error_code}: {error_message}")
         logger.error(f"API Error: {error_msg}")
         raise Exception(error_msg)
@@ -683,6 +717,7 @@ class BrokerData:
         exchange_securities = {}  # {exchange_segment: [security_id1, security_id2, ...]}
         security_map = {}  # {exchange_segment:security_id -> {symbol, exchange}}
 
+        skipped_symbols = []
         for item in symbols:
             symbol = item['symbol']
             exchange = item['exchange']
@@ -694,9 +729,11 @@ class BrokerData:
                 # Skip if security_id or exchange_segment is None
                 if not security_id:
                     logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve security ID")
+                    skipped_symbols.append(symbol)
                     continue
                 if not exchange_segment:
                     logger.warning(f"Skipping symbol {symbol} on {exchange}: unsupported exchange")
+                    skipped_symbols.append(symbol)
                     continue
 
                 # Add to exchange group
@@ -713,7 +750,11 @@ class BrokerData:
 
             except Exception as e:
                 logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
+                skipped_symbols.append(symbol)
                 continue
+
+        if skipped_symbols:
+            logger.warning(f"Skipped {len(skipped_symbols)} symbols: {skipped_symbols[:5]}...")
 
         # Return empty if no valid securities
         if not exchange_securities:
@@ -721,7 +762,10 @@ class BrokerData:
             return []
 
         logger.info(f"Requesting quotes for {sum(len(s) for s in exchange_securities.values())} instruments across {len(exchange_securities)} exchange segments")
-        logger.info(f"Exchange securities request: {exchange_securities}")
+        logger.info(f"Exchange securities request (first 10): {dict(list(exchange_securities.items())[:1])}")
+        # Log the first 10 security IDs being requested
+        for seg, ids in exchange_securities.items():
+            logger.info(f"Requesting {seg}: {ids[:10]}... (total: {len(ids)})")
 
         # Make API call
         try:
@@ -730,8 +774,18 @@ class BrokerData:
             logger.info(f"Multiquotes response data keys: {list(response.get('data', {}).keys()) if response.get('data') else 'No data'}")
             # Log first few security IDs from response for each segment
             for seg, seg_data in response.get('data', {}).items():
-                sample_ids = list(seg_data.keys())[:3] if isinstance(seg_data, dict) else []
-                logger.info(f"Response segment '{seg}' has {len(seg_data) if isinstance(seg_data, dict) else 0} instruments, sample IDs: {sample_ids}")
+                if isinstance(seg_data, dict):
+                    sample_ids = list(seg_data.keys())[:5]
+                    # Check how many have actual LTP data
+                    with_ltp = sum(1 for sid, sdata in seg_data.items()
+                                   if isinstance(sdata, dict) and (sdata.get('last_price') or sdata.get('lastPrice')))
+                    logger.info(f"Response segment '{seg}': {len(seg_data)} instruments, {with_ltp} with LTP data, sample IDs: {sample_ids}")
+                    # Log first instrument's data structure for debugging
+                    if sample_ids:
+                        first_data = seg_data.get(sample_ids[0], {})
+                        logger.debug(f"Sample data for {sample_ids[0]}: last_price={first_data.get('last_price')}, volume={first_data.get('volume')}")
+                else:
+                    logger.warning(f"Unexpected response format for segment '{seg}': {type(seg_data)}")
         except Exception as e:
             logger.error(f"API Error: {str(e)}")
             raise Exception(f"API Error: {str(e)}")
@@ -905,3 +959,4 @@ class BrokerData:
         except Exception as e:
             logger.error(f"Error in get_depth: {str(e)}", exc_info=True)
             raise Exception(f"Error fetching market depth: {str(e)}")
+        
