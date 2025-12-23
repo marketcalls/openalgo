@@ -10,6 +10,25 @@ from utils.logging import get_logger
 # Initialize logger
 logger = get_logger(__name__)
 
+# =============================================================================
+# Connection Pool Configuration
+# =============================================================================
+# These settings control how the websocket_proxy handles broker symbol limits.
+# Most brokers limit symbols per WebSocket connection (e.g., Angel: 1000, Zerodha: 3000).
+# The connection pool automatically creates additional connections when limits are reached.
+
+# Maximum symbols per single WebSocket connection
+# Set lower than broker limits to be safe (Angel=1000, Zerodha=3000)
+MAX_SYMBOLS_PER_WEBSOCKET = int(os.getenv('MAX_SYMBOLS_PER_WEBSOCKET', '1000'))
+
+# Maximum WebSocket connections per user/broker
+# Total capacity = MAX_SYMBOLS_PER_WEBSOCKET × MAX_WEBSOCKET_CONNECTIONS
+MAX_WEBSOCKET_CONNECTIONS = int(os.getenv('MAX_WEBSOCKET_CONNECTIONS', '3'))
+
+# Enable/disable connection pooling globally
+# When disabled, falls back to single connection per broker
+ENABLE_CONNECTION_POOLING = os.getenv('ENABLE_CONNECTION_POOLING', 'true').lower() == 'true'
+
 def is_port_available(port):
     """
     Check if a port is available for use
@@ -78,25 +97,54 @@ class BaseBrokerWebSocketAdapter(ABC):
     _shared_context = None
     _context_lock = threading.Lock()
     
-    def __init__(self):
+    def __init__(self, use_shared_zmq: bool = False, shared_publisher=None):
+        """
+        Initialize the base broker adapter.
+
+        Args:
+            use_shared_zmq: If True, use a shared ZeroMQ publisher instead of creating one.
+                           This is used by ConnectionPool for multi-connection support.
+            shared_publisher: The shared publisher instance to use when use_shared_zmq=True
+        """
         self.logger = get_logger("broker_adapter")
         self.logger.info("BaseBrokerWebSocketAdapter initializing")
-        
+
+        # Check if being created within a ConnectionPool context
+        # This handles the case where broker adapters don't forward kwargs to super().__init__()
         try:
-            # Initialize shared ZeroMQ context
-            self._initialize_shared_context()
-            
-            # Create socket and bind to port
-            self.socket = self._create_socket()
-            self.zmq_port = self._bind_to_available_port()
-            os.environ["ZMQ_PORT"] = str(self.zmq_port)
-            
+            from .connection_manager import is_pooled_creation, get_shared_publisher_for_pooled_creation
+            if is_pooled_creation():
+                use_shared_zmq = True
+                shared_publisher = get_shared_publisher_for_pooled_creation()
+                self.logger.info("Detected pooled creation context - using shared ZMQ")
+        except ImportError:
+            pass  # connection_manager not available, use provided params
+
+        # Track if using shared ZMQ (for connection pooling)
+        self._uses_shared_zmq = use_shared_zmq
+        self._shared_publisher = shared_publisher
+
+        try:
+            if use_shared_zmq and shared_publisher:
+                # Use shared publisher - don't create own socket
+                self.socket = None
+                self.zmq_port = shared_publisher.zmq_port
+                self.context = None
+                self.logger.info(f"Using shared ZMQ publisher on port {self.zmq_port}")
+            else:
+                # Initialize own ZeroMQ context and socket
+                self._initialize_shared_context()
+
+                # Create socket and bind to port
+                self.socket = self._create_socket()
+                self.zmq_port = self._bind_to_available_port()
+                os.environ["ZMQ_PORT"] = str(self.zmq_port)
+                self.logger.info(f"BaseBrokerWebSocketAdapter initialized on port {self.zmq_port}")
+
             # Initialize instance variables
             self.subscriptions = {}
             self.connected = False
-            
-            self.logger.info(f"BaseBrokerWebSocketAdapter initialized on port {self.zmq_port}")
-            
+
         except Exception as e:
             self.logger.error(f"Error in BaseBrokerWebSocketAdapter init: {e}")
             raise
@@ -218,20 +266,26 @@ class BaseBrokerWebSocketAdapter(ABC):
         
     def cleanup_zmq(self):
         """
-        Properly clean up ZeroMQ resources and release bound ports
+        Properly clean up ZeroMQ resources and release bound ports.
+        Skips cleanup if using shared ZeroMQ publisher (connection pooling mode).
         """
+        # Skip cleanup if using shared ZMQ (managed by ConnectionPool)
+        if hasattr(self, '_uses_shared_zmq') and self._uses_shared_zmq:
+            self.logger.debug("Skipping ZMQ cleanup - using shared publisher")
+            return
+
         try:
             # Release the port from the bound ports set
-            if hasattr(self, 'zmq_port'):
+            if hasattr(self, 'zmq_port') and self.zmq_port:
                 with self._port_lock:
                     self._bound_ports.discard(self.zmq_port)
                     self.logger.info(f"Released port {self.zmq_port}")
-            
+
             # Close the socket
             if hasattr(self, 'socket') and self.socket:
                 self.socket.close(linger=0)  # Don't linger on close
                 self.logger.info("ZeroMQ socket closed")
-                
+
         except Exception as e:
             self.logger.exception(f"Error cleaning up ZeroMQ resources: {e}")
             
@@ -249,16 +303,23 @@ class BaseBrokerWebSocketAdapter(ABC):
     def publish_market_data(self, topic, data):
         """
         Publish market data to ZeroMQ subscribers
-        
+
         Args:
             topic: Topic string for subscriber filtering (e.g., 'NSE_RELIANCE_LTP')
             data: Market data dictionary
         """
         try:
-            self.socket.send_multipart([
-                topic.encode('utf-8'),
-                json.dumps(data).encode('utf-8')
-            ])
+            if self._uses_shared_zmq and self._shared_publisher:
+                # Use shared publisher (connection pooling mode)
+                self._shared_publisher.publish(topic, data)
+            elif self.socket:
+                # Use own socket
+                self.socket.send_multipart([
+                    topic.encode('utf-8'),
+                    json.dumps(data).encode('utf-8')
+                ])
+            else:
+                self.logger.warning("No ZMQ socket available for publishing")
         except Exception as e:
             self.logger.exception(f"Error publishing market data: {e}")
     
