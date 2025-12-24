@@ -97,7 +97,7 @@ cloudflared tunnel route dns openalgo demo.example.com
 ### Step 5: Run the tunnel
 
 ```powershell
-cloudflared tunnel --config .\.cloudflared\config.yml run openalgo
+cloudflared tunnel --config .\config.yml run openalgo
 ```
 
 ---
