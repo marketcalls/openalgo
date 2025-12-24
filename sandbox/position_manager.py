@@ -340,6 +340,28 @@ class PositionManager:
             positions = []
 
             for position in all_positions:
+                # CATCH-UP RESET: Check if today_realized_pnl needs to be reset
+                # This handles the case where the scheduled reset job was missed
+                # Reset if position has non-zero today_realized_pnl and was last updated before session boundary
+                needs_pnl_reset = False
+                if position.today_realized_pnl and position.today_realized_pnl != 0:
+                    # Check if there's been a session boundary since the position was created/traded
+                    # If position was last modified before today's session boundary, reset today_realized_pnl
+                    position_date = position.updated_at.date() if position.updated_at else today
+                    session_boundary_date = last_session_expiry.date()
+
+                    # If position's date is before today's session boundary date, or
+                    # if same date but position was updated before session expiry time
+                    if position_date < session_boundary_date:
+                        needs_pnl_reset = True
+                    elif position_date == session_boundary_date and position.updated_at < last_session_expiry:
+                        needs_pnl_reset = True
+
+                if needs_pnl_reset:
+                    logger.info(f"Catch-up reset: Resetting today_realized_pnl for {position.symbol} from {position.today_realized_pnl} to 0")
+                    position.today_realized_pnl = Decimal('0.00')
+                    db_session.commit()
+
                 # If position was updated after last session expiry, include it
                 # This includes positions that went to zero during current session (closed positions)
                 if position.updated_at >= last_session_expiry:
@@ -358,18 +380,24 @@ class PositionManager:
 
             positions_list = []
             total_unrealized_pnl = Decimal('0.00')  # Only from open positions
-            total_display_pnl = Decimal('0.00')     # For display (includes closed positions)
+            total_today_realized_pnl = Decimal('0.00')  # Today's realized P&L
+            total_pnl_today = Decimal('0.00')  # Today's total (realized + unrealized)
 
             for position in positions:
-                pnl = Decimal(str(position.pnl))
+                unrealized_pnl = Decimal(str(position.pnl))  # Current unrealized P&L from MTM
+                today_realized = Decimal(str(position.today_realized_pnl or 0))
 
-                # Add to display total (includes all positions)
-                total_display_pnl += pnl
-
-                # Only add to unrealized P&L if position is open (not closed)
-                # Closed positions (qty=0) have their P&L already in realized_pnl in funds
+                # For open positions: total_pnl_today = today's realized + unrealized
+                # For closed positions (qty=0): total_pnl_today = today's realized only
                 if position.quantity != 0:
-                    total_unrealized_pnl += pnl
+                    total_unrealized_pnl += unrealized_pnl
+                    position_total_pnl_today = today_realized + unrealized_pnl
+                else:
+                    # Closed position - only today's realized matters
+                    position_total_pnl_today = today_realized
+
+                total_today_realized_pnl += today_realized
+                total_pnl_today += position_total_pnl_today
 
                 positions_list.append({
                     'symbol': position.symbol,
@@ -378,8 +406,11 @@ class PositionManager:
                     'quantity': position.quantity,
                     'average_price': float(position.average_price),
                     'ltp': float(position.ltp) if position.ltp else 0.0,
-                    'pnl': float(pnl),
+                    'pnl': float(position_total_pnl_today),  # Today's total P&L (realized + unrealized)
                     'pnl_percent': float(position.pnl_percent),
+                    'unrealized_pnl': float(unrealized_pnl),  # Unrealized only (for reference)
+                    'today_realized_pnl': float(today_realized),
+                    'total_pnl_today': float(position_total_pnl_today),
                 })
 
             # Update fund unrealized P&L (only from open positions)
@@ -390,7 +421,10 @@ class PositionManager:
             return True, {
                 'status': 'success',
                 'data': positions_list,
-                'total_pnl': float(total_display_pnl),  # Display total includes all positions
+                'total_pnl': float(total_pnl_today),  # Today's total P&L (realized + unrealized)
+                'total_unrealized_pnl': float(total_unrealized_pnl),
+                'total_today_realized_pnl': float(total_today_realized_pnl),
+                'total_pnl_today': float(total_pnl_today),
                 'mode': 'analyze'
             }, 200
 
@@ -461,7 +495,7 @@ class PositionManager:
             # Update MTM for each position
             for position in positions:
                 # Skip MTM update for closed positions (quantity = 0)
-                # They already have accumulated realized P&L stored in position.pnl
+                # They already have today's realized P&L stored in position.pnl
                 if position.quantity == 0:
                     continue
 
@@ -478,9 +512,9 @@ class PositionManager:
                             ltp
                         )
 
-                        # Display = accumulated realized P&L + current unrealized P&L
-                        accumulated_realized = position.accumulated_realized_pnl if position.accumulated_realized_pnl else Decimal('0.00')
-                        position.pnl = accumulated_realized + current_unrealized_pnl
+                        # pnl = unrealized only (broker standard - Zerodha Kite style)
+                        # This is the primary P&L field for open positions
+                        position.pnl = current_unrealized_pnl
 
                         position.pnl_percent = self._calculate_pnl_percent(
                             position.average_price,
@@ -498,7 +532,7 @@ class PositionManager:
         """Update MTM for a single position"""
         try:
             # Skip MTM update for closed positions (quantity = 0)
-            # They already have realized P&L stored from when position was closed
+            # They already have today's realized P&L stored from when position was closed
             if position.quantity == 0:
                 return
 
@@ -515,9 +549,8 @@ class PositionManager:
                         ltp
                     )
 
-                    # Display = accumulated realized P&L + current unrealized P&L
-                    accumulated_realized = position.accumulated_realized_pnl if position.accumulated_realized_pnl else Decimal('0.00')
-                    position.pnl = accumulated_realized + current_unrealized_pnl
+                    # pnl = unrealized only (broker standard - Zerodha Kite style)
+                    position.pnl = current_unrealized_pnl
 
                     position.pnl_percent = self._calculate_pnl_percent(
                         position.average_price,

@@ -39,7 +39,10 @@ class PingSchema(Schema):
 
 class ChartSchema(Schema):
     apikey = fields.Str(required=True)
-    
+
     class Meta:
         # Allow unknown fields - chart preferences can have any key-value pairs
         unknown = INCLUDE
+
+class PnlSymbolsSchema(Schema):
+    apikey = fields.Str(required=True)

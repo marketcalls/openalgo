@@ -183,7 +183,7 @@ def reset_config():
         # Default configurations
         default_configs = {
             'starting_capital': '10000000.00',
-            'reset_day': 'Sunday',
+            'reset_day': 'Never',
             'reset_time': '00:00',
             'order_check_interval': '5',
             'mtm_update_interval': '5',
@@ -220,6 +220,11 @@ def reset_config():
             deleted_holdings = SandboxHoldings.query.filter_by(user_id=user_id).delete()
             logger.info(f"Deleted {deleted_holdings} sandbox holdings for user {user_id}")
 
+            # Delete all daily P&L history
+            from database.sandbox_db import SandboxDailyPnL
+            deleted_daily_pnl = SandboxDailyPnL.query.filter_by(user_id=user_id).delete()
+            logger.info(f"Deleted {deleted_daily_pnl} daily P&L records for user {user_id}")
+
             # Reset funds to starting capital
             from decimal import Decimal
             from datetime import datetime
@@ -235,6 +240,7 @@ def reset_config():
                 fund.used_margin = Decimal('0.00')
                 fund.unrealized_pnl = Decimal('0.00')
                 fund.realized_pnl = Decimal('0.00')
+                fund.today_realized_pnl = Decimal('0.00')
                 fund.total_pnl = Decimal('0.00')
                 fund.last_reset_date = datetime.now(pytz.timezone('Asia/Kolkata'))
                 fund.reset_count = (fund.reset_count or 0) + 1
@@ -248,6 +254,7 @@ def reset_config():
                     used_margin=Decimal('0.00'),
                     unrealized_pnl=Decimal('0.00'),
                     realized_pnl=Decimal('0.00'),
+                    today_realized_pnl=Decimal('0.00'),
                     total_pnl=Decimal('0.00'),
                     last_reset_date=datetime.now(pytz.timezone('Asia/Kolkata')),
                     reset_count=1
@@ -266,7 +273,7 @@ def reset_config():
         logger.info("Sandbox configuration and data reset to defaults")
         return jsonify({
             'status': 'success',
-            'message': 'Configuration and data reset to defaults successfully. All orders, trades, positions, and holdings have been cleared.'
+            'message': 'Configuration and data reset to defaults successfully. All orders, trades, positions, holdings, and P&L history have been cleared.'
         })
 
     except Exception as e:
@@ -320,6 +327,146 @@ def squareoff_status():
             'status': 'error',
             'message': f'Error getting square-off status: {str(e)}'
         }), 500
+
+
+@sandbox_bp.route('/mypnl')
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def my_pnl():
+    """Render the historical P&L page"""
+    try:
+        from decimal import Decimal
+        from datetime import datetime, date
+        import pytz
+
+        user_id = session.get('user')
+        ist = pytz.timezone('Asia/Kolkata')
+
+        # Get all positions (both open and closed) for P&L history
+        positions = SandboxPositions.query.filter_by(user_id=user_id).order_by(
+            SandboxPositions.updated_at.desc()
+        ).all()
+
+        # Get holdings for P&L
+        holdings = SandboxHoldings.query.filter_by(user_id=user_id).order_by(
+            SandboxHoldings.updated_at.desc()
+        ).all()
+
+        # Get funds for summary
+        funds = SandboxFunds.query.filter_by(user_id=user_id).first()
+
+        # Prepare position data
+        position_list = []
+        positions_unrealized = Decimal('0.00')
+
+        for pos in positions:
+            today_realized = Decimal(str(pos.today_realized_pnl or 0))
+            all_time_realized = Decimal(str(pos.accumulated_realized_pnl or 0))
+            unrealized = Decimal(str(pos.pnl or 0)) if pos.quantity != 0 else Decimal('0.00')
+
+            if pos.quantity != 0:
+                positions_unrealized += unrealized
+
+            position_list.append({
+                'symbol': pos.symbol,
+                'exchange': pos.exchange,
+                'product': pos.product,
+                'quantity': pos.quantity,
+                'average_price': float(pos.average_price),
+                'ltp': float(pos.ltp) if pos.ltp else 0.0,
+                'unrealized_pnl': float(unrealized),
+                'today_realized_pnl': float(today_realized),
+                'all_time_realized_pnl': float(all_time_realized),
+                'status': 'Open' if pos.quantity != 0 else 'Closed',
+                'updated_at': pos.updated_at.strftime('%Y-%m-%d %H:%M:%S') if pos.updated_at else ''
+            })
+
+        # Prepare holdings data
+        holdings_list = []
+        holdings_unrealized = Decimal('0.00')
+
+        for holding in holdings:
+            if holding.quantity != 0:
+                unrealized = Decimal(str(holding.pnl or 0))
+                holdings_unrealized += unrealized
+
+                holdings_list.append({
+                    'symbol': holding.symbol,
+                    'exchange': holding.exchange,
+                    'product': 'CNC',
+                    'quantity': holding.quantity,
+                    'average_price': float(holding.average_price),
+                    'ltp': float(holding.ltp) if holding.ltp else 0.0,
+                    'unrealized_pnl': float(unrealized),
+                    'pnl_percent': float(holding.pnl_percent or 0),
+                    'settlement_date': holding.settlement_date.strftime('%Y-%m-%d') if holding.settlement_date else ''
+                })
+
+        # Get recent trades
+        trades = SandboxTrades.query.filter_by(user_id=user_id).order_by(
+            SandboxTrades.trade_timestamp.desc()
+        ).limit(50).all()
+
+        trade_list = []
+        for trade in trades:
+            trade_list.append({
+                'tradeid': trade.tradeid,
+                'symbol': trade.symbol,
+                'exchange': trade.exchange,
+                'action': trade.action,
+                'quantity': trade.quantity,
+                'price': float(trade.price),
+                'product': trade.product,
+                'timestamp': trade.trade_timestamp.strftime('%Y-%m-%d %H:%M:%S') if trade.trade_timestamp else ''
+            })
+
+        # Get date-wise P&L history (last 30 days)
+        from database.sandbox_db import SandboxDailyPnL
+        daily_pnl_records = SandboxDailyPnL.query.filter_by(user_id=user_id).order_by(
+            SandboxDailyPnL.date.desc()
+        ).limit(30).all()
+
+        daily_pnl_list = []
+        for record in daily_pnl_records:
+            daily_pnl_list.append({
+                'date': record.date.strftime('%Y-%m-%d'),
+                'realized_pnl': float(record.realized_pnl or 0),
+                'positions_unrealized': float(record.positions_unrealized_pnl or 0),
+                'holdings_unrealized': float(record.holdings_unrealized_pnl or 0),
+                'total_unrealized': float((record.positions_unrealized_pnl or 0) + (record.holdings_unrealized_pnl or 0)),
+                'total_mtm': float(record.total_mtm or 0),
+                'portfolio_value': float(record.portfolio_value or 0)
+            })
+
+        # Calculate today's live P&L (not yet snapshotted)
+        today_realized = Decimal(str(funds.today_realized_pnl or 0)) if funds else Decimal('0.00')
+        total_unrealized = positions_unrealized + holdings_unrealized
+        today_total_mtm = today_realized + total_unrealized
+
+        # Summary data
+        summary = {
+            'today_realized_pnl': float(today_realized),
+            'all_time_realized_pnl': float(funds.realized_pnl or 0) if funds else 0.0,
+            'positions_unrealized_pnl': float(positions_unrealized),
+            'holdings_unrealized_pnl': float(holdings_unrealized),
+            'total_unrealized_pnl': float(total_unrealized),
+            'today_total_mtm': float(today_total_mtm),
+            'total_pnl': float(funds.total_pnl or 0) if funds else 0.0,
+            'available_balance': float(funds.available_balance or 0) if funds else 0.0,
+            'total_capital': float(funds.total_capital or 0) if funds else 0.0
+        }
+
+        return render_template('sandbox_mypnl.html',
+                             positions=position_list,
+                             holdings=holdings_list,
+                             trades=trade_list,
+                             daily_pnl=daily_pnl_list,
+                             summary=summary)
+
+    except Exception as e:
+        logger.error(f"Error rendering my P&L page: {str(e)}\n{traceback.format_exc()}")
+        flash('Error loading P&L data', 'error')
+        return redirect(url_for('sandbox_bp.sandbox_config'))
 
 
 def validate_config(config_key, config_value):

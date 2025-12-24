@@ -43,6 +43,7 @@ from .instruments import api as instruments_ns
 from .chart_api import api as chart_ns
 from .market_holidays import api as market_holidays_ns
 from .market_timings import api as market_timings_ns
+from .pnl_symbols import api as pnl_symbols_ns
 
 # Add namespaces
 api.add_namespace(place_order_ns, path='/placeorder')
@@ -83,3 +84,4 @@ api.add_namespace(instruments_ns, path='/instruments')
 api.add_namespace(chart_ns, path='/chart')
 api.add_namespace(market_holidays_ns, path='/market/holidays')
 api.add_namespace(market_timings_ns, path='/market/timings')
+api.add_namespace(pnl_symbols_ns, path='/pnl')
