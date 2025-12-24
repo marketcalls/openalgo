@@ -153,7 +153,7 @@ class FyersDataMapper:
                 "last_trade_quantity": fyers_data.get("last_traded_qty", 0),
                 "total_buy_quantity": fyers_data.get("tot_buy_qty", 0),
                 "total_sell_quantity": fyers_data.get("tot_sell_qty", 0),
-                "change": fyers_data.get("ch", 0),
+                "change": convert_price(fyers_data.get("ch", 0)),
                 "change_percent": fyers_data.get("chp", 0),
                 "timestamp": int(time.time()),
                 "data_type": "Quote"
