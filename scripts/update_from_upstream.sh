@@ -15,6 +15,7 @@ STRATEGY="merge"   # merge or rebase
 AUTO_THEIRS=0
 NO_BACKUP=0
 PUSH_AFTER=0
+FORCE_PUSH=0
 STASH_IF_DIRTY=0
 
 usage() {
@@ -25,10 +26,11 @@ Options:
   -r, --remote <name>      Remote name to pull from (default: upstream)
   -b, --branch <name>      Branch to update (default: main)
   -s, --strategy <merge|rebase>  Use merge (default) or rebase
-      --auto-theirs        On conflicts accept upstream changes for conflicting files
-      --no-backup          Don't create a backup branch
-      --push               Push updated branch to 'origin' after successful merge
-      --stash-if-dirty     Auto-stash local changes before updating and pop after
+  --auto-theirs        On conflicts accept upstream changes for conflicting files
+  --no-backup          Don't create a backup branch
+  --push               Push updated branch to 'origin' after successful merge
+  --force-with-lease   If push is rejected, attempt a safer force push (--force-with-lease)
+  --stash-if-dirty     Auto-stash local changes before updating and pop after
   -h, --help               Show this help and exit
 
 Examples:
@@ -51,6 +53,9 @@ while [[ $# -gt 0 ]]; do
       NO_BACKUP=1; shift;;
     --push)
       PUSH_AFTER=1; shift;;
+    --force|--force-with-lease)
+      # Allow forcing push if user explicitly requests it (uses --force-with-lease)
+      FORCE_PUSH=1; shift;;
     --stash-if-dirty)
       STASH_IF_DIRTY=1; shift;;
     -h|--help)
@@ -61,6 +66,27 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "Update from remote '${REMOTE}' branch '${BRANCH}' (strategy=${STRATEGY})"
+
+# helper: attempt push to origin honoring FORCE_PUSH
+do_push() {
+  if [[ "$PUSH_AFTER" -eq 1 ]]; then
+    echo "Pushing ${BRANCH} to origin..."
+    set +e
+    git push origin "$BRANCH"
+    PUSH_EXIT=$?
+    set -e
+    if [[ $PUSH_EXIT -ne 0 ]]; then
+      echo "Initial push failed (non-fast-forward or other)."
+      if [[ "$FORCE_PUSH" -eq 1 ]]; then
+        echo "Attempting safer force push (git push --force-with-lease origin ${BRANCH})..."
+        git push --force-with-lease origin "$BRANCH"
+      else
+        echo "Push was rejected. To overwrite remote with your rebased branch, re-run the script with --force-with-lease to attempt a safe force push, or run 'git pull --rebase origin ${BRANCH}' and resolve any conflicts before pushing." >&2
+        return $PUSH_EXIT
+      fi
+    fi
+  fi
+}
 
 ROOT_DIR=$(git rev-parse --show-toplevel 2>/dev/null || true)
 if [[ -z "$ROOT_DIR" ]]; then
@@ -121,10 +147,7 @@ fi
 
 if [[ $MERGE_EXIT -eq 0 ]]; then
   echo "Update successful (no conflicts)."
-  if [[ "$PUSH_AFTER" -eq 1 ]]; then
-    echo "Pushing ${BRANCH} to origin..."
-    git push origin "$BRANCH"
-  fi
+  do_push || exit $?
   if [[ "${STASHED:-0}" -eq 1 ]]; then
     echo "Popping stash..."
     git stash pop || true
@@ -149,9 +172,7 @@ if [[ "$AUTO_THEIRS" -eq 1 ]]; then
   echo "$UNMERGED" | xargs -r -d '\n' git checkout --theirs --
   echo "$UNMERGED" | xargs -r -d '\n' git add --
   git commit -m "Merge ${REMOTE}/${BRANCH} - accept upstream for conflicts"
-  if [[ "$PUSH_AFTER" -eq 1 ]]; then
-    git push origin "$BRANCH"
-  fi
+  do_push || exit $?
   if [[ "${STASHED:-0}" -eq 1 ]]; then
     git stash pop || true
   fi
@@ -178,9 +199,7 @@ if [[ ${#RESOLVED[@]} -gt 0 ]]; then
   REMAINING=$(git diff --name-only --diff-filter=U || true)
   if [[ -z "$REMAINING" ]]; then
     git commit -m "Merge ${REMOTE}/${BRANCH} - auto-resolved lockfiles"
-    if [[ "$PUSH_AFTER" -eq 1 ]]; then
-      git push origin "$BRANCH"
-    fi
+    do_push || exit $?
     if [[ "${STASHED:-0}" -eq 1 ]]; then
       git stash pop || true
     fi
