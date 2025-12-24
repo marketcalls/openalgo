@@ -81,17 +81,17 @@ class FyersDataMapper:
     def map_to_openalgo_quote(self, fyers_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Map Fyers data to OpenAlgo Quote format
-        
+
         Args:
             fyers_data: Raw data from Fyers HSM WebSocket
-            
+
         Returns:
             OpenAlgo Quote format dict or None if mapping fails
         """
         try:
             if not fyers_data:
                 return None
-            
+
             # Get the symbol
             symbol = fyers_data.get("original_symbol") or fyers_data.get("symbol", "")
             
@@ -149,13 +149,16 @@ class FyersDataMapper:
                 "lower_circuit": convert_price(fyers_data.get("lower_ckt", 0)),
                 "last_traded_time": fyers_data.get("last_traded_time", 0),
                 "exchange_time": fyers_data.get("exch_feed_time", 0),
-                "average_price": convert_price(fyers_data.get("avg_trade_price", 0)),
+                "avg_trade_price": convert_price(fyers_data.get("avg_trade_price", 0)),
+                "last_trade_quantity": fyers_data.get("last_traded_qty", 0),
                 "total_buy_quantity": fyers_data.get("tot_buy_qty", 0),
                 "total_sell_quantity": fyers_data.get("tot_sell_qty", 0),
+                "change": fyers_data.get("ch", 0),
+                "change_percent": fyers_data.get("chp", 0),
                 "timestamp": int(time.time()),
                 "data_type": "Quote"
             }
-            
+
             return openalgo_data
             
         except Exception as e:
