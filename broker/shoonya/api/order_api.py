@@ -295,7 +295,9 @@ def modify_order(data,auth):
     payload_str = "jData=" + json.dumps(transformed_data) + "&jKey=" + AUTH_TOKEN
 
     logger.debug(f"=== SHOONYA MODIFY ORDER ===")
-    logger.debug(f"jData={json.dumps(transformed_data)}")
+    # Redact sensitive fields for logging
+    safe_log_data = {k: v for k, v in transformed_data.items() if k != 'uid'}
+    logger.debug(f"jData={json.dumps(safe_log_data)}")
 
     # Get the shared httpx client
     client = get_httpx_client()
