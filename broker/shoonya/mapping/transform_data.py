@@ -45,8 +45,8 @@ def transform_modify_order_data(data, token):
         "tsym": data["symbol"],
         "ret": "DAY",
         "mkt_protection": "0",
-        "trgprc": str(data.get("trigger_price", "0")),  # Fixed: was trdprc, should be trgprc
-        "dscqty": str(data.get("disclosed_quantity", "0")),  # Ensure disclosed_quantity is string
+        "trgprc": str(data.get("trigger_price") or 0),  # Fixed: was trdprc, should be trgprc
+        "dscqty": str(data.get("disclosed_quantity") or 0),  # Ensure disclosed_quantity is string
         "uid": data["apikey"]
     }
 

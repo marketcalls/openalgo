@@ -52,8 +52,8 @@ def transform_modify_order_data(data, token):
         "qty": str(data["quantity"]),
         "tsym": symbol,
         "ret": "DAY",
-        "trgprc": str(data.get("trigger_price", "0")),  # Required for SL/SL-M orders
-        "dscqty": str(data.get("disclosed_quantity", "0"))
+        "trgprc": str(data.get("trigger_price") or 0),  # Required for SL/SL-M orders
+        "dscqty": str(data.get("disclosed_quantity") or 0)
     }
 
 
