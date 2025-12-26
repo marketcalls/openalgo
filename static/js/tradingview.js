@@ -14,8 +14,8 @@ document.addEventListener('DOMContentLoaded', function() {
     let debounceTimeout;
     let currentMode = 'strategy'; // Default mode
 
-    // Host URL from template
-    const hostURL = '{{ host }}' || window.location.origin;
+    // Host URL from template (set in tradingview.html before this script loads)
+    const hostURL = window.OPENALGO_HOST || window.location.origin;
 
     // Set default values and generate JSON
     if (symbolInput && exchangeSelect && productSelect) {
@@ -297,7 +297,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // Update webhook URL
             if (webhookDisplay) {
                 webhookDisplay.textContent = '.../api/v1/placesmartorder';
-                webhookDisplay.setAttribute('data-tip', `${window.location.origin}/api/v1/placesmartorder`);
+                webhookDisplay.setAttribute('data-tip', `${hostURL}/api/v1/placesmartorder`);
             }
         } else {
             lineTab.classList.add('tab-active');
@@ -314,7 +314,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // Update webhook URL
             if (webhookDisplay) {
                 webhookDisplay.textContent = '.../api/v1/placeorder';
-                webhookDisplay.setAttribute('data-tip', `${window.location.origin}/api/v1/placeorder`);
+                webhookDisplay.setAttribute('data-tip', `${hostURL}/api/v1/placeorder`);
             }
         }
 
