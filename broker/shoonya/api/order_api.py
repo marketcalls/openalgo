@@ -289,17 +289,21 @@ def modify_order(data,auth):
     data['symbol'] = get_br_symbol(data['symbol'],data['exchange'])
     data["apikey"] = api_key
 
-    transformed_data = transform_modify_order_data(data, token)  # You need to implement this function
+    transformed_data = transform_modify_order_data(data, token)
     # Set up the request headers
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
     payload_str = "jData=" + json.dumps(transformed_data) + "&jKey=" + AUTH_TOKEN
 
+    logger.debug(f"=== SHOONYA MODIFY ORDER ===")
+    logger.debug(f"jData={json.dumps(transformed_data)}&jKey={AUTH_TOKEN}")
+
     # Get the shared httpx client
     client = get_httpx_client()
     url = "https://api.shoonya.com/NorenWClientTP/ModifyOrder"
-    
+
     response = client.post(url, content=payload_str, headers=headers)
     response_data = json.loads(response.text)
+    logger.info(f"Modify order response: {response_data}")
 
     # Add compatibility for service layer that expects .status attribute
     response.status = response.status_code
