@@ -166,3 +166,41 @@ def check_if_ready(broker):
         return False
     finally:
         session.close()
+
+def is_download_needed(broker):
+    """
+    Check if master contract download is needed for a broker.
+    Returns True if download is needed (never downloaded or not downloaded today).
+    Returns False if already successfully downloaded today.
+    """
+    session = SessionLocal()
+    try:
+        status = session.query(MasterContractStatus).filter_by(broker=broker).first()
+        
+        # If no status exists or status is not success, download is needed
+        if not status or status.status != 'success':
+            logger.info(f"Master contract download needed for {broker}: No successful download found")
+            return True
+        
+        # Check if last_updated is today
+        if status.last_updated:
+            today = datetime.now().date()
+            last_update_date = status.last_updated.date()
+            
+            if last_update_date == today:
+                logger.info(f"Master contract already downloaded today for {broker} at {status.last_updated}")
+                return False
+            else:
+                logger.info(f"Master contract download needed for {broker}: Last download was on {last_update_date}")
+                return True
+        else:
+            # If last_updated is None, we need to download
+            logger.info(f"Master contract download needed for {broker}: No last_updated timestamp")
+            return True
+            
+    except Exception as e:
+        logger.error(f"Error checking if download needed for {broker}: {str(e)}")
+        # On error, default to needing download to be safe
+        return True
+    finally:
+        session.close()
