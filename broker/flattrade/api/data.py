@@ -133,10 +133,10 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            # Flattrade API rate limits: 40 requests/second, 200/minute
+            # Flattrade API rate limits: 10 requests/second
             # Process one symbol at a time since API doesn't support batching
-            BATCH_SIZE = 40  # Process 40 symbols per batch (matches rate limit per second)
-            RATE_LIMIT_DELAY = 1.0  # 1 second delay between batches
+            BATCH_SIZE = 10  # Process 10 symbols per batch (matches rate limit per second)
+            RATE_LIMIT_DELAY = 1.1  # 1.1 second delay between batches for safety margin
 
             if len(symbols) > BATCH_SIZE:
                 logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
