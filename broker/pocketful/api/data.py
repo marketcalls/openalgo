@@ -1,5 +1,5 @@
-import http.client
 import json
+import logging
 import os
 import urllib.parse
 from database.token_db import get_br_symbol, get_oa_symbol
@@ -8,6 +8,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 from broker.pocketful.api.pocketfulwebsocket import PocketfulSocket, get_ws_connection_status, get_snapquotedata
 import time
+import httpx
+from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -26,7 +28,7 @@ class PocketfulAPIError(Exception):
 
 def get_api_response(endpoint, auth, method="GET", payload=''):
     AUTH_TOKEN = auth
-    conn = http.client.HTTPSConnection("api.pocketful.in")
+    base_url = "https://api.pocketful.in"
     headers = {
         'Authorization': f'Bearer {AUTH_TOKEN}',
         'Content-Type': 'application/json'
@@ -35,28 +37,41 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     try:
         # Log the complete request details for debugging
         logger.info("=== API Request Details ===")
-        logger.info(f"URL: https://api.pocketful.in{endpoint}")
+        logger.info(f"URL: {base_url}{endpoint}")
         logger.info(f"Method: {method}")
         logger.info(f"Headers: {json.dumps(headers, indent=2)}")
         if payload:
             logger.info(f"Payload: {payload}")
 
-        conn.request(method, endpoint, payload, headers)
-        res = conn.getresponse()
-        data = res.read()
-        response = json.loads(data.decode("utf-8"))
+        # Get the shared httpx client
+        client = get_httpx_client()
+        url = f"{base_url}{endpoint}"
+
+        # Make request based on method
+        if method == "GET":
+            res = client.get(url, headers=headers)
+        elif method == "POST":
+            res = client.post(url, headers=headers, content=payload)
+        elif method == "PUT":
+            res = client.put(url, headers=headers, content=payload)
+        elif method == "DELETE":
+            res = client.delete(url, headers=headers)
+        else:
+            res = client.request(method, url, headers=headers, content=payload)
+
+        response = res.json()
 
         # Log the complete response
         logger.info("=== API Response Details ===")
-        logger.info(f"Status Code: {res.status}")
-        logger.info(f"Response Headers: {dict(res.getheaders())}")
+        logger.info(f"Status Code: {res.status_code}")
+        logger.info(f"Response Headers: {dict(res.headers)}")
         logger.info(f"Response Body: {json.dumps(response, indent=2)}")
 
         # Check for permission errors
         if response.get('status') == 'error':
             error_type = response.get('error_type')
             error_message = response.get('message', 'Unknown error')
-            
+
             if error_type == 'PermissionException' or 'permission' in error_message.lower():
                 raise PocketfulPermissionError(f"API Permission denied: {error_message}.")
             else:
@@ -172,29 +187,29 @@ class BrokerData:
     
     def _get_quotes_compact(self, symbol: str, exchange: str) -> dict:
         """
-        Get quotes using compact market data WebSocket
+        Get quotes using detailed market data WebSocket (provides open/close/volume)
         """
         # Ensure WebSocket connection is established
         if not self._ensure_websocket_connection():
             raise PocketfulAPIError("WebSocket connection not established")
-            
+
         # Convert symbol to broker format and get instrument token
         br_symbol = get_br_symbol(symbol, exchange)
-        logger.info(f"Fetching quotes using compact market data for {exchange}:{br_symbol}")
-        
+        logger.info(f"Fetching quotes using detailed market data for {exchange}:{br_symbol}")
+
         # Get token from database
         with db_session() as session:
             symbol_info = session.query(SymToken).filter(
                 SymToken.exchange == exchange,
                 SymToken.brsymbol == br_symbol
             ).first()
-            
+
             if not symbol_info:
                 raise Exception(f"Could not find token for {exchange}:{br_symbol}")
-            
+
             # Get the instrument token from the database
             instrument_token = int(symbol_info.token)
-        
+
         # Map exchange to Pocketful exchange code
         if exchange == "NSE_INDEX":
             exchange_code = self.exchange_map.get("NSE", 1)
@@ -202,61 +217,67 @@ class BrokerData:
             exchange_code = self.exchange_map.get("BSE", 6)
         else:
             exchange_code = self.exchange_map.get(exchange, 1)
-        
+
         # Log the instrument details
         logger.info(f"Using exchange_code={exchange_code}, instrument_token={instrument_token}")
-        
-        # Subscribe to compact market data
-        compact_payload = {'exchangeCode': exchange_code, 'instrumentToken': instrument_token}
-        subscription_result = self.ws_connection.subscribe_compact_marketdata(compact_payload)
-        logger.info(f"Compact market data subscription result: {subscription_result}")
-        
+
+        # Subscribe to detailed market data (includes open/close/volume)
+        detailed_payload = {'exchangeCode': exchange_code, 'instrumentToken': instrument_token}
+        subscription_result = self.ws_connection.subscribe_detailed_marketdata(detailed_payload)
+        logger.info(f"Detailed market data subscription result: {subscription_result}")
+
         # Wait for data to be received
         attempts = 0
         max_attempts = 10
-        compact_data = None
-        
+        detailed_data = None
+
         while attempts < max_attempts:
             time.sleep(1.0)
-            compact_data = self.ws_connection.read_compact_marketdata()
-            logger.info(f"Attempt {attempts+1}: Received compact data: {compact_data}")
-            
+            detailed_data = self.ws_connection.read_detailed_marketdata()
+            logger.info(f"Attempt {attempts+1}: Received detailed data: {detailed_data}")
+
             # Check if we have valid data for our instrument
-            if compact_data and isinstance(compact_data, dict):
-                token_in_data = compact_data.get('instrument_token') or compact_data.get('instrumentToken')
+            if detailed_data and isinstance(detailed_data, dict):
+                token_in_data = detailed_data.get('instrument_token') or detailed_data.get('instrumentToken')
                 if token_in_data and str(token_in_data) == str(instrument_token):
-                    logger.info(f"Received valid compact data for {exchange}:{br_symbol}")
+                    logger.info(f"Received valid detailed data for {exchange}:{br_symbol}")
                     break
-            
+
             attempts += 1
-        
+
         # Unsubscribe after receiving data
-        self.ws_connection.unsubscribe_compact_marketdata(compact_payload)
-        
+        self.ws_connection.unsubscribe_detailed_marketdata(detailed_payload)
+
         # If no valid data received, raise exception
-        if not compact_data or not isinstance(compact_data, dict):
-            raise Exception(f"No compact market data received for {exchange}:{br_symbol}")
-        
-        # Extract and format quote data from compact market data
-        # Note: Price values in compact data are multiplied by 100
-        last_traded_price = compact_data.get('last_traded_price', 0) / 100 if compact_data.get('last_traded_price') else 0
-        bid_price = compact_data.get('bidPrice', 0) / 100 if compact_data.get('bidPrice') else 0
-        ask_price = compact_data.get('askPrice', 0) / 100 if compact_data.get('askPrice') else 0
-        low_dpr = compact_data.get('lowDPR', 0) / 100 if compact_data.get('lowDPR') else 0
-        high_dpr = compact_data.get('highDPR', 0) / 100 if compact_data.get('highDPR') else 0
-        
+        if not detailed_data or not isinstance(detailed_data, dict):
+            raise Exception(f"No detailed market data received for {exchange}:{br_symbol}")
+
+        # Extract and format quote data from detailed market data
+        # Note: Price values are multiplied by 100
+        last_traded_price = detailed_data.get('last_traded_price', 0) / 100 if detailed_data.get('last_traded_price') else 0
+        bid_price = detailed_data.get('best_bid_price', 0) / 100 if detailed_data.get('best_bid_price') else 0
+        ask_price = detailed_data.get('best_ask_price', 0) / 100 if detailed_data.get('best_ask_price') else 0
+        high_price = detailed_data.get('high_price', 0) / 100 if detailed_data.get('high_price') else 0
+        low_price = detailed_data.get('low_price', 0) / 100 if detailed_data.get('low_price') else 0
+        open_price = detailed_data.get('open_price', 0) / 100 if detailed_data.get('open_price') else 0
+        close_price = detailed_data.get('close_price', 0) / 100 if detailed_data.get('close_price') else 0
+        volume = detailed_data.get('trade_volume', 0)
+
+        # Calculate change from LTP and previous close
+        change = last_traded_price - close_price if close_price else 0
+
         # Return formatted quote data
         return {
             'ask': ask_price,
             'bid': bid_price,
-            'high': high_dpr,
-            'low': low_dpr,
+            'high': high_price,
+            'low': low_price,
             'ltp': last_traded_price,
-            'open': 0,  # Not provided in compact data
-            'prev_close': 0,  # Not provided in compact data
-            'volume': 0,  # Not provided in compact data
-            'oi': compact_data.get('currentOpenInterest', 0),
-            'change': compact_data.get('change', 0) / 100 if compact_data.get('change') else 0
+            'open': open_price,
+            'prev_close': close_price,
+            'volume': volume,
+            'oi': detailed_data.get('currentOpenInterest', 0),
+            'change': change
         }
 
     def get_history(self, symbol: str, exchange: str, timeframe: str, from_date: str, to_date: str) -> pd.DataFrame:
@@ -301,28 +322,29 @@ class BrokerData:
             try:
                 # Fetch client_id from trading_info endpoint
                 logger.info("Fetching client_id from trading_info endpoint")
-                
-                # Use http.client for consistency with other methods
-                conn = http.client.HTTPSConnection("trade.pocketful.in")
+
+                # Get the shared httpx client
+                client = get_httpx_client()
                 headers = {
                     'Authorization': f'Bearer {self.auth_token}',
                     'Content-Type': 'application/json'
                 }
-                
-                conn.request("GET", "/api/v1/user/trading_info", headers=headers)
-                response = conn.getresponse()
-                data = response.read().decode("utf-8")
-                info_response = json.loads(data)
-                
+
+                response = client.get("https://trade.pocketful.in/api/v1/user/trading_info", headers=headers)
+                info_response = response.json()
+
                 if info_response.get('status') == 'success':
                     self.client_id = info_response.get('data', {}).get('client_id')
                     logger.info(f"Got client_id from API: {self.client_id}")
                 else:
                     raise PocketfulAPIError(f"Failed to fetch client_id: {info_response.get('message', 'Unknown error')}")
+            except httpx.HTTPError as e:
+                logger.error(f"Error fetching client_id: {str(e)}")
+                raise PocketfulAPIError(f"Error fetching client_id: {str(e)}")
             except Exception as e:
                 logger.error(f"Error fetching client_id: {str(e)}")
                 raise PocketfulAPIError(f"Error fetching client_id: {str(e)}")
-                
+
         return self.client_id
     
     def _ensure_websocket_connection(self):
