@@ -237,11 +237,15 @@ def transform_positions_data(positions_data):
             "quantity": (int(position.get('flBuyQty', 0)) - int(position.get('flSellQty', 0)))+(int(position.get('cfBuyQty', 0)) - int(position.get('cfSellQty', 0))),
             "average_price": position.get('avgnetprice', 0.0),
         }
-        if transformed_position['quantity'] > 0:
-            transformed_position["average_price"] = round(float(position['buyAmt'])/float(position['flBuyQty']),2)
-        elif transformed_position['quantity'] < 0:
-            transformed_position["average_price"] = round(float(position['sellAmt'])/float(position['flSellQty']),2)
+        buy_qty = float(position.get('flBuyQty', 0))
+        sell_qty = float(position.get('flSellQty', 0))
 
+        if transformed_position['quantity'] > 0 and buy_qty > 0:
+            transformed_position["average_price"] = round(float(position.get('buyAmt', 0)) / buy_qty, 2)
+        elif transformed_position['quantity'] < 0 and sell_qty > 0:
+            transformed_position["average_price"] = round(float(position.get('sellAmt', 0)) / sell_qty, 2)
+        else:
+            transformed_position["average_price"] = 0.0
         transformed_data.append(transformed_position)
     return transformed_data
 
