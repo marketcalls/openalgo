@@ -246,6 +246,8 @@ def transform_positions_data(positions_data):
             transformed_position["average_price"] = round(float(position.get('sellAmt', 0)) / sell_qty, 2)
         elif transformed_position['quantity'] != 0:
             transformed_position["average_price"] = 0.0
+            
+        transformed_data.append(transformed_position)
         
     return transformed_data
 
