@@ -244,6 +244,11 @@ def transform_tradebook_data(tradebook_data):
         except (ValueError, TypeError):
             average_price = 0.0
 
+        try:
+            orderid = int(trade.get('AppOrderID', 0) or 0)
+        except (ValueError, TypeError):
+            orderid = 0
+
         transformed_trade = {
             "symbol": trade.get('TradingSymbol', ''),
             "exchange": mapped_exchange,
@@ -252,7 +257,7 @@ def transform_tradebook_data(tradebook_data):
             "quantity": quantity,
             "average_price": average_price,
             "trade_value": quantity * average_price,
-            "orderid": int(trade.get('AppOrderID', 0)),
+            "orderid": orderid,
             "timestamp": trade.get('OrderGeneratedDateTime', '')
         }
         transformed_data.append(transformed_trade)
