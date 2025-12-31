@@ -168,10 +168,10 @@ def transform_order_data(orders):
 def map_trade_data(trade_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
-
+    
     Parameters:
     - order_data: A list of dictionaries, where each dictionary represents an order.
-
+    
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
@@ -183,38 +183,32 @@ def map_trade_data(trade_data):
         "MCXFO": "MCX",
         "NSECD": "CDS"
     }
-
-    # Log raw response for debugging average_price issues
-    logger.debug(f"[Wisdom TradeBook] Raw API response: {trade_data}")
-
-    # Check if 'data' is None
+    
+        # Check if 'data' is None
     if 'result' not in trade_data or not trade_data['result']:
         logger.info("No data available.")
         return []  # Return an empty list if no orders are available
-
+    
     trade_data = trade_data['result']
 
     if trade_data:
-        for trade in trade_data:
-            # Log key price fields for debugging
-            logger.debug(f"[Wisdom TradeBook] Trade AppOrderID={trade.get('AppOrderID')}, "
-                        f"OrderAverageTradedPrice={trade.get('OrderAverageTradedPrice')}, "
-                        f"LastTradedPrice={trade.get('LastTradedPrice')}")
 
+        for trade in trade_data:
             # Extract the instrument_token and exchange for the current order
             symboltoken = trade['ExchangeInstrumentID']
             exch = trade.get("ExchangeSegment", "")
             exchange = exchange_mapping.get(exch, exch)
-
+            
             # Use the get_symbol function to fetch the symbol from the database
             symbol_from_db = get_symbol(symboltoken, exchange)
-
+            
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
                 trade['TradingSymbol'] = symbol_from_db
 
-    logger.info(f"trade_data: {trade_data}")
 
+    logger.info(f"trade_data: {trade_data}")
+   
     return trade_data
 
 
@@ -232,38 +226,16 @@ def transform_tradebook_data(tradebook_data):
         "MCXFO": "MCX",
         "NSECD": "CDS"
     }
-
-
+    
+   
     for trade in tradebook_data:
 
         exchange = trade.get("ExchangeSegment", "")
         mapped_exchange = exchange_mapping.get(exchange, exchange)
-
+        
         # Ensure quantity and average price are converted to the correct types
-        quantity = int(trade.get('OrderQuantity', 0) or 0)
-
-        # Get average price - try OrderAverageTradedPrice first, then LastTradedPrice as fallback
-        # XTS returns these as strings, so handle conversion carefully
-        avg_price_raw = trade.get('OrderAverageTradedPrice')
-        if avg_price_raw and str(avg_price_raw).strip() not in ('', '0', '0.0', '0.00'):
-            try:
-                average_price = float(avg_price_raw)
-            except (ValueError, TypeError):
-                average_price = 0.0
-        else:
-            # Fallback to LastTradedPrice if OrderAverageTradedPrice is empty/zero
-            ltp_raw = trade.get('LastTradedPrice')
-            try:
-                average_price = float(ltp_raw) if ltp_raw else 0.0
-            except (ValueError, TypeError):
-                average_price = 0.0
-
-        # Ensure orderid is converted to string consistently (matches transform_order_data)
-        app_order_id = trade.get('AppOrderID', '')
-        try:
-            orderid = str(int(float(app_order_id))) if app_order_id else ''
-        except (ValueError, TypeError):
-            orderid = str(app_order_id) if app_order_id else ''
+        quantity = int(trade.get('OrderQuantity', 0))
+        average_price = float(trade.get('OrderAverageTradedPrice', 0.0))
 
         transformed_trade = {
             "symbol": trade.get('TradingSymbol', ''),
@@ -273,7 +245,7 @@ def transform_tradebook_data(tradebook_data):
             "quantity": quantity,
             "average_price": average_price,
             "trade_value": quantity * average_price,
-            "orderid": orderid,
+            "orderid": trade.get('AppOrderID', ''),
             "timestamp": trade.get('OrderGeneratedDateTime', '')
         }
         transformed_data.append(transformed_trade)
