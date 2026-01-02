@@ -106,7 +106,7 @@ class BrokerData:
             if response.get('stat') != 'Ok':
                 raise Exception(f"Error from Flattrade API: {response.get('emsg', 'Unknown error')}")
             
-            # Return simplified quote data as dict (not list) - NOW INCLUDING OI
+            # Return simplified quote data as dict (not list) - INCLUDING OI and TICK SIZE
             return {
                 'bid': float(response.get('bp1', 0)),
                 'ask': float(response.get('sp1', 0)),
@@ -116,7 +116,8 @@ class BrokerData:
                 'ltp': float(response.get('lp', 0)),
                 'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
                 'volume': int(float(response.get('v', 0))),
-                'oi': int(response.get('oi', 0))  # 🔥 ADDED OPEN INTEREST
+                'oi': int(response.get('oi', 0)),
+                'tick_size': float(response.get('ti', 0)) if response.get('ti') else None
             }
 
         except Exception as e:
@@ -201,7 +202,8 @@ class BrokerData:
                     'ltp': float(response.get('lp', 0)),
                     'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
                     'volume': int(float(response.get('v', 0))),
-                    'oi': int(response.get('oi', 0))
+                    'oi': int(response.get('oi', 0)),
+                    'tick_size': float(response.get('ti', 0)) if response.get('ti') else None
                 }
             }
 
@@ -253,7 +255,8 @@ class BrokerData:
                     'ltp': float(response.get('lp', 0)),
                     'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
                     'volume': int(float(response.get('v', 0))),
-                    'oi': int(response.get('oi', 0))
+                    'oi': int(response.get('oi', 0)),
+                    'tick_size': float(response.get('ti', 0)) if response.get('ti') else None
                 }
             }
 
