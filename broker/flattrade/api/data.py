@@ -202,7 +202,8 @@ class BrokerData:
                     'ltp': float(response.get('lp', 0)),
                     'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
                     'volume': int(float(response.get('v', 0))),
-                    'oi': int(response.get('oi', 0))
+                    'oi': int(response.get('oi', 0)),
+                    'tick_size': float(response.get('ti', 0)) if response.get('ti') else None
                 }
             }
 
@@ -254,7 +255,8 @@ class BrokerData:
                     'ltp': float(response.get('lp', 0)),
                     'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
                     'volume': int(float(response.get('v', 0))),
-                    'oi': int(response.get('oi', 0))
+                    'oi': int(response.get('oi', 0)),
+                    'tick_size': float(response.get('ti', 0)) if response.get('ti') else None
                 }
             }
 

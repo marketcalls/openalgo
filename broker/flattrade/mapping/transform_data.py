@@ -97,7 +97,9 @@ def transform_data(data, token, auth_token=None):
         "ordersource": "API"
     }
 
-    logger.info(f"Transformed order data: {transformed}")
+    # Log order data without sensitive fields (uid, actid contain API keys)
+    safe_log = {k: v for k, v in transformed.items() if k not in ('uid', 'actid')}
+    logger.info(f"Transformed order data: {safe_log}")
     return transformed
 
 
