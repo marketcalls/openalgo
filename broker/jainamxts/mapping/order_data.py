@@ -153,7 +153,7 @@ def transform_order_data(orders):
             "trigger_price": order.get("OrderStopPrice", 0.0),
             "pricetype": mapped_order_type,
             "product": order.get("ProductType", ""),
-            "orderid": str(int(order.get("AppOrderID", 0))) if order.get("AppOrderID") else "",
+            "orderid": str(int(float(order.get("AppOrderID", 0) or 0))),
             "order_status": mapped_order_status,
             "timestamp": order.get("LastUpdateDateTime", "")
         }
