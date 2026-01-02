@@ -245,7 +245,7 @@ def transform_tradebook_data(tradebook_data):
             "quantity": quantity,
             "average_price": average_price,
             "trade_value": quantity * average_price,
-            "orderid": str(int(trade.get('AppOrderID', 0))) if trade.get('AppOrderID') else "",
+            "orderid": str(int(float(trade.get('AppOrderID', 0) or 0))),
             "timestamp": trade.get('OrderGeneratedDateTime', '')
         }
         transformed_data.append(transformed_trade)
