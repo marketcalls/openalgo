@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from utils.httpx_client import get_httpx_client
 from database.auth_db import get_feed_token
 from broker.iifl.baseurl import MARKET_DATA_URL
+from broker.iifl.api.auth_api import get_feed_token as refresh_feed_token
 import pytz
 from utils.logging import get_logger
 
@@ -88,7 +89,20 @@ class BrokerData:
                 "10m": "600", "15m": "900", "30m": "1800", "60m": "3600",
                 "D": "D"
         }
-        
+
+    def _refresh_feed_token(self):
+        """Refresh the feed token when it expires"""
+        try:
+            new_feed_token, user_id, error = refresh_feed_token()
+            if error:
+                logger.error(f"Failed to refresh feed token: {error}")
+                return False
+            self.feed_token = new_feed_token
+            logger.info("Feed token refreshed successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Error refreshing feed token: {e}")
+            return False
 
     def _get_instrument_token(self, symbol: str, exchange: str) -> tuple:
         """
@@ -130,12 +144,13 @@ class BrokerData:
             
             return symbol_info, brexchange
 
-    def _fetch_market_data(self, token: dict, message_code: int) -> dict:
+    def _fetch_market_data(self, token: dict, message_code: int, retry_on_invalid_token: bool = True) -> dict:
         """
         Helper method to fetch market data from IIFL API
         Args:
             token: Dictionary containing exchangeSegment and exchangeInstrumentID
             message_code: XTS message code (e.g., 1502 for market data, 1510 for OI)
+            retry_on_invalid_token: Whether to retry with refreshed token on Invalid Token error
         Returns:
             dict: Parsed market data
         """
@@ -145,7 +160,7 @@ class BrokerData:
                 "xtsMessageCode": message_code,
                 "publishFormat": "JSON"
             }
-            
+
             response = get_api_response(
                 "/instruments/quotes",
                 self.auth_token,
@@ -153,9 +168,19 @@ class BrokerData:
                 payload=payload,
                 feed_token=self.feed_token
             )
-            
+
             if not response or response.get('type') != 'success':
                 error_msg = response.get('description', 'Unknown error') if response else 'No response'
+
+                # Check if token expired and retry with refreshed token
+                if retry_on_invalid_token and 'Invalid Token' in error_msg:
+                    logger.info("Feed token expired, attempting to refresh...")
+                    if self._refresh_feed_token():
+                        # Retry the request with new token (only once)
+                        return self._fetch_market_data(token, message_code, retry_on_invalid_token=False)
+                    else:
+                        logger.error("Failed to refresh feed token")
+
                 logger.warning(f"Error fetching market data (code {message_code}): {error_msg}")
                 return None
                 
