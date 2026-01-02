@@ -245,9 +245,9 @@ def transform_tradebook_data(tradebook_data):
             average_price = 0.0
 
         try:
-            orderid = int(trade.get('AppOrderID', 0) or 0)
+            orderid = str(int(float(trade.get('AppOrderID', 0) or 0)))
         except (ValueError, TypeError):
-            orderid = 0
+            orderid = "0"
 
         transformed_trade = {
             "symbol": trade.get('TradingSymbol', ''),
