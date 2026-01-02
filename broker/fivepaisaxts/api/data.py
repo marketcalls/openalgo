@@ -98,6 +98,8 @@ class BrokerData:
                 logger.error(f"Failed to refresh feed token: {error}")
                 return False
             self.feed_token = new_feed_token
+            if user_id:
+                self.user_id = user_id
             logger.info("Feed token refreshed successfully")
             return True
         except Exception as e:
