@@ -2,7 +2,7 @@ import json
 import os
 import urllib.parse
 from database.token_db import get_br_symbol, get_oa_symbol, get_brexchange
-from broker.fivepaisaxts.database.master_contract_db import SymToken, db_session
+from broker.wisdom.database.master_contract_db import SymToken, db_session
 from flask import session  
 import pandas as pd
 from datetime import datetime, timedelta
