@@ -239,6 +239,11 @@ class IbullsWebSocketAdapter(BaseBrokerWebSocketAdapter):
         
     def cleanup_zmq(self) -> None:
         """Override cleanup_zmq to provide more detailed logging"""
+        # Skip cleanup if using shared ZMQ (managed by ConnectionPool)
+        if hasattr(self, '_uses_shared_zmq') and self._uses_shared_zmq:
+            self.logger.debug("Skipping ZMQ cleanup - using shared publisher")
+            return
+
         try:
             # Release the port from the bound ports set
             if hasattr(self, 'zmq_port'):
