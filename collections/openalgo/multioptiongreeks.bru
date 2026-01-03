@@ -1,0 +1,27 @@
+meta {
+  name: Multi Option Greeks
+  type: http
+  seq: 16
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/multioptiongreeks
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "symbols": [
+        {
+          "symbol": "NIFTY27JAN2626000CE",
+          "exchange": "NFO"
+        },
+        {
+          "symbol": "NIFTY27JAN2626000PE",
+          "exchange": "NFO"
+        }
+      ]
+  }
+}

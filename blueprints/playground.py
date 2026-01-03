@@ -109,7 +109,7 @@ def categorize_endpoint(path):
 
     # Data endpoints
     if any(x in path_lower for x in ['/quotes', '/multiquotes', '/depth', '/history', '/intervals', '/symbol',
-                                      '/search', '/expiry', '/optionsymbol', '/optiongreeks', '/optionchain',
+                                      '/search', '/expiry', '/optionsymbol', '/optiongreeks', '/multioptiongreeks', '/optionchain',
                                       '/ticker', '/syntheticfuture', '/instruments']):
         return 'data'
 

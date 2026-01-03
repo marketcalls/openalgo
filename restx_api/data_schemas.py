@@ -134,3 +134,22 @@ class MarketHolidaysSchema(Schema):
 class MarketTimingsSchema(Schema):
     apikey = fields.Str(required=True)      # API Key for authentication
     date = fields.Str(required=True)        # Date in YYYY-MM-DD format
+
+class OptionSymbolRequest(Schema):
+    """Schema for a single option symbol request in batch"""
+    symbol = fields.Str(required=True)      # Option symbol (e.g., NIFTY28NOV2424000CE)
+    exchange = fields.Str(required=True, validate=validate.OneOf(["NFO", "BFO", "CDS", "MCX"]))
+    underlying_symbol = fields.Str(required=False)   # Optional: Specify underlying symbol
+    underlying_exchange = fields.Str(required=False)  # Optional: Specify underlying exchange
+
+class MultiOptionGreeksSchema(Schema):
+    """Schema for batch option greeks requests"""
+    apikey = fields.Str(required=True)      # API Key for authentication
+    symbols = fields.List(
+        fields.Nested(OptionSymbolRequest), 
+        required=True, 
+        validate=validate.Length(min=1, max=50)  # Max 50 symbols per request
+    )
+    interest_rate = fields.Float(required=False, validate=validate.Range(min=0, max=100))  # Common interest rate for all
+    expiry_time = fields.Str(required=False)  # Optional: Common expiry time for all
+
