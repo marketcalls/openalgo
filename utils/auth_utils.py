@@ -3,7 +3,7 @@ from flask import current_app as app
 from threading import Thread
 from utils.session import get_session_expiry_time, set_session_login_time
 from database.auth_db import upsert_auth, get_feed_token as db_get_feed_token
-from database.master_contract_status_db import init_broker_status, update_status
+from database.master_contract_status_db import init_broker_status, update_status, is_download_needed
 import importlib
 import re
 from utils.logging import get_logger
@@ -154,10 +154,17 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
     inserted_id = upsert_auth(user_session_key, auth_token, broker, feed_token=feed_token, user_id=user_id)
     if inserted_id:
         logger.info(f"Database record upserted with ID: {inserted_id}")
-        # Initialize master contract status for this broker
-        init_broker_status(broker)
-        thread = Thread(target=async_master_contract_download, args=(broker,))
-        thread.start()
+        
+        # Check if master contract download is needed (only on first login of the day)
+        if is_download_needed(broker):
+            logger.info(f"Master contract download needed for {broker} - starting download thread")
+            # Initialize master contract status for this broker
+            init_broker_status(broker)
+            thread = Thread(target=async_master_contract_download, args=(broker,))
+            thread.start()
+        else:
+            logger.info(f"Master contract already downloaded today for {broker} - skipping download")
+        
         return redirect(url_for('dashboard_bp.dashboard'))
     else:
         logger.error(f"Failed to upsert auth token for user {user_session_key}")
