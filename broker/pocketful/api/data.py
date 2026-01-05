@@ -622,3 +622,216 @@ class BrokerData:
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """Alias for get_market_depth to maintain compatibility with common API"""
         return self.get_market_depth(symbol, exchange)
+
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols using WebSocket
+        Pocketful WebSocket supports subscribing to multiple instruments
+
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            # Pocketful WebSocket can handle multiple instruments
+            # Using batch size of 50 for practical response times
+            BATCH_SIZE = 50
+
+            if len(symbols) > BATCH_SIZE:
+                logger.debug(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.info(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    batch_results = self._process_multiquotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                logger.debug(f"Successfully processed {len(all_results)} quotes")
+                return all_results
+            else:
+                return self._process_multiquotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_multiquotes_batch(self, symbols: list) -> list:
+        """
+        Process a batch of symbols using WebSocket subscription
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+        Returns:
+            list: List of quote data for the batch
+        """
+        results = []
+        skipped_symbols = []
+        instruments_to_subscribe = []
+        symbol_map = {}  # Map instrument_token to original symbol/exchange
+
+        # Ensure WebSocket connection is established
+        try:
+            if not self._ensure_websocket_connection():
+                raise PocketfulAPIError("WebSocket connection not established")
+        except Exception as e:
+            logger.error(f"Failed to establish WebSocket connection: {str(e)}")
+            # Return all symbols as errors
+            for item in symbols:
+                results.append({
+                    'symbol': item['symbol'],
+                    'exchange': item['exchange'],
+                    'error': f'WebSocket connection failed: {str(e)}'
+                })
+            return results
+
+        # Step 1: Prepare all instruments
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            try:
+                br_symbol = get_br_symbol(symbol, exchange)
+
+                # Get token from database
+                with db_session() as session:
+                    symbol_info = session.query(SymToken).filter(
+                        SymToken.exchange == exchange,
+                        SymToken.brsymbol == br_symbol
+                    ).first()
+
+                    if not symbol_info:
+                        logger.warning(f"Skipping symbol {symbol} on {exchange}: could not find token")
+                        skipped_symbols.append({
+                            'symbol': symbol,
+                            'exchange': exchange,
+                            'error': 'Could not resolve token'
+                        })
+                        continue
+
+                    instrument_token = int(symbol_info.token)
+
+                # Map exchange to Pocketful exchange code
+                if exchange == "NSE_INDEX":
+                    exchange_code = self.exchange_map.get("NSE", 1)
+                elif exchange == "BSE_INDEX":
+                    exchange_code = self.exchange_map.get("BSE", 6)
+                else:
+                    exchange_code = self.exchange_map.get(exchange, 1)
+
+                # Store instrument details for subscription
+                instruments_to_subscribe.append({
+                    'exchangeCode': exchange_code,
+                    'instrumentToken': instrument_token
+                })
+
+                # Store mapping for response processing
+                symbol_map[str(instrument_token)] = {
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'br_symbol': br_symbol,
+                    'token': instrument_token,
+                    'exchange_code': exchange_code
+                }
+
+            except Exception as e:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': str(e)
+                })
+                continue
+
+        if not instruments_to_subscribe:
+            logger.warning("No valid symbols to fetch quotes for")
+            return skipped_symbols
+
+        # Step 2: Subscribe to all instruments at once
+        logger.info(f"Subscribing to {len(instruments_to_subscribe)} symbols via WebSocket")
+
+        for instrument in instruments_to_subscribe:
+            try:
+                self.ws_connection.subscribe_detailed_marketdata(instrument)
+            except Exception as e:
+                logger.warning(f"Failed to subscribe to instrument {instrument}: {str(e)}")
+
+        # Step 3: Collect data while waiting - read continuously to capture all instruments
+        received_data = {}
+        num_instruments = len(instruments_to_subscribe)
+        max_wait_time = min(max(num_instruments * 0.5, 3), 15)  # Between 3-15 seconds based on instrument count
+        start_time = time.time()
+
+        logger.debug(f"Collecting data for up to {max_wait_time:.1f}s for {num_instruments} instruments...")
+
+        # Read continuously until we have all data or timeout
+        while time.time() - start_time < max_wait_time:
+            detailed_data = self.ws_connection.read_detailed_marketdata()
+
+            if detailed_data and isinstance(detailed_data, dict):
+                token_in_data = detailed_data.get('instrument_token') or detailed_data.get('instrumentToken')
+                if token_in_data and str(token_in_data) in symbol_map:
+                    received_data[str(token_in_data)] = detailed_data
+                    logger.debug(f"Received data for token {token_in_data} ({len(received_data)}/{num_instruments})")
+
+            # Exit early if we have all data
+            if len(received_data) >= num_instruments:
+                logger.debug(f"All {num_instruments} instruments received, exiting early")
+                break
+
+            # Small delay between reads to avoid busy loop
+            time.sleep(0.05)
+
+        logger.debug(f"Data collection completed: {len(received_data)}/{num_instruments} instruments received")
+
+        # Step 5: Build results from received data
+        for token_str, info in symbol_map.items():
+            detailed_data = received_data.get(token_str)
+
+            if detailed_data:
+                # Extract and format quote data from detailed market data
+                # Note: Price values are multiplied by 100
+                last_traded_price = detailed_data.get('last_traded_price', 0) / 100 if detailed_data.get('last_traded_price') else 0
+                bid_price = detailed_data.get('best_bid_price', 0) / 100 if detailed_data.get('best_bid_price') else 0
+                ask_price = detailed_data.get('best_ask_price', 0) / 100 if detailed_data.get('best_ask_price') else 0
+                high_price = detailed_data.get('high_price', 0) / 100 if detailed_data.get('high_price') else 0
+                low_price = detailed_data.get('low_price', 0) / 100 if detailed_data.get('low_price') else 0
+                open_price = detailed_data.get('open_price', 0) / 100 if detailed_data.get('open_price') else 0
+                close_price = detailed_data.get('close_price', 0) / 100 if detailed_data.get('close_price') else 0
+                volume = detailed_data.get('trade_volume', 0)
+
+                results.append({
+                    'symbol': info['symbol'],
+                    'exchange': info['exchange'],
+                    'data': {
+                        'bid': bid_price,
+                        'ask': ask_price,
+                        'open': open_price,
+                        'high': high_price,
+                        'low': low_price,
+                        'ltp': last_traded_price,
+                        'prev_close': close_price,
+                        'volume': volume,
+                        'oi': detailed_data.get('currentOpenInterest', 0)
+                    }
+                })
+            else:
+                results.append({
+                    'symbol': info['symbol'],
+                    'exchange': info['exchange'],
+                    'error': 'No data received'
+                })
+
+        # Step 6: Unsubscribe after getting data
+        logger.info(f"Unsubscribing from {len(instruments_to_subscribe)} symbols")
+        for instrument in instruments_to_subscribe:
+            try:
+                self.ws_connection.unsubscribe_detailed_marketdata(instrument)
+            except Exception as e:
+                logger.warning(f"Failed to unsubscribe from instrument {instrument}: {str(e)}")
+
+        logger.info(f"Retrieved quotes for {len([r for r in results if 'data' in r])}/{len(symbol_map)} symbols")
+        return skipped_symbols + results
