@@ -352,7 +352,12 @@ def process_pocketful_bfo_csv(path):
 def process_pocketful_mcx_csv(path):
     """
     Processes the pocketful MCX CSV file to fit the existing database schema and performs exchange name mapping.
+    OpenAlgo MCX Symbol Format:
+    - Futures: [BaseSymbol][DDMMMYY]FUT (e.g., CRUDEOILM20MAY24FUT)
+    - Options: [BaseSymbol][DDMMMYY][Strike][CE/PE] (e.g., SILVERM28JUL26227750PE)
     """
+    import re
+
     logger.info("Processing pocketful MCX CSV Data")
     file_path = f'{path}/MCXCompactScrip.csv'
 
@@ -367,33 +372,46 @@ def process_pocketful_mcx_csv(path):
     # Normalize Instrument Type to Option Type
     df.loc[df['instrument_name'].isin(['FUTCOM', 'FUTIDX']), 'option_type'] = 'XX'
 
-    # Helper to format expiry as DDMMMYY (e.g., 26JUN25)
+    # Helper to format expiry as DDMMMYY (e.g., 28JUL26)
     def format_expiry(expiry):
         return expiry.strftime('%d%b%y').upper() if pd.notnull(expiry) else ''
 
-    # Define the function to reformat symbol details
-    def reformat_symbol_detail(row):
+    # Helper to extract base symbol from trading_symbol (letters before first digit)
+    # Example: SILVERM26MAR131500CE -> SILVERM
+    def extract_base_symbol(trading_symbol):
+        match = re.match(r'^([A-Z]+)', str(trading_symbol).upper())
+        if match:
+            return match.group(1)
+        return trading_symbol
+
+    # Define the function to build OpenAlgo symbol
+    def build_openalgo_symbol(row):
         try:
+            # Extract base symbol from trading_symbol (e.g., SILVERM from SILVERM26MAR131500CE)
+            base_symbol = extract_base_symbol(row['trading_symbol'])
             expiry_str = format_expiry(row['Expiry Date'])
-            strike = float(row['strike'])
-            strike_str = str(int(strike)) if strike.is_integer() else str(strike)
+
             if row['option_type'] == 'XX':
-                return f"{row['trading_symbol']}{expiry_str}FUT"
+                # Futures: SILVERM28JUL26FUT
+                return f"{base_symbol}{expiry_str}FUT"
             elif row['option_type'] in ['CE', 'PE']:
-                return f"{row['trading_symbol']}{expiry_str}{strike_str}{row['option_type']}"
+                # Options: SILVERM28JUL26227750PE
+                strike = float(row['strike'])
+                strike_str = str(int(strike)) if strike.is_integer() else str(strike)
+                return f"{base_symbol}{expiry_str}{strike_str}{row['option_type']}"
             else:
                 return row['trading_symbol']
         except Exception as e:
-            logger.error(f"Error processing row: {row}, Error: {e}")
-            return row['trading_symbol']  # fallback to just the symbol
+            logger.error(f"Error processing MCX row: {row}, Error: {e}")
+            return row['trading_symbol']  # fallback to broker symbol
 
     # Apply the symbol formatting for all rows based on option_type
-    df['symbol'] = df.apply(reformat_symbol_detail, axis=1)
+    df['symbol'] = df.apply(build_openalgo_symbol, axis=1)
 
     # Create token_df with required columns
     token_df = df[['symbol']].copy()
     token_df['brsymbol'] = df['trading_symbol'].values
-    token_df['name'] = df['trading_symbol'].values
+    token_df['name'] = df['trading_symbol'].apply(extract_base_symbol).values
     token_df['exchange'] = df['exchange'].values
     token_df['brexchange'] = df['exchange'].values
     token_df['token'] = df['exchange_token'].values
