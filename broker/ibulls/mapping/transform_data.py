@@ -123,8 +123,8 @@ def map_order_type(pricetype):
     order_type_mapping = {
         "MARKET": "MARKET",
         "LIMIT": "LIMIT",
-        "SL": "SL-L",
-        "SL-M": "SL-M"
+        "SL": "STOPLIMIT",
+        "SL-M": "STOPMARKET"
     }
     return order_type_mapping.get(pricetype, "MARKET")  # Default to MARKET if not found
 

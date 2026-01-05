@@ -17,6 +17,7 @@ Thumbs.db
 .python-version
 config.ini
 .venvv
+.cloudflared/*.json
 
 #DB Files, CSV Files and Log/Tmp Files
 
@@ -27,6 +28,7 @@ config.ini
 *.tmp
 checkpoint.txt
 checkpoints.json
+
 
 # Strategy encryption key
 db/strategy_encryption.key

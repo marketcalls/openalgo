@@ -13,9 +13,14 @@ class BrokerData:
     def __init__(self, auth_token):
         # Updated for Neo API v2: session_token:::session_sid:::base_url:::access_token
         self.session_token, self.session_sid, self.base_url, self.access_token = auth_token.split(":::")
-        
-        # Override baseUrl with the working quotes server
-        self.quotes_base_url = "https://cis.kotaksecurities.com"
+
+        # baseUrl is mandatory; it comes from MPIN validation. Raise if missing.
+        if not self.base_url or not self.base_url.startswith("http"):
+            raise ValueError("Kotak auth token missing baseUrl. Please re-login (TOTP + MPIN) to refresh credentials.")
+
+        self.base_url = self.base_url.rstrip("/")
+        self.quotes_base_url = self.base_url  # Use broker-provided baseUrl for quotes
+        self.last_quote_error = None
         logger.info(f"Using quotes baseUrl: {self.quotes_base_url}")
         
         # Define empty timeframe map since Kotak Neo doesn't support historical data
@@ -52,31 +57,26 @@ class BrokerData:
 
     def _make_quotes_request(self, query, filter_name="all"):
         """Make HTTP request to Neo API v2 quotes endpoint using httpx connection pooling"""
+        client = get_httpx_client()
+
+        # URL encode spaces but keep pipe/comma characters
+        encoded_query = urllib.parse.quote(query, safe='|,')
+        endpoint = f"/script-details/1.0/quotes/neosymbol/{encoded_query}/{filter_name}"
+
+        headers = {
+            'Authorization': self.access_token,
+            'Content-Type': 'application/json'
+        }
+
+        url = f"{self.quotes_base_url}{endpoint}"
+        last_error = None
+
         try:
-            # Get the shared httpx client with connection pooling
-            client = get_httpx_client()
-
-            # URL encode only spaces, keep pipe character (|) as is
-            # The query format is: exchange_segment|symbol (e.g., nse_cm|INFY-EQ)
-            encoded_query = urllib.parse.quote(query, safe='|')
-            endpoint = f"/script-details/1.0/quotes/neosymbol/{encoded_query}/{filter_name}"
-
-            # Neo API v2 quotes headers - only Authorization (access token), no Auth/Sid
-            headers = {
-                'Authorization': self.access_token,
-                'Content-Type': 'application/json'
-            }
-
-            # Construct full URL
-            url = f"{self.quotes_base_url}{endpoint}"
-
             logger.info(f"QUOTES API - Making request to: {url}")
             logger.debug(f"QUOTES API - Using access_token: {self.access_token[:10]}...")
 
-            # Make request using httpx
             response = client.get(url, headers=headers)
-
-            logger.info(f"QUOTES API - Response status: {response.status_code}")
+            logger.info(f"QUOTES API - Response status: {response.status_code} for {url}")
 
             if response.status_code == 200:
                 response_data = json.loads(response.text)
@@ -86,17 +86,25 @@ class BrokerData:
                 if "depth" in endpoint and response_data and isinstance(response_data, list) and len(response_data) > 0:
                     logger.debug(f"DEPTH API - Complete raw response structure: {json.dumps(response_data[0], indent=2)}")
                 
+                self.last_quote_error = None
                 return response_data
-            else:
-                logger.warning(f"QUOTES API - HTTP {response.status_code}: {response.text}")
-                return None
+
+            last_error = {
+                'status': response.status_code,
+                'body': response.text[:500],
+                'url': url
+            }
+            logger.warning(f"QUOTES API - HTTP {response.status_code}: {response.text[:200]}...")
 
         except httpx.HTTPError as e:
-            logger.error(f"HTTP error in _make_quotes_request: {e}")
-            return None
+            last_error = {'error': str(e), 'url': url}
+            logger.error(f"HTTP error in _make_quotes_request ({url}): {e}")
         except Exception as e:
-            logger.error(f"Error in _make_quotes_request: {e}")
-            return None
+            last_error = {'error': str(e), 'url': url}
+            logger.error(f"Error in _make_quotes_request ({url}): {e}")
+
+        self.last_quote_error = last_error
+        return None
 
     def get_quotes(self, symbol, exchange):
         """Get live quotes using Neo API v2 quotes endpoint with pSymbol-based queries"""
@@ -139,8 +147,8 @@ class BrokerData:
                 quote_data = response[0]
                 logger.info(f"QUOTES API - Query successful for: {quote_data.get('display_symbol')}")
             else:
-                logger.error(f"QUOTES API - Query failed for {symbol}")
-                return self._get_default_quote()
+                logger.error(f"QUOTES API - Query failed for {symbol}; last_error={self.last_quote_error}")
+                return None
             
             if response and isinstance(response, list) and len(response) > 0:
                 quote_data = response[0]
@@ -406,33 +414,10 @@ class BrokerData:
         logger.debug(f"Combined query: {combined_query[:200]}..." if len(combined_query) > 200 else f"Combined query: {combined_query}")
 
         # Make API request using existing method (handles URL encoding)
-        try:
-            # Get the shared httpx client
-            client = get_httpx_client()
-
-            # URL encode spaces but keep pipe and comma characters
-            encoded_query = urllib.parse.quote(combined_query, safe='|,')
-            endpoint = f"/script-details/1.0/quotes/neosymbol/{encoded_query}/all"
-
-            headers = {
-                'Authorization': self.access_token,
-                'Content-Type': 'application/json'
-            }
-
-            url = f"{self.quotes_base_url}{endpoint}"
-            logger.debug(f"MULTIQUOTES API - Making request to: {url[:200]}...")
-
-            response = client.get(url, headers=headers)
-
-            if response.status_code != 200:
-                logger.error(f"MULTIQUOTES API - HTTP {response.status_code}: {response.text}")
-                raise Exception(f"API Error: HTTP {response.status_code}")
-
-            response_data = json.loads(response.text)
-
-        except Exception as e:
-            logger.error(f"API Error: {str(e)}")
-            raise Exception(f"API Error: {str(e)}")
+        response_data = self._make_quotes_request(combined_query, "all")
+        if response_data is None:
+            logger.error(f"API Error: {self.last_quote_error}")
+            raise Exception(f"API Error: {self.last_quote_error}")
 
         # Parse response and build results
         results = []

@@ -153,7 +153,7 @@ def transform_order_data(orders):
             "trigger_price": order.get("OrderStopPrice", 0.0),
             "pricetype": mapped_order_type,
             "product": order.get("ProductType", ""),
-            "orderid": str(int(order.get("AppOrderID", 0))) if order.get("AppOrderID") else "",
+            "orderid": str(int(float(order.get("AppOrderID", 0) or 0))),
             "order_status": mapped_order_status,
             "timestamp": order.get("LastUpdateDateTime", "")
         }
@@ -245,7 +245,7 @@ def transform_tradebook_data(tradebook_data):
             "quantity": quantity,
             "average_price": average_price,
             "trade_value": quantity * average_price,
-            "orderid": str(int(trade.get('AppOrderID', 0))) if trade.get('AppOrderID') else "",
+            "orderid": str(int(float(trade.get('AppOrderID', 0) or 0))),
             "timestamp": trade.get('OrderGeneratedDateTime', '')
         }
         transformed_data.append(transformed_trade)
