@@ -55,7 +55,7 @@ def map_order_data(order_data):
         # Check if symbol was found; if so, update with OpenAlgo format
         if symbol:
             # Convert to OpenAlgo symbol format
-            oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
+            oa_symbol = get_oa_symbol(symbol, exchange)
             order['tradingsymbol'] = oa_symbol
             # Also update trading_symbol if it exists to maintain consistency
             if 'trading_symbol' in order:
@@ -286,7 +286,7 @@ def map_trade_data(trade_data):
             
             # Convert to OpenAlgo symbol format if exchange is available
             if exchange:
-                oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
+                oa_symbol = get_oa_symbol(symbol, exchange)
                 processed_trade['tradingsymbol'] = oa_symbol
         
         # Map transaction_type/order_side to a standard format
@@ -421,7 +421,7 @@ def map_position_data(position_data):
             
             # Convert to OpenAlgo symbol format if exchange is available
             if exchange:
-                oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
+                oa_symbol = get_oa_symbol(symbol, exchange)
                 if oa_symbol:
                     processed_position['tradingsymbol'] = oa_symbol
                 else:
@@ -566,7 +566,7 @@ def transform_holdings_data(holdings_data):
             # Try to convert to OpenAlgo symbol format
             try:
                 logger.info(f"DEBUG - Converting symbol '{tradingsymbol}' for exchange '{exchange}' to OpenAlgo format")
-                oa_symbol = get_oa_symbol(symbol=tradingsymbol, exchange=exchange)
+                oa_symbol = get_oa_symbol(tradingsymbol, exchange)
                 if oa_symbol:
                     tradingsymbol = oa_symbol
                     logger.debug(f"DEBUG - Converted to OpenAlgo symbol: {tradingsymbol}")
