@@ -379,10 +379,11 @@ def process_pocketful_mcx_csv(path):
     # Helper to extract base symbol from trading_symbol (letters before first digit)
     # Example: SILVERM26MAR131500CE -> SILVERM
     def extract_base_symbol(trading_symbol):
-        match = re.match(r'^([A-Z]+)', str(trading_symbol).upper())
+        trading_symbol_upper = str(trading_symbol).upper()
+        match = re.match(r'^([A-Z]+)', trading_symbol_upper)
         if match:
             return match.group(1)
-        return trading_symbol
+        return trading_symbol_upper  # Return uppercased for consistency
 
     # Define the function to build OpenAlgo symbol
     def build_openalgo_symbol(row):

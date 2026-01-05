@@ -205,7 +205,7 @@ class BrokerData:
             ).first()
 
             if not symbol_info:
-                raise Exception(f"Could not find token for {exchange}:{br_symbol}")
+                raise PocketfulAPIError(f"Could not find token for {exchange}:{br_symbol}")
 
             # Get the instrument token from the database
             instrument_token = int(symbol_info.token)
@@ -226,31 +226,33 @@ class BrokerData:
         subscription_result = self.ws_connection.subscribe_detailed_marketdata(detailed_payload)
         logger.info(f"Detailed market data subscription result: {subscription_result}")
 
-        # Wait for data to be received
-        attempts = 0
-        max_attempts = 10
+        # Use try/finally to ensure unsubscribe is always called
         detailed_data = None
+        try:
+            # Wait for data to be received
+            attempts = 0
+            max_attempts = 10
 
-        while attempts < max_attempts:
-            time.sleep(1.0)
-            detailed_data = self.ws_connection.read_detailed_marketdata()
-            logger.info(f"Attempt {attempts+1}: Received detailed data: {detailed_data}")
+            while attempts < max_attempts:
+                time.sleep(1.0)
+                detailed_data = self.ws_connection.read_detailed_marketdata()
+                logger.info(f"Attempt {attempts+1}: Received detailed data: {detailed_data}")
 
-            # Check if we have valid data for our instrument
-            if detailed_data and isinstance(detailed_data, dict):
-                token_in_data = detailed_data.get('instrument_token') or detailed_data.get('instrumentToken')
-                if token_in_data and str(token_in_data) == str(instrument_token):
-                    logger.info(f"Received valid detailed data for {exchange}:{br_symbol}")
-                    break
+                # Check if we have valid data for our instrument
+                if detailed_data and isinstance(detailed_data, dict):
+                    token_in_data = detailed_data.get('instrument_token') or detailed_data.get('instrumentToken')
+                    if token_in_data and str(token_in_data) == str(instrument_token):
+                        logger.info(f"Received valid detailed data for {exchange}:{br_symbol}")
+                        break
 
-            attempts += 1
-
-        # Unsubscribe after receiving data
-        self.ws_connection.unsubscribe_detailed_marketdata(detailed_payload)
+                attempts += 1
+        finally:
+            # Always unsubscribe, even if an exception occurs
+            self.ws_connection.unsubscribe_detailed_marketdata(detailed_payload)
 
         # If no valid data received, raise exception
         if not detailed_data or not isinstance(detailed_data, dict):
-            raise Exception(f"No detailed market data received for {exchange}:{br_symbol}")
+            raise PocketfulAPIError(f"No detailed market data received for {exchange}:{br_symbol}")
 
         # Extract and format quote data from detailed market data
         # Note: Price values are multiplied by 100
@@ -658,7 +660,7 @@ class BrokerData:
 
         except Exception as e:
             logger.exception(f"Error fetching multiquotes")
-            raise Exception(f"Error fetching multiquotes: {e}")
+            raise PocketfulAPIError(f"Error fetching multiquotes: {e}") from e
 
     def _process_multiquotes_batch(self, symbols: list) -> list:
         """
