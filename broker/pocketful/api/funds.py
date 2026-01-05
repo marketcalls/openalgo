@@ -19,7 +19,6 @@ def get_margin_data(auth_token):
     # For Pocketful, we need the client_id which is stored in the session after authentication
     client_id = session.get('USER_ID')
     # Pocketful's base URL and endpoint for funds
-    logger.info(f"Auth token is {auth_token}")
     base_url = "https://trade.pocketful.in"
     endpoint = "/api/v2/funds/view"
     
@@ -46,7 +45,7 @@ def get_margin_data(auth_token):
             
             if info_data.get('status') == 'success':
                 client_id = info_data.get('data', {}).get('client_id')
-                logger.info(f"Retrieved client_id: {client_id}")
+                logger.debug(f"Retrieved client_id: {client_id}")
             else:
                 logger.info(f"Error fetching client_id: {info_data.get('message', 'Unknown error')}")
                 return {}
