@@ -5,16 +5,16 @@ class PocketfulExchangeMapper:
     """Maps OpenAlgo exchange codes to Pocketful-specific exchange types"""
 
     # Exchange type mapping for Pocketful broker
-    # Based on Pocketful WebSocket API documentation
+    # Based on Pocketful WebSocket API (matching data.py)
     EXCHANGE_TYPES = {
         'NSE': 1,      # NSE Cash Market
         'NFO': 2,      # NSE Futures & Options
-        'BSE': 3,      # BSE Cash Market
-        'BFO': 4,      # BSE F&O
-        'MCX': 5,      # MCX
-        'CDS': 6,      # Currency Derivatives
+        'CDS': 3,      # Currency Derivatives
+        'MCX': 4,      # MCX
+        'BSE': 6,      # BSE Cash Market
+        'BFO': 7,      # BSE F&O
         'NSE_INDEX': 1,  # NSE Index
-        'BSE_INDEX': 3   # BSE Index
+        'BSE_INDEX': 6   # BSE Index
     }
 
     @staticmethod

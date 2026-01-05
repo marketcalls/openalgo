@@ -73,6 +73,9 @@ from broker.jainamxts.streaming.jainamxts_adapter import JainamXTSWebSocketAdapt
 # Import the samco_adapter
 from broker.samco.streaming.samco_adapter import SamcoWebSocketAdapter
 
+# Import the pocketful_adapter
+from broker.pocketful.streaming.pocketful_adapter import PocketfulWebSocketAdapter
+
 # AliceBlue adapter will be loaded dynamically
 
 # Register adapters
@@ -97,6 +100,7 @@ register_adapter("mstock", MstockWebSocketAdapter)
 register_adapter("motilal", MotilalWebSocketAdapter)
 register_adapter("jainamxts", JainamXTSWebSocketAdapter)
 register_adapter("samco", SamcoWebSocketAdapter)
+register_adapter("pocketful", PocketfulWebSocketAdapter)
 
 # AliceBlue adapter will be registered dynamically when first used
 
@@ -143,5 +147,6 @@ __all__ = [
     'MstockWebSocketAdapter',
     'MotilalWebSocketAdapter',
     'JainamXTSWebSocketAdapter',
-    'SamcoWebSocketAdapter'
+    'SamcoWebSocketAdapter',
+    'PocketfulWebSocketAdapter'
 ]
