@@ -34,6 +34,7 @@ from .option_symbol import api as option_symbol_ns
 from .options_order import api as options_order_ns
 from .options_multiorder import api as options_multiorder_ns
 from .option_greeks import api as option_greeks_ns
+from .multi_option_greeks import api as multi_option_greeks_ns
 from .synthetic_future import api as synthetic_future_ns
 from .analyzer import api as analyzer_ns
 from .ping import api as ping_ns
@@ -75,6 +76,7 @@ api.add_namespace(option_symbol_ns, path='/optionsymbol')
 api.add_namespace(options_order_ns, path='/optionsorder')
 api.add_namespace(options_multiorder_ns, path='/optionsmultiorder')
 api.add_namespace(option_greeks_ns, path='/optiongreeks')
+api.add_namespace(multi_option_greeks_ns, path='/multioptiongreeks')
 api.add_namespace(synthetic_future_ns, path='/syntheticfuture')
 api.add_namespace(analyzer_ns, path='/analyzer')
 api.add_namespace(ping_ns, path='/ping')
