@@ -39,7 +39,7 @@ def transform_data(data, client_id=None, auth_token=None):
     price = float(data.get("price", "0"))
 
     # Apply Market Price Protection for MARKET orders (case-insensitive check)
-    if data.get("pricetype", "").upper() == "MARKET":
+    if str(data.get("pricetype") or "").upper() == "MARKET":
         logger.info(f"MPP: MARKET order detected for Symbol={data['symbol']}, Exchange={data['exchange']}, Action={order_side}")
         try:
             if auth_token:
