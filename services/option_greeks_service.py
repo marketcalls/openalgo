@@ -539,3 +539,119 @@ def get_option_greeks(
             'status': 'error',
             'message': f'Failed to get option Greeks: {str(e)}'
         }, 500
+
+
+def get_multi_option_greeks(
+    symbols: list,
+    interest_rate: Optional[float] = None,
+    expiry_time: Optional[str] = None,
+    api_key: Optional[str] = None
+) -> Tuple[bool, Dict[str, Any], int]:
+    """
+    Get option Greeks for multiple symbols in a single call.
+    Uses concurrent execution for efficiency.
+    
+    Args:
+        symbols: List of dicts with 'symbol', 'exchange', optional 'underlying_symbol', 'underlying_exchange'
+        interest_rate: Optional common interest rate for all symbols
+        expiry_time: Optional common expiry time for all symbols
+        api_key: API key for authentication
+        
+    Returns:
+        Tuple of (success, response_dict, status_code)
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
+    # Early return for empty symbols list
+    if not symbols:
+        return True, {
+            'status': 'success',
+            'data': [],
+            'summary': {'total': 0, 'success': 0, 'failed': 0}
+        }, 200
+    
+    results = []
+    success_count = 0
+    failed_count = 0
+    
+    def fetch_single_greeks(symbol_request):
+        """Fetch Greeks for a single symbol"""
+        try:
+            symbol = symbol_request.get('symbol')
+            exchange = symbol_request.get('exchange')
+            underlying_symbol = symbol_request.get('underlying_symbol')
+            underlying_exchange = symbol_request.get('underlying_exchange')
+            
+            success, response, status_code = get_option_greeks(
+                option_symbol=symbol,
+                exchange=exchange,
+                interest_rate=interest_rate,
+                forward_price=None,  # Not supported in batch mode
+                underlying_symbol=underlying_symbol,
+                underlying_exchange=underlying_exchange,
+                expiry_time=expiry_time,
+                api_key=api_key
+            )
+            
+            return {
+                'success': success,
+                'response': response,
+                'symbol': symbol,
+                'exchange': exchange
+            }
+        except Exception as e:
+            logger.error(f"Error fetching Greeks for {symbol_request.get('symbol')}: {e}")
+            return {
+                'success': False,
+                'response': {
+                    'status': 'error',
+                    'symbol': symbol_request.get('symbol'),
+                    'exchange': symbol_request.get('exchange'),
+                    'message': str(e)
+                },
+                'symbol': symbol_request.get('symbol'),
+                'exchange': symbol_request.get('exchange')
+            }
+    
+    # Use ThreadPoolExecutor for parallel execution
+    # Limit workers to avoid overwhelming the broker API
+    max_workers = min(len(symbols), 10)
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        future_to_symbol = {
+            executor.submit(fetch_single_greeks, sym): sym 
+            for sym in symbols
+        }
+        
+        # Collect results as they complete
+        for future in as_completed(future_to_symbol):
+            result = future.result()
+            
+            if result['success']:
+                success_count += 1
+                results.append(result['response'])
+            else:
+                failed_count += 1
+                results.append(result['response'])
+    
+    # Sort results to maintain original order
+    symbol_order = {sym['symbol']: idx for idx, sym in enumerate(symbols)}
+    results.sort(key=lambda x: symbol_order.get(x.get('symbol'), 999))
+    
+    response = {
+        'status': 'success' if failed_count == 0 else 'partial' if success_count > 0 else 'error',
+        'data': results,
+        'summary': {
+            'total': len(symbols),
+            'success': success_count,
+            'failed': failed_count
+        }
+    }
+    
+    logger.info(f"Multi Greeks completed: {success_count}/{len(symbols)} successful")
+    
+    # Return False only when ALL operations fail (status='error')
+    # Return True for 'success' or 'partial' (at least some succeeded)
+    is_success = response['status'] != 'error'
+    return is_success, response, 200
