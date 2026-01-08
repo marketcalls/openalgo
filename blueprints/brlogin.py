@@ -452,6 +452,19 @@ def broker_callback(broker,para=None):
             auth_token, error_message = auth_function(userid, password, totp_code)
             forward_url = 'firstock.html'
 
+    elif broker == 'nubra':
+        if request.method == 'GET':
+            return render_template('nubra.html')
+
+        elif request.method == 'POST':
+            totp_code = request.form.get('totp')
+
+            if not totp_code:
+                return render_template('nubra.html', error_message="TOTP code is required.")
+
+            auth_token, feed_token, error_message = auth_function(totp_code)
+            forward_url = 'nubra.html'
+
     elif broker == 'samco':
         if request.method == 'GET':
             return render_template('samco.html')

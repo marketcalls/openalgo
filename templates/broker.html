@@ -69,6 +69,9 @@
                 case 'motilal':
                     loginUrl = '/motilal/callback';
                     break;
+                case 'nubra':
+                    loginUrl = '/nubra/callback';
+                    break;
                 case 'flattrade':
                     const flattradeApiKey = getFlattradeApiKey('{{broker_api_key}}');
                     loginUrl = 'https://auth.flattrade.in/?app_key=' + flattradeApiKey;
@@ -186,6 +189,7 @@
                                 <option value="jainamxts" {{ 'disabled' if broker_name != 'jainamxts' }}>JainamXts {{ '(Disabled)' if broker_name != 'jainamxts' }}</option>
                                 <option value="kotak" {{ 'disabled' if broker_name != 'kotak' }}>Kotak Securities {{ '(Disabled)' if broker_name != 'kotak' }}</option>
                                 <option value="mstock" {{ 'disabled' if broker_name != 'mstock' }}>mStock by Mirae Asset {{ '(Disabled)' if broker_name != 'mstock' }}</option>
+                                <option value="nubra" {{ 'disabled' if broker_name != 'nubra' }}>Nubra {{ '(Disabled)' if broker_name != 'nubra' }}</option>
                                 <option value="paytm" {{ 'disabled' if broker_name != 'paytm' }}>Paytm Money {{ '(Disabled)' if broker_name != 'paytm' }}</option>
                                 <option value="pocketful" {{ 'disabled' if broker_name != 'pocketful' }}>Pocketful {{ '(Disabled)' if broker_name != 'pocketful' }}</option>
                                 <option value="samco" {{ 'disabled' if broker_name != 'samco' }}>Samco {{ '(Disabled)' if broker_name != 'samco' }}</option>
