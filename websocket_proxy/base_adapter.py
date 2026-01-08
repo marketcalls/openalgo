@@ -126,10 +126,10 @@ class BaseBrokerWebSocketAdapter(ABC):
 
         try:
             if use_shared_zmq and shared_publisher:
-                # Use shared publisher - don't create own socket
-                self.socket = None
+                # Use shared publisher's socket instead of creating own
+                self.socket = shared_publisher.socket
                 self.zmq_port = shared_publisher.zmq_port
-                self.context = None
+                self.context = shared_publisher.context
                 self.logger.info(f"Using shared ZMQ publisher on port {self.zmq_port}")
             else:
                 # Initialize own ZeroMQ context and socket

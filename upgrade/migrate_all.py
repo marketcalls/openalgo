@@ -45,6 +45,7 @@ MIGRATIONS = [
     ('migrate_security_columns.py', 'Security Columns'),
     ('migrate_sandbox.py', 'Sandbox Mode'),
     ('migrate_order_mode.py', 'Order Mode & Action Center'),
+    ('migrate_sandbox_pnl.py', 'Sandbox Day-wise PnL Tracking'),
 
     # Performance migrations
     ('migrate_indexes.py', 'Database Performance Indexes'),

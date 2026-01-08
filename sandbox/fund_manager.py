@@ -75,6 +75,7 @@ class FundManager:
                         available_balance=self.starting_capital,
                         used_margin=Decimal('0.00'),
                         realized_pnl=Decimal('0.00'),
+                        today_realized_pnl=Decimal('0.00'),
                         unrealized_pnl=Decimal('0.00'),
                         total_pnl=Decimal('0.00'),
                         last_reset_date=datetime.now(pytz.timezone('Asia/Kolkata')),
@@ -114,7 +115,9 @@ class FundManager:
                 'availablecash': float(funds.available_balance),
                 'collateral': 0.00,  # No collateral in sandbox
                 'm2munrealized': float(funds.unrealized_pnl),
-                'm2mrealized': float(funds.realized_pnl),
+                'm2mrealized': float(funds.today_realized_pnl or 0),  # Today's realized P&L (resets daily)
+                'total_realized_pnl': float(funds.realized_pnl),  # All-time realized P&L
+                'today_realized_pnl': float(funds.today_realized_pnl or 0),
                 'utiliseddebits': float(funds.used_margin),
                 'grossexposure': float(funds.used_margin),
                 'totalpnl': float(funds.total_pnl),
@@ -130,7 +133,7 @@ class FundManager:
         """Check if funds need to be reset (every Sunday at midnight IST)"""
         try:
             # Check if auto-reset is disabled
-            reset_day = get_config('reset_day', 'Sunday')
+            reset_day = get_config('reset_day', 'Never')
             if reset_day.lower() == 'never':
                 return  # Skip reset check entirely
 
@@ -172,6 +175,7 @@ class FundManager:
                 funds.available_balance = self.starting_capital
                 funds.used_margin = Decimal('0.00')
                 funds.realized_pnl = Decimal('0.00')
+                funds.today_realized_pnl = Decimal('0.00')
                 funds.unrealized_pnl = Decimal('0.00')
                 funds.total_pnl = Decimal('0.00')
                 funds.last_reset_date = datetime.now(pytz.timezone('Asia/Kolkata'))
@@ -254,9 +258,11 @@ class FundManager:
                 funds.used_margin -= amount
                 funds.available_balance += amount
 
-                # Add realized P&L
+                # Add realized P&L (all-time)
                 funds.available_balance += realized_pnl
                 funds.realized_pnl += realized_pnl
+                # Add to today's realized P&L (resets daily at session boundary)
+                funds.today_realized_pnl = (funds.today_realized_pnl or Decimal('0.00')) + realized_pnl
                 funds.total_pnl = funds.realized_pnl + funds.unrealized_pnl
 
                 db_session.commit()

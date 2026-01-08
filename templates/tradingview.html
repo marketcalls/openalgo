@@ -201,6 +201,10 @@
 
 <!-- Include Prism JS and TradingView JS -->
 <script src="{{ url_for('static', filename='js/prism.js') }}"></script>
+<script>
+// Pass host URL from template to JavaScript
+window.OPENALGO_HOST = '{{host}}';
+</script>
 <script src="{{ url_for('static', filename='js/tradingview.js') }}"></script>
 <script>
 function copyWebhook() {

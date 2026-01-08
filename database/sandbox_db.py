@@ -117,7 +117,8 @@ class SandboxPositions(Base):
     ltp = Column(DECIMAL(10, 2), nullable=True)  # Last traded price
     pnl = Column(DECIMAL(10, 2), default=0.00)  # Current P&L (unrealized for open, realized for closed)
     pnl_percent = Column(DECIMAL(10, 4), default=0.00)  # P&L percentage
-    accumulated_realized_pnl = Column(DECIMAL(10, 2), default=0.00)  # Accumulated realized P&L for the day
+    accumulated_realized_pnl = Column(DECIMAL(10, 2), default=0.00)  # Accumulated realized P&L (all-time for this position)
+    today_realized_pnl = Column(DECIMAL(10, 2), default=0.00)  # Today's realized P&L only (resets daily)
 
     # Margin tracking - stores exact margin blocked for this position
     # This prevents margin release bugs when execution price differs from order placement price
@@ -174,7 +175,8 @@ class SandboxFunds(Base):
     used_margin = Column(DECIMAL(15, 2), default=0.00)  # Margin blocked in positions
 
     # P&L tracking
-    realized_pnl = Column(DECIMAL(15, 2), default=0.00)  # Realized profit/loss from closed positions
+    realized_pnl = Column(DECIMAL(15, 2), default=0.00)  # Realized profit/loss from closed positions (all-time)
+    today_realized_pnl = Column(DECIMAL(15, 2), default=0.00)  # Today's realized P&L only (resets daily)
     unrealized_pnl = Column(DECIMAL(15, 2), default=0.00)  # Unrealized P&L from open positions
     total_pnl = Column(DECIMAL(15, 2), default=0.00)  # Total P&L (realized + unrealized)
 
@@ -185,6 +187,38 @@ class SandboxFunds(Base):
     # Timestamps
     created_at = Column(DateTime, nullable=False, default=func.now())
     updated_at = Column(DateTime, nullable=False, default=func.now(), onupdate=func.now())
+
+
+class SandboxDailyPnL(Base):
+    """Sandbox daily P&L snapshots - tracks end-of-day P&L for historical reporting"""
+    __tablename__ = 'sandbox_daily_pnl'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(50), nullable=False, index=True)
+    date = Column(Date, nullable=False, index=True)  # Trading date
+
+    # Realized P&L (from closed positions/trades)
+    realized_pnl = Column(DECIMAL(15, 2), default=0.00)
+
+    # Unrealized P&L (from open positions + holdings at EOD)
+    positions_unrealized_pnl = Column(DECIMAL(15, 2), default=0.00)  # Open positions MTM
+    holdings_unrealized_pnl = Column(DECIMAL(15, 2), default=0.00)  # Holdings MTM
+
+    # Total MTM = Realized + Unrealized
+    total_mtm = Column(DECIMAL(15, 2), default=0.00)
+
+    # Portfolio value at EOD
+    available_balance = Column(DECIMAL(15, 2), default=0.00)
+    used_margin = Column(DECIMAL(15, 2), default=0.00)
+    portfolio_value = Column(DECIMAL(15, 2), default=0.00)  # Total value including positions
+
+    # Metadata
+    created_at = Column(DateTime, nullable=False, default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'date', name='unique_user_daily_pnl'),
+        Index('idx_user_date', 'user_id', 'date'),
+    )
 
 
 class SandboxConfig(Base):
@@ -219,8 +253,8 @@ def init_default_config():
         },
         {
             'config_key': 'reset_day',
-            'config_value': 'Sunday',
-            'description': 'Day of week for automatic fund reset'
+            'config_value': 'Never',
+            'description': 'Day of week for automatic fund reset (Never = disabled)'
         },
         {
             'config_key': 'reset_time',

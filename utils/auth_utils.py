@@ -108,6 +108,14 @@ def async_master_contract_download(broker):
         except Exception as cache_error:
             logger.error(f"Failed to load symbols into cache: {cache_error}")
             # Don't fail the whole process if cache loading fails
+
+        # Run catch-up tasks for sandbox mode (T+1 settlement, daily PnL reset)
+        try:
+            from sandbox.catch_up_processor import run_catch_up_tasks
+            run_catch_up_tasks()
+        except Exception as catch_up_error:
+            logger.error(f"Failed to run catch-up tasks: {catch_up_error}")
+            # Don't fail the whole process if catch-up fails
             
     except Exception as e:
         logger.error(f"Error during master contract download for {broker}: {str(e)}")

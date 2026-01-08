@@ -126,7 +126,7 @@ def _schedule_square_off_jobs(scheduler):
     try:
         from sandbox.fund_manager import reset_all_user_funds
 
-        reset_day = get_config('reset_day', 'Sunday')
+        reset_day = get_config('reset_day', 'Never')
         reset_time_str = get_config('reset_time', '00:00')
 
         # Check if auto-reset is disabled
@@ -161,6 +161,154 @@ def _schedule_square_off_jobs(scheduler):
 
     except Exception as e:
         logger.error(f"Failed to schedule auto-reset: {e}")
+
+    # Schedule daily P&L snapshot at 23:59 IST (before session boundary reset)
+    # This captures the end-of-day P&L for historical reporting
+    try:
+        import os
+        from decimal import Decimal
+        from datetime import date
+
+        def capture_daily_pnl_snapshot():
+            """Capture end-of-day P&L snapshot for all users"""
+            try:
+                from database.sandbox_db import (
+                    SandboxFunds, SandboxPositions, SandboxHoldings,
+                    SandboxDailyPnL, db_session
+                )
+
+                today = date.today()
+
+                # Get all users with funds
+                all_funds = SandboxFunds.query.all()
+
+                for funds in all_funds:
+                    user_id = funds.user_id
+
+                    # Calculate positions unrealized P&L
+                    positions = SandboxPositions.query.filter_by(user_id=user_id).filter(
+                        SandboxPositions.quantity != 0
+                    ).all()
+                    positions_unrealized = sum(Decimal(str(p.pnl or 0)) for p in positions)
+
+                    # Calculate holdings unrealized P&L
+                    holdings = SandboxHoldings.query.filter_by(user_id=user_id).filter(
+                        SandboxHoldings.quantity != 0
+                    ).all()
+                    holdings_unrealized = sum(Decimal(str(h.pnl or 0)) for h in holdings)
+
+                    # Get today's realized P&L
+                    realized_pnl = Decimal(str(funds.today_realized_pnl or 0))
+
+                    # Total MTM = Realized + Unrealized (positions + holdings)
+                    total_unrealized = positions_unrealized + holdings_unrealized
+                    total_mtm = realized_pnl + total_unrealized
+
+                    # Portfolio value
+                    portfolio_value = Decimal(str(funds.available_balance or 0)) + Decimal(str(funds.used_margin or 0))
+
+                    # Check if snapshot already exists for today
+                    existing = SandboxDailyPnL.query.filter_by(
+                        user_id=user_id,
+                        date=today
+                    ).first()
+
+                    if existing:
+                        # Update existing snapshot
+                        existing.realized_pnl = realized_pnl
+                        existing.positions_unrealized_pnl = positions_unrealized
+                        existing.holdings_unrealized_pnl = holdings_unrealized
+                        existing.total_mtm = total_mtm
+                        existing.available_balance = funds.available_balance
+                        existing.used_margin = funds.used_margin
+                        existing.portfolio_value = portfolio_value
+                    else:
+                        # Create new snapshot
+                        snapshot = SandboxDailyPnL(
+                            user_id=user_id,
+                            date=today,
+                            realized_pnl=realized_pnl,
+                            positions_unrealized_pnl=positions_unrealized,
+                            holdings_unrealized_pnl=holdings_unrealized,
+                            total_mtm=total_mtm,
+                            available_balance=funds.available_balance,
+                            used_margin=funds.used_margin,
+                            portfolio_value=portfolio_value
+                        )
+                        db_session.add(snapshot)
+
+                db_session.commit()
+                logger.info(f"Daily P&L snapshot captured for {len(all_funds)} users")
+
+            except Exception as e:
+                db_session.rollback()
+                logger.error(f"Error capturing daily P&L snapshot: {e}")
+
+        # Schedule snapshot at 23:59 IST (before midnight reset)
+        snapshot_trigger = CronTrigger(
+            hour=23,
+            minute=59,
+            timezone=IST
+        )
+
+        snapshot_job = scheduler.add_job(
+            func=capture_daily_pnl_snapshot,
+            trigger=snapshot_trigger,
+            id='daily_pnl_snapshot',
+            name='Daily PnL Snapshot (23:59 IST)',
+            replace_existing=True,
+            misfire_grace_time=300
+        )
+
+        logger.debug(f"  Daily PnL Snapshot: 23:59 IST (Job ID: {snapshot_job.id})")
+
+    except Exception as e:
+        logger.error(f"Failed to schedule daily PnL snapshot: {e}")
+
+    # Schedule daily P&L reset at SESSION_EXPIRY_TIME (default 03:00 IST)
+    # This resets today_realized_pnl for all users at session boundary
+    try:
+        def reset_daily_pnl():
+            """Reset today_realized_pnl for all users at session boundary"""
+            try:
+                from database.sandbox_db import SandboxFunds, SandboxPositions, db_session
+
+                # Reset funds - today_realized_pnl
+                funds_count = SandboxFunds.query.update({'today_realized_pnl': Decimal('0.00')})
+
+                # Reset positions - today_realized_pnl
+                positions_count = SandboxPositions.query.update({'today_realized_pnl': Decimal('0.00')})
+
+                db_session.commit()
+                logger.info(f"Daily P&L reset completed: {funds_count} funds, {positions_count} positions reset")
+
+            except Exception as e:
+                db_session.rollback()
+                logger.error(f"Error in daily P&L reset: {e}")
+
+        # Get reset time from SESSION_EXPIRY_TIME env variable
+        session_expiry_str = os.getenv('SESSION_EXPIRY_TIME', '03:00')
+        reset_hour, reset_minute = map(int, session_expiry_str.split(':'))
+
+        pnl_reset_trigger = CronTrigger(
+            hour=reset_hour,
+            minute=reset_minute,
+            timezone=IST
+        )
+
+        pnl_reset_job = scheduler.add_job(
+            func=reset_daily_pnl,
+            trigger=pnl_reset_trigger,
+            id='daily_pnl_reset',
+            name=f'Daily PnL Reset ({session_expiry_str} IST)',
+            replace_existing=True,
+            misfire_grace_time=300
+        )
+
+        logger.debug(f"  Daily PnL Reset: {session_expiry_str} IST (Job ID: {pnl_reset_job.id})")
+
+    except Exception as e:
+        logger.error(f"Failed to schedule daily PnL reset: {e}")
 
 
 def start_squareoff_scheduler():

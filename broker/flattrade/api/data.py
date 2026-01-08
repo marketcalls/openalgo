@@ -106,7 +106,7 @@ class BrokerData:
             if response.get('stat') != 'Ok':
                 raise Exception(f"Error from Flattrade API: {response.get('emsg', 'Unknown error')}")
             
-            # Return simplified quote data as dict (not list) - NOW INCLUDING OI
+            # Return simplified quote data as dict (not list) - INCLUDING OI and TICK SIZE
             return {
                 'bid': float(response.get('bp1', 0)),
                 'ask': float(response.get('sp1', 0)),
@@ -116,7 +116,8 @@ class BrokerData:
                 'ltp': float(response.get('lp', 0)),
                 'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
                 'volume': int(float(response.get('v', 0))),
-                'oi': int(response.get('oi', 0))  # 🔥 ADDED OPEN INTEREST
+                'oi': int(response.get('oi', 0)),
+                'tick_size': float(response.get('ti', 0)) if response.get('ti') else None
             }
 
         except Exception as e:
@@ -133,10 +134,10 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            # Flattrade API rate limits: 40 requests/second, 200/minute
+            # Flattrade API rate limits: 10 requests/second
             # Process one symbol at a time since API doesn't support batching
-            BATCH_SIZE = 40  # Process 40 symbols per batch (matches rate limit per second)
-            RATE_LIMIT_DELAY = 1.0  # 1 second delay between batches
+            BATCH_SIZE = 10  # Process 10 symbols per batch (matches rate limit per second)
+            RATE_LIMIT_DELAY = 1.1  # 1.1 second delay between batches for safety margin
 
             if len(symbols) > BATCH_SIZE:
                 logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
@@ -201,7 +202,8 @@ class BrokerData:
                     'ltp': float(response.get('lp', 0)),
                     'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
                     'volume': int(float(response.get('v', 0))),
-                    'oi': int(response.get('oi', 0))
+                    'oi': int(response.get('oi', 0)),
+                    'tick_size': float(response.get('ti', 0)) if response.get('ti') else None
                 }
             }
 
@@ -253,7 +255,8 @@ class BrokerData:
                     'ltp': float(response.get('lp', 0)),
                     'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
                     'volume': int(float(response.get('v', 0))),
-                    'oi': int(response.get('oi', 0))
+                    'oi': int(response.get('oi', 0)),
+                    'tick_size': float(response.get('ti', 0)) if response.get('ti') else None
                 }
             }
 

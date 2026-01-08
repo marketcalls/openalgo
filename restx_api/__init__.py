@@ -34,6 +34,7 @@ from .option_symbol import api as option_symbol_ns
 from .options_order import api as options_order_ns
 from .options_multiorder import api as options_multiorder_ns
 from .option_greeks import api as option_greeks_ns
+from .multi_option_greeks import api as multi_option_greeks_ns
 from .synthetic_future import api as synthetic_future_ns
 from .analyzer import api as analyzer_ns
 from .ping import api as ping_ns
@@ -43,6 +44,7 @@ from .instruments import api as instruments_ns
 from .chart_api import api as chart_ns
 from .market_holidays import api as market_holidays_ns
 from .market_timings import api as market_timings_ns
+from .pnl_symbols import api as pnl_symbols_ns
 
 # Add namespaces
 api.add_namespace(place_order_ns, path='/placeorder')
@@ -74,6 +76,7 @@ api.add_namespace(option_symbol_ns, path='/optionsymbol')
 api.add_namespace(options_order_ns, path='/optionsorder')
 api.add_namespace(options_multiorder_ns, path='/optionsmultiorder')
 api.add_namespace(option_greeks_ns, path='/optiongreeks')
+api.add_namespace(multi_option_greeks_ns, path='/multioptiongreeks')
 api.add_namespace(synthetic_future_ns, path='/syntheticfuture')
 api.add_namespace(analyzer_ns, path='/analyzer')
 api.add_namespace(ping_ns, path='/ping')
@@ -83,3 +86,4 @@ api.add_namespace(instruments_ns, path='/instruments')
 api.add_namespace(chart_ns, path='/chart')
 api.add_namespace(market_holidays_ns, path='/market/holidays')
 api.add_namespace(market_timings_ns, path='/market/timings')
+api.add_namespace(pnl_symbols_ns, path='/pnl')

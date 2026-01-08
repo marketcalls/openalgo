@@ -262,6 +262,7 @@ def init_latency_monitoring(app):
         'expiry': 'EXPIRY',
         'margin': 'MARGIN',
         'option_greeks': 'GREEKS',
+        'multi_option_greeks': 'MULTI_GREEKS',
         'option_symbol': 'OPTION_SYMBOL',
         'synthetic_future': 'SYNTHETIC',
         'ticker': 'TICKER',

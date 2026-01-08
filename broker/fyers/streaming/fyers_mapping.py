@@ -6,6 +6,9 @@ Maps Fyers HSM data to OpenAlgo format for compatibility
 import time
 from typing import Dict, Any, Optional
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 class FyersDataMapper:
     """
@@ -43,7 +46,7 @@ class FyersDataMapper:
                 exchange = fyers_data.get("exchange", "")
                 symbol_name = symbol
             
-            print(f"LTP Mapping: original_symbol={symbol}, parsed exchange={exchange}, symbol_name={symbol_name}")
+            logger.debug(f"LTP Mapping: original_symbol={symbol}, parsed exchange={exchange}, symbol_name={symbol_name}")
             
             # Apply multiplier and precision to LTP
             ltp = fyers_data.get("ltp", 0)
@@ -75,23 +78,23 @@ class FyersDataMapper:
             return openalgo_data
             
         except Exception as e:
-            print(f"Error mapping LTP data: {e}")
+            logger.debug(f"Error mapping LTP data: {e}")
             return None
     
     def map_to_openalgo_quote(self, fyers_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Map Fyers data to OpenAlgo Quote format
-        
+
         Args:
             fyers_data: Raw data from Fyers HSM WebSocket
-            
+
         Returns:
             OpenAlgo Quote format dict or None if mapping fails
         """
         try:
             if not fyers_data:
                 return None
-            
+
             # Get the symbol
             symbol = fyers_data.get("original_symbol") or fyers_data.get("symbol", "")
             
@@ -149,17 +152,20 @@ class FyersDataMapper:
                 "lower_circuit": convert_price(fyers_data.get("lower_ckt", 0)),
                 "last_traded_time": fyers_data.get("last_traded_time", 0),
                 "exchange_time": fyers_data.get("exch_feed_time", 0),
-                "average_price": convert_price(fyers_data.get("avg_trade_price", 0)),
+                "avg_trade_price": convert_price(fyers_data.get("avg_trade_price", 0)),
+                "last_trade_quantity": fyers_data.get("last_traded_qty", 0),
                 "total_buy_quantity": fyers_data.get("tot_buy_qty", 0),
                 "total_sell_quantity": fyers_data.get("tot_sell_qty", 0),
+                "change": convert_price(fyers_data.get("ch", 0)),
+                "change_percent": fyers_data.get("chp", 0),
                 "timestamp": int(time.time()),
                 "data_type": "Quote"
             }
-            
+
             return openalgo_data
             
         except Exception as e:
-            print(f"Error mapping Quote data: {e}")
+            logger.debug(f"Error mapping Quote data: {e}")
             return None
     
     def map_to_openalgo_depth(self, fyers_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -260,7 +266,7 @@ class FyersDataMapper:
             return openalgo_data
 
         except Exception as e:
-            print(f"Error mapping Depth data: {e}")
+            logger.debug(f"Error mapping Depth data: {e}")
             return None
 
     def map_tbt_depth_to_openalgo(self, ticker: str, tbt_depth: Dict[str, Any],
@@ -319,7 +325,7 @@ class FyersDataMapper:
             return openalgo_data
 
         except Exception as e:
-            print(f"Error mapping TBT Depth data: {e}")
+            logger.debug(f"Error mapping TBT Depth data: {e}")
             return None
     
     def map_index_to_synthetic_depth(self, fyers_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -350,7 +356,7 @@ class FyersDataMapper:
                 exchange = fyers_data.get("exchange", "")
                 symbol_name = symbol
             
-            print(f"Index Depth Mapping: original_symbol={symbol}, parsed exchange={exchange}, symbol_name={symbol_name}")
+            logger.debug(f"Index Depth Mapping: original_symbol={symbol}, parsed exchange={exchange}, symbol_name={symbol_name}")
             
             # Get LTP from index data and apply proper conversion
             raw_ltp = fyers_data.get("ltp", 0)
@@ -411,7 +417,7 @@ class FyersDataMapper:
             return openalgo_data
             
         except Exception as e:
-            print(f"Error mapping Index to synthetic Depth data: {e}")
+            logger.debug(f"Error mapping Index to synthetic Depth data: {e}")
             return None
     
     def map_fyers_data(self, fyers_data: Dict[str, Any], requested_type: str = "Quote") -> Optional[Dict[str, Any]]:

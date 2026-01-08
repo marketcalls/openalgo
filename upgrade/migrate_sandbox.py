@@ -269,7 +269,7 @@ def insert_default_config(conn):
 
     default_configs = [
         ('starting_capital', '10000000.00', 'Starting sandbox capital in INR (₹1 Crore) - Min: ₹1000'),
-        ('reset_day', 'Sunday', 'Day of week for automatic fund reset'),
+        ('reset_day', 'Never', 'Day of week for automatic fund reset (Never = disabled)'),
         ('reset_time', '00:00', 'Time for automatic fund reset (IST)'),
         ('order_check_interval', '5', 'Interval in seconds to check pending orders - Range: 1-30 seconds'),
         ('mtm_update_interval', '5', 'Interval in seconds to update MTM - Range: 0-60 seconds (0 = manual only)'),

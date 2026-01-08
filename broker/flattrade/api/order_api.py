@@ -40,16 +40,24 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     return json.loads(data)
 
 def get_order_book(auth):
-    return get_api_response("/PiConnectTP/OrderBook",auth,method="POST")
+    response = get_api_response("/PiConnectTP/OrderBook",auth,method="POST")
+    logger.debug(f"Flattrade OrderBook Response: {response}")
+    return response
 
 def get_trade_book(auth):
-    return get_api_response("/PiConnectTP/TradeBook",auth,method="POST")
+    response = get_api_response("/PiConnectTP/TradeBook",auth,method="POST")
+    logger.debug(f"Flattrade TradeBook Response: {response}")
+    return response
 
 def get_positions(auth):
-    return get_api_response("/PiConnectTP/PositionBook",auth,method="POST")
+    response = get_api_response("/PiConnectTP/PositionBook",auth,method="POST")
+    logger.debug(f"Flattrade PositionBook Response: {response}")
+    return response
 
 def get_holdings(auth):
-    return get_api_response("/PiConnectTP/Holdings",auth,method="POST")
+    response = get_api_response("/PiConnectTP/Holdings",auth,method="POST")
+    logger.debug(f"Flattrade Holdings Response: {response}")
+    return response
 
 def get_open_position(tradingsymbol, exchange, producttype,auth):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
@@ -80,7 +88,7 @@ def place_order_api(data,auth):
     BROKER_API_KEY = full_api_key.split(':::')[0]
     data['apikey'] = BROKER_API_KEY
     token = get_token(data['symbol'], data['exchange'])
-    newdata = transform_data(data, token)  
+    newdata = transform_data(data, token, AUTH_TOKEN)
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
 
     payload = "jData=" + json.dumps(newdata) + "&jKey=" + AUTH_TOKEN

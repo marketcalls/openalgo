@@ -405,6 +405,7 @@ class ExecutionEngine:
                     position.pnl = Decimal('0.00')  # Reset current P&L (will be updated by MTM)
                     position.pnl_percent = Decimal('0.00')
                     # accumulated_realized_pnl stays as is from previous closed trades
+                    # today_realized_pnl: Keep current value (already reset at session boundary)
                     # Store the exact margin that was blocked at order placement time
                     order_margin = order.margin_blocked if hasattr(order, 'margin_blocked') and order.margin_blocked else Decimal('0.00')
                     position.margin_blocked = order_margin
@@ -431,15 +432,17 @@ class ExecutionEngine:
                         logger.info(f"Released exact margin ₹{margin_to_release} for closed position (from position.margin_blocked)")
 
                     # Keep position with 0 quantity to show it was closed
-                    # Add realized P&L to accumulated realized P&L (for day's trading)
+                    # Add realized P&L to accumulated realized P&L (all-time)
                     position.accumulated_realized_pnl += realized_pnl
+                    # Add realized P&L to today's realized P&L (resets daily at session boundary)
+                    position.today_realized_pnl = (position.today_realized_pnl or Decimal('0.00')) + realized_pnl
 
                     position.quantity = 0
                     position.margin_blocked = Decimal('0.00')  # Reset margin to 0 when position fully closed
                     position.ltp = execution_price
-                    position.pnl = position.accumulated_realized_pnl  # Display total accumulated P&L
+                    position.pnl = position.today_realized_pnl  # Display today's realized P&L for closed positions
                     position.pnl_percent = Decimal('0.00')
-                    logger.info(f"Position closed: {order.symbol}, Realized P&L: ₹{realized_pnl}, Total Accumulated P&L: ₹{position.accumulated_realized_pnl}")
+                    logger.info(f"Position closed: {order.symbol}, Realized P&L: ₹{realized_pnl}, Today's Realized P&L: ₹{position.today_realized_pnl}")
 
                 elif (old_quantity > 0 and final_quantity > old_quantity) or (old_quantity < 0 and final_quantity < old_quantity):
                     # Adding to existing position (same direction, position size increasing)
@@ -467,9 +470,11 @@ class ExecutionEngine:
                         reduced_quantity, execution_price
                     )
 
-                    # Add realized P&L to accumulated realized P&L
-                    # This tracks all partial closes throughout the day
+                    # Add realized P&L to accumulated realized P&L (all-time)
+                    # This tracks all partial closes
                     position.accumulated_realized_pnl = (position.accumulated_realized_pnl or Decimal('0.00')) + realized_pnl
+                    # Add realized P&L to today's realized P&L (resets daily at session boundary)
+                    position.today_realized_pnl = (position.today_realized_pnl or Decimal('0.00')) + realized_pnl
 
                     # Release margin PROPORTIONALLY for reduced quantity
                     # Use exact margin stored in position, release proportionally

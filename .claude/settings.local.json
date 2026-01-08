@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nPerf: Move Telegram alerts off request thread to reduce order latency\n\nWrap all telegram_alert_service.send_order_alert\\(\\) calls with\nsocketio.start_background_task\\(\\) to move DB lookups and message\nformatting off the request thread entirely.\n\nPreviously, even when Telegram was not configured, the synchronous\nDB lookups \\(get_username_by_apikey, get_telegram_user_by_username\\)\nwould block the order response by 5-100ms.\n\nAffected services:\n- place_order_service\n- place_smart_order_service\n- cancel_order_service\n- cancel_all_order_service\n- basket_order_service\n- close_position_service\n- place_options_order_service\n- options_multiorder_service\n- modify_order_service\n- sandbox_service\n- split_order_service\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push)",
+      "WebFetch(domain:127.0.0.1)",
+      "Bash(sqlite3:*)",
+      "Bash(python:*)",
+      "Bash(npm run build:css:*)",
+      "Bash(npm install)",
+      "Bash(git commit:*)"
+    ]
+  }
+}

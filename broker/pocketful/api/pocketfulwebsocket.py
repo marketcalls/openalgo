@@ -1,10 +1,10 @@
-import requests
 import json
 import threading
 import time
 import websocket
 import struct
 from broker.pocketful.api.packet_decoder import decodeDetailedMarketData, decodeCompactMarketData, decodeSnapquoteData, decodeOrderUpdate, decodeTradeUpdate
+from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -173,29 +173,37 @@ class PocketfulSocket(object):
         self.access_token = access_token
 
     def get_request(self, url, params):
-        headers = self.headers
+        """Make GET request using shared httpx client"""
+        client = get_httpx_client()
+        headers = dict(self.headers)
         headers['Authorization'] = f'Bearer {self.access_token}'
-        res = requests.get(f'{self.base_url}{url}' , params=params, headers=headers)
+        res = client.get(f'{self.base_url}{url}', params=params, headers=headers)
         return res.json()
 
     def post_request(self, url, data):
-        headers = self.headers
+        """Make POST request using shared httpx client"""
+        client = get_httpx_client()
+        headers = dict(self.headers)
         headers['Authorization'] = f'Bearer {self.access_token}'
-        res = requests.post(f'{self.base_url}{url}', headers=headers, data=json.dumps(data))
-        logger.info(f"{res}")
+        res = client.post(f'{self.base_url}{url}', headers=headers, json=data)
+        logger.info(f"POST Response: {res.status_code}")
         return res.json()
 
     def put_request(self, url, data):
-        headers = self.headers
+        """Make PUT request using shared httpx client"""
+        client = get_httpx_client()
+        headers = dict(self.headers)
         headers['Authorization'] = f'Bearer {self.access_token}'
-        res = requests.put(f'{self.base_url}{url}', headers=headers, data=json.dumps(data))
-        logger.info(f"{res}")
+        res = client.put(f'{self.base_url}{url}', headers=headers, json=data)
+        logger.info(f"PUT Response: {res.status_code}")
         return res.json()
 
     def delete_request(self, url, params):
-        headers = self.headers
+        """Make DELETE request using shared httpx client"""
+        client = get_httpx_client()
+        headers = dict(self.headers)
         headers['Authorization'] = f'Bearer {self.access_token}'
-        res = requests.delete(f'{self.base_url}{url}' , params=params, headers=headers)
+        res = client.delete(f'{self.base_url}{url}', params=params, headers=headers)
         return res.json()
 
     

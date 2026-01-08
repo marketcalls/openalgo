@@ -223,6 +223,27 @@ def process_angel_json(path):
     df.loc[(df['instrumenttype'] == 'OPTSTK') & (df['symbol'].str.endswith('CE', na=False)), 'instrumenttype'] = 'CE'
     df.loc[(df['instrumenttype'] == 'OPTSTK') & (df['symbol'].str.endswith('PE', na=False)), 'instrumenttype'] = 'PE'
 
+    # Convert MCX OPTFUT to CE/PE (to match NFO format)
+    df.loc[(df['instrumenttype'] == 'OPTFUT') & (df['symbol'].str.endswith('CE', na=False)), 'instrumenttype'] = 'CE'
+    df.loc[(df['instrumenttype'] == 'OPTFUT') & (df['symbol'].str.endswith('PE', na=False)), 'instrumenttype'] = 'PE'
+
+    # Convert CDS OPTCUR/OPTIRC to CE/PE (to match NFO format)
+    df.loc[(df['instrumenttype'] == 'OPTCUR') & (df['symbol'].str.endswith('CE', na=False)), 'instrumenttype'] = 'CE'
+    df.loc[(df['instrumenttype'] == 'OPTCUR') & (df['symbol'].str.endswith('PE', na=False)), 'instrumenttype'] = 'PE'
+    df.loc[(df['instrumenttype'] == 'OPTIRC') & (df['symbol'].str.endswith('CE', na=False)), 'instrumenttype'] = 'CE'
+    df.loc[(df['instrumenttype'] == 'OPTIRC') & (df['symbol'].str.endswith('PE', na=False)), 'instrumenttype'] = 'PE'
+
+    # Convert all futures instrument types to 'FUT' for consistency
+    # FUTIDX (Index Futures), FUTSTK (Stock Futures) - NFO/BFO
+    # FUTCOM (Commodity Futures) - MCX
+    # FUTCUR, FUTIRC, FUTIRT (Currency/Interest Rate Futures) - CDS
+    df.loc[df['instrumenttype'] == 'FUTIDX', 'instrumenttype'] = 'FUT'
+    df.loc[df['instrumenttype'] == 'FUTSTK', 'instrumenttype'] = 'FUT'
+    df.loc[df['instrumenttype'] == 'FUTCOM', 'instrumenttype'] = 'FUT'
+    df.loc[df['instrumenttype'] == 'FUTCUR', 'instrumenttype'] = 'FUT'
+    df.loc[df['instrumenttype'] == 'FUTIRC', 'instrumenttype'] = 'FUT'
+    df.loc[df['instrumenttype'] == 'FUTIRT', 'instrumenttype'] = 'FUT'
+
     # Return the processed DataFrame
     return df
 
