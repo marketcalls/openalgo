@@ -87,11 +87,14 @@ def _create_http_client() -> httpx.Client:
     """
     Create a new HTTP client with automatic protocol negotiation and latency tracking.
     Enables both HTTP/2 and HTTP/1.1, letting httpx choose the best protocol.
+    
+    Note: HTTP/2 is disabled on Windows to avoid WinError 10035 socket issues.
 
     Returns:
         httpx.Client: A configured HTTP client with protocol auto-negotiation and timing hooks
     """
     import os
+    import sys
     import time
     from flask import g
 
@@ -127,12 +130,15 @@ def _create_http_client() -> httpx.Client:
         # In standalone mode, disable HTTP/2 to avoid protocol negotiation issues
         app_mode = os.environ.get('APP_MODE', 'integrated').strip().strip("'\"")
         is_standalone = app_mode == 'standalone'
+        
+        # Also disable HTTP/2 on Windows due to WinError 10035 socket issues
+        is_windows = sys.platform == 'win32'
 
-        # Disable HTTP/2 in standalone/Docker environments to avoid protocol negotiation issues
-        http2_enabled = not is_standalone
+        # Disable HTTP/2 in standalone/Docker environments or Windows to avoid socket issues
+        http2_enabled = not is_standalone and not is_windows
 
         client = httpx.Client(
-            http2=http2_enabled,  # Disable HTTP/2 in standalone mode, enable in integrated mode
+            http2=http2_enabled,  # Disable HTTP/2 in standalone mode or Windows
             http1=True,  # Always enable HTTP/1.1 for compatibility
             timeout=120.0,  # Increased timeout for large historical data requests
             limits=httpx.Limits(
@@ -149,7 +155,9 @@ def _create_http_client() -> httpx.Client:
             }
         )
 
-        if is_standalone:
+        if is_windows:
+            logger.info("Running on Windows - HTTP/2 disabled to avoid socket errors (WinError 10035)")
+        elif is_standalone:
             logger.info("Running in standalone mode - HTTP/2 disabled for compatibility")
         else:
             logger.info("Running in integrated mode - HTTP/2 enabled for optimal performance")
