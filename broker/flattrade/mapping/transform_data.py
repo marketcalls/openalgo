@@ -109,7 +109,7 @@ def transform_modify_order_data(data, token):
     if symbol and '&' in symbol:
         symbol = symbol.replace('&', '%26')
 
-    return {
+    result = {
         "uid": data["apikey"],
         "exch": data["exchange"],
         "norenordno": data["orderid"],
@@ -118,9 +118,15 @@ def transform_modify_order_data(data, token):
         "qty": str(data["quantity"]),
         "tsym": symbol,
         "ret": "DAY",
-        "trgprc": str(data.get("trigger_price") or 0),  # Required for SL/SL-M orders
         "dscqty": str(data.get("disclosed_quantity") or 0)
     }
+    
+    # Only include trigger price for SL/SL-M orders
+    # Sending trgprc=0 for LIMIT orders causes "Trigger price invalid - 0.00" error
+    if data["pricetype"] in ["SL", "SL-M"]:
+        result["trgprc"] = str(data.get("trigger_price") or 0)
+    
+    return result
 
 
 
