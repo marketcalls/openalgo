@@ -8,7 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
+# dist is INCLUDED - pre-built for community use
 dist-ssr
 *.local
 
