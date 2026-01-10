@@ -48,14 +48,26 @@ ENV/
 env.bak/ 
 venv.bak/ 
 
-# Node modules
-/node_modules/
+# Node modules (all directories)
+node_modules/
+**/node_modules/
 
 # Build output
-/dist/
-/build/
-/.next/
-/out/
+dist/
+build/
+.next/
+out/
+
+# Frontend specific
+frontend/dist/
+frontend/.cache/
+*.local
 
 # Tailwind CSS output
 # **/output.css
+
+# npm cache
+.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
