@@ -53,14 +53,25 @@ export const useAuthStore = create<AuthStore>()(
         const now = new Date()
         const loginTime = new Date(user.loginTime)
 
-        // Get IST time
-        const istOffset = 5.5 * 60 * 60 * 1000
-        const nowIST = new Date(now.getTime() + istOffset)
+        // Convert to IST properly: UTC + 5.5 hours
+        // First get UTC time, then add IST offset
+        const istOffsetMs = 5.5 * 60 * 60 * 1000
+        const localOffsetMs = now.getTimezoneOffset() * 60 * 1000
+
+        // Convert current time to IST
+        const nowUTC = now.getTime() + localOffsetMs
+        const nowIST = new Date(nowUTC + istOffsetMs)
+
+        // Convert login time to IST
+        const loginUTC = loginTime.getTime() + localOffsetMs
+        const loginIST = new Date(loginUTC + istOffsetMs)
+
+        // Create today's 3 AM IST expiry time
         const todayExpiry = new Date(nowIST)
         todayExpiry.setHours(3, 0, 0, 0)
 
-        // If login was before today's 3 AM and now is after 3 AM, session expired
-        if (nowIST > todayExpiry && loginTime < todayExpiry) {
+        // If current time is after 3 AM IST today and login was before 3 AM IST today
+        if (nowIST > todayExpiry && loginIST < todayExpiry) {
           get().logout()
           return false
         }

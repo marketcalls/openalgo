@@ -1,4 +1,5 @@
-from flask import Blueprint, request, redirect, url_for, render_template, session, jsonify, make_response, flash
+from flask import Blueprint, request, redirect, url_for, render_template, session, jsonify, make_response, flash, current_app
+from flask_wtf.csrf import generate_csrf
 from limiter import limiter  # Import the limiter instance
 from extensions import socketio
 import os
@@ -26,25 +27,68 @@ auth_bp = Blueprint('auth', __name__, url_prefix='/auth')
 def ratelimit_handler(e):
     return jsonify(error="Rate limit exceeded"), 429
 
+
+@auth_bp.route('/csrf-token', methods=['GET'])
+def get_csrf_token():
+    """Return a CSRF token for React SPA to use in form submissions."""
+    token = generate_csrf()
+    return jsonify({'csrf_token': token})
+
+
+@auth_bp.route('/broker-config', methods=['GET'])
+def get_broker_config():
+    """Return broker configuration for React SPA."""
+    if 'user' not in session:
+        return jsonify({'status': 'error', 'message': 'Not authenticated'}), 401
+
+    BROKER_API_KEY = os.getenv('BROKER_API_KEY')
+    REDIRECT_URL = os.getenv('REDIRECT_URL')
+
+    # Extract broker name from redirect URL
+    match = re.search(r'/([^/]+)/callback$', REDIRECT_URL)
+    broker_name = match.group(1) if match else None
+
+    if not broker_name:
+        return jsonify({'status': 'error', 'message': 'Broker not configured'}), 500
+
+    return jsonify({
+        'status': 'success',
+        'broker_name': broker_name,
+        'broker_api_key': BROKER_API_KEY,
+        'redirect_url': REDIRECT_URL
+    })
+
+
+@auth_bp.route('/check-setup', methods=['GET'])
+def check_setup_required():
+    """Check if initial setup is required (no users exist)."""
+    needs_setup = find_user_by_username() is None
+    return jsonify({
+        'status': 'success',
+        'needs_setup': needs_setup
+    })
+
+
 @auth_bp.route('/login', methods=['GET', 'POST'])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
 @limiter.limit(LOGIN_RATE_LIMIT_HOUR)
 def login():
-    if find_user_by_username() is None:
-        return redirect(url_for('core_bp.setup'))
+    # Handle POST requests first (for React SPA / AJAX login)
+    if request.method == 'POST':
+        # Check if setup is required
+        if find_user_by_username() is None:
+            return jsonify({'status': 'error', 'message': 'Please complete initial setup first.', 'redirect': '/setup'}), 400
 
-    if 'user' in session:
-            return redirect(url_for('auth.broker_login'))
-    
-    if session.get('logged_in'):
-        return redirect(url_for('dashboard_bp.dashboard'))
+        # Check if already logged in
+        if 'user' in session:
+            return jsonify({'status': 'success', 'message': 'Already logged in', 'redirect': '/broker'}), 200
 
-    if request.method == 'GET':
-        return render_template('login.html')
-    elif request.method == 'POST':
+        if session.get('logged_in'):
+            return jsonify({'status': 'success', 'message': 'Already logged in', 'redirect': '/dashboard'}), 200
+
         username = request.form['username']
         password = request.form['password']
-        
+
         if authenticate_user(username, password):
             session['user'] = username  # Set the username in the session
             logger.info(f"Login success for user: {username}")
@@ -52,6 +96,18 @@ def login():
             return jsonify({'status': 'success'}), 200
         else:
             return jsonify({'status': 'error', 'message': 'Invalid credentials'}), 401
+
+    # Handle GET requests (for traditional form page)
+    if find_user_by_username() is None:
+        return redirect(url_for('core_bp.setup'))
+
+    if 'user' in session:
+        return redirect(url_for('auth.broker_login'))
+
+    if session.get('logged_in'):
+        return redirect(url_for('dashboard_bp.dashboard'))
+
+    return render_template('login.html')
 
 @auth_bp.route('/broker', methods=['GET', 'POST'])
 @limiter.limit(LOGIN_RATE_LIMIT_MIN)
@@ -457,6 +513,181 @@ def debug_smtp():
         }), 500
 
 
+@auth_bp.route('/session-status', methods=['GET'])
+def get_session_status():
+    """Return current session status for React SPA."""
+    if 'user' not in session:
+        return jsonify({'status': 'error', 'message': 'Not authenticated', 'authenticated': False}), 401
+
+    # If session claims to be logged in with broker, validate the auth token exists
+    if session.get('logged_in') and session.get('broker'):
+        from database.auth_db import get_auth_token
+        auth_token = get_auth_token(session.get('user'))
+        if auth_token is None:
+            logger.warning(f"Session status: stale session detected for user {session.get('user')} - no auth token")
+            # Clear the stale session
+            session.clear()
+            return jsonify({'status': 'error', 'message': 'Session expired', 'authenticated': False}), 401
+
+    return jsonify({
+        'status': 'success',
+        'authenticated': True,
+        'logged_in': session.get('logged_in', False),
+        'user': session.get('user'),
+        'broker': session.get('broker')
+    })
+
+
+@auth_bp.route('/app-info', methods=['GET'])
+def get_app_info():
+    """Return app information including version for React SPA."""
+    from utils.version import get_version
+    return jsonify({
+        'status': 'success',
+        'version': get_version(),
+        'name': 'OpenAlgo'
+    })
+
+
+@auth_bp.route('/analyzer-mode', methods=['GET'])
+@check_session_validity
+def get_analyzer_mode_status():
+    """Return current analyzer mode status for React SPA."""
+    if 'user' not in session:
+        return jsonify({'status': 'error', 'message': 'Not authenticated'}), 401
+
+    try:
+        from database.settings_db import get_analyze_mode
+
+        current_mode = get_analyze_mode()
+
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'mode': 'analyze' if current_mode else 'live',
+                'analyze_mode': current_mode
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error getting analyzer mode: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@auth_bp.route('/analyzer-toggle', methods=['POST'])
+@check_session_validity
+def toggle_analyzer_mode_session():
+    """Toggle analyzer mode for React SPA using session authentication."""
+    if 'user' not in session:
+        return jsonify({'status': 'error', 'message': 'Not authenticated'}), 401
+
+    if not session.get('logged_in'):
+        return jsonify({'status': 'error', 'message': 'Broker not connected'}), 401
+
+    try:
+        from database.settings_db import get_analyze_mode, set_analyze_mode
+
+        # Get current mode and toggle it
+        current_mode = get_analyze_mode()
+        new_mode = not current_mode
+
+        # Set the new mode
+        set_analyze_mode(new_mode)
+
+        # Start/stop execution engine and squareoff scheduler based on mode
+        from sandbox.execution_thread import start_execution_engine, stop_execution_engine
+        from sandbox.squareoff_thread import start_squareoff_scheduler, stop_squareoff_scheduler
+
+        if new_mode:
+            # Analyzer mode ON - start both threads
+            start_execution_engine()
+            start_squareoff_scheduler()
+
+            # Run catch-up settlement for any missed settlements while app was stopped
+            from sandbox.position_manager import catchup_missed_settlements
+            try:
+                catchup_missed_settlements()
+                logger.info("Catch-up settlement check completed")
+            except Exception as e:
+                logger.error(f"Error in catch-up settlement: {e}")
+
+            logger.info("Analyzer mode enabled - Execution engine and square-off scheduler started")
+        else:
+            # Analyzer mode OFF - stop both threads
+            stop_execution_engine()
+            stop_squareoff_scheduler()
+            logger.info("Analyzer mode disabled - Execution engine and square-off scheduler stopped")
+
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'mode': 'analyze' if new_mode else 'live',
+                'analyze_mode': new_mode,
+                'message': f'Switched to {"Analyze" if new_mode else "Live"} mode'
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error toggling analyzer mode: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@auth_bp.route('/dashboard-data', methods=['GET'])
+@check_session_validity
+def get_dashboard_data():
+    """Return dashboard funds data using session authentication for React SPA."""
+    if 'user' not in session:
+        return jsonify({'status': 'error', 'message': 'Not authenticated'}), 401
+
+    if not session.get('logged_in'):
+        return jsonify({'status': 'error', 'message': 'Broker not connected'}), 401
+
+    login_username = session['user']
+    broker = session.get('broker')
+
+    if not broker:
+        return jsonify({'status': 'error', 'message': 'Broker not set in session'}), 400
+
+    try:
+        from database.auth_db import get_auth_token, get_api_key_for_tradingview
+        from database.settings_db import get_analyze_mode
+        from services.funds_service import get_funds
+
+        AUTH_TOKEN = get_auth_token(login_username)
+
+        if AUTH_TOKEN is None:
+            logger.warning(f"No auth token found for user {login_username}")
+            return jsonify({'status': 'error', 'message': 'Session expired'}), 401
+
+        # Check if in analyze mode
+        if get_analyze_mode():
+            api_key = get_api_key_for_tradingview(login_username)
+            if api_key:
+                success, response, status_code = get_funds(api_key=api_key)
+            else:
+                return jsonify({'status': 'error', 'message': 'API key required for analyze mode'}), 400
+        else:
+            success, response, status_code = get_funds(auth_token=AUTH_TOKEN, broker=broker)
+
+        if not success:
+            logger.error(f"Failed to get funds data: {response.get('message', 'Unknown error')}")
+            return jsonify({'status': 'error', 'message': response.get('message', 'Failed to get funds')}), status_code
+
+        margin_data = response.get('data', {})
+
+        if not margin_data:
+            logger.error(f"Failed to get margin data for user {login_username}")
+            return jsonify({'status': 'error', 'message': 'Failed to get margin data'}), 500
+
+        return jsonify({
+            'status': 'success',
+            'data': margin_data
+        })
+
+    except Exception as e:
+        logger.error(f"Error fetching dashboard data: {e}")
+        return jsonify({'status': 'error', 'message': 'Internal server error'}), 500
+
+
 @auth_bp.route('/logout', methods=['GET', 'POST'])
 def logout():
     if session.get('logged_in'):
@@ -488,10 +719,13 @@ def logout():
         else:
             logger.error(f"Failed to upsert auth token for user: {username}")
         
-        # Remove tokens and user information from session
-        session.pop('user', None)  # Remove 'user' from session if exists
-        session.pop('broker', None)  # Remove 'user' from session if exists
-        session.pop('logged_in', None)
+        # Clear entire session to ensure complete logout
+        session.clear()
+        logger.info(f"Session cleared for user: {username}")
 
-    # Redirect to login page after logout
+    # For POST requests (AJAX from React), return JSON
+    if request.method == 'POST':
+        return jsonify({'status': 'success', 'message': 'Logged out successfully'})
+
+    # For GET requests (traditional), redirect to login page
     return redirect(url_for('auth.login'))

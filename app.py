@@ -181,6 +181,14 @@ def create_app():
         app.config['WTF_CSRF_TIME_LIMIT'] = None  # No time limit if empty
 
     # Register RESTx API blueprint first
+    # Register React frontend blueprint FIRST for migrated routes
+    # React routes take priority over old Flask/Jinja2 routes
+    if is_react_frontend_available():
+        app.register_blueprint(react_bp)
+        logger.info("React frontend enabled (frontend/dist found)")
+    else:
+        logger.info("React frontend not available, using Jinja2 templates")
+
     app.register_blueprint(api_v1_bp)
     
     # Exempt API endpoints from CSRF protection (they use API key authentication)
@@ -221,12 +229,6 @@ def create_app():
     app.register_blueprint(logging_bp)  # Register Logging blueprint
     app.register_blueprint(admin_bp)  # Register Admin blueprint
 
-    # Register React frontend blueprint LAST (catch-all for SPA routing)
-    # Only serves React if frontend/dist exists, otherwise falls through to Jinja2 templates
-    if is_react_frontend_available():
-        app.register_blueprint(react_bp)
-        logger.info("React frontend enabled (frontend/dist found)")
-
 
     # Exempt webhook endpoints from CSRF protection after app initialization
     with app.app_context():
@@ -236,7 +238,10 @@ def create_app():
         
         # Exempt broker callback endpoints from CSRF protection (OAuth callbacks from external providers)
         csrf.exempt(app.view_functions['brlogin.broker_callback'])
-        
+
+        # Exempt logout endpoint from CSRF protection (safe - only destroys session)
+        csrf.exempt(app.view_functions['auth.logout'])
+
         # Initialize latency monitoring (after registering API blueprint)
         init_latency_monitoring(app)
 
@@ -302,9 +307,9 @@ def create_app():
         from utils.session import is_session_valid, revoke_user_tokens
         
         # Skip session check for static files, API endpoints, and public routes
-        if (request.path.startswith('/static/') or 
-            request.path.startswith('/api/') or 
-            request.path in ['/', '/auth/login', '/auth/reset-password', '/setup', '/download', '/faq'] or
+        if (request.path.startswith('/static/') or
+            request.path.startswith('/api/') or
+            request.path in ['/', '/auth/login', '/auth/reset-password', '/auth/csrf-token', '/auth/broker-config', '/setup', '/download', '/faq'] or
             request.path.startswith('/auth/broker/') or  # OAuth callbacks
             request.path.startswith('/_reload-ws')):  # WebSocket reload endpoint
             return

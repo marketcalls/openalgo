@@ -1,10 +1,10 @@
 """
 React Frontend Serving Blueprint
-Serves the pre-built React app for all non-API routes.
+Serves the pre-built React app for migrated routes.
 """
 
 from pathlib import Path
-from flask import Blueprint, send_from_directory, current_app
+from flask import Blueprint, send_from_directory
 
 react_bp = Blueprint('react', __name__)
 
@@ -18,14 +18,8 @@ def is_react_frontend_available():
     return FRONTEND_DIST.exists() and index_html.exists()
 
 
-@react_bp.route('/', defaults={'path': ''})
-@react_bp.route('/<path:path>')
-def serve_react(path):
-    """
-    Serve React app for all frontend routes.
-    - Static files (JS, CSS, images) served directly
-    - All other routes serve index.html (React Router handles routing)
-    """
+def serve_react_app():
+    """Serve the React app's index.html."""
     if not is_react_frontend_available():
         return """
         <html>
@@ -38,20 +32,70 @@ cd frontend
 npm install
 npm run build</pre>
             <p>Or use the pre-built version from the repository.</p>
-            <hr>
-            <p><strong>API is still available at:</strong> <code>/api/v1/</code></p>
         </body>
         </html>
         """, 503
-
-    # Try to serve static file first
-    file_path = FRONTEND_DIST / path
-    if path and file_path.exists() and file_path.is_file():
-        return send_from_directory(FRONTEND_DIST, path)
-
-    # Otherwise serve index.html (React Router will handle the route)
     return send_from_directory(FRONTEND_DIST, 'index.html')
 
+
+# ============================================================
+# Phase 2 Migrated Routes - These are served by React
+# ============================================================
+
+# Index/Home route
+@react_bp.route('/')
+def react_index():
+    return serve_react_app()
+
+
+# Login route
+@react_bp.route('/login')
+def react_login():
+    return serve_react_app()
+
+
+# Setup route (initial admin setup)
+@react_bp.route('/setup')
+def react_setup():
+    return serve_react_app()
+
+
+# Broker selection - serve React at /broker (alias for /auth/broker)
+@react_bp.route('/broker')
+def react_broker():
+    return serve_react_app()
+
+
+# Dashboard
+@react_bp.route('/dashboard')
+def react_dashboard():
+    return serve_react_app()
+
+
+# Trading pages
+@react_bp.route('/positions')
+def react_positions():
+    return serve_react_app()
+
+
+@react_bp.route('/orderbook')
+def react_orderbook():
+    return serve_react_app()
+
+
+@react_bp.route('/tradebook')
+def react_tradebook():
+    return serve_react_app()
+
+
+@react_bp.route('/holdings')
+def react_holdings():
+    return serve_react_app()
+
+
+# ============================================================
+# Static Assets - Always served for React app
+# ============================================================
 
 @react_bp.route('/assets/<path:filename>')
 def serve_assets(filename):
@@ -64,3 +108,19 @@ def serve_assets(filename):
     # Cache assets for 1 year (they have content hashes in filenames)
     response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
     return response
+
+
+@react_bp.route('/favicon.ico')
+def serve_favicon():
+    """Serve favicon."""
+    if not is_react_frontend_available():
+        return "Not found", 404
+    return send_from_directory(FRONTEND_DIST, 'favicon.ico')
+
+
+@react_bp.route('/logo.png')
+def serve_logo():
+    """Serve logo."""
+    if not is_react_frontend_available():
+        return "Not found", 404
+    return send_from_directory(FRONTEND_DIST, 'logo.png')

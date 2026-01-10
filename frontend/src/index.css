@@ -66,50 +66,49 @@
     --sell: 25 95% 63%;
   }
 
-  /* Analyzer Mode - Purple/Violet tint */
+  /* Analyzer Mode - Dark purple theme (like dracula) */
   .analyzer {
-    --background: 270 50% 98%;
-    --foreground: 270 50% 10%;
-    --card: 270 50% 100%;
-    --card-foreground: 270 50% 10%;
-    --primary: 270 70% 50%;
-    --primary-foreground: 0 0% 98%;
-    --accent: 270 50% 95%;
-    --accent-foreground: 270 50% 10%;
-    --border: 270 30% 85%;
+    --background: oklch(0.16 0.02 280);
+    --foreground: oklch(0.95 0.02 280);
+    --card: oklch(0.2 0.025 280);
+    --card-foreground: oklch(0.95 0.02 280);
+    --popover: oklch(0.2 0.025 280);
+    --popover-foreground: oklch(0.95 0.02 280);
+    --primary: oklch(0.7 0.2 280);
+    --primary-foreground: oklch(0.98 0 0);
+    --secondary: oklch(0.28 0.03 280);
+    --secondary-foreground: oklch(0.95 0.02 280);
+    --muted: oklch(0.28 0.025 280);
+    --muted-foreground: oklch(0.7 0.03 280);
+    --accent: oklch(0.28 0.03 280);
+    --accent-foreground: oklch(0.95 0.02 280);
+    --destructive: oklch(0.65 0.2 25);
+    --destructive-foreground: oklch(0.98 0 0);
+    --border: oklch(0.35 0.04 280);
+    --input: oklch(0.35 0.04 280);
+    --ring: oklch(0.7 0.2 280);
   }
 
-  .analyzer.dark {
-    --background: 270 30% 8%;
-    --foreground: 270 10% 95%;
-    --card: 270 30% 12%;
-    --card-foreground: 270 10% 95%;
-    --primary: 270 70% 60%;
-    --accent: 270 30% 18%;
-    --border: 270 20% 20%;
-  }
-
-  /* Sandbox Mode - Amber/Orange tint */
+  /* Sandbox Mode - Amber/Orange unique theme (no dark variant) */
   .sandbox {
-    --background: 45 50% 98%;
-    --foreground: 45 50% 10%;
-    --card: 45 50% 100%;
-    --card-foreground: 45 50% 10%;
-    --primary: 45 90% 50%;
-    --primary-foreground: 45 50% 10%;
-    --accent: 45 50% 95%;
-    --accent-foreground: 45 50% 10%;
-    --border: 45 30% 85%;
-  }
-
-  .sandbox.dark {
-    --background: 45 30% 8%;
-    --foreground: 45 10% 95%;
-    --card: 45 30% 12%;
-    --card-foreground: 45 10% 95%;
-    --primary: 45 90% 55%;
-    --accent: 45 30% 18%;
-    --border: 45 20% 20%;
+    --background: oklch(0.97 0.03 85);
+    --foreground: oklch(0.2 0.05 60);
+    --card: oklch(0.99 0.02 85);
+    --card-foreground: oklch(0.2 0.05 60);
+    --popover: oklch(0.99 0.02 85);
+    --popover-foreground: oklch(0.2 0.05 60);
+    --primary: oklch(0.7 0.18 70);
+    --primary-foreground: oklch(0.15 0.05 60);
+    --secondary: oklch(0.93 0.04 85);
+    --secondary-foreground: oklch(0.25 0.05 60);
+    --muted: oklch(0.93 0.03 85);
+    --muted-foreground: oklch(0.5 0.04 70);
+    --accent: oklch(0.93 0.04 85);
+    --accent-foreground: oklch(0.25 0.05 60);
+    --destructive: oklch(0.577 0.245 27.325);
+    --border: oklch(0.88 0.04 85);
+    --input: oklch(0.88 0.04 85);
+    --ring: oklch(0.7 0.18 70);
   }
 }
 
@@ -240,4 +239,40 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Analyzer Mode - Dark purple theme (like dracula) - placed last for highest priority */
+.analyzer {
+  --background: oklch(0.16 0.02 280);
+  --foreground: oklch(0.95 0.02 280);
+  --card: oklch(0.2 0.025 280);
+  --card-foreground: oklch(0.95 0.02 280);
+  --popover: oklch(0.2 0.025 280);
+  --popover-foreground: oklch(0.95 0.02 280);
+  --primary: oklch(0.7 0.2 280);
+  --primary-foreground: oklch(0.98 0 0);
+  --secondary: oklch(0.28 0.03 280);
+  --secondary-foreground: oklch(0.95 0.02 280);
+  --muted: oklch(0.28 0.025 280);
+  --muted-foreground: oklch(0.7 0.03 280);
+  --accent: oklch(0.28 0.03 280);
+  --accent-foreground: oklch(0.95 0.02 280);
+  --destructive: oklch(0.65 0.2 25);
+  --destructive-foreground: oklch(0.98 0 0);
+  --border: oklch(0.35 0.04 280);
+  --input: oklch(0.35 0.04 280);
+  --ring: oklch(0.7 0.2 280);
+  --chart-1: oklch(0.7 0.2 280);
+  --chart-2: oklch(0.65 0.18 320);
+  --chart-3: oklch(0.6 0.15 260);
+  --chart-4: oklch(0.75 0.15 300);
+  --chart-5: oklch(0.55 0.2 240);
+  --sidebar: oklch(0.18 0.02 280);
+  --sidebar-foreground: oklch(0.95 0.02 280);
+  --sidebar-primary: oklch(0.7 0.2 280);
+  --sidebar-primary-foreground: oklch(0.98 0 0);
+  --sidebar-accent: oklch(0.28 0.03 280);
+  --sidebar-accent-foreground: oklch(0.95 0.02 280);
+  --sidebar-border: oklch(0.35 0.04 280);
+  --sidebar-ring: oklch(0.7 0.2 280);
 }
