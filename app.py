@@ -49,6 +49,7 @@ from blueprints.sandbox import sandbox_bp  # Import the sandbox blueprint
 from blueprints.logging import logging_bp  # Import the logging blueprint
 from blueprints.playground import playground_bp  # Import the API playground blueprint
 from blueprints.admin import admin_bp  # Import the admin blueprint
+from blueprints.react_app import react_bp, is_react_frontend_available  # Import React frontend blueprint
 from services.telegram_bot_service import telegram_bot_service
 from database.telegram_db import get_bot_config
 
@@ -219,6 +220,12 @@ def create_app():
     app.register_blueprint(playground_bp)  # Register API playground blueprint
     app.register_blueprint(logging_bp)  # Register Logging blueprint
     app.register_blueprint(admin_bp)  # Register Admin blueprint
+
+    # Register React frontend blueprint LAST (catch-all for SPA routing)
+    # Only serves React if frontend/dist exists, otherwise falls through to Jinja2 templates
+    if is_react_frontend_available():
+        app.register_blueprint(react_bp)
+        logger.info("React frontend enabled (frontend/dist found)")
 
 
     # Exempt webhook endpoints from CSRF protection after app initialization
