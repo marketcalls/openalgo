@@ -1,7 +1,7 @@
 [project]
 requires-python = ">=3.12"
 name = "openalgoUI"
-version = "1.0.0.41"
+version = "2.0.0.0"
 description = "Broker-agnostic open-source trading automation"
 dependencies = [
   "aniso8601==9.0.1",
@@ -138,12 +138,12 @@ dependencies = [
   "typing-inspection>=0.4.1",
   "tzdata==2025.2",
   "tzlocal==5.2",
-  "urllib3==2.6.1",
+  "urllib3==2.6.3",
   "uvicorn==0.35.0",
   "wcwidth==0.2.13",
   "websocket-client==1.8.0",
   "websockets==15.0.1",
-  "Werkzeug==3.1.4",
+  "Werkzeug==3.1.5",
   "wheel==0.43.0",
   "wrapt==1.16.0",
   "wsproto==1.2.0",
