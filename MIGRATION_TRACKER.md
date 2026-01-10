@@ -23,6 +23,157 @@
 
 ---
 
+## Template Migration Status
+
+**Total Jinja2 Templates**: 77 | **Migrated**: 0 | **Remaining**: 66 pages
+
+### Phase 2: Auth & Core Trading (24 templates)
+
+#### Authentication (4)
+| Jinja2 Template | React Component | Status |
+|-----------------|-----------------|--------|
+| `login.html` | `pages/Login.tsx` | [ ] |
+| `broker.html` | `pages/BrokerSelect.tsx` | [ ] |
+| `setup.html` | `pages/Setup.tsx` | [ ] |
+| `reset_password.html` | `pages/ResetPassword.tsx` | [ ] |
+
+#### Core Trading (5)
+| Jinja2 Template | React Component | Status |
+|-----------------|-----------------|--------|
+| `dashboard.html` | `pages/Dashboard.tsx` | [ ] |
+| `positions.html` | `pages/Positions.tsx` | [ ] |
+| `orderbook.html` | `pages/OrderBook.tsx` | [ ] |
+| `tradebook.html` | `pages/TradeBook.tsx` | [ ] |
+| `holdings.html` | `pages/Holdings.tsx` | [ ] |
+
+#### Broker TOTP Forms (13)
+| Jinja2 Template | React Component | Status |
+|-----------------|-----------------|--------|
+| `5paisa.html` | `components/broker-totp/FivePaisa.tsx` | [ ] |
+| `aliceblue.html` | `components/broker-totp/AliceBlue.tsx` | [ ] |
+| `angel.html` | `components/broker-totp/Angel.tsx` | [ ] |
+| `definedgeotp.html` | `components/broker-totp/Definedge.tsx` | [ ] |
+| `firstock.html` | `components/broker-totp/Firstock.tsx` | [ ] |
+| `kotak.html` | `components/broker-totp/Kotak.tsx` | [ ] |
+| `motilal.html` | `components/broker-totp/Motilal.tsx` | [ ] |
+| `mstock.html` | `components/broker-totp/MStock.tsx` | [ ] |
+| `nubra.html` | `components/broker-totp/Nubra.tsx` | [ ] |
+| `samco.html` | `components/broker-totp/Samco.tsx` | [ ] |
+| `shoonya.html` | `components/broker-totp/Shoonya.tsx` | [ ] |
+| `tradejini.html` | `components/broker-totp/Tradejini.tsx` | [ ] |
+| `zebu.html` | `components/broker-totp/Zebu.tsx` | [ ] |
+
+#### Layout Components (2)
+| Jinja2 Template | React Component | Status |
+|-----------------|-----------------|--------|
+| `layout.html` + `navbar.html` | `components/Layout.tsx` | [ ] |
+| `footer.html` | `components/Footer.tsx` | [ ] |
+
+### Phase 3: Holdings & Search (2 templates)
+| Jinja2 Template | React Component | Status |
+|-----------------|-----------------|--------|
+| `holdings.html` | (covered in Phase 2) | [ ] |
+| `search.html` | `pages/Search.tsx` | [ ] |
+
+### Phase 4: Charts & Market Data (4 templates)
+| Jinja2 Template | React Component | Status |
+|-----------------|-----------------|--------|
+| `tradingview.html` | `pages/TradingView.tsx` | [ ] |
+| `gocharting.html` | `pages/GoCharting.tsx` | [ ] |
+| `pnltracker.html` | `pages/PnLTracker.tsx` | [ ] |
+| `websocket/test_market_data.html` | `pages/WebSocket/MarketData.tsx` | [ ] |
+
+### Phase 6: Strategy & Automation (15 templates)
+
+#### Strategy (4)
+| Jinja2 Template | React Component | Status |
+|-----------------|-----------------|--------|
+| `strategy/index.html` | `pages/Strategy/Index.tsx` | [ ] |
+| `strategy/new_strategy.html` | `pages/Strategy/New.tsx` | [ ] |
+| `strategy/view_strategy.html` | `pages/Strategy/View.tsx` | [ ] |
+| `strategy/configure_symbols.html` | `pages/Strategy/Configure.tsx` | [ ] |
+
+#### Chartink (4)
+| Jinja2 Template | React Component | Status |
+|-----------------|-----------------|--------|
+| `chartink/index.html` | `pages/Chartink/Index.tsx` | [ ] |
+| `chartink/new_strategy.html` | `pages/Chartink/New.tsx` | [ ] |
+| `chartink/view_strategy.html` | `pages/Chartink/View.tsx` | [ ] |
+| `chartink/configure_symbols.html` | `pages/Chartink/Configure.tsx` | [ ] |
+
+#### Python Strategy (4)
+| Jinja2 Template | React Component | Status |
+|-----------------|-----------------|--------|
+| `python_strategy/index.html` | `pages/PythonStrategy/Index.tsx` | [ ] |
+| `python_strategy/new.html` | `pages/PythonStrategy/New.tsx` | [ ] |
+| `python_strategy/edit.html` | `pages/PythonStrategy/Edit.tsx` | [ ] |
+| `python_strategy/logs.html` | `pages/PythonStrategy/Logs.tsx` | [ ] |
+
+#### Analyzer/Sandbox (3)
+| Jinja2 Template | React Component | Status |
+|-----------------|-----------------|--------|
+| `analyzer.html` | `pages/Analyzer.tsx` | [ ] |
+| `sandbox.html` | `pages/Sandbox.tsx` | [ ] |
+| `sandbox_mypnl.html` | `pages/SandboxPnL.tsx` | [ ] |
+
+### Phase 7: Settings & Admin (19 templates)
+
+#### Admin (4)
+| Jinja2 Template | React Component | Status |
+|-----------------|-----------------|--------|
+| `admin/index.html` | `pages/Admin/Index.tsx` | [ ] |
+| `admin/freeze.html` | `pages/Admin/Freeze.tsx` | [ ] |
+| `admin/holidays.html` | `pages/Admin/Holidays.tsx` | [ ] |
+| `admin/timings.html` | `pages/Admin/Timings.tsx` | [ ] |
+
+#### Telegram (4)
+| Jinja2 Template | React Component | Status |
+|-----------------|-----------------|--------|
+| `telegram/index.html` | `pages/Telegram/Index.tsx` | [ ] |
+| `telegram/config.html` | `pages/Telegram/Config.tsx` | [ ] |
+| `telegram/users.html` | `pages/Telegram/Users.tsx` | [ ] |
+| `telegram/analytics.html` | `pages/Telegram/Analytics.tsx` | [ ] |
+
+#### Monitoring (3)
+| Jinja2 Template | React Component | Status |
+|-----------------|-----------------|--------|
+| `security/dashboard.html` | `pages/Security/Dashboard.tsx` | [ ] |
+| `traffic/dashboard.html` | `pages/Traffic/Dashboard.tsx` | [ ] |
+| `latency/dashboard.html` | `pages/Latency/Dashboard.tsx` | [ ] |
+
+#### Settings & Features (8)
+| Jinja2 Template | React Component | Status |
+|-----------------|-----------------|--------|
+| `apikey.html` | `pages/ApiKey.tsx` | [ ] |
+| `logs.html` | `pages/Logs.tsx` | [ ] |
+| `platforms.html` | `pages/Platforms.tsx` | [ ] |
+| `token.html` | `pages/Token.tsx` | [ ] |
+| `profile.html` | `pages/Profile.tsx` | [ ] |
+| `action_center.html` | `pages/ActionCenter.tsx` | [ ] |
+| `playground.html` | `pages/Playground.tsx` | [ ] |
+| `logging.html` | `pages/Logging.tsx` | [ ] |
+
+### Public Pages & Error Pages (5 templates)
+| Jinja2 Template | React Component | Status |
+|-----------------|-----------------|--------|
+| `index.html` | `pages/Home.tsx` | [ ] |
+| `download.html` | `pages/Download.tsx` | [ ] |
+| `faq.html` | `pages/FAQ.tsx` | [ ] |
+| `404.html` | `pages/NotFound.tsx` | [ ] |
+| `500.html` | `pages/ServerError.tsx` | [ ] |
+
+### Component Templates (6 - will become shared components)
+| Jinja2 Template | React Component | Status |
+|-----------------|-----------------|--------|
+| `components/loading_spinner.html` | `components/ui/spinner.tsx` | [ ] |
+| `components/log_entry.html` | `components/LogEntry.tsx` | [ ] |
+| `components/logs_filters.html` | `components/LogsFilters.tsx` | [ ] |
+| `components/logs_scripts.html` | (merged into React) | [ ] |
+| `components/logs_styles.html` | (merged into Tailwind) | [ ] |
+| `components/pagination.html` | `components/ui/pagination.tsx` | [ ] |
+
+---
+
 ## Phase 1: Foundation Setup
 
 ### React Project Setup
