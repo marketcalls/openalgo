@@ -1,7 +1,7 @@
 # OpenAlgo v2.0 Migration Tracker
 
 > **Last Updated**: 2026-01-10
-> **Status**: Phase 2 Complete
+> **Status**: Phase 3 In Progress
 
 ---
 
@@ -11,7 +11,7 @@
 |-------|--------|----------|
 | Phase 1: Foundation | **Complete** | 14/14 |
 | Phase 2: Core Trading | **Complete** | 22/28 |
-| Phase 3: Search & Symbol | Not Started | 0/14 |
+| Phase 3: Search & Symbol | **In Progress** | 4/14 |
 | Phase 4: Charts & Market Data | Not Started | 0/10 |
 | Phase 5: Options Trading | Not Started | 0/12 |
 | Phase 6: Strategy & Automation | Not Started | 0/14 |
@@ -19,13 +19,13 @@
 | Phase 8: Mobile & Polish | Not Started | 0/14 |
 | Phase 9: Cleanup | Not Started | 0/6 |
 
-**Overall Progress**: 36/128 tasks (28%)
+**Overall Progress**: 40/128 tasks (31%)
 
 ---
 
 ## Template Migration Status
 
-**Total Jinja2 Templates**: 77 | **Migrated**: 15 | **Remaining**: 51 pages
+**Total Jinja2 Templates**: 77 | **Migrated**: 19 | **Remaining**: 47 pages
 
 ### Phase 2: Auth & Core Trading (24 templates)
 
@@ -72,7 +72,8 @@
 ### Phase 3: Search & Symbol (2 templates)
 | Jinja2 Template | React Component | Status |
 |-----------------|-----------------|--------|
-| `search.html` | `pages/Search.tsx` | [ ] Pending |
+| `token.html` | `pages/Token.tsx` | [x] Complete |
+| `search.html` | `pages/Search.tsx` | [x] Complete |
 
 ### Phase 4: Charts & Market Data (4 templates)
 | Jinja2 Template | React Component | Status |
@@ -143,13 +144,13 @@
 #### Settings & Features (8)
 | Jinja2 Template | React Component | Status |
 |-----------------|-----------------|--------|
-| `apikey.html` | `pages/ApiKey.tsx` | [ ] Pending |
+| `apikey.html` | `pages/ApiKey.tsx` | [x] Complete |
 | `logs.html` | `pages/Logs.tsx` | [ ] Pending |
 | `platforms.html` | `pages/Platforms.tsx` | [ ] Pending |
-| `token.html` | `pages/Token.tsx` | [ ] Pending |
+| `token.html` | `pages/Token.tsx` | [x] Complete |
 | `profile.html` | `pages/Profile.tsx` | [ ] Pending |
 | `action_center.html` | `pages/ActionCenter.tsx` | [ ] Pending |
-| `playground.html` | `pages/Playground.tsx` | [ ] Pending |
+| `playground.html` | `pages/Playground.tsx` | [x] Complete |
 | `logging.html` | `pages/Logging.tsx` | [ ] Pending |
 
 ### Public Pages & Error Pages (5 templates)
@@ -272,14 +273,38 @@ lucide-react: latest
 
 ---
 
-## Phase 3: Search & Symbol (Next)
+## Phase 3: Search & Symbol (In Progress)
 
 ### Symbol Search
-- [ ] Search page
-- [ ] Debounced search
-- [ ] Autocomplete dropdown
-- [ ] Exchange filtering
+- [x] Token page (search form with F&O filters)
+- [x] Search results page with sortable table
+- [x] Debounced autocomplete search
+- [x] Exchange filtering
+- [x] F&O filters (underlying, expiry, strike range)
+- [x] Pagination controls
 - [ ] Recent searches
+
+### API Key & Playground
+- [x] API key display with show/hide toggle
+- [x] Copy to clipboard functionality
+- [x] Regenerate API key with confirmation
+- [x] Order execution mode toggle (Auto/Semi-Auto)
+- [x] API Playground with three-panel layout
+- [x] Endpoint sidebar with search
+- [x] Request body editor with line numbers
+- [x] Response viewer with syntax highlighting
+- [x] Copy cURL command
+
+### Positions Enhancements
+- [x] Grouping options (None, Underlying, Underlying & Expiry)
+- [x] Exchange filter
+- [x] Direction filter (Long/Short)
+- [x] Product type filter (CNC/MIS/NRML)
+- [x] Settings modal for filters
+- [x] Active filters bar
+- [x] Sorting by columns
+- [x] Preferences saved to localStorage
+- [x] Collapsible group headers
 
 ---
 
@@ -483,6 +508,7 @@ frontend/
 │   │   │   └── Navbar.tsx
 │   │   └── ui/ (shadcn components)
 │   ├── pages/
+│   │   ├── ApiKey.tsx          # Phase 3
 │   │   ├── BrokerSelect.tsx
 │   │   ├── BrokerTOTP.tsx
 │   │   ├── Dashboard.tsx
@@ -490,8 +516,11 @@ frontend/
 │   │   ├── Home.tsx
 │   │   ├── Login.tsx
 │   │   ├── OrderBook.tsx
-│   │   ├── Positions.tsx
+│   │   ├── Playground.tsx      # Phase 3
+│   │   ├── Positions.tsx       # Updated with full filtering
+│   │   ├── Search.tsx          # Phase 3
 │   │   ├── Setup.tsx
+│   │   ├── Token.tsx           # Phase 3
 │   │   └── TradeBook.tsx
 │   ├── stores/
 │   │   ├── authStore.ts
@@ -531,9 +560,10 @@ openalgo/
 
 ## Notes
 
-- **Priority**: Phase 3 (Search) is next
+- **Priority**: Phase 4 (Charts & WebSocket) is next
 - **Auth Flow**: Matches current Flask session behavior
 - **API Keys**: REST API authentication unchanged
 - **WebSocket**: Will use existing Flask-SocketIO events (Phase 4)
 - **Backward Compatible**: External apps (TradingView, Amibroker) unaffected
 - **No Broker Logos**: Using text/initials only for broker identification
+- **CSRF**: All mutations protected except logout and /api/v1/* endpoints

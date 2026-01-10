@@ -93,6 +93,29 @@ def react_holdings():
     return serve_react_app()
 
 
+# Search pages
+@react_bp.route('/search/token')
+def react_search_token():
+    return serve_react_app()
+
+
+@react_bp.route('/search')
+def react_search():
+    return serve_react_app()
+
+
+# API Key management
+@react_bp.route('/apikey')
+def react_apikey():
+    return serve_react_app()
+
+
+# Playground
+@react_bp.route('/playground')
+def react_playground():
+    return serve_react_app()
+
+
 # ============================================================
 # Static Assets - Always served for React app
 # ============================================================

@@ -698,6 +698,128 @@ def cancel_all_orders_ui():
             'message': f'An error occurred: {str(e)}'
         }), 500
 
+@orders_bp.route('/cancel_order', methods=['POST'])
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def cancel_order_ui():
+    """Cancel a single order using the broker API from UI"""
+    try:
+        # Get auth token from session
+        login_username = session['user']
+        auth_token = get_auth_token(login_username)
+        broker_name = session.get('broker')
+
+        if not auth_token or not broker_name:
+            return jsonify({
+                'status': 'error',
+                'message': 'Authentication error'
+            }), 401
+
+        # Get order ID from request
+        data = request.get_json()
+        orderid = data.get('orderid')
+
+        if not orderid:
+            return jsonify({
+                'status': 'error',
+                'message': 'Order ID is required'
+            }), 400
+
+        # Import necessary functions
+        from services.cancel_order_service import cancel_order
+        from database.auth_db import get_api_key_for_tradingview
+        from database.settings_db import get_analyze_mode
+
+        # Get API key for analyze mode
+        api_key = None
+        if get_analyze_mode():
+            api_key = get_api_key_for_tradingview(login_username)
+
+        # Call the service with appropriate parameters
+        success, response_data, status_code = cancel_order(
+            orderid=orderid,
+            api_key=api_key,
+            auth_token=auth_token,
+            broker=broker_name
+        )
+
+        return jsonify(response_data), status_code
+
+    except Exception as e:
+        logger.error(f"Error in cancel_order_ui endpoint: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'An error occurred: {str(e)}'
+        }), 500
+
+@orders_bp.route('/modify_order', methods=['POST'])
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def modify_order_ui():
+    """Modify an order using the broker API from UI"""
+    try:
+        # Get auth token from session
+        login_username = session['user']
+        auth_token = get_auth_token(login_username)
+        broker_name = session.get('broker')
+
+        if not auth_token or not broker_name:
+            return jsonify({
+                'status': 'error',
+                'message': 'Authentication error'
+            }), 401
+
+        # Get order data from request
+        data = request.get_json()
+        orderid = data.get('orderid')
+
+        if not orderid:
+            return jsonify({
+                'status': 'error',
+                'message': 'Order ID is required'
+            }), 400
+
+        # Import necessary functions
+        from services.modify_order_service import modify_order
+        from database.auth_db import get_api_key_for_tradingview
+        from database.settings_db import get_analyze_mode
+
+        # Get API key for analyze mode
+        api_key = None
+        if get_analyze_mode():
+            api_key = get_api_key_for_tradingview(login_username)
+
+        # Build order data for modification
+        order_data = {
+            'orderid': orderid,
+            'symbol': data.get('symbol'),
+            'exchange': data.get('exchange'),
+            'action': data.get('action'),
+            'product': data.get('product'),
+            'pricetype': data.get('pricetype'),
+            'price': data.get('price'),
+            'quantity': data.get('quantity'),
+            'disclosed_quantity': data.get('disclosed_quantity', 0),
+            'trigger_price': data.get('trigger_price', 0),
+        }
+
+        # Call the service with appropriate parameters
+        success, response_data, status_code = modify_order(
+            order_data=order_data,
+            api_key=api_key,
+            auth_token=auth_token,
+            broker=broker_name
+        )
+
+        return jsonify(response_data), status_code
+
+    except Exception as e:
+        logger.error(f"Error in modify_order_ui endpoint: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': f'An error occurred: {str(e)}'
+        }), 500
+
 @orders_bp.route('/action-center')
 @check_session_validity
 @limiter.limit(API_RATE_LIMIT)

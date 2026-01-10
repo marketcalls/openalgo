@@ -521,13 +521,25 @@ def get_session_status():
 
     # If session claims to be logged in with broker, validate the auth token exists
     if session.get('logged_in') and session.get('broker'):
-        from database.auth_db import get_auth_token
+        from database.auth_db import get_auth_token, get_api_key_for_tradingview
         auth_token = get_auth_token(session.get('user'))
         if auth_token is None:
             logger.warning(f"Session status: stale session detected for user {session.get('user')} - no auth token")
             # Clear the stale session
             session.clear()
             return jsonify({'status': 'error', 'message': 'Session expired', 'authenticated': False}), 401
+
+        # Get API key for the user
+        api_key = get_api_key_for_tradingview(session.get('user'))
+
+        return jsonify({
+            'status': 'success',
+            'authenticated': True,
+            'logged_in': session.get('logged_in', False),
+            'user': session.get('user'),
+            'broker': session.get('broker'),
+            'api_key': api_key
+        })
 
     return jsonify({
         'status': 'success',

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import {
   TrendingUp,
   TrendingDown,
@@ -6,6 +6,7 @@ import {
   RefreshCw,
   Download,
 } from 'lucide-react';
+import { onModeChange } from '@/stores/themeStore';
 import {
   Table,
   TableBody,
@@ -42,7 +43,7 @@ export default function Holdings() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchHoldings = async (showRefresh = false) => {
+  const fetchHoldings = useCallback(async (showRefresh = false) => {
     if (!apiKey) {
       setIsLoading(false);
       return;
@@ -65,13 +66,21 @@ export default function Holdings() {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  };
+  }, [apiKey]);
 
   useEffect(() => {
     fetchHoldings();
     const interval = setInterval(() => fetchHoldings(), 30000);
     return () => clearInterval(interval);
-  }, [apiKey]);
+  }, [fetchHoldings]);
+
+  // Listen for mode changes (live/analyze) and refresh data
+  useEffect(() => {
+    const unsubscribe = onModeChange(() => {
+      fetchHoldings();
+    });
+    return () => unsubscribe();
+  }, [fetchHoldings]);
 
   const exportToCSV = () => {
     const headers = ['Symbol', 'Exchange', 'Quantity', 'Product', 'P&L', 'P&L %'];

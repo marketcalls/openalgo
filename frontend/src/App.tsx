@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Providers } from '@/app/providers';
 import { Layout } from '@/components/layout/Layout';
+import { FullWidthLayout } from '@/components/layout/FullWidthLayout';
 import { AuthSync } from '@/components/auth/AuthSync';
 
 // Pages
@@ -13,6 +14,10 @@ import Positions from '@/pages/Positions';
 import OrderBook from '@/pages/OrderBook';
 import TradeBook from '@/pages/TradeBook';
 import Holdings from '@/pages/Holdings';
+import Token from '@/pages/Token';
+import Search from '@/pages/Search';
+import ApiKey from '@/pages/ApiKey';
+import Playground from '@/pages/Playground';
 
 function App() {
   return (
@@ -36,6 +41,16 @@ function App() {
               <Route path="/orderbook" element={<OrderBook />} />
               <Route path="/tradebook" element={<TradeBook />} />
               <Route path="/holdings" element={<Holdings />} />
+              {/* Search routes - match Flask /search/* routes */}
+              <Route path="/search/token" element={<Token />} />
+              <Route path="/search" element={<Search />} />
+              {/* API Key management */}
+              <Route path="/apikey" element={<ApiKey />} />
+            </Route>
+
+            {/* Full-width protected routes */}
+            <Route element={<FullWidthLayout />}>
+              <Route path="/playground" element={<Playground />} />
             </Route>
 
             {/* Catch-all redirect */}

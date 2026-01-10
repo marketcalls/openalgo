@@ -85,7 +85,7 @@ export interface PlaceOrderRequest {
 }
 
 export interface ApiResponse<T> {
-  status: 'success' | 'error';
+  status: 'success' | 'error' | 'info';
   message?: string;
   data?: T;
 }

@@ -13,7 +13,7 @@ interface AuthSyncProps {
  */
 export function AuthSync({ children }: AuthSyncProps) {
   const [isChecking, setIsChecking] = useState(true);
-  const { setUser, logout } = useAuthStore();
+  const { setUser, setApiKey, logout } = useAuthStore();
   const { syncAppMode } = useThemeStore();
 
   useEffect(() => {
@@ -34,6 +34,10 @@ export function AuthSync({ children }: AuthSyncProps) {
               isLoggedIn: true,
               loginTime: new Date().toISOString(),
             });
+            // Store the API key for trading API calls
+            if (data.api_key) {
+              setApiKey(data.api_key);
+            }
             // Also sync app mode from backend
             await syncAppMode();
           } else if (data.status === 'success' && data.authenticated && !data.logged_in) {
@@ -61,7 +65,7 @@ export function AuthSync({ children }: AuthSyncProps) {
     };
 
     syncSession();
-  }, [setUser, logout, syncAppMode]);
+  }, [setUser, setApiKey, logout, syncAppMode]);
 
   // Show nothing while checking - prevents flash of wrong content
   if (isChecking) {

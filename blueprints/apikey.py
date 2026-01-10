@@ -29,6 +29,16 @@ def manage_api_key():
         # Get order mode (default to 'auto' if not set)
         order_mode = get_order_mode(login_username) or 'auto'
         logger.info(f"Checking API key status for user: {login_username}, order_mode: {order_mode}")
+
+        # Return JSON if Accept header requests it (for React frontend)
+        if request.headers.get('Accept') == 'application/json':
+            return jsonify({
+                'login_username': login_username,
+                'has_api_key': has_api_key,
+                'api_key': api_key,
+                'order_mode': order_mode
+            })
+
         return render_template('apikey.html',
                              login_username=login_username,
                              has_api_key=has_api_key,

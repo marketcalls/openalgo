@@ -218,59 +218,45 @@ export function Navbar() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuItem asChild>
-                <Link to="/profile" className="flex items-center gap-2">
-                  <User className="h-4 w-4" />
-                  Profile
-                </Link>
+              <DropdownMenuItem onSelect={() => navigate('/profile')} className="cursor-pointer">
+                <User className="h-4 w-4 mr-2" />
+                Profile
               </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/apikey" className="flex items-center gap-2">
-                  <Key className="h-4 w-4" />
-                  API Key
-                </Link>
+              <DropdownMenuItem onSelect={() => navigate('/apikey')} className="cursor-pointer">
+                <Key className="h-4 w-4 mr-2" />
+                API Key
               </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/telegram" className="flex items-center gap-2">
-                  <MessageSquare className="h-4 w-4" />
-                  Telegram Bot
-                </Link>
+              <DropdownMenuItem onSelect={() => navigate('/telegram')} className="cursor-pointer">
+                <MessageSquare className="h-4 w-4 mr-2" />
+                Telegram Bot
               </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/holdings" className="flex items-center gap-2">
-                  <ClipboardList className="h-4 w-4" />
-                  Holdings
-                </Link>
+              <DropdownMenuItem onSelect={() => navigate('/holdings')} className="cursor-pointer">
+                <ClipboardList className="h-4 w-4 mr-2" />
+                Holdings
               </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/python-strategy" className="flex items-center gap-2">
-                  <Code2 className="h-4 w-4" />
-                  Python Strategies
-                </Link>
+              <DropdownMenuItem onSelect={() => navigate('/python-strategy')} className="cursor-pointer">
+                <Code2 className="h-4 w-4 mr-2" />
+                Python Strategies
               </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/pnl-tracker" className="flex items-center gap-2">
-                  <BarChart3 className="h-4 w-4" />
-                  PnL Tracker
-                </Link>
+              <DropdownMenuItem onSelect={() => navigate('/pnl-tracker')} className="cursor-pointer">
+                <BarChart3 className="h-4 w-4 mr-2" />
+                PnL Tracker
               </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/search" className="flex items-center gap-2">
-                  <Search className="h-4 w-4" />
-                  Search
-                </Link>
+              <DropdownMenuItem onSelect={() => navigate('/search/token')} className="cursor-pointer">
+                <Search className="h-4 w-4 mr-2" />
+                Search
               </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/sandbox" className="flex items-center gap-2">
-                  <FlaskConical className="h-4 w-4" />
-                  Sandbox
-                </Link>
+              <DropdownMenuItem onSelect={() => navigate('/playground')} className="cursor-pointer">
+                <Zap className="h-4 w-4 mr-2" />
+                API Playground
               </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/admin" className="flex items-center gap-2">
-                  <Settings className="h-4 w-4" />
-                  Admin
-                </Link>
+              <DropdownMenuItem onSelect={() => navigate('/sandbox')} className="cursor-pointer">
+                <FlaskConical className="h-4 w-4 mr-2" />
+                Sandbox
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => navigate('/admin')} className="cursor-pointer">
+                <Settings className="h-4 w-4 mr-2" />
+                Admin
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
                 <a href="https://docs.openalgo.in" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2">

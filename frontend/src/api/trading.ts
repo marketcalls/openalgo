@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { apiClient, webClient } from './client';
 import type {
   Position,
   Order,
@@ -11,12 +11,36 @@ import type {
   ApiResponse,
 } from '@/types/trading';
 
+export interface QuotesData {
+  ask: number;
+  bid: number;
+  high: number;
+  low: number;
+  ltp: number;
+  oi: number;
+  open: number;
+  prev_close: number;
+  volume: number;
+}
+
 export const tradingApi = {
+  /**
+   * Get real-time quotes for a symbol
+   */
+  getQuotes: async (apiKey: string, symbol: string, exchange: string): Promise<ApiResponse<QuotesData>> => {
+    const response = await apiClient.post<ApiResponse<QuotesData>>('/quotes', {
+      apikey: apiKey,
+      symbol,
+      exchange,
+    });
+    return response.data;
+  },
+
   /**
    * Get margin/funds data
    */
   getFunds: async (apiKey: string): Promise<ApiResponse<MarginData>> => {
-    const response = await apiClient.post<ApiResponse<MarginData>>('/api/v1/funds', {
+    const response = await apiClient.post<ApiResponse<MarginData>>('/funds', {
       apikey: apiKey,
     });
     return response.data;
@@ -26,7 +50,7 @@ export const tradingApi = {
    * Get positions
    */
   getPositions: async (apiKey: string): Promise<ApiResponse<Position[]>> => {
-    const response = await apiClient.post<ApiResponse<Position[]>>('/api/v1/positionbook', {
+    const response = await apiClient.post<ApiResponse<Position[]>>('/positionbook', {
       apikey: apiKey,
     });
     return response.data;
@@ -36,7 +60,7 @@ export const tradingApi = {
    * Get order book
    */
   getOrders: async (apiKey: string): Promise<ApiResponse<{ orders: Order[]; statistics: OrderStats }>> => {
-    const response = await apiClient.post<ApiResponse<{ orders: Order[]; statistics: OrderStats }>>('/api/v1/orderbook', {
+    const response = await apiClient.post<ApiResponse<{ orders: Order[]; statistics: OrderStats }>>('/orderbook', {
       apikey: apiKey,
     });
     return response.data;
@@ -46,7 +70,7 @@ export const tradingApi = {
    * Get trade book
    */
   getTrades: async (apiKey: string): Promise<ApiResponse<Trade[]>> => {
-    const response = await apiClient.post<ApiResponse<Trade[]>>('/api/v1/tradebook', {
+    const response = await apiClient.post<ApiResponse<Trade[]>>('/tradebook', {
       apikey: apiKey,
     });
     return response.data;
@@ -56,7 +80,7 @@ export const tradingApi = {
    * Get holdings
    */
   getHoldings: async (apiKey: string): Promise<ApiResponse<{ holdings: Holding[]; statistics: PortfolioStats }>> => {
-    const response = await apiClient.post<ApiResponse<{ holdings: Holding[]; statistics: PortfolioStats }>>('/api/v1/holdings', {
+    const response = await apiClient.post<ApiResponse<{ holdings: Holding[]; statistics: PortfolioStats }>>('/holdings', {
       apikey: apiKey,
     });
     return response.data;
@@ -66,48 +90,54 @@ export const tradingApi = {
    * Place order
    */
   placeOrder: async (order: PlaceOrderRequest): Promise<ApiResponse<{ orderid: string }>> => {
-    const response = await apiClient.post<ApiResponse<{ orderid: string }>>('/api/v1/place_order', order);
+    const response = await apiClient.post<ApiResponse<{ orderid: string }>>('/place_order', order);
     return response.data;
   },
 
   /**
-   * Modify order
+   * Modify order (uses session auth with CSRF)
    */
   modifyOrder: async (
-    apiKey: string,
     orderid: string,
-    updates: Partial<PlaceOrderRequest>
+    orderData: {
+      symbol: string;
+      exchange: string;
+      action: string;
+      product: string;
+      pricetype: string;
+      price: number;
+      quantity: number;
+      trigger_price?: number;
+      disclosed_quantity?: number;
+    }
   ): Promise<ApiResponse<{ orderid: string }>> => {
-    const response = await apiClient.post<ApiResponse<{ orderid: string }>>('/api/v1/modify_order', {
-      apikey: apiKey,
+    const response = await webClient.post<ApiResponse<{ orderid: string }>>('/modify_order', {
       orderid,
-      ...updates,
+      ...orderData,
     });
     return response.data;
   },
 
   /**
-   * Cancel order
+   * Cancel order (uses session auth with CSRF)
    */
-  cancelOrder: async (apiKey: string, orderid: string, strategy: string): Promise<ApiResponse<void>> => {
-    const response = await apiClient.post<ApiResponse<void>>('/api/v1/cancel_order', {
-      apikey: apiKey,
+  cancelOrder: async (orderid: string): Promise<ApiResponse<{ orderid: string }>> => {
+    const response = await webClient.post<ApiResponse<{ orderid: string }>>('/cancel_order', {
       orderid,
-      strategy,
     });
     return response.data;
   },
 
   /**
-   * Close a specific position
+   * Close a specific position (uses session auth with CSRF)
    */
   closePosition: async (
     symbol: string,
     exchange: string,
     product: string
   ): Promise<ApiResponse<void>> => {
-    // Uses the web route which handles session-based auth
-    const response = await apiClient.post<ApiResponse<void>>('/close_position', {
+    // Uses the web route which handles session-based auth with CSRF
+    const response = await webClient.post<ApiResponse<void>>('/close_position', {
       symbol,
       exchange,
       product,
@@ -116,21 +146,18 @@ export const tradingApi = {
   },
 
   /**
-   * Close all positions
+   * Close all positions (uses session auth with CSRF)
    */
   closeAllPositions: async (): Promise<ApiResponse<void>> => {
-    const response = await apiClient.post<ApiResponse<void>>('/close_all_positions', {});
+    const response = await webClient.post<ApiResponse<void>>('/close_all_positions', {});
     return response.data;
   },
 
   /**
-   * Cancel all orders
+   * Cancel all orders (uses session auth with CSRF)
    */
-  cancelAllOrders: async (apiKey: string, strategy: string): Promise<ApiResponse<void>> => {
-    const response = await apiClient.post<ApiResponse<void>>('/api/v1/cancel_all_orders', {
-      apikey: apiKey,
-      strategy,
-    });
+  cancelAllOrders: async (): Promise<ApiResponse<void>> => {
+    const response = await webClient.post<ApiResponse<void>>('/cancel_all_orders', {});
     return response.data;
   },
 };
