@@ -33,12 +33,16 @@ def cleanup_test_data(user_id):
         SandboxPositions.query.filter_by(user_id=user_id).delete()
         SandboxFunds.query.filter_by(user_id=user_id).delete()
         db_session.commit()
-    except Exception:
+    except Exception as e:
         db_session.rollback()
+        # Log cleanup warning but don't fail - tests should continue
+        print(f"Warning: Cleanup for {user_id} failed: {e}")
 
 
 def test_session_start_calculation():
     """Test session start time calculation"""
+    import pytz
+    
     print("\n" + "="*50)
     print("TEST 1: Session Start Calculation")
     print("="*50)
@@ -46,13 +50,18 @@ def test_session_start_calculation():
     session_start = get_sandbox_session_start()
     print(f"Session start: {session_start}")
 
-    # Session start should be in the past or exactly now
-    now = datetime.now()
-    assert session_start <= now, "Session start should not be in the future"
+    # Session start is a naive datetime representing IST time
+    # We need to compare with IST time, not system-local time
+    ist = pytz.timezone('Asia/Kolkata')
+    now_ist = datetime.now(ist)
+    # Strip timezone to get naive datetime for comparison (both represent IST)
+    now_naive_ist = now_ist.replace(tzinfo=None)
+    
+    assert session_start <= now_naive_ist, "Session start should not be in the future"
 
     # Session start should be within the last 24 hours
-    yesterday = now - timedelta(days=1)
-    assert session_start >= yesterday, "Session start should be within last 24 hours"
+    yesterday_ist = now_naive_ist - timedelta(days=1)
+    assert session_start >= yesterday_ist, "Session start should be within last 24 hours"
 
     print("PASSED: Session Start Calculation\n")
 
