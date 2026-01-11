@@ -530,6 +530,17 @@ class OrderManager:
                     if new_qty % lot_size != 0:
                         return False, {'status': 'error', 'message': f'Quantity must be in multiples of lot size {lot_size}', 'mode': 'analyze'}, 400
 
+            # Validate price if being modified (required for LIMIT and SL orders)
+            if 'price' in new_data and new_data['price'] is not None:
+                if new_price <= 0:
+                    return False, {'status': 'error', 'message': 'Price must be positive', 'mode': 'analyze'}, 400
+                # For MARKET orders, price is not used - but we still validate if provided
+            
+            # Validate trigger_price if being modified (required for SL and SL-M orders)
+            if 'trigger_price' in new_data and new_data['trigger_price'] is not None:
+                if new_trigger_price <= 0:
+                    return False, {'status': 'error', 'message': 'Trigger price must be positive', 'mode': 'analyze'}, 400
+
             # Calculate and validate margin BEFORE modifying any state
             margin_adjustment = None  # (action, amount, new_margin) - action: 'block' | 'release' | None
             if original_margin > 0 and new_values != original_values:
@@ -561,6 +572,7 @@ class OrderManager:
 
             # Step 3: Apply margin changes ONLY after successful order commit
             # This ensures we never have inconsistent state
+            margin_warning = None
             if margin_adjustment:
                 if margin_adjustment['action'] == 'block':
                     success, _ = self.fund_manager.block_margin(
@@ -569,8 +581,16 @@ class OrderManager:
                     )
                     if not success:
                         # Critical: Order is committed but margin block failed
-                        # Log error but don't fail - order state is correct, margin will be reconciled
+                        # Attempt to revert order's margin_blocked to original value
                         logger.error(f"Order {orderid} modified but failed to block additional margin ₹{margin_adjustment['amount']}")
+                        try:
+                            order.margin_blocked = original_margin
+                            db_session.commit()
+                            logger.info(f"Reverted order {orderid} margin_blocked to original ₹{original_margin}")
+                            margin_warning = f"Order modified but margin update failed. Margin reverted to ₹{original_margin}. Please verify funds."
+                        except Exception as revert_error:
+                            logger.error(f"Failed to revert margin_blocked for order {orderid}: {revert_error}")
+                            margin_warning = f"Order modified but margin update failed. Manual reconciliation may be needed."
                     else:
                         logger.info(f"Blocked additional margin ₹{margin_adjustment['amount']} for order {orderid}")
                 elif margin_adjustment['action'] == 'release':
@@ -581,13 +601,32 @@ class OrderManager:
                     )
                     if not success:
                         # Critical: Order is committed but margin release failed
-                        # Log error but don't fail - order state is correct, margin will be reconciled
+                        # Attempt to revert order's margin_blocked to original value
                         logger.error(f"Order {orderid} modified but failed to release excess margin ₹{margin_adjustment['amount']}")
+                        try:
+                            order.margin_blocked = original_margin
+                            db_session.commit()
+                            logger.info(f"Reverted order {orderid} margin_blocked to original ₹{original_margin}")
+                            margin_warning = f"Order modified but margin release failed. Margin kept at ₹{original_margin}. Please verify funds."
+                        except Exception as revert_error:
+                            logger.error(f"Failed to revert margin_blocked for order {orderid}: {revert_error}")
+                            margin_warning = f"Order modified but margin release failed. Manual reconciliation may be needed."
                     else:
                         logger.info(f"Released margin ₹{margin_adjustment['amount']} for order {orderid}")
 
             logger.info(f"Order modified: {orderid}")
-            return True, {'status': 'success', 'orderid': orderid, 'message': 'Order modified successfully', 'mode': 'analyze'}, 200
+            
+            # Build response with optional warning
+            response = {
+                'status': 'success', 
+                'orderid': orderid, 
+                'message': 'Order modified successfully', 
+                'mode': 'analyze'
+            }
+            if margin_warning:
+                response['warning'] = margin_warning
+            
+            return True, response, 200
 
         except Exception as e:
             db_session.rollback()
