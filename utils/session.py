@@ -65,8 +65,14 @@ def is_session_valid():
     logger.debug(f"Session valid. Current time: {now_ist}, Login time: {login_time}, Daily expiry: {daily_expiry}")
     return True
 
-def revoke_user_tokens():
-    """Revoke auth tokens for the current user when session expires"""
+def revoke_user_tokens(revoke_db_tokens=True):
+    """
+    Revoke auth tokens for the current user when session expires.
+    
+    Args:
+        revoke_db_tokens (bool): If True, revokes the token in the database (Invalidates API Key).
+                                 If False, only clears local caches (Preserves API Key).
+    """
     if 'user' in session:
         username = session.get('user')
         try:
@@ -108,12 +114,16 @@ def revoke_user_tokens():
             except Exception as cache_error:
                 logger.error(f"Error clearing telegram cache: {cache_error}")
 
-            # Revoke the auth token in database
-            inserted_id = upsert_auth(username, "", "", revoke=True)
-            if inserted_id is not None:
-                logger.info(f"Auto-expiry: Revoked auth tokens for user: {username}")
+            if revoke_db_tokens:
+                # Revoke the auth token in database
+                inserted_id = upsert_auth(username, "", "", revoke=True)
+                if inserted_id is not None:
+                    logger.info(f"Auto-expiry: Revoked auth tokens for user: {username}")
+                else:
+                    logger.error(f"Auto-expiry: Failed to revoke auth tokens for user: {username}")
             else:
-                logger.error(f"Auto-expiry: Failed to revoke auth tokens for user: {username}")
+                logger.info(f"Auto-expiry: Skipped DB revocation for user: {username} (Preserving API access)")
+
         except Exception as e:
             logger.error(f"Error revoking tokens during auto-expiry for user {username}: {e}")
 
