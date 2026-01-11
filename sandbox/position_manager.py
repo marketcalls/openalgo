@@ -304,29 +304,13 @@ class PositionManager:
             tuple: (success: bool, response: dict, status_code: int)
         """
         try:
-            from datetime import datetime, time, timedelta
-            import os
+            from datetime import datetime
+            from sandbox.utils import get_sandbox_session_start
 
-            # Get session expiry time from config (e.g., '03:00')
-            session_expiry_str = os.getenv('SESSION_EXPIRY_TIME', '03:00')
-            expiry_hour, expiry_minute = map(int, session_expiry_str.split(':'))
-
-            # Get current time
-            now = datetime.now()
-            today = now.date()
-
-            # Calculate if we're in a new session
-            session_expiry_time = time(expiry_hour, expiry_minute)
-
-            # Determine last session expiry
-            if now.time() < session_expiry_time:
-                # We're before today's session expiry (e.g., before 3 AM)
-                # Last session expired yesterday at 3 AM
-                last_session_expiry = datetime.combine(today - timedelta(days=1), session_expiry_time)
-            else:
-                # We're after today's session expiry (e.g., after 3 AM)
-                # Last session expired today at 3 AM
-                last_session_expiry = datetime.combine(today, session_expiry_time)
+            # Get session start time (timezone-naive for DB compatibility)
+            # This is the same as last_session_expiry in the original logic
+            last_session_expiry = get_sandbox_session_start()
+            today = datetime.now().date()
 
             # Get all positions (including zero quantity ones from current session)
             positions_query = SandboxPositions.query.filter(
@@ -759,30 +743,10 @@ class PositionManager:
     def get_tradebook(self):
         """Get all executed trades for the user for current session only"""
         try:
-            from datetime import datetime, time, timedelta
-            import os
+            from sandbox.utils import get_sandbox_session_start
 
-            # Get session expiry time from config (e.g., '03:00')
-            session_expiry_str = os.getenv('SESSION_EXPIRY_TIME', '03:00')
-            expiry_hour, expiry_minute = map(int, session_expiry_str.split(':'))
-
-            # Get current time
-            now = datetime.now()
-            today = now.date()
-
-            # Calculate session start time
-            # If current time is before session expiry (e.g., before 3 AM),
-            # session started yesterday at expiry time
-            session_expiry_time = time(expiry_hour, expiry_minute)
-
-            if now.time() < session_expiry_time:
-                # We're in the early morning before session expiry
-                # Session started yesterday at expiry time
-                session_start = datetime.combine(today - timedelta(days=1), session_expiry_time)
-            else:
-                # We're after session expiry time
-                # Session started today at expiry time
-                session_start = datetime.combine(today, session_expiry_time)
+            # Get session start time (timezone-naive for DB compatibility)
+            session_start = get_sandbox_session_start()
 
             trades = SandboxTrades.query.filter(
                 SandboxTrades.user_id == self.user_id,

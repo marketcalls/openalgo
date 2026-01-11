@@ -490,69 +490,224 @@ class OrderManager:
             tuple: (success: bool, response: dict, status_code: int)
         """
         try:
-            # Get existing order
-            order = SandboxOrders.query.filter_by(
-                orderid=orderid,
-                user_id=self.user_id
-            ).first()
+            order = SandboxOrders.query.filter_by(orderid=orderid, user_id=self.user_id).first()
 
             if not order:
-                return False, {
-                    'status': 'error',
-                    'message': f'Order {orderid} not found',
-                    'mode': 'analyze'
-                }, 404
+                return False, {'status': 'error', 'message': f'Order {orderid} not found', 'mode': 'analyze'}, 404
 
             if order.order_status != 'open':
-                return False, {
-                    'status': 'error',
-                    'message': f'Cannot modify order in {order.order_status} status',
-                    'mode': 'analyze'
-                }, 400
+                return False, {'status': 'error', 'message': f'Cannot modify order in {order.order_status} status', 'mode': 'analyze'}, 400
 
-            # Update order parameters
+            # Store original values for comparison and potential rollback
+            original_margin = order.margin_blocked if hasattr(order, 'margin_blocked') and order.margin_blocked else Decimal('0')
+            original_values = (order.quantity, order.price, order.trigger_price)
+
+            # Calculate new values without modifying order yet
+            new_qty = int(new_data['quantity']) if 'quantity' in new_data else order.quantity
+            new_price = Decimal(str(new_data['price'])) if new_data.get('price') else order.price
+            new_trigger_price = Decimal(str(new_data['trigger_price'])) if new_data.get('trigger_price') else order.trigger_price
+            new_values = (new_qty, new_price, new_trigger_price)
+
+            # Validate quantity if being modified
             if 'quantity' in new_data:
-                new_quantity = int(new_data['quantity'])
-                # Validate lot size (from cache)
+                # Quantity must be positive
+                if new_qty <= 0:
+                    return False, {'status': 'error', 'message': 'Quantity must be positive', 'mode': 'analyze'}, 400
+                
+                # Quantity cannot be less than already filled quantity
+                filled_qty = order.filled_quantity or 0
+                if new_qty < filled_qty:
+                    return False, {
+                        'status': 'error', 
+                        'message': f'Cannot reduce quantity below filled quantity ({filled_qty})', 
+                        'mode': 'analyze'
+                    }, 400
+                
+                # Validate lot size for F&O
                 symbol_obj = get_symbol_info(order.symbol, order.exchange)
                 if symbol_obj and order.exchange in ['NFO', 'BFO', 'CDS', 'BCD', 'MCX', 'NCDEX']:
                     lot_size = symbol_obj.lotsize or 1
-                    if new_quantity % lot_size != 0:
-                        return False, {
-                            'status': 'error',
-                            'message': f'Quantity must be in multiples of lot size {lot_size}',
-                            'mode': 'analyze'
-                        }, 400
-                order.quantity = new_quantity
-                order.pending_quantity = new_quantity
+                    if new_qty % lot_size != 0:
+                        return False, {'status': 'error', 'message': f'Quantity must be in multiples of lot size {lot_size}', 'mode': 'analyze'}, 400
 
-            if 'price' in new_data and new_data['price']:
-                order.price = Decimal(str(new_data['price']))
+            # Validate price if being modified (required for LIMIT and SL orders)
+            if 'price' in new_data and new_data['price'] is not None:
+                if new_price <= 0:
+                    return False, {'status': 'error', 'message': 'Price must be positive', 'mode': 'analyze'}, 400
+                # For MARKET orders, price is not used - but we still validate if provided
+            
+            # Validate trigger_price if being modified (required for SL and SL-M orders)
+            if 'trigger_price' in new_data and new_data['trigger_price'] is not None:
+                if new_trigger_price <= 0:
+                    return False, {'status': 'error', 'message': 'Trigger price must be positive', 'mode': 'analyze'}, 400
 
-            if 'trigger_price' in new_data and new_data['trigger_price']:
-                order.trigger_price = Decimal(str(new_data['trigger_price']))
+            # Calculate and validate margin BEFORE modifying any state
+            margin_adjustment = None  # (action, amount, new_margin) - action: 'block' | 'release' | None
+            if original_margin > 0 and new_values != original_values:
+                margin_result = self._calculate_margin_adjustment(
+                    order, new_qty, new_price, new_trigger_price, original_margin
+                )
+                if margin_result['error']:
+                    return False, margin_result['error_response'], 400
+                margin_adjustment = margin_result['adjustment']
 
+            # All validations passed - now apply changes atomically
+            # Step 1: Update order properties
+            order.quantity = new_qty
+            order.pending_quantity = new_qty
+            order.price = new_price
+            order.trigger_price = new_trigger_price
             order.update_timestamp = datetime.now(pytz.timezone('Asia/Kolkata'))
+            
+            if margin_adjustment:
+                order.margin_blocked = margin_adjustment['new_margin']
 
-            db_session.commit()
+            # Step 2: Commit order changes first
+            try:
+                db_session.commit()
+            except Exception as commit_error:
+                db_session.rollback()
+                logger.error(f"Failed to commit order modification: {commit_error}")
+                return False, {'status': 'error', 'message': f'Error modifying order: {str(commit_error)}', 'mode': 'analyze'}, 500
+
+            # Step 3: Apply margin changes ONLY after successful order commit
+            # This ensures we never have inconsistent state
+            margin_warning = None
+            if margin_adjustment:
+                if margin_adjustment['action'] == 'block':
+                    success, _ = self.fund_manager.block_margin(
+                        margin_adjustment['amount'], 
+                        f"Order modified: {order.symbol}"
+                    )
+                    if not success:
+                        # Critical: Order is committed but margin block failed
+                        # Attempt to revert order's margin_blocked to original value
+                        logger.error(f"Order {orderid} modified but failed to block additional margin ₹{margin_adjustment['amount']}")
+                        try:
+                            order.margin_blocked = original_margin
+                            db_session.commit()
+                            logger.info(f"Reverted order {orderid} margin_blocked to original ₹{original_margin}")
+                            margin_warning = f"Order modified but margin update failed. Margin reverted to ₹{original_margin}. Please verify funds."
+                        except Exception as revert_error:
+                            logger.error(f"Failed to revert margin_blocked for order {orderid}: {revert_error}")
+                            margin_warning = f"Order modified but margin update failed. Manual reconciliation may be needed."
+                    else:
+                        logger.info(f"Blocked additional margin ₹{margin_adjustment['amount']} for order {orderid}")
+                elif margin_adjustment['action'] == 'release':
+                    success, _ = self.fund_manager.release_margin(
+                        margin_adjustment['amount'], 
+                        0, 
+                        f"Order modified: {order.symbol}"
+                    )
+                    if not success:
+                        # Critical: Order is committed but margin release failed
+                        # Attempt to revert order's margin_blocked to original value
+                        logger.error(f"Order {orderid} modified but failed to release excess margin ₹{margin_adjustment['amount']}")
+                        try:
+                            order.margin_blocked = original_margin
+                            db_session.commit()
+                            logger.info(f"Reverted order {orderid} margin_blocked to original ₹{original_margin}")
+                            margin_warning = f"Order modified but margin release failed. Margin kept at ₹{original_margin}. Please verify funds."
+                        except Exception as revert_error:
+                            logger.error(f"Failed to revert margin_blocked for order {orderid}: {revert_error}")
+                            margin_warning = f"Order modified but margin release failed. Manual reconciliation may be needed."
+                    else:
+                        logger.info(f"Released margin ₹{margin_adjustment['amount']} for order {orderid}")
 
             logger.info(f"Order modified: {orderid}")
-
-            return True, {
-                'status': 'success',
-                'orderid': orderid,
-                'message': 'Order modified successfully',
+            
+            # Build response with optional warning
+            response = {
+                'status': 'success', 
+                'orderid': orderid, 
+                'message': 'Order modified successfully', 
                 'mode': 'analyze'
-            }, 200
+            }
+            if margin_warning:
+                response['warning'] = margin_warning
+            
+            return True, response, 200
 
         except Exception as e:
             db_session.rollback()
             logger.error(f"Error modifying order {orderid}: {e}")
-            return False, {
-                'status': 'error',
-                'message': f'Error modifying order: {str(e)}',
-                'mode': 'analyze'
-            }, 500
+            return False, {'status': 'error', 'message': f'Error modifying order: {str(e)}', 'mode': 'analyze'}, 500
+
+    def _calculate_margin_adjustment(self, order, new_qty, new_price, new_trigger_price, original_margin):
+        """
+        Calculate margin adjustment needed for order modification.
+        Returns dict with 'error', 'error_response', and 'adjustment' keys.
+        Does NOT modify any state - purely calculative.
+        
+        Note: This considers position netting to match the logic used during order placement.
+        """
+        result = {'error': False, 'error_response': None, 'adjustment': None}
+
+        # Determine price for margin calculation (trigger price for SL orders, else limit price)
+        margin_price = new_trigger_price if order.price_type in ['SL', 'SL-M'] else new_price
+        if not margin_price or margin_price <= 0:
+            return result  # No valid price to calculate margin
+
+        # Calculate base margin for new quantity (before position netting)
+        base_new_margin, msg = self.fund_manager.calculate_margin_required(
+            order.symbol, order.exchange, order.product, new_qty, margin_price, order.action
+        )
+        if base_new_margin is None:
+            result['error'] = True
+            result['error_response'] = {'status': 'error', 'message': f'Unable to calculate margin: {msg}', 'mode': 'analyze'}
+            return result
+
+        # Apply position netting logic (same as order placement)
+        # Check if this order will close/reduce/reverse an existing position
+        new_margin = base_new_margin
+        existing_position = SandboxPositions.query.filter_by(
+            user_id=self.user_id,
+            symbol=order.symbol,
+            exchange=order.exchange,
+            product=order.product
+        ).first()
+
+        if existing_position and existing_position.quantity != 0:
+            # Check if order is opposite to position direction
+            if (existing_position.quantity > 0 and order.action == 'SELL') or \
+               (existing_position.quantity < 0 and order.action == 'BUY'):
+                # Opposite direction - will reduce or reverse position
+                existing_qty = abs(existing_position.quantity)
+                
+                if new_qty <= existing_qty:
+                    # Order will only reduce/close position - no new margin needed
+                    new_margin = Decimal('0')
+                    logger.debug(f"Modified order will reduce position - no margin required")
+                else:
+                    # Order will reverse position - only margin for excess quantity
+                    excess_qty = new_qty - existing_qty
+                    new_margin, _ = self.fund_manager.calculate_margin_required(
+                        order.symbol, order.exchange, order.product, excess_qty, margin_price, order.action
+                    )
+                    logger.debug(f"Modified order will reverse position - margin for {excess_qty} shares: ₹{new_margin}")
+
+        margin_diff = new_margin - original_margin
+
+        if margin_diff > 0:
+            # Need additional margin - validate availability first
+            can_trade, check_msg = self.fund_manager.check_margin_available(margin_diff)
+            if not can_trade:
+                result['error'] = True
+                result['error_response'] = {
+                    'status': 'error', 
+                    'message': f'Insufficient funds. Additional margin required: ₹{margin_diff:.2f}. {check_msg}', 
+                    'mode': 'analyze'
+                }
+                return result
+            result['adjustment'] = {'action': 'block', 'amount': margin_diff, 'new_margin': new_margin}
+        elif margin_diff < 0:
+            # Will release excess margin
+            result['adjustment'] = {'action': 'release', 'amount': abs(margin_diff), 'new_margin': new_margin}
+        else:
+            # No change needed, but update the margin_blocked field
+            result['adjustment'] = {'action': None, 'amount': Decimal('0'), 'new_margin': new_margin}
+
+        return result
 
     def cancel_order(self, orderid):
         """
@@ -671,30 +826,10 @@ class OrderManager:
     def get_orderbook(self):
         """Get all orders for the user for current session only"""
         try:
-            from datetime import datetime, time as dt_time, timedelta
-            import os
+            from sandbox.utils import get_sandbox_session_start
 
-            # Get session expiry time from config (e.g., '03:00')
-            session_expiry_str = os.getenv('SESSION_EXPIRY_TIME', '03:00')
-            expiry_hour, expiry_minute = map(int, session_expiry_str.split(':'))
-
-            # Get current time
-            now = datetime.now()
-            today = now.date()
-
-            # Calculate session start time
-            # If current time is before session expiry (e.g., before 3 AM),
-            # session started yesterday at expiry time
-            session_expiry_time = dt_time(expiry_hour, expiry_minute)
-
-            if now.time() < session_expiry_time:
-                # We're in the early morning before session expiry
-                # Session started yesterday at expiry time
-                session_start = datetime.combine(today - timedelta(days=1), session_expiry_time)
-            else:
-                # We're after session expiry time
-                # Session started today at expiry time
-                session_start = datetime.combine(today, session_expiry_time)
+            # Get session start time from utility
+            session_start = get_sandbox_session_start()
 
             orders = SandboxOrders.query.filter(
                 SandboxOrders.user_id == self.user_id,

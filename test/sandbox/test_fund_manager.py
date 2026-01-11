@@ -211,8 +211,10 @@ def cleanup_test_data(user_id):
     try:
         SandboxFunds.query.filter_by(user_id=user_id).delete()
         db_session.commit()
-    except:
+    except Exception as e:
         db_session.rollback()
+        # Log cleanup warning but don't fail - tests should continue
+        print(f"Warning: Cleanup for {user_id} failed: {e}")
 
 
 def run_all_tests():
