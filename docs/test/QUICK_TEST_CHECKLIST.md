@@ -140,10 +140,20 @@ uv run app.py
 API_KEY="your_api_key_here"
 BASE_URL="http://127.0.0.1:5000"
 
-# Test quotes
+# Test equity quotes
 curl -X POST "$BASE_URL/api/v1/quotes" \
   -H "Content-Type: application/json" \
   -d '{"apikey":"'$API_KEY'","symbol":"RELIANCE","exchange":"NSE"}'
+
+# Test index quotes
+curl -X POST "$BASE_URL/api/v1/quotes" \
+  -H "Content-Type: application/json" \
+  -d '{"apikey":"'$API_KEY'","symbol":"NIFTY","exchange":"NSE_INDEX"}'
+
+# Test market depth
+curl -X POST "$BASE_URL/api/v1/depth" \
+  -H "Content-Type: application/json" \
+  -d '{"apikey":"'$API_KEY'","symbol":"INFY","exchange":"NSE"}'
 
 # Test funds
 curl -X POST "$BASE_URL/api/v1/funds" \
@@ -154,13 +164,63 @@ curl -X POST "$BASE_URL/api/v1/funds" \
 curl -X POST "$BASE_URL/api/v1/positionbook" \
   -H "Content-Type: application/json" \
   -d '{"apikey":"'$API_KEY'"}'
+
+# Test historical data
+curl -X POST "$BASE_URL/api/v1/history" \
+  -H "Content-Type: application/json" \
+  -d '{"apikey":"'$API_KEY'","symbol":"RELIANCE","exchange":"NSE","interval":"5m","start_date":"2025-01-01","end_date":"2025-01-13"}'
 ```
 
-- [ ] Quotes endpoint
+- [ ] Equity quotes endpoint
+- [ ] Index quotes endpoint
+- [ ] Market depth endpoint
 - [ ] Funds endpoint
 - [ ] Positions endpoint
 - [ ] Orderbook endpoint
+- [ ] Historical data endpoint
 - [ ] Place order endpoint
+
+---
+
+## OpenAlgo Symbol Format Quick Reference
+
+### Exchange Codes
+| Code | Description |
+|------|-------------|
+| `NSE` | NSE Equities |
+| `BSE` | BSE Equities |
+| `NFO` | NSE F&O |
+| `BFO` | BSE F&O |
+| `CDS` | NSE Currency |
+| `BCD` | BSE Currency |
+| `MCX` | Commodities |
+| `NSE_INDEX` | NSE Indices |
+| `BSE_INDEX` | BSE Indices |
+
+### Symbol Formats
+```
+Equity:   RELIANCE, INFY, TCS, SBIN
+Index:    NIFTY, BANKNIFTY, SENSEX
+Futures:  NIFTY30JAN25FUT, BANKNIFTY29JAN25FUT
+Options:  NIFTY30JAN2523500CE, BANKNIFTY29JAN2548000PE
+Currency: USDINR10JAN25FUT, USDINR10JAN2584CE
+MCX:      CRUDEOIL17JAN25FUT, GOLD05FEB25FUT
+```
+
+### Test Symbols (Update expiry dates as needed)
+| Type | Exchange | Symbol |
+|------|----------|--------|
+| Equity | NSE | `RELIANCE` |
+| Equity | NSE | `INFY` |
+| Index | NSE_INDEX | `NIFTY` |
+| Index | NSE_INDEX | `BANKNIFTY` |
+| Index | BSE_INDEX | `SENSEX` |
+| Future | NFO | `NIFTY30JAN25FUT` |
+| Future | NFO | `BANKNIFTY29JAN25FUT` |
+| Option CE | NFO | `NIFTY30JAN2523500CE` |
+| Option PE | NFO | `BANKNIFTY29JAN2548000PE` |
+| Currency | CDS | `USDINR10JAN25FUT` |
+| Commodity | MCX | `CRUDEOIL17JAN25FUT` |
 
 ---
 

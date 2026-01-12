@@ -751,6 +751,171 @@ open http://127.0.0.1:5000
 
 ---
 
+## Appendix: OpenAlgo Symbol Format
+
+### Exchange Codes
+| Code | Description |
+|------|-------------|
+| `NSE` | National Stock Exchange equities |
+| `BSE` | Bombay Stock Exchange equities |
+| `NFO` | NSE Futures and Options |
+| `BFO` | BSE Futures and Options |
+| `CDS` | NSE Currency Derivatives |
+| `BCD` | BSE Currency Derivatives |
+| `MCX` | Multi Commodity Exchange |
+| `NSE_INDEX` | NSE Indices |
+| `BSE_INDEX` | BSE Indices |
+
+### Equity Symbols
+**Format:** `[Base Symbol]`
+
+| Exchange | Symbol | Description |
+|----------|--------|-------------|
+| NSE | `RELIANCE` | Reliance Industries |
+| NSE | `INFY` | Infosys |
+| NSE | `TCS` | Tata Consultancy Services |
+| NSE | `SBIN` | State Bank of India |
+| BSE | `TATAMOTORS` | Tata Motors |
+
+### Index Symbols
+| Exchange | Symbol | Description |
+|----------|--------|-------------|
+| NSE_INDEX | `NIFTY` | Nifty 50 Index |
+| NSE_INDEX | `BANKNIFTY` | Bank Nifty Index |
+| NSE_INDEX | `FINNIFTY` | Fin Nifty Index |
+| NSE_INDEX | `MIDCPNIFTY` | Midcap Nifty Index |
+| NSE_INDEX | `NIFTYNXT50` | Nifty Next 50 Index |
+| NSE_INDEX | `INDIAVIX` | India VIX |
+| BSE_INDEX | `SENSEX` | Sensex Index |
+| BSE_INDEX | `BANKEX` | Bankex Index |
+| BSE_INDEX | `SENSEX50` | Sensex 50 Index |
+
+### Future Symbols
+**Format:** `[Base Symbol][Expiration Date]FUT`
+
+| Exchange | Symbol | Description |
+|----------|--------|-------------|
+| NFO | `BANKNIFTY24APR24FUT` | Bank Nifty Apr 2024 Future |
+| NFO | `NIFTY30JAN25FUT` | Nifty Jan 2025 Future |
+| NFO | `RELIANCE30JAN25FUT` | Reliance Jan 2025 Future |
+| BFO | `SENSEX24APR24FUT` | Sensex Apr 2024 Future |
+| CDS | `USDINR10MAY24FUT` | USD/INR May 2024 Future |
+| MCX | `CRUDEOILM20MAY24FUT` | Crude Oil May 2024 Future |
+| MCX | `GOLD05FEB25FUT` | Gold Feb 2025 Future |
+
+### Options Symbols
+**Format:** `[Base Symbol][Expiration Date][Strike Price][CE/PE]`
+
+| Exchange | Symbol | Description |
+|----------|--------|-------------|
+| NFO | `NIFTY28MAR2420800CE` | Nifty 20800 Call Mar 2024 |
+| NFO | `NIFTY28MAR2420800PE` | Nifty 20800 Put Mar 2024 |
+| NFO | `BANKNIFTY24APR2448000CE` | Bank Nifty 48000 Call Apr 2024 |
+| NFO | `VEDL25APR24292.5CE` | Vedanta 292.5 Call Apr 2024 |
+| NFO | `RELIANCE30JAN252800CE` | Reliance 2800 Call Jan 2025 |
+| CDS | `USDINR19APR2482CE` | USD/INR 82 Call Apr 2024 |
+| MCX | `CRUDEOIL17APR246750CE` | Crude Oil 6750 Call Apr 2024 |
+| MCX | `GOLD05FEB2578000PE` | Gold 78000 Put Feb 2025 |
+
+### Test Payloads
+
+**Equity Order:**
+```json
+{
+  "apikey": "YOUR_API_KEY",
+  "strategy": "Test",
+  "exchange": "NSE",
+  "symbol": "RELIANCE",
+  "action": "BUY",
+  "product": "MIS",
+  "pricetype": "MARKET",
+  "quantity": "1"
+}
+```
+
+**Index Future Order:**
+```json
+{
+  "apikey": "YOUR_API_KEY",
+  "strategy": "Test",
+  "exchange": "NFO",
+  "symbol": "NIFTY30JAN25FUT",
+  "action": "BUY",
+  "product": "NRML",
+  "pricetype": "MARKET",
+  "quantity": "25"
+}
+```
+
+**Index Options Order:**
+```json
+{
+  "apikey": "YOUR_API_KEY",
+  "strategy": "Test",
+  "exchange": "NFO",
+  "symbol": "NIFTY30JAN2523500CE",
+  "action": "BUY",
+  "product": "NRML",
+  "pricetype": "MARKET",
+  "quantity": "25"
+}
+```
+
+**Quotes Request:**
+```json
+{
+  "apikey": "YOUR_API_KEY",
+  "symbol": "RELIANCE",
+  "exchange": "NSE"
+}
+```
+
+**Index Quotes Request:**
+```json
+{
+  "apikey": "YOUR_API_KEY",
+  "symbol": "NIFTY",
+  "exchange": "NSE_INDEX"
+}
+```
+
+**Historical Data Request:**
+```json
+{
+  "apikey": "YOUR_API_KEY",
+  "symbol": "RELIANCE",
+  "exchange": "NSE",
+  "interval": "5m",
+  "start_date": "2025-01-01",
+  "end_date": "2025-01-13"
+}
+```
+
+**Market Depth Request:**
+```json
+{
+  "apikey": "YOUR_API_KEY",
+  "symbol": "INFY",
+  "exchange": "NSE"
+}
+```
+
+**TradingView Webhook Payload:**
+```json
+{
+  "apikey": "YOUR_API_KEY",
+  "strategy": "TV_Strategy",
+  "symbol": "{{ticker}}",
+  "action": "{{strategy.order.action}}",
+  "exchange": "NSE",
+  "pricetype": "MARKET",
+  "product": "MIS",
+  "quantity": "1"
+}
+```
+
+---
+
 ## Sign-Off
 
 | Role | Name | Date | Signature |
