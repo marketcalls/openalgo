@@ -1,7 +1,7 @@
 # OpenAlgo v2.0 Migration Tracker
 
-> **Last Updated**: 2026-01-10
-> **Status**: Phase 3 Complete ✓
+> **Last Updated**: 2026-01-12
+> **Status**: Phase 4 Complete ✓
 
 ---
 
@@ -12,20 +12,20 @@
 | Phase 1: Foundation | **Complete** ✓ | 14/14 |
 | Phase 2: Core Trading | **Complete** ✓ | 22/28 |
 | Phase 3: Search & Symbol | **Complete** ✓ | 14/14 |
-| Phase 4: Charts & Market Data | Not Started | 0/10 |
+| Phase 4: Charts & WebSocket | **Complete** ✓ | 12/12 |
 | Phase 5: Options Trading | Not Started | 0/12 |
 | Phase 6: Strategy & Automation | Not Started | 0/14 |
 | Phase 7: Settings & Admin | Not Started | 0/16 |
 | Phase 8: Mobile & Polish | Not Started | 0/14 |
 | Phase 9: Cleanup | Not Started | 0/6 |
 
-**Overall Progress**: 50/128 tasks (39%)
+**Overall Progress**: 62/128 tasks (48%)
 
 ---
 
 ## Template Migration Status
 
-**Total Jinja2 Templates**: 77 | **Migrated**: 21 | **Remaining**: 45 pages
+**Total Jinja2 Templates**: 77 | **Migrated**: 29 | **Remaining**: 37 pages
 
 ### Phase 2: Auth & Core Trading (24 templates)
 
@@ -75,13 +75,17 @@
 | `token.html` | `pages/Token.tsx` | [x] Complete |
 | `search.html` | `pages/Search.tsx` | [x] Complete |
 
-### Phase 4: Charts & Market Data (4 templates)
+### Phase 4: Charts & WebSocket (8 templates) - COMPLETE ✓
 | Jinja2 Template | React Component | Status |
 |-----------------|-----------------|--------|
-| `tradingview.html` | `pages/TradingView.tsx` | [ ] Pending |
-| `gocharting.html` | `pages/GoCharting.tsx` | [ ] Pending |
-| `pnltracker.html` | `pages/PnLTracker.tsx` | [ ] Pending |
-| `websocket/test_market_data.html` | `pages/WebSocket/MarketData.tsx` | [ ] Pending |
+| `platforms.html` | `pages/Platforms.tsx` | [x] Complete |
+| `tradingview.html` | `pages/TradingView.tsx` | [x] Complete |
+| `gocharting.html` | `pages/GoCharting.tsx` | [x] Complete |
+| `pnltracker.html` | `pages/PnLTracker.tsx` | [x] Complete |
+| `websocket/test_market_data.html` | `pages/WebSocketTest.tsx` | [x] Complete |
+| `sandbox.html` | `pages/Sandbox.tsx` | [x] Complete |
+| `sandbox_mypnl.html` | `pages/SandboxPnL.tsx` | [x] Complete |
+| `analyzer.html` | `pages/Analyzer.tsx` | [x] Complete |
 
 ### Phase 6: Strategy & Automation (15 templates)
 
@@ -109,12 +113,12 @@
 | `python_strategy/edit.html` | `pages/PythonStrategy/Edit.tsx` | [ ] Pending |
 | `python_strategy/logs.html` | `pages/PythonStrategy/Logs.tsx` | [ ] Pending |
 
-#### Analyzer/Sandbox (3)
+#### Analyzer/Sandbox (3) - Moved to Phase 4 ✓
 | Jinja2 Template | React Component | Status |
 |-----------------|-----------------|--------|
-| `analyzer.html` | `pages/Analyzer.tsx` | [ ] Pending |
-| `sandbox.html` | `pages/Sandbox.tsx` | [ ] Pending |
-| `sandbox_mypnl.html` | `pages/SandboxPnL.tsx` | [ ] Pending |
+| `analyzer.html` | `pages/Analyzer.tsx` | [x] Complete (Phase 4) |
+| `sandbox.html` | `pages/Sandbox.tsx` | [x] Complete (Phase 4) |
+| `sandbox_mypnl.html` | `pages/SandboxPnL.tsx` | [x] Complete (Phase 4) |
 
 ### Phase 7: Settings & Admin (19 templates)
 
@@ -146,7 +150,7 @@
 |-----------------|-----------------|--------|
 | `apikey.html` | `pages/ApiKey.tsx` | [x] Complete |
 | `logs.html` | `pages/Logs.tsx` | [ ] Pending |
-| `platforms.html` | `pages/Platforms.tsx` | [ ] Pending |
+| `platforms.html` | `pages/Platforms.tsx` | [x] Complete (Phase 4) |
 | `token.html` | `pages/Token.tsx` | [x] Complete |
 | `profile.html` | `pages/Profile.tsx` | [ ] Pending |
 | `action_center.html` | `pages/ActionCenter.tsx` | [ ] Pending |
@@ -321,23 +325,46 @@ lucide-react: latest
 
 ---
 
-## Phase 4: Charts & Market Data
+## Phase 4: Charts, WebSocket & Sandbox - COMPLETE ✓
 
-### TradingView Charts
-- [ ] Candlestick chart component
-- [ ] Multiple timeframes
-- [ ] Volume bars
-- [ ] Real-time updates
-- [ ] Drawing tools
-- [ ] Technical indicators
+### Trading Platforms
+- [x] Platforms.tsx - Overview page with TradingView, GoCharting, Chartink cards
+- [x] TradingView.tsx - Webhook URL and JSON payload generator
+- [x] GoCharting.tsx - Webhook URL and JSON payload generator
+- [x] Default values: NHPC symbol, NSE exchange, quantity 1
+- [x] Auto-generate JSON on page load
 
-### Market Depth
-- [ ] Bid/Ask ladder
-- [ ] Volume visualization
-- [ ] Real-time updates
+### P&L Tracker
+- [x] PnLTracker.tsx - Real-time P&L chart with lightweight-charts
+- [x] Metrics cards: Current MTM, Max MTM, Min MTM, Max Drawdown
+- [x] Screenshot functionality with html2canvas-pro (oklch support)
+- [x] Dark/Light theme support for chart
+- [x] OpenAlgo watermark on chart
 
-### Quotes Panel
-- [ ] Full quote display
+### WebSocket & Market Data
+- [x] WebSocketTest.tsx - Market data streaming test page
+- [x] Symbol subscription/unsubscription
+- [x] Real-time LTP, bid/ask display
+- [x] Connection status indicators
+
+### Sandbox & Analyzer
+- [x] Sandbox.tsx - Configuration management page
+- [x] SandboxPnL.tsx - P&L history with chart
+- [x] Analyzer.tsx - API request analyzer with filters
+- [x] Backend API endpoints for sandbox configs
+
+### Backend Updates
+- [x] react_app.py - Added routes for all Phase 4 pages
+- [x] sandbox.py - Added /sandbox/api/configs endpoint with defaults
+- [x] sandbox.py - Added /sandbox/mypnl/api/data endpoint
+- [x] analyzer.py - Added /analyzer/api/data endpoint
+- [x] pnltracker.py - Renamed legacy route to avoid conflict
+
+### Technical Fixes
+- [x] Fixed route conflicts between Flask blueprints and React
+- [x] Fixed CSRF token handling (fetchCSRFToken API)
+- [x] html2canvas-pro for oklch color support in screenshots
+- [x] Fixed PnL Tracker navigation (route mismatch)
 
 ---
 
@@ -526,20 +553,28 @@ frontend/
 │   ├── hooks/
 │   │   └── useSocket.ts             # Phase 3
 │   ├── pages/
+│   │   ├── Analyzer.tsx             # Phase 4
 │   │   ├── ApiKey.tsx               # Phase 3
 │   │   ├── BrokerSelect.tsx
 │   │   ├── BrokerTOTP.tsx
 │   │   ├── Dashboard.tsx
+│   │   ├── GoCharting.tsx           # Phase 4
 │   │   ├── Holdings.tsx
 │   │   ├── Home.tsx
 │   │   ├── Login.tsx
 │   │   ├── OrderBook.tsx            # Enhanced: cancel/modify/filters
+│   │   ├── Platforms.tsx            # Phase 4
 │   │   ├── Playground.tsx           # Phase 3
+│   │   ├── PnLTracker.tsx           # Phase 4
 │   │   ├── Positions.tsx            # Enhanced: close/filters
+│   │   ├── Sandbox.tsx              # Phase 4
+│   │   ├── SandboxPnL.tsx           # Phase 4
 │   │   ├── Search.tsx               # Phase 3
 │   │   ├── Setup.tsx
 │   │   ├── Token.tsx                # Phase 3
-│   │   └── TradeBook.tsx            # Enhanced: filters
+│   │   ├── TradeBook.tsx            # Enhanced: filters
+│   │   ├── TradingView.tsx          # Phase 4
+│   │   └── WebSocketTest.tsx        # Phase 4
 │   ├── stores/
 │   │   ├── authStore.ts
 │   │   └── themeStore.ts
@@ -557,10 +592,13 @@ frontend/
 openalgo/
 ├── app.py                  # Register react_bp, CSRF exemptions
 ├── blueprints/
+│   ├── analyzer.py         # Added /analyzer/api/data endpoint (Phase 4)
 │   ├── apikey.py           # API key management endpoints (Phase 3)
 │   ├── auth.py             # Added check-setup, session-status, JSON logout
 │   ├── orders.py           # Cancel/modify order web routes (Phase 3)
-│   ├── react_app.py        # Serve React SPA + Phase 3 routes
+│   ├── pnltracker.py       # Renamed legacy route (Phase 4)
+│   ├── react_app.py        # Serve React SPA + Phase 3/4 routes
+│   ├── sandbox.py          # Added /sandbox/api/configs, /sandbox/mypnl/api/data (Phase 4)
 │   └── search.py           # Added brexchange/lotsize to response (Phase 3)
 ├── .gitignore              # Include frontend/dist
 └── frontend/.gitignore     # Include dist for community
@@ -581,10 +619,11 @@ openalgo/
 
 ## Notes
 
-- **Priority**: Phase 4 (Charts & WebSocket) is next
+- **Priority**: Phase 6 (Strategy & Automation) is next
 - **Auth Flow**: Matches current Flask session behavior
 - **API Keys**: REST API authentication unchanged
-- **WebSocket**: Will use existing Flask-SocketIO events (Phase 4)
+- **WebSocket**: Using existing Flask-SocketIO events
 - **Backward Compatible**: External apps (TradingView, Amibroker) unaffected
 - **No Broker Logos**: Using text/initials only for broker identification
 - **CSRF**: All mutations protected except logout and /api/v1/* endpoints
+- **html2canvas-pro**: Required for oklch color support in screenshots
