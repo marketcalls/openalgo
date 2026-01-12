@@ -10,8 +10,6 @@
 
 </div>
 
-![OpenAlgo - Your Personal Algo Trading Platform](static/images/image.png)
-
 **OpenAlgo** is a production-ready, open-source algorithmic trading platform built with Flask and Python. It provides a unified API layer across 24+ Indian brokers, enabling seamless integration with popular platforms like TradingView, Amibroker, Excel, Python, and AI agents. Designed for traders and developers, OpenAlgo makes algo trading accessible, secure, and powerful.
 
 ## Quick Links
@@ -158,12 +156,16 @@ Real-time notifications and command execution:
 
 **Privacy First**: Zero data collection policy - your data stays on your server
 
-### Modern UI with DaisyUI
-- 30+ beautiful themes to choose from (Light, Dark, and more)
-- Real-time updates via WebSocket (orders, trades, positions, logs)
+### Modern React Frontend
+- **React 18** with TypeScript for type-safe, maintainable code
+- **shadcn/ui** components with Tailwind CSS 4.0 for beautiful, accessible UI
+- **TanStack Query** for efficient server state management and caching
+- **Zustand** for lightweight client state management
+- **Real-time updates** via Socket.IO (orders, trades, positions, logs)
+- **Monaco Editor** for Python strategy editing with syntax highlighting
+- **Recharts** for interactive P&L and analytics charts
+- Light and Dark themes with system preference detection
 - Mobile-friendly responsive design
-- Theme-aware syntax highlighting
-- Zero-config installation
 
 ## Supported Platforms
 
@@ -186,12 +188,13 @@ Receive your strategy alerts directly to **Telegram** for all platforms.
 ## Architecture Highlights
 
 - **Backend**: Flask 3.0 + SQLAlchemy 2.0
-- **Frontend**: Tailwind CSS 4.1 + DaisyUI 5.1
+- **Frontend**: React 18 + TypeScript + Vite + shadcn/ui + Tailwind CSS 4.0
+- **State Management**: TanStack Query (server) + Zustand (client)
 - **Real-time**: Flask-SocketIO, WebSockets, ZeroMQ
 - **Security**: Argon2-CFFI, Cryptography (Fernet), Flask-WTF
 - **Databases**: SQLite (4 separate DBs: main, logs, latency, sandbox)
 - **Broker Pattern**: Standardized structure (auth, order, data, funds, streaming, mapping)
-- **Connection Pooling**: Optimized latency with efficient connection management
+- **Build**: Vite for fast development and optimized production builds
 
 ## OpenAlgo FOSS Ecosystem
 
@@ -294,7 +297,11 @@ OpenAlgo is released under the **AGPL V3.0 License**. See [LICENSE](LICENSE) for
 
 ### Third-Party Libraries
 
-- **[DaisyUI](https://github.com/saadeghi/daisyui)** - MIT License - Modern UI component library for Tailwind CSS with 30+ themes
+- **[React](https://react.dev)** - MIT License - UI library for building user interfaces
+- **[shadcn/ui](https://ui.shadcn.com)** - MIT License - Beautifully designed components built with Radix UI and Tailwind CSS
+- **[TanStack Query](https://tanstack.com/query)** - MIT License - Powerful asynchronous state management
+- **[Recharts](https://recharts.org)** - MIT License - Composable charting library for React
+- **[Monaco Editor](https://microsoft.github.io/monaco-editor)** - MIT License - Code editor that powers VS Code
 - **[TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts)** - Apache 2.0 - Financial charting library for PnL visualization
 
 ## Repo Activity
