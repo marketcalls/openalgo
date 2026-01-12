@@ -33,6 +33,10 @@ import { StrategyIndex, NewStrategy, ViewStrategy, ConfigureSymbols } from '@/pa
 import { PythonStrategyIndex, NewPythonStrategy, EditPythonStrategy, PythonStrategyLogs } from '@/pages/python-strategy';
 // Phase 6 Pages - Chartink
 import { ChartinkIndex, NewChartinkStrategy, ViewChartinkStrategy, ConfigureChartinkSymbols } from '@/pages/chartink';
+// Phase 7 Pages - Admin
+import { AdminIndex, FreezeQty, Holidays, MarketTimings } from '@/pages/admin';
+// Phase 7 Pages - Telegram
+import { TelegramIndex, TelegramConfig, TelegramUsers, TelegramAnalytics } from '@/pages/telegram';
 
 function App() {
   return (
@@ -86,6 +90,16 @@ function App() {
               <Route path="/chartink/new" element={<NewChartinkStrategy />} />
               <Route path="/chartink/:strategyId" element={<ViewChartinkStrategy />} />
               <Route path="/chartink/:strategyId/configure" element={<ConfigureChartinkSymbols />} />
+              {/* Phase 7: Admin */}
+              <Route path="/admin" element={<AdminIndex />} />
+              <Route path="/admin/freeze" element={<FreezeQty />} />
+              <Route path="/admin/holidays" element={<Holidays />} />
+              <Route path="/admin/timings" element={<MarketTimings />} />
+              {/* Phase 7: Telegram */}
+              <Route path="/telegram" element={<TelegramIndex />} />
+              <Route path="/telegram/config" element={<TelegramConfig />} />
+              <Route path="/telegram/users" element={<TelegramUsers />} />
+              <Route path="/telegram/analytics" element={<TelegramAnalytics />} />
             </Route>
 
             {/* Full-width protected routes */}
