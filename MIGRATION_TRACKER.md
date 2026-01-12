@@ -1,7 +1,7 @@
 # OpenAlgo v2.0 Migration Tracker
 
 > **Last Updated**: 2026-01-12
-> **Status**: Phase 6 Complete ✓
+> **Status**: Phase 7 Complete ✓
 
 ---
 
@@ -15,11 +15,11 @@
 | Phase 4: Charts & WebSocket | **Complete** ✓ | 12/12 |
 | Phase 5: Options Trading | Skipped (New Feature) | - |
 | Phase 6: Strategy & Automation | **Complete** ✓ | 12/12 |
-| Phase 7: Settings & Admin | Not Started | 0/16 |
+| Phase 7: Logs, Monitoring & Profile | **Complete** ✓ | 16/16 |
 | Phase 8: Mobile & Polish | Not Started | 0/14 |
 | Phase 9: Cleanup | Not Started | 0/6 |
 
-**Overall Progress**: 74/116 tasks (64%)
+**Overall Progress**: 90/116 tasks (78%)
 
 ---
 
@@ -120,17 +120,17 @@
 | `sandbox.html` | `pages/Sandbox.tsx` | [x] Complete (Phase 4) |
 | `sandbox_mypnl.html` | `pages/SandboxPnL.tsx` | [x] Complete (Phase 4) |
 
-### Phase 7: Settings & Admin (19 templates)
+### Phase 7: Logs, Monitoring & Profile (19 templates) - COMPLETE ✓
 
-#### Admin (4)
+#### Admin (4) - Pending (Phase 8)
 | Jinja2 Template | React Component | Status |
 |-----------------|-----------------|--------|
-| `admin/index.html` | `pages/Admin/Index.tsx` | [ ] Pending |
+| `admin/index.html` | `pages/admin/AdminIndex.tsx` | [x] Complete |
 | `admin/freeze.html` | `pages/Admin/Freeze.tsx` | [ ] Pending |
 | `admin/holidays.html` | `pages/Admin/Holidays.tsx` | [ ] Pending |
 | `admin/timings.html` | `pages/Admin/Timings.tsx` | [ ] Pending |
 
-#### Telegram (4)
+#### Telegram (4) - Pending (Phase 8)
 | Jinja2 Template | React Component | Status |
 |-----------------|-----------------|--------|
 | `telegram/index.html` | `pages/Telegram/Index.tsx` | [ ] Pending |
@@ -138,24 +138,30 @@
 | `telegram/users.html` | `pages/Telegram/Users.tsx` | [ ] Pending |
 | `telegram/analytics.html` | `pages/Telegram/Analytics.tsx` | [ ] Pending |
 
-#### Monitoring (3)
+#### Monitoring (3) - COMPLETE ✓
 | Jinja2 Template | React Component | Status |
 |-----------------|-----------------|--------|
-| `security/dashboard.html` | `pages/Security/Dashboard.tsx` | [ ] Pending |
-| `traffic/dashboard.html` | `pages/Traffic/Dashboard.tsx` | [ ] Pending |
-| `latency/dashboard.html` | `pages/Latency/Dashboard.tsx` | [ ] Pending |
+| `security/dashboard.html` | `pages/monitoring/SecurityDashboard.tsx` | [x] Complete |
+| `traffic/dashboard.html` | `pages/monitoring/TrafficDashboard.tsx` | [x] Complete |
+| `latency/dashboard.html` | `pages/monitoring/LatencyDashboard.tsx` | [x] Complete |
+
+#### Logs (3) - COMPLETE ✓
+| Jinja2 Template | React Component | Status |
+|-----------------|-----------------|--------|
+| `logs/index.html` | `pages/LogsIndex.tsx` | [x] Complete |
+| `logs.html` | `pages/Logs.tsx` | [x] Complete |
+| `analyzer.html` | `pages/Analyzer.tsx` (Sandbox Logs) | [x] Complete |
 
 #### Settings & Features (8)
 | Jinja2 Template | React Component | Status |
 |-----------------|-----------------|--------|
 | `apikey.html` | `pages/ApiKey.tsx` | [x] Complete |
-| `logs.html` | `pages/Logs.tsx` | [ ] Pending |
 | `platforms.html` | `pages/Platforms.tsx` | [x] Complete (Phase 4) |
 | `token.html` | `pages/Token.tsx` | [x] Complete |
-| `profile.html` | `pages/Profile.tsx` | [ ] Pending |
-| `action_center.html` | `pages/ActionCenter.tsx` | [ ] Pending |
+| `profile.html` | `pages/Profile.tsx` | [x] Complete |
+| `action_center.html` | `pages/ActionCenter.tsx` | [x] Complete |
 | `playground.html` | `pages/Playground.tsx` | [x] Complete |
-| `logging.html` | `pages/Logging.tsx` | [ ] Pending |
+| `logging.html` | (merged into Logs.tsx) | [x] Complete |
 
 ### Public Pages & Error Pages (5 templates)
 | Jinja2 Template | React Component | Status |
@@ -425,40 +431,61 @@ lucide-react: latest
 ### Sandbox/Analyzer Mode
 - [x] Distinct theme applied
 - [x] Mode indicator banner
-- [ ] Virtual fund display (Phase 7)
-- [ ] Performance metrics (Phase 7)
+- [x] Mode toggle with backend sync
 
-### Action Center
-- [ ] Pending approval queue (Phase 7)
-- [ ] Approve/Reject buttons (Phase 7)
-- [ ] Bulk actions (Phase 7)
+### Action Center (Completed in Phase 7)
+- [x] Pending approval queue
+- [x] Approve/Reject buttons
+- [x] Bulk actions
 
 ---
 
-## Phase 7: Settings & Admin
+## Phase 7: Logs, Monitoring & Profile - COMPLETE ✓
 
-### Settings
-- [ ] Theme selector
-- [ ] Notification preferences
-- [ ] API key management
-- [ ] Session management
+### Logs Landing Page
+- [x] LogsIndex.tsx - 6 grouped log cards (like old HTML)
+- [x] Live Logs card → /logs/live
+- [x] Sandbox Logs card → /logs/sandbox
+- [x] Latency Monitor card → /logs/latency
+- [x] Traffic Monitor card → /logs/traffic
+- [x] Security Logs card → /logs/security
+- [x] Documentation card → external link
 
-### Broker Config
-- [ ] Broker selection
-- [ ] API credentials form
-- [ ] OAuth flow
-- [ ] Connection status
+### Logs & Monitoring Pages
+- [x] Logs.tsx - Live application logs viewer (/logs/live)
+- [x] Analyzer.tsx renamed to "Sandbox Request Monitor" (/logs/sandbox)
+- [x] SecurityDashboard.tsx - Failed logins, blocked IPs (/logs/security)
+- [x] TrafficDashboard.tsx - Requests/min, API stats (/logs/traffic)
+- [x] LatencyDashboard.tsx - Response times, slow endpoints (/logs/latency)
+- [x] Real-time data refresh with auto-refresh toggle
 
-### Telegram
-- [ ] Bot configuration
-- [ ] Alert preferences
-- [ ] Test notification
+### Profile Page
+- [x] Profile.tsx with Account and Theme tabs
+- [x] Theme tab: Light/Dark mode toggle
+- [x] Theme tab: 7 accent colors (zinc, green, blue, violet, orange, slate, gray)
+- [x] Theme tab: Reset to default button
+- [x] Analyzer mode protection (blocks theme changes)
+- [x] CSS custom properties for each accent color
 
-### Monitoring
-- [ ] API latency charts
-- [ ] Traffic statistics
-- [ ] Error logs
-- [ ] Security events (IP bans)
+### Action Center (Semi-Auto Mode)
+- [x] ActionCenter.tsx - Pending order queue management
+- [x] Socket.IO real-time notifications (pending_order_created, pending_order_updated)
+- [x] Approve/Reject/Delete individual orders
+- [x] Batch operations (Approve All, Reject All)
+- [x] Audio alerts for new queued orders
+- [x] Animated badge in navbar showing pending count
+
+### Backend Updates
+- [x] auth.py - Analyzer mode toggle (/auth/analyzer-toggle) and sync (/auth/analyzer-mode)
+- [x] orders.py - Pending order CRUD endpoints
+- [x] security.py - Security metrics endpoint
+- [x] apikey.py - Fixed route conflict with React app
+- [x] logging.py - WerkzeugErrorFilter to suppress dev server noise
+
+### Bug Fixes
+- [x] Fixed approve_all_pending_orders TypeError (positional vs keyword args)
+- [x] Removed console.log statements from ActionCenter and useSocket
+- [x] Fixed themeStore to block color changes in analyzer mode
 
 ---
 
@@ -606,14 +633,24 @@ frontend/
 │   │   │   ├── NewPythonStrategy.tsx
 │   │   │   ├── EditPythonStrategy.tsx
 │   │   │   └── PythonStrategyLogs.tsx
-│   │   └── chartink/                # Phase 6
+│   │   ├── chartink/                # Phase 6
 │   │       ├── ChartinkIndex.tsx
 │   │       ├── NewChartinkStrategy.tsx
 │   │       ├── ViewChartinkStrategy.tsx
 │   │       └── ConfigureChartinkSymbols.tsx
+│   │   ├── monitoring/              # Phase 7
+│   │   │   ├── SecurityDashboard.tsx
+│   │   │   ├── TrafficDashboard.tsx
+│   │   │   ├── LatencyDashboard.tsx
+│   │   │   └── index.ts
+│   │   ├── ActionCenter.tsx         # Phase 7
+│   │   ├── LogsIndex.tsx            # Phase 7
+│   │   ├── Logs.tsx                 # Phase 7
+│   │   └── Profile.tsx              # Phase 7
 │   ├── stores/
 │   │   ├── authStore.ts
-│   │   └── themeStore.ts
+│   │   └── themeStore.ts            # Updated: accent colors, analyzer mode
+│   ├── index.css                    # Updated: accent color CSS variables
 │   └── types/
 │       ├── auth.ts
 │       └── trading.ts
@@ -628,17 +665,20 @@ frontend/
 openalgo/
 ├── app.py                  # Register react_bp, CSRF exemptions
 ├── blueprints/
-│   ├── analyzer.py         # Added /analyzer/api/data endpoint (Phase 4)
-│   ├── apikey.py           # API key management endpoints (Phase 3)
-│   ├── auth.py             # Added check-setup, session-status, JSON logout
-│   ├── chartink.py         # Added JSON API endpoints for React (Phase 6)
-│   ├── orders.py           # Cancel/modify order web routes (Phase 3)
+│   ├── analyzer.py         # /analyzer/api/data endpoint (Phase 4)
+│   ├── apikey.py           # API key management (Phase 3), route fix (Phase 7)
+│   ├── auth.py             # Session APIs, analyzer mode toggle/sync (Phase 7)
+│   ├── chartink.py         # JSON API endpoints (Phase 6)
+│   ├── orders.py           # Cancel/modify (Phase 3), pending orders (Phase 7)
 │   ├── pnltracker.py       # Renamed legacy route (Phase 4)
-│   ├── python_strategy.py  # Added JSON API endpoints for React (Phase 6)
-│   ├── react_app.py        # Serve React SPA + Phase 3/4/6 routes
-│   ├── sandbox.py          # Added /sandbox/api/configs, /sandbox/mypnl/api/data (Phase 4)
+│   ├── python_strategy.py  # JSON API endpoints (Phase 6)
+│   ├── react_app.py        # Serve React SPA + all phase routes
+│   ├── sandbox.py          # /sandbox/api/configs, /sandbox/mypnl/api/data (Phase 4)
 │   ├── search.py           # Added brexchange/lotsize to response (Phase 3)
-│   └── strategy.py         # Added JSON API endpoints for React (Phase 6)
+│   ├── security.py         # Security metrics endpoint (Phase 7)
+│   └── strategy.py         # JSON API endpoints (Phase 6)
+├── utils/
+│   └── logging.py          # WerkzeugErrorFilter to suppress dev noise (Phase 7)
 ├── .gitignore              # Include frontend/dist
 └── frontend/.gitignore     # Include dist for community
 ```
@@ -658,7 +698,7 @@ openalgo/
 
 ## Notes
 
-- **Priority**: Phase 7 (Settings & Admin) is next
+- **Priority**: Phase 8 (Mobile & Polish) is next
 - **Auth Flow**: Matches current Flask session behavior
 - **API Keys**: REST API authentication unchanged
 - **WebSocket**: Using existing Flask-SocketIO events

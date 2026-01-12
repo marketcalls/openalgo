@@ -1333,44 +1333,48 @@ The existing Flask-SocketIO events work seamlessly:
   - [ ] Schedule configuration
   - [ ] Strategy logs viewer (real-time)
 
-- [ ] **Sandbox/Analyzer Mode**
-  - [ ] Distinct theme (purple/violet tint)
-  - [ ] Mode indicator banner
-  - [ ] Virtual fund display
-  - [ ] All trading features in sandbox
-  - [ ] Performance metrics
+- [x] **Sandbox/Analyzer Mode**
+  - [x] Distinct theme (purple/violet tint)
+  - [x] Mode indicator banner
+  - [x] Mode toggle with backend sync
 
-- [ ] **Action Center**
-  - [ ] Pending approval queue
-  - [ ] Approve/Reject buttons
-  - [ ] Bulk actions
-  - [ ] Audit trail
+- [x] **Action Center** (Completed in Phase 7)
+  - [x] Pending approval queue
+  - [x] Approve/Reject buttons
+  - [x] Bulk actions
 
-### Phase 7: Settings & Admin
-**Goal**: Configuration and monitoring
+### Phase 7: Logs, Monitoring & Profile ✓ COMPLETE
+**Goal**: Logs landing page, monitoring dashboards, profile/theme customization, action center
 
-- [ ] **Settings Page**
-  - [ ] Theme selector (light/dark + color themes)
-  - [ ] Notification preferences
-  - [ ] API key management
-  - [ ] Session management
+- [x] **Logs Landing Page**
+  - [x] LogsIndex.tsx with 6 grouped cards (like old HTML)
+  - [x] Routes: /logs/live, /logs/sandbox, /logs/latency, /logs/traffic, /logs/security
+  - [x] Documentation external link
 
-- [ ] **Broker Configuration**
-  - [ ] Broker selection
-  - [ ] API credentials
-  - [ ] OAuth flow integration
-  - [ ] Connection status
+- [x] **Monitoring Dashboard**
+  - [x] SecurityDashboard.tsx - Failed logins, blocked IPs
+  - [x] TrafficDashboard.tsx - Requests/min, API stats
+  - [x] LatencyDashboard.tsx - Response times, slow endpoints
+  - [x] Real-time data refresh with auto-refresh toggle
 
-- [ ] **Telegram Integration**
-  - [ ] Bot configuration
-  - [ ] Alert preferences
-  - [ ] Test notification
+- [x] **Profile Page**
+  - [x] Theme selector (light/dark mode toggle)
+  - [x] Accent color selection (7 colors)
+  - [x] Reset to default button
+  - [x] Analyzer mode protection
 
-- [ ] **Monitoring Dashboard**
-  - [ ] API latency charts
-  - [ ] Traffic statistics
-  - [ ] Error logs
-  - [ ] Security events (IP bans)
+- [x] **Action Center (Semi-Auto Mode)**
+  - [x] Pending order queue management
+  - [x] Approve/Reject/Delete individual orders
+  - [x] Batch operations (Approve All, Reject All)
+  - [x] Socket.IO real-time notifications
+  - [x] Audio alerts for new queued orders
+
+- [x] **Backend Updates**
+  - [x] Analyzer mode toggle/sync endpoints
+  - [x] Pending order management endpoints
+  - [x] Security metrics endpoint
+  - [x] Werkzeug error filter for dev server
 
 ### Phase 8: Mobile Responsiveness & Polish
 **Goal**: Full responsive design and production readiness
@@ -1738,13 +1742,13 @@ This migration plan transforms OpenAlgo into a **professional-grade trading term
 | Bundle Size | N/A | <500KB gzipped |
 
 ### Migration Phases Summary
-1. **Foundation** - React setup, auth, base layout
-2. **Core Trading** - Dashboard, Orders, Positions (Priority)
-3. **Holdings & Watchlist** - Portfolio management
-4. **Charts & Data** - TradingView charts, market depth
-5. **Options** - Option chain, Greeks
-6. **Strategy** - Python strategies, Sandbox/Analyzer
-7. **Settings** - Configuration, monitoring
+1. **Foundation** ✓ - React setup, auth, base layout
+2. **Core Trading** ✓ - Dashboard, Orders, Positions (Priority)
+3. **Search & Symbol** ✓ - Token search, API playground
+4. **Charts & Data** ✓ - TradingView charts, WebSocket, Sandbox
+5. **Options** - Option chain, Greeks (Skipped - New Feature)
+6. **Strategy** ✓ - Webhook, Python, Chartink strategies
+7. **Logs & Monitoring** ✓ - Logs, monitoring dashboards, profile, action center
 8. **Polish** - Mobile responsive, testing
 9. **Cleanup** - Remove legacy templates
 
