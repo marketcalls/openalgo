@@ -1148,6 +1148,140 @@ def check_contracts():
             'message': f'Error checking contracts: {str(e)}'
         }), 500
 
+# =============================================================================
+# JSON API Endpoints for React Frontend
+# =============================================================================
+
+@python_strategy_bp.route('/api/strategies')
+@check_session_validity
+def api_get_strategies():
+    """API: Get all strategies as JSON"""
+    cleanup_dead_processes()
+    strategies = []
+
+    for strategy_id, config in STRATEGY_CONFIGS.items():
+        strategies.append({
+            'id': strategy_id,
+            'name': config.get('name', ''),
+            'file_name': config.get('file_name', ''),
+            'status': 'running' if config.get('is_running') else ('error' if config.get('error_message') else 'stopped'),
+            'is_running': config.get('is_running', False),
+            'is_scheduled': config.get('is_scheduled', False),
+            'schedule_start_time': config.get('schedule_start_time'),
+            'schedule_stop_time': config.get('schedule_stop_time'),
+            'schedule_days': config.get('schedule_days', []),
+            'last_started': config.get('last_started'),
+            'last_stopped': config.get('last_stopped'),
+            'error_message': config.get('error_message'),
+            'process_id': config.get('process_id'),
+            'created_at': config.get('created_at'),
+        })
+
+    return jsonify({'strategies': strategies})
+
+@python_strategy_bp.route('/api/strategy/<strategy_id>')
+@check_session_validity
+def api_get_strategy(strategy_id):
+    """API: Get single strategy as JSON"""
+    if strategy_id not in STRATEGY_CONFIGS:
+        return jsonify({'status': 'error', 'message': 'Strategy not found'}), 404
+
+    config = STRATEGY_CONFIGS[strategy_id]
+    return jsonify({
+        'strategy': {
+            'id': strategy_id,
+            'name': config.get('name', ''),
+            'file_name': config.get('file_name', ''),
+            'status': 'running' if config.get('is_running') else ('error' if config.get('error_message') else 'stopped'),
+            'is_running': config.get('is_running', False),
+            'is_scheduled': config.get('is_scheduled', False),
+            'schedule_start_time': config.get('schedule_start_time'),
+            'schedule_stop_time': config.get('schedule_stop_time'),
+            'schedule_days': config.get('schedule_days', []),
+            'last_started': config.get('last_started'),
+            'last_stopped': config.get('last_stopped'),
+            'error_message': config.get('error_message'),
+            'process_id': config.get('process_id'),
+            'created_at': config.get('created_at'),
+        }
+    })
+
+@python_strategy_bp.route('/api/strategy/<strategy_id>/content')
+@check_session_validity
+def api_get_strategy_content(strategy_id):
+    """API: Get strategy file content"""
+    if strategy_id not in STRATEGY_CONFIGS:
+        return jsonify({'status': 'error', 'message': 'Strategy not found'}), 404
+
+    config = STRATEGY_CONFIGS[strategy_id]
+    file_name = config.get('file_name')
+
+    if not file_name:
+        return jsonify({'status': 'error', 'message': 'Strategy file not found'}), 404
+
+    strategy_path = STRATEGIES_DIR / file_name
+    if not strategy_path.exists():
+        return jsonify({'status': 'error', 'message': 'Strategy file not found on disk'}), 404
+
+    try:
+        content = strategy_path.read_text(encoding='utf-8')
+        return jsonify({
+            'name': config.get('name', ''),
+            'file_name': file_name,
+            'content': content,
+            'is_running': config.get('is_running', False)
+        })
+    except Exception as e:
+        logger.error(f"Error reading strategy file: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@python_strategy_bp.route('/api/logs/<strategy_id>')
+@check_session_validity
+def api_get_log_files(strategy_id):
+    """API: Get list of log files for a strategy"""
+    if strategy_id not in STRATEGY_CONFIGS:
+        return jsonify({'status': 'error', 'message': 'Strategy not found'}), 404
+
+    log_dir = LOGS_DIR / strategy_id
+    if not log_dir.exists():
+        return jsonify({'logs': []})
+
+    logs = []
+    for log_file in sorted(log_dir.glob('*.log'), key=lambda x: x.stat().st_mtime, reverse=True):
+        stats = log_file.stat()
+        logs.append({
+            'name': log_file.name,
+            'size': stats.st_size,
+            'modified': datetime.fromtimestamp(stats.st_mtime).isoformat()
+        })
+
+    return jsonify({'logs': logs})
+
+@python_strategy_bp.route('/api/logs/<strategy_id>/<log_name>')
+@check_session_validity
+def api_get_log_content(strategy_id, log_name):
+    """API: Get log file content"""
+    if strategy_id not in STRATEGY_CONFIGS:
+        return jsonify({'status': 'error', 'message': 'Strategy not found'}), 404
+
+    # Sanitize log_name to prevent path traversal
+    safe_log_name = secure_filename(log_name)
+    log_path = LOGS_DIR / strategy_id / safe_log_name
+
+    if not log_path.exists():
+        return jsonify({'status': 'error', 'message': 'Log file not found'}), 404
+
+    try:
+        content = log_path.read_text(encoding='utf-8', errors='replace')
+        return jsonify({
+            'name': safe_log_name,
+            'content': content,
+            'size': log_path.stat().st_size
+        })
+    except Exception as e:
+        logger.error(f"Error reading log file: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 @python_strategy_bp.route('/edit/<strategy_id>')
 @check_session_validity
 def edit_strategy(strategy_id):

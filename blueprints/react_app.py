@@ -171,6 +171,76 @@ def react_analyzer():
 
 
 # ============================================================
+# Phase 6 Routes - Strategy & Automation
+# ============================================================
+
+# Webhook Strategies
+# Note: Using strict_slashes=False to handle both /strategy and /strategy/
+@react_bp.route('/strategy', strict_slashes=False)
+def react_strategy_index():
+    return serve_react_app()
+
+
+@react_bp.route('/strategy/new', strict_slashes=False)
+def react_strategy_new():
+    return serve_react_app()
+
+
+@react_bp.route('/strategy/<int:strategy_id>', strict_slashes=False)
+def react_strategy_view(strategy_id):
+    return serve_react_app()
+
+
+@react_bp.route('/strategy/<int:strategy_id>/configure', strict_slashes=False)
+def react_strategy_configure(strategy_id):
+    return serve_react_app()
+
+
+# Python Strategies
+# Note: Using strict_slashes=False to handle both /python and /python/
+@react_bp.route('/python', strict_slashes=False)
+def react_python_index():
+    return serve_react_app()
+
+
+@react_bp.route('/python/new', strict_slashes=False)
+def react_python_new():
+    return serve_react_app()
+
+
+@react_bp.route('/python/<strategy_id>/edit', strict_slashes=False)
+def react_python_edit(strategy_id):
+    return serve_react_app()
+
+
+@react_bp.route('/python/<strategy_id>/logs', strict_slashes=False)
+def react_python_logs(strategy_id):
+    return serve_react_app()
+
+
+# Chartink Strategies
+# Note: Using strict_slashes=False to handle both /chartink and /chartink/
+@react_bp.route('/chartink', strict_slashes=False)
+def react_chartink_index():
+    return serve_react_app()
+
+
+@react_bp.route('/chartink/new', strict_slashes=False)
+def react_chartink_new():
+    return serve_react_app()
+
+
+@react_bp.route('/chartink/<int:strategy_id>', strict_slashes=False)
+def react_chartink_view(strategy_id):
+    return serve_react_app()
+
+
+@react_bp.route('/chartink/<int:strategy_id>/configure', strict_slashes=False)
+def react_chartink_configure(strategy_id):
+    return serve_react_app()
+
+
+# ============================================================
 # Static Assets - Always served for React app
 # ============================================================
 

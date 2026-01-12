@@ -27,6 +27,12 @@ import SandboxPnL from '@/pages/SandboxPnL';
 import Analyzer from '@/pages/Analyzer';
 import WebSocketTest from '@/pages/WebSocketTest';
 import Platforms from '@/pages/Platforms';
+// Phase 6 Pages - Strategy
+import { StrategyIndex, NewStrategy, ViewStrategy, ConfigureSymbols } from '@/pages/strategy';
+// Phase 6 Pages - Python Strategy
+import { PythonStrategyIndex, NewPythonStrategy, EditPythonStrategy, PythonStrategyLogs } from '@/pages/python-strategy';
+// Phase 6 Pages - Chartink
+import { ChartinkIndex, NewChartinkStrategy, ViewChartinkStrategy, ConfigureChartinkSymbols } from '@/pages/chartink';
 
 function App() {
   return (
@@ -65,6 +71,21 @@ function App() {
               <Route path="/sandbox/mypnl" element={<SandboxPnL />} />
               <Route path="/analyzer" element={<Analyzer />} />
               <Route path="/websocket/test" element={<WebSocketTest />} />
+              {/* Phase 6: Webhook Strategies */}
+              <Route path="/strategy" element={<StrategyIndex />} />
+              <Route path="/strategy/new" element={<NewStrategy />} />
+              <Route path="/strategy/:strategyId" element={<ViewStrategy />} />
+              <Route path="/strategy/:strategyId/configure" element={<ConfigureSymbols />} />
+              {/* Phase 6: Python Strategies */}
+              <Route path="/python" element={<PythonStrategyIndex />} />
+              <Route path="/python/new" element={<NewPythonStrategy />} />
+              <Route path="/python/:strategyId/edit" element={<EditPythonStrategy />} />
+              <Route path="/python/:strategyId/logs" element={<PythonStrategyLogs />} />
+              {/* Phase 6: Chartink Strategies */}
+              <Route path="/chartink" element={<ChartinkIndex />} />
+              <Route path="/chartink/new" element={<NewChartinkStrategy />} />
+              <Route path="/chartink/:strategyId" element={<ViewChartinkStrategy />} />
+              <Route path="/chartink/:strategyId/configure" element={<ConfigureChartinkSymbols />} />
             </Route>
 
             {/* Full-width protected routes */}

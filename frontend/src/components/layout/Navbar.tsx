@@ -234,7 +234,7 @@ export function Navbar() {
                 <ClipboardList className="h-4 w-4 mr-2" />
                 Holdings
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => navigate('/python-strategy')} className="cursor-pointer">
+              <DropdownMenuItem onSelect={() => navigate('/python')} className="cursor-pointer">
                 <Code2 className="h-4 w-4 mr-2" />
                 Python Strategies
               </DropdownMenuItem>
