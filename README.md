@@ -157,7 +157,7 @@ Real-time notifications and command execution:
 **Privacy First**: Zero data collection policy - your data stays on your server
 
 ### Modern React Frontend
-- **React 18** with TypeScript for type-safe, maintainable code
+- **React 19** with TypeScript for type-safe, maintainable code
 - **shadcn/ui** components with Tailwind CSS 4.0 for beautiful, accessible UI
 - **TanStack Query** for efficient server state management and caching
 - **Zustand** for lightweight client state management
@@ -188,7 +188,7 @@ Receive your strategy alerts directly to **Telegram** for all platforms.
 ## Architecture Highlights
 
 - **Backend**: Flask 3.0 + SQLAlchemy 2.0
-- **Frontend**: React 18 + TypeScript + Vite + shadcn/ui + Tailwind CSS 4.0
+- **Frontend**: React 19 + TypeScript + Vite + shadcn/ui + Tailwind CSS 4.0
 - **State Management**: TanStack Query (server) + Zustand (client)
 - **Real-time**: Flask-SocketIO, WebSockets, ZeroMQ
 - **Security**: Argon2-CFFI, Cryptography (Fernet), Flask-WTF
