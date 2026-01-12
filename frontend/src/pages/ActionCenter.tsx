@@ -141,7 +141,7 @@ export default function ActionCenterPage() {
   // Socket connection for realtime order updates
   useEffect(() => {
     // Create audio element for alert sounds
-    audioRef.current = new Audio('/static/sounds/alert.mp3')
+    audioRef.current = new Audio('/sounds/alert.mp3')
     audioRef.current.preload = 'auto'
 
     // Connect to socket server

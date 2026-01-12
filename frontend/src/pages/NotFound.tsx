@@ -9,7 +9,7 @@ export default function NotFound() {
         {/* Floating yoga illustration */}
         <div className="mb-8">
           <img
-            src="/static/images/yoga.png"
+            src="/images/yoga.png"
             alt="Meditation illustration"
             className="w-64 h-64 mx-auto animate-float"
             onError={(e) => {

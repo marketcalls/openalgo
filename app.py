@@ -49,7 +49,7 @@ from blueprints.sandbox import sandbox_bp  # Import the sandbox blueprint
 from blueprints.logging import logging_bp  # Import the logging blueprint
 from blueprints.playground import playground_bp  # Import the API playground blueprint
 from blueprints.admin import admin_bp  # Import the admin blueprint
-from blueprints.react_app import react_bp, is_react_frontend_available  # Import React frontend blueprint
+from blueprints.react_app import react_bp, is_react_frontend_available, serve_react_app  # Import React frontend blueprint
 from services.telegram_bot_service import telegram_bot_service
 from database.telegram_db import get_bot_config
 
@@ -356,17 +356,47 @@ def create_app():
         # Track 404 error for security monitoring
         Error404Tracker.track_404(client_ip, path)
 
+        # Serve React app if available (React Router handles 404)
+        if is_react_frontend_available():
+            return serve_react_app()
         return render_template('404.html'), 404
 
     @app.errorhandler(500)
     def internal_server_error(e):
         """Custom handler for 500 Internal Server Error"""
+        from flask import redirect
+
         # Log the error (optional)
         logger.error(f"Server Error: {e}")
 
-        # Provide a logout option
+        # Redirect to React error page if available
+        if is_react_frontend_available():
+            return redirect('/error')
         return render_template("500.html"), 500
-        
+
+    @app.errorhandler(429)
+    def rate_limit_exceeded(e):
+        """Custom handler for 429 Too Many Requests"""
+        from flask import redirect, request
+
+        # Log rate limit hit
+        logger.warning(f"Rate limit exceeded for {request.remote_addr}: {request.path}")
+
+        # For API requests, return JSON response
+        if request.path.startswith('/api/'):
+            return {
+                'status': 'error',
+                'message': 'Rate limit exceeded. Please slow down your requests.',
+                'retry_after': 60
+            }, 429
+
+        # For web requests, redirect to React rate-limited page if available
+        if is_react_frontend_available():
+            return redirect('/rate-limited')
+
+        # Fallback plain text response
+        return 'Too Many Requests. Please wait and try again.', 429
+
     @app.context_processor
     def inject_version():
         return dict(version=get_version())

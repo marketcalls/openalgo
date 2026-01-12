@@ -482,7 +482,7 @@ export default function Playground() {
           </Button>
           <div className="flex items-center gap-2 px-2">
             <img
-              src="/static/favicon/android-chrome-192x192.png"
+              src="/images/android-chrome-192x192.png"
               alt="OpenAlgo"
               className="w-6 h-6"
             />
@@ -914,7 +914,7 @@ export default function Playground() {
             /* Empty State */
             <div className="flex-1 flex flex-col items-center justify-center text-center bg-zinc-950">
               <img
-                src="/static/favicon/android-chrome-192x192.png"
+                src="/images/android-chrome-192x192.png"
                 alt="OpenAlgo"
                 className="w-16 h-16 mb-4"
               />

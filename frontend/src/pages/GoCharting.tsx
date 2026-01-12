@@ -394,7 +394,7 @@ export default function GoCharting() {
 
               <div className="flex gap-3">
                 <Button asChild variant="outline" size="sm">
-                  <a href="/static/docs/gocharting_webhook_setup.md" download>
+                  <a href="/docs/gocharting_webhook_setup.md" download>
                     Download Guide
                   </a>
                 </Button>

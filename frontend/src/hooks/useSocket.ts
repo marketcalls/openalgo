@@ -102,8 +102,8 @@ export function useSocket() {
       return
     }
 
-    // Create audio element - use Flask static path
-    audioRef.current = new Audio('/static/sounds/alert.mp3')
+    // Create audio element
+    audioRef.current = new Audio('/sounds/alert.mp3')
     audioRef.current.preload = 'auto'
 
     // Enable audio on user interaction

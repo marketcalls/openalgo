@@ -31,7 +31,7 @@ describe('PageLoader', () => {
 
   describe('accessibility', () => {
     it('has accessible loading indicator', () => {
-      const { container } = render(<PageLoader />)
+      render(<PageLoader />)
 
       // Check for text content that screen readers can announce
       expect(screen.getByText('Loading...')).toBeInTheDocument()

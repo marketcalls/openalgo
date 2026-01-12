@@ -14,6 +14,7 @@ const Login = lazy(() => import('@/pages/Login'))
 const ResetPassword = lazy(() => import('@/pages/ResetPassword'))
 const Download = lazy(() => import('@/pages/Download'))
 const ServerError = lazy(() => import('@/pages/ServerError'))
+const RateLimited = lazy(() => import('@/pages/RateLimited'))
 const NotFound = lazy(() => import('@/pages/NotFound'))
 
 // Broker auth
@@ -96,6 +97,7 @@ function App() {
               <Route path="/reset-password" element={<ResetPassword />} />
               <Route path="/download" element={<Download />} />
               <Route path="/error" element={<ServerError />} />
+              <Route path="/rate-limited" element={<RateLimited />} />
 
               {/* Broker auth routes */}
               <Route path="/broker" element={<BrokerSelect />} />
