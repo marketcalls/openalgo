@@ -1,7 +1,7 @@
 # OpenAlgo v2.0 Migration Tracker
 
 > **Last Updated**: 2026-01-12
-> **Status**: Phase 4 Complete ✓
+> **Status**: Phase 6 Complete ✓
 
 ---
 
@@ -13,19 +13,19 @@
 | Phase 2: Core Trading | **Complete** ✓ | 22/28 |
 | Phase 3: Search & Symbol | **Complete** ✓ | 14/14 |
 | Phase 4: Charts & WebSocket | **Complete** ✓ | 12/12 |
-| Phase 5: Options Trading | Not Started | 0/12 |
-| Phase 6: Strategy & Automation | Not Started | 0/14 |
+| Phase 5: Options Trading | Skipped (New Feature) | - |
+| Phase 6: Strategy & Automation | **Complete** ✓ | 12/12 |
 | Phase 7: Settings & Admin | Not Started | 0/16 |
 | Phase 8: Mobile & Polish | Not Started | 0/14 |
 | Phase 9: Cleanup | Not Started | 0/6 |
 
-**Overall Progress**: 62/128 tasks (48%)
+**Overall Progress**: 74/116 tasks (64%)
 
 ---
 
 ## Template Migration Status
 
-**Total Jinja2 Templates**: 77 | **Migrated**: 29 | **Remaining**: 37 pages
+**Total Jinja2 Templates**: 77 | **Migrated**: 41 | **Remaining**: 25 pages
 
 ### Phase 2: Auth & Core Trading (24 templates)
 
@@ -87,31 +87,31 @@
 | `sandbox_mypnl.html` | `pages/SandboxPnL.tsx` | [x] Complete |
 | `analyzer.html` | `pages/Analyzer.tsx` | [x] Complete |
 
-### Phase 6: Strategy & Automation (15 templates)
+### Phase 6: Strategy & Automation (15 templates) - COMPLETE ✓
 
 #### Strategy (4)
 | Jinja2 Template | React Component | Status |
 |-----------------|-----------------|--------|
-| `strategy/index.html` | `pages/Strategy/Index.tsx` | [ ] Pending |
-| `strategy/new_strategy.html` | `pages/Strategy/New.tsx` | [ ] Pending |
-| `strategy/view_strategy.html` | `pages/Strategy/View.tsx` | [ ] Pending |
-| `strategy/configure_symbols.html` | `pages/Strategy/Configure.tsx` | [ ] Pending |
+| `strategy/index.html` | `pages/strategy/StrategyIndex.tsx` | [x] Complete |
+| `strategy/new_strategy.html` | `pages/strategy/NewStrategy.tsx` | [x] Complete |
+| `strategy/view_strategy.html` | `pages/strategy/ViewStrategy.tsx` | [x] Complete |
+| `strategy/configure_symbols.html` | `pages/strategy/ConfigureSymbols.tsx` | [x] Complete |
 
 #### Chartink (4)
 | Jinja2 Template | React Component | Status |
 |-----------------|-----------------|--------|
-| `chartink/index.html` | `pages/Chartink/Index.tsx` | [ ] Pending |
-| `chartink/new_strategy.html` | `pages/Chartink/New.tsx` | [ ] Pending |
-| `chartink/view_strategy.html` | `pages/Chartink/View.tsx` | [ ] Pending |
-| `chartink/configure_symbols.html` | `pages/Chartink/Configure.tsx` | [ ] Pending |
+| `chartink/index.html` | `pages/chartink/ChartinkIndex.tsx` | [x] Complete |
+| `chartink/new_strategy.html` | `pages/chartink/NewChartinkStrategy.tsx` | [x] Complete |
+| `chartink/view_strategy.html` | `pages/chartink/ViewChartinkStrategy.tsx` | [x] Complete |
+| `chartink/configure_symbols.html` | `pages/chartink/ConfigureChartinkSymbols.tsx` | [x] Complete |
 
 #### Python Strategy (4)
 | Jinja2 Template | React Component | Status |
 |-----------------|-----------------|--------|
-| `python_strategy/index.html` | `pages/PythonStrategy/Index.tsx` | [ ] Pending |
-| `python_strategy/new.html` | `pages/PythonStrategy/New.tsx` | [ ] Pending |
-| `python_strategy/edit.html` | `pages/PythonStrategy/Edit.tsx` | [ ] Pending |
-| `python_strategy/logs.html` | `pages/PythonStrategy/Logs.tsx` | [ ] Pending |
+| `python_strategy/index.html` | `pages/python-strategy/PythonStrategyIndex.tsx` | [x] Complete |
+| `python_strategy/new.html` | `pages/python-strategy/NewPythonStrategy.tsx` | [x] Complete |
+| `python_strategy/edit.html` | `pages/python-strategy/EditPythonStrategy.tsx` | [x] Complete |
+| `python_strategy/logs.html` | `pages/python-strategy/PythonStrategyLogs.tsx` | [x] Complete |
 
 #### Analyzer/Sandbox (3) - Moved to Phase 4 ✓
 | Jinja2 Template | React Component | Status |
@@ -390,27 +390,48 @@ lucide-react: latest
 
 ---
 
-## Phase 6: Strategy & Automation
+## Phase 6: Strategy & Automation - COMPLETE ✓
 
-### Strategy Management
-- [ ] Strategy list
-- [ ] Start/Stop controls
-- [ ] Monaco code editor
-- [ ] Environment variables
-- [ ] Schedule configuration
-- [ ] Strategy logs (real-time)
+### Webhook Strategies (/strategy)
+- [x] StrategyIndex - List all strategies with status, webhook URLs
+- [x] NewStrategy - Create form with platform, type, trading mode, times
+- [x] ViewStrategy - Strategy details, toggle activation, symbol mappings
+- [x] ConfigureSymbols - Single/bulk symbol add with search autocomplete
+
+### Python Strategies (/python)
+- [x] PythonStrategyIndex - Strategy cards with Start/Stop controls
+- [x] NewPythonStrategy - File upload with example template
+- [x] EditPythonStrategy - Code editor with syntax highlighting, fullscreen
+- [x] PythonStrategyLogs - Log viewer with file selection, auto-scroll
+
+### Chartink Strategies (/chartink)
+- [x] ChartinkIndex - Strategy list (NSE/BSE only, safety warning)
+- [x] NewChartinkStrategy - Intraday/positional form, auto "chartink_" prefix
+- [x] ViewChartinkStrategy - Webhook setup instructions for Chartink
+- [x] ConfigureChartinkSymbols - Symbol mapping (MIS/CNC, NSE/BSE only)
+
+### Backend API Additions
+- [x] JSON API endpoints added to chartink.py, strategy.py, python_strategy.py
+- [x] Routes: /api/strategies, /api/strategy/<id>, /api/strategy (POST), /api/strategy/<id>/toggle
+- [x] React routes added to react_app.py with strict_slashes=False
+
+### Security Improvements
+- [x] CSRF token error handling - reject requests on failure
+- [x] Input length validation on CSV bulk import (100KB max)
+- [x] File size validation on Python upload (1MB max)
+- [x] Removed PID exposure from UI
+- [x] 403 Forbidden handling for unauthorized access
 
 ### Sandbox/Analyzer Mode
 - [x] Distinct theme applied
 - [x] Mode indicator banner
-- [ ] Virtual fund display
-- [ ] All trading features
-- [ ] Performance metrics
+- [ ] Virtual fund display (Phase 7)
+- [ ] Performance metrics (Phase 7)
 
 ### Action Center
-- [ ] Pending approval queue
-- [ ] Approve/Reject buttons
-- [ ] Bulk actions
+- [ ] Pending approval queue (Phase 7)
+- [ ] Approve/Reject buttons (Phase 7)
+- [ ] Bulk actions (Phase 7)
 
 ---
 
@@ -574,7 +595,22 @@ frontend/
 │   │   ├── Token.tsx                # Phase 3
 │   │   ├── TradeBook.tsx            # Enhanced: filters
 │   │   ├── TradingView.tsx          # Phase 4
-│   │   └── WebSocketTest.tsx        # Phase 4
+│   │   ├── WebSocketTest.tsx        # Phase 4
+│   │   ├── strategy/                # Phase 6
+│   │   │   ├── StrategyIndex.tsx
+│   │   │   ├── NewStrategy.tsx
+│   │   │   ├── ViewStrategy.tsx
+│   │   │   └── ConfigureSymbols.tsx
+│   │   ├── python-strategy/         # Phase 6
+│   │   │   ├── PythonStrategyIndex.tsx
+│   │   │   ├── NewPythonStrategy.tsx
+│   │   │   ├── EditPythonStrategy.tsx
+│   │   │   └── PythonStrategyLogs.tsx
+│   │   └── chartink/                # Phase 6
+│   │       ├── ChartinkIndex.tsx
+│   │       ├── NewChartinkStrategy.tsx
+│   │       ├── ViewChartinkStrategy.tsx
+│   │       └── ConfigureChartinkSymbols.tsx
 │   ├── stores/
 │   │   ├── authStore.ts
 │   │   └── themeStore.ts
@@ -595,11 +631,14 @@ openalgo/
 │   ├── analyzer.py         # Added /analyzer/api/data endpoint (Phase 4)
 │   ├── apikey.py           # API key management endpoints (Phase 3)
 │   ├── auth.py             # Added check-setup, session-status, JSON logout
+│   ├── chartink.py         # Added JSON API endpoints for React (Phase 6)
 │   ├── orders.py           # Cancel/modify order web routes (Phase 3)
 │   ├── pnltracker.py       # Renamed legacy route (Phase 4)
-│   ├── react_app.py        # Serve React SPA + Phase 3/4 routes
+│   ├── python_strategy.py  # Added JSON API endpoints for React (Phase 6)
+│   ├── react_app.py        # Serve React SPA + Phase 3/4/6 routes
 │   ├── sandbox.py          # Added /sandbox/api/configs, /sandbox/mypnl/api/data (Phase 4)
-│   └── search.py           # Added brexchange/lotsize to response (Phase 3)
+│   ├── search.py           # Added brexchange/lotsize to response (Phase 3)
+│   └── strategy.py         # Added JSON API endpoints for React (Phase 6)
 ├── .gitignore              # Include frontend/dist
 └── frontend/.gitignore     # Include dist for community
 ```
@@ -619,7 +658,7 @@ openalgo/
 
 ## Notes
 
-- **Priority**: Phase 6 (Strategy & Automation) is next
+- **Priority**: Phase 7 (Settings & Admin) is next
 - **Auth Flow**: Matches current Flask session behavior
 - **API Keys**: REST API authentication unchanged
 - **WebSocket**: Using existing Flask-SocketIO events
