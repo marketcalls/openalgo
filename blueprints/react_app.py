@@ -62,9 +62,33 @@ def react_setup():
     return serve_react_app()
 
 
+# Password reset
+@react_bp.route('/reset-password')
+def react_reset_password():
+    return serve_react_app()
+
+
+# Download page
+@react_bp.route('/download')
+def react_download():
+    return serve_react_app()
+
+
+# Error page
+@react_bp.route('/error')
+def react_error():
+    return serve_react_app()
+
+
 # Broker selection - serve React at /broker (alias for /auth/broker)
 @react_bp.route('/broker')
 def react_broker():
+    return serve_react_app()
+
+
+# Broker TOTP routes - serve React for broker authentication forms
+@react_bp.route('/broker/<broker>/totp')
+def react_broker_totp(broker):
     return serve_react_app()
 
 
@@ -314,9 +338,39 @@ def react_latency():
 # Phase 7 Routes - Settings & Action Center
 # ============================================================
 
-# Trading Logs
+# Logs Index
 @react_bp.route('/logs', strict_slashes=False)
 def react_logs():
+    return serve_react_app()
+
+
+# Live Logs
+@react_bp.route('/logs/live', strict_slashes=False)
+def react_logs_live():
+    return serve_react_app()
+
+
+# Sandbox Logs (Analyzer)
+@react_bp.route('/logs/sandbox', strict_slashes=False)
+def react_logs_sandbox():
+    return serve_react_app()
+
+
+# Security Logs
+@react_bp.route('/logs/security', strict_slashes=False)
+def react_logs_security():
+    return serve_react_app()
+
+
+# Traffic Monitor
+@react_bp.route('/logs/traffic', strict_slashes=False)
+def react_logs_traffic():
+    return serve_react_app()
+
+
+# Latency Monitor
+@react_bp.route('/logs/latency', strict_slashes=False)
+def react_logs_latency():
     return serve_react_app()
 
 

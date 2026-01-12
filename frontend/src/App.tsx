@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { Providers } from '@/app/providers';
 import { Layout } from '@/components/layout/Layout';
 import { FullWidthLayout } from '@/components/layout/FullWidthLayout';
@@ -44,6 +44,13 @@ import LogsIndex from '@/pages/LogsIndex';
 import LiveLogs from '@/pages/Logs';
 import Profile from '@/pages/Profile';
 import ActionCenter from '@/pages/ActionCenter';
+// Public Pages
+import ResetPassword from '@/pages/ResetPassword';
+import Download from '@/pages/Download';
+import NotFound from '@/pages/NotFound';
+import ServerError from '@/pages/ServerError';
+// Broker TOTP
+import BrokerTOTP from '@/pages/BrokerTOTP';
 
 function App() {
   return (
@@ -55,10 +62,15 @@ function App() {
             <Route path="/" element={<Home />} />
             <Route path="/setup" element={<Setup />} />
             <Route path="/login" element={<Login />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
+            <Route path="/download" element={<Download />} />
+            <Route path="/error" element={<ServerError />} />
 
-            {/* Broker auth route - requires basic login */}
-            {/* Note: /<broker>/callback routes are handled by Flask (brlogin_bp) */}
+            {/* Broker auth routes */}
             <Route path="/broker" element={<BrokerSelect />} />
+            <Route path="/broker/:broker/totp" element={<BrokerTOTP />} />
+            {/* Dynamic broker TOTP routes for all supported brokers */}
+            <Route path="/:broker/auth" element={<BrokerTOTP />} />
 
             {/* Protected routes - requires broker auth */}
             <Route element={<Layout />}>
@@ -124,8 +136,8 @@ function App() {
               <Route path="/playground" element={<Playground />} />
             </Route>
 
-            {/* Catch-all redirect */}
-            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+            {/* 404 Not Found */}
+            <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthSync>
       </BrowserRouter>

@@ -3,7 +3,7 @@ import axios from 'axios'
 const API_BASE_URL = import.meta.env.VITE_API_URL || ''
 
 // Helper to fetch CSRF token
-async function fetchCSRFToken(): Promise<string> {
+export async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', {
     credentials: 'include',
   });
