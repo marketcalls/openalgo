@@ -80,6 +80,12 @@ def react_error():
     return serve_react_app()
 
 
+# Rate limited page
+@react_bp.route('/rate-limited')
+def react_rate_limited():
+    return serve_react_app()
+
+
 # Broker selection - serve React at /broker (alias for /auth/broker)
 @react_bp.route('/broker')
 def react_broker():
@@ -417,3 +423,38 @@ def serve_logo():
     if not is_react_frontend_available():
         return "Not found", 404
     return send_from_directory(FRONTEND_DIST, 'logo.png')
+
+
+@react_bp.route('/apple-touch-icon.png')
+def serve_apple_touch_icon():
+    """Serve Apple touch icon."""
+    if not is_react_frontend_available():
+        return "Not found", 404
+    return send_from_directory(FRONTEND_DIST, 'apple-touch-icon.png')
+
+
+@react_bp.route('/images/<path:filename>')
+def serve_images(filename):
+    """Serve images from React dist."""
+    images_dir = FRONTEND_DIST / 'images'
+    if not images_dir.exists():
+        return "Images not found", 404
+    return send_from_directory(images_dir, filename)
+
+
+@react_bp.route('/sounds/<path:filename>')
+def serve_sounds(filename):
+    """Serve sounds from React dist."""
+    sounds_dir = FRONTEND_DIST / 'sounds'
+    if not sounds_dir.exists():
+        return "Sounds not found", 404
+    return send_from_directory(sounds_dir, filename)
+
+
+@react_bp.route('/docs/<path:filename>')
+def serve_docs(filename):
+    """Serve docs from React dist."""
+    docs_dir = FRONTEND_DIST / 'docs'
+    if not docs_dir.exists():
+        return "Docs not found", 404
+    return send_from_directory(docs_dir, filename)
