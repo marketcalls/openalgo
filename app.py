@@ -8,7 +8,7 @@ import sys
 # Initialize logging EARLY to suppress verbose startup logs
 from utils.logging import get_logger, log_startup_banner, highlight_url  # Import centralized logging
 
-from flask import Flask, render_template, session
+from flask import Flask, session
 from flask_wtf.csrf import CSRFProtect  # Import CSRF protection
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
@@ -356,23 +356,19 @@ def create_app():
         # Track 404 error for security monitoring
         Error404Tracker.track_404(client_ip, path)
 
-        # Serve React app if available (React Router handles 404)
-        if is_react_frontend_available():
-            return serve_react_app()
-        return render_template('404.html'), 404
+        # Serve React app (React Router handles 404)
+        return serve_react_app()
 
     @app.errorhandler(500)
     def internal_server_error(e):
         """Custom handler for 500 Internal Server Error"""
         from flask import redirect
 
-        # Log the error (optional)
+        # Log the error
         logger.error(f"Server Error: {e}")
 
-        # Redirect to React error page if available
-        if is_react_frontend_available():
-            return redirect('/error')
-        return render_template("500.html"), 500
+        # Redirect to React error page
+        return redirect('/error')
 
     @app.errorhandler(429)
     def rate_limit_exceeded(e):
@@ -390,12 +386,8 @@ def create_app():
                 'retry_after': 60
             }, 429
 
-        # For web requests, redirect to React rate-limited page if available
-        if is_react_frontend_available():
-            return redirect('/rate-limited')
-
-        # Fallback plain text response
-        return 'Too Many Requests. Please wait and try again.', 429
+        # For web requests, redirect to React rate-limited page
+        return redirect('/rate-limited')
 
     @app.context_processor
     def inject_version():
