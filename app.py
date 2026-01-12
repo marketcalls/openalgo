@@ -182,12 +182,12 @@ def create_app():
 
     # Register RESTx API blueprint first
     # Register React frontend blueprint FIRST for migrated routes
-    # React routes take priority over old Flask/Jinja2 routes
+    # Register React frontend routes
     if is_react_frontend_available():
         app.register_blueprint(react_bp)
-        logger.info("React frontend enabled (frontend/dist found)")
+        logger.debug("React frontend enabled (frontend/dist found)")
     else:
-        logger.info("React frontend not available, using Jinja2 templates")
+        logger.warning("React frontend not available - run 'npm run build' in frontend/")
 
     app.register_blueprint(api_v1_bp)
     
