@@ -160,6 +160,7 @@ export function Navbar() {
             onClick={handleModeToggle}
             disabled={isTogglingMode}
             title={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
+            aria-label={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
           >
             {isTogglingMode ? (
               <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
@@ -178,6 +179,7 @@ export function Navbar() {
             onClick={toggleMode}
             disabled={appMode !== 'live'}
             title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+            aria-label={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
           >
             {mode === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
@@ -189,6 +191,7 @@ export function Navbar() {
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 rounded-full bg-primary text-primary-foreground"
+                aria-label="Open user menu"
               >
                 <span className="text-sm font-medium">
                   {user?.username?.[0]?.toUpperCase() || 'O'}
