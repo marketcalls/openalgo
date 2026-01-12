@@ -1,26 +1,26 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Search, Info } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Card, CardContent } from '@/components/ui/card';
+import { Info, Search } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+} from '@/components/ui/select'
 
 interface SearchResult {
-  symbol: string;
-  name: string;
-  exchange: string;
-  token: string;
-  expiry?: string;
-  strike?: number;
+  symbol: string
+  name: string
+  exchange: string
+  token: string
+  expiry?: string
+  strike?: number
 }
 
 const EXCHANGES = [
@@ -32,206 +32,209 @@ const EXCHANGES = [
   { value: 'MCX', label: 'MCX - Multi Commodity Exchange' },
   { value: 'NSE_INDEX', label: 'NSE_INDEX - National Stock Exchange Index' },
   { value: 'BSE_INDEX', label: 'BSE_INDEX - Bombay Stock Exchange Index' },
-];
+]
 
-const FNO_EXCHANGES = ['NFO', 'BFO', 'MCX', 'CDS'];
+const FNO_EXCHANGES = ['NFO', 'BFO', 'MCX', 'CDS']
 
 export default function Token() {
-  const navigate = useNavigate();
-  const [symbol, setSymbol] = useState('');
-  const [exchange, setExchange] = useState('');
-  const [underlying, setUnderlying] = useState('');
-  const [instrumentType, setInstrumentType] = useState('');
-  const [expiry, setExpiry] = useState('');
-  const [strikeMin, setStrikeMin] = useState('');
-  const [strikeMax, setStrikeMax] = useState('');
+  const navigate = useNavigate()
+  const [symbol, setSymbol] = useState('')
+  const [exchange, setExchange] = useState('')
+  const [underlying, setUnderlying] = useState('')
+  const [instrumentType, setInstrumentType] = useState('')
+  const [expiry, setExpiry] = useState('')
+  const [strikeMin, setStrikeMin] = useState('')
+  const [strikeMax, setStrikeMax] = useState('')
 
-  const [underlyings, setUnderlyings] = useState<string[]>([]);
-  const [expiries, setExpiries] = useState<string[]>([]);
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [showResults, setShowResults] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isFnoLoading, setIsFnoLoading] = useState(false);
-  const [symbolError, setSymbolError] = useState('');
+  const [underlyings, setUnderlyings] = useState<string[]>([])
+  const [expiries, setExpiries] = useState<string[]>([])
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([])
+  const [showResults, setShowResults] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [isFnoLoading, setIsFnoLoading] = useState(false)
+  const [symbolError, setSymbolError] = useState('')
 
   // Refs for click-outside handling and request tracking
-  const inputWrapperRef = useRef<HTMLDivElement>(null);
-  const fnoRequestIdRef = useRef(0);
+  const inputWrapperRef = useRef<HTMLDivElement>(null)
+  const fnoRequestIdRef = useRef(0)
 
-  const isFnoExchange = FNO_EXCHANGES.includes(exchange);
+  const isFnoExchange = FNO_EXCHANGES.includes(exchange)
 
-  const hasFnoFilters = underlying || expiry || instrumentType || strikeMin || strikeMax;
+  const hasFnoFilters = underlying || expiry || instrumentType || strikeMin || strikeMax
 
   const resetFnoFilters = useCallback(() => {
-    setUnderlying('');
-    setInstrumentType('');
-    setExpiry('');
-    setStrikeMin('');
-    setStrikeMax('');
-  }, []);
+    setUnderlying('')
+    setInstrumentType('')
+    setExpiry('')
+    setStrikeMin('')
+    setStrikeMax('')
+  }, [])
 
   // Fetch underlyings when exchange changes to FNO
   useEffect(() => {
     if (!isFnoExchange) {
-      setUnderlyings([]);
-      setExpiries([]);
-      resetFnoFilters();
-      return;
+      setUnderlyings([])
+      setExpiries([])
+      resetFnoFilters()
+      return
     }
 
     // Increment request ID to invalidate stale responses
-    const requestId = ++fnoRequestIdRef.current;
-    setIsFnoLoading(true);
+    const requestId = ++fnoRequestIdRef.current
+    setIsFnoLoading(true)
 
     const fetchData = async () => {
       try {
         const [underlyingsRes, expiriesRes] = await Promise.all([
           fetch(`/search/api/underlyings?exchange=${exchange}`, { credentials: 'include' }),
           fetch(`/search/api/expiries?exchange=${exchange}`, { credentials: 'include' }),
-        ]);
+        ])
 
         // Ignore if this is a stale request
-        if (requestId !== fnoRequestIdRef.current) return;
+        if (requestId !== fnoRequestIdRef.current) return
 
         if (underlyingsRes.ok) {
-          const data = await underlyingsRes.json();
+          const data = await underlyingsRes.json()
           if (data.status === 'success' && Array.isArray(data.underlyings)) {
-            setUnderlyings(data.underlyings);
+            setUnderlyings(data.underlyings)
           }
         }
 
         if (expiriesRes.ok) {
-          const data = await expiriesRes.json();
+          const data = await expiriesRes.json()
           if (data.status === 'success' && Array.isArray(data.expiries)) {
-            setExpiries(data.expiries);
+            setExpiries(data.expiries)
           }
         }
       } catch (error) {
-        console.error('Error fetching F&O data:', error);
+        console.error('Error fetching F&O data:', error)
       } finally {
         if (requestId === fnoRequestIdRef.current) {
-          setIsFnoLoading(false);
+          setIsFnoLoading(false)
         }
       }
-    };
+    }
 
-    fetchData();
-  }, [exchange, isFnoExchange, resetFnoFilters]);
+    fetchData()
+  }, [exchange, isFnoExchange, resetFnoFilters])
 
   // Fetch expiries when underlying changes
   useEffect(() => {
-    if (!isFnoExchange || !underlying) return;
+    if (!isFnoExchange || !underlying) return
 
     const fetchExpiriesForUnderlying = async () => {
       try {
         const response = await fetch(
           `/search/api/expiries?exchange=${exchange}&underlying=${underlying}`,
           { credentials: 'include' }
-        );
+        )
         if (response.ok) {
-          const data = await response.json();
+          const data = await response.json()
           if (data.status === 'success' && Array.isArray(data.expiries)) {
-            setExpiries(data.expiries);
+            setExpiries(data.expiries)
           }
         }
       } catch (error) {
-        console.error('Error fetching expiries:', error);
+        console.error('Error fetching expiries:', error)
       }
-    };
+    }
 
-    fetchExpiriesForUnderlying();
-  }, [underlying, exchange, isFnoExchange]);
+    fetchExpiriesForUnderlying()
+  }, [underlying, exchange, isFnoExchange])
 
   // Debounced search for autocomplete
-  const performAutocompleteSearch = useCallback(async (query: string, exch: string) => {
-    if (query.length < 2 && !(isFnoExchange && hasFnoFilters)) {
-      setSearchResults([]);
-      setShowResults(false);
-      return;
-    }
+  const performAutocompleteSearch = useCallback(
+    async (query: string, exch: string) => {
+      if (query.length < 2 && !(isFnoExchange && hasFnoFilters)) {
+        setSearchResults([])
+        setShowResults(false)
+        return
+      }
 
-    setIsLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (query) params.append('q', query);
-      if (exch) params.append('exchange', exch);
-      if (underlying) params.append('underlying', underlying);
-      if (expiry) params.append('expiry', expiry);
-      if (instrumentType) params.append('instrumenttype', instrumentType);
-      if (strikeMin) params.append('strike_min', strikeMin);
-      if (strikeMax) params.append('strike_max', strikeMax);
+      setIsLoading(true)
+      try {
+        const params = new URLSearchParams()
+        if (query) params.append('q', query)
+        if (exch) params.append('exchange', exch)
+        if (underlying) params.append('underlying', underlying)
+        if (expiry) params.append('expiry', expiry)
+        if (instrumentType) params.append('instrumenttype', instrumentType)
+        if (strikeMin) params.append('strike_min', strikeMin)
+        if (strikeMax) params.append('strike_max', strikeMax)
 
-      const response = await fetch(`/search/api/search?${params}`, {
-        credentials: 'include',
-      });
-      const data = await response.json();
-      setSearchResults((data.results || []).slice(0, 10));
-      setShowResults(true);
-    } catch (error) {
-      console.error('Search error:', error);
-      setSearchResults([]);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [underlying, expiry, instrumentType, strikeMin, strikeMax, isFnoExchange, hasFnoFilters]);
+        const response = await fetch(`/search/api/search?${params}`, {
+          credentials: 'include',
+        })
+        const data = await response.json()
+        setSearchResults((data.results || []).slice(0, 10))
+        setShowResults(true)
+      } catch (error) {
+        console.error('Search error:', error)
+        setSearchResults([])
+      } finally {
+        setIsLoading(false)
+      }
+    },
+    [underlying, expiry, instrumentType, strikeMin, strikeMax, isFnoExchange, hasFnoFilters]
+  )
 
   // Debounced input handler
   useEffect(() => {
     const timer = setTimeout(() => {
       if (symbol.length >= 2 || (isFnoExchange && hasFnoFilters)) {
-        performAutocompleteSearch(symbol, exchange);
+        performAutocompleteSearch(symbol, exchange)
       }
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [symbol, exchange, performAutocompleteSearch]);
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [symbol, exchange, performAutocompleteSearch, hasFnoFilters, isFnoExchange])
 
   // Click-outside handler to close dropdown
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (inputWrapperRef.current && !inputWrapperRef.current.contains(e.target as Node)) {
-        setShowResults(false);
+        setShowResults(false)
       }
-    };
-    document.addEventListener('click', handleClickOutside);
-    return () => document.removeEventListener('click', handleClickOutside);
-  }, []);
+    }
+    document.addEventListener('click', handleClickOutside)
+    return () => document.removeEventListener('click', handleClickOutside)
+  }, [])
 
   const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setShowResults(false);
-    setSymbolError('');
+    e.preventDefault()
+    setShowResults(false)
+    setSymbolError('')
 
     // Validate: symbol is required unless FNO filters are applied
     if (!symbol && !(isFnoExchange && hasFnoFilters)) {
-      setSymbolError('Required - enter a search term');
-      return;
+      setSymbolError('Required - enter a search term')
+      return
     }
 
     // Exchange is required
     if (!exchange) {
-      return;
+      return
     }
 
     // Navigate to search results page with query params
-    const params = new URLSearchParams();
-    if (symbol) params.append('symbol', symbol);
-    if (exchange) params.append('exchange', exchange);
-    if (underlying) params.append('underlying', underlying);
-    if (expiry) params.append('expiry', expiry);
-    if (instrumentType) params.append('instrumenttype', instrumentType);
-    if (strikeMin) params.append('strike_min', strikeMin);
-    if (strikeMax) params.append('strike_max', strikeMax);
+    const params = new URLSearchParams()
+    if (symbol) params.append('symbol', symbol)
+    if (exchange) params.append('exchange', exchange)
+    if (underlying) params.append('underlying', underlying)
+    if (expiry) params.append('expiry', expiry)
+    if (instrumentType) params.append('instrumenttype', instrumentType)
+    if (strikeMin) params.append('strike_min', strikeMin)
+    if (strikeMax) params.append('strike_max', strikeMax)
 
-    navigate(`/search?${params.toString()}`);
-  };
+    navigate(`/search?${params.toString()}`)
+  }
 
   const handleResultClick = (result: SearchResult) => {
-    setSymbol(result.symbol);
-    setExchange(result.exchange);
-    setShowResults(false);
-  };
+    setSymbol(result.symbol)
+    setExchange(result.exchange)
+    setShowResults(false)
+  }
 
-  const showStrikeRange = instrumentType === 'CE' || instrumentType === 'PE';
+  const showStrikeRange = instrumentType === 'CE' || instrumentType === 'PE'
 
   return (
     <div className="max-w-4xl mx-auto py-8 px-4">
@@ -251,8 +254,11 @@ export default function Token() {
             <div className="space-y-2">
               <div className="flex justify-between">
                 <Label htmlFor="symbol">Symbol, Name, or Token</Label>
-                <span className={`text-xs ${symbolError ? 'text-red-500' : isFnoExchange && hasFnoFilters ? 'text-green-600' : 'text-muted-foreground'}`}>
-                  {symbolError || (isFnoExchange && hasFnoFilters ? '(Optional with filters)' : '(Required)')}
+                <span
+                  className={`text-xs ${symbolError ? 'text-red-500' : isFnoExchange && hasFnoFilters ? 'text-green-600' : 'text-muted-foreground'}`}
+                >
+                  {symbolError ||
+                    (isFnoExchange && hasFnoFilters ? '(Optional with filters)' : '(Required)')}
                 </span>
               </div>
               <div className="relative" ref={inputWrapperRef}>
@@ -262,12 +268,12 @@ export default function Token() {
                   placeholder="e.g., nifty, RELIANCE, 2885"
                   value={symbol}
                   onChange={(e) => {
-                    setSymbol(e.target.value);
-                    setSymbolError('');
+                    setSymbol(e.target.value)
+                    setSymbolError('')
                   }}
                   onFocus={() => {
                     if (symbol.length >= 2 || (isFnoExchange && hasFnoFilters)) {
-                      setShowResults(true);
+                      setShowResults(true)
                     }
                   }}
                   autoComplete="off"
@@ -312,7 +318,9 @@ export default function Token() {
                   <div className="absolute z-50 w-full mt-1 bg-background border rounded-lg shadow-lg p-8 text-center">
                     <Search className="h-12 w-12 mx-auto text-muted-foreground/50 mb-3" />
                     <div className="font-medium">No results found</div>
-                    <div className="text-sm text-muted-foreground mt-1">Try a different search term</div>
+                    <div className="text-sm text-muted-foreground mt-1">
+                      Try a different search term
+                    </div>
                   </div>
                 )}
               </div>
@@ -372,7 +380,10 @@ export default function Token() {
 
                   <div className="space-y-2">
                     <Label>Instrument Type</Label>
-                    <Select value={instrumentType || '_all'} onValueChange={(v) => setInstrumentType(v === '_all' ? '' : v)}>
+                    <Select
+                      value={instrumentType || '_all'}
+                      onValueChange={(v) => setInstrumentType(v === '_all' ? '' : v)}
+                    >
                       <SelectTrigger>
                         <SelectValue placeholder="All Types" />
                       </SelectTrigger>
@@ -446,24 +457,40 @@ export default function Token() {
           <div>
             <div className="font-semibold mb-1">Stock Search:</div>
             <ul className="ml-2 space-y-0.5 text-sm">
-              <li>By symbol: <code className="bg-muted px-2 py-0.5 rounded">RELIANCE</code>, <code className="bg-muted px-2 py-0.5 rounded">INFY</code></li>
-              <li>By company name: <code className="bg-muted px-2 py-0.5 rounded">Reliance Industries</code></li>
-              <li>By token number: <code className="bg-muted px-2 py-0.5 rounded">2885</code></li>
+              <li>
+                By symbol: <code className="bg-muted px-2 py-0.5 rounded">RELIANCE</code>,{' '}
+                <code className="bg-muted px-2 py-0.5 rounded">INFY</code>
+              </li>
+              <li>
+                By company name:{' '}
+                <code className="bg-muted px-2 py-0.5 rounded">Reliance Industries</code>
+              </li>
+              <li>
+                By token number: <code className="bg-muted px-2 py-0.5 rounded">2885</code>
+              </li>
             </ul>
           </div>
           <div>
             <div className="font-semibold mb-1">Futures & Options:</div>
             <ul className="ml-2 space-y-0.5 text-sm">
-              <li>Futures: <code className="bg-muted px-2 py-0.5 rounded">nifty oct fut</code>, <code className="bg-muted px-2 py-0.5 rounded">banknifty dec fut</code></li>
-              <li>Call Options: <code className="bg-muted px-2 py-0.5 rounded">nifty 25000 ce</code></li>
-              <li>Put Options: <code className="bg-muted px-2 py-0.5 rounded">nifty 24000 pe</code></li>
+              <li>
+                Futures: <code className="bg-muted px-2 py-0.5 rounded">nifty oct fut</code>,{' '}
+                <code className="bg-muted px-2 py-0.5 rounded">banknifty dec fut</code>
+              </li>
+              <li>
+                Call Options: <code className="bg-muted px-2 py-0.5 rounded">nifty 25000 ce</code>
+              </li>
+              <li>
+                Put Options: <code className="bg-muted px-2 py-0.5 rounded">nifty 24000 pe</code>
+              </li>
             </ul>
           </div>
           <div className="text-xs text-muted-foreground mt-2">
-            <strong>Tip:</strong> Select the appropriate exchange (NFO for F&O, NSE for stocks) for accurate results
+            <strong>Tip:</strong> Select the appropriate exchange (NFO for F&O, NSE for stocks) for
+            accurate results
           </div>
         </AlertDescription>
       </Alert>
     </div>
-  );
+  )
 }

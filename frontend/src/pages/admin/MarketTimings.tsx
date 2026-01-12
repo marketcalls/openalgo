@@ -1,16 +1,12 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import {
-  Clock,
-  ArrowLeft,
-  Pencil,
-  Save,
-  X,
-  Search,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { ArrowLeft, Clock, Pencil, Save, Search, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
+import { adminApi } from '@/api/admin'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import {
   Table,
   TableBody,
@@ -18,105 +14,103 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table';
-import { Badge } from '@/components/ui/badge';
-import { toast } from 'sonner';
-import { adminApi } from '@/api/admin';
-import type { MarketTiming, TodayTiming } from '@/types/admin';
+} from '@/components/ui/table'
+import type { MarketTiming, TodayTiming } from '@/types/admin'
 
 export default function MarketTimingsPage() {
-  const [timings, setTimings] = useState<MarketTiming[]>([]);
-  const [todayTimings, setTodayTimings] = useState<TodayTiming[]>([]);
-  const [today, setToday] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
+  const [timings, setTimings] = useState<MarketTiming[]>([])
+  const [todayTimings, setTodayTimings] = useState<TodayTiming[]>([])
+  const [today, setToday] = useState('')
+  const [isLoading, setIsLoading] = useState(true)
 
   // Edit state
-  const [editingExchange, setEditingExchange] = useState<string | null>(null);
-  const [editStartTime, setEditStartTime] = useState('');
-  const [editEndTime, setEditEndTime] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
+  const [editingExchange, setEditingExchange] = useState<string | null>(null)
+  const [editStartTime, setEditStartTime] = useState('')
+  const [editEndTime, setEditEndTime] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
 
   // Check timings state
-  const [checkDate, setCheckDate] = useState('');
-  const [checkTimings, setCheckTimings] = useState<TodayTiming[] | null>(null);
-  const [isChecking, setIsChecking] = useState(false);
+  const [checkDate, setCheckDate] = useState('')
+  const [checkTimings, setCheckTimings] = useState<TodayTiming[] | null>(null)
+  const [isChecking, setIsChecking] = useState(false)
 
   useEffect(() => {
-    fetchTimings();
-  }, []);
+    fetchTimings()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const fetchTimings = async () => {
     try {
-      const response = await adminApi.getTimings();
-      setTimings(response.data);
-      setTodayTimings(response.today_timings);
-      setToday(response.today);
+      const response = await adminApi.getTimings()
+      setTimings(response.data)
+      setTodayTimings(response.today_timings)
+      setToday(response.today)
     } catch (error) {
-      console.error('Error fetching timings:', error);
-      toast.error('Failed to load market timings');
+      console.error('Error fetching timings:', error)
+      toast.error('Failed to load market timings')
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   const handleEdit = (timing: MarketTiming) => {
-    setEditingExchange(timing.exchange);
-    setEditStartTime(timing.start_time);
-    setEditEndTime(timing.end_time);
-  };
+    setEditingExchange(timing.exchange)
+    setEditStartTime(timing.start_time)
+    setEditEndTime(timing.end_time)
+  }
 
   const handleSaveEdit = async (exchange: string) => {
     if (!editStartTime || !editEndTime) {
-      toast.error('Please enter both start and end times');
-      return;
+      toast.error('Please enter both start and end times')
+      return
     }
 
     // Validate time format
-    const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+    const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/
     if (!timeRegex.test(editStartTime) || !timeRegex.test(editEndTime)) {
-      toast.error('Invalid time format. Use HH:MM');
-      return;
+      toast.error('Invalid time format. Use HH:MM')
+      return
     }
 
-    setIsSaving(true);
+    setIsSaving(true)
     try {
       const response = await adminApi.editTiming(exchange, {
         start_time: editStartTime,
         end_time: editEndTime,
-      });
+      })
 
       if (response.status === 'success') {
-        toast.success(response.message || 'Timing updated successfully');
-        setEditingExchange(null);
-        fetchTimings();
+        toast.success(response.message || 'Timing updated successfully')
+        setEditingExchange(null)
+        fetchTimings()
       } else {
-        toast.error(response.message || 'Failed to update timing');
+        toast.error(response.message || 'Failed to update timing')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to update timing');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to update timing')
     } finally {
-      setIsSaving(false);
+      setIsSaving(false)
     }
-  };
+  }
 
   const handleCheckTimings = async () => {
     if (!checkDate) {
-      toast.error('Please select a date');
-      return;
+      toast.error('Please select a date')
+      return
     }
 
-    setIsChecking(true);
+    setIsChecking(true)
     try {
-      const response = await adminApi.checkTimings(checkDate);
-      setCheckTimings(response.timings);
+      const response = await adminApi.checkTimings(checkDate)
+      setCheckTimings(response.timings)
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to check timings');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to check timings')
     } finally {
-      setIsChecking(false);
+      setIsChecking(false)
     }
-  };
+  }
 
   const getExchangeColor = (exchange: string) => {
     const colors: Record<string, string> = {
@@ -127,16 +121,16 @@ export default function MarketTimingsPage() {
       MCX: 'bg-purple-500',
       CDS: 'bg-orange-500',
       BCD: 'bg-pink-500',
-    };
-    return colors[exchange] || 'bg-gray-500';
-  };
+    }
+    return colors[exchange] || 'bg-gray-500'
+  }
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
-    );
+    )
   }
 
   return (
@@ -152,9 +146,7 @@ export default function MarketTimingsPage() {
             Market Timings
           </h1>
         </div>
-        <p className="text-muted-foreground">
-          Configure trading session timings for each exchange
-        </p>
+        <p className="text-muted-foreground">Configure trading session timings for each exchange</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -255,9 +247,7 @@ export default function MarketTimingsPage() {
           <Card>
             <CardHeader>
               <CardTitle>Today&apos;s Timings</CardTitle>
-              <CardDescription>
-                Actual market timings for {today}
-              </CardDescription>
+              <CardDescription>Actual market timings for {today}</CardDescription>
             </CardHeader>
             <CardContent>
               {todayTimings.length === 0 ? (
@@ -288,9 +278,7 @@ export default function MarketTimingsPage() {
           <Card>
             <CardHeader>
               <CardTitle>Check Timings for Date</CardTitle>
-              <CardDescription>
-                Look up market timings for a specific date
-              </CardDescription>
+              <CardDescription>Look up market timings for a specific date</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex gap-2">
@@ -298,8 +286,8 @@ export default function MarketTimingsPage() {
                   type="date"
                   value={checkDate}
                   onChange={(e) => {
-                    setCheckDate(e.target.value);
-                    setCheckTimings(null);
+                    setCheckDate(e.target.value)
+                    setCheckTimings(null)
                   }}
                   className="flex-1"
                 />
@@ -380,5 +368,5 @@ export default function MarketTimingsPage() {
         </CardContent>
       </Card>
     </div>
-  );
+  )
 }

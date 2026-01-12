@@ -1,26 +1,26 @@
-import { useEffect, useState } from 'react';
-import { Github } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { Github } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 
 export function Footer() {
-  const [version, setVersion] = useState<string>('');
+  const [version, setVersion] = useState<string>('')
 
   useEffect(() => {
     const fetchVersion = async () => {
       try {
-        const response = await fetch('/auth/app-info');
-        const data = await response.json();
+        const response = await fetch('/auth/app-info')
+        const data = await response.json()
         if (data.status === 'success') {
-          setVersion(data.version);
+          setVersion(data.version)
         }
       } catch (error) {
-        console.error('Failed to fetch version:', error);
+        console.error('Failed to fetch version:', error)
       }
-    };
+    }
 
-    fetchVersion();
-  }, []);
+    fetchVersion()
+  }, [])
 
   return (
     <footer className="mt-auto border-t bg-muted/30">
@@ -61,7 +61,13 @@ export function Footer() {
               <Github className="h-4 w-4" />
             </a>
           </Button>
-          <Button variant="ghost" size="icon" asChild className="h-8 w-8" title="Join our Discord community">
+          <Button
+            variant="ghost"
+            size="icon"
+            asChild
+            className="h-8 w-8"
+            title="Join our Discord community"
+          >
             <a
               href="https://openalgo.in/discord"
               target="_blank"
@@ -85,7 +91,13 @@ export function Footer() {
               </svg>
             </a>
           </Button>
-          <Button variant="ghost" size="icon" asChild className="h-8 w-8" title="Subscribe to our YouTube channel">
+          <Button
+            variant="ghost"
+            size="icon"
+            asChild
+            className="h-8 w-8"
+            title="Subscribe to our YouTube channel"
+          >
             <a
               href="https://www.youtube.com/@openalgo"
               target="_blank"
@@ -100,5 +112,5 @@ export function Footer() {
         </div>
       </div>
     </footer>
-  );
+  )
 }

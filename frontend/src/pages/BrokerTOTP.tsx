@@ -1,49 +1,67 @@
-import { useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
-import { Loader2, ArrowLeft, Shield, AlertTriangle, ExternalLink } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { useAuthStore } from '@/stores/authStore';
-import { toast } from 'sonner';
-import { fetchCSRFToken } from '@/api/client';
+import { AlertTriangle, ArrowLeft, ExternalLink, Loader2, Shield } from 'lucide-react'
+import { useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { toast } from 'sonner'
+import { fetchCSRFToken } from '@/api/client'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { useAuthStore } from '@/stores/authStore'
 
 // Field configuration type
 interface FieldConfig {
-  name: string;
-  label: string;
-  type: string;
-  placeholder: string;
-  pattern?: string;
-  maxLength?: number;
-  inputMode?: 'numeric' | 'text' | 'tel';
-  prefix?: string;
-  hint?: string;
-  optional?: boolean;
+  name: string
+  label: string
+  type: string
+  placeholder: string
+  pattern?: string
+  maxLength?: number
+  inputMode?: 'numeric' | 'text' | 'tel'
+  prefix?: string
+  hint?: string
+  optional?: boolean
 }
 
 interface BrokerConfig {
-  fields: FieldConfig[];
-  callbackUrl?: string;
-  warning?: string;
-  hiddenFields?: Record<string, string>;
+  fields: FieldConfig[]
+  callbackUrl?: string
+  warning?: string
+  hiddenFields?: Record<string, string>
 }
 
 // Broker-specific field configurations
 const brokerFields: Record<string, BrokerConfig> = {
   fivepaisa: {
     fields: [
-      { name: 'userid', label: 'Client ID / Mobile No', type: 'text', placeholder: 'Enter Client ID or Mobile Number' },
+      {
+        name: 'userid',
+        label: 'Client ID / Mobile No',
+        type: 'text',
+        placeholder: 'Enter Client ID or Mobile Number',
+      },
       { name: 'pin', label: 'PIN', type: 'password', placeholder: 'Enter your PIN' },
-      { name: 'totp', label: 'TOTP', type: 'password', placeholder: 'Enter 6-digit TOTP', maxLength: 6, pattern: '[0-9]{6}', inputMode: 'numeric' },
+      {
+        name: 'totp',
+        label: 'TOTP',
+        type: 'password',
+        placeholder: 'Enter 6-digit TOTP',
+        maxLength: 6,
+        pattern: '[0-9]{6}',
+        inputMode: 'numeric',
+      },
     ],
     callbackUrl: '/fivepaisa/callback',
   },
   aliceblue: {
     fields: [
-      { name: 'userid', label: 'User ID', type: 'text', placeholder: 'Enter your User ID (alphanumeric)' },
+      {
+        name: 'userid',
+        label: 'User ID',
+        type: 'text',
+        placeholder: 'Enter your User ID (alphanumeric)',
+      },
     ],
     callbackUrl: '/aliceblue/callback',
   },
@@ -51,13 +69,29 @@ const brokerFields: Record<string, BrokerConfig> = {
     fields: [
       { name: 'userid', label: 'Client ID', type: 'text', placeholder: 'Enter your Client ID' },
       { name: 'pin', label: 'PIN', type: 'password', placeholder: 'Enter your PIN (min 4 digits)' },
-      { name: 'totp', label: 'TOTP', type: 'text', placeholder: 'Enter 6-digit TOTP', maxLength: 6, pattern: '[0-9]{6}', inputMode: 'numeric', hint: 'Get TOTP from your authenticator app' },
+      {
+        name: 'totp',
+        label: 'TOTP',
+        type: 'text',
+        placeholder: 'Enter 6-digit TOTP',
+        maxLength: 6,
+        pattern: '[0-9]{6}',
+        inputMode: 'numeric',
+        hint: 'Get TOTP from your authenticator app',
+      },
     ],
     callbackUrl: '/angel/callback',
   },
   definedge: {
     fields: [
-      { name: 'otp', label: 'OTP', type: 'password', placeholder: 'Enter OTP sent to your registered mobile/email', inputMode: 'numeric', hint: 'OTP has been sent to your registered mobile/email' },
+      {
+        name: 'otp',
+        label: 'OTP',
+        type: 'password',
+        placeholder: 'Enter OTP sent to your registered mobile/email',
+        inputMode: 'numeric',
+        hint: 'OTP has been sent to your registered mobile/email',
+      },
     ],
     callbackUrl: '/definedge/callback',
   },
@@ -65,44 +99,120 @@ const brokerFields: Record<string, BrokerConfig> = {
     fields: [
       { name: 'userid', label: 'User ID', type: 'text', placeholder: 'Enter your User ID' },
       { name: 'password', label: 'Password', type: 'password', placeholder: 'Enter your Password' },
-      { name: 'totp', label: 'TOTP', type: 'password', placeholder: 'Enter 6-digit TOTP', maxLength: 6, pattern: '[0-9]{6}', inputMode: 'numeric', hint: 'Get TOTP from your authenticator app' },
+      {
+        name: 'totp',
+        label: 'TOTP',
+        type: 'password',
+        placeholder: 'Enter 6-digit TOTP',
+        maxLength: 6,
+        pattern: '[0-9]{6}',
+        inputMode: 'numeric',
+        hint: 'Get TOTP from your authenticator app',
+      },
     ],
     callbackUrl: '/firstock/callback',
   },
   kotak: {
     fields: [
-      { name: 'mobile', label: 'Mobile Number', type: 'tel', placeholder: 'Enter 10-digit mobile number', maxLength: 10, pattern: '[0-9]{10}', inputMode: 'numeric', prefix: '+91', hint: 'Mobile number registered with Kotak NEO' },
-      { name: 'mpin', label: 'MPIN', type: 'password', placeholder: 'Enter 6-digit MPIN', maxLength: 6, pattern: '[0-9]{6}', inputMode: 'numeric' },
-      { name: 'totp', label: 'TOTP Code', type: 'text', placeholder: 'Enter 6-digit TOTP', maxLength: 6, pattern: '[0-9]{6}', inputMode: 'numeric' },
+      {
+        name: 'mobile',
+        label: 'Mobile Number',
+        type: 'tel',
+        placeholder: 'Enter 10-digit mobile number',
+        maxLength: 10,
+        pattern: '[0-9]{10}',
+        inputMode: 'numeric',
+        prefix: '+91',
+        hint: 'Mobile number registered with Kotak NEO',
+      },
+      {
+        name: 'mpin',
+        label: 'MPIN',
+        type: 'password',
+        placeholder: 'Enter 6-digit MPIN',
+        maxLength: 6,
+        pattern: '[0-9]{6}',
+        inputMode: 'numeric',
+      },
+      {
+        name: 'totp',
+        label: 'TOTP Code',
+        type: 'text',
+        placeholder: 'Enter 6-digit TOTP',
+        maxLength: 6,
+        pattern: '[0-9]{6}',
+        inputMode: 'numeric',
+      },
     ],
     callbackUrl: '/kotak/callback',
-    warning: 'Make sure TOTP is registered in your Kotak NEO mobile app. Go to Settings > Security > Enable TOTP.',
+    warning:
+      'Make sure TOTP is registered in your Kotak NEO mobile app. Go to Settings > Security > Enable TOTP.',
   },
   motilal: {
     fields: [
       { name: 'userid', label: 'User ID', type: 'text', placeholder: 'Enter your User ID' },
       { name: 'password', label: 'Password', type: 'password', placeholder: 'Enter your Password' },
-      { name: 'dob', label: 'Date of Birth', type: 'text', placeholder: 'DD/MM/YYYY', hint: 'Format: DD/MM/YYYY' },
-      { name: 'totp', label: 'TOTP', type: 'password', placeholder: 'Enter TOTP (optional)', maxLength: 6, optional: true, hint: 'Leave blank to receive OTP via SMS/Email' },
+      {
+        name: 'dob',
+        label: 'Date of Birth',
+        type: 'text',
+        placeholder: 'DD/MM/YYYY',
+        hint: 'Format: DD/MM/YYYY',
+      },
+      {
+        name: 'totp',
+        label: 'TOTP',
+        type: 'password',
+        placeholder: 'Enter TOTP (optional)',
+        maxLength: 6,
+        optional: true,
+        hint: 'Leave blank to receive OTP via SMS/Email',
+      },
     ],
     callbackUrl: '/motilal/callback',
   },
   mstock: {
     fields: [
       { name: 'password', label: 'Password', type: 'password', placeholder: 'Enter your Password' },
-      { name: 'totp', label: 'TOTP', type: 'text', placeholder: 'Enter 6-digit TOTP', maxLength: 6, pattern: '[0-9]{6}', inputMode: 'numeric' },
+      {
+        name: 'totp',
+        label: 'TOTP',
+        type: 'text',
+        placeholder: 'Enter 6-digit TOTP',
+        maxLength: 6,
+        pattern: '[0-9]{6}',
+        inputMode: 'numeric',
+      },
     ],
     callbackUrl: '/mstock/callback',
   },
   nubra: {
     fields: [
-      { name: 'totp', label: 'TOTP Code', type: 'text', placeholder: 'Enter 6-digit TOTP', maxLength: 6, pattern: '[0-9]{6}', inputMode: 'numeric', hint: 'Enter the 6-digit code from your authenticator app' },
+      {
+        name: 'totp',
+        label: 'TOTP Code',
+        type: 'text',
+        placeholder: 'Enter 6-digit TOTP',
+        maxLength: 6,
+        pattern: '[0-9]{6}',
+        inputMode: 'numeric',
+        hint: 'Enter the 6-digit code from your authenticator app',
+      },
     ],
     callbackUrl: '/nubra/callback',
   },
   samco: {
     fields: [
-      { name: 'yob', label: 'Year of Birth', type: 'text', placeholder: 'YYYY', maxLength: 4, pattern: '[0-9]{4}', inputMode: 'numeric', hint: 'Client ID and Password are configured in environment' },
+      {
+        name: 'yob',
+        label: 'Year of Birth',
+        type: 'text',
+        placeholder: 'YYYY',
+        maxLength: 4,
+        pattern: '[0-9]{4}',
+        inputMode: 'numeric',
+        hint: 'Client ID and Password are configured in environment',
+      },
     ],
     callbackUrl: '/samco/callback',
   },
@@ -110,14 +220,29 @@ const brokerFields: Record<string, BrokerConfig> = {
     fields: [
       { name: 'userid', label: 'User ID', type: 'text', placeholder: 'Enter your User ID' },
       { name: 'password', label: 'Password', type: 'password', placeholder: 'Enter your Password' },
-      { name: 'totp', label: 'TOTP', type: 'password', placeholder: 'Enter 6-digit TOTP', maxLength: 6, pattern: '[0-9]{6}', inputMode: 'numeric', hint: 'Get TOTP from your authenticator app' },
+      {
+        name: 'totp',
+        label: 'TOTP',
+        type: 'password',
+        placeholder: 'Enter 6-digit TOTP',
+        maxLength: 6,
+        pattern: '[0-9]{6}',
+        inputMode: 'numeric',
+        hint: 'Get TOTP from your authenticator app',
+      },
     ],
     callbackUrl: '/shoonya/callback',
   },
   tradejini: {
     fields: [
       { name: 'password', label: 'Password', type: 'password', placeholder: 'Enter your Password' },
-      { name: 'twofa', label: '2FA Code / TOTP', type: 'text', placeholder: 'Enter your 2FA code or TOTP', hint: 'You can get TOTP from Tradejini web app under Profile > Security' },
+      {
+        name: 'twofa',
+        label: '2FA Code / TOTP',
+        type: 'text',
+        placeholder: 'Enter your 2FA code or TOTP',
+        hint: 'You can get TOTP from Tradejini web app under Profile > Security',
+      },
     ],
     callbackUrl: '/tradejini/callback',
     hiddenFields: { twofatype: 'totp' },
@@ -126,7 +251,13 @@ const brokerFields: Record<string, BrokerConfig> = {
     fields: [
       { name: 'userid', label: 'User ID', type: 'text', placeholder: 'Enter your User ID' },
       { name: 'password', label: 'Password', type: 'password', placeholder: 'Enter your Password' },
-      { name: 'totp', label: 'TOTP / DOB / PAN', type: 'password', placeholder: 'Enter TOTP (6 digits), DOB (DDMMYYYY), or PAN', hint: 'Enter 6-digit TOTP, Date of Birth (DDMMYYYY), or PAN number' },
+      {
+        name: 'totp',
+        label: 'TOTP / DOB / PAN',
+        type: 'password',
+        placeholder: 'Enter TOTP (6 digits), DOB (DDMMYYYY), or PAN',
+        hint: 'Enter 6-digit TOTP, Date of Birth (DDMMYYYY), or PAN number',
+      },
     ],
     callbackUrl: '/zebu/callback',
   },
@@ -134,10 +265,18 @@ const brokerFields: Record<string, BrokerConfig> = {
     fields: [
       { name: 'userid', label: 'User ID', type: 'text', placeholder: 'Enter your User ID' },
       { name: 'password', label: 'Password', type: 'password', placeholder: 'Enter your Password' },
-      { name: 'totp', label: 'TOTP', type: 'text', placeholder: 'Enter 6-digit TOTP', maxLength: 6, pattern: '[0-9]{6}', inputMode: 'numeric' },
+      {
+        name: 'totp',
+        label: 'TOTP',
+        type: 'text',
+        placeholder: 'Enter 6-digit TOTP',
+        maxLength: 6,
+        pattern: '[0-9]{6}',
+        inputMode: 'numeric',
+      },
     ],
   },
-};
+}
 
 const brokerNames: Record<string, string> = {
   fivepaisa: '5Paisa',
@@ -155,105 +294,110 @@ const brokerNames: Record<string, string> = {
   tradejini: 'Tradejini',
   zebu: 'Zebu',
   jmfinancial: 'JM Financial',
-};
+}
 
 export default function BrokerTOTP() {
-  const { broker } = useParams<{ broker: string }>();
-  const navigate = useNavigate();
-  const { login } = useAuthStore();
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [formData, setFormData] = useState<Record<string, string>>({});
+  const { broker } = useParams<{ broker: string }>()
+  const navigate = useNavigate()
+  const { login } = useAuthStore()
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [formData, setFormData] = useState<Record<string, string>>({})
 
   // Normalize broker name (handle 5paisa -> fivepaisa)
-  const normalizedBroker = broker === '5paisa' ? 'fivepaisa' : broker;
-  const config = normalizedBroker && brokerFields[normalizedBroker] ? brokerFields[normalizedBroker] : brokerFields.default;
-  const brokerName = broker ? brokerNames[broker] || brokerNames[normalizedBroker || ''] || broker : 'Broker';
+  const normalizedBroker = broker === '5paisa' ? 'fivepaisa' : broker
+  const config =
+    normalizedBroker && brokerFields[normalizedBroker]
+      ? brokerFields[normalizedBroker]
+      : brokerFields.default
+  const brokerName = broker
+    ? brokerNames[broker] || brokerNames[normalizedBroker || ''] || broker
+    : 'Broker'
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-    setError(null);
+    e.preventDefault()
+    setIsLoading(true)
+    setError(null)
 
     // Validate broker parameter
     if (!broker && !normalizedBroker) {
-      setError('Invalid broker selected.');
-      setIsLoading(false);
-      return;
+      setError('Invalid broker selected.')
+      setIsLoading(false)
+      return
     }
 
     // Validate required fields (skip optional fields)
-    const requiredFields = config.fields.filter(f => !f.optional).map(f => f.name);
-    const missingFields = requiredFields.filter(f => !formData[f]?.trim());
+    const requiredFields = config.fields.filter((f) => !f.optional).map((f) => f.name)
+    const missingFields = requiredFields.filter((f) => !formData[f]?.trim())
     if (missingFields.length > 0) {
-      setError('Please fill in all required fields.');
-      setIsLoading(false);
-      return;
+      setError('Please fill in all required fields.')
+      setIsLoading(false)
+      return
     }
 
     try {
-      const csrfToken = await fetchCSRFToken();
+      const csrfToken = await fetchCSRFToken()
 
-      const form = new FormData();
+      const form = new FormData()
 
       // Add form fields
       Object.entries(formData).forEach(([key, value]) => {
         // Special handling for Kotak mobile - add +91 prefix
         if (normalizedBroker === 'kotak' && key === 'mobile') {
-          form.append(key, '+91' + value.trim());
+          form.append(key, `+91${value.trim()}`)
         } else {
-          form.append(key, value.trim());
+          form.append(key, value.trim())
         }
-      });
+      })
 
       // Add hidden fields if any
       if (config.hiddenFields) {
         Object.entries(config.hiddenFields).forEach(([key, value]) => {
-          form.append(key, value);
-        });
+          form.append(key, value)
+        })
       }
 
-      form.append('csrf_token', csrfToken);
+      form.append('csrf_token', csrfToken)
 
       // Use custom callback URL or default pattern
-      const callbackUrl = config.callbackUrl || `/${broker}/callback`;
+      const callbackUrl = config.callbackUrl || `/${broker}/callback`
 
       const response = await fetch(callbackUrl, {
         method: 'POST',
         body: form,
         credentials: 'include',
-      });
+      })
 
-      const data = await response.json();
+      const data = await response.json()
 
       if (data.status === 'success' || response.ok) {
-        login(formData.userid || formData.mobile || '', broker || '');
-        toast.success('Authentication successful');
-        navigate('/dashboard');
+        login(formData.userid || formData.mobile || '', broker || '')
+        toast.success('Authentication successful')
+        navigate('/dashboard')
       } else {
-        setError(data.message || 'Authentication failed. Please try again.');
+        setError(data.message || 'Authentication failed. Please try again.')
       }
     } catch {
-      setError('Authentication failed. Please check your credentials and try again.');
+      setError('Authentication failed. Please check your credentials and try again.')
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   const handleInputChange = (name: string, value: string, field: FieldConfig) => {
     // Apply input filtering based on field type
-    let filteredValue = value;
+    let filteredValue = value
 
     if (field.inputMode === 'numeric') {
-      filteredValue = value.replace(/\D/g, '');
+      filteredValue = value.replace(/\D/g, '')
     }
 
     if (field.maxLength) {
-      filteredValue = filteredValue.slice(0, field.maxLength);
+      filteredValue = filteredValue.slice(0, field.maxLength)
     }
 
-    setFormData((prev) => ({ ...prev, [name]: filteredValue }));
-  };
+    setFormData((prev) => ({ ...prev, [name]: filteredValue }))
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center py-8 px-4">
@@ -295,7 +439,9 @@ export default function BrokerTOTP() {
                 <div key={field.name} className="space-y-2">
                   <Label htmlFor={field.name}>
                     {field.label}
-                    {field.optional && <span className="text-muted-foreground ml-1">(optional)</span>}
+                    {field.optional && (
+                      <span className="text-muted-foreground ml-1">(optional)</span>
+                    )}
                   </Label>
                   <div className="relative">
                     {field.prefix && (
@@ -314,13 +460,17 @@ export default function BrokerTOTP() {
                       disabled={isLoading}
                       maxLength={field.maxLength}
                       pattern={field.pattern}
-                      autoComplete={field.type === 'password' ? 'current-password' : field.inputMode === 'numeric' ? 'one-time-code' : 'off'}
+                      autoComplete={
+                        field.type === 'password'
+                          ? 'current-password'
+                          : field.inputMode === 'numeric'
+                            ? 'one-time-code'
+                            : 'off'
+                      }
                       className={field.prefix ? 'pl-12' : ''}
                     />
                   </div>
-                  {field.hint && (
-                    <p className="text-xs text-muted-foreground">{field.hint}</p>
-                  )}
+                  {field.hint && <p className="text-xs text-muted-foreground">{field.hint}</p>}
                 </div>
               ))}
 
@@ -370,5 +520,5 @@ export default function BrokerTOTP() {
         </Card>
       </div>
     </div>
-  );
+  )
 }

@@ -1,60 +1,61 @@
-import { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
 import {
-  Plus,
-  Settings,
-  Eye,
-  Webhook,
+  AlertTriangle,
+  Check,
   Clock,
   Copy,
-  Check,
+  Eye,
+  Plus,
   RefreshCw,
+  Settings,
+  Webhook,
   Zap,
-  AlertTriangle,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Skeleton } from '@/components/ui/skeleton';
-import { toast } from 'sonner';
-import { chartinkApi } from '@/api/chartink';
-import type { ChartinkStrategy } from '@/types/chartink';
+} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
+import { chartinkApi } from '@/api/chartink'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
+import type { ChartinkStrategy } from '@/types/chartink'
 
 export default function ChartinkIndex() {
-  const navigate = useNavigate();
-  const [strategies, setStrategies] = useState<ChartinkStrategy[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const navigate = useNavigate()
+  const [strategies, setStrategies] = useState<ChartinkStrategy[]>([])
+  const [loading, setLoading] = useState(true)
+  const [copiedId, setCopiedId] = useState<string | null>(null)
 
   const fetchStrategies = async () => {
     try {
-      setLoading(true);
-      const data = await chartinkApi.getStrategies();
-      setStrategies(data);
+      setLoading(true)
+      const data = await chartinkApi.getStrategies()
+      setStrategies(data)
     } catch (error) {
-      console.error('Failed to fetch strategies:', error);
-      toast.error('Failed to load Chartink strategies');
+      console.error('Failed to fetch strategies:', error)
+      toast.error('Failed to load Chartink strategies')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   useEffect(() => {
-    fetchStrategies();
-  }, []);
+    fetchStrategies()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const copyWebhookUrl = async (webhookId: string) => {
-    const url = chartinkApi.getWebhookUrl(webhookId);
+    const url = chartinkApi.getWebhookUrl(webhookId)
     try {
-      await navigator.clipboard.writeText(url);
-      setCopiedId(webhookId);
-      toast.success('Webhook URL copied to clipboard');
-      setTimeout(() => setCopiedId(null), 2000);
+      await navigator.clipboard.writeText(url)
+      setCopiedId(webhookId)
+      toast.success('Webhook URL copied to clipboard')
+      setTimeout(() => setCopiedId(null), 2000)
     } catch {
-      toast.error('Failed to copy URL');
+      toast.error('Failed to copy URL')
     }
-  };
+  }
 
   if (loading) {
     return (
@@ -69,7 +70,7 @@ export default function ChartinkIndex() {
           ))}
         </div>
       </div>
-    );
+    )
   }
 
   return (
@@ -78,9 +79,7 @@ export default function ChartinkIndex() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Chartink Strategies</h1>
-          <p className="text-muted-foreground">
-            Manage your Chartink webhook integrations
-          </p>
+          <p className="text-muted-foreground">Manage your Chartink webhook integrations</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={fetchStrategies}>
@@ -196,23 +195,13 @@ export default function ChartinkIndex() {
 
                 {/* Action Buttons */}
                 <div className="flex gap-2 pt-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="flex-1"
-                    asChild
-                  >
+                  <Button variant="outline" size="sm" className="flex-1" asChild>
                     <Link to={`/chartink/${strategy.id}/configure`}>
                       <Settings className="h-4 w-4 mr-2" />
                       Symbols
                     </Link>
                   </Button>
-                  <Button
-                    variant="default"
-                    size="sm"
-                    className="flex-1"
-                    asChild
-                  >
+                  <Button variant="default" size="sm" className="flex-1" asChild>
                     <Link to={`/chartink/${strategy.id}`}>
                       <Eye className="h-4 w-4 mr-2" />
                       View
@@ -265,5 +254,5 @@ export default function ChartinkIndex() {
         </CardContent>
       </Card>
     </div>
-  );
+  )
 }

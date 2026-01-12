@@ -1,17 +1,10 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { Settings, RotateCcw, BarChart3, Save } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import { BarChart3, RotateCcw, Save, Settings } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -19,31 +12,47 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { toast } from 'sonner';
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 
 async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', {
     credentials: 'include',
-  });
-  const data = await response.json();
-  return data.csrf_token;
+  })
+  const data = await response.json()
+  return data.csrf_token
 }
 
 interface ConfigItem {
-  value: string;
-  description: string;
+  value: string
+  description: string
 }
 
 interface ConfigCategory {
-  title: string;
-  configs: Record<string, ConfigItem>;
+  title: string
+  configs: Record<string, ConfigItem>
 }
 
-type Configs = Record<string, ConfigCategory>;
+type Configs = Record<string, ConfigCategory>
 
-const DAYS_OF_WEEK = ['Never', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const DAYS_OF_WEEK = [
+  'Never',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+  'Sunday',
+]
 
 const CAPITAL_OPTIONS = [
   { value: '100000', label: '1,00,000 (1 Lakh)' },
@@ -52,82 +61,83 @@ const CAPITAL_OPTIONS = [
   { value: '2500000', label: '25,00,000 (25 Lakhs)' },
   { value: '5000000', label: '50,00,000 (50 Lakhs)' },
   { value: '10000000', label: '1,00,00,000 (1 Crore)' },
-];
+]
 
 function formatConfigLabel(key: string): string {
   return key
     .split('_')
     .map((word) => {
-      const upper = word.toUpperCase();
+      const upper = word.toUpperCase()
       if (['NSE', 'BSE', 'CDS', 'BCD', 'MCX', 'NCDEX', 'MIS', 'CNC', 'NRML'].includes(upper)) {
-        return upper;
+        return upper
       }
-      return word.charAt(0).toUpperCase() + word.slice(1);
+      return word.charAt(0).toUpperCase() + word.slice(1)
     })
-    .join(' ');
+    .join(' ')
 }
 
 export default function Sandbox() {
-  const [configs, setConfigs] = useState<Configs>({});
-  const [modifiedConfigs, setModifiedConfigs] = useState<Set<string>>(new Set());
-  const [isLoading, setIsLoading] = useState(true);
-  const [isResetting, setIsResetting] = useState(false);
-  const [showResetDialog, setShowResetDialog] = useState(false);
+  const [configs, setConfigs] = useState<Configs>({})
+  const [modifiedConfigs, setModifiedConfigs] = useState<Set<string>>(new Set())
+  const [isLoading, setIsLoading] = useState(true)
+  const [isResetting, setIsResetting] = useState(false)
+  const [showResetDialog, setShowResetDialog] = useState(false)
 
   // Fetch configs on mount
   useEffect(() => {
-    fetchConfigs();
-  }, []);
+    fetchConfigs()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const fetchConfigs = async () => {
     try {
       const response = await fetch('/sandbox/api/configs', {
         credentials: 'include',
-      });
+      })
       if (response.ok) {
-        const data = await response.json();
+        const data = await response.json()
         if (data.status === 'success') {
-          setConfigs(data.configs);
+          setConfigs(data.configs)
         }
       }
     } catch (error) {
-      console.error('Error fetching configs:', error);
-      toast.error('Failed to load configuration');
+      console.error('Error fetching configs:', error)
+      toast.error('Failed to load configuration')
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   const updateConfig = (configKey: string, value: string) => {
     // Update local state
     setConfigs((prev) => {
-      const updated = { ...prev };
+      const updated = { ...prev }
       for (const categoryKey in updated) {
         if (updated[categoryKey].configs[configKey]) {
           updated[categoryKey].configs[configKey] = {
             ...updated[categoryKey].configs[configKey],
             value,
-          };
-          break;
+          }
+          break
         }
       }
-      return updated;
-    });
-    setModifiedConfigs((prev) => new Set(prev).add(configKey));
-  };
+      return updated
+    })
+    setModifiedConfigs((prev) => new Set(prev).add(configKey))
+  }
 
   const saveConfig = async (configKey: string) => {
     // Find the value
-    let value = '';
+    let value = ''
     for (const categoryKey in configs) {
       if (configs[categoryKey].configs[configKey]) {
-        value = configs[categoryKey].configs[configKey].value;
-        break;
+        value = configs[categoryKey].configs[configKey].value
+        break
       }
     }
 
     try {
-      const csrfToken = await fetchCSRFToken();
+      const csrfToken = await fetchCSRFToken()
 
       const response = await fetch('/sandbox/update', {
         method: 'POST',
@@ -140,30 +150,30 @@ export default function Sandbox() {
           config_key: configKey,
           config_value: value,
         }),
-      });
+      })
 
-      const data = await response.json();
+      const data = await response.json()
 
       if (data.status === 'success') {
-        toast.success(data.message);
+        toast.success(data.message)
         setModifiedConfigs((prev) => {
-          const updated = new Set(prev);
-          updated.delete(configKey);
-          return updated;
-        });
+          const updated = new Set(prev)
+          updated.delete(configKey)
+          return updated
+        })
       } else {
-        toast.error(data.message);
+        toast.error(data.message)
       }
     } catch (error) {
-      console.error('Error saving config:', error);
-      toast.error('Failed to save configuration');
+      console.error('Error saving config:', error)
+      toast.error('Failed to save configuration')
     }
-  };
+  }
 
   const resetConfiguration = async () => {
-    setIsResetting(true);
+    setIsResetting(true)
     try {
-      const csrfToken = await fetchCSRFToken();
+      const csrfToken = await fetchCSRFToken()
 
       const response = await fetch('/sandbox/reset', {
         method: 'POST',
@@ -172,30 +182,30 @@ export default function Sandbox() {
           'X-CSRFToken': csrfToken,
         },
         credentials: 'include',
-      });
+      })
 
-      const data = await response.json();
+      const data = await response.json()
 
       if (data.status === 'success') {
-        toast.success(data.message);
-        setShowResetDialog(false);
+        toast.success(data.message)
+        setShowResetDialog(false)
         // Reload configs
         setTimeout(() => {
-          fetchConfigs();
-        }, 1000);
+          fetchConfigs()
+        }, 1000)
       } else {
-        toast.error(data.message);
+        toast.error(data.message)
       }
     } catch (error) {
-      console.error('Error resetting config:', error);
-      toast.error('Failed to reset configuration');
+      console.error('Error resetting config:', error)
+      toast.error('Failed to reset configuration')
     } finally {
-      setIsResetting(false);
+      setIsResetting(false)
     }
-  };
+  }
 
   const renderConfigInput = (configKey: string, configData: ConfigItem) => {
-    const isModified = modifiedConfigs.has(configKey);
+    const isModified = modifiedConfigs.has(configKey)
 
     // Reset Day selector
     if (configKey === 'reset_day') {
@@ -216,12 +226,16 @@ export default function Sandbox() {
               ))}
             </SelectContent>
           </Select>
-          <Button size="sm" variant={isModified ? 'default' : 'secondary'} onClick={() => saveConfig(configKey)}>
+          <Button
+            size="sm"
+            variant={isModified ? 'default' : 'secondary'}
+            onClick={() => saveConfig(configKey)}
+          >
             <Save className="h-4 w-4 mr-1" />
             Set
           </Button>
         </div>
-      );
+      )
     }
 
     // Time inputs
@@ -234,12 +248,16 @@ export default function Sandbox() {
             onChange={(e) => updateConfig(configKey, e.target.value)}
             className="flex-1"
           />
-          <Button size="sm" variant={isModified ? 'default' : 'secondary'} onClick={() => saveConfig(configKey)}>
+          <Button
+            size="sm"
+            variant={isModified ? 'default' : 'secondary'}
+            onClick={() => saveConfig(configKey)}
+          >
             <Save className="h-4 w-4 mr-1" />
             Set
           </Button>
         </div>
-      );
+      )
     }
 
     // Leverage inputs
@@ -255,23 +273,24 @@ export default function Sandbox() {
             step="0.1"
             className="flex-1"
           />
-          <Button size="sm" variant={isModified ? 'default' : 'secondary'} onClick={() => saveConfig(configKey)}>
+          <Button
+            size="sm"
+            variant={isModified ? 'default' : 'secondary'}
+            onClick={() => saveConfig(configKey)}
+          >
             <Save className="h-4 w-4 mr-1" />
             Set
           </Button>
         </div>
-      );
+      )
     }
 
     // Starting capital selector
     if (configKey === 'starting_capital') {
-      const currentValue = parseFloat(configData.value || '10000000').toFixed(0);
+      const currentValue = parseFloat(configData.value || '10000000').toFixed(0)
       return (
         <div className="flex gap-2">
-          <Select
-            value={currentValue}
-            onValueChange={(value) => updateConfig(configKey, value)}
-          >
+          <Select value={currentValue} onValueChange={(value) => updateConfig(configKey, value)}>
             <SelectTrigger className="flex-1">
               <SelectValue />
             </SelectTrigger>
@@ -283,12 +302,16 @@ export default function Sandbox() {
               ))}
             </SelectContent>
           </Select>
-          <Button size="sm" variant={isModified ? 'default' : 'secondary'} onClick={() => saveConfig(configKey)}>
+          <Button
+            size="sm"
+            variant={isModified ? 'default' : 'secondary'}
+            onClick={() => saveConfig(configKey)}
+          >
             <Save className="h-4 w-4 mr-1" />
             Set
           </Button>
         </div>
-      );
+      )
     }
 
     // Order check interval / MTM update interval
@@ -304,12 +327,16 @@ export default function Sandbox() {
             step="1"
             className="flex-1"
           />
-          <Button size="sm" variant={isModified ? 'default' : 'secondary'} onClick={() => saveConfig(configKey)}>
+          <Button
+            size="sm"
+            variant={isModified ? 'default' : 'secondary'}
+            onClick={() => saveConfig(configKey)}
+          >
             <Save className="h-4 w-4 mr-1" />
             Set
           </Button>
         </div>
-      );
+      )
     }
 
     // Default text input
@@ -321,20 +348,24 @@ export default function Sandbox() {
           onChange={(e) => updateConfig(configKey, e.target.value)}
           className="flex-1"
         />
-        <Button size="sm" variant={isModified ? 'default' : 'secondary'} onClick={() => saveConfig(configKey)}>
+        <Button
+          size="sm"
+          variant={isModified ? 'default' : 'secondary'}
+          onClick={() => saveConfig(configKey)}
+        >
           <Save className="h-4 w-4 mr-1" />
           Set
         </Button>
       </div>
-    );
-  };
+    )
+  }
 
   if (isLoading) {
     return (
       <div className="container mx-auto py-8 px-4 flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
-    );
+    )
   }
 
   return (
@@ -423,11 +454,7 @@ export default function Sandbox() {
             <Button variant="ghost" onClick={() => setShowResetDialog(false)}>
               Cancel
             </Button>
-            <Button
-              variant="destructive"
-              onClick={resetConfiguration}
-              disabled={isResetting}
-            >
+            <Button variant="destructive" onClick={resetConfiguration} disabled={isResetting}>
               {isResetting ? (
                 <>
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-current mr-2"></div>
@@ -441,5 +468,5 @@ export default function Sandbox() {
         </DialogContent>
       </Dialog>
     </div>
-  );
+  )
 }

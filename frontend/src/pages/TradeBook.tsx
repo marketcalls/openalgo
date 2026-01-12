@@ -1,25 +1,9 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
-import {
-  TrendingUp,
-  TrendingDown,
-  Loader2,
-  Download,
-  RefreshCw,
-  Settings2,
-} from 'lucide-react';
-import { onModeChange } from '@/stores/themeStore';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Label } from '@/components/ui/label';
+import { Download, Loader2, RefreshCw, Settings2, TrendingDown, TrendingUp } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { tradingApi } from '@/api/trading'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -28,22 +12,31 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from '@/components/ui/dialog';
-import { useAuthStore } from '@/stores/authStore';
-import { tradingApi } from '@/api/trading';
-import type { Trade } from '@/types/trading';
-import { cn, sanitizeCSV } from '@/lib/utils';
+} from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { cn, sanitizeCSV } from '@/lib/utils'
+import { useAuthStore } from '@/stores/authStore'
+import { onModeChange } from '@/stores/themeStore'
+import type { Trade } from '@/types/trading'
 
 interface FilterState {
-  action: string[];
-  exchange: string[];
-  product: string[];
+  action: string[]
+  exchange: string[]
+  product: string[]
 }
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat('en-IN', {
     minimumFractionDigits: 2,
-  }).format(value);
+  }).format(value)
 }
 
 function formatTime(timestamp: string): string {
@@ -52,94 +45,108 @@ function formatTime(timestamp: string): string {
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
-    });
+    })
   } catch {
-    return timestamp;
+    return timestamp
   }
 }
 
 export default function TradeBook() {
-  const { apiKey } = useAuthStore();
-  const [trades, setTrades] = useState<Trade[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { apiKey } = useAuthStore()
+  const [trades, setTrades] = useState<Trade[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   // Filter state
   const [filters, setFilters] = useState<FilterState>({
     action: [],
     exchange: [],
     product: [],
-  });
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  })
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   // Filter trades
   const filteredTrades = useMemo(() => {
     return trades.filter((trade) => {
-      if (filters.action.length > 0 && !filters.action.includes(trade.action)) return false;
-      if (filters.exchange.length > 0 && !filters.exchange.includes(trade.exchange)) return false;
-      if (filters.product.length > 0 && !filters.product.includes(trade.product)) return false;
-      return true;
-    });
-  }, [trades, filters]);
+      if (filters.action.length > 0 && !filters.action.includes(trade.action)) return false
+      if (filters.exchange.length > 0 && !filters.exchange.includes(trade.exchange)) return false
+      if (filters.product.length > 0 && !filters.product.includes(trade.product)) return false
+      return true
+    })
+  }, [trades, filters])
 
-  const hasActiveFilters = filters.action.length > 0 || filters.exchange.length > 0 || filters.product.length > 0;
+  const hasActiveFilters =
+    filters.action.length > 0 || filters.exchange.length > 0 || filters.product.length > 0
 
   const toggleFilter = (type: keyof FilterState, value: string) => {
     setFilters((prev) => {
-      const arr = prev[type];
-      const index = arr.indexOf(value);
+      const arr = prev[type]
+      const index = arr.indexOf(value)
       if (index > -1) {
-        return { ...prev, [type]: arr.filter((v) => v !== value) };
+        return { ...prev, [type]: arr.filter((v) => v !== value) }
       }
-      return { ...prev, [type]: [...arr, value] };
-    });
-  };
+      return { ...prev, [type]: [...arr, value] }
+    })
+  }
 
   const clearFilters = () => {
-    setFilters({ action: [], exchange: [], product: [] });
-  };
+    setFilters({ action: [], exchange: [], product: [] })
+  }
 
-  const fetchTrades = useCallback(async (showRefresh = false) => {
-    if (!apiKey) {
-      setIsLoading(false);
-      return;
-    }
-
-    if (showRefresh) setIsRefreshing(true);
-
-    try {
-      const response = await tradingApi.getTrades(apiKey);
-      if (response.status === 'success' && response.data) {
-        setTrades(response.data);
-        setError(null);
-      } else {
-        setError(response.message || 'Failed to fetch trades');
+  const fetchTrades = useCallback(
+    async (showRefresh = false) => {
+      if (!apiKey) {
+        setIsLoading(false)
+        return
       }
-    } catch {
-      setError('Failed to fetch trades');
-    } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }
-  }, [apiKey]);
+
+      if (showRefresh) setIsRefreshing(true)
+
+      try {
+        const response = await tradingApi.getTrades(apiKey)
+        if (response.status === 'success' && response.data) {
+          setTrades(response.data)
+          setError(null)
+        } else {
+          setError(response.message || 'Failed to fetch trades')
+        }
+      } catch {
+        setError('Failed to fetch trades')
+      } finally {
+        setIsLoading(false)
+        setIsRefreshing(false)
+      }
+    },
+    [apiKey]
+  )
 
   useEffect(() => {
-    fetchTrades();
-    const interval = setInterval(() => fetchTrades(), 10000);
-    return () => clearInterval(interval);
-  }, [fetchTrades]);
+    fetchTrades()
+    const interval = setInterval(() => fetchTrades(), 10000)
+    return () => clearInterval(interval)
+  }, [fetchTrades])
 
   // Listen for mode changes (live/analyze) and refresh data
   useEffect(() => {
     const unsubscribe = onModeChange(() => {
-      fetchTrades();
-    });
-    return () => unsubscribe();
-  }, [fetchTrades]);
+      fetchTrades()
+    })
+    return () => unsubscribe()
+  }, [fetchTrades])
 
   const exportToCSV = () => {
-    const headers = ['Symbol', 'Exchange', 'Product', 'Action', 'Qty', 'Price', 'Trade Value', 'Order ID', 'Time'];
+    const headers = [
+      'Symbol',
+      'Exchange',
+      'Product',
+      'Action',
+      'Qty',
+      'Price',
+      'Trade Value',
+      'Order ID',
+      'Time',
+    ]
     const rows = trades.map((t) => [
       sanitizeCSV(t.symbol),
       sanitizeCSV(t.exchange),
@@ -150,33 +157,44 @@ export default function TradeBook() {
       sanitizeCSV(t.trade_value),
       sanitizeCSV(t.orderid),
       sanitizeCSV(t.timestamp),
-    ]);
+    ])
 
-    const csv = [headers, ...rows].map((row) => row.join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `tradebook_${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-  };
+    const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `tradebook_${new Date().toISOString().split('T')[0]}.csv`
+    a.click()
+  }
 
   const stats = {
     total: filteredTrades.length,
     buyTrades: filteredTrades.filter((t) => t.action === 'BUY').length,
     sellTrades: filteredTrades.filter((t) => t.action === 'SELL').length,
-  };
+  }
 
-  const FilterChip = ({ type, value, label }: { type: keyof FilterState; value: string; label: string }) => (
+  const FilterChip = ({
+    type,
+    value,
+    label,
+  }: {
+    type: keyof FilterState
+    value: string
+    label: string
+  }) => (
     <Button
       variant={filters[type].includes(value) ? 'default' : 'outline'}
       size="sm"
-      className={cn('rounded-full', filters[type].includes(value) && 'bg-pink-500 hover:bg-pink-600')}
+      className={cn(
+        'rounded-full',
+        filters[type].includes(value) && 'bg-pink-500 hover:bg-pink-600'
+      )}
       onClick={() => toggleFilter(type, value)}
     >
       {label}
     </Button>
-  );
+  )
 
   return (
     <div className="space-y-6">
@@ -190,7 +208,11 @@ export default function TradeBook() {
           {/* Settings Button */}
           <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
             <DialogTrigger asChild>
-              <Button variant={hasActiveFilters ? 'default' : 'outline'} size="sm" className="relative">
+              <Button
+                variant={hasActiveFilters ? 'default' : 'outline'}
+                size="sm"
+                className="relative"
+              >
                 <Settings2 className="h-4 w-4 mr-2" />
                 Filters
                 {hasActiveFilters && (
@@ -274,17 +296,29 @@ export default function TradeBook() {
         <div className="flex flex-wrap items-center gap-3">
           <span className="text-sm text-muted-foreground">Active Filters:</span>
           {filters.action.map((v) => (
-            <Badge key={v} variant="secondary" className="bg-pink-500/10 text-pink-600 border-pink-500/30">
+            <Badge
+              key={v}
+              variant="secondary"
+              className="bg-pink-500/10 text-pink-600 border-pink-500/30"
+            >
               {v}
             </Badge>
           ))}
           {filters.exchange.map((v) => (
-            <Badge key={v} variant="secondary" className="bg-pink-500/10 text-pink-600 border-pink-500/30">
+            <Badge
+              key={v}
+              variant="secondary"
+              className="bg-pink-500/10 text-pink-600 border-pink-500/30"
+            >
               {v}
             </Badge>
           ))}
           {filters.product.map((v) => (
-            <Badge key={v} variant="secondary" className="bg-pink-500/10 text-pink-600 border-pink-500/30">
+            <Badge
+              key={v}
+              variant="secondary"
+              className="bg-pink-500/10 text-pink-600 border-pink-500/30"
+            >
               {v}
             </Badge>
           ))}
@@ -378,10 +412,7 @@ export default function TradeBook() {
                       <TableCell>
                         <Badge
                           variant={trade.action === 'BUY' ? 'default' : 'destructive'}
-                          className={cn(
-                            'gap-1',
-                            trade.action === 'BUY' ? 'bg-green-500' : ''
-                          )}
+                          className={cn('gap-1', trade.action === 'BUY' ? 'bg-green-500' : '')}
                         >
                           {trade.action === 'BUY' ? (
                             <TrendingUp className="h-3 w-3" />
@@ -411,5 +442,5 @@ export default function TradeBook() {
         </CardContent>
       </Card>
     </div>
-  );
+  )
 }

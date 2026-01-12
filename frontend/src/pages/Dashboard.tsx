@@ -1,204 +1,195 @@
-import { useEffect, useState, useCallback } from 'react';
-import { Link } from 'react-router-dom';
-import {
-  Search,
-  FileText,
-  BookOpen,
-  MessageCircle,
-  BarChart3,
-  Zap,
-} from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { cn } from '@/lib/utils';
-import { onModeChange } from '@/stores/themeStore';
+import { BarChart3, BookOpen, FileText, MessageCircle, Search, Zap } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
+import { onModeChange } from '@/stores/themeStore'
 
 interface MarginData {
-  availablecash: string;
-  collateral: string;
-  m2munrealized: string;
-  m2mrealized: string;
-  utiliseddebits: string;
+  availablecash: string
+  collateral: string
+  m2munrealized: string
+  m2mrealized: string
+  utiliseddebits: string
 }
 
 interface MasterContractStatus {
-  status: 'pending' | 'downloading' | 'success' | 'error';
-  message?: string;
-  total_symbols?: number;
+  status: 'pending' | 'downloading' | 'success' | 'error'
+  message?: string
+  total_symbols?: number
 }
 
 // Format number in Indian format with Cr/L suffixes
 function formatIndianNumber(value: string | number): string {
-  const num = typeof value === 'string' ? parseFloat(value) : value;
-  if (isNaN(num)) return '0.00';
+  const num = typeof value === 'string' ? parseFloat(value) : value
+  if (Number.isNaN(num)) return '0.00'
 
-  const isNegative = num < 0;
-  const absNum = Math.abs(num);
+  const isNegative = num < 0
+  const absNum = Math.abs(num)
 
-  let formatted: string;
+  let formatted: string
   if (absNum >= 10000000) {
     // 1 Crore or more
-    formatted = `${(absNum / 10000000).toFixed(2)}Cr`;
+    formatted = `${(absNum / 10000000).toFixed(2)}Cr`
   } else if (absNum >= 100000) {
     // 1 Lakh or more
-    formatted = `${(absNum / 100000).toFixed(2)}L`;
+    formatted = `${(absNum / 100000).toFixed(2)}L`
   } else {
     // Less than 1 Lakh - just decimal format
-    formatted = absNum.toFixed(2);
+    formatted = absNum.toFixed(2)
   }
 
-  return isNegative ? `-${formatted}` : formatted;
+  return isNegative ? `-${formatted}` : formatted
 }
 
 // Get color class based on P&L value
 function getPnLColor(value: string | number): string {
-  const num = typeof value === 'string' ? parseFloat(value) : value;
-  if (num > 0) return 'text-green-600 dark:text-green-400';
-  if (num < 0) return 'text-red-600 dark:text-red-400';
-  return 'text-foreground';
+  const num = typeof value === 'string' ? parseFloat(value) : value
+  if (num > 0) return 'text-green-600 dark:text-green-400'
+  if (num < 0) return 'text-red-600 dark:text-red-400'
+  return 'text-foreground'
 }
 
 function getPnLBadgeVariant(value: string | number): 'default' | 'destructive' | 'secondary' {
-  const num = typeof value === 'string' ? parseFloat(value) : value;
-  if (num > 0) return 'default';
-  if (num < 0) return 'destructive';
-  return 'secondary';
+  const num = typeof value === 'string' ? parseFloat(value) : value
+  if (num > 0) return 'default'
+  if (num < 0) return 'destructive'
+  return 'secondary'
 }
 
 export default function Dashboard() {
-  const [marginData, setMarginData] = useState<MarginData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [marginData, setMarginData] = useState<MarginData | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [masterContract, setMasterContract] = useState<MasterContractStatus>({
     status: 'pending',
-  });
-  const [isAuthenticated, setIsAuthenticated] = useState(true); // Assume authenticated initially
+  })
+  const [isAuthenticated, setIsAuthenticated] = useState(true) // Assume authenticated initially
 
   // Fetch dashboard funds data
   const fetchFundsData = useCallback(async () => {
     try {
-      setIsLoading(true);
+      setIsLoading(true)
       const response = await fetch('/auth/dashboard-data', {
         credentials: 'include',
-      });
+      })
 
       if (response.status === 401) {
-        setIsAuthenticated(false);
-        setIsLoading(false);
-        return;
+        setIsAuthenticated(false)
+        setIsLoading(false)
+        return
       }
 
-      const data = await response.json();
+      const data = await response.json()
 
       if (data.status === 'success' && data.data) {
-        setMarginData(data.data);
-        setError(null);
+        setMarginData(data.data)
+        setError(null)
       } else {
-        setError(data.message || 'Failed to fetch margin data');
+        setError(data.message || 'Failed to fetch margin data')
       }
     } catch (err) {
-      console.error('Error fetching funds:', err);
-      setError('Failed to fetch margin data');
+      console.error('Error fetching funds:', err)
+      setError('Failed to fetch margin data')
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  }, []);
+  }, [])
 
   useEffect(() => {
-    fetchFundsData();
+    fetchFundsData()
     // Refresh every 30 seconds
-    const interval = setInterval(fetchFundsData, 30000);
-    return () => clearInterval(interval);
-  }, [fetchFundsData]);
+    const interval = setInterval(fetchFundsData, 30000)
+    return () => clearInterval(interval)
+  }, [fetchFundsData])
 
   // Listen for mode changes and refresh data
   useEffect(() => {
     const unsubscribe = onModeChange(() => {
       // Refresh funds data when mode changes
-      fetchFundsData();
-    });
-    return () => unsubscribe();
-  }, [fetchFundsData]);
+      fetchFundsData()
+    })
+    return () => unsubscribe()
+  }, [fetchFundsData])
 
   // Check master contract status
   const checkMasterContractStatus = useCallback(async () => {
     try {
       const response = await fetch('/api/master-contract/status', {
         credentials: 'include',
-        headers: { 'Accept': 'application/json' },
-      });
+        headers: { Accept: 'application/json' },
+      })
 
       if (response.status === 401) {
-        return;
+        return
       }
 
-      const data = await response.json();
-      setMasterContract(data);
-    } catch (err) {
-      setMasterContract({ status: 'error', message: 'Failed to check status' });
+      const data = await response.json()
+      setMasterContract(data)
+    } catch (_err) {
+      setMasterContract({ status: 'error', message: 'Failed to check status' })
     }
-  }, []);
+  }, [])
 
   useEffect(() => {
-    checkMasterContractStatus();
+    checkMasterContractStatus()
 
     // Poll every 5 seconds until successful
     const interval = setInterval(() => {
-      setMasterContract(prev => {
+      setMasterContract((prev) => {
         if (prev.status === 'success') {
-          return prev; // Don't check again if already successful
+          return prev // Don't check again if already successful
         }
-        checkMasterContractStatus();
-        return prev;
-      });
-    }, 5000);
+        checkMasterContractStatus()
+        return prev
+      })
+    }, 5000)
 
-    return () => clearInterval(interval);
-  }, [checkMasterContractStatus]);
+    return () => clearInterval(interval)
+  }, [checkMasterContractStatus])
 
   // Master Contract LED color
   const getMasterContractLedColor = () => {
     switch (masterContract.status) {
       case 'success':
-        return 'bg-green-500';
+        return 'bg-green-500'
       case 'downloading':
-        return 'bg-yellow-500 animate-pulse';
+        return 'bg-yellow-500 animate-pulse'
       case 'error':
-        return 'bg-red-500';
-      case 'pending':
+        return 'bg-red-500'
       default:
-        return 'bg-gray-400 animate-pulse';
+        return 'bg-gray-400 animate-pulse'
     }
-  };
+  }
 
   const getMasterContractStatusText = () => {
     switch (masterContract.status) {
       case 'success':
         return masterContract.total_symbols
           ? `Ready (${masterContract.total_symbols} symbols)`
-          : 'Ready';
+          : 'Ready'
       case 'downloading':
-        return 'Downloading...';
+        return 'Downloading...'
       case 'error':
-        return 'Error';
-      case 'pending':
+        return 'Error'
       default:
-        return 'Checking...';
+        return 'Checking...'
     }
-  };
+  }
 
   const getMasterContractTextColor = () => {
     switch (masterContract.status) {
       case 'success':
-        return 'text-green-600 dark:text-green-400';
+        return 'text-green-600 dark:text-green-400'
       case 'downloading':
-        return 'text-yellow-600 dark:text-yellow-400';
+        return 'text-yellow-600 dark:text-yellow-400'
       case 'error':
-        return 'text-red-600 dark:text-red-400';
+        return 'text-red-600 dark:text-red-400'
       default:
-        return 'text-muted-foreground';
+        return 'text-muted-foreground'
     }
-  };
+  }
 
   const quickAccessCards = [
     {
@@ -216,7 +207,8 @@ export default function Dashboard() {
       label: 'Live Logs',
       description: 'Real-time trading activity logs',
       icon: FileText,
-      gradient: 'from-violet-500/10 to-violet-500/5 hover:from-violet-500/20 hover:to-violet-500/10',
+      gradient:
+        'from-violet-500/10 to-violet-500/5 hover:from-violet-500/20 hover:to-violet-500/10',
       iconBg: 'bg-violet-500/20',
       iconColor: 'text-violet-500',
       borderColor: 'border-violet-500/20 hover:border-violet-500/40',
@@ -257,12 +249,13 @@ export default function Dashboard() {
       label: 'Latency Monitor',
       description: 'Monitor order & API latency',
       icon: Zap,
-      gradient: 'from-orange-500/10 to-orange-500/5 hover:from-orange-500/20 hover:to-orange-500/10',
+      gradient:
+        'from-orange-500/10 to-orange-500/5 hover:from-orange-500/20 hover:to-orange-500/10',
       iconBg: 'bg-orange-500/20',
       iconColor: 'text-orange-500',
       borderColor: 'border-orange-500/20 hover:border-orange-500/40',
     },
-  ];
+  ]
 
   // If not authenticated, show login prompt
   if (!isAuthenticated) {
@@ -274,7 +267,7 @@ export default function Dashboard() {
           Go to Login
         </Link>
       </div>
-    );
+    )
   }
 
   return (
@@ -289,15 +282,10 @@ export default function Dashboard() {
         </div>
         {/* Master Contract Status Indicator */}
         <div className="flex items-center gap-2 md:gap-3 bg-muted rounded-lg px-3 md:px-4 py-2 md:py-3 w-fit lg:ml-auto lg:self-start">
-          <span className="text-xs md:text-sm font-medium whitespace-nowrap">
-            Master Contract:
-          </span>
+          <span className="text-xs md:text-sm font-medium whitespace-nowrap">Master Contract:</span>
           <div className="flex items-center gap-2">
             <div
-              className={cn(
-                'w-2.5 h-2.5 md:w-3 md:h-3 rounded-full',
-                getMasterContractLedColor()
-              )}
+              className={cn('w-2.5 h-2.5 md:w-3 md:h-3 rounded-full', getMasterContractLedColor())}
             />
             <span
               className={cn('text-xs md:text-sm', getMasterContractTextColor())}
@@ -317,9 +305,15 @@ export default function Dashboard() {
             <div className="space-y-1">
               <p className="text-sm text-muted-foreground">Available Balance</p>
               <p className="text-2xl font-bold text-primary">
-                {isLoading ? '...' : marginData ? formatIndianNumber(marginData.availablecash) : '0.00'}
+                {isLoading
+                  ? '...'
+                  : marginData
+                    ? formatIndianNumber(marginData.availablecash)
+                    : '0.00'}
               </p>
-              <Badge variant="secondary" className="mt-2">Cash Balance</Badge>
+              <Badge variant="secondary" className="mt-2">
+                Cash Balance
+              </Badge>
             </div>
           </CardContent>
         </Card>
@@ -330,9 +324,15 @@ export default function Dashboard() {
             <div className="space-y-1">
               <p className="text-sm text-muted-foreground">Collateral</p>
               <p className="text-2xl font-bold text-violet-500 dark:text-violet-400">
-                {isLoading ? '...' : marginData ? formatIndianNumber(marginData.collateral) : '0.00'}
+                {isLoading
+                  ? '...'
+                  : marginData
+                    ? formatIndianNumber(marginData.collateral)
+                    : '0.00'}
               </p>
-              <Badge variant="secondary" className="mt-2">Total Collateral</Badge>
+              <Badge variant="secondary" className="mt-2">
+                Total Collateral
+              </Badge>
             </div>
           </CardContent>
         </Card>
@@ -342,11 +342,17 @@ export default function Dashboard() {
           <CardContent className="pt-6">
             <div className="space-y-1">
               <p className="text-sm text-muted-foreground">Unrealized P&L</p>
-              <p className={cn(
-                'text-2xl font-bold',
-                marginData ? getPnLColor(marginData.m2munrealized) : ''
-              )}>
-                {isLoading ? '...' : marginData ? formatIndianNumber(marginData.m2munrealized) : '0.00'}
+              <p
+                className={cn(
+                  'text-2xl font-bold',
+                  marginData ? getPnLColor(marginData.m2munrealized) : ''
+                )}
+              >
+                {isLoading
+                  ? '...'
+                  : marginData
+                    ? formatIndianNumber(marginData.m2munrealized)
+                    : '0.00'}
               </p>
               <Badge
                 variant={marginData ? getPnLBadgeVariant(marginData.m2munrealized) : 'secondary'}
@@ -363,11 +369,17 @@ export default function Dashboard() {
           <CardContent className="pt-6">
             <div className="space-y-1">
               <p className="text-sm text-muted-foreground">Realized P&L</p>
-              <p className={cn(
-                'text-2xl font-bold',
-                marginData ? getPnLColor(marginData.m2mrealized) : ''
-              )}>
-                {isLoading ? '...' : marginData ? formatIndianNumber(marginData.m2mrealized) : '0.00'}
+              <p
+                className={cn(
+                  'text-2xl font-bold',
+                  marginData ? getPnLColor(marginData.m2mrealized) : ''
+                )}
+              >
+                {isLoading
+                  ? '...'
+                  : marginData
+                    ? formatIndianNumber(marginData.m2mrealized)
+                    : '0.00'}
               </p>
               <Badge
                 variant={marginData ? getPnLBadgeVariant(marginData.m2mrealized) : 'secondary'}
@@ -385,9 +397,16 @@ export default function Dashboard() {
             <div className="space-y-1">
               <p className="text-sm text-muted-foreground">Utilised Margin</p>
               <p className="text-2xl font-bold text-cyan-500 dark:text-cyan-400">
-                {isLoading ? '...' : marginData ? formatIndianNumber(marginData.utiliseddebits) : '0.00'}
+                {isLoading
+                  ? '...'
+                  : marginData
+                    ? formatIndianNumber(marginData.utiliseddebits)
+                    : '0.00'}
               </p>
-              <Badge variant="outline" className="mt-2 border-cyan-500/50 text-cyan-600 dark:text-cyan-400">
+              <Badge
+                variant="outline"
+                className="mt-2 border-cyan-500/50 text-cyan-600 dark:text-cyan-400"
+              >
                 Used Margin
               </Badge>
             </div>
@@ -413,7 +432,7 @@ export default function Dashboard() {
               'block rounded-lg border transition-all duration-300 hover:shadow-lg',
               `bg-gradient-to-br ${card.gradient}`,
               card.borderColor
-            );
+            )
 
             const cardContent = (
               <div className="p-4 md:p-5">
@@ -427,7 +446,7 @@ export default function Dashboard() {
                   </div>
                 </div>
               </div>
-            );
+            )
 
             if (card.external) {
               return (
@@ -440,17 +459,17 @@ export default function Dashboard() {
                 >
                   {cardContent}
                 </a>
-              );
+              )
             }
 
             return (
               <Link key={card.href} to={card.href} className={cardClasses}>
                 {cardContent}
               </Link>
-            );
+            )
           })}
         </div>
       </div>
     </div>
-  );
+  )
 }

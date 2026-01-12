@@ -1,15 +1,10 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import {
-  BarChart3,
-  ArrowLeft,
-  Users,
-  MessageSquare,
-  Bell,
-  TrendingUp,
-} from 'lucide-react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { ArrowLeft, BarChart3, Bell, MessageSquare, TrendingUp, Users } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
+import { webClient } from '@/api/client'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
   TableBody,
@@ -17,54 +12,57 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table';
-import { toast } from 'sonner';
-import { webClient } from '@/api/client';
-import type { TelegramAnalytics as TelegramAnalyticsType, CommandStats, TelegramUser } from '@/types/telegram';
+} from '@/components/ui/table'
+import type {
+  CommandStats,
+  TelegramAnalytics as TelegramAnalyticsType,
+  TelegramUser,
+} from '@/types/telegram'
 
 export default function TelegramAnalytics() {
-  const [analytics, setAnalytics] = useState<TelegramAnalyticsType | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [analytics, setAnalytics] = useState<TelegramAnalyticsType | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
-    fetchAnalytics();
-  }, []);
+    fetchAnalytics()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const fetchAnalytics = async () => {
     try {
       const response = await webClient.get<{ status: string; data: TelegramAnalyticsType }>(
         '/telegram/api/analytics'
-      );
-      setAnalytics(response.data.data);
+      )
+      setAnalytics(response.data.data)
     } catch (error) {
-      console.error('Error fetching analytics:', error);
-      toast.error('Failed to load analytics');
+      console.error('Error fetching analytics:', error)
+      toast.error('Failed to load analytics')
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   const getTotalCommands = (stats: CommandStats[] | undefined | null) => {
-    if (!Array.isArray(stats)) return 0;
-    return stats.reduce((sum, s) => sum + s.count, 0);
-  };
+    if (!Array.isArray(stats)) return 0
+    return stats.reduce((sum, s) => sum + s.count, 0)
+  }
 
   const getTopCommand = (stats: CommandStats[] | undefined | null) => {
-    if (!Array.isArray(stats) || stats.length === 0) return null;
-    return stats.reduce((max, s) => (s.count > max.count ? s : max), stats[0]);
-  };
+    if (!Array.isArray(stats) || stats.length === 0) return null
+    return stats.reduce((max, s) => (s.count > max.count ? s : max), stats[0])
+  }
 
   const formatDate = (dateString: string | null) => {
-    if (!dateString) return '-';
-    return new Date(dateString).toLocaleString();
-  };
+    if (!dateString) return '-'
+    return new Date(dateString).toLocaleString()
+  }
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
-    );
+    )
   }
 
   if (!analytics) {
@@ -72,16 +70,16 @@ export default function TelegramAnalytics() {
       <div className="flex items-center justify-center py-16">
         <p className="text-muted-foreground">Failed to load analytics data</p>
       </div>
-    );
+    )
   }
 
   // Ensure arrays are safe to use
-  const safeStats7d = Array.isArray(analytics.stats_7d) ? analytics.stats_7d : [];
-  const safeStats30d = Array.isArray(analytics.stats_30d) ? analytics.stats_30d : [];
-  const safeUsers = Array.isArray(analytics.users) ? analytics.users : [];
+  const safeStats7d = Array.isArray(analytics.stats_7d) ? analytics.stats_7d : []
+  const safeStats30d = Array.isArray(analytics.stats_30d) ? analytics.stats_30d : []
+  const safeUsers = Array.isArray(analytics.users) ? analytics.users : []
 
-  const topCommand7d = getTopCommand(safeStats7d);
-  const topCommand30d = getTopCommand(safeStats30d);
+  const topCommand7d = getTopCommand(safeStats7d)
+  const topCommand30d = getTopCommand(safeStats30d)
 
   return (
     <div className="py-6 space-y-6">
@@ -243,9 +241,7 @@ export default function TelegramAnalytics() {
       <Card>
         <CardHeader>
           <CardTitle>User Activity</CardTitle>
-          <CardDescription>
-            Recent user activity overview
-          </CardDescription>
+          <CardDescription>Recent user activity overview</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="border rounded-md">
@@ -272,7 +268,9 @@ export default function TelegramAnalytics() {
                       <TableCell>
                         <div>
                           <p className="font-medium">
-                            {user.telegram_username ? `@${user.telegram_username}` : user.first_name || 'Unknown'}
+                            {user.telegram_username
+                              ? `@${user.telegram_username}`
+                              : user.first_name || 'Unknown'}
                           </p>
                         </div>
                       </TableCell>
@@ -308,5 +306,5 @@ export default function TelegramAnalytics() {
         </CardContent>
       </Card>
     </div>
-  );
+  )
 }

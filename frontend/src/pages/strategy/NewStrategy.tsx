@@ -1,25 +1,25 @@
-import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft, Zap, Info } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { ArrowLeft, Info, Zap } from 'lucide-react'
+import { useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
+import { strategyApi } from '@/api/strategy'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { toast } from 'sonner';
-import { strategyApi } from '@/api/strategy';
-import { PLATFORMS, TRADING_MODES } from '@/types/strategy';
+} from '@/components/ui/select'
+import { PLATFORMS, TRADING_MODES } from '@/types/strategy'
 
 export default function NewStrategy() {
-  const navigate = useNavigate();
-  const [loading, setLoading] = useState(false);
+  const navigate = useNavigate()
+  const [loading, setLoading] = useState(false)
   const [formData, setFormData] = useState({
     name: '',
     platform: '',
@@ -28,55 +28,55 @@ export default function NewStrategy() {
     start_time: '09:15',
     end_time: '15:00',
     squareoff_time: '15:15',
-  });
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  })
+  const [errors, setErrors] = useState<Record<string, string>>({})
 
   const validateForm = () => {
-    const newErrors: Record<string, string> = {};
+    const newErrors: Record<string, string> = {}
 
     // Name validation
     if (!formData.name.trim()) {
-      newErrors.name = 'Strategy name is required';
+      newErrors.name = 'Strategy name is required'
     } else if (formData.name.length < 3 || formData.name.length > 50) {
-      newErrors.name = 'Name must be between 3 and 50 characters';
+      newErrors.name = 'Name must be between 3 and 50 characters'
     } else if (!/^[a-zA-Z0-9\s\-_]+$/.test(formData.name)) {
-      newErrors.name = 'Name can only contain letters, numbers, spaces, hyphens, and underscores';
+      newErrors.name = 'Name can only contain letters, numbers, spaces, hyphens, and underscores'
     }
 
     // Platform validation
     if (!formData.platform) {
-      newErrors.platform = 'Please select a platform';
+      newErrors.platform = 'Please select a platform'
     }
 
     // Time validation for intraday
     if (formData.strategy_type === 'intraday') {
-      const start = formData.start_time;
-      const end = formData.end_time;
-      const squareoff = formData.squareoff_time;
+      const start = formData.start_time
+      const end = formData.end_time
+      const squareoff = formData.squareoff_time
 
       if (!start || !end || !squareoff) {
-        newErrors.time = 'All time fields are required for intraday strategies';
+        newErrors.time = 'All time fields are required for intraday strategies'
       } else if (start >= end) {
-        newErrors.time = 'Start time must be before end time';
+        newErrors.time = 'Start time must be before end time'
       } else if (end >= squareoff) {
-        newErrors.time = 'End time must be before square off time';
+        newErrors.time = 'End time must be before square off time'
       }
     }
 
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
+    setErrors(newErrors)
+    return Object.keys(newErrors).length === 0
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+    e.preventDefault()
 
     if (!validateForm()) {
-      toast.error('Please fix the form errors');
-      return;
+      toast.error('Please fix the form errors')
+      return
     }
 
     try {
-      setLoading(true);
+      setLoading(true)
       const response = await strategyApi.createStrategy({
         name: formData.name,
         platform: formData.platform,
@@ -87,26 +87,27 @@ export default function NewStrategy() {
           end_time: formData.end_time,
           squareoff_time: formData.squareoff_time,
         }),
-      });
+      })
 
       if (response.status === 'success') {
-        toast.success('Strategy created successfully');
-        navigate(`/strategy/${response.data?.strategy_id}`);
+        toast.success('Strategy created successfully')
+        navigate(`/strategy/${response.data?.strategy_id}`)
       } else {
-        toast.error(response.message || 'Failed to create strategy');
+        toast.error(response.message || 'Failed to create strategy')
       }
     } catch (error: unknown) {
-      console.error('Failed to create strategy:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Failed to create strategy';
-      toast.error(errorMessage);
+      console.error('Failed to create strategy:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Failed to create strategy'
+      toast.error(errorMessage)
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
-  const finalName = formData.platform && formData.name
-    ? `${formData.platform}_${formData.name.toLowerCase().replace(/\s+/g, '_')}`
-    : '';
+  const finalName =
+    formData.platform && formData.name
+      ? `${formData.platform}_${formData.name.toLowerCase().replace(/\s+/g, '_')}`
+      : ''
 
   return (
     <div className="container mx-auto py-6 max-w-2xl space-y-6">
@@ -133,9 +134,7 @@ export default function NewStrategy() {
             <Zap className="h-5 w-5" />
             Strategy Details
           </CardTitle>
-          <CardDescription>
-            Configure your webhook strategy settings
-          </CardDescription>
+          <CardDescription>Configure your webhook strategy settings</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
@@ -149,9 +148,7 @@ export default function NewStrategy() {
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 className={errors.name ? 'border-red-500' : ''}
               />
-              {errors.name && (
-                <p className="text-sm text-red-500">{errors.name}</p>
-              )}
+              {errors.name && <p className="text-sm text-red-500">{errors.name}</p>}
               <p className="text-xs text-muted-foreground">
                 3-50 characters. Letters, numbers, spaces, hyphens, and underscores only.
               </p>
@@ -175,9 +172,7 @@ export default function NewStrategy() {
                   ))}
                 </SelectContent>
               </Select>
-              {errors.platform && (
-                <p className="text-sm text-red-500">{errors.platform}</p>
-              )}
+              {errors.platform && <p className="text-sm text-red-500">{errors.platform}</p>}
             </div>
 
             {/* Final Name Preview */}
@@ -185,7 +180,8 @@ export default function NewStrategy() {
               <Alert>
                 <Info className="h-4 w-4" />
                 <AlertDescription>
-                  Final strategy name: <code className="bg-muted px-1 rounded font-mono">{finalName}</code>
+                  Final strategy name:{' '}
+                  <code className="bg-muted px-1 rounded font-mono">{finalName}</code>
                 </AlertDescription>
               </Alert>
             )}
@@ -231,7 +227,7 @@ export default function NewStrategy() {
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                {TRADING_MODES.find(m => m.value === formData.trading_mode)?.description}
+                {TRADING_MODES.find((m) => m.value === formData.trading_mode)?.description}
               </p>
             </div>
 
@@ -270,11 +266,10 @@ export default function NewStrategy() {
                   </div>
                 </div>
 
-                {errors.time && (
-                  <p className="text-sm text-red-500">{errors.time}</p>
-                )}
+                {errors.time && <p className="text-sm text-red-500">{errors.time}</p>}
                 <p className="text-xs text-muted-foreground">
-                  Orders will only be placed during trading hours. Positions will be squared off at the specified time.
+                  Orders will only be placed during trading hours. Positions will be squared off at
+                  the specified time.
                 </p>
               </div>
             )}
@@ -297,5 +292,5 @@ export default function NewStrategy() {
         </CardContent>
       </Card>
     </div>
-  );
+  )
 }

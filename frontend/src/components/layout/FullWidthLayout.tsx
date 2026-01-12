@@ -1,20 +1,20 @@
-import { Outlet, Navigate } from 'react-router-dom';
-import { useAuthStore } from '@/stores/authStore';
-import { SocketProvider } from '@/components/socket/SocketProvider';
+import { Navigate, Outlet } from 'react-router-dom'
+import { SocketProvider } from '@/components/socket/SocketProvider'
+import { useAuthStore } from '@/stores/authStore'
 
 /**
  * Full-width layout for apps like Playground that need maximum screen space.
  * No container constraints, minimal chrome.
  */
 export function FullWidthLayout() {
-  const { isAuthenticated, user } = useAuthStore();
+  const { isAuthenticated, user } = useAuthStore()
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/login" replace />
   }
 
   if (!user?.broker) {
-    return <Navigate to="/broker" replace />;
+    return <Navigate to="/broker" replace />
   }
 
   return (
@@ -23,5 +23,5 @@ export function FullWidthLayout() {
         <Outlet />
       </div>
     </SocketProvider>
-  );
+  )
 }

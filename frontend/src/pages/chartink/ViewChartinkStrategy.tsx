@@ -1,23 +1,23 @@
-import { useState, useEffect } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
+  AlertTriangle,
   ArrowLeft,
-  Copy,
   Check,
-  Trash2,
+  Clock,
+  Copy,
+  Info,
   Power,
   Settings,
-  Clock,
-  AlertTriangle,
+  Trash2,
   Webhook,
-  Info,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Separator } from '@/components/ui/separator';
+} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { toast } from 'sonner'
+import { chartinkApi } from '@/api/chartink'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -25,7 +25,9 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
+} from '@/components/ui/dialog'
+import { Separator } from '@/components/ui/separator'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
   TableBody,
@@ -33,107 +35,106 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table';
-import { toast } from 'sonner';
-import { chartinkApi } from '@/api/chartink';
-import type { ChartinkStrategy, ChartinkSymbolMapping } from '@/types/chartink';
+} from '@/components/ui/table'
+import type { ChartinkStrategy, ChartinkSymbolMapping } from '@/types/chartink'
 
 export default function ViewChartinkStrategy() {
-  const { strategyId } = useParams<{ strategyId: string }>();
-  const navigate = useNavigate();
-  const [strategy, setStrategy] = useState<ChartinkStrategy | null>(null);
-  const [mappings, setMappings] = useState<ChartinkSymbolMapping[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [toggling, setToggling] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const { strategyId } = useParams<{ strategyId: string }>()
+  const navigate = useNavigate()
+  const [strategy, setStrategy] = useState<ChartinkStrategy | null>(null)
+  const [mappings, setMappings] = useState<ChartinkSymbolMapping[]>([])
+  const [loading, setLoading] = useState(true)
+  const [toggling, setToggling] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [copiedField, setCopiedField] = useState<string | null>(null)
 
   const fetchStrategy = async () => {
-    if (!strategyId) return;
+    if (!strategyId) return
     try {
-      setLoading(true);
-      const data = await chartinkApi.getStrategy(Number(strategyId));
-      setStrategy(data.strategy);
-      setMappings(data.mappings || []);
+      setLoading(true)
+      const data = await chartinkApi.getStrategy(Number(strategyId))
+      setStrategy(data.strategy)
+      setMappings(data.mappings || [])
     } catch (error) {
-      console.error('Failed to fetch strategy:', error);
-      toast.error('Failed to load strategy');
-      navigate('/chartink');
+      console.error('Failed to fetch strategy:', error)
+      toast.error('Failed to load strategy')
+      navigate('/chartink')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   useEffect(() => {
-    fetchStrategy();
-  }, [strategyId]);
+    fetchStrategy()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const copyToClipboard = async (text: string, field: string) => {
     try {
-      await navigator.clipboard.writeText(text);
-      setCopiedField(field);
-      toast.success('Copied to clipboard');
-      setTimeout(() => setCopiedField(null), 2000);
+      await navigator.clipboard.writeText(text)
+      setCopiedField(field)
+      toast.success('Copied to clipboard')
+      setTimeout(() => setCopiedField(null), 2000)
     } catch {
-      toast.error('Failed to copy');
+      toast.error('Failed to copy')
     }
-  };
+  }
 
   const handleToggle = async () => {
-    if (!strategy) return;
+    if (!strategy) return
     try {
-      setToggling(true);
-      const response = await chartinkApi.toggleStrategy(strategy.id);
+      setToggling(true)
+      const response = await chartinkApi.toggleStrategy(strategy.id)
       if (response.status === 'success') {
-        setStrategy({ ...strategy, is_active: response.data?.is_active ?? !strategy.is_active });
-        toast.success(response.data?.is_active ? 'Strategy activated' : 'Strategy deactivated');
+        setStrategy({ ...strategy, is_active: response.data?.is_active ?? !strategy.is_active })
+        toast.success(response.data?.is_active ? 'Strategy activated' : 'Strategy deactivated')
       } else {
-        toast.error(response.message || 'Failed to toggle strategy');
+        toast.error(response.message || 'Failed to toggle strategy')
       }
     } catch (error) {
-      console.error('Failed to toggle strategy:', error);
-      toast.error('Failed to toggle strategy');
+      console.error('Failed to toggle strategy:', error)
+      toast.error('Failed to toggle strategy')
     } finally {
-      setToggling(false);
+      setToggling(false)
     }
-  };
+  }
 
   const handleDelete = async () => {
-    if (!strategy) return;
+    if (!strategy) return
     try {
-      setDeleting(true);
-      const response = await chartinkApi.deleteStrategy(strategy.id);
+      setDeleting(true)
+      const response = await chartinkApi.deleteStrategy(strategy.id)
       if (response.status === 'success') {
-        toast.success('Strategy deleted successfully');
-        navigate('/chartink');
+        toast.success('Strategy deleted successfully')
+        navigate('/chartink')
       } else {
-        toast.error(response.message || 'Failed to delete strategy');
+        toast.error(response.message || 'Failed to delete strategy')
       }
     } catch (error) {
-      console.error('Failed to delete strategy:', error);
-      toast.error('Failed to delete strategy');
+      console.error('Failed to delete strategy:', error)
+      toast.error('Failed to delete strategy')
     } finally {
-      setDeleting(false);
-      setDeleteDialogOpen(false);
+      setDeleting(false)
+      setDeleteDialogOpen(false)
     }
-  };
+  }
 
   const handleDeleteMapping = async (mappingId: number) => {
-    if (!strategy) return;
+    if (!strategy) return
     try {
-      const response = await chartinkApi.deleteSymbolMapping(strategy.id, mappingId);
+      const response = await chartinkApi.deleteSymbolMapping(strategy.id, mappingId)
       if (response.status === 'success') {
-        setMappings(mappings.filter((m) => m.id !== mappingId));
-        toast.success('Symbol mapping deleted');
+        setMappings(mappings.filter((m) => m.id !== mappingId))
+        toast.success('Symbol mapping deleted')
       } else {
-        toast.error(response.message || 'Failed to delete mapping');
+        toast.error(response.message || 'Failed to delete mapping')
       }
     } catch (error) {
-      console.error('Failed to delete mapping:', error);
-      toast.error('Failed to delete mapping');
+      console.error('Failed to delete mapping:', error)
+      toast.error('Failed to delete mapping')
     }
-  };
+  }
 
   if (loading) {
     return (
@@ -142,14 +143,14 @@ export default function ViewChartinkStrategy() {
         <Skeleton className="h-48" />
         <Skeleton className="h-64" />
       </div>
-    );
+    )
   }
 
   if (!strategy) {
-    return null;
+    return null
   }
 
-  const webhookUrl = chartinkApi.getWebhookUrl(strategy.webhook_id);
+  const webhookUrl = chartinkApi.getWebhookUrl(strategy.webhook_id)
 
   return (
     <div className="container mx-auto py-6 space-y-6">
@@ -303,9 +304,14 @@ export default function ViewChartinkStrategy() {
         <AlertTitle>Important Notes</AlertTitle>
         <AlertDescription>
           <ul className="list-disc list-inside mt-2 space-y-1 text-sm">
-            <li>Orders are processed only when the strategy is <strong>active</strong></li>
+            <li>
+              Orders are processed only when the strategy is <strong>active</strong>
+            </li>
             {strategy.is_intraday && (
-              <li>Orders are processed only during trading hours ({strategy.start_time} - {strategy.end_time})</li>
+              <li>
+                Orders are processed only during trading hours ({strategy.start_time} -{' '}
+                {strategy.end_time})
+              </li>
             )}
             <li>Chartink symbol must be configured in the mappings below</li>
             <li>Only NSE and BSE exchanges are supported</li>
@@ -335,9 +341,7 @@ export default function ViewChartinkStrategy() {
             <div className="text-center py-8 text-muted-foreground">
               <p>No symbols configured yet.</p>
               <Button variant="link" asChild>
-                <Link to={`/chartink/${strategy.id}/configure`}>
-                  Add your first symbol
-                </Link>
+                <Link to={`/chartink/${strategy.id}/configure`}>Add your first symbol</Link>
               </Button>
             </div>
           ) : (
@@ -384,8 +388,8 @@ export default function ViewChartinkStrategy() {
           <DialogHeader>
             <DialogTitle>Delete Strategy</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete "{strategy.name}"? This action cannot be undone.
-              All symbol mappings will also be deleted.
+              Are you sure you want to delete "{strategy.name}"? This action cannot be undone. All
+              symbol mappings will also be deleted.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -399,5 +403,5 @@ export default function ViewChartinkStrategy() {
         </DialogContent>
       </Dialog>
     </div>
-  );
+  )
 }

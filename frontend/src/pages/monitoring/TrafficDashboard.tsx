@@ -1,14 +1,18 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Activity, ArrowLeft, Download, Filter, RefreshCw } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
+import { webClient } from '@/api/client'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
-  Activity,
-  ArrowLeft,
-  RefreshCw,
-  Download,
-  Filter,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   Table,
   TableBody,
@@ -16,132 +20,123 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from '@/components/ui/tabs';
-import { Badge } from '@/components/ui/badge';
-import { toast } from 'sonner';
-import { webClient } from '@/api/client';
+} from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 interface TrafficLog {
-  timestamp: string;
-  client_ip: string;
-  method: string;
-  path: string;
-  status_code: number;
-  duration_ms: number;
-  host: string;
-  error: string | null;
+  timestamp: string
+  client_ip: string
+  method: string
+  path: string
+  status_code: number
+  duration_ms: number
+  host: string
+  error: string | null
 }
 
 interface TrafficStats {
   overall: {
-    total_requests: number;
-    error_requests: number;
-    avg_duration: number;
-  };
+    total_requests: number
+    error_requests: number
+    avg_duration: number
+  }
   api: {
-    total_requests: number;
-    error_requests: number;
-    avg_duration: number;
-  };
-  endpoints: Record<string, {
-    total: number;
-    errors: number;
-    avg_duration: number;
-  }>;
+    total_requests: number
+    error_requests: number
+    avg_duration: number
+  }
+  endpoints: Record<
+    string,
+    {
+      total: number
+      errors: number
+      avg_duration: number
+    }
+  >
 }
 
 export default function TrafficDashboard() {
-  const [isLoading, setIsLoading] = useState(true);
-  const [logs, setLogs] = useState<TrafficLog[]>([]);
-  const [stats, setStats] = useState<TrafficStats | null>(null);
-  const [activeTab, setActiveTab] = useState<'all' | 'api'>('all');
-  const [filter, setFilter] = useState<'all' | 'error' | 'success'>('all');
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoading, setIsLoading] = useState(true)
+  const [logs, setLogs] = useState<TrafficLog[]>([])
+  const [stats, setStats] = useState<TrafficStats | null>(null)
+  const [activeTab, setActiveTab] = useState<'all' | 'api'>('all')
+  const [filter, setFilter] = useState<'all' | 'error' | 'success'>('all')
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
   useEffect(() => {
-    fetchData();
+    fetchData()
     // Auto-refresh every 30 seconds
-    const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
-  }, []);
+    const interval = setInterval(fetchData, 30000)
+    return () => clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const fetchData = async () => {
     try {
       const [logsResponse, statsResponse] = await Promise.all([
         webClient.get<TrafficLog[]>('/traffic/api/logs'),
         webClient.get<TrafficStats>('/traffic/api/stats'),
-      ]);
+      ])
 
-      setLogs(Array.isArray(logsResponse.data) ? logsResponse.data : []);
-      setStats(statsResponse.data);
+      setLogs(Array.isArray(logsResponse.data) ? logsResponse.data : [])
+      setStats(statsResponse.data)
     } catch (error) {
-      console.error('Error fetching traffic data:', error);
-      toast.error('Failed to load traffic data');
+      console.error('Error fetching traffic data:', error)
+      toast.error('Failed to load traffic data')
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   const handleRefresh = async () => {
-    setIsRefreshing(true);
-    await fetchData();
-    setIsRefreshing(false);
-    toast.success('Data refreshed');
-  };
+    setIsRefreshing(true)
+    await fetchData()
+    setIsRefreshing(false)
+    toast.success('Data refreshed')
+  }
 
   const handleExport = () => {
     // Open export URL in new tab
-    window.open('/traffic/export', '_blank');
-  };
+    window.open('/traffic/export', '_blank')
+  }
 
   const filteredLogs = logs.filter((log) => {
     // Filter by tab
     if (activeTab === 'api' && !log.path.startsWith('/api/v1/')) {
-      return false;
+      return false
     }
     // Filter by status
     if (filter === 'error') {
-      return log.status_code >= 400;
+      return log.status_code >= 400
     } else if (filter === 'success') {
-      return log.status_code < 400;
+      return log.status_code < 400
     }
-    return true;
-  });
+    return true
+  })
 
-  const currentStats = activeTab === 'api' ? stats?.api : stats?.overall;
+  const currentStats = activeTab === 'api' ? stats?.api : stats?.overall
 
-  const getMethodBadgeVariant = (method: string): 'default' | 'secondary' | 'destructive' | 'outline' => {
+  const getMethodBadgeVariant = (
+    method: string
+  ): 'default' | 'secondary' | 'destructive' | 'outline' => {
     switch (method) {
       case 'GET':
-        return 'default';
+        return 'default'
       case 'POST':
-        return 'secondary';
+        return 'secondary'
       case 'DELETE':
-        return 'destructive';
+        return 'destructive'
       default:
-        return 'outline';
+        return 'outline'
     }
-  };
+  }
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
-    );
+    )
   }
 
   return (
@@ -158,9 +153,7 @@ export default function TrafficDashboard() {
               Traffic Dashboard
             </h1>
           </div>
-          <p className="text-muted-foreground">
-            Monitor HTTP traffic and API requests
-          </p>
+          <p className="text-muted-foreground">Monitor HTTP traffic and API requests</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing}>
@@ -184,7 +177,9 @@ export default function TrafficDashboard() {
         </Card>
         <Card>
           <CardContent className="p-4 text-center">
-            <p className="text-2xl font-bold text-destructive">{currentStats?.error_requests || 0}</p>
+            <p className="text-2xl font-bold text-destructive">
+              {currentStats?.error_requests || 0}
+            </p>
             <p className="text-sm text-muted-foreground">Error Requests</p>
           </CardContent>
         </Card>
@@ -252,9 +247,7 @@ export default function TrafficDashboard() {
                         <TableRow key={index}>
                           <TableCell className="text-sm">{log.timestamp}</TableCell>
                           <TableCell>
-                            <Badge variant={getMethodBadgeVariant(log.method)}>
-                              {log.method}
-                            </Badge>
+                            <Badge variant={getMethodBadgeVariant(log.method)}>{log.method}</Badge>
                           </TableCell>
                           <TableCell className="max-w-xs truncate font-mono text-sm">
                             {log.path}
@@ -266,7 +259,9 @@ export default function TrafficDashboard() {
                           </TableCell>
                           <TableCell>{log.duration_ms.toFixed(2)}ms</TableCell>
                           <TableCell className="font-mono text-sm">{log.client_ip}</TableCell>
-                          <TableCell className="max-w-xs truncate text-sm">{log.host || '-'}</TableCell>
+                          <TableCell className="max-w-xs truncate text-sm">
+                            {log.host || '-'}
+                          </TableCell>
                         </TableRow>
                       ))
                     )}
@@ -314,13 +309,21 @@ export default function TrafficDashboard() {
                         </TableCell>
                         <TableCell>{data.avg_duration.toFixed(2)}ms</TableCell>
                         <TableCell>
-                          <Badge variant={
-                            data.total === 0 ? 'outline' :
-                            ((data.total - data.errors) / data.total) >= 0.95 ? 'secondary' :
-                            ((data.total - data.errors) / data.total) >= 0.8 ? 'outline' :
-                            'destructive'
-                          }>
-                            {data.total === 0 ? 'N/A' : (((data.total - data.errors) / data.total) * 100).toFixed(1)}%
+                          <Badge
+                            variant={
+                              data.total === 0
+                                ? 'outline'
+                                : (data.total - data.errors) / data.total >= 0.95
+                                  ? 'secondary'
+                                  : (data.total - data.errors) / data.total >= 0.8
+                                    ? 'outline'
+                                    : 'destructive'
+                            }
+                          >
+                            {data.total === 0
+                              ? 'N/A'
+                              : (((data.total - data.errors) / data.total) * 100).toFixed(1)}
+                            %
                           </Badge>
                         </TableCell>
                       </TableRow>
@@ -332,5 +335,5 @@ export default function TrafficDashboard() {
         </Card>
       )}
     </div>
-  );
+  )
 }

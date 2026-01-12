@@ -1,18 +1,24 @@
-import { Link } from 'react-router-dom';
-import { LogIn, Download, Menu, Moon, Sun, BookOpen, MessageCircle, ClipboardList, HelpCircle } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { useThemeStore } from '@/stores/themeStore';
-import { useState } from 'react';
 import {
-  Sheet,
-  SheetContent,
-  SheetTrigger,
-} from '@/components/ui/sheet';
-import { Footer } from '@/components/layout/Footer';
+  BookOpen,
+  ClipboardList,
+  Download,
+  HelpCircle,
+  LogIn,
+  Menu,
+  MessageCircle,
+  Moon,
+  Sun,
+} from 'lucide-react'
+import { useState } from 'react'
+import { Link } from 'react-router-dom'
+import { Footer } from '@/components/layout/Footer'
+import { Button } from '@/components/ui/button'
+import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet'
+import { useThemeStore } from '@/stores/themeStore'
 
 export default function Home() {
-  const { mode, toggleMode } = useThemeStore();
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const { mode, toggleMode } = useThemeStore()
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   const navLinks = [
     { href: '/', label: 'Home', internal: true },
@@ -20,7 +26,7 @@ export default function Home() {
     { href: 'https://openalgo.in/discord', label: 'Community', internal: false },
     { href: 'https://openalgo.in/roadmap', label: 'Roadmap', internal: false },
     { href: 'https://docs.openalgo.in', label: 'Docs', internal: false },
-  ];
+  ]
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -47,8 +53,19 @@ export default function Home() {
                     className="flex items-center gap-2 px-4 py-2 rounded-md hover:bg-accent"
                     onClick={() => setMobileMenuOpen(false)}
                   >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-5 w-5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"
+                      />
                     </svg>
                     Home
                   </Link>
@@ -115,12 +132,7 @@ export default function Home() {
                   </Button>
                 </Link>
               ) : (
-                <a
-                  key={link.href}
-                  href={link.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
+                <a key={link.href} href={link.href} target="_blank" rel="noopener noreferrer">
                   <Button variant="ghost" size="sm">
                     {link.label}
                   </Button>
@@ -135,11 +147,7 @@ export default function Home() {
               <Button size="sm">Download</Button>
             </Link>
             <Button variant="ghost" size="icon" onClick={toggleMode}>
-              {mode === 'dark' ? (
-                <Sun className="h-5 w-5" />
-              ) : (
-                <Moon className="h-5 w-5" />
-              )}
+              {mode === 'dark' ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
             </Button>
           </div>
         </nav>
@@ -150,8 +158,7 @@ export default function Home() {
         <div className="container">
           <div className="text-center max-w-3xl mx-auto">
             <h1 className="text-5xl font-bold mb-8">
-              Your Personal{' '}
-              <span className="text-primary">Algo Trading</span>{' '}
+              Your Personal <span className="text-primary">Algo Trading</span>{' '}
               <span className="text-primary">Platform</span>
             </h1>
             <p className="text-xl mb-8 text-muted-foreground">
@@ -180,5 +187,5 @@ export default function Home() {
       {/* Footer */}
       <Footer />
     </div>
-  );
+  )
 }

@@ -3,7 +3,19 @@ import { persist } from 'zustand/middleware'
 
 export type ThemeMode = 'light' | 'dark'
 export type AppMode = 'live' | 'analyzer'
-export type ThemeColor = 'zinc' | 'slate' | 'stone' | 'gray' | 'neutral' | 'red' | 'rose' | 'orange' | 'green' | 'blue' | 'yellow' | 'violet'
+export type ThemeColor =
+  | 'zinc'
+  | 'slate'
+  | 'stone'
+  | 'gray'
+  | 'neutral'
+  | 'red'
+  | 'rose'
+  | 'orange'
+  | 'green'
+  | 'blue'
+  | 'yellow'
+  | 'violet'
 
 // Event emitter for mode changes
 type ModeChangeCallback = (newMode: AppMode) => void
@@ -17,7 +29,7 @@ export const onModeChange = (callback: ModeChangeCallback): (() => void) => {
 }
 
 const notifyModeChange = (newMode: AppMode) => {
-  modeChangeListeners.forEach(cb => cb(newMode))
+  modeChangeListeners.forEach((cb) => cb(newMode))
 }
 
 interface ThemeStore {

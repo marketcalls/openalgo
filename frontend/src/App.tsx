@@ -1,56 +1,65 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { Providers } from '@/app/providers';
-import { Layout } from '@/components/layout/Layout';
-import { FullWidthLayout } from '@/components/layout/FullWidthLayout';
-import { AuthSync } from '@/components/auth/AuthSync';
-
-// Pages
-import Home from '@/pages/Home';
-import Setup from '@/pages/Setup';
-import Login from '@/pages/Login';
-import BrokerSelect from '@/pages/BrokerSelect';
-import Dashboard from '@/pages/Dashboard';
-import Positions from '@/pages/Positions';
-import OrderBook from '@/pages/OrderBook';
-import TradeBook from '@/pages/TradeBook';
-import Holdings from '@/pages/Holdings';
-import Token from '@/pages/Token';
-import Search from '@/pages/Search';
-import ApiKey from '@/pages/ApiKey';
-import Playground from '@/pages/Playground';
-// Phase 4 Pages
-import TradingView from '@/pages/TradingView';
-import GoCharting from '@/pages/GoCharting';
-import PnLTracker from '@/pages/PnLTracker';
-import Sandbox from '@/pages/Sandbox';
-import SandboxPnL from '@/pages/SandboxPnL';
-import Analyzer from '@/pages/Analyzer';
-import WebSocketTest from '@/pages/WebSocketTest';
-import Platforms from '@/pages/Platforms';
-// Phase 6 Pages - Strategy
-import { StrategyIndex, NewStrategy, ViewStrategy, ConfigureSymbols } from '@/pages/strategy';
-// Phase 6 Pages - Python Strategy
-import { PythonStrategyIndex, NewPythonStrategy, EditPythonStrategy, PythonStrategyLogs } from '@/pages/python-strategy';
-// Phase 6 Pages - Chartink
-import { ChartinkIndex, NewChartinkStrategy, ViewChartinkStrategy, ConfigureChartinkSymbols } from '@/pages/chartink';
+import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { Providers } from '@/app/providers'
+import { AuthSync } from '@/components/auth/AuthSync'
+import { FullWidthLayout } from '@/components/layout/FullWidthLayout'
+import { Layout } from '@/components/layout/Layout'
+import ActionCenter from '@/pages/ActionCenter'
+import Analyzer from '@/pages/Analyzer'
+import ApiKey from '@/pages/ApiKey'
 // Phase 7 Pages - Admin
-import { AdminIndex, FreezeQty, Holidays, MarketTimings } from '@/pages/admin';
-// Phase 7 Pages - Telegram
-import { TelegramIndex, TelegramConfig, TelegramUsers, TelegramAnalytics } from '@/pages/telegram';
-// Phase 7 Pages - Monitoring
-import { SecurityDashboard, TrafficDashboard, LatencyDashboard } from '@/pages/monitoring';
-// Phase 7 Pages - Settings
-import LogsIndex from '@/pages/LogsIndex';
-import LiveLogs from '@/pages/Logs';
-import Profile from '@/pages/Profile';
-import ActionCenter from '@/pages/ActionCenter';
-// Public Pages
-import ResetPassword from '@/pages/ResetPassword';
-import Download from '@/pages/Download';
-import NotFound from '@/pages/NotFound';
-import ServerError from '@/pages/ServerError';
+import { AdminIndex, FreezeQty, Holidays, MarketTimings } from '@/pages/admin'
+import BrokerSelect from '@/pages/BrokerSelect'
 // Broker TOTP
-import BrokerTOTP from '@/pages/BrokerTOTP';
+import BrokerTOTP from '@/pages/BrokerTOTP'
+// Phase 6 Pages - Chartink
+import {
+  ChartinkIndex,
+  ConfigureChartinkSymbols,
+  NewChartinkStrategy,
+  ViewChartinkStrategy,
+} from '@/pages/chartink'
+import Dashboard from '@/pages/Dashboard'
+import Download from '@/pages/Download'
+import GoCharting from '@/pages/GoCharting'
+import Holdings from '@/pages/Holdings'
+// Pages
+import Home from '@/pages/Home'
+import Login from '@/pages/Login'
+import LiveLogs from '@/pages/Logs'
+// Phase 7 Pages - Settings
+import LogsIndex from '@/pages/LogsIndex'
+// Phase 7 Pages - Monitoring
+import { LatencyDashboard, SecurityDashboard, TrafficDashboard } from '@/pages/monitoring'
+import NotFound from '@/pages/NotFound'
+import OrderBook from '@/pages/OrderBook'
+import Platforms from '@/pages/Platforms'
+import Playground from '@/pages/Playground'
+import PnLTracker from '@/pages/PnLTracker'
+import Positions from '@/pages/Positions'
+import Profile from '@/pages/Profile'
+// Phase 6 Pages - Python Strategy
+import {
+  EditPythonStrategy,
+  NewPythonStrategy,
+  PythonStrategyIndex,
+  PythonStrategyLogs,
+} from '@/pages/python-strategy'
+// Public Pages
+import ResetPassword from '@/pages/ResetPassword'
+import Sandbox from '@/pages/Sandbox'
+import SandboxPnL from '@/pages/SandboxPnL'
+import Search from '@/pages/Search'
+import ServerError from '@/pages/ServerError'
+import Setup from '@/pages/Setup'
+// Phase 6 Pages - Strategy
+import { ConfigureSymbols, NewStrategy, StrategyIndex, ViewStrategy } from '@/pages/strategy'
+import Token from '@/pages/Token'
+import TradeBook from '@/pages/TradeBook'
+// Phase 4 Pages
+import TradingView from '@/pages/TradingView'
+// Phase 7 Pages - Telegram
+import { TelegramAnalytics, TelegramConfig, TelegramIndex, TelegramUsers } from '@/pages/telegram'
+import WebSocketTest from '@/pages/WebSocketTest'
 
 function App() {
   return (
@@ -108,7 +117,10 @@ function App() {
               <Route path="/chartink" element={<ChartinkIndex />} />
               <Route path="/chartink/new" element={<NewChartinkStrategy />} />
               <Route path="/chartink/:strategyId" element={<ViewChartinkStrategy />} />
-              <Route path="/chartink/:strategyId/configure" element={<ConfigureChartinkSymbols />} />
+              <Route
+                path="/chartink/:strategyId/configure"
+                element={<ConfigureChartinkSymbols />}
+              />
               {/* Phase 7: Admin */}
               <Route path="/admin" element={<AdminIndex />} />
               <Route path="/admin/freeze" element={<FreezeQty />} />
@@ -142,7 +154,7 @@ function App() {
         </AuthSync>
       </BrowserRouter>
     </Providers>
-  );
+  )
 }
 
-export default App;
+export default App

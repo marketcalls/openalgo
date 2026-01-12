@@ -1,20 +1,19 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
 import {
-  Key,
+  AlertCircle,
+  ArrowRight,
+  Check,
   Copy,
-  RefreshCw,
   Eye,
   EyeOff,
-  Zap,
-  Check,
-  AlertCircle,
   Info,
-  ArrowRight,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Alert, AlertDescription } from '@/components/ui/alert';
+  Key,
+  RefreshCw,
+  Zap,
+} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,83 +23,85 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import { toast } from 'sonner';
-import { useAuthStore } from '@/stores/authStore';
+} from '@/components/ui/alert-dialog'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { useAuthStore } from '@/stores/authStore'
 
 async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', {
     credentials: 'include',
-  });
-  const data = await response.json();
-  return data.csrf_token;
+  })
+  const data = await response.json()
+  return data.csrf_token
 }
 
 export default function ApiKey() {
-  const { user } = useAuthStore();
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  const [hasApiKey, setHasApiKey] = useState(false);
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRegenerating, setIsRegenerating] = useState(false);
-  const [showRegenerateDialog, setShowRegenerateDialog] = useState(false);
+  const { user } = useAuthStore()
+  const [apiKey, setApiKey] = useState<string | null>(null)
+  const [hasApiKey, setHasApiKey] = useState(false)
+  const [showApiKey, setShowApiKey] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isRegenerating, setIsRegenerating] = useState(false)
+  const [showRegenerateDialog, setShowRegenerateDialog] = useState(false)
 
   // Order mode state
-  const [orderMode, setOrderMode] = useState<'auto' | 'semi_auto'>('auto');
-  const [isTogglingMode, setIsTogglingMode] = useState(false);
+  const [orderMode, setOrderMode] = useState<'auto' | 'semi_auto'>('auto')
+  const [isTogglingMode, setIsTogglingMode] = useState(false)
 
   useEffect(() => {
-    fetchApiKeyData();
-  }, []);
+    fetchApiKeyData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const fetchApiKeyData = async () => {
-    setIsLoading(true);
+    setIsLoading(true)
     try {
       const response = await fetch('/apikey', {
         credentials: 'include',
         headers: {
-          'Accept': 'application/json',
+          Accept: 'application/json',
         },
-      });
+      })
 
       if (response.ok) {
-        const contentType = response.headers.get('content-type');
-        if (contentType && contentType.includes('application/json')) {
-          const data = await response.json();
-          setApiKey(data.api_key || null);
-          setHasApiKey(!!data.api_key);
-          setOrderMode(data.order_mode || 'auto');
+        const contentType = response.headers.get('content-type')
+        if (contentType?.includes('application/json')) {
+          const data = await response.json()
+          setApiKey(data.api_key || null)
+          setHasApiKey(!!data.api_key)
+          setOrderMode(data.order_mode || 'auto')
         } else {
           // Backend returned HTML - this shouldn't happen now
-          console.error('Backend returned HTML instead of JSON');
-          toast.error('Failed to load API key - please refresh');
+          console.error('Backend returned HTML instead of JSON')
+          toast.error('Failed to load API key - please refresh')
         }
       }
     } catch (error) {
-      console.error('Error fetching API key:', error);
-      toast.error('Failed to load API key');
+      console.error('Error fetching API key:', error)
+      toast.error('Failed to load API key')
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   const handleCopyApiKey = async () => {
     if (apiKey) {
       try {
-        await navigator.clipboard.writeText(apiKey);
-        toast.success('API key copied to clipboard');
+        await navigator.clipboard.writeText(apiKey)
+        toast.success('API key copied to clipboard')
       } catch {
-        toast.error('Failed to copy API key');
+        toast.error('Failed to copy API key')
       }
     }
-  };
+  }
 
   const handleRegenerateApiKey = async () => {
-    setIsRegenerating(true);
-    setShowRegenerateDialog(false);
+    setIsRegenerating(true)
+    setShowRegenerateDialog(false)
 
     try {
-      const csrfToken = await fetchCSRFToken();
+      const csrfToken = await fetchCSRFToken()
 
       const response = await fetch('/apikey', {
         method: 'POST',
@@ -112,32 +113,32 @@ export default function ApiKey() {
         body: JSON.stringify({
           user_id: user?.username,
         }),
-      });
+      })
 
-      const data = await response.json();
+      const data = await response.json()
 
       if (data.api_key) {
-        setApiKey(data.api_key);
-        setHasApiKey(true);
-        setShowApiKey(true);
-        toast.success('API key generated successfully');
+        setApiKey(data.api_key)
+        setHasApiKey(true)
+        setShowApiKey(true)
+        toast.success('API key generated successfully')
       } else {
-        toast.error(data.error || 'Failed to generate API key');
+        toast.error(data.error || 'Failed to generate API key')
       }
     } catch (error) {
-      console.error('Error regenerating API key:', error);
-      toast.error('Failed to generate API key');
+      console.error('Error regenerating API key:', error)
+      toast.error('Failed to generate API key')
     } finally {
-      setIsRegenerating(false);
+      setIsRegenerating(false)
     }
-  };
+  }
 
   const handleToggleOrderMode = async () => {
-    const newMode = orderMode === 'auto' ? 'semi_auto' : 'auto';
-    setIsTogglingMode(true);
+    const newMode = orderMode === 'auto' ? 'semi_auto' : 'auto'
+    setIsTogglingMode(true)
 
     try {
-      const csrfToken = await fetchCSRFToken();
+      const csrfToken = await fetchCSRFToken()
 
       const response = await fetch('/apikey/mode', {
         method: 'POST',
@@ -150,30 +151,30 @@ export default function ApiKey() {
           user_id: user?.username,
           mode: newMode,
         }),
-      });
+      })
 
-      const data = await response.json();
+      const data = await response.json()
 
       if (data.mode) {
-        setOrderMode(data.mode);
-        toast.success(`Order mode updated to ${data.mode === 'semi_auto' ? 'Semi-Auto' : 'Auto'}`);
+        setOrderMode(data.mode)
+        toast.success(`Order mode updated to ${data.mode === 'semi_auto' ? 'Semi-Auto' : 'Auto'}`)
       } else {
-        toast.error(data.error || 'Failed to update order mode');
+        toast.error(data.error || 'Failed to update order mode')
       }
     } catch (error) {
-      console.error('Error toggling order mode:', error);
-      toast.error('Failed to update order mode');
+      console.error('Error toggling order mode:', error)
+      toast.error('Failed to update order mode')
     } finally {
-      setIsTogglingMode(false);
+      setIsTogglingMode(false)
     }
-  };
+  }
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
-    );
+    )
   }
 
   return (
@@ -216,11 +217,7 @@ export default function ApiKey() {
 
             {/* Action Buttons */}
             <div className="flex flex-wrap gap-2">
-              <Button
-                onClick={handleCopyApiKey}
-                disabled={!hasApiKey}
-                size="sm"
-              >
+              <Button onClick={handleCopyApiKey} disabled={!hasApiKey} size="sm">
                 <Copy className="h-4 w-4 mr-2" />
                 Copy
               </Button>
@@ -274,12 +271,30 @@ export default function ApiKey() {
                 </div>
 
                 {/* Current Mode Status */}
-                <Alert variant={orderMode === 'semi_auto' ? 'default' : 'default'} className={orderMode === 'semi_auto' ? 'border-yellow-500 bg-yellow-500/10' : 'border-green-500 bg-green-500/10'}>
+                <Alert
+                  variant={orderMode === 'semi_auto' ? 'default' : 'default'}
+                  className={
+                    orderMode === 'semi_auto'
+                      ? 'border-yellow-500 bg-yellow-500/10'
+                      : 'border-green-500 bg-green-500/10'
+                  }
+                >
                   <Info className="h-4 w-4" />
                   <AlertDescription>
-                    Current mode: <strong>{orderMode === 'semi_auto' ? 'Semi-Auto' : 'Auto'}</strong>
+                    Current mode:{' '}
+                    <strong>{orderMode === 'semi_auto' ? 'Semi-Auto' : 'Auto'}</strong>
                     {orderMode === 'semi_auto' ? (
-                      <span> - All orders will be queued in <Link to="/action-center" className="font-bold underline hover:text-primary">Action Center</Link> for approval</span>
+                      <span>
+                        {' '}
+                        - All orders will be queued in{' '}
+                        <Link
+                          to="/action-center"
+                          className="font-bold underline hover:text-primary"
+                        >
+                          Action Center
+                        </Link>{' '}
+                        for approval
+                      </span>
                     ) : (
                       <span> - All orders will execute immediately</span>
                     )}
@@ -300,8 +315,8 @@ export default function ApiKey() {
               API Playground
             </CardTitle>
             <CardDescription>
-              Test and explore OpenAlgo REST APIs directly in your browser. Send requests,
-              view responses, and experiment with all available endpoints without writing any code.
+              Test and explore OpenAlgo REST APIs directly in your browser. Send requests, view
+              responses, and experiment with all available endpoints without writing any code.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -335,8 +350,8 @@ export default function ApiKey() {
 
             <div className="p-3 bg-muted rounded-lg">
               <p className="text-xs text-muted-foreground">
-                <strong>Tip:</strong> Your API key is automatically injected into requests
-                when you use the Playground. No need to copy it manually.
+                <strong>Tip:</strong> Your API key is automatically injected into requests when you
+                use the Playground. No need to copy it manually.
               </p>
             </div>
 
@@ -372,5 +387,5 @@ export default function ApiKey() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
-  );
+  )
 }

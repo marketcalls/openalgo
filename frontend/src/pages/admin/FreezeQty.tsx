@@ -1,42 +1,8 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import {
-  Snowflake,
-  Plus,
-  Pencil,
-  Trash2,
-  Upload,
-  Search,
-  ArrowLeft,
-  Save,
-  X,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import { ArrowLeft, Pencil, Plus, Save, Search, Snowflake, Trash2, Upload, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
+import { adminApi } from '@/api/admin'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -46,43 +12,68 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import { Label } from '@/components/ui/label';
-import { toast } from 'sonner';
-import { adminApi } from '@/api/admin';
-import type { FreezeQty } from '@/types/admin';
+} from '@/components/ui/alert-dialog'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import type { FreezeQty } from '@/types/admin'
 
-const EXCHANGES = ['NFO', 'BFO', 'CDS', 'MCX'];
+const EXCHANGES = ['NFO', 'BFO', 'CDS', 'MCX']
 
 export default function FreezeQtyPage() {
-  const [freezeData, setFreezeData] = useState<FreezeQty[]>([]);
-  const [filteredData, setFilteredData] = useState<FreezeQty[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [freezeData, setFreezeData] = useState<FreezeQty[]>([])
+  const [filteredData, setFilteredData] = useState<FreezeQty[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [searchQuery, setSearchQuery] = useState('')
 
   // Add dialog state
-  const [showAddDialog, setShowAddDialog] = useState(false);
-  const [newEntry, setNewEntry] = useState({ exchange: 'NFO', symbol: '', freeze_qty: '' });
-  const [isAdding, setIsAdding] = useState(false);
+  const [showAddDialog, setShowAddDialog] = useState(false)
+  const [newEntry, setNewEntry] = useState({ exchange: 'NFO', symbol: '', freeze_qty: '' })
+  const [isAdding, setIsAdding] = useState(false)
 
   // Edit state
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [editValue, setEditValue] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editValue, setEditValue] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
 
   // Delete dialog state
-  const [deleteEntry, setDeleteEntry] = useState<FreezeQty | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteEntry, setDeleteEntry] = useState<FreezeQty | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
 
   // Upload dialog state
-  const [showUploadDialog, setShowUploadDialog] = useState(false);
-  const [uploadExchange, setUploadExchange] = useState('NFO');
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
+  const [showUploadDialog, setShowUploadDialog] = useState(false)
+  const [uploadExchange, setUploadExchange] = useState('NFO')
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [isUploading, setIsUploading] = useState(false)
 
   useEffect(() => {
-    fetchFreezeData();
-  }, []);
+    fetchFreezeData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     if (searchQuery) {
@@ -90,142 +81,142 @@ export default function FreezeQtyPage() {
         (item) =>
           item.symbol.toLowerCase().includes(searchQuery.toLowerCase()) ||
           item.exchange.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-      setFilteredData(filtered);
+      )
+      setFilteredData(filtered)
     } else {
-      setFilteredData(freezeData);
+      setFilteredData(freezeData)
     }
-  }, [searchQuery, freezeData]);
+  }, [searchQuery, freezeData])
 
   const fetchFreezeData = async () => {
     try {
-      const data = await adminApi.getFreezeList();
-      setFreezeData(data);
-      setFilteredData(data);
+      const data = await adminApi.getFreezeList()
+      setFreezeData(data)
+      setFilteredData(data)
     } catch (error) {
-      console.error('Error fetching freeze data:', error);
-      toast.error('Failed to load freeze quantities');
+      console.error('Error fetching freeze data:', error)
+      toast.error('Failed to load freeze quantities')
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   const handleAdd = async () => {
     if (!newEntry.symbol || !newEntry.freeze_qty) {
-      toast.error('Please fill in all fields');
-      return;
+      toast.error('Please fill in all fields')
+      return
     }
 
-    setIsAdding(true);
+    setIsAdding(true)
     try {
       const response = await adminApi.addFreeze({
         exchange: newEntry.exchange,
         symbol: newEntry.symbol.toUpperCase(),
-        freeze_qty: parseInt(newEntry.freeze_qty),
-      });
+        freeze_qty: parseInt(newEntry.freeze_qty, 10),
+      })
 
       if (response.status === 'success') {
-        toast.success(response.message || 'Entry added successfully');
-        setShowAddDialog(false);
-        setNewEntry({ exchange: 'NFO', symbol: '', freeze_qty: '' });
-        fetchFreezeData();
+        toast.success(response.message || 'Entry added successfully')
+        setShowAddDialog(false)
+        setNewEntry({ exchange: 'NFO', symbol: '', freeze_qty: '' })
+        fetchFreezeData()
       } else {
-        toast.error(response.message || 'Failed to add entry');
+        toast.error(response.message || 'Failed to add entry')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to add entry');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to add entry')
     } finally {
-      setIsAdding(false);
+      setIsAdding(false)
     }
-  };
+  }
 
   const handleEdit = (entry: FreezeQty) => {
-    setEditingId(entry.id);
-    setEditValue(entry.freeze_qty.toString());
-  };
+    setEditingId(entry.id)
+    setEditValue(entry.freeze_qty.toString())
+  }
 
   const handleSaveEdit = async (id: number) => {
     if (!editValue) {
-      toast.error('Please enter a freeze quantity');
-      return;
+      toast.error('Please enter a freeze quantity')
+      return
     }
 
-    setIsSaving(true);
+    setIsSaving(true)
     try {
       const response = await adminApi.editFreeze(id, {
-        freeze_qty: parseInt(editValue),
-      });
+        freeze_qty: parseInt(editValue, 10),
+      })
 
       if (response.status === 'success') {
-        toast.success(response.message || 'Entry updated successfully');
-        setEditingId(null);
-        fetchFreezeData();
+        toast.success(response.message || 'Entry updated successfully')
+        setEditingId(null)
+        fetchFreezeData()
       } else {
-        toast.error(response.message || 'Failed to update entry');
+        toast.error(response.message || 'Failed to update entry')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to update entry');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to update entry')
     } finally {
-      setIsSaving(false);
+      setIsSaving(false)
     }
-  };
+  }
 
   const handleDelete = async () => {
-    if (!deleteEntry) return;
+    if (!deleteEntry) return
 
-    setIsDeleting(true);
+    setIsDeleting(true)
     try {
-      const response = await adminApi.deleteFreeze(deleteEntry.id);
+      const response = await adminApi.deleteFreeze(deleteEntry.id)
 
       if (response.status === 'success') {
-        toast.success(response.message || 'Entry deleted successfully');
-        setDeleteEntry(null);
-        fetchFreezeData();
+        toast.success(response.message || 'Entry deleted successfully')
+        setDeleteEntry(null)
+        fetchFreezeData()
       } else {
-        toast.error(response.message || 'Failed to delete entry');
+        toast.error(response.message || 'Failed to delete entry')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to delete entry');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to delete entry')
     } finally {
-      setIsDeleting(false);
+      setIsDeleting(false)
     }
-  };
+  }
 
   const handleUpload = async () => {
     if (!uploadFile) {
-      toast.error('Please select a CSV file');
-      return;
+      toast.error('Please select a CSV file')
+      return
     }
 
-    setIsUploading(true);
+    setIsUploading(true)
     try {
-      const response = await adminApi.uploadFreezeCSV(uploadFile, uploadExchange);
+      const response = await adminApi.uploadFreezeCSV(uploadFile, uploadExchange)
 
       if (response.status === 'success') {
-        toast.success(response.message || 'CSV uploaded successfully');
-        setShowUploadDialog(false);
-        setUploadFile(null);
-        fetchFreezeData();
+        toast.success(response.message || 'CSV uploaded successfully')
+        setShowUploadDialog(false)
+        setUploadFile(null)
+        fetchFreezeData()
       } else {
-        toast.error(response.message || 'Failed to upload CSV');
+        toast.error(response.message || 'Failed to upload CSV')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to upload CSV');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to upload CSV')
     } finally {
-      setIsUploading(false);
+      setIsUploading(false)
     }
-  };
+  }
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
-    );
+    )
   }
 
   return (
@@ -288,9 +279,7 @@ export default function FreezeQtyPage() {
       <Card>
         <CardHeader>
           <CardTitle>Freeze Quantity List</CardTitle>
-          <CardDescription>
-            {filteredData.length} entries total
-          </CardDescription>
+          <CardDescription>{filteredData.length} entries total</CardDescription>
         </CardHeader>
         <CardContent>
           {/* Search */}
@@ -321,7 +310,9 @@ export default function FreezeQtyPage() {
                 {filteredData.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
-                      {searchQuery ? 'No matching entries found' : 'No freeze quantities configured'}
+                      {searchQuery
+                        ? 'No matching entries found'
+                        : 'No freeze quantities configured'}
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -518,5 +509,5 @@ export default function FreezeQtyPage() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
-  );
+  )
 }

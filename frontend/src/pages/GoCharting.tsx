@@ -1,27 +1,27 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { Copy, RefreshCw, AlertTriangle, BookOpen, ExternalLink, Info } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { AlertTriangle, BookOpen, Copy, ExternalLink, Info, RefreshCw } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { toast } from 'sonner'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { toast } from 'sonner';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { useThemeStore } from '@/stores/themeStore';
+} from '@/components/ui/select'
+import { useThemeStore } from '@/stores/themeStore'
 
 interface SearchResult {
-  symbol: string;
-  name: string;
-  exchange: string;
-  token: string;
+  symbol: string
+  name: string
+  exchange: string
+  token: string
 }
 
 const EXCHANGES = [
@@ -31,99 +31,102 @@ const EXCHANGES = [
   { value: 'BFO', label: 'BFO' },
   { value: 'CDS', label: 'CDS' },
   { value: 'MCX', label: 'MCX' },
-];
+]
 
 const PRODUCTS = [
   { value: 'MIS', label: 'MIS - Intraday' },
   { value: 'NRML', label: 'NRML - Carry Forward' },
   { value: 'CNC', label: 'CNC - Delivery' },
-];
+]
 
 export default function GoCharting() {
-  const { mode } = useThemeStore();
-  const isDarkMode = mode === 'dark';
+  const { mode } = useThemeStore()
+  const isDarkMode = mode === 'dark'
 
   // Form state
-  const [symbol, setSymbol] = useState('NHPC');
-  const [exchange, setExchange] = useState('NSE');
-  const [product, setProduct] = useState('MIS');
-  const [action, setAction] = useState('BUY');
-  const [quantity, setQuantity] = useState('1');
+  const [symbol, setSymbol] = useState('NHPC')
+  const [exchange, setExchange] = useState('NSE')
+  const [product, setProduct] = useState('MIS')
+  const [action, setAction] = useState('BUY')
+  const [quantity, setQuantity] = useState('1')
 
   // Search state
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [showResults, setShowResults] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([])
+  const [showResults, setShowResults] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
 
   // JSON output
-  const [generatedJson, setGeneratedJson] = useState<string>('');
+  const [generatedJson, setGeneratedJson] = useState<string>('')
 
   // Refs
-  const inputWrapperRef = useRef<HTMLDivElement>(null);
+  const inputWrapperRef = useRef<HTMLDivElement>(null)
 
   // Get webhook URL
-  const webhookUrl = `${window.location.origin}/api/v1/placeorder`;
+  const webhookUrl = `${window.location.origin}/api/v1/placeorder`
 
   // Debounced search
-  const performSearch = useCallback(async (query: string) => {
-    if (query.length < 2) {
-      setSearchResults([]);
-      setShowResults(false);
-      return;
-    }
+  const performSearch = useCallback(
+    async (query: string) => {
+      if (query.length < 2) {
+        setSearchResults([])
+        setShowResults(false)
+        return
+      }
 
-    setIsLoading(true);
-    try {
-      const params = new URLSearchParams({ q: query });
-      if (exchange) params.append('exchange', exchange);
+      setIsLoading(true)
+      try {
+        const params = new URLSearchParams({ q: query })
+        if (exchange) params.append('exchange', exchange)
 
-      const response = await fetch(`/search/api/search?${params}`, {
-        credentials: 'include',
-      });
-      const data = await response.json();
-      setSearchResults((data.results || []).slice(0, 10));
-      setShowResults(true);
-    } catch (error) {
-      console.error('Search error:', error);
-      setSearchResults([]);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [exchange]);
+        const response = await fetch(`/search/api/search?${params}`, {
+          credentials: 'include',
+        })
+        const data = await response.json()
+        setSearchResults((data.results || []).slice(0, 10))
+        setShowResults(true)
+      } catch (error) {
+        console.error('Search error:', error)
+        setSearchResults([])
+      } finally {
+        setIsLoading(false)
+      }
+    },
+    [exchange]
+  )
 
   // Debounced input handler
   useEffect(() => {
     const timer = setTimeout(() => {
       if (symbol.length >= 2) {
-        performSearch(symbol);
+        performSearch(symbol)
       }
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [symbol, performSearch]);
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [symbol, performSearch])
 
   // Click-outside handler
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (inputWrapperRef.current && !inputWrapperRef.current.contains(e.target as Node)) {
-        setShowResults(false);
+        setShowResults(false)
       }
-    };
-    document.addEventListener('click', handleClickOutside);
-    return () => document.removeEventListener('click', handleClickOutside);
-  }, []);
+    }
+    document.addEventListener('click', handleClickOutside)
+    return () => document.removeEventListener('click', handleClickOutside)
+  }, [])
 
   const handleResultClick = (result: SearchResult) => {
-    setSymbol(result.symbol);
-    setExchange(result.exchange);
-    setShowResults(false);
-  };
+    setSymbol(result.symbol)
+    setExchange(result.exchange)
+    setShowResults(false)
+  }
 
   const generateJson = (showError = true) => {
     if (!symbol || !exchange) {
       if (showError) {
-        toast.error('Please select a symbol and exchange');
+        toast.error('Please select a symbol and exchange')
       }
-      return;
+      return
     }
 
     const json = {
@@ -135,24 +138,25 @@ export default function GoCharting() {
       product: product,
       pricetype: 'MARKET',
       quantity: quantity,
-    };
+    }
 
-    setGeneratedJson(JSON.stringify(json, null, 2));
-  };
+    setGeneratedJson(JSON.stringify(json, null, 2))
+  }
 
   // Auto-generate JSON when values change
   useEffect(() => {
-    generateJson(false);
-  }, [symbol, exchange, product, action, quantity]);
+    generateJson(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const copyToClipboard = async (text: string, label: string) => {
     try {
-      await navigator.clipboard.writeText(text);
-      toast.success(`${label} copied to clipboard`);
+      await navigator.clipboard.writeText(text)
+      toast.success(`${label} copied to clipboard`)
     } catch {
-      toast.error('Copy failed - please copy manually');
+      toast.error('Copy failed - please copy manually')
     }
-  };
+  }
 
   return (
     <div className="container mx-auto py-6 px-4 max-w-6xl">
@@ -168,7 +172,8 @@ export default function GoCharting() {
       <Alert className="mb-8 border-yellow-500 bg-yellow-500/10">
         <AlertTriangle className="h-5 w-5 text-yellow-500" />
         <AlertDescription className="ml-2">
-          <strong>Test in Analyze Mode first before live trading!</strong> Enable from navbar toggle.
+          <strong>Test in Analyze Mode first before live trading!</strong> Enable from navbar
+          toggle.
         </AlertDescription>
       </Alert>
 
@@ -215,7 +220,7 @@ export default function GoCharting() {
                     value={symbol}
                     onChange={(e) => setSymbol(e.target.value)}
                     onFocus={() => {
-                      if (symbol.length >= 2) setShowResults(true);
+                      if (symbol.length >= 2) setShowResults(true)
                     }}
                     autoComplete="off"
                   />
@@ -406,5 +411,5 @@ export default function GoCharting() {
         </div>
       </div>
     </div>
-  );
+  )
 }

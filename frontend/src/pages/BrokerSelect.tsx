@@ -1,17 +1,17 @@
-import { useState, useEffect } from 'react';
-import { Loader2, ExternalLink, BookOpen } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { BookOpen, ExternalLink, Loader2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { Label } from '@/components/ui/label';
-import { useAuthStore } from '@/stores/authStore';
+} from '@/components/ui/select'
+import { useAuthStore } from '@/stores/authStore'
 
 // All supported brokers with their display names and auth types
 const allBrokers = [
@@ -44,39 +44,39 @@ const allBrokers = [
   { id: 'wisdom', name: 'Wisdom Capital', authType: 'totp' },
   { id: 'zebu', name: 'Zebu', authType: 'totp' },
   { id: 'zerodha', name: 'Zerodha', authType: 'oauth' },
-] as const;
+] as const
 
 interface BrokerConfig {
-  broker_name: string;
-  broker_api_key: string;
-  redirect_url: string;
+  broker_name: string
+  broker_api_key: string
+  redirect_url: string
 }
 
 // Helper function to get Flattrade API key
 function getFlattradeApiKey(fullKey: string): string {
-  if (!fullKey) return '';
-  const parts = fullKey.split(':::');
-  return parts.length > 1 ? parts[1] : fullKey;
+  if (!fullKey) return ''
+  const parts = fullKey.split(':::')
+  return parts.length > 1 ? parts[1] : fullKey
 }
 
 // Generate random state for OAuth
 function generateRandomState(): string {
-  const length = 16;
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let result = '';
+  const length = 16
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+  let result = ''
   for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
+    result += chars.charAt(Math.floor(Math.random() * chars.length))
   }
-  return result;
+  return result
 }
 
 export default function BrokerSelect() {
-  const { user } = useAuthStore();
-  const [selectedBroker, setSelectedBroker] = useState<string>('');
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [brokerConfig, setBrokerConfig] = useState<BrokerConfig | null>(null);
+  const { user } = useAuthStore()
+  const [selectedBroker, setSelectedBroker] = useState<string>('')
+  const [isLoading, setIsLoading] = useState(true)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [brokerConfig, setBrokerConfig] = useState<BrokerConfig | null>(null)
 
   useEffect(() => {
     // Fetch broker configuration
@@ -84,46 +84,46 @@ export default function BrokerSelect() {
       try {
         const response = await fetch('/auth/broker-config', {
           credentials: 'include',
-        });
-        const data = await response.json();
+        })
+        const data = await response.json()
 
         if (data.status === 'success') {
-          setBrokerConfig(data);
+          setBrokerConfig(data)
           // Auto-select the configured broker
-          setSelectedBroker(data.broker_name);
+          setSelectedBroker(data.broker_name)
         } else {
-          setError(data.message || 'Failed to load broker configuration');
+          setError(data.message || 'Failed to load broker configuration')
         }
       } catch (err) {
-        console.error('Error fetching broker config:', err);
-        setError('Failed to load broker configuration');
+        console.error('Error fetching broker config:', err)
+        setError('Failed to load broker configuration')
       } finally {
-        setIsLoading(false);
+        setIsLoading(false)
       }
-    };
+    }
 
-    fetchBrokerConfig();
-  }, []);
+    fetchBrokerConfig()
+  }, [])
 
   const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    console.log('Form submitted, selectedBroker:', selectedBroker, 'brokerConfig:', brokerConfig);
+    e.preventDefault()
+    console.log('Form submitted, selectedBroker:', selectedBroker, 'brokerConfig:', brokerConfig)
 
     if (!selectedBroker) {
-      setError('Please select a broker');
-      return;
+      setError('Please select a broker')
+      return
     }
 
     if (!brokerConfig) {
-      setError('Broker configuration not loaded');
-      return;
+      setError('Broker configuration not loaded')
+      return
     }
 
-    setIsSubmitting(true);
-    let loginUrl = '';
+    setIsSubmitting(true)
+    let loginUrl = ''
 
-    const { broker_api_key, redirect_url } = brokerConfig;
-    console.log('broker_api_key:', broker_api_key, 'redirect_url:', redirect_url);
+    const { broker_api_key, redirect_url } = brokerConfig
+    console.log('broker_api_key:', broker_api_key, 'redirect_url:', redirect_url)
 
     // Build login URL based on broker type (matching original broker.html logic)
     switch (selectedBroker) {
@@ -149,65 +149,67 @@ export default function BrokerSelect() {
       case 'wisdom':
       case 'zebu':
         // TOTP brokers - redirect to callback page which shows form
-        loginUrl = `/${selectedBroker}/callback`;
-        break;
+        loginUrl = `/${selectedBroker}/callback`
+        break
 
       case 'dhan':
-        loginUrl = '/dhan/initiate-oauth';
-        break;
+        loginUrl = '/dhan/initiate-oauth'
+        break
 
       case 'compositedge':
-        loginUrl = `https://xts.compositedge.com/interactive/thirdparty?appKey=${broker_api_key}&returnURL=${redirect_url}`;
-        break;
+        loginUrl = `https://xts.compositedge.com/interactive/thirdparty?appKey=${broker_api_key}&returnURL=${redirect_url}`
+        break
 
-      case 'flattrade':
-        const flattradeApiKey = getFlattradeApiKey(broker_api_key);
-        loginUrl = `https://auth.flattrade.in/?app_key=${flattradeApiKey}`;
-        break;
+      case 'flattrade': {
+        const flattradeApiKey = getFlattradeApiKey(broker_api_key)
+        loginUrl = `https://auth.flattrade.in/?app_key=${flattradeApiKey}`
+        break
+      }
 
       case 'fyers':
-        loginUrl = `https://api-t1.fyers.in/api/v3/generate-authcode?client_id=${broker_api_key}&redirect_uri=${redirect_url}&response_type=code&state=2e9b44629ebb28226224d09db3ffb47c`;
-        break;
+        loginUrl = `https://api-t1.fyers.in/api/v3/generate-authcode?client_id=${broker_api_key}&redirect_uri=${redirect_url}&response_type=code&state=2e9b44629ebb28226224d09db3ffb47c`
+        break
 
       case 'upstox':
-        loginUrl = `https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=${broker_api_key}&redirect_uri=${redirect_url}`;
-        break;
+        loginUrl = `https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id=${broker_api_key}&redirect_uri=${redirect_url}`
+        break
 
       case 'zerodha':
-        loginUrl = `https://kite.trade/connect/login?api_key=${broker_api_key}`;
-        break;
+        loginUrl = `https://kite.trade/connect/login?api_key=${broker_api_key}`
+        break
 
       case 'paytm':
-        loginUrl = `https://login.paytmmoney.com/merchant-login?apiKey=${broker_api_key}&state={default}`;
-        break;
+        loginUrl = `https://login.paytmmoney.com/merchant-login?apiKey=${broker_api_key}&state={default}`
+        break
 
-      case 'pocketful':
-        const state = generateRandomState();
-        localStorage.setItem('pocketful_oauth_state', state);
-        const scope = 'orders holdings';
-        loginUrl = `https://trade.pocketful.in/oauth2/auth?client_id=${broker_api_key}&redirect_uri=${redirect_url}&response_type=code&scope=${encodeURIComponent(scope)}&state=${encodeURIComponent(state)}`;
-        break;
+      case 'pocketful': {
+        const state = generateRandomState()
+        localStorage.setItem('pocketful_oauth_state', state)
+        const scope = 'orders holdings'
+        loginUrl = `https://trade.pocketful.in/oauth2/auth?client_id=${broker_api_key}&redirect_uri=${redirect_url}&response_type=code&scope=${encodeURIComponent(scope)}&state=${encodeURIComponent(state)}`
+        break
+      }
 
       default:
-        console.log('Unknown broker:', selectedBroker);
-        setError('Please select a broker');
-        setIsSubmitting(false);
-        return;
+        console.log('Unknown broker:', selectedBroker)
+        setError('Please select a broker')
+        setIsSubmitting(false)
+        return
     }
 
-    console.log('Redirecting to:', loginUrl);
+    console.log('Redirecting to:', loginUrl)
     // Use setTimeout to ensure state updates complete before navigation
     setTimeout(() => {
-      window.location.href = loginUrl;
-    }, 100);
-  };
+      window.location.href = loginUrl
+    }, 100)
+  }
 
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin" />
       </div>
-    );
+    )
   }
 
   return (
@@ -234,37 +236,29 @@ export default function BrokerSelect() {
 
               <form onSubmit={handleSubmit} className="space-y-6">
                 <div className="space-y-2">
-                  <Label htmlFor="broker-select">Login with your Broker</Label>
+                  <Label htmlFor="broker-select" className="block text-center">Login with your Broker</Label>
                   <Select
                     value={selectedBroker}
                     onValueChange={setSelectedBroker}
                     disabled={isSubmitting}
                   >
-                    <SelectTrigger id="broker-select">
+                    <SelectTrigger id="broker-select" className="w-full">
                       <SelectValue placeholder="Select a Broker" />
                     </SelectTrigger>
                     <SelectContent>
                       {allBrokers.map((broker) => {
-                        const isEnabled = broker.id === brokerConfig?.broker_name;
+                        const isEnabled = broker.id === brokerConfig?.broker_name
                         return (
-                          <SelectItem
-                            key={broker.id}
-                            value={broker.id}
-                            disabled={!isEnabled}
-                          >
+                          <SelectItem key={broker.id} value={broker.id} disabled={!isEnabled}>
                             {broker.name} {!isEnabled && '(Disabled)'}
                           </SelectItem>
-                        );
+                        )
                       })}
                     </SelectContent>
                   </Select>
                 </div>
 
-                <Button
-                  type="submit"
-                  className="w-full"
-                  disabled={!selectedBroker || isSubmitting}
-                >
+                <Button type="submit" className="w-full" disabled={!selectedBroker || isSubmitting}>
                   {isSubmitting ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -287,25 +281,19 @@ export default function BrokerSelect() {
               Connect Your <span className="text-primary">Broker</span>
             </h1>
             <p className="text-lg lg:text-xl mb-8 text-muted-foreground">
-              Link your trading account to start executing trades through OpenAlgo's
-              algorithmic trading platform.
+              Link your trading account to start executing trades through OpenAlgo's algorithmic
+              trading platform.
             </p>
 
             <Alert className="mb-6">
               <BookOpen className="h-4 w-4" />
               <AlertTitle>Need Help?</AlertTitle>
-              <AlertDescription>
-                Check our documentation for broker setup guides.
-              </AlertDescription>
+              <AlertDescription>Check our documentation for broker setup guides.</AlertDescription>
             </Alert>
 
             <div className="flex justify-center lg:justify-start gap-4">
               <Button variant="outline" asChild>
-                <a
-                  href="https://docs.openalgo.in"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
+                <a href="https://docs.openalgo.in" target="_blank" rel="noopener noreferrer">
                   <BookOpen className="mr-2 h-4 w-4" />
                   Documentation
                 </a>
@@ -315,5 +303,5 @@ export default function BrokerSelect() {
         </div>
       </div>
     </div>
-  );
+  )
 }

@@ -1,36 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import {
-  ArrowLeft,
-  Plus,
-  Trash2,
-  Search,
-  Upload,
-  FileText,
-  RefreshCw,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
-import { Textarea } from '@/components/ui/textarea';
-import { Skeleton } from '@/components/ui/skeleton';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { ArrowLeft, FileText, Plus, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
+import { toast } from 'sonner'
+import { chartinkApi } from '@/api/chartink'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Command,
   CommandEmpty,
@@ -38,18 +13,7 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-} from '@/components/ui/command';
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover';
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from '@/components/ui/tabs';
+} from '@/components/ui/command'
 import {
   Dialog,
   DialogContent,
@@ -57,192 +21,218 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { toast } from 'sonner';
-import { chartinkApi } from '@/api/chartink';
-import { CHARTINK_EXCHANGES, CHARTINK_PRODUCTS } from '@/types/chartink';
-import type { ChartinkStrategy, ChartinkSymbolMapping } from '@/types/chartink';
-import type { SymbolSearchResult } from '@/types/strategy';
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
+import type { ChartinkStrategy, ChartinkSymbolMapping } from '@/types/chartink'
+import { CHARTINK_EXCHANGES, CHARTINK_PRODUCTS } from '@/types/chartink'
+import type { SymbolSearchResult } from '@/types/strategy'
 
 export default function ConfigureChartinkSymbols() {
-  const { strategyId } = useParams<{ strategyId: string }>();
-  const [strategy, setStrategy] = useState<ChartinkStrategy | null>(null);
-  const [mappings, setMappings] = useState<ChartinkSymbolMapping[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
+  const { strategyId } = useParams<{ strategyId: string }>()
+  const [strategy, setStrategy] = useState<ChartinkStrategy | null>(null)
+  const [mappings, setMappings] = useState<ChartinkSymbolMapping[]>([])
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
 
   // Single symbol form
-  const [symbolSearch, setSymbolSearch] = useState('');
-  const [searchResults, setSearchResults] = useState<SymbolSearchResult[]>([]);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [selectedSymbol, setSelectedSymbol] = useState<SymbolSearchResult | null>(null);
-  const [chartinkSymbol, setChartinkSymbol] = useState('');
-  const [exchange, setExchange] = useState<'NSE' | 'BSE' | ''>('');
-  const [quantity, setQuantity] = useState('1');
-  const [productType, setProductType] = useState<'MIS' | 'CNC' | ''>('');
+  const [symbolSearch, setSymbolSearch] = useState('')
+  const [searchResults, setSearchResults] = useState<SymbolSearchResult[]>([])
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [selectedSymbol, setSelectedSymbol] = useState<SymbolSearchResult | null>(null)
+  const [chartinkSymbol, setChartinkSymbol] = useState('')
+  const [exchange, setExchange] = useState<'NSE' | 'BSE' | ''>('')
+  const [quantity, setQuantity] = useState('1')
+  const [productType, setProductType] = useState<'MIS' | 'CNC' | ''>('')
 
   // Bulk symbols form
-  const [csvData, setCsvData] = useState('');
+  const [csvData, setCsvData] = useState('')
 
   // Delete confirmation
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [mappingToDelete, setMappingToDelete] = useState<number | null>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [mappingToDelete, setMappingToDelete] = useState<number | null>(null)
 
   const fetchStrategy = async () => {
-    if (!strategyId) return;
+    if (!strategyId) return
     try {
-      setLoading(true);
-      const data = await chartinkApi.getStrategy(Number(strategyId));
-      setStrategy(data.strategy);
-      setMappings(data.mappings || []);
+      setLoading(true)
+      const data = await chartinkApi.getStrategy(Number(strategyId))
+      setStrategy(data.strategy)
+      setMappings(data.mappings || [])
     } catch (error) {
-      console.error('Failed to fetch strategy:', error);
-      toast.error('Failed to load strategy');
+      console.error('Failed to fetch strategy:', error)
+      toast.error('Failed to load strategy')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   useEffect(() => {
-    fetchStrategy();
-  }, [strategyId]);
+    fetchStrategy()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Debounced symbol search
-  const searchSymbols = useCallback(async (query: string) => {
-    if (query.length < 2) {
-      setSearchResults([]);
-      return;
-    }
-    try {
-      setSearchLoading(true);
-      const exchangeFilter = exchange || undefined;
-      const results = await chartinkApi.searchSymbols(query, exchangeFilter as 'NSE' | 'BSE' | undefined);
-      setSearchResults(results);
-    } catch (error) {
-      console.error('Search failed:', error);
-    } finally {
-      setSearchLoading(false);
-    }
-  }, [exchange]);
+  const searchSymbols = useCallback(
+    async (query: string) => {
+      if (query.length < 2) {
+        setSearchResults([])
+        return
+      }
+      try {
+        setSearchLoading(true)
+        const exchangeFilter = exchange || undefined
+        const results = await chartinkApi.searchSymbols(
+          query,
+          exchangeFilter as 'NSE' | 'BSE' | undefined
+        )
+        setSearchResults(results)
+      } catch (error) {
+        console.error('Search failed:', error)
+      } finally {
+        setSearchLoading(false)
+      }
+    },
+    [exchange]
+  )
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      searchSymbols(symbolSearch);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [symbolSearch, searchSymbols]);
+      searchSymbols(symbolSearch)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [symbolSearch, searchSymbols])
 
   const handleSymbolSelect = (result: SymbolSearchResult) => {
-    setSelectedSymbol(result);
-    setSymbolSearch(result.symbol);
-    setChartinkSymbol(result.symbol); // Use same symbol as Chartink symbol
+    setSelectedSymbol(result)
+    setSymbolSearch(result.symbol)
+    setChartinkSymbol(result.symbol) // Use same symbol as Chartink symbol
     if (result.exchange === 'NSE' || result.exchange === 'BSE') {
-      setExchange(result.exchange);
+      setExchange(result.exchange)
     }
-    setSearchOpen(false);
+    setSearchOpen(false)
     // Set default product type
-    setProductType('MIS');
-  };
+    setProductType('MIS')
+  }
 
   const handleSingleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+    e.preventDefault()
 
     if (!chartinkSymbol) {
-      toast.error('Please enter the Chartink symbol');
-      return;
+      toast.error('Please enter the Chartink symbol')
+      return
     }
     if (!exchange) {
-      toast.error('Please select an exchange (NSE or BSE only)');
-      return;
+      toast.error('Please select an exchange (NSE or BSE only)')
+      return
     }
     if (!quantity || Number(quantity) < 1) {
-      toast.error('Quantity must be at least 1');
-      return;
+      toast.error('Quantity must be at least 1')
+      return
     }
     if (!productType) {
-      toast.error('Please select a product type (MIS or CNC)');
-      return;
+      toast.error('Please select a product type (MIS or CNC)')
+      return
     }
 
     try {
-      setSubmitting(true);
+      setSubmitting(true)
       const response = await chartinkApi.addSymbolMapping(Number(strategyId), {
-        symbol: chartinkSymbol,  // Backend expects 'symbol', not 'chartink_symbol'
+        symbol: chartinkSymbol, // Backend expects 'symbol', not 'chartink_symbol'
         exchange: exchange as 'NSE' | 'BSE',
         quantity: Number(quantity),
         product_type: productType as 'MIS' | 'CNC',
-      });
+      })
 
       if (response.status === 'success') {
-        toast.success('Symbol added successfully');
+        toast.success('Symbol added successfully')
         // Reset form
-        setSelectedSymbol(null);
-        setSymbolSearch('');
-        setChartinkSymbol('');
-        setExchange('');
-        setQuantity('1');
-        setProductType('');
+        setSelectedSymbol(null)
+        setSymbolSearch('')
+        setChartinkSymbol('')
+        setExchange('')
+        setQuantity('1')
+        setProductType('')
         // Refresh mappings
-        fetchStrategy();
+        fetchStrategy()
       } else {
-        toast.error(response.message || 'Failed to add symbol');
+        toast.error(response.message || 'Failed to add symbol')
       }
     } catch (error) {
-      console.error('Failed to add symbol:', error);
-      toast.error('Failed to add symbol');
+      console.error('Failed to add symbol:', error)
+      toast.error('Failed to add symbol')
     } finally {
-      setSubmitting(false);
+      setSubmitting(false)
     }
-  };
+  }
 
   const handleBulkSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+    e.preventDefault()
 
     if (!csvData.trim()) {
-      toast.error('Please enter CSV data');
-      return;
+      toast.error('Please enter CSV data')
+      return
     }
 
     try {
-      setSubmitting(true);
-      const response = await chartinkApi.addBulkSymbols(Number(strategyId), csvData);
+      setSubmitting(true)
+      const response = await chartinkApi.addBulkSymbols(Number(strategyId), csvData)
 
       if (response.status === 'success') {
-        const { added = 0, failed = 0 } = response.data || {};
-        toast.success(`Added ${added} symbols${failed > 0 ? `, ${failed} failed` : ''}`);
-        setCsvData('');
-        fetchStrategy();
+        const { added = 0, failed = 0 } = response.data || {}
+        toast.success(`Added ${added} symbols${failed > 0 ? `, ${failed} failed` : ''}`)
+        setCsvData('')
+        fetchStrategy()
       } else {
-        toast.error(response.message || 'Failed to add symbols');
+        toast.error(response.message || 'Failed to add symbols')
       }
     } catch (error) {
-      console.error('Failed to add bulk symbols:', error);
-      toast.error('Failed to add symbols');
+      console.error('Failed to add bulk symbols:', error)
+      toast.error('Failed to add symbols')
     } finally {
-      setSubmitting(false);
+      setSubmitting(false)
     }
-  };
+  }
 
   const handleDeleteMapping = async () => {
-    if (mappingToDelete === null || !strategyId) return;
+    if (mappingToDelete === null || !strategyId) return
 
     try {
-      const response = await chartinkApi.deleteSymbolMapping(Number(strategyId), mappingToDelete);
+      const response = await chartinkApi.deleteSymbolMapping(Number(strategyId), mappingToDelete)
       if (response.status === 'success') {
-        setMappings(mappings.filter((m) => m.id !== mappingToDelete));
-        toast.success('Symbol removed');
+        setMappings(mappings.filter((m) => m.id !== mappingToDelete))
+        toast.success('Symbol removed')
       } else {
-        toast.error(response.message || 'Failed to remove symbol');
+        toast.error(response.message || 'Failed to remove symbol')
       }
     } catch (error) {
-      console.error('Failed to delete mapping:', error);
-      toast.error('Failed to remove symbol');
+      console.error('Failed to delete mapping:', error)
+      toast.error('Failed to remove symbol')
     } finally {
-      setDeleteDialogOpen(false);
-      setMappingToDelete(null);
+      setDeleteDialogOpen(false)
+      setMappingToDelete(null)
     }
-  };
+  }
 
   if (loading) {
     return (
@@ -251,11 +241,11 @@ export default function ConfigureChartinkSymbols() {
         <Skeleton className="h-64" />
         <Skeleton className="h-48" />
       </div>
-    );
+    )
   }
 
   if (!strategy) {
-    return null;
+    return null
   }
 
   return (
@@ -287,7 +277,8 @@ export default function ConfigureChartinkSymbols() {
         <CardHeader>
           <CardTitle>Add Symbols</CardTitle>
           <CardDescription>
-            Add individual symbols or bulk import from CSV (NSE/BSE exchanges, MIS/CNC products only)
+            Add individual symbols or bulk import from CSV (NSE/BSE exchanges, MIS/CNC products
+            only)
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -370,7 +361,10 @@ export default function ConfigureChartinkSymbols() {
                   {/* Exchange */}
                   <div className="space-y-2">
                     <Label>Exchange</Label>
-                    <Select value={exchange} onValueChange={(value) => setExchange(value as 'NSE' | 'BSE')}>
+                    <Select
+                      value={exchange}
+                      onValueChange={(value) => setExchange(value as 'NSE' | 'BSE')}
+                    >
                       <SelectTrigger>
                         <SelectValue placeholder="Select" />
                       </SelectTrigger>
@@ -399,7 +393,10 @@ export default function ConfigureChartinkSymbols() {
                   {/* Product Type */}
                   <div className="space-y-2">
                     <Label>Product</Label>
-                    <Select value={productType} onValueChange={(value) => setProductType(value as 'MIS' | 'CNC')}>
+                    <Select
+                      value={productType}
+                      onValueChange={(value) => setProductType(value as 'MIS' | 'CNC')}
+                    >
                       <SelectTrigger>
                         <SelectValue placeholder="Select" />
                       </SelectTrigger>
@@ -434,7 +431,8 @@ export default function ConfigureChartinkSymbols() {
                     className="font-mono text-sm"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Format: ChartinkSymbol,Exchange,Quantity,Product (one per line, no header). Max 100KB.
+                    Format: ChartinkSymbol,Exchange,Quantity,Product (one per line, no header). Max
+                    100KB.
                     <br />
                     Exchange: NSE or BSE only | Product: MIS or CNC only
                   </p>
@@ -508,8 +506,8 @@ export default function ConfigureChartinkSymbols() {
                         size="icon"
                         className="text-red-500 hover:text-red-600 hover:bg-red-50"
                         onClick={() => {
-                          setMappingToDelete(mapping.id);
-                          setDeleteDialogOpen(true);
+                          setMappingToDelete(mapping.id)
+                          setDeleteDialogOpen(true)
                         }}
                       >
                         <Trash2 className="h-4 w-4" />
@@ -529,8 +527,8 @@ export default function ConfigureChartinkSymbols() {
           <DialogHeader>
             <DialogTitle>Remove Symbol</DialogTitle>
             <DialogDescription>
-              Are you sure you want to remove this symbol from the strategy?
-              This action cannot be undone.
+              Are you sure you want to remove this symbol from the strategy? This action cannot be
+              undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -544,5 +542,5 @@ export default function ConfigureChartinkSymbols() {
         </DialogContent>
       </Dialog>
     </div>
-  );
+  )
 }

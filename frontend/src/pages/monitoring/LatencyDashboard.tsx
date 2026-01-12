@@ -1,16 +1,19 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { ArrowLeft, CheckCircle, Download, Gauge, RefreshCw, XCircle, Zap } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
+import { webClient } from '@/api/client'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
-  Gauge,
-  ArrowLeft,
-  RefreshCw,
-  Download,
-  CheckCircle,
-  XCircle,
-  Zap,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Progress } from '@/components/ui/progress'
 import {
   Table,
   TableBody,
@@ -18,111 +21,110 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
-import { toast } from 'sonner';
-import { webClient } from '@/api/client';
+} from '@/components/ui/table'
 
 interface LatencyLog {
-  id: number;
-  timestamp: string;
-  order_id: string;
-  broker: string | null;
-  symbol: string | null;
-  order_type: string;
-  rtt_ms: number;
-  validation_latency_ms: number;
-  response_latency_ms: number;
-  overhead_ms: number;
-  total_latency_ms: number;
-  status: string;
-  error: string | null;
+  id: number
+  timestamp: string
+  order_id: string
+  broker: string | null
+  symbol: string | null
+  order_type: string
+  rtt_ms: number
+  validation_latency_ms: number
+  response_latency_ms: number
+  overhead_ms: number
+  total_latency_ms: number
+  status: string
+  error: string | null
 }
 
 interface BrokerStats {
-  avg_total: number;
-  p50_total: number;
-  p99_total: number;
-  sla_150ms: number;
-  total_orders: number;
+  avg_total: number
+  p50_total: number
+  p99_total: number
+  sla_150ms: number
+  total_orders: number
 }
 
 interface LatencyStats {
-  total_orders: number;
-  success_rate: number;
-  failed_orders: number;
-  avg_total: number;
-  sla_150ms: number;
-  broker_stats: Record<string, BrokerStats>;
-  broker_histograms?: Record<string, {
-    bins: string[];
-    counts: number[];
-    avg_rtt: number;
-    min_rtt: number;
-    max_rtt: number;
-  }>;
+  total_orders: number
+  success_rate: number
+  failed_orders: number
+  avg_total: number
+  sla_150ms: number
+  broker_stats: Record<string, BrokerStats>
+  broker_histograms?: Record<
+    string,
+    {
+      bins: string[]
+      counts: number[]
+      avg_rtt: number
+      min_rtt: number
+      max_rtt: number
+    }
+  >
 }
 
 export default function LatencyDashboard() {
-  const [isLoading, setIsLoading] = useState(true);
-  const [logs, setLogs] = useState<LatencyLog[]>([]);
-  const [stats, setStats] = useState<LatencyStats | null>(null);
-  const [selectedOrder, setSelectedOrder] = useState<LatencyLog | null>(null);
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoading, setIsLoading] = useState(true)
+  const [logs, setLogs] = useState<LatencyLog[]>([])
+  const [stats, setStats] = useState<LatencyStats | null>(null)
+  const [selectedOrder, setSelectedOrder] = useState<LatencyLog | null>(null)
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
   useEffect(() => {
-    fetchData();
+    fetchData()
     // Auto-refresh every 30 seconds
-    const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
-  }, []);
+    const interval = setInterval(fetchData, 30000)
+    return () => clearInterval(interval)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const fetchData = async () => {
     try {
       const [logsResponse, statsResponse] = await Promise.all([
         webClient.get<LatencyLog[]>('/latency/api/logs'),
         webClient.get<LatencyStats>('/latency/api/stats'),
-      ]);
+      ])
 
-      setLogs(Array.isArray(logsResponse.data) ? logsResponse.data : []);
-      setStats(statsResponse.data);
+      setLogs(Array.isArray(logsResponse.data) ? logsResponse.data : [])
+      setStats(statsResponse.data)
     } catch (error) {
-      console.error('Error fetching latency data:', error);
-      toast.error('Failed to load latency data');
+      console.error('Error fetching latency data:', error)
+      toast.error('Failed to load latency data')
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   const handleRefresh = async () => {
-    setIsRefreshing(true);
-    await fetchData();
-    setIsRefreshing(false);
-    toast.success('Data refreshed');
-  };
+    setIsRefreshing(true)
+    await fetchData()
+    setIsRefreshing(false)
+    toast.success('Data refreshed')
+  }
 
   const handleExport = () => {
-    window.open('/latency/export', '_blank');
-  };
+    window.open('/latency/export', '_blank')
+  }
 
-  const getSpeedRating = (latency: number): { label: string; color: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' } => {
-    if (latency < 150) return { label: 'Excellent', color: 'text-green-500', variant: 'secondary' };
-    if (latency < 250) return { label: 'Good', color: 'text-yellow-500', variant: 'outline' };
-    if (latency < 400) return { label: 'Acceptable', color: 'text-orange-500', variant: 'outline' };
-    return { label: 'Slow', color: 'text-red-500', variant: 'destructive' };
-  };
+  const getSpeedRating = (
+    latency: number
+  ): {
+    label: string
+    color: string
+    variant: 'default' | 'secondary' | 'destructive' | 'outline'
+  } => {
+    if (latency < 150) return { label: 'Excellent', color: 'text-green-500', variant: 'secondary' }
+    if (latency < 250) return { label: 'Good', color: 'text-yellow-500', variant: 'outline' }
+    if (latency < 400) return { label: 'Acceptable', color: 'text-orange-500', variant: 'outline' }
+    return { label: 'Slow', color: 'text-red-500', variant: 'destructive' }
+  }
 
   const formatTimestamp = (timestamp: string) => {
     try {
-      const date = new Date(timestamp);
+      const date = new Date(timestamp)
       return date.toLocaleString('en-IN', {
         timeZone: 'Asia/Kolkata',
         year: 'numeric',
@@ -132,31 +134,35 @@ export default function LatencyDashboard() {
         minute: '2-digit',
         second: '2-digit',
         hour12: true,
-      });
+      })
     } catch {
-      return timestamp;
+      return timestamp
     }
-  };
+  }
 
   // Calculate distribution for chart-like display
   const getDistribution = () => {
-    const excellent = logs.filter((l) => (l.total_latency_ms || 0) < 150).length;
-    const good = logs.filter((l) => (l.total_latency_ms || 0) >= 150 && (l.total_latency_ms || 0) < 250).length;
-    const acceptable = logs.filter((l) => (l.total_latency_ms || 0) >= 250 && (l.total_latency_ms || 0) < 400).length;
-    const slow = logs.filter((l) => (l.total_latency_ms || 0) >= 400).length;
-    const total = logs.length || 1;
-    return { excellent, good, acceptable, slow, total };
-  };
+    const excellent = logs.filter((l) => (l.total_latency_ms || 0) < 150).length
+    const good = logs.filter(
+      (l) => (l.total_latency_ms || 0) >= 150 && (l.total_latency_ms || 0) < 250
+    ).length
+    const acceptable = logs.filter(
+      (l) => (l.total_latency_ms || 0) >= 250 && (l.total_latency_ms || 0) < 400
+    ).length
+    const slow = logs.filter((l) => (l.total_latency_ms || 0) >= 400).length
+    const total = logs.length || 1
+    return { excellent, good, acceptable, slow, total }
+  }
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
-    );
+    )
   }
 
-  const distribution = getDistribution();
+  const distribution = getDistribution()
 
   return (
     <div className="py-6 space-y-6">
@@ -172,9 +178,7 @@ export default function LatencyDashboard() {
               Order Latency Monitor
             </h1>
           </div>
-          <p className="text-muted-foreground">
-            Track how fast brokers confirm your orders
-          </p>
+          <p className="text-muted-foreground">Track how fast brokers confirm your orders</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing}>
@@ -228,7 +232,9 @@ export default function LatencyDashboard() {
                 </p>
                 <p className="text-xs text-muted-foreground">End-to-end order confirmation</p>
               </div>
-              <Gauge className={`h-8 w-8 ${getSpeedRating(stats?.avg_total || 0).color} opacity-20`} />
+              <Gauge
+                className={`h-8 w-8 ${getSpeedRating(stats?.avg_total || 0).color} opacity-20`}
+              />
             </div>
           </CardContent>
         </Card>
@@ -238,19 +244,21 @@ export default function LatencyDashboard() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Fast Orders</p>
-                <p className={`text-2xl font-bold ${
-                  (stats?.sla_150ms || 0) >= 95 ? 'text-green-500' :
-                  (stats?.sla_150ms || 0) >= 85 ? 'text-yellow-500' : 'text-red-500'
-                }`}>
+                <p
+                  className={`text-2xl font-bold ${
+                    (stats?.sla_150ms || 0) >= 95
+                      ? 'text-green-500'
+                      : (stats?.sla_150ms || 0) >= 85
+                        ? 'text-yellow-500'
+                        : 'text-red-500'
+                  }`}
+                >
                   {(stats?.sla_150ms || 0).toFixed(1)}%
                 </p>
                 <p className="text-xs text-muted-foreground">Under 150ms (Target: 95%)</p>
               </div>
               <div className="relative h-16 w-16">
-                <Progress
-                  value={stats?.sla_150ms || 0}
-                  className="h-16 w-16 rounded-full"
-                />
+                <Progress value={stats?.sla_150ms || 0} className="h-16 w-16 rounded-full" />
                 <span className="absolute inset-0 flex items-center justify-center text-xs font-bold">
                   {Math.round(stats?.sla_150ms || 0)}%
                 </span>
@@ -264,7 +272,9 @@ export default function LatencyDashboard() {
       <Card>
         <CardHeader>
           <CardTitle>Performance Levels</CardTitle>
-          <CardDescription>Total end-to-end time from order submission to confirmation</CardDescription>
+          <CardDescription>
+            Total end-to-end time from order submission to confirmation
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -398,10 +408,15 @@ export default function LatencyDashboard() {
                         <div className="w-24 h-2 bg-muted rounded-full overflow-hidden">
                           <div
                             className={`h-full ${
-                              data.avg_total < 150 ? 'bg-green-500' :
-                              data.avg_total < 250 ? 'bg-yellow-500' : 'bg-red-500'
+                              data.avg_total < 150
+                                ? 'bg-green-500'
+                                : data.avg_total < 250
+                                  ? 'bg-yellow-500'
+                                  : 'bg-red-500'
                             }`}
-                            style={{ width: `${Math.max(0, Math.min(100, ((400 - data.avg_total) / 400) * 100))}%` }}
+                            style={{
+                              width: `${Math.max(0, Math.min(100, ((400 - data.avg_total) / 400) * 100))}%`,
+                            }}
                           />
                         </div>
                       </TableCell>
@@ -444,7 +459,7 @@ export default function LatencyDashboard() {
                   </TableRow>
                 ) : (
                   logs.map((log) => {
-                    const rating = getSpeedRating(log.total_latency_ms || 0);
+                    const rating = getSpeedRating(log.total_latency_ms || 0)
                     return (
                       <TableRow key={log.id}>
                         <TableCell className="text-sm">{formatTimestamp(log.timestamp)}</TableCell>
@@ -467,16 +482,12 @@ export default function LatencyDashboard() {
                           )}
                         </TableCell>
                         <TableCell>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => setSelectedOrder(log)}
-                          >
+                          <Button size="sm" variant="ghost" onClick={() => setSelectedOrder(log)}>
                             Details
                           </Button>
                         </TableCell>
                       </TableRow>
-                    );
+                    )
                   })
                 )}
               </TableBody>
@@ -508,7 +519,9 @@ export default function LatencyDashboard() {
                 <Card>
                   <CardContent className="p-4">
                     <p className="text-sm text-muted-foreground">Performance</p>
-                    <p className={`text-lg font-bold ${getSpeedRating(selectedOrder.total_latency_ms).color}`}>
+                    <p
+                      className={`text-lg font-bold ${getSpeedRating(selectedOrder.total_latency_ms).color}`}
+                    >
                       {getSpeedRating(selectedOrder.total_latency_ms).label}
                     </p>
                   </CardContent>
@@ -524,11 +537,17 @@ export default function LatencyDashboard() {
                   <div className="flex justify-between mb-2">
                     <div>
                       <span className="font-semibold">Total Confirmation Time</span>
-                      <p className="text-xs text-muted-foreground">What you experience end-to-end</p>
+                      <p className="text-xs text-muted-foreground">
+                        What you experience end-to-end
+                      </p>
                     </div>
-                    <span className="text-lg font-bold">{(selectedOrder.total_latency_ms || 0).toFixed(2)}ms</span>
+                    <span className="text-lg font-bold">
+                      {(selectedOrder.total_latency_ms || 0).toFixed(2)}ms
+                    </span>
                   </div>
-                  <Progress value={Math.min(100, ((selectedOrder.total_latency_ms || 0) / 500) * 100)} />
+                  <Progress
+                    value={Math.min(100, ((selectedOrder.total_latency_ms || 0) / 500) * 100)}
+                  />
                 </div>
 
                 <p className="text-xs text-muted-foreground">This consists of:</p>
@@ -538,8 +557,12 @@ export default function LatencyDashboard() {
                   <div className="flex justify-between items-start mb-1">
                     <div>
                       <span className="font-semibold text-sm">Broker API Call</span>
-                      <Badge variant="outline" className="ml-2 text-xs">HTTP</Badge>
-                      <p className="text-xs text-muted-foreground mt-1">Network latency + broker processing</p>
+                      <Badge variant="outline" className="ml-2 text-xs">
+                        HTTP
+                      </Badge>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Network latency + broker processing
+                      </p>
                     </div>
                     <span className="font-bold">{(selectedOrder.rtt_ms || 0).toFixed(2)}ms</span>
                   </div>
@@ -555,10 +578,16 @@ export default function LatencyDashboard() {
                   <div className="flex justify-between items-start mb-1">
                     <div>
                       <span className="font-semibold text-sm">Platform Processing</span>
-                      <Badge variant="outline" className="ml-2 text-xs">OpenAlgo</Badge>
-                      <p className="text-xs text-muted-foreground mt-1">Authentication, validation & logging</p>
+                      <Badge variant="outline" className="ml-2 text-xs">
+                        OpenAlgo
+                      </Badge>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Authentication, validation & logging
+                      </p>
                     </div>
-                    <span className="font-bold">{(selectedOrder.overhead_ms || 0).toFixed(2)}ms</span>
+                    <span className="font-bold">
+                      {(selectedOrder.overhead_ms || 0).toFixed(2)}ms
+                    </span>
                   </div>
                   <div className="text-xs text-muted-foreground mt-2 space-y-0.5">
                     <p>API key authentication (~5-10ms)</p>
@@ -592,5 +621,5 @@ export default function LatencyDashboard() {
         </DialogContent>
       </Dialog>
     </div>
-  );
+  )
 }

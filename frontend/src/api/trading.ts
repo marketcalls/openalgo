@@ -1,39 +1,43 @@
-import { apiClient, webClient } from './client';
 import type {
-  Position,
-  Order,
-  Trade,
+  ApiResponse,
   Holding,
-  PortfolioStats,
   MarginData,
+  Order,
   OrderStats,
   PlaceOrderRequest,
-  ApiResponse,
-} from '@/types/trading';
+  PortfolioStats,
+  Position,
+  Trade,
+} from '@/types/trading'
+import { apiClient, webClient } from './client'
 
 export interface QuotesData {
-  ask: number;
-  bid: number;
-  high: number;
-  low: number;
-  ltp: number;
-  oi: number;
-  open: number;
-  prev_close: number;
-  volume: number;
+  ask: number
+  bid: number
+  high: number
+  low: number
+  ltp: number
+  oi: number
+  open: number
+  prev_close: number
+  volume: number
 }
 
 export const tradingApi = {
   /**
    * Get real-time quotes for a symbol
    */
-  getQuotes: async (apiKey: string, symbol: string, exchange: string): Promise<ApiResponse<QuotesData>> => {
+  getQuotes: async (
+    apiKey: string,
+    symbol: string,
+    exchange: string
+  ): Promise<ApiResponse<QuotesData>> => {
     const response = await apiClient.post<ApiResponse<QuotesData>>('/quotes', {
       apikey: apiKey,
       symbol,
       exchange,
-    });
-    return response.data;
+    })
+    return response.data
   },
 
   /**
@@ -42,8 +46,8 @@ export const tradingApi = {
   getFunds: async (apiKey: string): Promise<ApiResponse<MarginData>> => {
     const response = await apiClient.post<ApiResponse<MarginData>>('/funds', {
       apikey: apiKey,
-    });
-    return response.data;
+    })
+    return response.data
   },
 
   /**
@@ -52,18 +56,23 @@ export const tradingApi = {
   getPositions: async (apiKey: string): Promise<ApiResponse<Position[]>> => {
     const response = await apiClient.post<ApiResponse<Position[]>>('/positionbook', {
       apikey: apiKey,
-    });
-    return response.data;
+    })
+    return response.data
   },
 
   /**
    * Get order book
    */
-  getOrders: async (apiKey: string): Promise<ApiResponse<{ orders: Order[]; statistics: OrderStats }>> => {
-    const response = await apiClient.post<ApiResponse<{ orders: Order[]; statistics: OrderStats }>>('/orderbook', {
-      apikey: apiKey,
-    });
-    return response.data;
+  getOrders: async (
+    apiKey: string
+  ): Promise<ApiResponse<{ orders: Order[]; statistics: OrderStats }>> => {
+    const response = await apiClient.post<ApiResponse<{ orders: Order[]; statistics: OrderStats }>>(
+      '/orderbook',
+      {
+        apikey: apiKey,
+      }
+    )
+    return response.data
   },
 
   /**
@@ -72,26 +81,30 @@ export const tradingApi = {
   getTrades: async (apiKey: string): Promise<ApiResponse<Trade[]>> => {
     const response = await apiClient.post<ApiResponse<Trade[]>>('/tradebook', {
       apikey: apiKey,
-    });
-    return response.data;
+    })
+    return response.data
   },
 
   /**
    * Get holdings
    */
-  getHoldings: async (apiKey: string): Promise<ApiResponse<{ holdings: Holding[]; statistics: PortfolioStats }>> => {
-    const response = await apiClient.post<ApiResponse<{ holdings: Holding[]; statistics: PortfolioStats }>>('/holdings', {
+  getHoldings: async (
+    apiKey: string
+  ): Promise<ApiResponse<{ holdings: Holding[]; statistics: PortfolioStats }>> => {
+    const response = await apiClient.post<
+      ApiResponse<{ holdings: Holding[]; statistics: PortfolioStats }>
+    >('/holdings', {
       apikey: apiKey,
-    });
-    return response.data;
+    })
+    return response.data
   },
 
   /**
    * Place order
    */
   placeOrder: async (order: PlaceOrderRequest): Promise<ApiResponse<{ orderid: string }>> => {
-    const response = await apiClient.post<ApiResponse<{ orderid: string }>>('/place_order', order);
-    return response.data;
+    const response = await apiClient.post<ApiResponse<{ orderid: string }>>('/place_order', order)
+    return response.data
   },
 
   /**
@@ -100,22 +113,22 @@ export const tradingApi = {
   modifyOrder: async (
     orderid: string,
     orderData: {
-      symbol: string;
-      exchange: string;
-      action: string;
-      product: string;
-      pricetype: string;
-      price: number;
-      quantity: number;
-      trigger_price?: number;
-      disclosed_quantity?: number;
+      symbol: string
+      exchange: string
+      action: string
+      product: string
+      pricetype: string
+      price: number
+      quantity: number
+      trigger_price?: number
+      disclosed_quantity?: number
     }
   ): Promise<ApiResponse<{ orderid: string }>> => {
     const response = await webClient.post<ApiResponse<{ orderid: string }>>('/modify_order', {
       orderid,
       ...orderData,
-    });
-    return response.data;
+    })
+    return response.data
   },
 
   /**
@@ -124,8 +137,8 @@ export const tradingApi = {
   cancelOrder: async (orderid: string): Promise<ApiResponse<{ orderid: string }>> => {
     const response = await webClient.post<ApiResponse<{ orderid: string }>>('/cancel_order', {
       orderid,
-    });
-    return response.data;
+    })
+    return response.data
   },
 
   /**
@@ -141,23 +154,23 @@ export const tradingApi = {
       symbol,
       exchange,
       product,
-    });
-    return response.data;
+    })
+    return response.data
   },
 
   /**
    * Close all positions (uses session auth with CSRF)
    */
   closeAllPositions: async (): Promise<ApiResponse<void>> => {
-    const response = await webClient.post<ApiResponse<void>>('/close_all_positions', {});
-    return response.data;
+    const response = await webClient.post<ApiResponse<void>>('/close_all_positions', {})
+    return response.data
   },
 
   /**
    * Cancel all orders (uses session auth with CSRF)
    */
   cancelAllOrders: async (): Promise<ApiResponse<void>> => {
-    const response = await webClient.post<ApiResponse<void>>('/cancel_all_orders', {});
-    return response.data;
+    const response = await webClient.post<ApiResponse<void>>('/cancel_all_orders', {})
+    return response.data
   },
-};
+}

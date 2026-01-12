@@ -1,10 +1,22 @@
-import { useState, useEffect } from 'react';
-import { Download, Filter, AlertTriangle, CheckCircle, Eye, Activity, Users, BarChart3 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import {
+  Activity,
+  AlertTriangle,
+  BarChart3,
+  CheckCircle,
+  Download,
+  Eye,
+  Filter,
+  Users,
+} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Table,
   TableBody,
@@ -12,49 +24,41 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { useThemeStore } from '@/stores/themeStore';
+} from '@/components/ui/table'
+import { useThemeStore } from '@/stores/themeStore'
 
 interface ApiRequest {
-  timestamp: string;
-  api_type: string;
-  source: string;
-  symbol?: string;
-  quantity?: number;
-  position_size?: number;
-  orderid?: string;
-  exchange?: string;
-  action?: string;
-  request_data: Record<string, unknown>;
-  response_data?: Record<string, unknown>;
+  timestamp: string
+  api_type: string
+  source: string
+  symbol?: string
+  quantity?: number
+  position_size?: number
+  orderid?: string
+  exchange?: string
+  action?: string
+  request_data: Record<string, unknown>
+  response_data?: Record<string, unknown>
   analysis: {
-    issues?: boolean | string[];
-    error?: string;
-    error_type?: string;
-    warnings?: string[];
-  };
+    issues?: boolean | string[]
+    error?: string
+    error_type?: string
+    warnings?: string[]
+  }
 }
 
 interface Stats {
-  total_requests: number;
+  total_requests: number
   issues: {
-    total: number;
-  };
-  symbols: string[];
-  sources: string[];
+    total: number
+  }
+  symbols: string[]
+  sources: string[]
 }
 
 interface AnalyzerData {
-  requests: ApiRequest[];
-  stats: Stats;
+  requests: ApiRequest[]
+  stats: Stats
 }
 
 const EXCHANGE_COLORS: Record<string, string> = {
@@ -66,107 +70,110 @@ const EXCHANGE_COLORS: Record<string, string> = {
   BCD: 'bg-red-500/10 text-red-600 border-red-500/30',
   MCX: 'bg-primary/10 text-primary border-primary/30',
   NCDEX: 'bg-green-500/10 text-green-600 border-green-500/30',
-};
+}
 
 export default function Analyzer() {
-  const { mode } = useThemeStore();
-  const isDarkMode = mode === 'dark';
+  const { mode } = useThemeStore()
+  const isDarkMode = mode === 'dark'
 
-  const [data, setData] = useState<AnalyzerData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [selectedRequest, setSelectedRequest] = useState<ApiRequest | null>(null);
-  const [showDetailsDialog, setShowDetailsDialog] = useState(false);
+  const [data, setData] = useState<AnalyzerData | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const [selectedRequest, setSelectedRequest] = useState<ApiRequest | null>(null)
+  const [showDetailsDialog, setShowDetailsDialog] = useState(false)
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    fetchData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const fetchData = async (start?: string, end?: string) => {
-    setIsLoading(true);
+    setIsLoading(true)
     try {
-      const params = new URLSearchParams();
-      if (start) params.append('start_date', start);
-      if (end) params.append('end_date', end);
+      const params = new URLSearchParams()
+      if (start) params.append('start_date', start)
+      if (end) params.append('end_date', end)
 
-      const url = params.toString() ? `/analyzer/api/data?${params}` : '/analyzer/api/data';
+      const url = params.toString() ? `/analyzer/api/data?${params}` : '/analyzer/api/data'
 
       const response = await fetch(url, {
         credentials: 'include',
-      });
+      })
 
       if (response.ok) {
-        const result = await response.json();
+        const result = await response.json()
         if (result.status === 'success') {
-          setData(result.data);
+          setData(result.data)
         }
       }
     } catch (error) {
-      console.error('Error fetching analyzer data:', error);
+      console.error('Error fetching analyzer data:', error)
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   const handleFilter = (e: React.FormEvent) => {
-    e.preventDefault();
-    fetchData(startDate, endDate);
-  };
+    e.preventDefault()
+    fetchData(startDate, endDate)
+  }
 
   const handleExport = () => {
-    const params = new URLSearchParams();
-    if (startDate) params.append('start_date', startDate);
-    if (endDate) params.append('end_date', endDate);
+    const params = new URLSearchParams()
+    if (startDate) params.append('start_date', startDate)
+    if (endDate) params.append('end_date', endDate)
 
-    const url = params.toString() ? `/analyzer/export?${params}` : '/analyzer/export';
-    window.location.href = url;
-  };
+    const url = params.toString() ? `/analyzer/export?${params}` : '/analyzer/export'
+    window.location.href = url
+  }
 
   const viewDetails = (request: ApiRequest) => {
-    setSelectedRequest(request);
-    setShowDetailsDialog(true);
-  };
+    setSelectedRequest(request)
+    setShowDetailsDialog(true)
+  }
 
   const getRequestDetails = (request: ApiRequest): string => {
     if (request.api_type === 'cancelorder') {
-      return `OrderID: ${request.orderid}`;
+      return `OrderID: ${request.orderid}`
     }
 
-    let details = request.symbol || '';
+    let details = request.symbol || ''
     if (request.quantity) {
-      details += ` (${request.quantity})`;
+      details += ` (${request.quantity})`
     }
     if (request.api_type === 'placesmartorder' && request.position_size) {
-      details += ` [Size: ${request.position_size}]`;
+      details += ` [Size: ${request.position_size}]`
     }
-    return details;
-  };
+    return details
+  }
 
   // Clean request data for display (remove apikey)
   const cleanRequestData = (data: Record<string, unknown>): Record<string, unknown> => {
-    const cleaned = { ...data };
-    delete cleaned.apikey;
-    return cleaned;
-  };
+    const cleaned = { ...data }
+    delete cleaned.apikey
+    return cleaned
+  }
 
   if (isLoading) {
     return (
       <div className="container mx-auto py-8 px-4 flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
-    );
+    )
   }
 
-  const stats = data?.stats || { total_requests: 0, issues: { total: 0 }, symbols: [], sources: [] };
-  const requests = data?.requests || [];
+  const stats = data?.stats || { total_requests: 0, issues: { total: 0 }, symbols: [], sources: [] }
+  const requests = data?.requests || []
 
   return (
     <div className="container mx-auto py-6 px-4">
       {/* Header */}
       <div className="mb-6">
         <h1 className="text-3xl font-bold">Sandbox Request Monitor</h1>
-        <p className="text-muted-foreground mt-1">Review and validate your sandbox API requests before going live</p>
+        <p className="text-muted-foreground mt-1">
+          Review and validate your sandbox API requests before going live
+        </p>
       </div>
 
       {/* Date Filter */}
@@ -223,7 +230,9 @@ export default function Analyzer() {
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold text-yellow-500">{stats.issues.total}</div>
-            <Badge variant="secondary" className="mt-1">Needs Attention</Badge>
+            <Badge variant="secondary" className="mt-1">
+              Needs Attention
+            </Badge>
           </CardContent>
         </Card>
 
@@ -236,7 +245,9 @@ export default function Analyzer() {
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold">{stats.symbols.length}</div>
-            <Badge variant="outline" className="mt-1">Tracked</Badge>
+            <Badge variant="outline" className="mt-1">
+              Tracked
+            </Badge>
           </CardContent>
         </Card>
 
@@ -249,7 +260,9 @@ export default function Analyzer() {
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold">{stats.sources.length}</div>
-            <Badge variant="outline" className="mt-1">Connected</Badge>
+            <Badge variant="outline" className="mt-1">
+              Connected
+            </Badge>
           </CardContent>
         </Card>
       </div>
@@ -293,7 +306,10 @@ export default function Analyzer() {
                       <TableCell className="font-medium">{getRequestDetails(request)}</TableCell>
                       <TableCell>
                         {request.exchange && (
-                          <Badge className={EXCHANGE_COLORS[request.exchange] || ''} variant="outline">
+                          <Badge
+                            className={EXCHANGE_COLORS[request.exchange] || ''}
+                            variant="outline"
+                          >
                             {request.exchange}
                           </Badge>
                         )}
@@ -307,12 +323,18 @@ export default function Analyzer() {
                       </TableCell>
                       <TableCell>
                         {request.analysis.issues ? (
-                          <Badge variant="secondary" className="bg-yellow-500/10 text-yellow-600 border-yellow-500/30">
+                          <Badge
+                            variant="secondary"
+                            className="bg-yellow-500/10 text-yellow-600 border-yellow-500/30"
+                          >
                             <AlertTriangle className="h-3 w-3 mr-1" />
                             Error
                           </Badge>
                         ) : (
-                          <Badge variant="secondary" className="bg-green-500/10 text-green-600 border-green-500/30">
+                          <Badge
+                            variant="secondary"
+                            className="bg-green-500/10 text-green-600 border-green-500/30"
+                          >
                             <CheckCircle className="h-3 w-3 mr-1" />
                             Success
                           </Badge>
@@ -373,7 +395,11 @@ export default function Analyzer() {
                       background: isDarkMode ? '#1e1e1e' : '#f8f8f8',
                     }}
                   >
-                    {JSON.stringify(selectedRequest.response_data || selectedRequest.analysis, null, 2)}
+                    {JSON.stringify(
+                      selectedRequest.response_data || selectedRequest.analysis,
+                      null,
+                      2
+                    )}
                   </SyntaxHighlighter>
                 </div>
               </div>
@@ -382,5 +408,5 @@ export default function Analyzer() {
         </DialogContent>
       </Dialog>
     </div>
-  );
+  )
 }

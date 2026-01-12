@@ -1,21 +1,12 @@
-import { useState, useEffect, useRef } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import {
-  ArrowLeft,
-  FileText,
-  RefreshCw,
-  Trash2,
-  ScrollText,
-  Clock,
-  HardDrive,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Label } from '@/components/ui/label';
-import { Skeleton } from '@/components/ui/skeleton';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import { ArrowLeft, Clock, FileText, HardDrive, RefreshCw, ScrollText, Trash2 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
+import { toast } from 'sonner'
+import { pythonStrategyApi } from '@/api/python-strategy'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -23,141 +14,145 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { toast } from 'sonner';
-import { pythonStrategyApi } from '@/api/python-strategy';
-import type { PythonStrategy, LogFile, LogContent } from '@/types/python-strategy';
+} from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Skeleton } from '@/components/ui/skeleton'
+import type { LogContent, LogFile, PythonStrategy } from '@/types/python-strategy'
 
 export default function PythonStrategyLogs() {
-  const { strategyId } = useParams<{ strategyId: string }>();
-  const [strategy, setStrategy] = useState<PythonStrategy | null>(null);
-  const [logFiles, setLogFiles] = useState<LogFile[]>([]);
-  const [selectedLog, setSelectedLog] = useState<string | null>(null);
-  const [logContent, setLogContent] = useState<LogContent | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadingContent, setLoadingContent] = useState(false);
-  const [clearing, setClearing] = useState(false);
-  const [clearDialogOpen, setClearDialogOpen] = useState(false);
-  const [autoScroll, setAutoScroll] = useState(true);
-  const logContainerRef = useRef<HTMLDivElement>(null);
+  const { strategyId } = useParams<{ strategyId: string }>()
+  const [strategy, setStrategy] = useState<PythonStrategy | null>(null)
+  const [logFiles, setLogFiles] = useState<LogFile[]>([])
+  const [selectedLog, setSelectedLog] = useState<string | null>(null)
+  const [logContent, setLogContent] = useState<LogContent | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loadingContent, setLoadingContent] = useState(false)
+  const [clearing, setClearing] = useState(false)
+  const [clearDialogOpen, setClearDialogOpen] = useState(false)
+  const [autoScroll, setAutoScroll] = useState(true)
+  const logContainerRef = useRef<HTMLDivElement>(null)
 
   const fetchData = async () => {
-    if (!strategyId) return;
+    if (!strategyId) return
     try {
-      setLoading(true);
+      setLoading(true)
       const [strategyData, logsData] = await Promise.all([
         pythonStrategyApi.getStrategy(strategyId),
         pythonStrategyApi.getLogFiles(strategyId),
-      ]);
-      setStrategy(strategyData);
-      setLogFiles(logsData);
+      ])
+      setStrategy(strategyData)
+      setLogFiles(logsData)
 
       // Auto-select first log if available
       if (logsData.length > 0 && !selectedLog) {
-        setSelectedLog(logsData[0].name);
+        setSelectedLog(logsData[0].name)
       }
     } catch (error) {
-      console.error('Failed to fetch data:', error);
-      toast.error('Failed to load logs');
+      console.error('Failed to fetch data:', error)
+      toast.error('Failed to load logs')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   const fetchLogContent = async (logName: string) => {
-    if (!strategyId) return;
+    if (!strategyId) return
     try {
-      setLoadingContent(true);
-      const content = await pythonStrategyApi.getLogContent(strategyId, logName);
-      setLogContent(content);
+      setLoadingContent(true)
+      const content = await pythonStrategyApi.getLogContent(strategyId, logName)
+      setLogContent(content)
 
       // Auto-scroll to bottom
       if (autoScroll && logContainerRef.current) {
         setTimeout(() => {
           if (logContainerRef.current) {
-            logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+            logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight
           }
-        }, 100);
+        }, 100)
       }
     } catch (error) {
-      console.error('Failed to fetch log content:', error);
-      toast.error('Failed to load log content');
+      console.error('Failed to fetch log content:', error)
+      toast.error('Failed to load log content')
     } finally {
-      setLoadingContent(false);
+      setLoadingContent(false)
     }
-  };
+  }
 
   useEffect(() => {
-    fetchData();
-  }, [strategyId]);
+    fetchData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     if (selectedLog) {
-      fetchLogContent(selectedLog);
+      fetchLogContent(selectedLog)
     }
-  }, [selectedLog]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedLog])
 
   // Auto-refresh if strategy is running
   useEffect(() => {
     if (strategy?.status === 'running' && selectedLog) {
       const interval = setInterval(() => {
-        fetchLogContent(selectedLog);
-      }, 5000);
-      return () => clearInterval(interval);
+        fetchLogContent(selectedLog)
+      }, 5000)
+      return () => clearInterval(interval)
     }
-  }, [strategy?.status, selectedLog]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strategy?.status, selectedLog])
 
   const handleClearLogs = async () => {
-    if (!strategyId) return;
+    if (!strategyId) return
     try {
-      setClearing(true);
-      const response = await pythonStrategyApi.clearLogs(strategyId);
+      setClearing(true)
+      const response = await pythonStrategyApi.clearLogs(strategyId)
       if (response.status === 'success') {
-        toast.success('Logs cleared');
-        setLogFiles([]);
-        setSelectedLog(null);
-        setLogContent(null);
+        toast.success('Logs cleared')
+        setLogFiles([])
+        setSelectedLog(null)
+        setLogContent(null)
       } else {
-        toast.error(response.message || 'Failed to clear logs');
+        toast.error(response.message || 'Failed to clear logs')
       }
     } catch (error) {
-      console.error('Failed to clear logs:', error);
-      toast.error('Failed to clear logs');
+      console.error('Failed to clear logs:', error)
+      toast.error('Failed to clear logs')
     } finally {
-      setClearing(false);
-      setClearDialogOpen(false);
+      setClearing(false)
+      setClearDialogOpen(false)
     }
-  };
+  }
 
   const formatLogName = (name: string) => {
     // Remove strategy ID prefix if present
-    const parts = name.split('_');
+    const parts = name.split('_')
     if (parts.length > 1) {
-      return parts.slice(1).join('_').replace('.log', '');
+      return parts.slice(1).join('_').replace('.log', '')
     }
-    return name.replace('.log', '');
-  };
+    return name.replace('.log', '')
+  }
 
   const highlightLog = (content: string) => {
     // Add colors for different log levels
     return content.split('\n').map((line, index) => {
-      let className = 'text-gray-300';
+      let className = 'text-gray-300'
       if (line.includes('ERROR') || line.includes('error') || line.includes('Error')) {
-        className = 'text-red-400';
+        className = 'text-red-400'
       } else if (line.includes('WARNING') || line.includes('warning') || line.includes('Warning')) {
-        className = 'text-yellow-400';
+        className = 'text-yellow-400'
       } else if (line.includes('SUCCESS') || line.includes('success') || line.includes('Success')) {
-        className = 'text-green-400';
+        className = 'text-green-400'
       } else if (line.includes('INFO') || line.includes('info') || line.includes('Info')) {
-        className = 'text-blue-400';
+        className = 'text-blue-400'
       }
       return (
         <div key={index} className={className}>
           {line || '\u00A0'}
         </div>
-      );
-    });
-  };
+      )
+    })
+  }
 
   if (loading) {
     return (
@@ -168,11 +163,11 @@ export default function PythonStrategyLogs() {
           <Skeleton className="h-[600px] col-span-3" />
         </div>
       </div>
-    );
+    )
   }
 
   if (!strategy) {
-    return null;
+    return null
   }
 
   return (
@@ -202,7 +197,11 @@ export default function PythonStrategyLogs() {
               Auto-scroll
             </Label>
           </div>
-          <Button variant="outline" size="sm" onClick={() => selectedLog && fetchLogContent(selectedLog)}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => selectedLog && fetchLogContent(selectedLog)}
+          >
             <RefreshCw className="h-4 w-4 mr-2" />
             Refresh
           </Button>
@@ -230,9 +229,7 @@ export default function PythonStrategyLogs() {
           </CardHeader>
           <CardContent>
             {logFiles.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-8">
-                No log files found
-              </p>
+              <p className="text-sm text-muted-foreground text-center py-8">No log files found</p>
             ) : (
               <ScrollArea className="h-[500px]">
                 <div className="space-y-2">
@@ -246,9 +243,7 @@ export default function PythonStrategyLogs() {
                           : 'bg-muted hover:bg-muted/80'
                       }`}
                     >
-                      <div className="font-medium text-sm truncate">
-                        {formatLogName(log.name)}
-                      </div>
+                      <div className="font-medium text-sm truncate">{formatLogName(log.name)}</div>
                       <div className="flex items-center gap-2 mt-1 text-xs opacity-80">
                         <Clock className="h-3 w-3" />
                         {new Date(log.last_modified).toLocaleString('en-IN', {
@@ -284,8 +279,8 @@ export default function PythonStrategyLogs() {
             </CardTitle>
             {logContent && (
               <CardDescription>
-                {logContent.lines} lines • {logContent.size_kb.toFixed(2)} KB •
-                Last updated: {new Date(logContent.last_updated).toLocaleString()}
+                {logContent.lines} lines • {logContent.size_kb.toFixed(2)} KB • Last updated:{' '}
+                {new Date(logContent.last_updated).toLocaleString()}
               </CardDescription>
             )}
           </CardHeader>
@@ -320,8 +315,8 @@ export default function PythonStrategyLogs() {
           <DialogHeader>
             <DialogTitle>Clear All Logs</DialogTitle>
             <DialogDescription>
-              Are you sure you want to clear all log files for "{strategy.name}"?
-              This action cannot be undone.
+              Are you sure you want to clear all log files for "{strategy.name}"? This action cannot
+              be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -335,5 +330,5 @@ export default function PythonStrategyLogs() {
         </DialogContent>
       </Dialog>
     </div>
-  );
+  )
 }

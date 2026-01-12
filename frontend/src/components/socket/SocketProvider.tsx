@@ -1,39 +1,35 @@
-import { createContext, useContext, type ReactNode } from 'react';
-import { useSocket } from '@/hooks/useSocket';
-import { useAuthStore } from '@/stores/authStore';
+import { createContext, type ReactNode, useContext } from 'react'
+import { useSocket } from '@/hooks/useSocket'
+import { useAuthStore } from '@/stores/authStore'
 
 interface SocketContextType {
-  playAlertSound: () => void;
+  playAlertSound: () => void
 }
 
-const SocketContext = createContext<SocketContextType | null>(null);
+const SocketContext = createContext<SocketContextType | null>(null)
 
 export function useSocketContext() {
-  const context = useContext(SocketContext);
+  const context = useContext(SocketContext)
   if (!context) {
-    return { playAlertSound: () => {} };
+    return { playAlertSound: () => {} }
   }
-  return context;
+  return context
 }
 
 interface SocketProviderProps {
-  children: ReactNode;
+  children: ReactNode
 }
 
 export function SocketProvider({ children }: SocketProviderProps) {
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated } = useAuthStore()
 
   // Only initialize socket when authenticated
-  const { playAlertSound } = useSocket();
+  const { playAlertSound } = useSocket()
 
   // Only provide socket context when authenticated
   if (!isAuthenticated) {
-    return <>{children}</>;
+    return <>{children}</>
   }
 
-  return (
-    <SocketContext.Provider value={{ playAlertSound }}>
-      {children}
-    </SocketContext.Provider>
-  );
+  return <SocketContext.Provider value={{ playAlertSound }}>{children}</SocketContext.Provider>
 }

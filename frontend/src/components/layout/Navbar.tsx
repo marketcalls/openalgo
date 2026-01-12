@@ -1,43 +1,43 @@
-import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { useState } from 'react';
 import {
-  LayoutDashboard,
-  ClipboardList,
-  FileText,
-  TrendingUp,
+  BarChart3,
   Bell,
-  Layers,
+  BookOpen,
+  ClipboardList,
   Code2,
   FileBarChart,
-  Menu,
-  Sun,
-  Moon,
-  LogOut,
-  Key,
-  User,
-  Settings,
-  MessageSquare,
-  Search,
+  FileText,
   FlaskConical,
-  BookOpen,
+  Key,
+  Layers,
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  MessageSquare,
+  Moon,
+  Search,
+  Settings,
+  Sun,
+  TrendingUp,
+  User,
   Zap,
-  BarChart3,
-} from 'lucide-react';
-import { cn } from '@/lib/utils';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+} from 'lucide-react'
+import { useState } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
+import { authApi } from '@/api/auth'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
-import { useThemeStore } from '@/stores/themeStore';
-import { useAuthStore } from '@/stores/authStore';
-import { authApi } from '@/api/auth';
-import { toast } from 'sonner';
+} from '@/components/ui/dropdown-menu'
+import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet'
+import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/authStore'
+import { useThemeStore } from '@/stores/themeStore'
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -48,47 +48,47 @@ const navItems = [
   { href: '/platforms', label: 'Platforms', icon: Layers },
   { href: '/strategy', label: 'Strategy', icon: Code2 },
   { href: '/logs', label: 'Logs', icon: FileBarChart },
-];
+]
 
 export function Navbar() {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const [mobileOpen, setMobileOpen] = useState(false);
-  const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore();
-  const { user, logout } = useAuthStore();
+  const location = useLocation()
+  const navigate = useNavigate()
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
+  const { user, logout } = useAuthStore()
 
   const handleLogout = async () => {
     try {
-      await authApi.logout();
-      logout();
-      navigate('/login');
-      toast.success('Logged out successfully');
+      await authApi.logout()
+      logout()
+      navigate('/login')
+      toast.success('Logged out successfully')
     } catch {
-      logout();
-      navigate('/login');
+      logout()
+      navigate('/login')
     }
-  };
+  }
 
   const handleModeToggle = async () => {
-    const result = await toggleAppMode();
+    const result = await toggleAppMode()
     if (result.success) {
-      const newMode = useThemeStore.getState().appMode;
-      toast.success(`Switched to ${newMode === 'live' ? 'Live' : 'Analyze'} mode`);
+      const newMode = useThemeStore.getState().appMode
+      toast.success(`Switched to ${newMode === 'live' ? 'Live' : 'Analyze'} mode`)
 
       // Show warning toast when enabling analyzer mode (like old UI)
       if (newMode === 'analyzer') {
         setTimeout(() => {
           toast.warning('⚠️ Analyzer (Sandbox) mode is for testing purposes only', {
             duration: 20000,
-          });
-        }, 2000);
+          })
+        }, 2000)
       }
     } else {
-      toast.error(result.message || 'Failed to toggle mode');
+      toast.error(result.message || 'Failed to toggle mode')
     }
-  };
+  }
 
-  const isActive = (href: string) => location.pathname === href;
+  const isActive = (href: string) => location.pathname === href
 
   return (
     <nav className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -103,7 +103,11 @@ export function Navbar() {
           </SheetTrigger>
           <SheetContent side="left" className="w-72">
             <div className="flex flex-col gap-4 py-4">
-              <Link to="/dashboard" className="flex items-center gap-2 px-2" onClick={() => setMobileOpen(false)}>
+              <Link
+                to="/dashboard"
+                className="flex items-center gap-2 px-2"
+                onClick={() => setMobileOpen(false)}
+              >
                 <img src="/logo.png" alt="OpenAlgo" className="h-8 w-8" />
                 <span className="font-semibold">OpenAlgo</span>
               </Link>
@@ -115,9 +119,7 @@ export function Navbar() {
                     onClick={() => setMobileOpen(false)}
                     className={cn(
                       'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
-                      isActive(item.href)
-                        ? 'bg-primary text-primary-foreground'
-                        : 'hover:bg-muted'
+                      isActive(item.href) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
                     )}
                   >
                     <item.icon className="h-4 w-4" />
@@ -170,7 +172,9 @@ export function Navbar() {
               appMode === 'analyzer' && 'bg-purple-500 hover:bg-purple-600 text-white'
             )}
           >
-            <span className="hidden sm:inline">{appMode === 'live' ? 'Live Mode' : 'Analyze Mode'}</span>
+            <span className="hidden sm:inline">
+              {appMode === 'live' ? 'Live Mode' : 'Analyze Mode'}
+            </span>
             <span className="sm:hidden">{appMode === 'live' ? 'Live' : 'Analyze'}</span>
           </Badge>
 
@@ -201,17 +205,17 @@ export function Navbar() {
             disabled={appMode !== 'live'}
             title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
           >
-            {mode === 'light' ? (
-              <Sun className="h-4 w-4" />
-            ) : (
-              <Moon className="h-4 w-4" />
-            )}
+            {mode === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
 
           {/* Profile Dropdown */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full bg-primary text-primary-foreground">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 rounded-full bg-primary text-primary-foreground"
+              >
                 <span className="text-sm font-medium">
                   {user?.username?.[0]?.toUpperCase() || 'O'}
                 </span>
@@ -238,11 +242,17 @@ export function Navbar() {
                 <Code2 className="h-4 w-4 mr-2" />
                 Python Strategies
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => navigate('/pnl-tracker')} className="cursor-pointer">
+              <DropdownMenuItem
+                onSelect={() => navigate('/pnl-tracker')}
+                className="cursor-pointer"
+              >
                 <BarChart3 className="h-4 w-4 mr-2" />
                 PnL Tracker
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => navigate('/search/token')} className="cursor-pointer">
+              <DropdownMenuItem
+                onSelect={() => navigate('/search/token')}
+                className="cursor-pointer"
+              >
                 <Search className="h-4 w-4 mr-2" />
                 Search
               </DropdownMenuItem>
@@ -255,13 +265,21 @@ export function Navbar() {
                 Admin
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
-                <a href="https://docs.openalgo.in" target="_blank" rel="noopener noreferrer" className="flex items-center gap-2">
+                <a
+                  href="https://docs.openalgo.in"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2"
+                >
                   <BookOpen className="h-4 w-4" />
                   Docs
                 </a>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive">
+              <DropdownMenuItem
+                onClick={handleLogout}
+                className="text-destructive focus:text-destructive"
+              >
                 <LogOut className="h-4 w-4 mr-2" />
                 Logout
               </DropdownMenuItem>
@@ -270,5 +288,5 @@ export function Navbar() {
         </div>
       </div>
     </nav>
-  );
+  )
 }

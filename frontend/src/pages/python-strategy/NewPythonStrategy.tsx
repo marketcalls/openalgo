@@ -1,18 +1,14 @@
-import { useState, useRef } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft, Upload, FileCode, Info } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible';
-import { toast } from 'sonner';
-import { pythonStrategyApi } from '@/api/python-strategy';
+import { ArrowLeft, FileCode, Info, Upload } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
+import { pythonStrategyApi } from '@/api/python-strategy'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 
 const EXAMPLE_STRATEGY = `"""
 Example OpenAlgo Strategy
@@ -50,87 +46,87 @@ def main():
 
 if __name__ == "__main__":
     main()
-`;
+`
 
 export default function NewPythonStrategy() {
-  const navigate = useNavigate();
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [name, setName] = useState('');
-  const [file, setFile] = useState<File | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [showExample, setShowExample] = useState(false);
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const navigate = useNavigate()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [name, setName] = useState('')
+  const [file, setFile] = useState<File | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [showExample, setShowExample] = useState(false)
+  const [errors, setErrors] = useState<Record<string, string>>({})
 
   const validateForm = () => {
-    const newErrors: Record<string, string> = {};
+    const newErrors: Record<string, string> = {}
 
     if (!name.trim()) {
-      newErrors.name = 'Strategy name is required';
+      newErrors.name = 'Strategy name is required'
     } else if (name.length < 3 || name.length > 50) {
-      newErrors.name = 'Name must be between 3 and 50 characters';
+      newErrors.name = 'Name must be between 3 and 50 characters'
     } else if (!/^[a-zA-Z0-9\s\-_]+$/.test(name)) {
-      newErrors.name = 'Name can only contain letters, numbers, spaces, hyphens, and underscores';
+      newErrors.name = 'Name can only contain letters, numbers, spaces, hyphens, and underscores'
     }
 
     if (!file) {
-      newErrors.file = 'Please select a Python file';
+      newErrors.file = 'Please select a Python file'
     } else if (!file.name.endsWith('.py')) {
-      newErrors.file = 'File must be a Python file (.py)';
+      newErrors.file = 'File must be a Python file (.py)'
     }
 
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
+    setErrors(newErrors)
+    return Object.keys(newErrors).length === 0
+  }
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
+    const selectedFile = e.target.files?.[0]
     if (selectedFile) {
       // Validate file extension
       if (!selectedFile.name.endsWith('.py')) {
-        toast.error('Please select a Python file (.py)');
-        return;
+        toast.error('Please select a Python file (.py)')
+        return
       }
       // Validate file size (max 1MB for Python scripts)
-      const maxSizeBytes = 1024 * 1024; // 1MB
+      const maxSizeBytes = 1024 * 1024 // 1MB
       if (selectedFile.size > maxSizeBytes) {
-        toast.error('File size must be less than 1MB');
-        return;
+        toast.error('File size must be less than 1MB')
+        return
       }
-      setFile(selectedFile);
+      setFile(selectedFile)
       // Auto-fill name from file name if empty
       if (!name) {
-        const baseName = selectedFile.name.replace('.py', '').replace(/_/g, ' ');
-        setName(baseName.charAt(0).toUpperCase() + baseName.slice(1));
+        const baseName = selectedFile.name.replace('.py', '').replace(/_/g, ' ')
+        setName(baseName.charAt(0).toUpperCase() + baseName.slice(1))
       }
     }
-  };
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+    e.preventDefault()
 
     if (!validateForm()) {
-      toast.error('Please fix the form errors');
-      return;
+      toast.error('Please fix the form errors')
+      return
     }
 
     try {
-      setLoading(true);
-      const response = await pythonStrategyApi.uploadStrategy(name, file!);
+      setLoading(true)
+      const response = await pythonStrategyApi.uploadStrategy(name, file!)
 
       if (response.status === 'success') {
-        toast.success('Strategy uploaded successfully');
-        navigate(`/python/${response.data?.strategy_id}/edit`);
+        toast.success('Strategy uploaded successfully')
+        navigate(`/python/${response.data?.strategy_id}/edit`)
       } else {
-        toast.error(response.message || 'Failed to upload strategy');
+        toast.error(response.message || 'Failed to upload strategy')
       }
     } catch (error: unknown) {
-      console.error('Failed to upload strategy:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Failed to upload strategy';
-      toast.error(errorMessage);
+      console.error('Failed to upload strategy:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Failed to upload strategy'
+      toast.error(errorMessage)
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   return (
     <div className="container mx-auto py-6 max-w-2xl space-y-6">
@@ -154,8 +150,8 @@ export default function NewPythonStrategy() {
       <Alert>
         <Info className="h-4 w-4" />
         <AlertDescription>
-          Your Python script should use the <code className="bg-muted px-1 rounded">openalgo</code> SDK.
-          Install it with: <code className="bg-muted px-1 rounded">pip install openalgo</code>
+          Your Python script should use the <code className="bg-muted px-1 rounded">openalgo</code>{' '}
+          SDK. Install it with: <code className="bg-muted px-1 rounded">pip install openalgo</code>
         </AlertDescription>
       </Alert>
 
@@ -166,9 +162,7 @@ export default function NewPythonStrategy() {
             <Upload className="h-5 w-5" />
             Upload Strategy
           </CardTitle>
-          <CardDescription>
-            Select your Python script file and give it a name
-          </CardDescription>
+          <CardDescription>Select your Python script file and give it a name</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
@@ -182,12 +176,8 @@ export default function NewPythonStrategy() {
                 onChange={(e) => setName(e.target.value)}
                 className={errors.name ? 'border-red-500' : ''}
               />
-              {errors.name && (
-                <p className="text-sm text-red-500">{errors.name}</p>
-              )}
-              <p className="text-xs text-muted-foreground">
-                A descriptive name for your strategy
-              </p>
+              {errors.name && <p className="text-sm text-red-500">{errors.name}</p>}
+              <p className="text-xs text-muted-foreground">A descriptive name for your strategy</p>
             </div>
 
             {/* File Upload */}
@@ -223,15 +213,11 @@ export default function NewPythonStrategy() {
                     <p className="text-sm text-muted-foreground">
                       Click to select a Python file (.py)
                     </p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Maximum file size: 1MB
-                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">Maximum file size: 1MB</p>
                   </div>
                 )}
               </div>
-              {errors.file && (
-                <p className="text-sm text-red-500">{errors.file}</p>
-              )}
+              {errors.file && <p className="text-sm text-red-500">{errors.file}</p>}
             </div>
 
             {/* Submit */}
@@ -262,9 +248,7 @@ export default function NewPythonStrategy() {
                   <FileCode className="h-5 w-5" />
                   Example Strategy Template
                 </CardTitle>
-                <span className="text-muted-foreground">
-                  {showExample ? 'Hide' : 'Show'}
-                </span>
+                <span className="text-muted-foreground">{showExample ? 'Hide' : 'Show'}</span>
               </Button>
             </CollapsibleTrigger>
           </CardHeader>
@@ -278,8 +262,8 @@ export default function NewPythonStrategy() {
                 size="sm"
                 className="mt-4"
                 onClick={() => {
-                  navigator.clipboard.writeText(EXAMPLE_STRATEGY);
-                  toast.success('Copied to clipboard');
+                  navigator.clipboard.writeText(EXAMPLE_STRATEGY)
+                  toast.success('Copied to clipboard')
                 }}
               >
                 Copy Template
@@ -289,5 +273,5 @@ export default function NewPythonStrategy() {
         </Card>
       </Collapsible>
     </div>
-  );
+  )
 }

@@ -1,26 +1,27 @@
-import { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
 import {
-  Plus,
-  Play,
-  Square,
+  AlertTriangle,
   Calendar,
   CalendarOff,
+  Clock,
+  Download,
   FileCode,
   FileText,
-  Trash2,
-  Download,
-  RefreshCw,
-  Clock,
-  AlertTriangle,
-  Settings,
   MoreVertical,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Skeleton } from '@/components/ui/skeleton';
+  Play,
+  Plus,
+  RefreshCw,
+  Settings,
+  Square,
+  Trash2,
+} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
+import { pythonStrategyApi } from '@/api/python-strategy'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -28,206 +29,208 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
+} from '@/components/ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { toast } from 'sonner';
-import { pythonStrategyApi } from '@/api/python-strategy';
-import { STATUS_COLORS, STATUS_LABELS, SCHEDULE_DAYS } from '@/types/python-strategy';
-import type { PythonStrategy, MasterContractStatus } from '@/types/python-strategy';
+} from '@/components/ui/dropdown-menu'
+import { Skeleton } from '@/components/ui/skeleton'
+import type { MasterContractStatus, PythonStrategy } from '@/types/python-strategy'
+import { SCHEDULE_DAYS, STATUS_COLORS, STATUS_LABELS } from '@/types/python-strategy'
 
 export default function PythonStrategyIndex() {
-  const navigate = useNavigate();
-  const [strategies, setStrategies] = useState<PythonStrategy[]>([]);
-  const [masterStatus, setMasterStatus] = useState<MasterContractStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [strategyToDelete, setStrategyToDelete] = useState<PythonStrategy | null>(null);
-  const [currentTime, setCurrentTime] = useState(new Date());
+  const navigate = useNavigate()
+  const [strategies, setStrategies] = useState<PythonStrategy[]>([])
+  const [masterStatus, setMasterStatus] = useState<MasterContractStatus | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [strategyToDelete, setStrategyToDelete] = useState<PythonStrategy | null>(null)
+  const [currentTime, setCurrentTime] = useState(new Date())
 
   const fetchData = async () => {
     try {
-      setLoading(true);
+      setLoading(true)
       const [strategiesData, statusData] = await Promise.all([
         pythonStrategyApi.getStrategies(),
         pythonStrategyApi.getMasterContractStatus(),
-      ]);
-      setStrategies(strategiesData);
-      setMasterStatus(statusData);
+      ])
+      setStrategies(strategiesData)
+      setMasterStatus(statusData)
     } catch (error) {
-      console.error('Failed to fetch data:', error);
-      toast.error('Failed to load strategies');
+      console.error('Failed to fetch data:', error)
+      toast.error('Failed to load strategies')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   useEffect(() => {
-    fetchData();
+    fetchData()
     // Update current time every second
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000)
+    return () => clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const handleStart = async (strategy: PythonStrategy) => {
     try {
-      setActionLoading(strategy.id);
-      const response = await pythonStrategyApi.startStrategy(strategy.id);
+      setActionLoading(strategy.id)
+      const response = await pythonStrategyApi.startStrategy(strategy.id)
       if (response.status === 'success') {
-        toast.success(`Strategy ${strategy.name} started`);
-        fetchData();
+        toast.success(`Strategy ${strategy.name} started`)
+        fetchData()
       } else {
-        toast.error(response.message || 'Failed to start strategy');
+        toast.error(response.message || 'Failed to start strategy')
       }
     } catch (error) {
-      console.error('Failed to start strategy:', error);
-      toast.error('Failed to start strategy');
+      console.error('Failed to start strategy:', error)
+      toast.error('Failed to start strategy')
     } finally {
-      setActionLoading(null);
+      setActionLoading(null)
     }
-  };
+  }
 
   const handleStop = async (strategy: PythonStrategy) => {
     try {
-      setActionLoading(strategy.id);
-      const response = await pythonStrategyApi.stopStrategy(strategy.id);
+      setActionLoading(strategy.id)
+      const response = await pythonStrategyApi.stopStrategy(strategy.id)
       if (response.status === 'success') {
-        toast.success(`Strategy ${strategy.name} stopped`);
-        fetchData();
+        toast.success(`Strategy ${strategy.name} stopped`)
+        fetchData()
       } else {
-        toast.error(response.message || 'Failed to stop strategy');
+        toast.error(response.message || 'Failed to stop strategy')
       }
     } catch (error) {
-      console.error('Failed to stop strategy:', error);
-      toast.error('Failed to stop strategy');
+      console.error('Failed to stop strategy:', error)
+      toast.error('Failed to stop strategy')
     } finally {
-      setActionLoading(null);
+      setActionLoading(null)
     }
-  };
+  }
 
   const handleClearError = async (strategy: PythonStrategy) => {
     try {
-      setActionLoading(strategy.id);
-      const response = await pythonStrategyApi.clearError(strategy.id);
+      setActionLoading(strategy.id)
+      const response = await pythonStrategyApi.clearError(strategy.id)
       if (response.status === 'success') {
-        toast.success('Error cleared');
-        fetchData();
+        toast.success('Error cleared')
+        fetchData()
       } else {
-        toast.error(response.message || 'Failed to clear error');
+        toast.error(response.message || 'Failed to clear error')
       }
     } catch (error) {
-      console.error('Failed to clear error:', error);
-      toast.error('Failed to clear error');
+      console.error('Failed to clear error:', error)
+      toast.error('Failed to clear error')
     } finally {
-      setActionLoading(null);
+      setActionLoading(null)
     }
-  };
+  }
 
   const handleUnschedule = async (strategy: PythonStrategy) => {
     try {
-      setActionLoading(strategy.id);
-      const response = await pythonStrategyApi.unscheduleStrategy(strategy.id);
+      setActionLoading(strategy.id)
+      const response = await pythonStrategyApi.unscheduleStrategy(strategy.id)
       if (response.status === 'success') {
-        toast.success('Schedule removed');
-        fetchData();
+        toast.success('Schedule removed')
+        fetchData()
       } else {
-        toast.error(response.message || 'Failed to remove schedule');
+        toast.error(response.message || 'Failed to remove schedule')
       }
     } catch (error) {
-      console.error('Failed to unschedule:', error);
-      toast.error('Failed to remove schedule');
+      console.error('Failed to unschedule:', error)
+      toast.error('Failed to remove schedule')
     } finally {
-      setActionLoading(null);
+      setActionLoading(null)
     }
-  };
+  }
 
   const handleDelete = async () => {
-    if (!strategyToDelete) return;
+    if (!strategyToDelete) return
     try {
-      setActionLoading(strategyToDelete.id);
-      const response = await pythonStrategyApi.deleteStrategy(strategyToDelete.id);
+      setActionLoading(strategyToDelete.id)
+      const response = await pythonStrategyApi.deleteStrategy(strategyToDelete.id)
       if (response.status === 'success') {
-        toast.success('Strategy deleted');
-        setStrategies(strategies.filter((s) => s.id !== strategyToDelete.id));
+        toast.success('Strategy deleted')
+        setStrategies(strategies.filter((s) => s.id !== strategyToDelete.id))
       } else {
-        toast.error(response.message || 'Failed to delete strategy');
+        toast.error(response.message || 'Failed to delete strategy')
       }
     } catch (error) {
-      console.error('Failed to delete strategy:', error);
-      toast.error('Failed to delete strategy');
+      console.error('Failed to delete strategy:', error)
+      toast.error('Failed to delete strategy')
     } finally {
-      setActionLoading(null);
-      setDeleteDialogOpen(false);
-      setStrategyToDelete(null);
+      setActionLoading(null)
+      setDeleteDialogOpen(false)
+      setStrategyToDelete(null)
     }
-  };
+  }
 
   const handleExport = async (strategy: PythonStrategy) => {
     try {
-      const blob = await pythonStrategyApi.exportStrategy(strategy.id);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = strategy.file_name;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      toast.success('Strategy exported');
+      const blob = await pythonStrategyApi.exportStrategy(strategy.id)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = strategy.file_name
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      toast.success('Strategy exported')
     } catch (error) {
-      console.error('Failed to export strategy:', error);
-      toast.error('Failed to export strategy');
+      console.error('Failed to export strategy:', error)
+      toast.error('Failed to export strategy')
     }
-  };
+  }
 
   const handleCheckContracts = async () => {
     try {
-      setActionLoading('master');
-      const response = await pythonStrategyApi.checkAndStartPending();
+      setActionLoading('master')
+      const response = await pythonStrategyApi.checkAndStartPending()
       if (response.status === 'success') {
-        const started = response.data?.started || 0;
-        toast.success(`Started ${started} pending strategies`);
-        fetchData();
+        const started = response.data?.started || 0
+        toast.success(`Started ${started} pending strategies`)
+        fetchData()
       } else {
-        toast.error(response.message || 'Failed to check contracts');
+        toast.error(response.message || 'Failed to check contracts')
       }
     } catch (error) {
-      console.error('Failed to check contracts:', error);
-      toast.error('Failed to check contracts');
+      console.error('Failed to check contracts:', error)
+      toast.error('Failed to check contracts')
     } finally {
-      setActionLoading(null);
+      setActionLoading(null)
     }
-  };
+  }
 
   const formatScheduleDays = (days: string[]) => {
-    if (!days || days.length === 0) return '';
-    if (days.length === 7) return 'Every day';
-    if (days.length === 5 && !days.includes('sat') && !days.includes('sun')) return 'Weekdays';
-    return days.map((d) => SCHEDULE_DAYS.find((sd) => sd.value === d)?.label.slice(0, 3) || d).join(', ');
-  };
+    if (!days || days.length === 0) return ''
+    if (days.length === 7) return 'Every day'
+    if (days.length === 5 && !days.includes('sat') && !days.includes('sun')) return 'Weekdays'
+    return days
+      .map((d) => SCHEDULE_DAYS.find((sd) => sd.value === d)?.label.slice(0, 3) || d)
+      .join(', ')
+  }
 
   const formatTime = (timeStr: string | null) => {
-    if (!timeStr) return '-';
+    if (!timeStr) return '-'
     return new Date(timeStr).toLocaleString('en-IN', {
       day: '2-digit',
       month: 'short',
       hour: '2-digit',
       minute: '2-digit',
-    });
-  };
+    })
+  }
 
   // Stats
   const stats = {
     total: strategies.length,
     running: strategies.filter((s) => s.status === 'running').length,
     scheduled: strategies.filter((s) => s.is_scheduled).length,
-  };
+  }
 
   if (loading) {
     return (
@@ -247,7 +250,7 @@ export default function PythonStrategyIndex() {
           ))}
         </div>
       </div>
-    );
+    )
   }
 
   return (
@@ -256,9 +259,7 @@ export default function PythonStrategyIndex() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Python Strategies</h1>
-          <p className="text-muted-foreground">
-            Manage and run your Python trading scripts
-          </p>
+          <p className="text-muted-foreground">Manage and run your Python trading scripts</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={fetchData}>
@@ -357,7 +358,9 @@ export default function PythonStrategyIndex() {
           {strategies.map((strategy) => (
             <Card key={strategy.id} className="relative overflow-hidden">
               {/* Status bar */}
-              <div className={`absolute top-0 left-0 right-0 h-1 ${STATUS_COLORS[strategy.status]}`} />
+              <div
+                className={`absolute top-0 left-0 right-0 h-1 ${STATUS_COLORS[strategy.status]}`}
+              />
 
               <CardHeader className="pb-3">
                 <div className="flex items-start justify-between">
@@ -396,8 +399,8 @@ export default function PythonStrategyIndex() {
                           className="text-red-500"
                           disabled={strategy.status === 'running'}
                           onClick={() => {
-                            setStrategyToDelete(strategy);
-                            setDeleteDialogOpen(true);
+                            setStrategyToDelete(strategy)
+                            setDeleteDialogOpen(true)
                           }}
                         >
                           <Trash2 className="h-4 w-4 mr-2" />
@@ -528,8 +531,8 @@ export default function PythonStrategyIndex() {
           <DialogHeader>
             <DialogTitle>Delete Strategy</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete "{strategyToDelete?.name}"?
-              This will remove the strategy file and all associated logs.
+              Are you sure you want to delete "{strategyToDelete?.name}"? This will remove the
+              strategy file and all associated logs.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -543,5 +546,5 @@ export default function PythonStrategyIndex() {
         </DialogContent>
       </Dialog>
     </div>
-  );
+  )
 }

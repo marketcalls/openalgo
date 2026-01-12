@@ -1,95 +1,97 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import {
-  Settings,
-  ArrowLeft,
-  Key,
-  Eye,
-  EyeOff,
-  Save,
-  Check,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
-import { toast } from 'sonner';
-import { webClient } from '@/api/client';
+import { ArrowLeft, Check, Eye, EyeOff, Key, Save, Settings } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
+import { webClient } from '@/api/client'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 
 interface TelegramConfig {
-  has_token: boolean;
-  bot_username: string | null;
-  broadcast_enabled: boolean;
-  rate_limit_per_minute: number;
-  is_active: boolean;
+  has_token: boolean
+  bot_username: string | null
+  broadcast_enabled: boolean
+  rate_limit_per_minute: number
+  is_active: boolean
 }
 
 export default function TelegramConfig() {
-  const [config, setConfig] = useState<TelegramConfig | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
+  const [config, setConfig] = useState<TelegramConfig | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isSaving, setIsSaving] = useState(false)
 
   // Form state
-  const [token, setToken] = useState('');
-  const [showToken, setShowToken] = useState(false);
-  const [broadcastEnabled, setBroadcastEnabled] = useState(true);
-  const [rateLimit, setRateLimit] = useState(10);
+  const [token, setToken] = useState('')
+  const [showToken, setShowToken] = useState(false)
+  const [broadcastEnabled, setBroadcastEnabled] = useState(true)
+  const [rateLimit, setRateLimit] = useState(10)
 
   useEffect(() => {
-    fetchConfig();
-  }, []);
+    fetchConfig()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const fetchConfig = async () => {
     try {
-      const response = await webClient.get<{ status: string; data: TelegramConfig }>('/telegram/api/config');
-      const configData = response.data.data;
-      setConfig(configData);
-      setBroadcastEnabled(configData.broadcast_enabled);
-      setRateLimit(configData.rate_limit_per_minute);
+      const response = await webClient.get<{ status: string; data: TelegramConfig }>(
+        '/telegram/api/config'
+      )
+      const configData = response.data.data
+      setConfig(configData)
+      setBroadcastEnabled(configData.broadcast_enabled)
+      setRateLimit(configData.rate_limit_per_minute)
     } catch (error) {
-      console.error('Error fetching config:', error);
-      toast.error('Failed to load configuration');
+      console.error('Error fetching config:', error)
+      toast.error('Failed to load configuration')
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   const handleSave = async () => {
-    setIsSaving(true);
+    setIsSaving(true)
     try {
-      const updateData: { token?: string; broadcast_enabled: boolean; rate_limit_per_minute: number } = {
+      const updateData: {
+        token?: string
+        broadcast_enabled: boolean
+        rate_limit_per_minute: number
+      } = {
         broadcast_enabled: broadcastEnabled,
         rate_limit_per_minute: rateLimit,
-      };
+      }
 
       if (token) {
-        updateData.token = token;
+        updateData.token = token
       }
 
-      const response = await webClient.post<{ status: string; message: string }>('/telegram/config', updateData);
+      const response = await webClient.post<{ status: string; message: string }>(
+        '/telegram/config',
+        updateData
+      )
 
       if (response.data.status === 'success') {
-        toast.success('Configuration saved successfully');
-        setToken(''); // Clear token field after saving
-        fetchConfig(); // Refresh config
+        toast.success('Configuration saved successfully')
+        setToken('') // Clear token field after saving
+        fetchConfig() // Refresh config
       } else {
-        toast.error(response.data.message || 'Failed to save configuration');
+        toast.error(response.data.message || 'Failed to save configuration')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to save configuration');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to save configuration')
     } finally {
-      setIsSaving(false);
+      setIsSaving(false)
     }
-  };
+  }
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
-    );
+    )
   }
 
   return (
@@ -105,9 +107,7 @@ export default function TelegramConfig() {
             Bot Configuration
           </h1>
         </div>
-        <p className="text-muted-foreground">
-          Configure your Telegram bot settings
-        </p>
+        <p className="text-muted-foreground">Configure your Telegram bot settings</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -118,9 +118,7 @@ export default function TelegramConfig() {
               <Key className="h-5 w-5" />
               Bot Token
             </CardTitle>
-            <CardDescription>
-              Your Telegram Bot API token from @BotFather
-            </CardDescription>
+            <CardDescription>Your Telegram Bot API token from @BotFather</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {config?.has_token && (
@@ -136,7 +134,9 @@ export default function TelegramConfig() {
                 <div className="relative flex-1">
                   <Input
                     type={showToken ? 'text' : 'password'}
-                    placeholder={config?.has_token ? 'Enter new token to update' : 'Enter your bot token'}
+                    placeholder={
+                      config?.has_token ? 'Enter new token to update' : 'Enter your bot token'
+                    }
                     value={token}
                     onChange={(e) => setToken(e.target.value)}
                     className="pr-10"
@@ -163,9 +163,7 @@ export default function TelegramConfig() {
         <Card>
           <CardHeader>
             <CardTitle>Settings</CardTitle>
-            <CardDescription>
-              Configure bot behavior and limits
-            </CardDescription>
+            <CardDescription>Configure bot behavior and limits</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
             {/* Broadcast Toggle */}
@@ -176,10 +174,7 @@ export default function TelegramConfig() {
                   Allow sending broadcast messages to all users
                 </p>
               </div>
-              <Switch
-                checked={broadcastEnabled}
-                onCheckedChange={setBroadcastEnabled}
-              />
+              <Switch checked={broadcastEnabled} onCheckedChange={setBroadcastEnabled} />
             </div>
 
             {/* Rate Limit */}
@@ -188,7 +183,7 @@ export default function TelegramConfig() {
               <Input
                 type="number"
                 value={rateLimit}
-                onChange={(e) => setRateLimit(parseInt(e.target.value) || 10)}
+                onChange={(e) => setRateLimit(parseInt(e.target.value, 10) || 10)}
                 min={1}
                 max={60}
               />
@@ -208,7 +203,12 @@ export default function TelegramConfig() {
           rel="noopener noreferrer"
         >
           <Button variant="outline" className="w-full sm:w-auto">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" viewBox="0 0 20 20" fill="currentColor">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-4 w-4 mr-2"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
               <path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z" />
             </svg>
             View Documentation
@@ -228,8 +228,7 @@ export default function TelegramConfig() {
         <CardContent className="space-y-4">
           <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
             <p className="text-sm">
-              <span className="font-semibold">Need detailed instructions?</span>{' '}
-              Visit our complete{' '}
+              <span className="font-semibold">Need detailed instructions?</span> Visit our complete{' '}
               <a
                 href="https://docs.openalgo.in/trading-platform/telegram"
                 target="_blank"
@@ -245,11 +244,19 @@ export default function TelegramConfig() {
           <div className="prose prose-sm dark:prose-invert max-w-none">
             <h4 className="text-base font-semibold mb-2">Quick Steps:</h4>
             <ol className="text-muted-foreground space-y-1 list-decimal list-inside text-sm">
-              <li>Get a bot token from <strong>@BotFather</strong> on Telegram</li>
+              <li>
+                Get a bot token from <strong>@BotFather</strong> on Telegram
+              </li>
               <li>Paste the token above and click "Save Configuration"</li>
               <li>Start the bot from the dashboard</li>
-              <li>Open your bot in Telegram and send <code className="bg-muted px-1 rounded">/start</code></li>
-              <li>Link your account: <code className="bg-muted px-1 rounded">/link YOUR_API_KEY YOUR_HOST_URL</code></li>
+              <li>
+                Open your bot in Telegram and send{' '}
+                <code className="bg-muted px-1 rounded">/start</code>
+              </li>
+              <li>
+                Link your account:{' '}
+                <code className="bg-muted px-1 rounded">/link YOUR_API_KEY YOUR_HOST_URL</code>
+              </li>
             </ol>
           </div>
         </CardContent>
@@ -303,5 +310,5 @@ export default function TelegramConfig() {
         </CardContent>
       </Card>
     </div>
-  );
+  )
 }

@@ -1,12 +1,9 @@
-import { useEffect, useState, useCallback } from 'react';
-import {
-  TrendingUp,
-  TrendingDown,
-  Loader2,
-  RefreshCw,
-  Download,
-} from 'lucide-react';
-import { onModeChange } from '@/stores/themeStore';
+import { Download, Loader2, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { tradingApi } from '@/api/trading'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
   TableBody,
@@ -14,76 +11,76 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { useAuthStore } from '@/stores/authStore';
-import { tradingApi } from '@/api/trading';
-import type { Holding, HoldingsStats } from '@/types/trading';
-import { cn, sanitizeCSV } from '@/lib/utils';
+} from '@/components/ui/table'
+import { cn, sanitizeCSV } from '@/lib/utils'
+import { useAuthStore } from '@/stores/authStore'
+import { onModeChange } from '@/stores/themeStore'
+import type { Holding, HoldingsStats } from '@/types/trading'
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat('en-IN', {
     style: 'currency',
     currency: 'INR',
     minimumFractionDigits: 2,
-  }).format(value);
+  }).format(value)
 }
 
 function formatPercent(value: number): string {
-  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
+  return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
 }
 
 export default function Holdings() {
-  const { apiKey } = useAuthStore();
-  const [holdings, setHoldings] = useState<Holding[]>([]);
-  const [stats, setStats] = useState<HoldingsStats | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { apiKey } = useAuthStore()
+  const [holdings, setHoldings] = useState<Holding[]>([])
+  const [stats, setStats] = useState<HoldingsStats | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const fetchHoldings = useCallback(async (showRefresh = false) => {
-    if (!apiKey) {
-      setIsLoading(false);
-      return;
-    }
-
-    if (showRefresh) setIsRefreshing(true);
-
-    try {
-      const response = await tradingApi.getHoldings(apiKey);
-      if (response.status === 'success' && response.data) {
-        setHoldings(response.data.holdings || []);
-        setStats(response.data.statistics);
-        setError(null);
-      } else {
-        setError(response.message || 'Failed to fetch holdings');
+  const fetchHoldings = useCallback(
+    async (showRefresh = false) => {
+      if (!apiKey) {
+        setIsLoading(false)
+        return
       }
-    } catch {
-      setError('Failed to fetch holdings');
-    } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }
-  }, [apiKey]);
+
+      if (showRefresh) setIsRefreshing(true)
+
+      try {
+        const response = await tradingApi.getHoldings(apiKey)
+        if (response.status === 'success' && response.data) {
+          setHoldings(response.data.holdings || [])
+          setStats(response.data.statistics)
+          setError(null)
+        } else {
+          setError(response.message || 'Failed to fetch holdings')
+        }
+      } catch {
+        setError('Failed to fetch holdings')
+      } finally {
+        setIsLoading(false)
+        setIsRefreshing(false)
+      }
+    },
+    [apiKey]
+  )
 
   useEffect(() => {
-    fetchHoldings();
-    const interval = setInterval(() => fetchHoldings(), 30000);
-    return () => clearInterval(interval);
-  }, [fetchHoldings]);
+    fetchHoldings()
+    const interval = setInterval(() => fetchHoldings(), 30000)
+    return () => clearInterval(interval)
+  }, [fetchHoldings])
 
   // Listen for mode changes (live/analyze) and refresh data
   useEffect(() => {
     const unsubscribe = onModeChange(() => {
-      fetchHoldings();
-    });
-    return () => unsubscribe();
-  }, [fetchHoldings]);
+      fetchHoldings()
+    })
+    return () => unsubscribe()
+  }, [fetchHoldings])
 
   const exportToCSV = () => {
-    const headers = ['Symbol', 'Exchange', 'Quantity', 'Product', 'P&L', 'P&L %'];
+    const headers = ['Symbol', 'Exchange', 'Quantity', 'Product', 'P&L', 'P&L %']
     const rows = holdings.map((h) => [
       sanitizeCSV(h.symbol),
       sanitizeCSV(h.exchange),
@@ -91,18 +88,18 @@ export default function Holdings() {
       sanitizeCSV(h.product),
       sanitizeCSV(h.pnl),
       sanitizeCSV(h.pnlpercent),
-    ]);
+    ])
 
-    const csv = [headers, ...rows].map((row) => row.join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `holdings_${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-  };
+    const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `holdings_${new Date().toISOString().split('T')[0]}.csv`
+    a.click()
+  }
 
-  const isProfit = (value: number) => value >= 0;
+  const isProfit = (value: number) => value >= 0
 
   return (
     <div className="space-y-6">
@@ -153,9 +150,7 @@ export default function Holdings() {
             <CardTitle
               className={cn(
                 'text-2xl',
-                stats && isProfit(stats.totalprofitandloss)
-                  ? 'text-green-600'
-                  : 'text-red-600'
+                stats && isProfit(stats.totalprofitandloss) ? 'text-green-600' : 'text-red-600'
               )}
             >
               {stats ? (
@@ -179,9 +174,7 @@ export default function Holdings() {
             <CardTitle
               className={cn(
                 'text-2xl',
-                stats && isProfit(stats.totalpnlpercentage)
-                  ? 'text-green-600'
-                  : 'text-red-600'
+                stats && isProfit(stats.totalpnlpercentage) ? 'text-green-600' : 'text-red-600'
               )}
             >
               {stats ? formatPercent(stats.totalpnlpercentage) : '---'}
@@ -200,9 +193,7 @@ export default function Holdings() {
           ) : error ? (
             <div className="text-center py-12 text-muted-foreground">{error}</div>
           ) : holdings.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              No holdings found
-            </div>
+            <div className="text-center py-12 text-muted-foreground">No holdings found</div>
           ) : (
             <div className="overflow-x-auto">
               <Table>
@@ -223,9 +214,7 @@ export default function Holdings() {
                       <TableCell>
                         <Badge variant="outline">{holding.exchange}</Badge>
                       </TableCell>
-                      <TableCell className="text-right font-mono">
-                        {holding.quantity}
-                      </TableCell>
+                      <TableCell className="text-right font-mono">{holding.quantity}</TableCell>
                       <TableCell>
                         <Badge variant="secondary">{holding.product}</Badge>
                       </TableCell>
@@ -261,5 +250,5 @@ export default function Holdings() {
         </CardContent>
       </Card>
     </div>
-  );
+  )
 }

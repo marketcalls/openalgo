@@ -1,75 +1,76 @@
-import { useState, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
 import {
-  Plus,
-  Settings,
-  Eye,
-  Webhook,
-  Clock,
-  TrendingUp,
-  TrendingDown,
   ArrowLeftRight,
-  Copy,
   Check,
+  Clock,
+  Copy,
+  Eye,
+  Plus,
   RefreshCw,
-  Zap
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Skeleton } from '@/components/ui/skeleton';
-import { toast } from 'sonner';
-import { strategyApi } from '@/api/strategy';
-import type { Strategy } from '@/types/strategy';
+  Settings,
+  TrendingDown,
+  TrendingUp,
+  Webhook,
+  Zap,
+} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
+import { strategyApi } from '@/api/strategy'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
+import type { Strategy } from '@/types/strategy'
 
 export default function StrategyIndex() {
-  const navigate = useNavigate();
-  const [strategies, setStrategies] = useState<Strategy[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const navigate = useNavigate()
+  const [strategies, setStrategies] = useState<Strategy[]>([])
+  const [loading, setLoading] = useState(true)
+  const [copiedId, setCopiedId] = useState<string | null>(null)
 
   const fetchStrategies = async () => {
     try {
-      setLoading(true);
-      const data = await strategyApi.getStrategies();
-      setStrategies(data);
+      setLoading(true)
+      const data = await strategyApi.getStrategies()
+      setStrategies(data)
     } catch (error) {
-      console.error('Failed to fetch strategies:', error);
-      toast.error('Failed to load strategies');
+      console.error('Failed to fetch strategies:', error)
+      toast.error('Failed to load strategies')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   useEffect(() => {
-    fetchStrategies();
-  }, []);
+    fetchStrategies()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const copyWebhookUrl = async (webhookId: string) => {
-    const url = strategyApi.getWebhookUrl(webhookId);
+    const url = strategyApi.getWebhookUrl(webhookId)
     try {
-      await navigator.clipboard.writeText(url);
-      setCopiedId(webhookId);
-      toast.success('Webhook URL copied to clipboard');
-      setTimeout(() => setCopiedId(null), 2000);
+      await navigator.clipboard.writeText(url)
+      setCopiedId(webhookId)
+      toast.success('Webhook URL copied to clipboard')
+      setTimeout(() => setCopiedId(null), 2000)
     } catch {
-      toast.error('Failed to copy URL');
+      toast.error('Failed to copy URL')
     }
-  };
+  }
 
   const getTradingModeIcon = (mode: string) => {
     switch (mode) {
       case 'LONG':
-        return <TrendingUp className="h-4 w-4 text-green-500" />;
+        return <TrendingUp className="h-4 w-4 text-green-500" />
       case 'SHORT':
-        return <TrendingDown className="h-4 w-4 text-red-500" />;
+        return <TrendingDown className="h-4 w-4 text-red-500" />
       case 'BOTH':
-        return <ArrowLeftRight className="h-4 w-4 text-blue-500" />;
+        return <ArrowLeftRight className="h-4 w-4 text-blue-500" />
       default:
-        return null;
+        return null
     }
-  };
+  }
 
   const getPlatformLabel = (platform: string) => {
     const labels: Record<string, string> = {
@@ -79,9 +80,9 @@ export default function StrategyIndex() {
       metatrader: 'Metatrader',
       excel: 'Excel',
       others: 'Others',
-    };
-    return labels[platform] || platform;
-  };
+    }
+    return labels[platform] || platform
+  }
 
   if (loading) {
     return (
@@ -96,7 +97,7 @@ export default function StrategyIndex() {
           ))}
         </div>
       </div>
-    );
+    )
   }
 
   return (
@@ -127,7 +128,10 @@ export default function StrategyIndex() {
         <AlertTitle>Webhook Integration</AlertTitle>
         <AlertDescription>
           Create strategies to receive alerts from TradingView, Amibroker, Python scripts, and more.
-          Use keywords in your alert: <code className="bg-muted px-1 rounded">BUY</code>, <code className="bg-muted px-1 rounded">SELL</code>, <code className="bg-muted px-1 rounded">SHORT</code>, <code className="bg-muted px-1 rounded">COVER</code>
+          Use keywords in your alert: <code className="bg-muted px-1 rounded">BUY</code>,{' '}
+          <code className="bg-muted px-1 rounded">SELL</code>,{' '}
+          <code className="bg-muted px-1 rounded">SHORT</code>,{' '}
+          <code className="bg-muted px-1 rounded">COVER</code>
         </AlertDescription>
       </Alert>
 
@@ -161,9 +165,7 @@ export default function StrategyIndex() {
                 <div className="flex items-start justify-between">
                   <div className="space-y-1">
                     <CardTitle className="text-lg">{strategy.name}</CardTitle>
-                    <CardDescription>
-                      {getPlatformLabel(strategy.platform)}
-                    </CardDescription>
+                    <CardDescription>{getPlatformLabel(strategy.platform)}</CardDescription>
                   </div>
                   <Badge variant={strategy.is_active ? 'default' : 'secondary'}>
                     {strategy.is_active ? 'Active' : 'Inactive'}
@@ -215,23 +217,13 @@ export default function StrategyIndex() {
 
                 {/* Action Buttons */}
                 <div className="flex gap-2 pt-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="flex-1"
-                    asChild
-                  >
+                  <Button variant="outline" size="sm" className="flex-1" asChild>
                     <Link to={`/strategy/${strategy.id}/configure`}>
                       <Settings className="h-4 w-4 mr-2" />
                       Symbols
                     </Link>
                   </Button>
-                  <Button
-                    variant="default"
-                    size="sm"
-                    className="flex-1"
-                    asChild
-                  >
+                  <Button variant="default" size="sm" className="flex-1" asChild>
                     <Link to={`/strategy/${strategy.id}`}>
                       <Eye className="h-4 w-4 mr-2" />
                       View
@@ -274,5 +266,5 @@ export default function StrategyIndex() {
         </CardContent>
       </Card>
     </div>
-  );
+  )
 }

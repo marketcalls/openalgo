@@ -1,23 +1,23 @@
-import { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { LogIn, Github, MessageCircle, Info, Eye, EyeOff, Loader2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { useAuthStore } from '@/stores/authStore';
-import { toast } from 'sonner';
+import { Eye, EyeOff, Github, Info, Loader2, LogIn, MessageCircle } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { useAuthStore } from '@/stores/authStore'
 
 export default function Login() {
-  const navigate = useNavigate();
-  const { login: setLogin } = useAuthStore();
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isCheckingSetup, setIsCheckingSetup] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const navigate = useNavigate()
+  const { login: setLogin } = useAuthStore()
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [isCheckingSetup, setIsCheckingSetup] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   // Check if setup is required or already logged in on page load
   useEffect(() => {
@@ -26,112 +26,116 @@ export default function Login() {
         // First check if setup is needed
         const setupResponse = await fetch('/auth/check-setup', {
           credentials: 'include',
-        });
-        const setupData = await setupResponse.json();
+        })
+        const setupData = await setupResponse.json()
         if (setupData.needs_setup) {
-          navigate('/setup', { replace: true });
-          return;
+          navigate('/setup', { replace: true })
+          return
         }
 
         // Check if already logged in
         const sessionResponse = await fetch('/auth/session-status', {
           credentials: 'include',
-        });
+        })
 
         // Only process if response is successful (not 401 etc.)
         if (sessionResponse.ok) {
-          const sessionData = await sessionResponse.json();
+          const sessionData = await sessionResponse.json()
 
           if (sessionData.status === 'success' && sessionData.logged_in && sessionData.broker) {
             // Already fully logged in with broker, go to dashboard
-            navigate('/dashboard', { replace: true });
-            return;
-          } else if (sessionData.status === 'success' && sessionData.authenticated && !sessionData.logged_in) {
+            navigate('/dashboard', { replace: true })
+            return
+          } else if (
+            sessionData.status === 'success' &&
+            sessionData.authenticated &&
+            !sessionData.logged_in
+          ) {
             // Logged in but no broker, go to broker selection
-            navigate('/broker', { replace: true });
-            return;
+            navigate('/broker', { replace: true })
+            return
           }
         }
         // If session check fails (401, etc.), just stay on login page
       } catch (err) {
-        console.error('Failed to check setup status:', err);
+        console.error('Failed to check setup status:', err)
       } finally {
-        setIsCheckingSetup(false);
+        setIsCheckingSetup(false)
       }
-    };
-    checkSetup();
-  }, [navigate]);
+    }
+    checkSetup()
+  }, [navigate])
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoading(true);
-    setError(null);
+    e.preventDefault()
+    setIsLoading(true)
+    setError(null)
 
     try {
       // First, fetch CSRF token
       const csrfResponse = await fetch('/auth/csrf-token', {
         credentials: 'include',
-      });
+      })
 
       if (!csrfResponse.ok) {
-        console.error('CSRF fetch failed:', csrfResponse.status, csrfResponse.statusText);
-        setError('Failed to initialize login. Please refresh the page.');
-        setIsLoading(false);
-        return;
+        console.error('CSRF fetch failed:', csrfResponse.status, csrfResponse.statusText)
+        setError('Failed to initialize login. Please refresh the page.')
+        setIsLoading(false)
+        return
       }
 
-      const csrfData = await csrfResponse.json();
+      const csrfData = await csrfResponse.json()
 
       // Create form data with CSRF token (matches original Flask template approach)
-      const formData = new FormData();
-      formData.append('username', username);
-      formData.append('password', password);
-      formData.append('csrf_token', csrfData.csrf_token);
+      const formData = new FormData()
+      formData.append('username', username)
+      formData.append('password', password)
+      formData.append('csrf_token', csrfData.csrf_token)
 
       // Use native fetch like the original template
       const response = await fetch('/auth/login', {
         method: 'POST',
         body: formData,
         credentials: 'include',
-      });
+      })
 
       // Check content type before parsing
-      const contentType = response.headers.get('content-type');
+      const contentType = response.headers.get('content-type')
       if (!contentType || !contentType.includes('application/json')) {
-        console.error('Login response is not JSON:', contentType);
+        console.error('Login response is not JSON:', contentType)
         // If redirected to setup page, inform user
         if (response.url.includes('/setup')) {
-          setError('Please complete initial setup first.');
-          navigate('/setup');
+          setError('Please complete initial setup first.')
+          navigate('/setup')
         } else {
-          setError('Login failed. Please try again.');
+          setError('Login failed. Please try again.')
         }
-        setIsLoading(false);
-        return;
+        setIsLoading(false)
+        return
       }
 
-      const data = await response.json();
+      const data = await response.json()
 
       if (data.status === 'error') {
-        setError(data.message || 'Login failed. Please try again.');
+        setError(data.message || 'Login failed. Please try again.')
         // Handle redirect for setup
         if (data.redirect) {
-          navigate(data.redirect);
+          navigate(data.redirect)
         }
       } else {
         // Set login state (broker will be set after broker selection)
-        setLogin(username, '');
-        toast.success('Login successful');
+        setLogin(username, '')
+        toast.success('Login successful')
         // Use redirect from response if provided, otherwise go to broker
-        navigate(data.redirect || '/broker');
+        navigate(data.redirect || '/broker')
       }
     } catch (err) {
-      console.error('Login error:', err);
-      setError('Login failed. Please try again.');
+      console.error('Login error:', err)
+      setError('Login failed. Please try again.')
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   // Show loading while checking setup
   if (isCheckingSetup) {
@@ -139,7 +143,7 @@ export default function Login() {
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
-    );
+    )
   }
 
   return (
@@ -235,12 +239,11 @@ export default function Login() {
           {/* Welcome Content - Second on mobile */}
           <div className="flex-1 max-w-xl text-center lg:text-left order-2 lg:order-1">
             <h1 className="text-4xl lg:text-5xl font-bold mb-6">
-              Welcome to{' '}
-              <span className="text-primary">OpenAlgo</span>
+              Welcome to <span className="text-primary">OpenAlgo</span>
             </h1>
             <p className="text-lg lg:text-xl mb-8 text-muted-foreground">
-              Sign in to your account to access your trading dashboard and manage
-              your algorithmic trading strategies.
+              Sign in to your account to access your trading dashboard and manage your algorithmic
+              trading strategies.
             </p>
 
             <Alert className="mb-6">
@@ -279,5 +282,5 @@ export default function Login() {
         </div>
       </div>
     </div>
-  );
+  )
 }

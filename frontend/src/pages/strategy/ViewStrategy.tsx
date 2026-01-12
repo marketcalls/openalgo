@@ -1,27 +1,28 @@
-import { useState, useEffect } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
+  AlertTriangle,
   ArrowLeft,
-  Copy,
+  ArrowLeftRight,
   Check,
-  Trash2,
+  Clock,
+  Code,
+  Copy,
+  ExternalLink,
   Power,
   Settings,
-  Clock,
-  TrendingUp,
+  Trash2,
   TrendingDown,
-  ArrowLeftRight,
-  ExternalLink,
-  AlertTriangle,
+  TrendingUp,
   Webhook,
-  Code,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Separator } from '@/components/ui/separator';
+} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { toast } from 'sonner'
+import { strategyApi } from '@/api/strategy'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
   Dialog,
   DialogContent,
@@ -29,7 +30,9 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
+} from '@/components/ui/dialog'
+import { Separator } from '@/components/ui/separator'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
   TableBody,
@@ -37,126 +40,120 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table';
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible';
-import { toast } from 'sonner';
-import { strategyApi } from '@/api/strategy';
-import type { Strategy, StrategySymbolMapping } from '@/types/strategy';
+} from '@/components/ui/table'
+import type { Strategy, StrategySymbolMapping } from '@/types/strategy'
 
 export default function ViewStrategy() {
-  const { strategyId } = useParams<{ strategyId: string }>();
-  const navigate = useNavigate();
-  const [strategy, setStrategy] = useState<Strategy | null>(null);
-  const [mappings, setMappings] = useState<StrategySymbolMapping[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [toggling, setToggling] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [copiedField, setCopiedField] = useState<string | null>(null);
-  const [showCredentials, setShowCredentials] = useState(false);
+  const { strategyId } = useParams<{ strategyId: string }>()
+  const navigate = useNavigate()
+  const [strategy, setStrategy] = useState<Strategy | null>(null)
+  const [mappings, setMappings] = useState<StrategySymbolMapping[]>([])
+  const [loading, setLoading] = useState(true)
+  const [toggling, setToggling] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [copiedField, setCopiedField] = useState<string | null>(null)
+  const [showCredentials, setShowCredentials] = useState(false)
 
   const fetchStrategy = async () => {
-    if (!strategyId) return;
+    if (!strategyId) return
     try {
-      setLoading(true);
-      const data = await strategyApi.getStrategy(Number(strategyId));
-      setStrategy(data.strategy);
-      setMappings(data.mappings || []);
+      setLoading(true)
+      const data = await strategyApi.getStrategy(Number(strategyId))
+      setStrategy(data.strategy)
+      setMappings(data.mappings || [])
     } catch (error) {
-      console.error('Failed to fetch strategy:', error);
-      toast.error('Failed to load strategy');
-      navigate('/strategy');
+      console.error('Failed to fetch strategy:', error)
+      toast.error('Failed to load strategy')
+      navigate('/strategy')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   useEffect(() => {
-    fetchStrategy();
-  }, [strategyId]);
+    fetchStrategy()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const copyToClipboard = async (text: string, field: string) => {
     try {
-      await navigator.clipboard.writeText(text);
-      setCopiedField(field);
-      toast.success('Copied to clipboard');
-      setTimeout(() => setCopiedField(null), 2000);
+      await navigator.clipboard.writeText(text)
+      setCopiedField(field)
+      toast.success('Copied to clipboard')
+      setTimeout(() => setCopiedField(null), 2000)
     } catch {
-      toast.error('Failed to copy');
+      toast.error('Failed to copy')
     }
-  };
+  }
 
   const handleToggle = async () => {
-    if (!strategy) return;
+    if (!strategy) return
     try {
-      setToggling(true);
-      const response = await strategyApi.toggleStrategy(strategy.id);
+      setToggling(true)
+      const response = await strategyApi.toggleStrategy(strategy.id)
       if (response.status === 'success') {
-        setStrategy({ ...strategy, is_active: response.data?.is_active ?? !strategy.is_active });
-        toast.success(response.data?.is_active ? 'Strategy activated' : 'Strategy deactivated');
+        setStrategy({ ...strategy, is_active: response.data?.is_active ?? !strategy.is_active })
+        toast.success(response.data?.is_active ? 'Strategy activated' : 'Strategy deactivated')
       } else {
-        toast.error(response.message || 'Failed to toggle strategy');
+        toast.error(response.message || 'Failed to toggle strategy')
       }
     } catch (error) {
-      console.error('Failed to toggle strategy:', error);
-      toast.error('Failed to toggle strategy');
+      console.error('Failed to toggle strategy:', error)
+      toast.error('Failed to toggle strategy')
     } finally {
-      setToggling(false);
+      setToggling(false)
     }
-  };
+  }
 
   const handleDelete = async () => {
-    if (!strategy) return;
+    if (!strategy) return
     try {
-      setDeleting(true);
-      const response = await strategyApi.deleteStrategy(strategy.id);
+      setDeleting(true)
+      const response = await strategyApi.deleteStrategy(strategy.id)
       if (response.status === 'success') {
-        toast.success('Strategy deleted successfully');
-        navigate('/strategy');
+        toast.success('Strategy deleted successfully')
+        navigate('/strategy')
       } else {
-        toast.error(response.message || 'Failed to delete strategy');
+        toast.error(response.message || 'Failed to delete strategy')
       }
     } catch (error) {
-      console.error('Failed to delete strategy:', error);
-      toast.error('Failed to delete strategy');
+      console.error('Failed to delete strategy:', error)
+      toast.error('Failed to delete strategy')
     } finally {
-      setDeleting(false);
-      setDeleteDialogOpen(false);
+      setDeleting(false)
+      setDeleteDialogOpen(false)
     }
-  };
+  }
 
   const handleDeleteMapping = async (mappingId: number) => {
-    if (!strategy) return;
+    if (!strategy) return
     try {
-      const response = await strategyApi.deleteSymbolMapping(strategy.id, mappingId);
+      const response = await strategyApi.deleteSymbolMapping(strategy.id, mappingId)
       if (response.status === 'success') {
-        setMappings(mappings.filter((m) => m.id !== mappingId));
-        toast.success('Symbol mapping deleted');
+        setMappings(mappings.filter((m) => m.id !== mappingId))
+        toast.success('Symbol mapping deleted')
       } else {
-        toast.error(response.message || 'Failed to delete mapping');
+        toast.error(response.message || 'Failed to delete mapping')
       }
     } catch (error) {
-      console.error('Failed to delete mapping:', error);
-      toast.error('Failed to delete mapping');
+      console.error('Failed to delete mapping:', error)
+      toast.error('Failed to delete mapping')
     }
-  };
+  }
 
   const getTradingModeIcon = (mode: string) => {
     switch (mode) {
       case 'LONG':
-        return <TrendingUp className="h-4 w-4 text-green-500" />;
+        return <TrendingUp className="h-4 w-4 text-green-500" />
       case 'SHORT':
-        return <TrendingDown className="h-4 w-4 text-red-500" />;
+        return <TrendingDown className="h-4 w-4 text-red-500" />
       case 'BOTH':
-        return <ArrowLeftRight className="h-4 w-4 text-blue-500" />;
+        return <ArrowLeftRight className="h-4 w-4 text-blue-500" />
       default:
-        return null;
+        return null
     }
-  };
+  }
 
   const getPlatformLabel = (platform: string) => {
     const labels: Record<string, string> = {
@@ -166,9 +163,9 @@ export default function ViewStrategy() {
       metatrader: 'Metatrader',
       excel: 'Excel',
       others: 'Others',
-    };
-    return labels[platform] || platform;
-  };
+    }
+    return labels[platform] || platform
+  }
 
   if (loading) {
     return (
@@ -177,14 +174,14 @@ export default function ViewStrategy() {
         <Skeleton className="h-48" />
         <Skeleton className="h-64" />
       </div>
-    );
+    )
   }
 
   if (!strategy) {
-    return null;
+    return null
   }
 
-  const webhookUrl = strategyApi.getWebhookUrl(strategy.webhook_id);
+  const webhookUrl = strategyApi.getWebhookUrl(strategy.webhook_id)
 
   return (
     <div className="container mx-auto py-6 space-y-6">
@@ -206,7 +203,8 @@ export default function ViewStrategy() {
             </Badge>
           </h1>
           <p className="text-muted-foreground">
-            {getPlatformLabel(strategy.platform)} • Created {new Date(strategy.created_at).toLocaleDateString()}
+            {getPlatformLabel(strategy.platform)} • Created{' '}
+            {new Date(strategy.created_at).toLocaleDateString()}
           </p>
         </div>
         <div className="flex gap-2">
@@ -378,7 +376,7 @@ export default function ViewStrategy() {
                   TradingView Alert Message Format
                 </p>
                 <pre className="p-3 bg-muted rounded text-xs font-mono overflow-x-auto">
-{`{
+                  {`{
   "symbol": "{{ticker}}",
   "action": "BUY"
 }`}
@@ -398,14 +396,22 @@ export default function ViewStrategy() {
         <AlertTitle>Important Notes</AlertTitle>
         <AlertDescription>
           <ul className="list-disc list-inside mt-2 space-y-1 text-sm">
-            <li>Orders are processed only when the strategy is <strong>active</strong></li>
+            <li>
+              Orders are processed only when the strategy is <strong>active</strong>
+            </li>
             {strategy.is_intraday && (
-              <li>Orders are processed only during trading hours ({strategy.start_time} - {strategy.end_time})</li>
+              <li>
+                Orders are processed only during trading hours ({strategy.start_time} -{' '}
+                {strategy.end_time})
+              </li>
             )}
             <li>Symbol must be configured in the mappings below to receive orders</li>
             <li>Use the correct action keywords: BUY, SELL, SHORT, COVER</li>
             {strategy.trading_mode === 'BOTH' && (
-              <li>In BOTH mode, include <code className="bg-muted px-1 rounded">position_size</code> in your JSON payload</li>
+              <li>
+                In BOTH mode, include <code className="bg-muted px-1 rounded">position_size</code>{' '}
+                in your JSON payload
+              </li>
             )}
           </ul>
         </AlertDescription>
@@ -432,9 +438,7 @@ export default function ViewStrategy() {
             <div className="text-center py-8 text-muted-foreground">
               <p>No symbols configured yet.</p>
               <Button variant="link" asChild>
-                <Link to={`/strategy/${strategy.id}/configure`}>
-                  Add your first symbol
-                </Link>
+                <Link to={`/strategy/${strategy.id}/configure`}>Add your first symbol</Link>
               </Button>
             </div>
           ) : (
@@ -481,8 +485,8 @@ export default function ViewStrategy() {
           <DialogHeader>
             <DialogTitle>Delete Strategy</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete "{strategy.name}"? This action cannot be undone.
-              All symbol mappings will also be deleted.
+              Are you sure you want to delete "{strategy.name}"? This action cannot be undone. All
+              symbol mappings will also be deleted.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -496,5 +500,5 @@ export default function ViewStrategy() {
         </DialogContent>
       </Dialog>
     </div>
-  );
+  )
 }

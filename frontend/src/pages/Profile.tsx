@@ -1,50 +1,51 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
 import {
-  User,
-  ArrowLeft,
-  Lock,
-  Palette,
-  Mail,
-  Shield,
-  Check,
-  X,
-  Copy,
-  Send,
-  Bug,
-  RefreshCw,
-  Sun,
-  Moon,
   AlertCircle,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Label } from '@/components/ui/label';
-import { Progress } from '@/components/ui/progress';
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from '@/components/ui/tabs';
-import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-} from '@/components/ui/alert';
-import { toast } from 'sonner';
-import { webClient } from '@/api/client';
-import { useAuthStore } from '@/stores/authStore';
-import { useThemeStore, type ThemeMode, type ThemeColor } from '@/stores/themeStore';
+  ArrowLeft,
+  Bug,
+  Check,
+  Copy,
+  Lock,
+  Mail,
+  Moon,
+  Palette,
+  RefreshCw,
+  Send,
+  Shield,
+  Sun,
+  User,
+  X,
+} from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
+import { webClient } from '@/api/client'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Progress } from '@/components/ui/progress'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useAuthStore } from '@/stores/authStore'
+import { type ThemeColor, type ThemeMode, useThemeStore } from '@/stores/themeStore'
 
 // Professional themes suitable for trading terminals
 const THEME_MODES: { value: ThemeMode; label: string; icon: typeof Sun; description: string }[] = [
-  { value: 'light', label: 'Light', icon: Sun, description: 'Clean, bright interface for daytime trading' },
-  { value: 'dark', label: 'Dark', icon: Moon, description: 'Reduced eye strain for extended sessions' },
-];
+  {
+    value: 'light',
+    label: 'Light',
+    icon: Sun,
+    description: 'Clean, bright interface for daytime trading',
+  },
+  {
+    value: 'dark',
+    label: 'Dark',
+    icon: Moon,
+    description: 'Reduced eye strain for extended sessions',
+  },
+]
 
 // Accent colors for customization
 const ACCENT_COLORS: { value: ThemeColor; label: string; color: string }[] = [
@@ -56,97 +57,104 @@ const ACCENT_COLORS: { value: ThemeColor; label: string; color: string }[] = [
   { value: 'blue', label: 'Blue', color: 'bg-blue-500' },
   { value: 'violet', label: 'Violet', color: 'bg-violet-500' },
   { value: 'orange', label: 'Orange', color: 'bg-orange-500' },
-];
+]
 
 interface ProfileData {
-  username: string;
+  username: string
   smtp_settings: {
-    smtp_server: string;
-    smtp_port: number;
-    smtp_username: string;
-    smtp_password: boolean;
-    smtp_use_tls: boolean;
-    smtp_from_email: string;
-    smtp_helo_hostname: string;
-  } | null;
-  qr_code: string | null;
-  totp_secret: string | null;
+    smtp_server: string
+    smtp_port: number
+    smtp_username: string
+    smtp_password: boolean
+    smtp_use_tls: boolean
+    smtp_from_email: string
+    smtp_helo_hostname: string
+  } | null
+  qr_code: string | null
+  totp_secret: string | null
 }
 
 interface PasswordRequirements {
-  length: boolean;
-  uppercase: boolean;
-  lowercase: boolean;
-  number: boolean;
-  special: boolean;
+  length: boolean
+  uppercase: boolean
+  lowercase: boolean
+  number: boolean
+  special: boolean
 }
 
 export default function ProfilePage() {
-  const user = useAuthStore((s) => s.user);
-  const { mode, color, appMode, setMode, setColor } = useThemeStore();
-  const [activeTab, setActiveTab] = useState('account');
-  const [isLoading, setIsLoading] = useState(true);
-  const [profileData, setProfileData] = useState<ProfileData | null>(null);
+  const user = useAuthStore((s) => s.user)
+  const { mode, color, appMode, setMode, setColor } = useThemeStore()
+  const [activeTab, setActiveTab] = useState('account')
+  const [isLoading, setIsLoading] = useState(true)
+  const [profileData, setProfileData] = useState<ProfileData | null>(null)
 
   // Password form state
-  const [oldPassword, setOldPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
+  const [oldPassword, setOldPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [passwordRequirements, setPasswordRequirements] = useState<PasswordRequirements>({
     length: false,
     uppercase: false,
     lowercase: false,
     number: false,
     special: false,
-  });
-  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  })
+  const [isChangingPassword, setIsChangingPassword] = useState(false)
 
   // SMTP form state
-  const [smtpServer, setSmtpServer] = useState('smtp.gmail.com');
-  const [smtpPort, setSmtpPort] = useState('587');
-  const [smtpUsername, setSmtpUsername] = useState('');
-  const [smtpPassword, setSmtpPassword] = useState('');
-  const [smtpFromEmail, setSmtpFromEmail] = useState('');
-  const [smtpHeloHostname, setSmtpHeloHostname] = useState('smtp.gmail.com');
-  const [smtpUseTls, setSmtpUseTls] = useState(true);
-  const [isSavingSmtp, setIsSavingSmtp] = useState(false);
-  const [testEmail, setTestEmail] = useState('');
-  const [isSendingTest, setIsSendingTest] = useState(false);
-  const [isDebugging, setIsDebugging] = useState(false);
-  const [debugResult, setDebugResult] = useState<{success: boolean; message: string; details?: string[]} | null>(null);
+  const [smtpServer, setSmtpServer] = useState('smtp.gmail.com')
+  const [smtpPort, setSmtpPort] = useState('587')
+  const [smtpUsername, setSmtpUsername] = useState('')
+  const [smtpPassword, setSmtpPassword] = useState('')
+  const [smtpFromEmail, setSmtpFromEmail] = useState('')
+  const [smtpHeloHostname, setSmtpHeloHostname] = useState('smtp.gmail.com')
+  const [smtpUseTls, setSmtpUseTls] = useState(true)
+  const [isSavingSmtp, setIsSavingSmtp] = useState(false)
+  const [testEmail, setTestEmail] = useState('')
+  const [isSendingTest, setIsSendingTest] = useState(false)
+  const [isDebugging, setIsDebugging] = useState(false)
+  const [debugResult, setDebugResult] = useState<{
+    success: boolean
+    message: string
+    details?: string[]
+  } | null>(null)
 
   // Check if in analyzer mode (theme changes blocked)
-  const isAnalyzerMode = appMode === 'analyzer';
+  const isAnalyzerMode = appMode === 'analyzer'
 
   useEffect(() => {
-    fetchProfileData();
-  }, []);
+    fetchProfileData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const fetchProfileData = async () => {
     try {
-      const response = await webClient.get<{ status: string; data: ProfileData }>('/auth/profile-data');
+      const response = await webClient.get<{ status: string; data: ProfileData }>(
+        '/auth/profile-data'
+      )
       if (response.data.status === 'success') {
-        setProfileData(response.data.data);
+        setProfileData(response.data.data)
 
         // Populate SMTP form with existing settings
-        const smtp = response.data.data.smtp_settings;
+        const smtp = response.data.data.smtp_settings
         if (smtp) {
-          setSmtpServer(smtp.smtp_server || 'smtp.gmail.com');
-          setSmtpPort(String(smtp.smtp_port || 587));
-          setSmtpUsername(smtp.smtp_username || '');
-          setSmtpFromEmail(smtp.smtp_from_email || '');
-          setSmtpHeloHostname(smtp.smtp_helo_hostname || 'smtp.gmail.com');
-          setSmtpUseTls(smtp.smtp_use_tls !== false);
-          setTestEmail(smtp.smtp_username || '');
+          setSmtpServer(smtp.smtp_server || 'smtp.gmail.com')
+          setSmtpPort(String(smtp.smtp_port || 587))
+          setSmtpUsername(smtp.smtp_username || '')
+          setSmtpFromEmail(smtp.smtp_from_email || '')
+          setSmtpHeloHostname(smtp.smtp_helo_hostname || 'smtp.gmail.com')
+          setSmtpUseTls(smtp.smtp_use_tls !== false)
+          setTestEmail(smtp.smtp_username || '')
         }
       }
     } catch (error) {
-      console.error('Error fetching profile data:', error);
-      toast.error('Failed to load profile data');
+      console.error('Error fetching profile data:', error)
+      toast.error('Failed to load profile data')
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   // Password validation
   const checkPasswordRequirements = useCallback((password: string) => {
@@ -156,179 +164,195 @@ export default function ProfilePage() {
       lowercase: /[a-z]/.test(password),
       number: /[0-9]/.test(password),
       special: /[!@#$%^&*]/.test(password),
-    };
-    setPasswordRequirements(requirements);
-    return Object.values(requirements).every(Boolean);
-  }, []);
+    }
+    setPasswordRequirements(requirements)
+    return Object.values(requirements).every(Boolean)
+  }, [])
 
   useEffect(() => {
-    checkPasswordRequirements(newPassword);
-  }, [newPassword, checkPasswordRequirements]);
+    checkPasswordRequirements(newPassword)
+  }, [newPassword, checkPasswordRequirements])
 
   const getPasswordStrength = () => {
-    const metCount = Object.values(passwordRequirements).filter(Boolean).length;
-    if (metCount === 0) return { percentage: 0, label: 'None', color: 'bg-gray-400' };
-    if (metCount <= 2) return { percentage: 40, label: 'Weak', color: 'bg-red-500' };
-    if (metCount <= 3) return { percentage: 60, label: 'Fair', color: 'bg-yellow-500' };
-    if (metCount <= 4) return { percentage: 80, label: 'Good', color: 'bg-blue-500' };
-    return { percentage: 100, label: 'Strong', color: 'bg-green-500' };
-  };
+    const metCount = Object.values(passwordRequirements).filter(Boolean).length
+    if (metCount === 0) return { percentage: 0, label: 'None', color: 'bg-gray-400' }
+    if (metCount <= 2) return { percentage: 40, label: 'Weak', color: 'bg-red-500' }
+    if (metCount <= 3) return { percentage: 60, label: 'Fair', color: 'bg-yellow-500' }
+    if (metCount <= 4) return { percentage: 80, label: 'Good', color: 'bg-blue-500' }
+    return { percentage: 100, label: 'Strong', color: 'bg-green-500' }
+  }
 
-  const passwordsMatch = newPassword === confirmPassword && confirmPassword !== '';
-  const meetsAllRequirements = Object.values(passwordRequirements).every(Boolean);
-  const canSubmitPassword = passwordsMatch && meetsAllRequirements && oldPassword !== '';
+  const passwordsMatch = newPassword === confirmPassword && confirmPassword !== ''
+  const meetsAllRequirements = Object.values(passwordRequirements).every(Boolean)
+  const canSubmitPassword = passwordsMatch && meetsAllRequirements && oldPassword !== ''
 
   const handleChangePassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canSubmitPassword) return;
+    e.preventDefault()
+    if (!canSubmitPassword) return
 
-    setIsChangingPassword(true);
+    setIsChangingPassword(true)
     try {
-      const formData = new FormData();
-      formData.append('old_password', oldPassword);
-      formData.append('new_password', newPassword);
-      formData.append('confirm_password', confirmPassword);
+      const formData = new FormData()
+      formData.append('old_password', oldPassword)
+      formData.append('new_password', newPassword)
+      formData.append('confirm_password', confirmPassword)
 
-      const response = await webClient.post<{ status: string; message: string }>('/auth/change-password', formData);
+      const response = await webClient.post<{ status: string; message: string }>(
+        '/auth/change-password',
+        formData
+      )
 
       if (response.data.status === 'success') {
-        toast.success(response.data.message || 'Password changed successfully');
-        setOldPassword('');
-        setNewPassword('');
-        setConfirmPassword('');
+        toast.success(response.data.message || 'Password changed successfully')
+        setOldPassword('')
+        setNewPassword('')
+        setConfirmPassword('')
       } else {
-        toast.error(response.data.message || 'Failed to change password');
+        toast.error(response.data.message || 'Failed to change password')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to change password');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to change password')
     } finally {
-      setIsChangingPassword(false);
+      setIsChangingPassword(false)
     }
-  };
+  }
 
   const handleSaveSmtp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSavingSmtp(true);
+    e.preventDefault()
+    setIsSavingSmtp(true)
     try {
-      const formData = new FormData();
-      formData.append('smtp_server', smtpServer);
-      formData.append('smtp_port', smtpPort);
-      formData.append('smtp_username', smtpUsername);
+      const formData = new FormData()
+      formData.append('smtp_server', smtpServer)
+      formData.append('smtp_port', smtpPort)
+      formData.append('smtp_username', smtpUsername)
       if (smtpPassword) {
-        formData.append('smtp_password', smtpPassword);
+        formData.append('smtp_password', smtpPassword)
       }
-      formData.append('smtp_from_email', smtpFromEmail);
-      formData.append('smtp_helo_hostname', smtpHeloHostname);
+      formData.append('smtp_from_email', smtpFromEmail)
+      formData.append('smtp_helo_hostname', smtpHeloHostname)
       if (smtpUseTls) {
-        formData.append('smtp_use_tls', 'on');
+        formData.append('smtp_use_tls', 'on')
       }
 
-      const response = await webClient.post<{ status: string; message: string }>('/auth/smtp-config', formData);
+      const response = await webClient.post<{ status: string; message: string }>(
+        '/auth/smtp-config',
+        formData
+      )
 
       if (response.data.status === 'success') {
-        toast.success(response.data.message || 'SMTP settings saved successfully');
-        setSmtpPassword(''); // Clear password field after save
+        toast.success(response.data.message || 'SMTP settings saved successfully')
+        setSmtpPassword('') // Clear password field after save
       } else {
-        toast.error(response.data.message || 'Failed to save SMTP settings');
+        toast.error(response.data.message || 'Failed to save SMTP settings')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to save SMTP settings');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to save SMTP settings')
     } finally {
-      setIsSavingSmtp(false);
+      setIsSavingSmtp(false)
     }
-  };
+  }
 
   const handleTestEmail = async () => {
     if (!testEmail) {
-      toast.error('Please enter an email address to test');
-      return;
+      toast.error('Please enter an email address to test')
+      return
     }
 
-    setIsSendingTest(true);
-    setDebugResult(null);
+    setIsSendingTest(true)
+    setDebugResult(null)
     try {
-      const formData = new FormData();
-      formData.append('test_email', testEmail);
+      const formData = new FormData()
+      formData.append('test_email', testEmail)
 
-      const response = await webClient.post<{ success: boolean; message: string }>('/auth/test-smtp', formData);
+      const response = await webClient.post<{ success: boolean; message: string }>(
+        '/auth/test-smtp',
+        formData
+      )
 
       if (response.data.success) {
-        toast.success(response.data.message || 'Test email sent successfully');
+        toast.success(response.data.message || 'Test email sent successfully')
       } else {
-        toast.error(response.data.message || 'Failed to send test email');
+        toast.error(response.data.message || 'Failed to send test email')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to send test email');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to send test email')
     } finally {
-      setIsSendingTest(false);
+      setIsSendingTest(false)
     }
-  };
+  }
 
   const handleDebugSmtp = async () => {
-    setIsDebugging(true);
-    setDebugResult(null);
+    setIsDebugging(true)
+    setDebugResult(null)
     try {
-      const response = await webClient.post<{ success: boolean; message: string; details?: string[] }>('/auth/debug-smtp', {});
-      setDebugResult(response.data);
+      const response = await webClient.post<{
+        success: boolean
+        message: string
+        details?: string[]
+      }>('/auth/debug-smtp', {})
+      setDebugResult(response.data)
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
+      const err = error as { response?: { data?: { message?: string } } }
       setDebugResult({
         success: false,
         message: err.response?.data?.message || 'Failed to debug SMTP',
         details: [],
-      });
+      })
     } finally {
-      setIsDebugging(false);
+      setIsDebugging(false)
     }
-  };
+  }
 
   const handleThemeModeChange = (newMode: ThemeMode) => {
     if (isAnalyzerMode) {
-      toast.error('Cannot change theme while in Analyzer Mode');
-      return;
+      toast.error('Cannot change theme while in Analyzer Mode')
+      return
     }
-    setMode(newMode);
-    toast.success(`Theme changed to ${newMode}`);
-  };
+    setMode(newMode)
+    toast.success(`Theme changed to ${newMode}`)
+  }
 
   const handleAccentColorChange = (newColor: ThemeColor) => {
     if (isAnalyzerMode) {
-      toast.error('Cannot change theme while in Analyzer Mode');
-      return;
+      toast.error('Cannot change theme while in Analyzer Mode')
+      return
     }
-    setColor(newColor);
-    toast.success(`Accent color changed to ${newColor}`);
-  };
+    setColor(newColor)
+    toast.success(`Accent color changed to ${newColor}`)
+  }
 
   const handleResetTheme = () => {
     if (isAnalyzerMode) {
-      toast.error('Cannot change theme while in Analyzer Mode');
-      return;
+      toast.error('Cannot change theme while in Analyzer Mode')
+      return
     }
-    setMode('light');
-    setColor('zinc');
-    toast.success('Theme reset to default');
-  };
+    setMode('light')
+    setColor('zinc')
+    toast.success('Theme reset to default')
+  }
 
   const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text).then(() => {
-      toast.success('Copied to clipboard');
-    }).catch(() => {
-      toast.error('Failed to copy');
-    });
-  };
+    navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        toast.success('Copied to clipboard')
+      })
+      .catch(() => {
+        toast.error('Failed to copy')
+      })
+  }
 
-  const strength = getPasswordStrength();
+  const strength = getPasswordStrength()
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
-    );
+    )
   }
 
   return (
@@ -490,9 +514,9 @@ export default function ProfilePage() {
               <AlertCircle className="h-4 w-4" />
               <AlertTitle>Theme Changes Disabled</AlertTitle>
               <AlertDescription>
-                Theme customization is disabled while in Analyzer Mode.
-                The purple theme is automatically applied for visual distinction.
-                Switch back to Live Mode to change themes.
+                Theme customization is disabled while in Analyzer Mode. The purple theme is
+                automatically applied for visual distinction. Switch back to Live Mode to change
+                themes.
               </AlertDescription>
             </Alert>
           )}
@@ -506,8 +530,7 @@ export default function ProfilePage() {
                   <CardDescription>
                     {isAnalyzerMode
                       ? 'Analyzer Mode (Purple Theme)'
-                      : `${mode.charAt(0).toUpperCase() + mode.slice(1)} Mode with ${color.charAt(0).toUpperCase() + color.slice(1)} accent`
-                    }
+                      : `${mode.charAt(0).toUpperCase() + mode.slice(1)} Mode with ${color.charAt(0).toUpperCase() + color.slice(1)} accent`}
                   </CardDescription>
                 </div>
                 <div className="flex items-center gap-4">
@@ -540,8 +563,8 @@ export default function ProfilePage() {
             <CardContent>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {THEME_MODES.map((themeOption) => {
-                  const Icon = themeOption.icon;
-                  const isSelected = mode === themeOption.value && !isAnalyzerMode;
+                  const Icon = themeOption.icon
+                  const isSelected = mode === themeOption.value && !isAnalyzerMode
                   return (
                     <button
                       key={themeOption.value}
@@ -553,7 +576,9 @@ export default function ProfilePage() {
                           : 'border-border hover:border-primary/50'
                       } ${isAnalyzerMode ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                     >
-                      <div className={`p-2 rounded-lg ${isSelected ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}>
+                      <div
+                        className={`p-2 rounded-lg ${isSelected ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}
+                      >
                         <Icon className="h-5 w-5" />
                       </div>
                       <div className="flex-1">
@@ -566,7 +591,7 @@ export default function ProfilePage() {
                         </p>
                       </div>
                     </button>
-                  );
+                  )
                 })}
               </div>
             </CardContent>
@@ -581,7 +606,7 @@ export default function ProfilePage() {
             <CardContent>
               <div className="grid grid-cols-4 sm:grid-cols-8 gap-3">
                 {ACCENT_COLORS.map((accentColor) => {
-                  const isSelected = color === accentColor.value && !isAnalyzerMode;
+                  const isSelected = color === accentColor.value && !isAnalyzerMode
                   return (
                     <button
                       key={accentColor.value}
@@ -594,10 +619,12 @@ export default function ProfilePage() {
                       } ${isAnalyzerMode ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                       title={accentColor.label}
                     >
-                      <div className={`w-8 h-8 rounded-full ${accentColor.color} ring-2 ring-offset-2 ring-offset-background ${isSelected ? 'ring-primary' : 'ring-transparent'}`} />
+                      <div
+                        className={`w-8 h-8 rounded-full ${accentColor.color} ring-2 ring-offset-2 ring-offset-background ${isSelected ? 'ring-primary' : 'ring-transparent'}`}
+                      />
                       <span className="text-xs font-medium">{accentColor.label}</span>
                     </button>
-                  );
+                  )
                 })}
               </div>
             </CardContent>
@@ -610,13 +637,17 @@ export default function ProfilePage() {
             </CardHeader>
             <CardContent className="text-sm text-muted-foreground space-y-2">
               <p>
-                <strong>Light Mode:</strong> Optimized for daytime use with high contrast and readability.
+                <strong>Light Mode:</strong> Optimized for daytime use with high contrast and
+                readability.
               </p>
               <p>
-                <strong>Dark Mode:</strong> Reduces eye strain during extended trading sessions, especially in low-light environments.
+                <strong>Dark Mode:</strong> Reduces eye strain during extended trading sessions,
+                especially in low-light environments.
               </p>
               <p>
-                <strong>Analyzer Mode:</strong> When in sandbox/analyzer mode, a distinct purple theme is applied automatically to clearly indicate you are not trading with real funds.
+                <strong>Analyzer Mode:</strong> When in sandbox/analyzer mode, a distinct purple
+                theme is applied automatically to clearly indicate you are not trading with real
+                funds.
               </p>
             </CardContent>
           </Card>
@@ -637,9 +668,16 @@ export default function ProfilePage() {
                 <AlertTitle>Gmail Configuration Tips</AlertTitle>
                 <AlertDescription>
                   <ul className="text-sm list-disc list-inside mt-1 space-y-1">
-                    <li><strong>Personal Gmail:</strong> Server: smtp.gmail.com:587</li>
-                    <li><strong>Password:</strong> Use App Password (not your regular password)</li>
-                    <li><strong>Setup:</strong> Google Account - Security - 2-Step Verification - App passwords</li>
+                    <li>
+                      <strong>Personal Gmail:</strong> Server: smtp.gmail.com:587
+                    </li>
+                    <li>
+                      <strong>Password:</strong> Use App Password (not your regular password)
+                    </li>
+                    <li>
+                      <strong>Setup:</strong> Google Account - Security - 2-Step Verification - App
+                      passwords
+                    </li>
                   </ul>
                 </AlertDescription>
               </Alert>
@@ -682,7 +720,11 @@ export default function ProfilePage() {
                     type="password"
                     value={smtpPassword}
                     onChange={(e) => setSmtpPassword(e.target.value)}
-                    placeholder={profileData?.smtp_settings?.smtp_password ? 'Password is set (enter new to change)' : 'Enter your App Password'}
+                    placeholder={
+                      profileData?.smtp_settings?.smtp_password
+                        ? 'Password is set (enter new to change)'
+                        : 'Enter your App Password'
+                    }
                   />
                 </div>
 
@@ -775,8 +817,12 @@ export default function ProfilePage() {
                   </div>
 
                   {debugResult && (
-                    <Alert className={`mt-4 ${debugResult.success ? 'border-green-500' : 'border-yellow-500'}`}>
-                      <AlertTitle>{debugResult.success ? 'SMTP Debug Complete' : 'SMTP Connection Issues'}</AlertTitle>
+                    <Alert
+                      className={`mt-4 ${debugResult.success ? 'border-green-500' : 'border-yellow-500'}`}
+                    >
+                      <AlertTitle>
+                        {debugResult.success ? 'SMTP Debug Complete' : 'SMTP Connection Issues'}
+                      </AlertTitle>
                       <AlertDescription>
                         <p>{debugResult.message}</p>
                         {debugResult.details && debugResult.details.length > 0 && (
@@ -800,9 +846,7 @@ export default function ProfilePage() {
           <Card>
             <CardHeader>
               <CardTitle>TOTP Authentication</CardTitle>
-              <CardDescription>
-                Manage your Two-Factor Authentication settings
-              </CardDescription>
+              <CardDescription>Manage your Two-Factor Authentication settings</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <Alert>
@@ -810,8 +854,8 @@ export default function ProfilePage() {
                 <AlertTitle>About TOTP Authentication</AlertTitle>
                 <AlertDescription>
                   TOTP (Time-based One-Time Password) provides an additional layer of security.
-                  You&apos;ll need an authenticator app like Google Authenticator or Authy to generate
-                  codes for password recovery.
+                  You&apos;ll need an authenticator app like Google Authenticator or Authy to
+                  generate codes for password recovery.
                 </AlertDescription>
               </Alert>
 
@@ -855,7 +899,9 @@ export default function ProfilePage() {
                       <li>Install an authenticator app (Google Authenticator, Authy, etc.)</li>
                       <li>Scan the QR code above or enter the secret key manually</li>
                       <li>Save your backup codes in a safe place</li>
-                      <li>You&apos;ll need the TOTP code to reset your password if you forget it</li>
+                      <li>
+                        You&apos;ll need the TOTP code to reset your password if you forget it
+                      </li>
                     </ol>
                   </div>
                 </div>
@@ -872,5 +918,5 @@ export default function ProfilePage() {
         </TabsContent>
       </Tabs>
     </div>
-  );
+  )
 }

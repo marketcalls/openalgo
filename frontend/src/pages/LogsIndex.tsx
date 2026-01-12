@@ -1,41 +1,50 @@
-import { Link } from 'react-router-dom';
 import {
-  FileText,
-  ArrowLeft,
-  ClipboardList,
-  FlaskConical,
-  Clock,
   Activity,
-  Shield,
+  ArrowLeft,
+  ArrowRight,
   BookOpen,
   CheckCircle,
-  ArrowRight,
-} from 'lucide-react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
+  ClipboardList,
+  Clock,
+  FileText,
+  FlaskConical,
+  Shield,
+} from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
 interface LogCardProps {
-  title: string;
-  description: string;
-  icon: React.ComponentType<{ className?: string }>;
-  href: string;
-  features: string[];
-  buttonText: string;
-  gradient: string;
-  isExternal?: boolean;
+  title: string
+  description: string
+  icon: React.ComponentType<{ className?: string }>
+  href: string
+  features: string[]
+  buttonText: string
+  gradient: string
+  isExternal?: boolean
 }
 
-function LogCard({ title, description, icon: Icon, href, features, buttonText, gradient, isExternal }: LogCardProps) {
+function LogCard({
+  title,
+  description,
+  icon: Icon,
+  href,
+  features,
+  buttonText,
+  gradient,
+  isExternal,
+}: LogCardProps) {
   const content = (
     <Card className="h-full hover:shadow-lg transition-all duration-300 group overflow-hidden">
       <CardHeader className="text-center pb-2">
-        <div className={`w-20 h-20 mx-auto rounded-2xl ${gradient} flex items-center justify-center mb-4 group-hover:scale-105 transition-transform`}>
+        <div
+          className={`w-20 h-20 mx-auto rounded-2xl ${gradient} flex items-center justify-center mb-4 group-hover:scale-105 transition-transform`}
+        >
           <Icon className="h-10 w-10 text-white" />
         </div>
         <CardTitle className="text-xl">{title}</CardTitle>
-        <CardDescription className="text-sm min-h-[3rem]">
-          {description}
-        </CardDescription>
+        <CardDescription className="text-sm min-h-[3rem]">{description}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <ul className="space-y-2">
@@ -52,105 +61,87 @@ function LogCard({ title, description, icon: Icon, href, features, buttonText, g
         </Button>
       </CardContent>
     </Card>
-  );
+  )
 
   if (isExternal) {
     return (
       <a href={href} target="_blank" rel="noopener noreferrer" className="block">
         {content}
       </a>
-    );
+    )
   }
 
   return (
     <Link to={href} className="block">
       {content}
     </Link>
-  );
+  )
 }
 
 export default function LogsIndex() {
   const logCards: LogCardProps[] = [
     {
       title: 'Live Logs',
-      description: 'View real-time API order logs with detailed request and response data. Filter by date, search, and export logs to CSV.',
+      description:
+        'View real-time API order logs with detailed request and response data. Filter by date, search, and export logs to CSV.',
       icon: ClipboardList,
       href: '/logs/live',
-      features: [
-        'Order request & response logs',
-        'Date range filtering',
-        'CSV export',
-      ],
+      features: ['Order request & response logs', 'Date range filtering', 'CSV export'],
       buttonText: 'View Live Logs',
       gradient: 'bg-gradient-to-br from-cyan-400 to-blue-500',
     },
     {
       title: 'Sandbox Logs',
-      description: 'Sandbox testing logs to track and test your trading strategies before going live. Validate strategy performance in a safe environment.',
+      description:
+        'Sandbox testing logs to track and test your trading strategies before going live. Validate strategy performance in a safe environment.',
       icon: FlaskConical,
       href: '/logs/sandbox',
-      features: [
-        'Strategy testing logs',
-        'Paper trading validation',
-        'Risk-free testing',
-      ],
+      features: ['Strategy testing logs', 'Paper trading validation', 'Risk-free testing'],
       buttonText: 'Open Sandbox',
       gradient: 'bg-gradient-to-br from-pink-400 to-purple-500',
     },
     {
       title: 'Latency Monitor',
-      description: 'Track order execution latency for your connected broker. View histograms, percentiles, and identify performance bottlenecks.',
+      description:
+        'Track order execution latency for your connected broker. View histograms, percentiles, and identify performance bottlenecks.',
       icon: Clock,
       href: '/logs/latency',
-      features: [
-        'Order execution timing',
-        'Performance metrics',
-        'Latency histograms',
-      ],
+      features: ['Order execution timing', 'Performance metrics', 'Latency histograms'],
       buttonText: 'View Latency',
       gradient: 'bg-gradient-to-br from-yellow-400 to-orange-500',
     },
     {
       title: 'Traffic Monitor',
-      description: 'Monitor all incoming HTTP requests to your OpenAlgo instance. Track endpoints, methods, status codes, and response times.',
+      description:
+        'Monitor all incoming HTTP requests to your OpenAlgo instance. Track endpoints, methods, status codes, and response times.',
       icon: Activity,
       href: '/logs/traffic',
-      features: [
-        'Request/response tracking',
-        'Endpoint analytics',
-        'Response time metrics',
-      ],
+      features: ['Request/response tracking', 'Endpoint analytics', 'Response time metrics'],
       buttonText: 'View Traffic',
       gradient: 'bg-gradient-to-br from-teal-400 to-cyan-500',
     },
     {
       title: 'Security Logs',
-      description: 'Monitor security events including banned IPs, 404 errors, and invalid API key attempts. Manage IP bans and security thresholds.',
+      description:
+        'Monitor security events including banned IPs, 404 errors, and invalid API key attempts. Manage IP bans and security thresholds.',
       icon: Shield,
       href: '/logs/security',
-      features: [
-        'IP ban management',
-        'Security event tracking',
-        'Threat monitoring',
-      ],
+      features: ['IP ban management', 'Security event tracking', 'Threat monitoring'],
       buttonText: 'View Security',
       gradient: 'bg-gradient-to-br from-red-400 to-pink-500',
     },
     {
       title: 'Documentation',
-      description: 'Access comprehensive guides, API references, and troubleshooting tips. Learn how to configure and optimize your OpenAlgo setup.',
+      description:
+        'Access comprehensive guides, API references, and troubleshooting tips. Learn how to configure and optimize your OpenAlgo setup.',
       icon: BookOpen,
       href: 'https://docs.openalgo.in',
-      features: [
-        'API documentation',
-        'Setup guides',
-        'Troubleshooting tips',
-      ],
+      features: ['API documentation', 'Setup guides', 'Troubleshooting tips'],
       buttonText: 'View Docs',
       gradient: 'bg-gradient-to-br from-orange-400 to-amber-500',
       isExternal: true,
     },
-  ];
+  ]
 
   return (
     <div className="py-6 space-y-6">
@@ -177,5 +168,5 @@ export default function LogsIndex() {
         ))}
       </div>
     </div>
-  );
+  )
 }

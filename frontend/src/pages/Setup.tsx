@@ -1,33 +1,33 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Loader2, Check, Info } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Card, CardContent } from '@/components/ui/card';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Progress } from '@/components/ui/progress';
-import { cn } from '@/lib/utils';
-import { toast } from 'sonner';
+import { Check, Info, Loader2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Progress } from '@/components/ui/progress'
+import { cn } from '@/lib/utils'
 
 interface PasswordRequirements {
-  length: boolean;
-  uppercase: boolean;
-  lowercase: boolean;
-  number: boolean;
-  special: boolean;
+  length: boolean
+  uppercase: boolean
+  lowercase: boolean
+  number: boolean
+  special: boolean
 }
 
 function calculatePasswordStrength(password: string): number {
-  let score = 0;
-  if (password.length >= 8) score += 20;
-  if (password.length >= 12) score += 10;
-  if (password.length >= 16) score += 10;
-  if (/[A-Z]/.test(password)) score += 15;
-  if (/[a-z]/.test(password)) score += 15;
-  if (/[0-9]/.test(password)) score += 15;
-  if (/[!@#$%^&*]/.test(password)) score += 15;
-  return score;
+  let score = 0
+  if (password.length >= 8) score += 20
+  if (password.length >= 12) score += 10
+  if (password.length >= 16) score += 10
+  if (/[A-Z]/.test(password)) score += 15
+  if (/[a-z]/.test(password)) score += 15
+  if (/[0-9]/.test(password)) score += 15
+  if (/[!@#$%^&*]/.test(password)) score += 15
+  return score
 }
 
 function checkPasswordRequirements(password: string): PasswordRequirements {
@@ -37,114 +37,108 @@ function checkPasswordRequirements(password: string): PasswordRequirements {
     lowercase: /[a-z]/.test(password),
     number: /[0-9]/.test(password),
     special: /[!@#$%^&*]/.test(password),
-  };
+  }
 }
 
 export default function Setup() {
-  const navigate = useNavigate();
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const navigate = useNavigate()
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [formData, setFormData] = useState({
     username: '',
     email: '',
     password: '',
     confirmPassword: '',
-  });
+  })
   const [requirements, setRequirements] = useState<PasswordRequirements>({
     length: false,
     uppercase: false,
     lowercase: false,
     number: false,
     special: false,
-  });
-  const [passwordStrength, setPasswordStrength] = useState(0);
+  })
+  const [passwordStrength, setPasswordStrength] = useState(0)
 
   useEffect(() => {
-    const reqs = checkPasswordRequirements(formData.password);
-    setRequirements(reqs);
-    setPasswordStrength(calculatePasswordStrength(formData.password));
-  }, [formData.password]);
+    const reqs = checkPasswordRequirements(formData.password)
+    setRequirements(reqs)
+    setPasswordStrength(calculatePasswordStrength(formData.password))
+  }, [formData.password])
 
-  const allRequirementsMet = Object.values(requirements).every(Boolean);
-  const passwordsMatch = formData.password === formData.confirmPassword;
-  const allFieldsFilled = Object.values(formData).every((v) => v.trim() !== '');
-  const canSubmit = allRequirementsMet && passwordsMatch && allFieldsFilled;
+  const allRequirementsMet = Object.values(requirements).every(Boolean)
+  const passwordsMatch = formData.password === formData.confirmPassword
+  const allFieldsFilled = Object.values(formData).every((v) => v.trim() !== '')
+  const canSubmit = allRequirementsMet && passwordsMatch && allFieldsFilled
 
   const getStrengthLabel = () => {
-    if (passwordStrength >= 80) return { label: 'Strong', color: 'text-green-500' };
-    if (passwordStrength >= 50) return { label: 'Medium', color: 'text-yellow-500' };
-    if (passwordStrength > 0) return { label: 'Weak', color: 'text-red-500' };
-    return { label: '', color: '' };
-  };
+    if (passwordStrength >= 80) return { label: 'Strong', color: 'text-green-500' }
+    if (passwordStrength >= 50) return { label: 'Medium', color: 'text-yellow-500' }
+    if (passwordStrength > 0) return { label: 'Weak', color: 'text-red-500' }
+    return { label: '', color: '' }
+  }
 
-  const strengthInfo = getStrengthLabel();
+  const strengthInfo = getStrengthLabel()
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
-  };
+    const { name, value } = e.target
+    setFormData((prev) => ({ ...prev, [name]: value }))
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canSubmit) return;
+    e.preventDefault()
+    if (!canSubmit) return
 
-    setIsLoading(true);
-    setError(null);
+    setIsLoading(true)
+    setError(null)
 
     try {
       // First, fetch CSRF token
       const csrfResponse = await fetch('/auth/csrf-token', {
         credentials: 'include',
-      });
-      const csrfData = await csrfResponse.json();
+      })
+      const csrfData = await csrfResponse.json()
 
-      const form = new FormData();
-      form.append('username', formData.username);
-      form.append('email', formData.email);
-      form.append('password', formData.password);
-      form.append('confirm_password', formData.confirmPassword);
-      form.append('csrf_token', csrfData.csrf_token);
+      const form = new FormData()
+      form.append('username', formData.username)
+      form.append('email', formData.email)
+      form.append('password', formData.password)
+      form.append('confirm_password', formData.confirmPassword)
+      form.append('csrf_token', csrfData.csrf_token)
 
       const response = await fetch('/setup', {
         method: 'POST',
         body: form,
         credentials: 'include',
-      });
+      })
 
       // Consume response body
-      await response.text();
+      await response.text()
 
       // If setup was successful (response ok or redirected), go to login
       if (response.ok || response.redirected) {
-        toast.success('Account created successfully');
+        toast.success('Account created successfully')
         // Clear any existing session by calling logout
         try {
           await fetch('/auth/logout', {
             method: 'POST',
             credentials: 'include',
-          });
+          })
         } catch {
           // Ignore logout errors
         }
-        navigate('/login');
+        navigate('/login')
       } else {
-        setError('Setup failed. Please try again.');
+        setError('Setup failed. Please try again.')
       }
     } catch (err) {
-      console.error('Setup error:', err);
-      setError('Setup failed. Please check your connection and try again.');
+      console.error('Setup error:', err)
+      setError('Setup failed. Please check your connection and try again.')
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
-  const RequirementItem = ({
-    met,
-    children,
-  }: {
-    met: boolean;
-    children: React.ReactNode;
-  }) => (
+  const RequirementItem = ({ met, children }: { met: boolean; children: React.ReactNode }) => (
     <div
       className={cn(
         'flex items-center gap-2 text-sm py-1 transition-colors',
@@ -154,7 +148,7 @@ export default function Setup() {
       <Check className={cn('h-4 w-4', met ? 'opacity-100' : 'opacity-0')} />
       <span>{children}</span>
     </div>
-  );
+  )
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center py-12 px-4">
@@ -313,5 +307,5 @@ export default function Setup() {
         </div>
       </div>
     </div>
-  );
+  )
 }

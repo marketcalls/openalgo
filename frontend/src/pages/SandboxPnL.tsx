@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { Settings, Calendar, Briefcase, Package, Activity } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { Activity, Briefcase, Calendar, Package, Settings } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Table,
   TableBody,
@@ -11,117 +11,118 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { cn } from '@/lib/utils';
+} from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { cn } from '@/lib/utils'
 
 interface DailyPnL {
-  date: string;
-  realized_pnl: number;
-  positions_unrealized: number;
-  holdings_unrealized: number;
-  total_unrealized: number;
-  total_mtm: number;
-  portfolio_value: number;
+  date: string
+  realized_pnl: number
+  positions_unrealized: number
+  holdings_unrealized: number
+  total_unrealized: number
+  total_mtm: number
+  portfolio_value: number
 }
 
 interface Position {
-  symbol: string;
-  exchange: string;
-  product: string;
-  quantity: number;
-  average_price: number;
-  ltp: number;
-  today_realized_pnl: number;
-  all_time_realized_pnl: number;
-  status: string;
-  updated_at: string;
+  symbol: string
+  exchange: string
+  product: string
+  quantity: number
+  average_price: number
+  ltp: number
+  today_realized_pnl: number
+  all_time_realized_pnl: number
+  status: string
+  updated_at: string
 }
 
 interface Holding {
-  symbol: string;
-  exchange: string;
-  quantity: number;
-  average_price: number;
-  ltp: number;
-  unrealized_pnl: number;
-  pnl_percent: number;
-  settlement_date: string;
+  symbol: string
+  exchange: string
+  quantity: number
+  average_price: number
+  ltp: number
+  unrealized_pnl: number
+  pnl_percent: number
+  settlement_date: string
 }
 
 interface Trade {
-  tradeid: string;
-  symbol: string;
-  exchange: string;
-  action: string;
-  quantity: number;
-  price: number;
-  product: string;
-  timestamp: string;
+  tradeid: string
+  symbol: string
+  exchange: string
+  action: string
+  quantity: number
+  price: number
+  product: string
+  timestamp: string
 }
 
 interface Summary {
-  today_realized_pnl: number;
-  positions_unrealized_pnl: number;
-  holdings_unrealized_pnl: number;
-  today_total_mtm: number;
-  all_time_realized_pnl: number;
+  today_realized_pnl: number
+  positions_unrealized_pnl: number
+  holdings_unrealized_pnl: number
+  today_total_mtm: number
+  all_time_realized_pnl: number
 }
 
 interface SandboxData {
-  summary: Summary;
-  daily_pnl: DailyPnL[];
-  positions: Position[];
-  holdings: Holding[];
-  trades: Trade[];
+  summary: Summary
+  daily_pnl: DailyPnL[]
+  positions: Position[]
+  holdings: Holding[]
+  trades: Trade[]
 }
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat('en-IN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(value);
+  }).format(value)
 }
 
 function getPnLColor(value: number): string {
-  if (value > 0) return 'text-green-500';
-  if (value < 0) return 'text-red-500';
-  return '';
+  if (value > 0) return 'text-green-500'
+  if (value < 0) return 'text-red-500'
+  return ''
 }
 
 export default function SandboxPnL() {
-  const [data, setData] = useState<SandboxData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('daily');
+  const [data, setData] = useState<SandboxData | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [activeTab, setActiveTab] = useState('daily')
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    fetchData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const fetchData = async () => {
     try {
       const response = await fetch('/sandbox/mypnl/api/data', {
         credentials: 'include',
-      });
+      })
       if (response.ok) {
-        const result = await response.json();
+        const result = await response.json()
         if (result.status === 'success') {
-          setData(result.data);
+          setData(result.data)
         }
       }
     } catch (error) {
-      console.error('Error fetching data:', error);
+      console.error('Error fetching data:', error)
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   if (isLoading) {
     return (
       <div className="container mx-auto py-8 px-4 flex items-center justify-center">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
-    );
+    )
   }
 
   const summary = data?.summary || {
@@ -130,7 +131,7 @@ export default function SandboxPnL() {
     holdings_unrealized_pnl: 0,
     today_total_mtm: 0,
     all_time_realized_pnl: 0,
-  };
+  }
 
   return (
     <div className="container mx-auto py-6 px-4">
@@ -138,7 +139,9 @@ export default function SandboxPnL() {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
         <div>
           <h1 className="text-3xl font-bold">My P&L History</h1>
-          <p className="text-muted-foreground mt-1">Track your daily and historical profit & loss</p>
+          <p className="text-muted-foreground mt-1">
+            Track your daily and historical profit & loss
+          </p>
         </div>
         <Button asChild variant="outline">
           <Link to="/sandbox">
@@ -157,7 +160,10 @@ export default function SandboxPnL() {
             <div className={cn('text-2xl font-bold', getPnLColor(summary.today_realized_pnl))}>
               {formatCurrency(summary.today_realized_pnl)}
             </div>
-            <Badge variant={summary.today_realized_pnl >= 0 ? 'default' : 'destructive'} className="mt-1">
+            <Badge
+              variant={summary.today_realized_pnl >= 0 ? 'default' : 'destructive'}
+              className="mt-1"
+            >
               Today
             </Badge>
           </CardContent>
@@ -167,10 +173,14 @@ export default function SandboxPnL() {
         <Card>
           <CardContent className="p-4">
             <div className="text-sm text-muted-foreground">Positions MTM</div>
-            <div className={cn('text-2xl font-bold', getPnLColor(summary.positions_unrealized_pnl))}>
+            <div
+              className={cn('text-2xl font-bold', getPnLColor(summary.positions_unrealized_pnl))}
+            >
               {formatCurrency(summary.positions_unrealized_pnl)}
             </div>
-            <Badge variant="secondary" className="mt-1">Unrealized</Badge>
+            <Badge variant="secondary" className="mt-1">
+              Unrealized
+            </Badge>
           </CardContent>
         </Card>
 
@@ -181,7 +191,9 @@ export default function SandboxPnL() {
             <div className={cn('text-2xl font-bold', getPnLColor(summary.holdings_unrealized_pnl))}>
               {formatCurrency(summary.holdings_unrealized_pnl)}
             </div>
-            <Badge variant="outline" className="mt-1">Unrealized</Badge>
+            <Badge variant="outline" className="mt-1">
+              Unrealized
+            </Badge>
           </CardContent>
         </Card>
 
@@ -203,7 +215,10 @@ export default function SandboxPnL() {
             <div className={cn('text-2xl font-bold', getPnLColor(summary.all_time_realized_pnl))}>
               {formatCurrency(summary.all_time_realized_pnl)}
             </div>
-            <Badge variant={summary.all_time_realized_pnl >= 0 ? 'default' : 'destructive'} className="mt-1">
+            <Badge
+              variant={summary.all_time_realized_pnl >= 0 ? 'default' : 'destructive'}
+              className="mt-1"
+            >
               Lifetime
             </Badge>
           </CardContent>
@@ -259,16 +274,24 @@ export default function SandboxPnL() {
                           <TableCell className={cn('text-right', getPnLColor(day.realized_pnl))}>
                             {formatCurrency(day.realized_pnl)}
                           </TableCell>
-                          <TableCell className={cn('text-right', getPnLColor(day.positions_unrealized))}>
+                          <TableCell
+                            className={cn('text-right', getPnLColor(day.positions_unrealized))}
+                          >
                             {formatCurrency(day.positions_unrealized)}
                           </TableCell>
-                          <TableCell className={cn('text-right', getPnLColor(day.holdings_unrealized))}>
+                          <TableCell
+                            className={cn('text-right', getPnLColor(day.holdings_unrealized))}
+                          >
                             {formatCurrency(day.holdings_unrealized)}
                           </TableCell>
-                          <TableCell className={cn('text-right', getPnLColor(day.total_unrealized))}>
+                          <TableCell
+                            className={cn('text-right', getPnLColor(day.total_unrealized))}
+                          >
                             {formatCurrency(day.total_unrealized)}
                           </TableCell>
-                          <TableCell className={cn('text-right font-bold', getPnLColor(day.total_mtm))}>
+                          <TableCell
+                            className={cn('text-right font-bold', getPnLColor(day.total_mtm))}
+                          >
                             {formatCurrency(day.total_mtm)}
                           </TableCell>
                           <TableCell className="text-right text-primary">
@@ -323,18 +346,30 @@ export default function SandboxPnL() {
                           </TableCell>
                           <TableCell>
                             <Badge
-                              variant={pos.product === 'MIS' ? 'secondary' : pos.product === 'CNC' ? 'default' : 'outline'}
+                              variant={
+                                pos.product === 'MIS'
+                                  ? 'secondary'
+                                  : pos.product === 'CNC'
+                                    ? 'default'
+                                    : 'outline'
+                              }
                             >
                               {pos.product}
                             </Badge>
                           </TableCell>
                           <TableCell className="text-right">{pos.quantity}</TableCell>
-                          <TableCell className="text-right">{formatCurrency(pos.average_price)}</TableCell>
+                          <TableCell className="text-right">
+                            {formatCurrency(pos.average_price)}
+                          </TableCell>
                           <TableCell className="text-right">{formatCurrency(pos.ltp)}</TableCell>
-                          <TableCell className={cn('text-right', getPnLColor(pos.today_realized_pnl))}>
+                          <TableCell
+                            className={cn('text-right', getPnLColor(pos.today_realized_pnl))}
+                          >
                             {formatCurrency(pos.today_realized_pnl)}
                           </TableCell>
-                          <TableCell className={cn('text-right', getPnLColor(pos.all_time_realized_pnl))}>
+                          <TableCell
+                            className={cn('text-right', getPnLColor(pos.all_time_realized_pnl))}
+                          >
                             {formatCurrency(pos.all_time_realized_pnl)}
                           </TableCell>
                           <TableCell>
@@ -342,7 +377,9 @@ export default function SandboxPnL() {
                               {pos.status}
                             </Badge>
                           </TableCell>
-                          <TableCell className="text-xs text-muted-foreground">{pos.updated_at}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">
+                            {pos.updated_at}
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -388,15 +425,23 @@ export default function SandboxPnL() {
                             <Badge variant="outline">{holding.exchange}</Badge>
                           </TableCell>
                           <TableCell className="text-right">{holding.quantity}</TableCell>
-                          <TableCell className="text-right">{formatCurrency(holding.average_price)}</TableCell>
-                          <TableCell className="text-right">{formatCurrency(holding.ltp)}</TableCell>
-                          <TableCell className={cn('text-right', getPnLColor(holding.unrealized_pnl))}>
+                          <TableCell className="text-right">
+                            {formatCurrency(holding.average_price)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {formatCurrency(holding.ltp)}
+                          </TableCell>
+                          <TableCell
+                            className={cn('text-right', getPnLColor(holding.unrealized_pnl))}
+                          >
                             {formatCurrency(holding.unrealized_pnl)}
                           </TableCell>
                           <TableCell className={cn('text-right', getPnLColor(holding.pnl_percent))}>
                             {formatCurrency(holding.pnl_percent)}%
                           </TableCell>
-                          <TableCell className="text-xs text-muted-foreground">{holding.settlement_date}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">
+                            {holding.settlement_date}
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -450,15 +495,25 @@ export default function SandboxPnL() {
                             </Badge>
                           </TableCell>
                           <TableCell className="text-right">{trade.quantity}</TableCell>
-                          <TableCell className="text-right">{formatCurrency(trade.price)}</TableCell>
+                          <TableCell className="text-right">
+                            {formatCurrency(trade.price)}
+                          </TableCell>
                           <TableCell>
                             <Badge
-                              variant={trade.product === 'MIS' ? 'secondary' : trade.product === 'CNC' ? 'default' : 'outline'}
+                              variant={
+                                trade.product === 'MIS'
+                                  ? 'secondary'
+                                  : trade.product === 'CNC'
+                                    ? 'default'
+                                    : 'outline'
+                              }
                             >
                               {trade.product}
                             </Badge>
                           </TableCell>
-                          <TableCell className="text-xs text-muted-foreground">{trade.timestamp}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">
+                            {trade.timestamp}
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -475,5 +530,5 @@ export default function SandboxPnL() {
         </TabsContent>
       </Tabs>
     </div>
-  );
+  )
 }

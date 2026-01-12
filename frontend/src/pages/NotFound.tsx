@@ -1,6 +1,6 @@
-import { Link } from 'react-router-dom';
-import { Button } from '@/components/ui/button';
-import { Home, LogIn, BookOpen, HelpCircle, Download } from 'lucide-react';
+import { BookOpen, Download, HelpCircle, Home, LogIn } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Button } from '@/components/ui/button'
 
 export default function NotFound() {
   return (
@@ -14,7 +14,7 @@ export default function NotFound() {
             className="w-64 h-64 mx-auto animate-float"
             onError={(e) => {
               // Hide image if not found
-              e.currentTarget.style.display = 'none';
+              e.currentTarget.style.display = 'none'
             }}
           />
         </div>
@@ -24,8 +24,8 @@ export default function NotFound() {
         </h1>
 
         <p className="text-xl text-muted-foreground mb-8">
-          The page you're looking for doesn't exist or has been moved.
-          Don't worry, let's get you back on track.
+          The page you're looking for doesn't exist or has been moved. Don't worry, let's get you
+          back on track.
         </p>
 
         <div className="flex flex-wrap justify-center gap-4 mb-8">
@@ -57,11 +57,7 @@ export default function NotFound() {
         {/* Quick Links */}
         <div className="flex flex-wrap justify-center gap-4">
           <Button variant="ghost" size="sm" asChild>
-            <a
-              href="https://docs.openalgo.in"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
+            <a href="https://docs.openalgo.in" target="_blank" rel="noopener noreferrer">
               <BookOpen className="h-4 w-4 mr-2" />
               Documentation
             </a>
@@ -92,5 +88,5 @@ export default function NotFound() {
         }
       `}</style>
     </div>
-  );
+  )
 }

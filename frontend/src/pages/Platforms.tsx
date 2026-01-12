@@ -1,21 +1,30 @@
-import { Link } from 'react-router-dom';
-import { BarChart3, LineChart, Lightbulb, Zap, ExternalLink, CheckCircle } from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { BarChart3, CheckCircle, ExternalLink, Lightbulb, LineChart, Zap } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
 
 interface PlatformCardProps {
-  title: string;
-  description: string;
-  features: string[];
-  icon: React.ReactNode;
-  gradient: string;
-  link: string;
-  buttonText: string;
-  buttonVariant?: 'default' | 'secondary' | 'outline';
+  title: string
+  description: string
+  features: string[]
+  icon: React.ReactNode
+  gradient: string
+  link: string
+  buttonText: string
+  buttonVariant?: 'default' | 'secondary' | 'outline'
 }
 
-function PlatformCard({ title, description, features, icon, gradient, link, buttonText, buttonVariant = 'default' }: PlatformCardProps) {
+function PlatformCard({
+  title,
+  description,
+  features,
+  icon,
+  gradient,
+  link,
+  buttonText,
+  buttonVariant = 'default',
+}: PlatformCardProps) {
   return (
     <Card className="hover:shadow-xl transition-all duration-300 hover:-translate-y-2">
       <CardContent className="pt-10 pb-6 text-center">
@@ -54,14 +63,15 @@ function PlatformCard({ title, description, features, icon, gradient, link, butt
         </Button>
       </CardContent>
     </Card>
-  );
+  )
 }
 
 export default function Platforms() {
   const platforms: PlatformCardProps[] = [
     {
       title: 'TradingView',
-      description: "World's leading charting platform with advanced technical analysis tools and real-time data. Set up webhooks to automate your trading strategies.",
+      description:
+        "World's leading charting platform with advanced technical analysis tools and real-time data. Set up webhooks to automate your trading strategies.",
       features: [
         'Advanced charting & indicators',
         'Pine Script strategy alerts',
@@ -75,12 +85,9 @@ export default function Platforms() {
     },
     {
       title: 'GoCharting',
-      description: 'Professional HTML5 charting platform designed for Indian markets. Powerful analysis tools with seamless webhook integration for live trading.',
-      features: [
-        'Indian market optimized',
-        'Real-time market data',
-        'Simple webhook setup',
-      ],
+      description:
+        'Professional HTML5 charting platform designed for Indian markets. Powerful analysis tools with seamless webhook integration for live trading.',
+      features: ['Indian market optimized', 'Real-time market data', 'Simple webhook setup'],
       icon: <LineChart className="h-20 w-20 text-white" />,
       gradient: 'linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%)',
       link: '/gocharting',
@@ -89,19 +96,16 @@ export default function Platforms() {
     },
     {
       title: 'Chartink',
-      description: 'Build custom stock screeners with powerful technical analysis filters. Automate trading based on your screening conditions and market scans.',
-      features: [
-        'Custom stock screeners',
-        'Technical scan automation',
-        'Multi-symbol execution',
-      ],
+      description:
+        'Build custom stock screeners with powerful technical analysis filters. Automate trading based on your screening conditions and market scans.',
+      features: ['Custom stock screeners', 'Technical scan automation', 'Multi-symbol execution'],
       icon: <Lightbulb className="h-20 w-20 text-white" />,
       gradient: 'linear-gradient(135deg, #f59e0b 0%, #ef4444 100%)',
       link: '/chartink',
       buttonText: 'Configure Chartink',
       buttonVariant: 'default',
     },
-  ];
+  ]
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -127,7 +131,9 @@ export default function Platforms() {
           <AlertTitle className="font-bold">Getting Started</AlertTitle>
           <AlertDescription className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <span>
-              Each platform requires webhook configuration. Click on the platform cards above to generate your webhook URLs and JSON payloads. Make sure you have set up your API key before configuring webhooks.
+              Each platform requires webhook configuration. Click on the platform cards above to
+              generate your webhook URLs and JSON payloads. Make sure you have set up your API key
+              before configuring webhooks.
             </span>
             <Button asChild variant="outline" size="sm" className="gap-1 flex-shrink-0">
               <a href="https://docs.openalgo.in" target="_blank" rel="noopener noreferrer">
@@ -139,5 +145,5 @@ export default function Platforms() {
         </Alert>
       </div>
     </div>
-  );
+  )
 }

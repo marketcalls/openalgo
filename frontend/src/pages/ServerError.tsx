@@ -1,18 +1,18 @@
-import { Link } from 'react-router-dom';
-import { Button } from '@/components/ui/button';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Home, LogOut, BookOpen, HelpCircle, Download, AlertTriangle } from 'lucide-react';
-import { fetchCSRFToken } from '@/api/client';
-import { useState } from 'react';
-import { toast } from 'sonner';
+import { AlertTriangle, BookOpen, Download, HelpCircle, Home, LogOut } from 'lucide-react'
+import { useState } from 'react'
+import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
+import { fetchCSRFToken } from '@/api/client'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 
 export default function ServerError() {
-  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false)
 
   const handleLogout = async () => {
-    setIsLoggingOut(true);
+    setIsLoggingOut(true)
     try {
-      const csrfToken = await fetchCSRFToken();
+      const csrfToken = await fetchCSRFToken()
       const response = await fetch('/auth/logout', {
         method: 'POST',
         headers: {
@@ -20,20 +20,20 @@ export default function ServerError() {
           'X-CSRFToken': csrfToken,
         },
         credentials: 'include',
-      });
+      })
 
       if (response.ok) {
-        window.location.href = '/login';
+        window.location.href = '/login'
       } else {
-        toast.error('Failed to logout. Please try again.');
+        toast.error('Failed to logout. Please try again.')
       }
     } catch {
       // If logout fails, redirect to login anyway
-      window.location.href = '/login';
+      window.location.href = '/login'
     } finally {
-      setIsLoggingOut(false);
+      setIsLoggingOut(false)
     }
-  };
+  }
 
   return (
     <div className="min-h-[calc(100vh-16rem)] flex items-center justify-center p-4">
@@ -45,7 +45,7 @@ export default function ServerError() {
             alt="Meditation illustration"
             className="w-64 h-64 mx-auto animate-float"
             onError={(e) => {
-              e.currentTarget.style.display = 'none';
+              e.currentTarget.style.display = 'none'
             }}
           />
         </div>
@@ -55,8 +55,7 @@ export default function ServerError() {
         </h1>
 
         <p className="text-xl text-muted-foreground mb-6">
-          Oops! Something went wrong.
-          Don't worry, we're here to help you resolve this.
+          Oops! Something went wrong. Don't worry, we're here to help you resolve this.
         </p>
 
         {/* API Key Warning */}
@@ -99,11 +98,7 @@ export default function ServerError() {
         {/* Quick Links */}
         <div className="flex flex-wrap justify-center gap-4">
           <Button variant="ghost" size="sm" asChild>
-            <a
-              href="https://docs.openalgo.in"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
+            <a href="https://docs.openalgo.in" target="_blank" rel="noopener noreferrer">
               <BookOpen className="h-4 w-4 mr-2" />
               Documentation
             </a>
@@ -134,5 +129,5 @@ export default function ServerError() {
         }
       `}</style>
     </div>
-  );
+  )
 }

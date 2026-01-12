@@ -1,30 +1,20 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
 import {
+  ArrowRight,
+  BarChart3,
+  Bell,
+  Bot,
   MessageSquare,
   Power,
   PowerOff,
-  Users,
-  BarChart3,
-  Settings,
-  Send,
-  ArrowRight,
-  Bot,
-  Bell,
   Radio,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Textarea } from '@/components/ui/textarea';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+  Send,
+  Settings,
+  Users,
+} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
+import { webClient } from '@/api/client'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,144 +24,163 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import { toast } from 'sonner';
-import { webClient } from '@/api/client';
-import type { TelegramBotStatus, TelegramUser, CommandStats } from '@/types/telegram';
+} from '@/components/ui/alert-dialog'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Textarea } from '@/components/ui/textarea'
+import type { CommandStats, TelegramBotStatus, TelegramUser } from '@/types/telegram'
 
 interface TelegramIndexData {
-  bot_status: TelegramBotStatus;
+  bot_status: TelegramBotStatus
   config: {
-    bot_username: string | null;
-    broadcast_enabled: boolean;
-    rate_limit_per_minute: number;
-    is_active: boolean;
-  };
-  users: TelegramUser[];
-  stats: CommandStats[];
-  telegram_user: TelegramUser | null;
+    bot_username: string | null
+    broadcast_enabled: boolean
+    rate_limit_per_minute: number
+    is_active: boolean
+  }
+  users: TelegramUser[]
+  stats: CommandStats[]
+  telegram_user: TelegramUser | null
 }
 
 export default function TelegramIndex() {
-  const [data, setData] = useState<TelegramIndexData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isStarting, setIsStarting] = useState(false);
-  const [isStopping, setIsStopping] = useState(false);
-  const [isSendingTest, setIsSendingTest] = useState(false);
+  const [data, setData] = useState<TelegramIndexData | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isStarting, setIsStarting] = useState(false)
+  const [isStopping, setIsStopping] = useState(false)
+  const [isSendingTest, setIsSendingTest] = useState(false)
 
   // Broadcast state
-  const [broadcastMessage, setBroadcastMessage] = useState('');
-  const [showBroadcastConfirm, setShowBroadcastConfirm] = useState(false);
-  const [isBroadcasting, setIsBroadcasting] = useState(false);
+  const [broadcastMessage, setBroadcastMessage] = useState('')
+  const [showBroadcastConfirm, setShowBroadcastConfirm] = useState(false)
+  const [isBroadcasting, setIsBroadcasting] = useState(false)
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    fetchData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const fetchData = async () => {
     try {
-      const response = await webClient.get<{ status: string; data: TelegramIndexData }>('/telegram/api/index');
-      setData(response.data.data);
+      const response = await webClient.get<{ status: string; data: TelegramIndexData }>(
+        '/telegram/api/index'
+      )
+      setData(response.data.data)
     } catch (error) {
-      console.error('Error fetching telegram data:', error);
-      toast.error('Failed to load Telegram data');
+      console.error('Error fetching telegram data:', error)
+      toast.error('Failed to load Telegram data')
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   const handleStartBot = async () => {
-    setIsStarting(true);
+    setIsStarting(true)
     try {
-      const response = await webClient.post<{ status: string; message: string }>('/telegram/bot/start');
+      const response = await webClient.post<{ status: string; message: string }>(
+        '/telegram/bot/start'
+      )
       if (response.data.status === 'success') {
-        toast.success(response.data.message || 'Bot started successfully');
-        fetchData();
+        toast.success(response.data.message || 'Bot started successfully')
+        fetchData()
       } else {
-        toast.error(response.data.message || 'Failed to start bot');
+        toast.error(response.data.message || 'Failed to start bot')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to start bot');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to start bot')
     } finally {
-      setIsStarting(false);
+      setIsStarting(false)
     }
-  };
+  }
 
   const handleStopBot = async () => {
-    setIsStopping(true);
+    setIsStopping(true)
     try {
-      const response = await webClient.post<{ status: string; message: string }>('/telegram/bot/stop');
+      const response = await webClient.post<{ status: string; message: string }>(
+        '/telegram/bot/stop'
+      )
       if (response.data.status === 'success') {
-        toast.success(response.data.message || 'Bot stopped successfully');
-        fetchData();
+        toast.success(response.data.message || 'Bot stopped successfully')
+        fetchData()
       } else {
-        toast.error(response.data.message || 'Failed to stop bot');
+        toast.error(response.data.message || 'Failed to stop bot')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to stop bot');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to stop bot')
     } finally {
-      setIsStopping(false);
+      setIsStopping(false)
     }
-  };
+  }
 
   const handleSendTest = async () => {
-    setIsSendingTest(true);
+    setIsSendingTest(true)
     try {
-      const response = await webClient.post<{ status: string; message: string }>('/telegram/test-message');
+      const response = await webClient.post<{ status: string; message: string }>(
+        '/telegram/test-message'
+      )
       if (response.data.status === 'success') {
-        toast.success(response.data.message || 'Test message sent');
+        toast.success(response.data.message || 'Test message sent')
       } else {
-        toast.error(response.data.message || 'Failed to send test message');
+        toast.error(response.data.message || 'Failed to send test message')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to send test message');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to send test message')
     } finally {
-      setIsSendingTest(false);
+      setIsSendingTest(false)
     }
-  };
+  }
 
   const handleBroadcast = async () => {
     if (!broadcastMessage.trim()) {
-      toast.error('Please enter a message to broadcast');
-      return;
+      toast.error('Please enter a message to broadcast')
+      return
     }
-    setShowBroadcastConfirm(true);
-  };
+    setShowBroadcastConfirm(true)
+  }
 
   const confirmBroadcast = async () => {
-    setShowBroadcastConfirm(false);
-    setIsBroadcasting(true);
+    setShowBroadcastConfirm(false)
+    setIsBroadcasting(true)
     try {
       const response = await webClient.post<{
-        status: string;
-        message: string;
-        success_count?: number;
-        fail_count?: number;
-      }>('/telegram/broadcast', { message: broadcastMessage });
+        status: string
+        message: string
+        success_count?: number
+        fail_count?: number
+      }>('/telegram/broadcast', { message: broadcastMessage })
 
       if (response.data.status === 'success') {
-        toast.success(response.data.message || 'Broadcast sent successfully');
-        setBroadcastMessage('');
+        toast.success(response.data.message || 'Broadcast sent successfully')
+        setBroadcastMessage('')
       } else {
-        toast.error(response.data.message || 'Failed to send broadcast');
+        toast.error(response.data.message || 'Failed to send broadcast')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to send broadcast');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to send broadcast')
     } finally {
-      setIsBroadcasting(false);
+      setIsBroadcasting(false)
     }
-  };
+  }
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
-    );
+    )
   }
 
   if (!data) {
@@ -179,13 +188,13 @@ export default function TelegramIndex() {
       <div className="flex items-center justify-center py-16">
         <p className="text-muted-foreground">Failed to load Telegram data</p>
       </div>
-    );
+    )
   }
 
-  const { bot_status, config, users = [], stats = [] } = data;
-  const safeUsers = Array.isArray(users) ? users : [];
-  const safeStats = Array.isArray(stats) ? stats : [];
-  const activeUsers = safeUsers.filter((u) => u.notifications_enabled).length;
+  const { bot_status, config, users = [], stats = [] } = data
+  const safeUsers = Array.isArray(users) ? users : []
+  const safeStats = Array.isArray(stats) ? stats : []
+  const activeUsers = safeUsers.filter((u) => u.notifications_enabled).length
 
   return (
     <div className="py-6 space-y-6">
@@ -226,9 +235,11 @@ export default function TelegramIndex() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
-                bot_status.is_running ? 'bg-green-500' : 'bg-gray-400'
-              }`}>
+              <div
+                className={`w-12 h-12 rounded-full flex items-center justify-center ${
+                  bot_status.is_running ? 'bg-green-500' : 'bg-gray-400'
+                }`}
+              >
                 <Bot className="h-6 w-6 text-white" />
               </div>
               <div>
@@ -240,9 +251,10 @@ export default function TelegramIndex() {
                 </CardDescription>
               </div>
             </div>
-            <Badge variant={bot_status.is_running ? 'default' : 'secondary'} className={
-              bot_status.is_running ? 'bg-green-500 hover:bg-green-600' : ''
-            }>
+            <Badge
+              variant={bot_status.is_running ? 'default' : 'secondary'}
+              className={bot_status.is_running ? 'bg-green-500 hover:bg-green-600' : ''}
+            >
               {bot_status.is_running ? 'Online' : 'Offline'}
             </Badge>
           </div>
@@ -258,9 +270,7 @@ export default function TelegramIndex() {
               <p className="text-sm text-muted-foreground">Active Users</p>
             </div>
             <div className="text-center p-3 bg-muted rounded-lg">
-              <p className="text-2xl font-bold">
-                {safeStats.reduce((sum, s) => sum + s.count, 0)}
-              </p>
+              <p className="text-2xl font-bold">{safeStats.reduce((sum, s) => sum + s.count, 0)}</p>
               <p className="text-sm text-muted-foreground">Commands (7d)</p>
             </div>
             <div className="text-center p-3 bg-muted rounded-lg">
@@ -391,8 +401,8 @@ export default function TelegramIndex() {
                 </TableHeader>
                 <TableBody>
                   {safeStats.map((stat) => {
-                    const totalCommands = safeStats.reduce((sum, s) => sum + s.count, 0);
-                    const percentage = totalCommands > 0 ? (stat.count / totalCommands) * 100 : 0;
+                    const totalCommands = safeStats.reduce((sum, s) => sum + s.count, 0)
+                    const percentage = totalCommands > 0 ? (stat.count / totalCommands) * 100 : 0
                     return (
                       <TableRow key={stat.command}>
                         <TableCell>
@@ -413,7 +423,7 @@ export default function TelegramIndex() {
                           </div>
                         </TableCell>
                       </TableRow>
-                    );
+                    )
                   })}
                 </TableBody>
               </Table>
@@ -477,5 +487,5 @@ export default function TelegramIndex() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
-  );
+  )
 }

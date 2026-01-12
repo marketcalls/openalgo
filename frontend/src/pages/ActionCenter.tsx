@@ -1,36 +1,23 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { Link } from 'react-router-dom';
-import { io, Socket } from 'socket.io-client';
 import {
-  PlayCircle,
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   Check,
-  X,
-  Trash2,
-  Info,
   ChevronDown,
   ChevronUp,
+  Info,
+  PlayCircle,
   RefreshCw,
   Settings,
-  ArrowUp,
-  ArrowDown,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import {
-  Tabs,
-  TabsList,
-  TabsTrigger,
-} from '@/components/ui/tabs';
+  Trash2,
+  X,
+} from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { io, type Socket } from 'socket.io-client'
+import { toast } from 'sonner'
+import { webClient } from '@/api/client'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -40,324 +27,332 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
+} from '@/components/ui/alert-dialog'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible'
 import {
-  Alert,
-  AlertDescription,
-  AlertTitle,
-} from '@/components/ui/alert';
-import {
-  Collapsible,
-  CollapsibleContent,
-} from '@/components/ui/collapsible';
-import { toast } from 'sonner';
-import { webClient } from '@/api/client';
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 interface PendingOrder {
-  id: number;
-  strategy: string;
-  api_type: string;
-  symbol: string;
-  exchange: string;
-  action: 'BUY' | 'SELL';
-  quantity: number;
-  price: number;
-  price_type: string;
-  product_type: string;
-  status: 'pending' | 'approved' | 'rejected';
-  created_at_ist: string;
-  raw_order_data: Record<string, unknown>;
+  id: number
+  strategy: string
+  api_type: string
+  symbol: string
+  exchange: string
+  action: 'BUY' | 'SELL'
+  quantity: number
+  price: number
+  price_type: string
+  product_type: string
+  status: 'pending' | 'approved' | 'rejected'
+  created_at_ist: string
+  raw_order_data: Record<string, unknown>
 }
 
 interface OrderStats {
-  total_pending: number;
-  total_approved: number;
-  total_rejected: number;
-  total_buy_orders: number;
-  total_sell_orders: number;
+  total_pending: number
+  total_approved: number
+  total_rejected: number
+  total_buy_orders: number
+  total_sell_orders: number
 }
 
 interface ActionCenterResponse {
-  status: string;
+  status: string
   data: {
-    orders: PendingOrder[];
-    statistics: OrderStats;
-  };
+    orders: PendingOrder[]
+    statistics: OrderStats
+  }
 }
 
 export default function ActionCenterPage() {
-  const [orders, setOrders] = useState<PendingOrder[]>([]);
+  const [orders, setOrders] = useState<PendingOrder[]>([])
   const [stats, setStats] = useState<OrderStats>({
     total_pending: 0,
     total_approved: 0,
     total_rejected: 0,
     total_buy_orders: 0,
     total_sell_orders: 0,
-  });
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [activeFilter, setActiveFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
-  const [expandedOrders, setExpandedOrders] = useState<Set<number>>(new Set());
+  })
+  const [isLoading, setIsLoading] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [activeFilter, setActiveFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>(
+    'pending'
+  )
+  const [expandedOrders, setExpandedOrders] = useState<Set<number>>(new Set())
 
   // Confirmation dialogs
-  const [orderToDelete, setOrderToDelete] = useState<PendingOrder | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [isApproving, setIsApproving] = useState<number | null>(null);
-  const [isRejecting, setIsRejecting] = useState<number | null>(null);
-  const [isApprovingAll, setIsApprovingAll] = useState(false);
+  const [orderToDelete, setOrderToDelete] = useState<PendingOrder | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [isApproving, setIsApproving] = useState<number | null>(null)
+  const [isRejecting, setIsRejecting] = useState<number | null>(null)
+  const [isApprovingAll, setIsApprovingAll] = useState(false)
 
   // Socket ref for realtime updates
-  const socketRef = useRef<Socket | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const socketRef = useRef<Socket | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
 
   const fetchData = useCallback(async () => {
     try {
-      const statusParam = activeFilter === 'all' ? '' : activeFilter;
+      const statusParam = activeFilter === 'all' ? '' : activeFilter
       const response = await webClient.get<ActionCenterResponse>(
         `/action-center/api/data${statusParam ? `?status=${statusParam}` : ''}`
-      );
+      )
 
       if (response.data.status === 'success') {
-        setOrders(Array.isArray(response.data.data.orders) ? response.data.data.orders : []);
-        setStats(response.data.data.statistics || {
-          total_pending: 0,
-          total_approved: 0,
-          total_rejected: 0,
-          total_buy_orders: 0,
-          total_sell_orders: 0,
-        });
+        setOrders(Array.isArray(response.data.data.orders) ? response.data.data.orders : [])
+        setStats(
+          response.data.data.statistics || {
+            total_pending: 0,
+            total_approved: 0,
+            total_rejected: 0,
+            total_buy_orders: 0,
+            total_sell_orders: 0,
+          }
+        )
       }
     } catch (error) {
-      console.error('Error fetching action center data:', error);
-      toast.error('Failed to load action center data');
+      console.error('Error fetching action center data:', error)
+      toast.error('Failed to load action center data')
     } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
+      setIsLoading(false)
+      setIsRefreshing(false)
     }
-  }, [activeFilter]);
+  }, [activeFilter])
 
   useEffect(() => {
-    fetchData();
+    fetchData()
     // Auto-refresh every 30 seconds for pending orders
     if (activeFilter === 'pending') {
-      const interval = setInterval(fetchData, 30000);
-      return () => clearInterval(interval);
+      const interval = setInterval(fetchData, 30000)
+      return () => clearInterval(interval)
     }
-  }, [fetchData, activeFilter]);
+  }, [fetchData, activeFilter])
 
   // Socket connection for realtime order updates
   useEffect(() => {
     // Create audio element for alert sounds
-    audioRef.current = new Audio('/static/sounds/alert.mp3');
-    audioRef.current.preload = 'auto';
+    audioRef.current = new Audio('/static/sounds/alert.mp3')
+    audioRef.current.preload = 'auto'
 
     // Connect to socket server
-    const protocol = window.location.protocol;
-    const host = window.location.hostname;
-    const port = window.location.port;
+    const protocol = window.location.protocol
+    const host = window.location.hostname
+    const port = window.location.port
 
     socketRef.current = io(`${protocol}//${host}:${port}`, {
       transports: ['websocket', 'polling'],
-    });
+    })
 
-    const socket = socketRef.current;
+    const socket = socketRef.current
 
     // Listen for new pending orders (semi-auto mode)
     socket.on('pending_order_created', (data: { api_type: string; message: string }) => {
       // Play alert sound
       if (audioRef.current) {
-        audioRef.current.play().catch(() => {});
+        audioRef.current.play().catch(() => {})
       }
 
       // Show toast notification
       toast.warning(`New Order Queued: ${data.message}`, {
         duration: 5000,
-      });
+      })
 
       // Refresh data to show new order
-      fetchData();
-    });
+      fetchData()
+    })
 
     // Listen for order updates (approved, rejected, deleted)
     socket.on('pending_order_updated', () => {
       // Refresh data
-      fetchData();
-    });
+      fetchData()
+    })
 
     return () => {
-      socket.disconnect();
-    };
-  }, [fetchData]);
+      socket.disconnect()
+    }
+  }, [fetchData])
 
   const handleRefresh = async () => {
-    setIsRefreshing(true);
-    await fetchData();
-    toast.success('Data refreshed');
-  };
+    setIsRefreshing(true)
+    await fetchData()
+    toast.success('Data refreshed')
+  }
 
   const handleApprove = async (orderId: number) => {
-    setIsApproving(orderId);
+    setIsApproving(orderId)
     try {
       const response = await webClient.post<{ status: string; message: string }>(
         `/action-center/approve/${orderId}`,
         {}
-      );
+      )
 
       if (response.data.status === 'success') {
-        toast.success(response.data.message || 'Order approved and executed');
-        fetchData();
+        toast.success(response.data.message || 'Order approved and executed')
+        fetchData()
       } else if (response.data.status === 'warning') {
-        toast.warning(response.data.message);
-        fetchData();
+        toast.warning(response.data.message)
+        fetchData()
       } else {
-        toast.error(response.data.message || 'Failed to approve order');
+        toast.error(response.data.message || 'Failed to approve order')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to approve order');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to approve order')
     } finally {
-      setIsApproving(null);
+      setIsApproving(null)
     }
-  };
+  }
 
   const handleReject = async (orderId: number) => {
-    setIsRejecting(orderId);
+    setIsRejecting(orderId)
     try {
       const response = await webClient.post<{ status: string; message: string }>(
         `/action-center/reject/${orderId}`,
         { reason: 'Rejected by user' }
-      );
+      )
 
       if (response.data.status === 'success') {
-        toast.success('Order rejected');
-        fetchData();
+        toast.success('Order rejected')
+        fetchData()
       } else {
-        toast.error(response.data.message || 'Failed to reject order');
+        toast.error(response.data.message || 'Failed to reject order')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to reject order');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to reject order')
     } finally {
-      setIsRejecting(null);
+      setIsRejecting(null)
     }
-  };
+  }
 
   const handleDelete = async () => {
-    if (!orderToDelete) return;
+    if (!orderToDelete) return
 
-    setIsDeleting(true);
+    setIsDeleting(true)
     try {
       const response = await webClient.delete<{ status: string; message: string }>(
         `/action-center/delete/${orderToDelete.id}`
-      );
+      )
 
       if (response.data.status === 'success') {
-        toast.success('Order deleted');
-        setOrderToDelete(null);
-        fetchData();
+        toast.success('Order deleted')
+        setOrderToDelete(null)
+        fetchData()
       } else {
-        toast.error(response.data.message || 'Failed to delete order');
+        toast.error(response.data.message || 'Failed to delete order')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to delete order');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to delete order')
     } finally {
-      setIsDeleting(false);
+      setIsDeleting(false)
     }
-  };
+  }
 
   const handleApproveAll = async () => {
-    setIsApprovingAll(true);
+    setIsApprovingAll(true)
     try {
       const response = await webClient.post<{ status: string; message: string }>(
         '/action-center/approve-all',
         {}
-      );
+      )
 
       if (response.data.status === 'success') {
-        toast.success(response.data.message || 'All orders approved');
-        fetchData();
+        toast.success(response.data.message || 'All orders approved')
+        fetchData()
       } else if (response.data.status === 'warning') {
-        toast.warning(response.data.message);
-        fetchData();
+        toast.warning(response.data.message)
+        fetchData()
       } else {
-        toast.error(response.data.message || 'Failed to approve all orders');
+        toast.error(response.data.message || 'Failed to approve all orders')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to approve all orders');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to approve all orders')
     } finally {
-      setIsApprovingAll(false);
+      setIsApprovingAll(false)
     }
-  };
+  }
 
   const toggleExpanded = (orderId: number) => {
     setExpandedOrders((prev) => {
-      const newSet = new Set(prev);
+      const newSet = new Set(prev)
       if (newSet.has(orderId)) {
-        newSet.delete(orderId);
+        newSet.delete(orderId)
       } else {
-        newSet.add(orderId);
+        newSet.add(orderId)
       }
-      return newSet;
-    });
-  };
+      return newSet
+    })
+  }
 
   const getExchangeBadgeVariant = (exchange: string): 'default' | 'secondary' | 'outline' => {
     switch (exchange) {
       case 'NSE':
-        return 'default';
+        return 'default'
       case 'NFO':
-        return 'secondary';
+        return 'secondary'
       default:
-        return 'outline';
+        return 'outline'
     }
-  };
+  }
 
-  const getPriceTypeBadgeVariant = (priceType: string): 'default' | 'secondary' | 'destructive' | 'outline' => {
+  const getPriceTypeBadgeVariant = (
+    priceType: string
+  ): 'default' | 'secondary' | 'destructive' | 'outline' => {
     switch (priceType) {
       case 'MARKET':
-        return 'default';
+        return 'default'
       case 'LIMIT':
-        return 'secondary';
+        return 'secondary'
       case 'SL':
       case 'SL-M':
-        return 'destructive';
+        return 'destructive'
       default:
-        return 'outline';
+        return 'outline'
     }
-  };
+  }
 
   const getRelativeTime = (istTimestamp: string): string => {
-    if (!istTimestamp) return '';
+    if (!istTimestamp) return ''
     try {
-      const orderTime = new Date(istTimestamp.replace(' IST', ''));
-      const now = new Date();
-      const diffMs = now.getTime() - orderTime.getTime();
-      const diffMins = Math.floor(diffMs / 60000);
+      const orderTime = new Date(istTimestamp.replace(' IST', ''))
+      const now = new Date()
+      const diffMs = now.getTime() - orderTime.getTime()
+      const diffMins = Math.floor(diffMs / 60000)
 
-      if (diffMins < 1) return 'Just now';
-      if (diffMins === 1) return '1 minute ago';
-      if (diffMins < 60) return `${diffMins} minutes ago`;
+      if (diffMins < 1) return 'Just now'
+      if (diffMins === 1) return '1 minute ago'
+      if (diffMins < 60) return `${diffMins} minutes ago`
 
-      const diffHours = Math.floor(diffMins / 60);
-      if (diffHours === 1) return '1 hour ago';
-      if (diffHours < 24) return `${diffHours} hours ago`;
+      const diffHours = Math.floor(diffMins / 60)
+      if (diffHours === 1) return '1 hour ago'
+      if (diffHours < 24) return `${diffHours} hours ago`
 
-      const diffDays = Math.floor(diffHours / 24);
-      if (diffDays === 1) return 'Yesterday';
-      return `${diffDays} days ago`;
+      const diffDays = Math.floor(diffHours / 24)
+      if (diffDays === 1) return 'Yesterday'
+      return `${diffDays} days ago`
     } catch {
-      return '';
+      return ''
     }
-  };
+  }
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
-    );
+    )
   }
 
   return (
@@ -385,9 +380,7 @@ export default function ActionCenterPage() {
               Action Center
             </h1>
           </div>
-          <p className="text-muted-foreground">
-            Review and manage pending orders
-          </p>
+          <p className="text-muted-foreground">Review and manage pending orders</p>
         </div>
         <div className="flex gap-2">
           {activeFilter === 'pending' && stats.total_pending > 0 && (
@@ -635,7 +628,8 @@ export default function ActionCenterPage() {
                                   <h4 className="font-semibold">Order Details</h4>
 
                                   {/* Order Type Specific Details */}
-                                  {order.api_type === 'basketorder' && order.raw_order_data.orders ? (
+                                  {order.api_type === 'basketorder' &&
+                                  order.raw_order_data.orders ? (
                                     <div className="space-y-3">
                                       <p className="text-sm text-muted-foreground">
                                         Basket Order with{' '}
@@ -665,12 +659,18 @@ export default function ActionCenterPage() {
                                                   </Badge>
                                                 </div>
                                                 <div className="grid grid-cols-4 gap-2 text-sm">
-                                                  {Object.entries(basketOrder).map(([key, value]) => (
-                                                    <div key={key}>
-                                                      <span className="text-muted-foreground">{key}:</span>{' '}
-                                                      <span className="font-medium">{String(value)}</span>
-                                                    </div>
-                                                  ))}
+                                                  {Object.entries(basketOrder).map(
+                                                    ([key, value]) => (
+                                                      <div key={key}>
+                                                        <span className="text-muted-foreground">
+                                                          {key}:
+                                                        </span>{' '}
+                                                        <span className="font-medium">
+                                                          {String(value)}
+                                                        </span>
+                                                      </div>
+                                                    )
+                                                  )}
                                                 </div>
                                               </CardContent>
                                             </Card>
@@ -726,5 +726,5 @@ export default function ActionCenterPage() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
-  );
+  )
 }

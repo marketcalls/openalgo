@@ -1,35 +1,43 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { Camera, RefreshCw, TrendingUp, TrendingDown, AlertTriangle } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { toast } from 'sonner';
-import { useThemeStore } from '@/stores/themeStore';
+import { AlertTriangle, Camera, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { useThemeStore } from '@/stores/themeStore'
 
 async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', {
     credentials: 'include',
-  });
-  const data = await response.json();
-  return data.csrf_token;
+  })
+  const data = await response.json()
+  return data.csrf_token
 }
-import { createChart, AreaSeries, CrosshairMode, ColorType, type IChartApi, type ISeriesApi } from 'lightweight-charts';
+
 // Use html2canvas-pro which has native oklch color support
-import html2canvas from 'html2canvas-pro';
+import html2canvas from 'html2canvas-pro'
+import {
+  AreaSeries,
+  ColorType,
+  CrosshairMode,
+  createChart,
+  type IChartApi,
+  type ISeriesApi,
+} from 'lightweight-charts'
 
 interface PnLDataPoint {
-  time: number;
-  value: number;
+  time: number
+  value: number
 }
 
 interface PnLData {
-  current_mtm: number;
-  max_mtm: number;
-  max_mtm_time: string;
-  min_mtm: number;
-  min_mtm_time: string;
-  max_drawdown: number;
-  pnl_series: PnLDataPoint[];
-  drawdown_series: PnLDataPoint[];
+  current_mtm: number
+  max_mtm: number
+  max_mtm_time: string
+  min_mtm: number
+  min_mtm_time: string
+  max_drawdown: number
+  pnl_series: PnLDataPoint[]
+  drawdown_series: PnLDataPoint[]
 }
 
 function formatCurrency(value: number): string {
@@ -38,16 +46,16 @@ function formatCurrency(value: number): string {
     currency: 'INR',
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(value);
+  }).format(value)
 }
 
 export default function PnLTracker() {
-  const { mode } = useThemeStore();
-  const isDarkMode = mode === 'dark';
+  const { mode } = useThemeStore()
+  const isDarkMode = mode === 'dark'
 
   // State
-  const [isLoading, setIsLoading] = useState(false);
-  const [isCapturing, setIsCapturing] = useState(false);
+  const [isLoading, setIsLoading] = useState(false)
+  const [isCapturing, setIsCapturing] = useState(false)
   const [metrics, setMetrics] = useState({
     currentMtm: 0,
     maxMtm: 0,
@@ -55,27 +63,27 @@ export default function PnLTracker() {
     minMtm: 0,
     minMtmTime: '--:--',
     maxDrawdown: 0,
-  });
+  })
 
   // Refs
-  const chartContainerRef = useRef<HTMLDivElement>(null);
-  const screenshotContainerRef = useRef<HTMLDivElement>(null);
-  const chartRef = useRef<IChartApi | null>(null);
-  const pnlSeriesRef = useRef<ISeriesApi<'Area'> | null>(null);
-  const drawdownSeriesRef = useRef<ISeriesApi<'Area'> | null>(null);
-  const watermarkRef = useRef<HTMLDivElement | null>(null);
+  const chartContainerRef = useRef<HTMLDivElement>(null)
+  const screenshotContainerRef = useRef<HTMLDivElement>(null)
+  const chartRef = useRef<IChartApi | null>(null)
+  const pnlSeriesRef = useRef<ISeriesApi<'Area'> | null>(null)
+  const drawdownSeriesRef = useRef<ISeriesApi<'Area'> | null>(null)
+  const watermarkRef = useRef<HTMLDivElement | null>(null)
 
   // Initialize chart
   const initChart = useCallback(() => {
-    if (!chartContainerRef.current) return;
+    if (!chartContainerRef.current) return
 
     // Remove existing chart
     if (chartRef.current) {
-      chartRef.current.remove();
-      chartRef.current = null;
+      chartRef.current.remove()
+      chartRef.current = null
     }
 
-    const container = chartContainerRef.current;
+    const container = chartContainerRef.current
 
     const chart = createChart(container, {
       width: container.offsetWidth,
@@ -105,12 +113,12 @@ export default function PnLTracker() {
         timeVisible: true,
         secondsVisible: false,
         tickMarkFormatter: (time: number) => {
-          const date = new Date(time * 1000);
-          const istOffset = 5.5 * 60 * 60 * 1000;
-          const istDate = new Date(date.getTime() + istOffset);
-          const hours = istDate.getUTCHours().toString().padStart(2, '0');
-          const minutes = istDate.getUTCMinutes().toString().padStart(2, '0');
-          return `${hours}:${minutes}`;
+          const date = new Date(time * 1000)
+          const istOffset = 5.5 * 60 * 60 * 1000
+          const istDate = new Date(date.getTime() + istOffset)
+          const hours = istDate.getUTCHours().toString().padStart(2, '0')
+          const minutes = istDate.getUTCMinutes().toString().padStart(2, '0')
+          return `${hours}:${minutes}`
         },
       },
       crosshair: {
@@ -128,29 +136,29 @@ export default function PnLTracker() {
           labelBackgroundColor: isDarkMode ? '#1f2937' : '#2563eb',
         },
       },
-    });
+    })
 
     // Add watermark
-    const watermark = document.createElement('div');
-    watermark.style.position = 'absolute';
-    watermark.style.zIndex = '2';
-    watermark.style.color = isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.15)';
-    watermark.style.fontFamily = 'Arial, sans-serif';
-    watermark.style.fontSize = '48px';
-    watermark.style.fontWeight = 'bold';
-    watermark.style.userSelect = 'none';
-    watermark.style.pointerEvents = 'none';
-    watermark.textContent = 'OpenAlgo';
-    container.appendChild(watermark);
-    watermarkRef.current = watermark;
+    const watermark = document.createElement('div')
+    watermark.style.position = 'absolute'
+    watermark.style.zIndex = '2'
+    watermark.style.color = isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.15)'
+    watermark.style.fontFamily = 'Arial, sans-serif'
+    watermark.style.fontSize = '48px'
+    watermark.style.fontWeight = 'bold'
+    watermark.style.userSelect = 'none'
+    watermark.style.pointerEvents = 'none'
+    watermark.textContent = 'OpenAlgo'
+    container.appendChild(watermark)
+    watermarkRef.current = watermark
 
     // Position watermark
     const positionWatermark = () => {
-      if (!watermark || !container) return;
-      watermark.style.left = (container.offsetWidth / 2 - watermark.offsetWidth / 2) + 'px';
-      watermark.style.top = (container.offsetHeight / 2 - watermark.offsetHeight / 2) + 'px';
-    };
-    setTimeout(positionWatermark, 0);
+      if (!watermark || !container) return
+      watermark.style.left = `${container.offsetWidth / 2 - watermark.offsetWidth / 2}px`
+      watermark.style.top = `${container.offsetHeight / 2 - watermark.offsetHeight / 2}px`
+    }
+    setTimeout(positionWatermark, 0)
 
     // Create PnL series
     const pnlSeries = chart.addSeries(AreaSeries, {
@@ -163,7 +171,7 @@ export default function PnLTracker() {
         type: 'custom',
         formatter: (price: number) => formatCurrency(price),
       },
-    });
+    })
 
     // Create Drawdown series
     const drawdownSeries = chart.addSeries(AreaSeries, {
@@ -176,31 +184,31 @@ export default function PnLTracker() {
         type: 'custom',
         formatter: (price: number) => formatCurrency(price),
       },
-    });
+    })
 
-    chartRef.current = chart;
-    pnlSeriesRef.current = pnlSeries;
-    drawdownSeriesRef.current = drawdownSeries;
+    chartRef.current = chart
+    pnlSeriesRef.current = pnlSeries
+    drawdownSeriesRef.current = drawdownSeries
 
     // Handle resize
     const handleResize = () => {
       if (chartRef.current && container) {
-        chartRef.current.applyOptions({ width: container.offsetWidth });
-        positionWatermark();
+        chartRef.current.applyOptions({ width: container.offsetWidth })
+        positionWatermark()
       }
-    };
-    window.addEventListener('resize', handleResize);
+    }
+    window.addEventListener('resize', handleResize)
 
     return () => {
-      window.removeEventListener('resize', handleResize);
-    };
-  }, [isDarkMode]);
+      window.removeEventListener('resize', handleResize)
+    }
+  }, [isDarkMode])
 
   // Load PnL data
   const loadPnLData = useCallback(async () => {
-    setIsLoading(true);
+    setIsLoading(true)
     try {
-      const csrfToken = await fetchCSRFToken();
+      const csrfToken = await fetchCSRFToken()
 
       const response = await fetch('/pnltracker/api/pnl', {
         method: 'POST',
@@ -209,14 +217,14 @@ export default function PnLTracker() {
           'X-CSRFToken': csrfToken,
         },
         credentials: 'include',
-      });
+      })
 
-      if (!response.ok) throw new Error('Failed to fetch PnL data');
+      if (!response.ok) throw new Error('Failed to fetch PnL data')
 
-      const result = await response.json();
+      const result = await response.json()
 
       if (result.status === 'success') {
-        const data: PnLData = result.data;
+        const data: PnLData = result.data
 
         // Update metrics
         setMetrics({
@@ -226,7 +234,7 @@ export default function PnLTracker() {
           minMtm: data.min_mtm,
           minMtmTime: data.min_mtm_time || '--:--',
           maxDrawdown: data.max_drawdown,
-        });
+        })
 
         // Update chart
         if (pnlSeriesRef.current && data.pnl_series && Array.isArray(data.pnl_series)) {
@@ -235,45 +243,49 @@ export default function PnLTracker() {
               time: Math.floor(point.time / 1000) as import('lightweight-charts').UTCTimestamp,
               value: point.value,
             }))
-            .sort((a, b) => a.time - b.time);
+            .sort((a, b) => a.time - b.time)
 
           if (pnlData.length > 0) {
-            pnlSeriesRef.current.setData(pnlData);
+            pnlSeriesRef.current.setData(pnlData)
           }
         }
 
-        if (drawdownSeriesRef.current && data.drawdown_series && Array.isArray(data.drawdown_series)) {
+        if (
+          drawdownSeriesRef.current &&
+          data.drawdown_series &&
+          Array.isArray(data.drawdown_series)
+        ) {
           const drawdownData = data.drawdown_series
             .map((point) => ({
               time: Math.floor(point.time / 1000) as import('lightweight-charts').UTCTimestamp,
               value: point.value,
             }))
-            .sort((a, b) => a.time - b.time);
+            .sort((a, b) => a.time - b.time)
 
           if (drawdownData.length > 0) {
-            drawdownSeriesRef.current.setData(drawdownData);
+            drawdownSeriesRef.current.setData(drawdownData)
           }
         }
 
         if (chartRef.current) {
-          chartRef.current.timeScale().fitContent();
+          chartRef.current.timeScale().fitContent()
         }
       } else {
-        toast.error(result.message || 'Failed to load PnL data');
+        toast.error(result.message || 'Failed to load PnL data')
       }
     } catch (error) {
-      console.error('Error loading PnL data:', error);
-      toast.error('Failed to load PnL data. Please try again.');
+      console.error('Error loading PnL data:', error)
+      toast.error('Failed to load PnL data. Please try again.')
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  }, []);
+  }, [])
 
   // Take screenshot - html2canvas-pro supports oklch colors natively
   const takeScreenshot = async () => {
-    if (!screenshotContainerRef.current) return;
+    if (!screenshotContainerRef.current) return
 
-    setIsCapturing(true);
+    setIsCapturing(true)
 
     try {
       const canvas = await html2canvas(screenshotContainerRef.current, {
@@ -281,50 +293,54 @@ export default function PnLTracker() {
         scale: 2,
         logging: false,
         useCORS: true,
-      });
+      })
 
-      canvas.toBlob((blob) => {
-        if (!blob) return;
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-        link.download = `PnL_Tracker_${timestamp}.png`;
-        link.href = url;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) return
+          const url = URL.createObjectURL(blob)
+          const link = document.createElement('a')
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5)
+          link.download = `PnL_Tracker_${timestamp}.png`
+          link.href = url
+          document.body.appendChild(link)
+          link.click()
+          document.body.removeChild(link)
+          URL.revokeObjectURL(url)
 
-        toast.success('Screenshot saved successfully!');
-      }, 'image/png', 1.0);
+          toast.success('Screenshot saved successfully!')
+        },
+        'image/png',
+        1.0
+      )
     } catch (error) {
-      console.error('Screenshot error:', error);
-      toast.error('Failed to capture screenshot');
+      console.error('Screenshot error:', error)
+      toast.error('Failed to capture screenshot')
     } finally {
-      setIsCapturing(false);
+      setIsCapturing(false)
     }
-  };
+  }
 
   // Initialize chart and load data
   useEffect(() => {
-    initChart();
-    loadPnLData();
+    initChart()
+    loadPnLData()
 
     return () => {
       if (chartRef.current) {
-        chartRef.current.remove();
-        chartRef.current = null;
+        chartRef.current.remove()
+        chartRef.current = null
       }
-    };
-  }, [initChart, loadPnLData]);
+    }
+  }, [initChart, loadPnLData])
 
   // Re-initialize chart on theme change
   useEffect(() => {
     if (chartRef.current) {
-      initChart();
-      loadPnLData();
+      initChart()
+      loadPnLData()
     }
-  }, [isDarkMode, initChart, loadPnLData]);
+  }, [initChart, loadPnLData])
 
   return (
     <div className="container mx-auto py-6 px-4">
@@ -371,13 +387,19 @@ export default function PnLTracker() {
           {/* Current MTM */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Current MTM</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Current MTM
+              </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className={`text-2xl font-bold font-mono ${metrics.currentMtm >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+              <div
+                className={`text-2xl font-bold font-mono ${metrics.currentMtm >= 0 ? 'text-green-500' : 'text-red-500'}`}
+              >
                 {formatCurrency(metrics.currentMtm)}
               </div>
-              <div className={`text-sm ${metrics.currentMtm >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+              <div
+                className={`text-sm ${metrics.currentMtm >= 0 ? 'text-green-500' : 'text-red-500'}`}
+              >
                 {metrics.currentMtm >= 0 ? '+' : ''}
                 {((metrics.currentMtm / 100000) * 100).toFixed(2)}%
               </div>
@@ -396,9 +418,7 @@ export default function PnLTracker() {
               <div className="text-2xl font-bold font-mono text-green-500">
                 {formatCurrency(metrics.maxMtm)}
               </div>
-              <div className="text-sm text-muted-foreground">
-                at {metrics.maxMtmTime}
-              </div>
+              <div className="text-sm text-muted-foreground">at {metrics.maxMtmTime}</div>
             </CardContent>
           </Card>
 
@@ -414,9 +434,7 @@ export default function PnLTracker() {
               <div className="text-2xl font-bold font-mono text-red-500">
                 {formatCurrency(metrics.minMtm)}
               </div>
-              <div className="text-sm text-muted-foreground">
-                at {metrics.minMtmTime}
-              </div>
+              <div className="text-sm text-muted-foreground">at {metrics.minMtmTime}</div>
             </CardContent>
           </Card>
 
@@ -455,11 +473,7 @@ export default function PnLTracker() {
             </div>
           </CardHeader>
           <CardContent>
-            <div
-              ref={chartContainerRef}
-              className="relative"
-              style={{ height: '500px' }}
-            />
+            <div ref={chartContainerRef} className="relative" style={{ height: '500px' }} />
           </CardContent>
         </Card>
       </div>
@@ -476,5 +490,5 @@ export default function PnLTracker() {
         </div>
       )}
     </div>
-  );
+  )
 }

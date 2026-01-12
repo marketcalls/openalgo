@@ -1,74 +1,74 @@
-import { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft, Zap, Info } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { ArrowLeft, Info, Zap } from 'lucide-react'
+import { useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
+import { chartinkApi } from '@/api/chartink'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { toast } from 'sonner';
-import { chartinkApi } from '@/api/chartink';
+} from '@/components/ui/select'
 
 export default function NewChartinkStrategy() {
-  const navigate = useNavigate();
-  const [loading, setLoading] = useState(false);
+  const navigate = useNavigate()
+  const [loading, setLoading] = useState(false)
   const [formData, setFormData] = useState({
     name: '',
     strategy_type: 'intraday',
     start_time: '09:15',
     end_time: '15:00',
     squareoff_time: '15:15',
-  });
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  })
+  const [errors, setErrors] = useState<Record<string, string>>({})
 
   const validateForm = () => {
-    const newErrors: Record<string, string> = {};
+    const newErrors: Record<string, string> = {}
 
     // Name validation
     if (!formData.name.trim()) {
-      newErrors.name = 'Strategy name is required';
+      newErrors.name = 'Strategy name is required'
     } else if (formData.name.length < 3 || formData.name.length > 50) {
-      newErrors.name = 'Name must be between 3 and 50 characters';
+      newErrors.name = 'Name must be between 3 and 50 characters'
     } else if (!/^[a-zA-Z0-9\s\-_]+$/.test(formData.name)) {
-      newErrors.name = 'Name can only contain letters, numbers, spaces, hyphens, and underscores';
+      newErrors.name = 'Name can only contain letters, numbers, spaces, hyphens, and underscores'
     }
 
     // Time validation for intraday
     if (formData.strategy_type === 'intraday') {
-      const start = formData.start_time;
-      const end = formData.end_time;
-      const squareoff = formData.squareoff_time;
+      const start = formData.start_time
+      const end = formData.end_time
+      const squareoff = formData.squareoff_time
 
       if (!start || !end || !squareoff) {
-        newErrors.time = 'All time fields are required for intraday strategies';
+        newErrors.time = 'All time fields are required for intraday strategies'
       } else if (start >= end) {
-        newErrors.time = 'Start time must be before end time';
+        newErrors.time = 'Start time must be before end time'
       } else if (end >= squareoff) {
-        newErrors.time = 'End time must be before square off time';
+        newErrors.time = 'End time must be before square off time'
       }
     }
 
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
+    setErrors(newErrors)
+    return Object.keys(newErrors).length === 0
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+    e.preventDefault()
 
     if (!validateForm()) {
-      toast.error('Please fix the form errors');
-      return;
+      toast.error('Please fix the form errors')
+      return
     }
 
     try {
-      setLoading(true);
+      setLoading(true)
       const response = await chartinkApi.createStrategy({
         name: formData.name,
         strategy_type: formData.strategy_type as 'intraday' | 'positional',
@@ -77,26 +77,26 @@ export default function NewChartinkStrategy() {
           end_time: formData.end_time,
           squareoff_time: formData.squareoff_time,
         }),
-      });
+      })
 
       if (response.status === 'success') {
-        toast.success('Chartink strategy created successfully');
-        navigate(`/chartink/${response.data?.strategy_id}`);
+        toast.success('Chartink strategy created successfully')
+        navigate(`/chartink/${response.data?.strategy_id}`)
       } else {
-        toast.error(response.message || 'Failed to create strategy');
+        toast.error(response.message || 'Failed to create strategy')
       }
     } catch (error: unknown) {
-      console.error('Failed to create strategy:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Failed to create strategy';
-      toast.error(errorMessage);
+      console.error('Failed to create strategy:', error)
+      const errorMessage = error instanceof Error ? error.message : 'Failed to create strategy'
+      toast.error(errorMessage)
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   const finalName = formData.name
     ? `chartink_${formData.name.toLowerCase().replace(/\s+/g, '_')}`
-    : '';
+    : ''
 
   return (
     <div className="container mx-auto py-6 max-w-2xl space-y-6">
@@ -139,9 +139,7 @@ export default function NewChartinkStrategy() {
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 className={errors.name ? 'border-red-500' : ''}
               />
-              {errors.name && (
-                <p className="text-sm text-red-500">{errors.name}</p>
-              )}
+              {errors.name && <p className="text-sm text-red-500">{errors.name}</p>}
               <p className="text-xs text-muted-foreground">
                 3-50 characters. Letters, numbers, spaces, hyphens, and underscores only.
               </p>
@@ -152,7 +150,8 @@ export default function NewChartinkStrategy() {
               <Alert>
                 <Info className="h-4 w-4" />
                 <AlertDescription>
-                  Final strategy name: <code className="bg-muted px-1 rounded font-mono">{finalName}</code>
+                  Final strategy name:{' '}
+                  <code className="bg-muted px-1 rounded font-mono">{finalName}</code>
                 </AlertDescription>
               </Alert>
             )}
@@ -212,11 +211,10 @@ export default function NewChartinkStrategy() {
                   </div>
                 </div>
 
-                {errors.time && (
-                  <p className="text-sm text-red-500">{errors.time}</p>
-                )}
+                {errors.time && <p className="text-sm text-red-500">{errors.time}</p>}
                 <p className="text-xs text-muted-foreground">
-                  Orders will only be placed during trading hours. Positions will be squared off at the specified time.
+                  Orders will only be placed during trading hours. Positions will be squared off at
+                  the specified time.
                 </p>
               </div>
             )}
@@ -239,5 +237,5 @@ export default function NewChartinkStrategy() {
         </CardContent>
       </Card>
     </div>
-  );
+  )
 }

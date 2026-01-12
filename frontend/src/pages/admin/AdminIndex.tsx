@@ -1,38 +1,38 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
 import {
-  Settings,
-  Snowflake,
+  Activity,
+  ArrowRight,
   Calendar,
   Clock,
-  ArrowRight,
+  Settings,
   Shield,
-  Activity,
+  Snowflake,
   Zap,
-} from 'lucide-react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { adminApi } from '@/api/admin';
-import type { AdminStats } from '@/types/admin';
+} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { adminApi } from '@/api/admin'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import type { AdminStats } from '@/types/admin'
 
 export default function AdminIndex() {
-  const [stats, setStats] = useState<AdminStats | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [stats, setStats] = useState<AdminStats | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const data = await adminApi.getStats();
-        setStats(data);
+        const data = await adminApi.getStats()
+        setStats(data)
       } catch (error) {
-        console.error('Error fetching admin stats:', error);
+        console.error('Error fetching admin stats:', error)
       } finally {
-        setIsLoading(false);
+        setIsLoading(false)
       }
-    };
+    }
 
-    fetchStats();
-  }, []);
+    fetchStats()
+  }, [])
 
   const adminCards = [
     {
@@ -86,14 +86,14 @@ export default function AdminIndex() {
       countLabel: 'monitoring',
       color: 'bg-orange-500',
     },
-  ];
+  ]
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
-    );
+    )
   }
 
   return (
@@ -116,7 +116,9 @@ export default function AdminIndex() {
             <Card className="h-full hover:shadow-lg transition-shadow cursor-pointer group">
               <CardHeader>
                 <div className="flex items-center justify-between">
-                  <div className={`w-10 h-10 rounded-lg ${card.color} flex items-center justify-center`}>
+                  <div
+                    className={`w-10 h-10 rounded-lg ${card.color} flex items-center justify-center`}
+                  >
                     <card.icon className="h-5 w-5 text-white" />
                   </div>
                   {card.count !== undefined && (
@@ -167,5 +169,5 @@ export default function AdminIndex() {
         </CardContent>
       </Card>
     </div>
-  );
+  )
 }

@@ -1,13 +1,14 @@
-import { useState } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
+import { Apple, Download as DownloadIcon, Monitor } from 'lucide-react'
+import { useState } from 'react'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
+} from '@/components/ui/select'
 import {
   Table,
   TableBody,
@@ -15,15 +16,14 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Apple, Monitor, Download as DownloadIcon } from 'lucide-react';
+} from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 interface DownloadItem {
-  platform: string;
-  version: string;
-  url: string;
-  label: string;
+  platform: string
+  version: string
+  url: string
+  label: string
 }
 
 const downloads: Record<string, DownloadItem[]> = {
@@ -75,13 +75,13 @@ const downloads: Record<string, DownloadItem[]> = {
       label: 'Download EXE',
     },
   ],
-};
+}
 
-const versions = ['0.1.0'];
+const versions = ['0.1.0']
 
 export default function Download() {
-  const [selectedVersion, setSelectedVersion] = useState('0.1.0');
-  const [selectedPlatform, setSelectedPlatform] = useState('mac');
+  const [selectedVersion, setSelectedVersion] = useState('0.1.0')
+  const [selectedPlatform, setSelectedPlatform] = useState('mac')
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-4xl">
@@ -161,5 +161,5 @@ export default function Download() {
         </CardContent>
       </Card>
     </div>
-  );
+  )
 }

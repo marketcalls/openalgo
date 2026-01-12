@@ -1,19 +1,19 @@
-import { webClient } from './client';
 import type {
-  TelegramBotStatus,
-  TelegramConfig,
-  TelegramUser,
-  TelegramAnalytics,
-  UpdateConfigRequest,
   BroadcastRequest,
   BroadcastResponse,
   CommandStats,
-} from '@/types/telegram';
+  TelegramAnalytics,
+  TelegramBotStatus,
+  TelegramConfig,
+  TelegramUser,
+  UpdateConfigRequest,
+} from '@/types/telegram'
+import { webClient } from './client'
 
 interface ApiResponse<T = void> {
-  status: string;
-  message?: string;
-  data?: T;
+  status: string
+  message?: string
+  data?: T
 }
 
 export const telegramApi = {
@@ -25,24 +25,24 @@ export const telegramApi = {
    * Get bot status
    */
   getBotStatus: async (): Promise<TelegramBotStatus> => {
-    const response = await webClient.get<ApiResponse<TelegramBotStatus>>('/telegram/bot/status');
-    return response.data.data!;
+    const response = await webClient.get<ApiResponse<TelegramBotStatus>>('/telegram/bot/status')
+    return response.data.data!
   },
 
   /**
    * Start the bot
    */
   startBot: async (): Promise<ApiResponse> => {
-    const response = await webClient.post<ApiResponse>('/telegram/bot/start');
-    return response.data;
+    const response = await webClient.post<ApiResponse>('/telegram/bot/start')
+    return response.data
   },
 
   /**
    * Stop the bot
    */
   stopBot: async (): Promise<ApiResponse> => {
-    const response = await webClient.post<ApiResponse>('/telegram/bot/stop');
-    return response.data;
+    const response = await webClient.post<ApiResponse>('/telegram/bot/stop')
+    return response.data
   },
 
   // ============================================================================
@@ -53,16 +53,16 @@ export const telegramApi = {
    * Get bot configuration
    */
   getConfig: async (): Promise<TelegramConfig> => {
-    const response = await webClient.get<ApiResponse<TelegramConfig>>('/telegram/api/config');
-    return response.data.data!;
+    const response = await webClient.get<ApiResponse<TelegramConfig>>('/telegram/api/config')
+    return response.data.data!
   },
 
   /**
    * Update bot configuration
    */
   updateConfig: async (data: UpdateConfigRequest): Promise<ApiResponse> => {
-    const response = await webClient.post<ApiResponse>('/telegram/config', data);
-    return response.data;
+    const response = await webClient.post<ApiResponse>('/telegram/config', data)
+    return response.data
   },
 
   // ============================================================================
@@ -73,16 +73,19 @@ export const telegramApi = {
    * Get all telegram users
    */
   getUsers: async (): Promise<{ users: TelegramUser[]; stats: CommandStats[] }> => {
-    const response = await webClient.get<ApiResponse<{ users: TelegramUser[]; stats: CommandStats[] }>>('/telegram/api/users');
-    return response.data.data!;
+    const response =
+      await webClient.get<ApiResponse<{ users: TelegramUser[]; stats: CommandStats[] }>>(
+        '/telegram/api/users'
+      )
+    return response.data.data!
   },
 
   /**
    * Unlink a telegram user
    */
   unlinkUser: async (telegramId: number): Promise<ApiResponse> => {
-    const response = await webClient.post<ApiResponse>(`/telegram/user/${telegramId}/unlink`);
-    return response.data;
+    const response = await webClient.post<ApiResponse>(`/telegram/user/${telegramId}/unlink`)
+    return response.data
   },
 
   // ============================================================================
@@ -93,8 +96,8 @@ export const telegramApi = {
    * Get analytics data
    */
   getAnalytics: async (): Promise<TelegramAnalytics> => {
-    const response = await webClient.get<ApiResponse<TelegramAnalytics>>('/telegram/api/analytics');
-    return response.data.data!;
+    const response = await webClient.get<ApiResponse<TelegramAnalytics>>('/telegram/api/analytics')
+    return response.data.data!
   },
 
   // ============================================================================
@@ -105,16 +108,19 @@ export const telegramApi = {
    * Send test message
    */
   sendTestMessage: async (): Promise<ApiResponse> => {
-    const response = await webClient.post<ApiResponse>('/telegram/test-message');
-    return response.data;
+    const response = await webClient.post<ApiResponse>('/telegram/test-message')
+    return response.data
   },
 
   /**
    * Send broadcast message
    */
   sendBroadcast: async (data: BroadcastRequest): Promise<ApiResponse<BroadcastResponse>> => {
-    const response = await webClient.post<ApiResponse<BroadcastResponse>>('/telegram/broadcast', data);
-    return response.data;
+    const response = await webClient.post<ApiResponse<BroadcastResponse>>(
+      '/telegram/broadcast',
+      data
+    )
+    return response.data
   },
 
   /**
@@ -124,7 +130,7 @@ export const telegramApi = {
     const response = await webClient.post<ApiResponse>('/telegram/send-message', {
       telegram_id: telegramId,
       message,
-    });
-    return response.data;
+    })
+    return response.data
   },
-};
+}

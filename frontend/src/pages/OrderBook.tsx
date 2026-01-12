@@ -1,38 +1,17 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
 import {
-  Loader2,
-  Download,
-  X,
-  RefreshCw,
   CheckCircle2,
-  XCircle,
   Clock,
+  Download,
+  Loader2,
   Pencil,
+  RefreshCw,
   Settings2,
-} from 'lucide-react';
-import { onModeChange } from '@/stores/themeStore';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog';
+  X,
+  XCircle,
+} from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { toast } from 'sonner'
+import { type QuotesData, tradingApi } from '@/api/trading'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -43,18 +22,39 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from '@/components/ui/alert-dialog';
+} from '@/components/ui/alert-dialog'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { cn, sanitizeCSV } from '@/lib/utils'
 // Note: AlertDialog still used for Cancel All Orders
-import { useAuthStore } from '@/stores/authStore';
-import { tradingApi, type QuotesData } from '@/api/trading';
-import type { Order, OrderStats } from '@/types/trading';
-import { cn, sanitizeCSV } from '@/lib/utils';
-import { toast } from 'sonner';
+import { useAuthStore } from '@/stores/authStore'
+import { onModeChange } from '@/stores/themeStore'
+import type { Order, OrderStats } from '@/types/trading'
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat('en-IN', {
     minimumFractionDigits: 2,
-  }).format(value);
+  }).format(value)
 }
 
 function formatTime(timestamp: string): string {
@@ -63,9 +63,9 @@ function formatTime(timestamp: string): string {
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
-    });
+    })
   } catch {
-    return timestamp;
+    return timestamp
   }
 }
 
@@ -74,163 +74,166 @@ const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; l
   rejected: { icon: XCircle, color: 'text-red-500', label: 'rejected' },
   cancelled: { icon: XCircle, color: 'text-gray-500', label: 'cancelled' },
   open: { icon: Clock, color: 'text-blue-500', label: 'open' },
-};
+}
 
 export default function OrderBook() {
-  const { apiKey } = useAuthStore();
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [stats, setStats] = useState<OrderStats | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { apiKey } = useAuthStore()
+  const [orders, setOrders] = useState<Order[]>([])
+  const [stats, setStats] = useState<OrderStats | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   // Filter state
-  const [statusFilter, setStatusFilter] = useState<string[]>([]);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<string[]>([])
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   // Modify order state
-  const [modifyDialogOpen, setModifyDialogOpen] = useState(false);
-  const [modifyingOrder, setModifyingOrder] = useState<Order | null>(null);
-  const [quotes, setQuotes] = useState<QuotesData | null>(null);
-  const [isLoadingQuotes, setIsLoadingQuotes] = useState(false);
+  const [modifyDialogOpen, setModifyDialogOpen] = useState(false)
+  const [modifyingOrder, setModifyingOrder] = useState<Order | null>(null)
+  const [quotes, setQuotes] = useState<QuotesData | null>(null)
+  const [isLoadingQuotes, setIsLoadingQuotes] = useState(false)
   const [modifyForm, setModifyForm] = useState({
     quantity: 0,
     price: 0,
     trigger_price: 0,
     pricetype: 'MARKET' as string,
     product: 'MIS' as string,
-  });
+  })
 
   // Filter orders based on status
   const filteredOrders = useMemo(() => {
-    if (statusFilter.length === 0) return orders;
-    return orders.filter((order) => statusFilter.includes(order.order_status));
-  }, [orders, statusFilter]);
+    if (statusFilter.length === 0) return orders
+    return orders.filter((order) => statusFilter.includes(order.order_status))
+  }, [orders, statusFilter])
 
-  const hasActiveFilters = statusFilter.length > 0;
+  const hasActiveFilters = statusFilter.length > 0
 
   const toggleStatusFilter = (status: string) => {
     setStatusFilter((prev) => {
       if (prev.includes(status)) {
-        return prev.filter((s) => s !== status);
+        return prev.filter((s) => s !== status)
       }
-      return [...prev, status];
-    });
-  };
+      return [...prev, status]
+    })
+  }
 
   const clearFilters = () => {
-    setStatusFilter([]);
-  };
+    setStatusFilter([])
+  }
 
-  const fetchOrders = useCallback(async (showRefresh = false) => {
-    if (!apiKey) {
-      setIsLoading(false);
-      return;
-    }
-
-    if (showRefresh) setIsRefreshing(true);
-
-    try {
-      const response = await tradingApi.getOrders(apiKey);
-      if (response.status === 'success' && response.data) {
-        setOrders(response.data.orders || []);
-        setStats(response.data.statistics);
-        setError(null);
-      } else {
-        setError(response.message || 'Failed to fetch orders');
+  const fetchOrders = useCallback(
+    async (showRefresh = false) => {
+      if (!apiKey) {
+        setIsLoading(false)
+        return
       }
-    } catch {
-      setError('Failed to fetch orders');
-    } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }
-  }, [apiKey]);
+
+      if (showRefresh) setIsRefreshing(true)
+
+      try {
+        const response = await tradingApi.getOrders(apiKey)
+        if (response.status === 'success' && response.data) {
+          setOrders(response.data.orders || [])
+          setStats(response.data.statistics)
+          setError(null)
+        } else {
+          setError(response.message || 'Failed to fetch orders')
+        }
+      } catch {
+        setError('Failed to fetch orders')
+      } finally {
+        setIsLoading(false)
+        setIsRefreshing(false)
+      }
+    },
+    [apiKey]
+  )
 
   useEffect(() => {
-    fetchOrders();
-    const interval = setInterval(() => fetchOrders(), 10000);
-    return () => clearInterval(interval);
-  }, [fetchOrders]);
+    fetchOrders()
+    const interval = setInterval(() => fetchOrders(), 10000)
+    return () => clearInterval(interval)
+  }, [fetchOrders])
 
   // Listen for mode changes (live/analyze) and refresh data
   useEffect(() => {
     const unsubscribe = onModeChange(() => {
-      fetchOrders();
-    });
-    return () => unsubscribe();
-  }, [fetchOrders]);
+      fetchOrders()
+    })
+    return () => unsubscribe()
+  }, [fetchOrders])
 
   const handleCancelOrder = async (orderid: string) => {
     try {
-      const response = await tradingApi.cancelOrder(orderid);
-      console.log('[CancelOrder] Response:', response);
+      const response = await tradingApi.cancelOrder(orderid)
+      console.log('[CancelOrder] Response:', response)
       if (response.status === 'success') {
-        toast.success(`Order cancelled: ${orderid}`);
-        setTimeout(() => fetchOrders(true), 1000);
+        toast.success(`Order cancelled: ${orderid}`)
+        setTimeout(() => fetchOrders(true), 1000)
       } else {
-        toast.error(response.message || 'Failed to cancel order');
+        toast.error(response.message || 'Failed to cancel order')
       }
     } catch (error) {
-      console.error('[CancelOrder] Error:', error);
-      const axiosError = error as { response?: { data?: { message?: string } } };
-      const message = axiosError.response?.data?.message || 'Failed to cancel order';
-      toast.error(message);
+      console.error('[CancelOrder] Error:', error)
+      const axiosError = error as { response?: { data?: { message?: string } } }
+      const message = axiosError.response?.data?.message || 'Failed to cancel order'
+      toast.error(message)
     }
-  };
+  }
 
   const handleCancelAllOrders = async () => {
     try {
-      const response = await tradingApi.cancelAllOrders();
-      console.log('[CancelAll] Response:', response);
+      const response = await tradingApi.cancelAllOrders()
+      console.log('[CancelAll] Response:', response)
       if (response.status === 'success') {
-        toast.success(response.message || 'All orders cancelled');
+        toast.success(response.message || 'All orders cancelled')
         // Delay refresh to allow broker to process cancellations
-        setTimeout(() => fetchOrders(true), 2000);
+        setTimeout(() => fetchOrders(true), 2000)
       } else if (response.status === 'info') {
-        toast.info(response.message || 'No open orders to cancel');
+        toast.info(response.message || 'No open orders to cancel')
       } else {
-        toast.error(response.message || 'Failed to cancel all orders');
+        toast.error(response.message || 'Failed to cancel all orders')
       }
     } catch (error) {
-      console.error('[CancelAll] Error:', error);
+      console.error('[CancelAll] Error:', error)
       // Try to extract error message from axios error response
-      const axiosError = error as { response?: { data?: { message?: string } } };
-      const message = axiosError.response?.data?.message || 'Failed to cancel all orders';
-      toast.error(message);
+      const axiosError = error as { response?: { data?: { message?: string } } }
+      const message = axiosError.response?.data?.message || 'Failed to cancel all orders'
+      toast.error(message)
     }
-  };
+  }
 
   const openModifyDialog = async (order: Order) => {
-    setModifyingOrder(order);
+    setModifyingOrder(order)
     setModifyForm({
       quantity: order.quantity,
       price: order.price,
       trigger_price: order.trigger_price,
       pricetype: order.pricetype,
       product: order.product,
-    });
-    setQuotes(null);
-    setModifyDialogOpen(true);
+    })
+    setQuotes(null)
+    setModifyDialogOpen(true)
 
     // Fetch quotes for the symbol
     if (apiKey) {
-      setIsLoadingQuotes(true);
+      setIsLoadingQuotes(true)
       try {
-        const response = await tradingApi.getQuotes(apiKey, order.symbol, order.exchange);
+        const response = await tradingApi.getQuotes(apiKey, order.symbol, order.exchange)
         if (response.status === 'success' && response.data) {
-          setQuotes(response.data);
+          setQuotes(response.data)
         }
       } catch (error) {
-        console.error('[Quotes] Error:', error);
+        console.error('[Quotes] Error:', error)
       } finally {
-        setIsLoadingQuotes(false);
+        setIsLoadingQuotes(false)
       }
     }
-  };
+  }
 
   const handleModifyOrder = async () => {
-    if (!modifyingOrder) return;
+    if (!modifyingOrder) return
 
     try {
       const response = await tradingApi.modifyOrder(modifyingOrder.orderid, {
@@ -242,25 +245,37 @@ export default function OrderBook() {
         price: modifyForm.price,
         quantity: modifyForm.quantity,
         trigger_price: modifyForm.trigger_price,
-      });
-      console.log('[ModifyOrder] Response:', response);
+      })
+      console.log('[ModifyOrder] Response:', response)
       if (response.status === 'success') {
-        toast.success(`Order modified: ${modifyingOrder.orderid}`);
-        setModifyDialogOpen(false);
-        setTimeout(() => fetchOrders(true), 1000);
+        toast.success(`Order modified: ${modifyingOrder.orderid}`)
+        setModifyDialogOpen(false)
+        setTimeout(() => fetchOrders(true), 1000)
       } else {
-        toast.error(response.message || 'Failed to modify order');
+        toast.error(response.message || 'Failed to modify order')
       }
     } catch (error) {
-      console.error('[ModifyOrder] Error:', error);
-      const axiosError = error as { response?: { data?: { message?: string } } };
-      const message = axiosError.response?.data?.message || 'Failed to modify order';
-      toast.error(message);
+      console.error('[ModifyOrder] Error:', error)
+      const axiosError = error as { response?: { data?: { message?: string } } }
+      const message = axiosError.response?.data?.message || 'Failed to modify order'
+      toast.error(message)
     }
-  };
+  }
 
   const exportToCSV = () => {
-    const headers = ['Symbol', 'Exchange', 'Action', 'Qty', 'Price', 'Trigger', 'Type', 'Product', 'Order ID', 'Status', 'Time'];
+    const headers = [
+      'Symbol',
+      'Exchange',
+      'Action',
+      'Qty',
+      'Price',
+      'Trigger',
+      'Type',
+      'Product',
+      'Order ID',
+      'Status',
+      'Time',
+    ]
     const rows = orders.map((o) => [
       sanitizeCSV(o.symbol),
       sanitizeCSV(o.exchange),
@@ -273,29 +288,32 @@ export default function OrderBook() {
       sanitizeCSV(o.orderid),
       sanitizeCSV(o.order_status),
       sanitizeCSV(o.timestamp),
-    ]);
+    ])
 
-    const csv = [headers, ...rows].map((row) => row.join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `orderbook_${new Date().toISOString().split('T')[0]}.csv`;
-    a.click();
-  };
+    const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `orderbook_${new Date().toISOString().split('T')[0]}.csv`
+    a.click()
+  }
 
-  const openOrders = orders.filter((o) => o.order_status === 'open');
+  const openOrders = orders.filter((o) => o.order_status === 'open')
 
   const FilterChip = ({ status, label }: { status: string; label: string }) => (
     <Button
       variant={statusFilter.includes(status) ? 'default' : 'outline'}
       size="sm"
-      className={cn('rounded-full', statusFilter.includes(status) && 'bg-pink-500 hover:bg-pink-600')}
+      className={cn(
+        'rounded-full',
+        statusFilter.includes(status) && 'bg-pink-500 hover:bg-pink-600'
+      )}
       onClick={() => toggleStatusFilter(status)}
     >
       {label}
     </Button>
-  );
+  )
 
   return (
     <div className="space-y-6">
@@ -309,7 +327,11 @@ export default function OrderBook() {
           {/* Settings Button */}
           <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
             <DialogTrigger asChild>
-              <Button variant={hasActiveFilters ? 'default' : 'outline'} size="sm" className="relative">
+              <Button
+                variant={hasActiveFilters ? 'default' : 'outline'}
+                size="sm"
+                className="relative"
+              >
                 <Settings2 className="h-4 w-4 mr-2" />
                 Filters
                 {hasActiveFilters && (
@@ -371,14 +393,13 @@ export default function OrderBook() {
               <AlertDialogHeader>
                 <AlertDialogTitle>Cancel All Orders?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This will cancel all {openOrders.length} open orders. This action cannot be undone.
+                  This will cancel all {openOrders.length} open orders. This action cannot be
+                  undone.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel>Keep Orders</AlertDialogCancel>
-                <AlertDialogAction onClick={handleCancelAllOrders}>
-                  Cancel All
-                </AlertDialogAction>
+                <AlertDialogAction onClick={handleCancelAllOrders}>Cancel All</AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
@@ -390,7 +411,11 @@ export default function OrderBook() {
         <div className="flex flex-wrap items-center gap-3">
           <span className="text-sm text-muted-foreground">Active Filters:</span>
           {statusFilter.map((status) => (
-            <Badge key={status} variant="secondary" className="bg-pink-500/10 text-pink-600 border-pink-500/30">
+            <Badge
+              key={status}
+              variant="secondary"
+              className="bg-pink-500/10 text-pink-600 border-pink-500/30"
+            >
               {status}
             </Badge>
           ))}
@@ -418,9 +443,7 @@ export default function OrderBook() {
         <Card>
           <CardHeader className="pb-2">
             <CardDescription>Sell Orders</CardDescription>
-            <CardTitle className="text-2xl text-red-600">
-              {stats?.total_sell_orders ?? 0}
-            </CardTitle>
+            <CardTitle className="text-2xl text-red-600">{stats?.total_sell_orders ?? 0}</CardTitle>
           </CardHeader>
         </Card>
         <Card>
@@ -491,9 +514,9 @@ export default function OrderBook() {
                 </TableHeader>
                 <TableBody>
                   {filteredOrders.map((order, index) => {
-                    const status = statusConfig[order.order_status] || statusConfig.open;
-                    const StatusIcon = status.icon;
-                    const canCancel = order.order_status === 'open';
+                    const status = statusConfig[order.order_status] || statusConfig.open
+                    const StatusIcon = status.icon
+                    const canCancel = order.order_status === 'open'
 
                     return (
                       <TableRow key={`${order.orderid}-${index}`}>
@@ -510,7 +533,9 @@ export default function OrderBook() {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right font-mono">{order.quantity}</TableCell>
-                        <TableCell className="text-right font-mono">{formatCurrency(order.price)}</TableCell>
+                        <TableCell className="text-right font-mono">
+                          {formatCurrency(order.price)}
+                        </TableCell>
                         <TableCell className="text-right font-mono">
                           {formatCurrency(order.trigger_price)}
                         </TableCell>
@@ -555,7 +580,7 @@ export default function OrderBook() {
                           )}
                         </TableCell>
                       </TableRow>
-                    );
+                    )
                   })}
                 </TableBody>
               </Table>
@@ -570,7 +595,10 @@ export default function OrderBook() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-3">
               <span>Modify Order</span>
-              <Badge variant={modifyingOrder?.action === 'BUY' ? 'default' : 'destructive'} className={modifyingOrder?.action === 'BUY' ? 'bg-green-500' : ''}>
+              <Badge
+                variant={modifyingOrder?.action === 'BUY' ? 'default' : 'destructive'}
+                className={modifyingOrder?.action === 'BUY' ? 'bg-green-500' : ''}
+              >
                 {modifyingOrder?.action}
               </Badge>
             </DialogTitle>
@@ -592,11 +620,15 @@ export default function OrderBook() {
             <div className="flex items-center gap-3 pt-2 border-t">
               <div className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground">Type:</span>
-                <Badge variant="secondary" className="text-xs">{modifyForm.pricetype}</Badge>
+                <Badge variant="secondary" className="text-xs">
+                  {modifyForm.pricetype}
+                </Badge>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground">Product:</span>
-                <Badge variant="outline" className="text-xs">{modifyForm.product}</Badge>
+                <Badge variant="outline" className="text-xs">
+                  {modifyForm.product}
+                </Badge>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-xs text-muted-foreground">Qty:</span>
@@ -666,7 +698,9 @@ export default function OrderBook() {
                   type="number"
                   step="0.05"
                   value={modifyForm.price}
-                  onChange={(e) => setModifyForm({ ...modifyForm, price: parseFloat(e.target.value) || 0 })}
+                  onChange={(e) =>
+                    setModifyForm({ ...modifyForm, price: parseFloat(e.target.value) || 0 })
+                  }
                   className="col-span-3"
                 />
               </div>
@@ -682,7 +716,9 @@ export default function OrderBook() {
                   type="number"
                   step="0.05"
                   value={modifyForm.trigger_price}
-                  onChange={(e) => setModifyForm({ ...modifyForm, trigger_price: parseFloat(e.target.value) || 0 })}
+                  onChange={(e) =>
+                    setModifyForm({ ...modifyForm, trigger_price: parseFloat(e.target.value) || 0 })
+                  }
                   className="col-span-3"
                 />
               </div>
@@ -698,12 +734,10 @@ export default function OrderBook() {
             <Button variant="outline" onClick={() => setModifyDialogOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleModifyOrder}>
-              Modify Order
-            </Button>
+            <Button onClick={handleModifyOrder}>Modify Order</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
-  );
+  )
 }

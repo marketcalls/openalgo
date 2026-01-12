@@ -1,45 +1,45 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Progress } from '@/components/ui/progress';
 import {
-  Mail,
-  Lock,
-  Shield,
-  ChevronRight,
-  Check,
   AlertCircle,
+  ArrowLeft,
+  Check,
   CheckCircle,
+  ChevronRight,
   Info,
-  ArrowLeft
-} from 'lucide-react';
-import { toast } from 'sonner';
-import { fetchCSRFToken } from '@/api/client';
+  Lock,
+  Mail,
+  Shield,
+} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
+import { fetchCSRFToken } from '@/api/client'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Progress } from '@/components/ui/progress'
 
-type Step = 'email' | 'method' | 'totp' | 'email_sent' | 'password';
+type Step = 'email' | 'method' | 'totp' | 'email_sent' | 'password'
 
 interface PasswordRequirements {
-  length: boolean;
-  uppercase: boolean;
-  lowercase: boolean;
-  number: boolean;
-  special: boolean;
+  length: boolean
+  uppercase: boolean
+  lowercase: boolean
+  number: boolean
+  special: boolean
 }
 
 export default function ResetPassword() {
-  const [step, setStep] = useState<Step>('email');
-  const [email, setEmail] = useState('');
-  const [totpCode, setTotpCode] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [token, setToken] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
+  const [step, setStep] = useState<Step>('email')
+  const [email, setEmail] = useState('')
+  const [totpCode, setTotpCode] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [token, setToken] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
 
   // Password validation
   const [requirements, setRequirements] = useState<PasswordRequirements>({
@@ -48,9 +48,9 @@ export default function ResetPassword() {
     lowercase: false,
     number: false,
     special: false,
-  });
-  const [passwordStrength, setPasswordStrength] = useState(0);
-  const [passwordsMatch, setPasswordsMatch] = useState<boolean | null>(null);
+  })
+  const [passwordStrength, setPasswordStrength] = useState(0)
+  const [passwordsMatch, setPasswordsMatch] = useState<boolean | null>(null)
 
   // Check password requirements
   useEffect(() => {
@@ -60,47 +60,47 @@ export default function ResetPassword() {
       lowercase: /[a-z]/.test(password),
       number: /[0-9]/.test(password),
       special: /[!@#$%^&*]/.test(password),
-    };
-    setRequirements(newReqs);
+    }
+    setRequirements(newReqs)
 
     // Calculate strength
-    let score = 0;
-    if (password.length >= 8) score += 20;
-    if (password.length >= 12) score += 10;
-    if (password.length >= 16) score += 10;
-    if (newReqs.uppercase) score += 15;
-    if (newReqs.lowercase) score += 15;
-    if (newReqs.number) score += 15;
-    if (newReqs.special) score += 15;
-    setPasswordStrength(score);
-  }, [password]);
+    let score = 0
+    if (password.length >= 8) score += 20
+    if (password.length >= 12) score += 10
+    if (password.length >= 16) score += 10
+    if (newReqs.uppercase) score += 15
+    if (newReqs.lowercase) score += 15
+    if (newReqs.number) score += 15
+    if (newReqs.special) score += 15
+    setPasswordStrength(score)
+  }, [password])
 
   // Check password match
   useEffect(() => {
     if (confirmPassword === '') {
-      setPasswordsMatch(null);
+      setPasswordsMatch(null)
     } else {
-      setPasswordsMatch(password === confirmPassword);
+      setPasswordsMatch(password === confirmPassword)
     }
-  }, [password, confirmPassword]);
+  }, [password, confirmPassword])
 
-  const allRequirementsMet = Object.values(requirements).every(Boolean);
-  const canSubmitPassword = allRequirementsMet && passwordsMatch === true;
+  const allRequirementsMet = Object.values(requirements).every(Boolean)
+  const canSubmitPassword = allRequirementsMet && passwordsMatch === true
 
   const getStrengthLabel = () => {
-    if (passwordStrength >= 80) return { label: 'Strong', color: 'text-green-500' };
-    if (passwordStrength >= 50) return { label: 'Medium', color: 'text-yellow-500' };
-    if (passwordStrength > 0) return { label: 'Weak', color: 'text-red-500' };
-    return { label: '', color: '' };
-  };
+    if (passwordStrength >= 80) return { label: 'Strong', color: 'text-green-500' }
+    if (passwordStrength >= 50) return { label: 'Medium', color: 'text-yellow-500' }
+    if (passwordStrength > 0) return { label: 'Weak', color: 'text-red-500' }
+    return { label: '', color: '' }
+  }
 
   const handleEmailSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
+    e.preventDefault()
+    setLoading(true)
+    setError('')
 
     try {
-      const csrfToken = await fetchCSRFToken();
+      const csrfToken = await fetchCSRFToken()
       const response = await fetch('/auth/reset-password', {
         method: 'POST',
         headers: {
@@ -109,28 +109,28 @@ export default function ResetPassword() {
         },
         credentials: 'include',
         body: JSON.stringify({ step: 'email', email }),
-      });
+      })
 
-      const data = await response.json();
+      const data = await response.json()
 
       if (data.status === 'success') {
-        setStep('method');
+        setStep('method')
       } else {
-        setError(data.message || 'Email not found');
+        setError(data.message || 'Email not found')
       }
     } catch {
-      setError('Failed to process request');
+      setError('Failed to process request')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   const handleMethodSelect = async (method: 'totp' | 'email') => {
-    setLoading(true);
-    setError('');
+    setLoading(true)
+    setError('')
 
     try {
-      const csrfToken = await fetchCSRFToken();
+      const csrfToken = await fetchCSRFToken()
       const response = await fetch('/auth/reset-password', {
         method: 'POST',
         headers: {
@@ -139,33 +139,33 @@ export default function ResetPassword() {
         },
         credentials: 'include',
         body: JSON.stringify({ step: `select_${method}`, email }),
-      });
+      })
 
-      const data = await response.json();
+      const data = await response.json()
 
       if (data.status === 'success') {
         if (method === 'totp') {
-          setStep('totp');
+          setStep('totp')
         } else {
-          setStep('email_sent');
+          setStep('email_sent')
         }
       } else {
-        setError(data.message || 'Failed to select method');
+        setError(data.message || 'Failed to select method')
       }
     } catch {
-      setError('Failed to process request');
+      setError('Failed to process request')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   const handleTotpSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
+    e.preventDefault()
+    setLoading(true)
+    setError('')
 
     try {
-      const csrfToken = await fetchCSRFToken();
+      const csrfToken = await fetchCSRFToken()
       const response = await fetch('/auth/reset-password', {
         method: 'POST',
         headers: {
@@ -174,32 +174,32 @@ export default function ResetPassword() {
         },
         credentials: 'include',
         body: JSON.stringify({ step: 'totp', email, totp_code: totpCode }),
-      });
+      })
 
-      const data = await response.json();
+      const data = await response.json()
 
       if (data.status === 'success') {
-        setToken(data.token || '');
-        setStep('password');
+        setToken(data.token || '')
+        setStep('password')
       } else {
-        setError(data.message || 'Invalid TOTP code');
+        setError(data.message || 'Invalid TOTP code')
       }
     } catch {
-      setError('Failed to verify code');
+      setError('Failed to verify code')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   const handlePasswordSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canSubmitPassword) return;
+    e.preventDefault()
+    if (!canSubmitPassword) return
 
-    setLoading(true);
-    setError('');
+    setLoading(true)
+    setError('')
 
     try {
-      const csrfToken = await fetchCSRFToken();
+      const csrfToken = await fetchCSRFToken()
       const response = await fetch('/auth/reset-password', {
         method: 'POST',
         headers: {
@@ -214,32 +214,34 @@ export default function ResetPassword() {
           password,
           confirm_password: confirmPassword,
         }),
-      });
+      })
 
-      const data = await response.json();
+      const data = await response.json()
 
       if (data.status === 'success') {
-        setSuccess('Password reset successfully! Redirecting to login...');
-        toast.success('Password reset successfully!');
+        setSuccess('Password reset successfully! Redirecting to login...')
+        toast.success('Password reset successfully!')
         setTimeout(() => {
-          window.location.href = '/login';
-        }, 2000);
+          window.location.href = '/login'
+        }, 2000)
       } else {
-        setError(data.message || 'Failed to reset password');
+        setError(data.message || 'Failed to reset password')
       }
     } catch {
-      setError('Failed to reset password');
+      setError('Failed to reset password')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   const RequirementItem = ({ met, label }: { met: boolean; label: string }) => (
-    <div className={`flex items-center gap-2 text-sm transition-colors ${met ? 'text-green-500' : 'text-muted-foreground'}`}>
+    <div
+      className={`flex items-center gap-2 text-sm transition-colors ${met ? 'text-green-500' : 'text-muted-foreground'}`}
+    >
       <Check className={`h-4 w-4 ${met ? 'opacity-100' : 'opacity-0'}`} />
       <span>{label}</span>
     </div>
-  );
+  )
 
   return (
     <div className="min-h-[calc(100vh-8rem)] flex items-center justify-center p-4">
@@ -259,7 +261,9 @@ export default function ResetPassword() {
             {success && (
               <Alert className="border-green-500 bg-green-50 dark:bg-green-950">
                 <CheckCircle className="h-4 w-4 text-green-500" />
-                <AlertDescription className="text-green-700 dark:text-green-300">{success}</AlertDescription>
+                <AlertDescription className="text-green-700 dark:text-green-300">
+                  {success}
+                </AlertDescription>
               </Alert>
             )}
 
@@ -358,7 +362,11 @@ export default function ResetPassword() {
                     Enter the 6-digit code from your authenticator app
                   </p>
                 </div>
-                <Button type="submit" className="w-full" disabled={loading || totpCode.length !== 6}>
+                <Button
+                  type="submit"
+                  className="w-full"
+                  disabled={loading || totpCode.length !== 6}
+                >
                   {loading ? 'Verifying...' : 'Verify Code'}
                 </Button>
               </form>
@@ -374,8 +382,8 @@ export default function ResetPassword() {
                 </div>
                 <h3 className="text-lg font-semibold">Check Your Email</h3>
                 <p className="text-muted-foreground">
-                  We've sent a password reset link to <strong>{email}</strong>.
-                  Click the link in the email to continue resetting your password.
+                  We've sent a password reset link to <strong>{email}</strong>. Click the link in
+                  the email to continue resetting your password.
                 </p>
                 <Alert>
                   <Info className="h-4 w-4" />
@@ -440,10 +448,19 @@ export default function ResetPassword() {
 
                 <div className="bg-muted rounded-lg p-4 space-y-2">
                   <RequirementItem met={requirements.length} label="Minimum 8 characters" />
-                  <RequirementItem met={requirements.uppercase} label="At least 1 uppercase letter (A-Z)" />
-                  <RequirementItem met={requirements.lowercase} label="At least 1 lowercase letter (a-z)" />
+                  <RequirementItem
+                    met={requirements.uppercase}
+                    label="At least 1 uppercase letter (A-Z)"
+                  />
+                  <RequirementItem
+                    met={requirements.lowercase}
+                    label="At least 1 lowercase letter (a-z)"
+                  />
                   <RequirementItem met={requirements.number} label="At least 1 number (0-9)" />
-                  <RequirementItem met={requirements.special} label="At least 1 special character (!@#$%^&*)" />
+                  <RequirementItem
+                    met={requirements.special}
+                    label="At least 1 special character (!@#$%^&*)"
+                  />
                 </div>
 
                 <Button type="submit" className="w-full" disabled={loading || !canSubmitPassword}>
@@ -463,7 +480,10 @@ export default function ResetPassword() {
             </div>
 
             <div className="text-center">
-              <Link to="/login" className="text-sm text-primary hover:underline inline-flex items-center gap-1">
+              <Link
+                to="/login"
+                className="text-sm text-primary hover:underline inline-flex items-center gap-1"
+              >
                 <ArrowLeft className="h-4 w-4" />
                 Back to Login
               </Link>
@@ -472,5 +492,5 @@ export default function ResetPassword() {
         </Card>
       </div>
     </div>
-  );
+  )
 }

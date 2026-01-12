@@ -1,76 +1,78 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { Link } from 'react-router-dom';
 import {
-  Search,
-  Send,
-  Copy,
-  Eye,
-  EyeOff,
-  Key,
   ChevronDown,
   ChevronRight,
-  RefreshCw,
-  Menu,
-  X,
-  Home,
   Clock,
+  Copy,
   Download,
+  Eye,
+  EyeOff,
+  Home,
+  Key,
+  Menu,
   Plus,
+  RefreshCw,
+  Search,
+  Send,
   Terminal,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
+  X,
+} from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { cn } from '@/lib/utils'
 
 interface Endpoint {
-  name: string;
-  path: string;
-  method: 'GET' | 'POST';
-  body?: Record<string, unknown>;
-  params?: Record<string, unknown>;
+  name: string
+  path: string
+  method: 'GET' | 'POST'
+  body?: Record<string, unknown>
+  params?: Record<string, unknown>
 }
 
 interface EndpointsByCategory {
-  [category: string]: Endpoint[];
+  [category: string]: Endpoint[]
 }
 
 interface OpenTab {
-  id: string;
-  endpoint: Endpoint;
-  requestBody: string;
-  modified: boolean;
+  id: string
+  endpoint: Endpoint
+  requestBody: string
+  modified: boolean
 }
 
 async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', {
     credentials: 'include',
-  });
-  const data = await response.json();
-  return data.csrf_token;
+  })
+  const data = await response.json()
+  return data.csrf_token
 }
 
 function syntaxHighlight(json: string): string {
   if (json.length > 100 * 1024) {
-    return escapeHtml(json);
+    return escapeHtml(json)
   }
 
-  json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   return json.replace(
-    /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
-    function (match) {
-      let cls = 'text-orange-400'; // number
+    /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
+    (match) => {
+      let cls = 'text-orange-400' // number
       if (/^"/.test(match)) {
-        if (/:$/.test(match)) cls = 'text-sky-400'; // key
-        else cls = 'text-emerald-400'; // string
-      } else if (/true|false/.test(match)) cls = 'text-purple-400'; // boolean
-      else if (/null/.test(match)) cls = 'text-red-400'; // null
-      return `<span class="${cls}">${match}</span>`;
+        if (/:$/.test(match))
+          cls = 'text-sky-400' // key
+        else cls = 'text-emerald-400' // string
+      } else if (/true|false/.test(match))
+        cls = 'text-purple-400' // boolean
+      else if (/null/.test(match)) cls = 'text-red-400' // null
+      return `<span class="${cls}">${match}</span>`
     }
-  );
+  )
 }
 
 function escapeHtml(text: string): string {
@@ -79,118 +81,122 @@ function escapeHtml(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+    .replace(/'/g, '&#039;')
 }
 
 function isValidApiUrl(url: string): { valid: boolean; error?: string } {
   if (url.startsWith('/api/') || url.startsWith('/playground/')) {
-    return { valid: true };
+    return { valid: true }
   }
 
   try {
-    const parsed = new URL(url, window.location.origin);
+    const parsed = new URL(url, window.location.origin)
 
     if (parsed.origin !== window.location.origin) {
-      return { valid: false, error: 'Only same-origin requests are allowed' };
+      return { valid: false, error: 'Only same-origin requests are allowed' }
     }
 
     if (!parsed.pathname.startsWith('/api/') && !parsed.pathname.startsWith('/playground/')) {
-      return { valid: false, error: 'Only /api/ and /playground/ endpoints are allowed' };
+      return { valid: false, error: 'Only /api/ and /playground/ endpoints are allowed' }
     }
 
-    return { valid: true };
+    return { valid: true }
   } catch {
-    return { valid: false, error: 'Invalid URL format' };
+    return { valid: false, error: 'Invalid URL format' }
   }
 }
 
 export default function Playground() {
-  const [apiKey, setApiKey] = useState('');
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [endpoints, setEndpoints] = useState<EndpointsByCategory>({});
-  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
-  const [searchQuery, setSearchQuery] = useState('');
+  const [apiKey, setApiKey] = useState('')
+  const [showApiKey, setShowApiKey] = useState(false)
+  const [endpoints, setEndpoints] = useState<EndpointsByCategory>({})
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set())
+  const [searchQuery, setSearchQuery] = useState('')
 
   // Tabs state
-  const [openTabs, setOpenTabs] = useState<OpenTab[]>([]);
-  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [openTabs, setOpenTabs] = useState<OpenTab[]>([])
+  const [activeTabId, setActiveTabId] = useState<string | null>(null)
 
   // Request state
-  const [method, setMethod] = useState<'GET' | 'POST'>('POST');
-  const [url, setUrl] = useState('');
-  const [requestBody, setRequestBody] = useState('');
+  const [method, setMethod] = useState<'GET' | 'POST'>('POST')
+  const [url, setUrl] = useState('')
+  const [requestBody, setRequestBody] = useState('')
 
   // Response state
-  const [isLoading, setIsLoading] = useState(false);
-  const [responseStatus, setResponseStatus] = useState<number | null>(null);
-  const [responseTime, setResponseTime] = useState<number | null>(null);
-  const [responseSize, setResponseSize] = useState<number | null>(null);
-  const [responseData, setResponseData] = useState<string | null>(null);
-  const [responseHeaders, setResponseHeaders] = useState<Record<string, string>>({});
+  const [isLoading, setIsLoading] = useState(false)
+  const [responseStatus, setResponseStatus] = useState<number | null>(null)
+  const [responseTime, setResponseTime] = useState<number | null>(null)
+  const [responseSize, setResponseSize] = useState<number | null>(null)
+  const [responseData, setResponseData] = useState<string | null>(null)
+  const [responseHeaders, setResponseHeaders] = useState<Record<string, string>>({})
 
   // Mobile sidebar
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true)
 
-  const requestBodyRef = useRef<HTMLTextAreaElement>(null);
+  const requestBodyRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
-    loadApiKey();
-    loadEndpoints();
-  }, []);
+    loadApiKey()
+    loadEndpoints()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const loadApiKey = async () => {
     try {
       const response = await fetch('/playground/api-key', {
         credentials: 'include',
-      });
+      })
       if (response.ok) {
-        const data = await response.json();
-        setApiKey(data.api_key || '');
+        const data = await response.json()
+        setApiKey(data.api_key || '')
       }
     } catch (error) {
-      console.error('Error loading API key:', error);
+      console.error('Error loading API key:', error)
     }
-  };
+  }
 
   const loadEndpoints = async () => {
     try {
       const response = await fetch('/playground/endpoints', {
         credentials: 'include',
-      });
+      })
       if (response.ok) {
-        const data = await response.json();
-        setEndpoints(data);
+        const data = await response.json()
+        setEndpoints(data)
       }
     } catch (error) {
-      console.error('Error loading endpoints:', error);
-      toast.error('Failed to load endpoints');
+      console.error('Error loading endpoints:', error)
+      toast.error('Failed to load endpoints')
     }
-  };
+  }
 
-  const getDefaultBody = useCallback((endpoint: Endpoint): string => {
-    let body: Record<string, unknown> = {};
-    if (endpoint.method === 'GET' && endpoint.params) {
-      body = { ...endpoint.params };
-    } else if (endpoint.body) {
-      body = { ...endpoint.body };
-    }
+  const getDefaultBody = useCallback(
+    (endpoint: Endpoint): string => {
+      let body: Record<string, unknown> = {}
+      if (endpoint.method === 'GET' && endpoint.params) {
+        body = { ...endpoint.params }
+      } else if (endpoint.body) {
+        body = { ...endpoint.body }
+      }
 
-    if (apiKey && !body.apikey) {
-      body.apikey = apiKey;
-    }
+      if (apiKey && !body.apikey) {
+        body.apikey = apiKey
+      }
 
-    return JSON.stringify(body, null, 2);
-  }, [apiKey]);
+      return JSON.stringify(body, null, 2)
+    },
+    [apiKey]
+  )
 
   const selectEndpoint = (endpoint: Endpoint) => {
     // Check if tab already exists
-    const existingTab = openTabs.find(t => t.endpoint.path === endpoint.path);
+    const existingTab = openTabs.find((t) => t.endpoint.path === endpoint.path)
 
     if (existingTab) {
-      setActiveTabId(existingTab.id);
-      setMethod(existingTab.endpoint.method);
-      setUrl(existingTab.endpoint.path);
-      setRequestBody(existingTab.requestBody);
+      setActiveTabId(existingTab.id)
+      setMethod(existingTab.endpoint.method)
+      setUrl(existingTab.endpoint.path)
+      setRequestBody(existingTab.requestBody)
     } else {
       // Create new tab
       const newTab: OpenTab = {
@@ -198,109 +204,111 @@ export default function Playground() {
         endpoint,
         requestBody: getDefaultBody(endpoint),
         modified: false,
-      };
+      }
 
-      setOpenTabs(prev => [...prev, newTab]);
-      setActiveTabId(newTab.id);
-      setMethod(endpoint.method);
-      setUrl(endpoint.path);
-      setRequestBody(newTab.requestBody);
+      setOpenTabs((prev) => [...prev, newTab])
+      setActiveTabId(newTab.id)
+      setMethod(endpoint.method)
+      setUrl(endpoint.path)
+      setRequestBody(newTab.requestBody)
     }
 
     // Clear response when switching
-    setResponseData(null);
-    setResponseStatus(null);
-    setResponseTime(null);
-    setResponseSize(null);
-  };
+    setResponseData(null)
+    setResponseStatus(null)
+    setResponseTime(null)
+    setResponseSize(null)
+  }
 
   const closeTab = (tabId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const tabIndex = openTabs.findIndex(t => t.id === tabId);
-    const newTabs = openTabs.filter(t => t.id !== tabId);
-    setOpenTabs(newTabs);
+    e.stopPropagation()
+    const tabIndex = openTabs.findIndex((t) => t.id === tabId)
+    const newTabs = openTabs.filter((t) => t.id !== tabId)
+    setOpenTabs(newTabs)
 
     if (activeTabId === tabId) {
       // Select adjacent tab or clear
       if (newTabs.length > 0) {
-        const newIndex = Math.min(tabIndex, newTabs.length - 1);
-        const newActiveTab = newTabs[newIndex];
-        setActiveTabId(newActiveTab.id);
-        setMethod(newActiveTab.endpoint.method);
-        setUrl(newActiveTab.endpoint.path);
-        setRequestBody(newActiveTab.requestBody);
+        const newIndex = Math.min(tabIndex, newTabs.length - 1)
+        const newActiveTab = newTabs[newIndex]
+        setActiveTabId(newActiveTab.id)
+        setMethod(newActiveTab.endpoint.method)
+        setUrl(newActiveTab.endpoint.path)
+        setRequestBody(newActiveTab.requestBody)
       } else {
-        setActiveTabId(null);
-        setMethod('POST');
-        setUrl('');
-        setRequestBody('');
+        setActiveTabId(null)
+        setMethod('POST')
+        setUrl('')
+        setRequestBody('')
       }
     }
-  };
+  }
 
   const switchTab = (tab: OpenTab) => {
-    setActiveTabId(tab.id);
-    setMethod(tab.endpoint.method);
-    setUrl(tab.endpoint.path);
-    setRequestBody(tab.requestBody);
-    setResponseData(null);
-    setResponseStatus(null);
-  };
+    setActiveTabId(tab.id)
+    setMethod(tab.endpoint.method)
+    setUrl(tab.endpoint.path)
+    setRequestBody(tab.requestBody)
+    setResponseData(null)
+    setResponseStatus(null)
+  }
 
   const updateCurrentTabBody = (newBody: string) => {
-    setRequestBody(newBody);
+    setRequestBody(newBody)
     if (activeTabId) {
-      setOpenTabs(prev => prev.map(t =>
-        t.id === activeTabId
-          ? { ...t, requestBody: newBody, modified: newBody !== getDefaultBody(t.endpoint) }
-          : t
-      ));
+      setOpenTabs((prev) =>
+        prev.map((t) =>
+          t.id === activeTabId
+            ? { ...t, requestBody: newBody, modified: newBody !== getDefaultBody(t.endpoint) }
+            : t
+        )
+      )
     }
-  };
+  }
 
   const toggleCategory = (category: string) => {
     setCollapsedCategories((prev) => {
-      const next = new Set(prev);
+      const next = new Set(prev)
       if (next.has(category)) {
-        next.delete(category);
+        next.delete(category)
       } else {
-        next.add(category);
+        next.add(category)
       }
-      return next;
-    });
-  };
+      return next
+    })
+  }
 
   const prettifyBody = () => {
     try {
-      const parsed = JSON.parse(requestBody);
-      const prettified = JSON.stringify(parsed, null, 2);
-      updateCurrentTabBody(prettified);
-      toast.success('JSON prettified');
+      const parsed = JSON.parse(requestBody)
+      const prettified = JSON.stringify(parsed, null, 2)
+      updateCurrentTabBody(prettified)
+      toast.success('JSON prettified')
     } catch {
-      toast.error('Invalid JSON - cannot prettify');
+      toast.error('Invalid JSON - cannot prettify')
     }
-  };
+  }
 
   const sendRequest = async () => {
     if (!url) {
-      toast.warning('Please select an endpoint');
-      return;
+      toast.warning('Please select an endpoint')
+      return
     }
 
-    const validation = isValidApiUrl(url);
+    const validation = isValidApiUrl(url)
     if (!validation.valid) {
-      toast.error(validation.error);
-      return;
+      toast.error(validation.error)
+      return
     }
 
-    setIsLoading(true);
-    setResponseData(null);
-    setResponseStatus(null);
-    setResponseTime(null);
-    setResponseSize(null);
-    setResponseHeaders({});
+    setIsLoading(true)
+    setResponseData(null)
+    setResponseStatus(null)
+    setResponseTime(null)
+    setResponseSize(null)
+    setResponseHeaders({})
 
-    const startTime = Date.now();
+    const startTime = Date.now()
 
     try {
       const options: RequestInit = {
@@ -309,154 +317,154 @@ export default function Playground() {
         headers: {
           Accept: 'application/json',
         },
-      };
+      }
 
-      let fetchUrl = url;
+      let fetchUrl = url
 
       if (method === 'GET') {
         if (requestBody.trim()) {
           try {
-            const params = JSON.parse(requestBody);
-            const urlObj = new URL(url, window.location.origin);
+            const params = JSON.parse(requestBody)
+            const urlObj = new URL(url, window.location.origin)
             Object.entries(params).forEach(([key, value]) => {
               if (value !== null && value !== undefined && value !== '') {
-                urlObj.searchParams.append(key, String(value));
+                urlObj.searchParams.append(key, String(value))
               }
-            });
-            fetchUrl = urlObj.toString();
+            })
+            fetchUrl = urlObj.toString()
           } catch {
-            toast.error('Invalid JSON for query parameters');
-            setIsLoading(false);
-            return;
+            toast.error('Invalid JSON for query parameters')
+            setIsLoading(false)
+            return
           }
         }
       } else {
-        const csrfToken = await fetchCSRFToken();
-        (options.headers as Record<string, string>)['Content-Type'] = 'application/json';
-        (options.headers as Record<string, string>)['X-CSRFToken'] = csrfToken;
+        const csrfToken = await fetchCSRFToken()
+        ;(options.headers as Record<string, string>)['Content-Type'] = 'application/json'
+        ;(options.headers as Record<string, string>)['X-CSRFToken'] = csrfToken
         if (requestBody.trim()) {
-          options.body = requestBody;
+          options.body = requestBody
         }
       }
 
-      const response = await fetch(fetchUrl, options);
-      const elapsed = Date.now() - startTime;
+      const response = await fetch(fetchUrl, options)
+      const elapsed = Date.now() - startTime
 
       // Capture headers
-      const headers: Record<string, string> = {};
+      const headers: Record<string, string> = {}
       response.headers.forEach((value, key) => {
-        headers[key] = value;
-      });
-      setResponseHeaders(headers);
+        headers[key] = value
+      })
+      setResponseHeaders(headers)
 
-      let data;
-      const contentType = response.headers.get('content-type');
+      let data
+      const contentType = response.headers.get('content-type')
       if (contentType?.includes('application/json')) {
-        data = await response.json();
+        data = await response.json()
       } else {
-        data = { text: await response.text(), contentType };
+        data = { text: await response.text(), contentType }
       }
 
-      const responseText = JSON.stringify(data, null, 2);
-      setResponseStatus(response.status);
-      setResponseTime(elapsed);
-      setResponseSize(new Blob([responseText]).size);
-      setResponseData(responseText);
+      const responseText = JSON.stringify(data, null, 2)
+      setResponseStatus(response.status)
+      setResponseTime(elapsed)
+      setResponseSize(new Blob([responseText]).size)
+      setResponseData(responseText)
     } catch (error) {
-      const elapsed = Date.now() - startTime;
-      setResponseStatus(0);
-      setResponseTime(elapsed);
+      const elapsed = Date.now() - startTime
+      setResponseStatus(0)
+      setResponseTime(elapsed)
       setResponseData(
         JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }, null, 2)
-      );
+      )
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   const copyResponse = () => {
     if (responseData) {
-      navigator.clipboard.writeText(responseData);
-      toast.success('Response copied!');
+      navigator.clipboard.writeText(responseData)
+      toast.success('Response copied!')
     }
-  };
+  }
 
   const copyApiKey = () => {
     if (apiKey) {
-      navigator.clipboard.writeText(apiKey);
-      toast.success('API key copied!');
+      navigator.clipboard.writeText(apiKey)
+      toast.success('API key copied!')
     }
-  };
+  }
 
   const copyCurl = () => {
-    if (!url) return;
+    if (!url) return
 
-    let curlUrl = url;
+    let curlUrl = url
 
     if (method === 'GET' && requestBody.trim()) {
       try {
-        const params = JSON.parse(requestBody);
-        const urlObj = new URL(url, window.location.origin);
+        const params = JSON.parse(requestBody)
+        const urlObj = new URL(url, window.location.origin)
         Object.entries(params).forEach(([key, value]) => {
           if (value !== null && value !== undefined && value !== '') {
-            urlObj.searchParams.append(key, String(value));
+            urlObj.searchParams.append(key, String(value))
           }
-        });
-        curlUrl = urlObj.toString();
+        })
+        curlUrl = urlObj.toString()
       } catch {
-        toast.error('Invalid JSON for query parameters');
-        return;
+        toast.error('Invalid JSON for query parameters')
+        return
       }
     }
 
-    const absoluteUrl = new URL(curlUrl, window.location.origin).href;
-    let curl = `curl -X ${method} "${absoluteUrl}"`;
-    curl += ' \\\n  -H "Accept: application/json"';
+    const absoluteUrl = new URL(curlUrl, window.location.origin).href
+    let curl = `curl -X ${method} "${absoluteUrl}"`
+    curl += ' \\\n  -H "Accept: application/json"'
 
     if (method !== 'GET' && requestBody.trim()) {
-      curl += ' \\\n  -H "Content-Type: application/json"';
-      curl += ` \\\n  -d '${requestBody.replace(/'/g, "'\\''")}'`;
+      curl += ' \\\n  -H "Content-Type: application/json"'
+      curl += ` \\\n  -d '${requestBody.replace(/'/g, "'\\''")}'`
     }
 
-    navigator.clipboard.writeText(curl);
-    toast.success('Copied as cURL');
-  };
+    navigator.clipboard.writeText(curl)
+    toast.success('Copied as cURL')
+  }
 
   // Filter endpoints by search
   const filteredEndpoints = Object.entries(endpoints).reduce((acc, [category, eps]) => {
     if (!searchQuery) {
-      acc[category] = eps;
+      acc[category] = eps
     } else {
       const filtered = eps.filter(
         (ep) =>
           ep.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
           ep.path.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-      if (filtered.length) acc[category] = filtered;
+      )
+      if (filtered.length) acc[category] = filtered
     }
-    return acc;
-  }, {} as EndpointsByCategory);
+    return acc
+  }, {} as EndpointsByCategory)
 
   const getStatusColor = (status: number | null) => {
-    if (!status) return 'text-zinc-500';
-    if (status >= 200 && status < 300) return 'text-emerald-400';
-    if (status >= 400) return 'text-red-400';
-    return 'text-yellow-400';
-  };
+    if (!status) return 'text-zinc-500'
+    if (status >= 200 && status < 300) return 'text-emerald-400'
+    if (status >= 400) return 'text-red-400'
+    return 'text-yellow-400'
+  }
 
   const getStatusBg = (status: number | null) => {
-    if (!status) return 'bg-zinc-500/10';
-    if (status >= 200 && status < 300) return 'bg-emerald-500/10';
-    if (status >= 400) return 'bg-red-500/10';
-    return 'bg-yellow-500/10';
-  };
+    if (!status) return 'bg-zinc-500/10'
+    if (status >= 200 && status < 300) return 'bg-emerald-500/10'
+    if (status >= 400) return 'bg-red-500/10'
+    return 'bg-yellow-500/10'
+  }
 
   const formatSize = (bytes: number) => {
-    if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-    return `${bytes}B`;
-  };
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)}KB`
+    return `${bytes}B`
+  }
 
-  const activeTab = openTabs.find(t => t.id === activeTabId);
+  const activeTab = openTabs.find((t) => t.id === activeTabId)
 
   return (
     <div className="h-full flex flex-col bg-zinc-950 text-zinc-100">
@@ -473,7 +481,11 @@ export default function Playground() {
             <Menu className="h-4 w-4" />
           </Button>
           <div className="flex items-center gap-2 px-2">
-            <img src="/static/favicon/android-chrome-192x192.png" alt="OpenAlgo" className="w-6 h-6" />
+            <img
+              src="/static/favicon/android-chrome-192x192.png"
+              alt="OpenAlgo"
+              className="w-6 h-6"
+            />
             <span className="font-semibold text-sm">openalgo</span>
           </div>
         </div>
@@ -517,9 +529,9 @@ export default function Playground() {
             className="h-6 w-6 text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800"
             onClick={() => {
               // Select first available endpoint
-              const firstCat = Object.keys(endpoints)[0];
+              const firstCat = Object.keys(endpoints)[0]
               if (firstCat && endpoints[firstCat]?.[0]) {
-                selectEndpoint(endpoints[firstCat][0]);
+                selectEndpoint(endpoints[firstCat][0])
               }
             }}
           >
@@ -601,7 +613,8 @@ export default function Playground() {
                           key={idx}
                           className={cn(
                             'w-full flex items-center gap-2 px-2 py-1 rounded text-left text-xs hover:bg-zinc-800/50',
-                            activeTab?.endpoint.path === endpoint.path && 'bg-zinc-800 text-zinc-100'
+                            activeTab?.endpoint.path === endpoint.path &&
+                              'bg-zinc-800 text-zinc-100'
                           )}
                           onClick={() => selectEndpoint(endpoint)}
                         >
@@ -734,7 +747,9 @@ export default function Playground() {
                         {/* Line Numbers */}
                         <div className="w-10 bg-zinc-900/50 text-zinc-600 text-xs font-mono py-3 px-2 text-right select-none overflow-hidden border-r border-zinc-800">
                           {requestBody.split('\n').map((_, i) => (
-                            <div key={i} className="leading-5">{i + 1}</div>
+                            <div key={i} className="leading-5">
+                              {i + 1}
+                            </div>
                           ))}
                         </div>
                         {/* Editor */}
@@ -749,7 +764,10 @@ export default function Playground() {
                       </div>
                     </TabsContent>
 
-                    <TabsContent value="headers" className="flex-1 m-0 p-4 overflow-auto bg-zinc-950">
+                    <TabsContent
+                      value="headers"
+                      className="flex-1 m-0 p-4 overflow-auto bg-zinc-950"
+                    >
                       <div className="text-xs font-mono space-y-2">
                         <div className="flex gap-2">
                           <span className="text-zinc-500">Content-Type:</span>
@@ -785,8 +803,15 @@ export default function Playground() {
                       </TabsList>
                       <div className="flex items-center gap-3 text-xs font-mono">
                         {responseStatus !== null && (
-                          <span className={cn('px-2 py-0.5 rounded', getStatusBg(responseStatus), getStatusColor(responseStatus))}>
-                            {responseStatus} {responseStatus >= 200 && responseStatus < 300 ? 'OK' : 'Error'}
+                          <span
+                            className={cn(
+                              'px-2 py-0.5 rounded',
+                              getStatusBg(responseStatus),
+                              getStatusColor(responseStatus)
+                            )}
+                          >
+                            {responseStatus}{' '}
+                            {responseStatus >= 200 && responseStatus < 300 ? 'OK' : 'Error'}
                           </span>
                         )}
                         {responseTime !== null && (
@@ -830,7 +855,9 @@ export default function Playground() {
                             {/* Line Numbers */}
                             <div className="w-10 bg-zinc-900/50 text-zinc-600 text-xs font-mono py-3 px-2 text-right select-none overflow-hidden border-r border-zinc-800">
                               {responseData.split('\n').map((_, i) => (
-                                <div key={i} className="leading-5">{i + 1}</div>
+                                <div key={i} className="leading-5">
+                                  {i + 1}
+                                </div>
                               ))}
                             </div>
                             {/* Response Content */}
@@ -859,7 +886,10 @@ export default function Playground() {
                       </div>
                     </TabsContent>
 
-                    <TabsContent value="headers" className="flex-1 m-0 p-4 overflow-auto bg-zinc-950">
+                    <TabsContent
+                      value="headers"
+                      className="flex-1 m-0 p-4 overflow-auto bg-zinc-950"
+                    >
                       {Object.keys(responseHeaders).length > 0 ? (
                         <div className="text-xs font-mono space-y-2">
                           {Object.entries(responseHeaders).map(([key, value]) => (
@@ -880,11 +910,22 @@ export default function Playground() {
           ) : (
             /* Empty State */
             <div className="flex-1 flex flex-col items-center justify-center text-center bg-zinc-950">
-              <img src="/static/favicon/android-chrome-192x192.png" alt="OpenAlgo" className="w-16 h-16 mb-4" />
+              <img
+                src="/static/favicon/android-chrome-192x192.png"
+                alt="OpenAlgo"
+                className="w-16 h-16 mb-4"
+              />
               <h2 className="text-lg font-semibold text-zinc-300 mb-2">API Playground</h2>
-              <p className="text-zinc-500 text-sm mb-4">Select an endpoint from the sidebar to get started</p>
+              <p className="text-zinc-500 text-sm mb-4">
+                Select an endpoint from the sidebar to get started
+              </p>
               {!apiKey && (
-                <Button variant="outline" size="sm" className="border-zinc-700 text-zinc-300" asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-zinc-700 text-zinc-300"
+                  asChild
+                >
                   <Link to="/apikey">
                     <Key className="h-4 w-4 mr-2" />
                     Generate API Key
@@ -896,5 +937,5 @@ export default function Playground() {
         </div>
       </div>
     </div>
-  );
+  )
 }

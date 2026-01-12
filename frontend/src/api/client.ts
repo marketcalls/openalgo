@@ -6,9 +6,9 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || ''
 export async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', {
     credentials: 'include',
-  });
-  const data = await response.json();
-  return data.csrf_token;
+  })
+  const data = await response.json()
+  return data.csrf_token
 }
 
 export const apiClient = axios.create({
@@ -55,23 +55,26 @@ export const authClient = axios.create({
 authClient.interceptors.request.use(
   async (config) => {
     // Skip CSRF for login endpoint (no session yet)
-    const isLoginEndpoint = config.url?.includes('/auth/login');
+    const isLoginEndpoint = config.url?.includes('/auth/login')
 
-    if (!isLoginEndpoint && (config.method === 'post' || config.method === 'put' || config.method === 'delete')) {
+    if (
+      !isLoginEndpoint &&
+      (config.method === 'post' || config.method === 'put' || config.method === 'delete')
+    ) {
       try {
-        const csrfToken = await fetchCSRFToken();
+        const csrfToken = await fetchCSRFToken()
         if (csrfToken) {
-          config.headers['X-CSRFToken'] = csrfToken;
+          config.headers['X-CSRFToken'] = csrfToken
         }
       } catch (e) {
-        console.error('[authClient] Failed to fetch CSRF token:', e);
+        console.error('[authClient] Failed to fetch CSRF token:', e)
         // Continue without CSRF for auth operations - backend may handle differently
       }
     }
-    return config;
+    return config
   },
   (error) => {
-    return Promise.reject(error);
+    return Promise.reject(error)
   }
 )
 
@@ -89,23 +92,25 @@ webClient.interceptors.request.use(
   async (config) => {
     if (config.method === 'post' || config.method === 'put' || config.method === 'delete') {
       try {
-        const csrfToken = await fetchCSRFToken();
+        const csrfToken = await fetchCSRFToken()
         if (!csrfToken) {
           // Reject request if CSRF token is empty - security requirement
-          return Promise.reject(new Error('CSRF token is required for this operation'));
+          return Promise.reject(new Error('CSRF token is required for this operation'))
         }
-        config.headers['X-CSRFToken'] = csrfToken;
+        config.headers['X-CSRFToken'] = csrfToken
       } catch (e) {
-        console.error('[webClient] Failed to fetch CSRF token:', e);
+        console.error('[webClient] Failed to fetch CSRF token:', e)
         // Reject request if CSRF token fetch fails - security requirement
-        return Promise.reject(new Error('Failed to fetch CSRF token. Please refresh the page and try again.'));
+        return Promise.reject(
+          new Error('Failed to fetch CSRF token. Please refresh the page and try again.')
+        )
       }
     }
-    return config;
+    return config
   },
   (error) => {
-    console.error('[webClient] Request error:', error);
-    return Promise.reject(error);
+    console.error('[webClient] Request error:', error)
+    return Promise.reject(error)
   }
 )
 
@@ -113,16 +118,16 @@ webClient.interceptors.request.use(
 webClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    const status = error.response?.status;
+    const status = error.response?.status
     if (status === 401) {
       // Unauthorized - redirect to login
-      window.location.href = '/login';
+      window.location.href = '/login'
     } else if (status === 403) {
       // Forbidden - user doesn't have permission for this resource
       // Create a more descriptive error for the caller to handle
-      error.message = 'You do not have permission to access this resource';
+      error.message = 'You do not have permission to access this resource'
     }
-    return Promise.reject(error);
+    return Promise.reject(error)
   }
 )
 

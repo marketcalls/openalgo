@@ -1,39 +1,8 @@
-import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import {
-  Calendar,
-  Plus,
-  Trash2,
-  ArrowLeft,
-  ChevronLeft,
-  ChevronRight,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
+import { ArrowLeft, Calendar, ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
+import { adminApi } from '@/api/admin'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -43,127 +12,152 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
-import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
-import { Checkbox } from '@/components/ui/checkbox';
-import { toast } from 'sonner';
-import { adminApi } from '@/api/admin';
-import type { Holiday } from '@/types/admin';
+} from '@/components/ui/alert-dialog'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import type { Holiday } from '@/types/admin'
 
 const HOLIDAY_TYPES = [
   { value: 'TRADING_HOLIDAY', label: 'Trading Holiday' },
   { value: 'SETTLEMENT_HOLIDAY', label: 'Settlement Holiday' },
   { value: 'SPECIAL_SESSION', label: 'Special Session' },
-];
+]
 
 export default function HolidaysPage() {
-  const [holidays, setHolidays] = useState<Holiday[]>([]);
-  const [years, setYears] = useState<number[]>([]);
-  const [exchanges, setExchanges] = useState<string[]>([]);
-  const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
-  const [isLoading, setIsLoading] = useState(true);
+  const [holidays, setHolidays] = useState<Holiday[]>([])
+  const [years, setYears] = useState<number[]>([])
+  const [exchanges, setExchanges] = useState<string[]>([])
+  const [currentYear, setCurrentYear] = useState(new Date().getFullYear())
+  const [isLoading, setIsLoading] = useState(true)
 
   // Add dialog state
-  const [showAddDialog, setShowAddDialog] = useState(false);
+  const [showAddDialog, setShowAddDialog] = useState(false)
   const [newHoliday, setNewHoliday] = useState<{
-    date: string;
-    description: string;
-    holiday_type: 'TRADING_HOLIDAY' | 'SETTLEMENT_HOLIDAY' | 'SPECIAL_SESSION';
-    closed_exchanges: string[];
+    date: string
+    description: string
+    holiday_type: 'TRADING_HOLIDAY' | 'SETTLEMENT_HOLIDAY' | 'SPECIAL_SESSION'
+    closed_exchanges: string[]
   }>({
     date: '',
     description: '',
     holiday_type: 'TRADING_HOLIDAY',
     closed_exchanges: [],
-  });
-  const [isAdding, setIsAdding] = useState(false);
+  })
+  const [isAdding, setIsAdding] = useState(false)
 
   // Delete dialog state
-  const [deleteHoliday, setDeleteHoliday] = useState<Holiday | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteHoliday, setDeleteHoliday] = useState<Holiday | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
 
   useEffect(() => {
-    fetchHolidays(currentYear);
-  }, [currentYear]);
+    fetchHolidays(currentYear)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentYear])
 
   const fetchHolidays = async (year: number) => {
-    setIsLoading(true);
+    setIsLoading(true)
     try {
-      const response = await adminApi.getHolidays(year);
-      setHolidays(response.data);
-      setYears(response.years);
-      setExchanges(response.exchanges);
+      const response = await adminApi.getHolidays(year)
+      setHolidays(response.data)
+      setYears(response.years)
+      setExchanges(response.exchanges)
     } catch (error) {
-      console.error('Error fetching holidays:', error);
-      toast.error('Failed to load holidays');
+      console.error('Error fetching holidays:', error)
+      toast.error('Failed to load holidays')
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   const handleAdd = async () => {
     if (!newHoliday.date || !newHoliday.description) {
-      toast.error('Please fill in date and description');
-      return;
+      toast.error('Please fill in date and description')
+      return
     }
 
     if (newHoliday.holiday_type === 'TRADING_HOLIDAY' && newHoliday.closed_exchanges.length === 0) {
-      toast.error('Please select at least one exchange to close');
-      return;
+      toast.error('Please select at least one exchange to close')
+      return
     }
 
-    setIsAdding(true);
+    setIsAdding(true)
     try {
       const response = await adminApi.addHoliday({
         date: newHoliday.date,
         description: newHoliday.description,
         holiday_type: newHoliday.holiday_type,
         closed_exchanges: newHoliday.closed_exchanges,
-      });
+      })
 
       if (response.status === 'success') {
-        toast.success(response.message || 'Holiday added successfully');
-        setShowAddDialog(false);
+        toast.success(response.message || 'Holiday added successfully')
+        setShowAddDialog(false)
         setNewHoliday({
           date: '',
           description: '',
           holiday_type: 'TRADING_HOLIDAY',
           closed_exchanges: [],
-        });
-        fetchHolidays(currentYear);
+        })
+        fetchHolidays(currentYear)
       } else {
-        toast.error(response.message || 'Failed to add holiday');
+        toast.error(response.message || 'Failed to add holiday')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to add holiday');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to add holiday')
     } finally {
-      setIsAdding(false);
+      setIsAdding(false)
     }
-  };
+  }
 
   const handleDelete = async () => {
-    if (!deleteHoliday) return;
+    if (!deleteHoliday) return
 
-    setIsDeleting(true);
+    setIsDeleting(true)
     try {
-      const response = await adminApi.deleteHoliday(deleteHoliday.id);
+      const response = await adminApi.deleteHoliday(deleteHoliday.id)
 
       if (response.status === 'success') {
-        toast.success(response.message || 'Holiday deleted successfully');
-        setDeleteHoliday(null);
-        fetchHolidays(currentYear);
+        toast.success(response.message || 'Holiday deleted successfully')
+        setDeleteHoliday(null)
+        fetchHolidays(currentYear)
       } else {
-        toast.error(response.message || 'Failed to delete holiday');
+        toast.error(response.message || 'Failed to delete holiday')
       }
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { message?: string } } };
-      toast.error(err.response?.data?.message || 'Failed to delete holiday');
+      const err = error as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Failed to delete holiday')
     } finally {
-      setIsDeleting(false);
+      setIsDeleting(false)
     }
-  };
+  }
 
   const toggleExchange = (exchange: string) => {
     setNewHoliday((prev) => ({
@@ -171,35 +165,35 @@ export default function HolidaysPage() {
       closed_exchanges: prev.closed_exchanges.includes(exchange)
         ? prev.closed_exchanges.filter((e) => e !== exchange)
         : [...prev.closed_exchanges, exchange],
-    }));
-  };
+    }))
+  }
 
   const selectAllExchanges = () => {
     setNewHoliday((prev) => ({
       ...prev,
       closed_exchanges: exchanges,
-    }));
-  };
+    }))
+  }
 
   const getHolidayTypeBadge = (type: string) => {
     switch (type) {
       case 'TRADING_HOLIDAY':
-        return <Badge variant="destructive">Trading Holiday</Badge>;
+        return <Badge variant="destructive">Trading Holiday</Badge>
       case 'SETTLEMENT_HOLIDAY':
-        return <Badge variant="secondary">Settlement Holiday</Badge>;
+        return <Badge variant="secondary">Settlement Holiday</Badge>
       case 'SPECIAL_SESSION':
-        return <Badge className="bg-purple-500 hover:bg-purple-600">Special Session</Badge>;
+        return <Badge className="bg-purple-500 hover:bg-purple-600">Special Session</Badge>
       default:
-        return <Badge variant="outline">{type}</Badge>;
+        return <Badge variant="outline">{type}</Badge>
     }
-  };
+  }
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
-    );
+    )
   }
 
   return (
@@ -268,7 +262,7 @@ export default function HolidaysPage() {
               </Button>
               <Select
                 value={currentYear.toString()}
-                onValueChange={(v) => setCurrentYear(parseInt(v))}
+                onValueChange={(v) => setCurrentYear(parseInt(v, 10))}
               >
                 <SelectTrigger className="w-[120px]">
                   <SelectValue />
@@ -360,9 +354,7 @@ export default function HolidaysPage() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Add Holiday</DialogTitle>
-            <DialogDescription>
-              Add a new market holiday entry.
-            </DialogDescription>
+            <DialogDescription>Add a new market holiday entry.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
@@ -385,9 +377,9 @@ export default function HolidaysPage() {
               <Label>Holiday Type</Label>
               <Select
                 value={newHoliday.holiday_type}
-                onValueChange={(value: 'TRADING_HOLIDAY' | 'SETTLEMENT_HOLIDAY' | 'SPECIAL_SESSION') =>
-                  setNewHoliday({ ...newHoliday, holiday_type: value })
-                }
+                onValueChange={(
+                  value: 'TRADING_HOLIDAY' | 'SETTLEMENT_HOLIDAY' | 'SPECIAL_SESSION'
+                ) => setNewHoliday({ ...newHoliday, holiday_type: value })}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -405,7 +397,12 @@ export default function HolidaysPage() {
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label>Closed Exchanges</Label>
-                  <Button variant="link" size="sm" className="h-auto p-0" onClick={selectAllExchanges}>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="h-auto p-0"
+                    onClick={selectAllExchanges}
+                  >
                     Select All
                   </Button>
                 </div>
@@ -459,5 +456,5 @@ export default function HolidaysPage() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
-  );
+  )
 }

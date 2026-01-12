@@ -1,9 +1,17 @@
-import { useState, useEffect, useMemo } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
-import { Search as SearchIcon, Copy, ArrowUpDown, ChevronLeft, ChevronRight } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { ArrowUpDown, ChevronLeft, ChevronRight, Copy, Search as SearchIcon } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { toast } from 'sonner'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   Table,
   TableBody,
@@ -11,139 +19,144 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { toast } from 'sonner';
+} from '@/components/ui/table'
 
 interface SearchResult {
-  symbol: string;
-  brsymbol: string;
-  name: string;
-  exchange: string;
-  brexchange: string;
-  token: string;
-  lotsize: number | null;
-  freeze_qty: number | null;
+  symbol: string
+  brsymbol: string
+  name: string
+  exchange: string
+  brexchange: string
+  token: string
+  lotsize: number | null
+  freeze_qty: number | null
 }
 
-type SortKey = 'symbol' | 'brsymbol' | 'name' | 'exchange' | 'brexchange' | 'token' | 'lotsize' | 'freeze_qty';
-type SortDirection = 'asc' | 'desc';
+type SortKey =
+  | 'symbol'
+  | 'brsymbol'
+  | 'name'
+  | 'exchange'
+  | 'brexchange'
+  | 'token'
+  | 'lotsize'
+  | 'freeze_qty'
+type SortDirection = 'asc' | 'desc'
 
-const PAGE_SIZE_OPTIONS = [25, 50, 100, 250, 500, 'all'] as const;
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 250, 500, 'all'] as const
 
 export default function Search() {
-  const [searchParams] = useSearchParams();
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [sortKey, setSortKey] = useState<SortKey | null>(null);
-  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState<number | 'all'>(25);
+  const [searchParams] = useSearchParams()
+  const [results, setResults] = useState<SearchResult[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [sortKey, setSortKey] = useState<SortKey | null>(null)
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState<number | 'all'>(25)
 
   useEffect(() => {
-    fetchResults();
-  }, [searchParams]);
+    fetchResults()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const fetchResults = async () => {
-    setIsLoading(true);
+    setIsLoading(true)
     try {
       // Build URL with all search params - use the API endpoint
-      const params = new URLSearchParams();
-      const symbol = searchParams.get('symbol');
-      const exchange = searchParams.get('exchange');
-      const underlying = searchParams.get('underlying');
-      const expiry = searchParams.get('expiry');
-      const instrumenttype = searchParams.get('instrumenttype');
-      const strike_min = searchParams.get('strike_min');
-      const strike_max = searchParams.get('strike_max');
+      const params = new URLSearchParams()
+      const symbol = searchParams.get('symbol')
+      const exchange = searchParams.get('exchange')
+      const underlying = searchParams.get('underlying')
+      const expiry = searchParams.get('expiry')
+      const instrumenttype = searchParams.get('instrumenttype')
+      const strike_min = searchParams.get('strike_min')
+      const strike_max = searchParams.get('strike_max')
 
       // Use 'q' parameter for the API endpoint
-      if (symbol) params.append('q', symbol);
-      if (exchange) params.append('exchange', exchange);
-      if (underlying) params.append('underlying', underlying);
-      if (expiry) params.append('expiry', expiry);
-      if (instrumenttype) params.append('instrumenttype', instrumenttype);
-      if (strike_min) params.append('strike_min', strike_min);
-      if (strike_max) params.append('strike_max', strike_max);
+      if (symbol) params.append('q', symbol)
+      if (exchange) params.append('exchange', exchange)
+      if (underlying) params.append('underlying', underlying)
+      if (expiry) params.append('expiry', expiry)
+      if (instrumenttype) params.append('instrumenttype', instrumenttype)
+      if (strike_min) params.append('strike_min', strike_min)
+      if (strike_max) params.append('strike_max', strike_max)
 
       // Use the API search endpoint which returns JSON
       const response = await fetch(`/search/api/search?${params.toString()}`, {
         credentials: 'include',
-      });
+      })
 
       if (response.ok) {
-        const data = await response.json();
-        setResults(data.results || []);
+        const data = await response.json()
+        setResults(data.results || [])
       } else {
-        setResults([]);
+        setResults([])
       }
     } catch (error) {
-      console.error('Search error:', error);
-      setResults([]);
+      console.error('Search error:', error)
+      setResults([])
     } finally {
-      setIsLoading(false);
+      setIsLoading(false)
     }
-  };
+  }
 
   const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text).then(() => {
-      toast.success('Symbol copied to clipboard');
-    }).catch(() => {
-      toast.error('Failed to copy symbol');
-    });
-  };
+    navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        toast.success('Symbol copied to clipboard')
+      })
+      .catch(() => {
+        toast.error('Failed to copy symbol')
+      })
+  }
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
     } else {
-      setSortKey(key);
-      setSortDirection('asc');
+      setSortKey(key)
+      setSortDirection('asc')
     }
-  };
+  }
 
   const sortedResults = useMemo(() => {
-    if (!sortKey) return results;
+    if (!sortKey) return results
 
     return [...results].sort((a, b) => {
-      let aVal = a[sortKey];
-      let bVal = b[sortKey];
+      const aVal = a[sortKey]
+      const bVal = b[sortKey]
 
       // Handle numeric sorting
       if (['lotsize', 'token', 'freeze_qty'].includes(sortKey)) {
-        const aNum = parseFloat(String(aVal ?? 0).replace(/[^0-9.-]/g, '')) || 0;
-        const bNum = parseFloat(String(bVal ?? 0).replace(/[^0-9.-]/g, '')) || 0;
-        return sortDirection === 'asc' ? aNum - bNum : bNum - aNum;
+        const aNum = parseFloat(String(aVal ?? 0).replace(/[^0-9.-]/g, '')) || 0
+        const bNum = parseFloat(String(bVal ?? 0).replace(/[^0-9.-]/g, '')) || 0
+        return sortDirection === 'asc' ? aNum - bNum : bNum - aNum
       }
 
       // Handle string sorting
-      const aStr = String(aVal ?? '');
-      const bStr = String(bVal ?? '');
-      return sortDirection === 'asc'
-        ? aStr.localeCompare(bStr)
-        : bStr.localeCompare(aStr);
-    });
-  }, [results, sortKey, sortDirection]);
+      const aStr = String(aVal ?? '')
+      const bStr = String(bVal ?? '')
+      return sortDirection === 'asc' ? aStr.localeCompare(bStr) : bStr.localeCompare(aStr)
+    })
+  }, [results, sortKey, sortDirection])
 
   const paginatedResults = useMemo(() => {
-    if (pageSize === 'all') return sortedResults;
-    const start = (currentPage - 1) * pageSize;
-    return sortedResults.slice(start, start + pageSize);
-  }, [sortedResults, currentPage, pageSize]);
+    if (pageSize === 'all') return sortedResults
+    const start = (currentPage - 1) * pageSize
+    return sortedResults.slice(start, start + pageSize)
+  }, [sortedResults, currentPage, pageSize])
 
   const totalPages = useMemo(() => {
-    if (pageSize === 'all') return 1;
-    return Math.ceil(sortedResults.length / pageSize);
-  }, [sortedResults.length, pageSize]);
+    if (pageSize === 'all') return 1
+    return Math.ceil(sortedResults.length / pageSize)
+  }, [sortedResults.length, pageSize])
 
-  const showingStart = pageSize === 'all' ? 1 : (currentPage - 1) * pageSize + 1;
-  const showingEnd = pageSize === 'all' ? sortedResults.length : Math.min(currentPage * (pageSize as number), sortedResults.length);
+  const showingStart = pageSize === 'all' ? 1 : (currentPage - 1) * pageSize + 1
+  const showingEnd =
+    pageSize === 'all'
+      ? sortedResults.length
+      : Math.min(currentPage * (pageSize as number), sortedResults.length)
 
   const SortableHeader = ({ column, label }: { column: SortKey; label: string }) => (
     <TableHead
@@ -155,14 +168,14 @@ export default function Search() {
         <ArrowUpDown className="h-4 w-4 opacity-50" />
       </div>
     </TableHead>
-  );
+  )
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
-    );
+    )
   }
 
   return (
@@ -280,8 +293,8 @@ export default function Search() {
           <Select
             value={String(pageSize)}
             onValueChange={(v) => {
-              setPageSize(v === 'all' ? 'all' : Number(v));
-              setCurrentPage(1);
+              setPageSize(v === 'all' ? 'all' : Number(v))
+              setCurrentPage(1)
             }}
           >
             <SelectTrigger className="w-36">
@@ -298,5 +311,5 @@ export default function Search() {
         </div>
       )}
     </div>
-  );
+  )
 }

@@ -1,20 +1,20 @@
-import * as React from "react"
-import { cva, type VariantProps } from "class-variance-authority"
+import { cva, type VariantProps } from 'class-variance-authority'
+import type * as React from 'react'
 
-import { cn } from "@/lib/utils"
+import { cn } from '@/lib/utils'
 
 const alertVariants = cva(
-  "relative w-full rounded-lg border p-4 [&>svg~*]:pl-7 [&>svg+div]:translate-y-[-3px] [&>svg]:absolute [&>svg]:left-4 [&>svg]:top-4 [&>svg]:text-foreground",
+  'relative w-full rounded-lg border p-4 [&>svg~*]:pl-7 [&>svg+div]:translate-y-[-3px] [&>svg]:absolute [&>svg]:left-4 [&>svg]:top-4 [&>svg]:text-foreground',
   {
     variants: {
       variant: {
-        default: "bg-background text-foreground",
+        default: 'bg-background text-foreground',
         destructive:
-          "border-destructive/50 text-destructive dark:border-destructive [&>svg]:text-destructive",
+          'border-destructive/50 text-destructive dark:border-destructive [&>svg]:text-destructive',
       },
     },
     defaultVariants: {
-      variant: "default",
+      variant: 'default',
     },
   }
 )
@@ -23,7 +23,7 @@ function Alert({
   className,
   variant,
   ...props
-}: React.ComponentProps<"div"> & VariantProps<typeof alertVariants>) {
+}: React.ComponentProps<'div'> & VariantProps<typeof alertVariants>) {
   return (
     <div
       data-slot="alert"
@@ -34,21 +34,21 @@ function Alert({
   )
 }
 
-function AlertTitle({ className, ...props }: React.ComponentProps<"h5">) {
+function AlertTitle({ className, ...props }: React.ComponentProps<'h5'>) {
   return (
     <h5
       data-slot="alert-title"
-      className={cn("mb-1 font-medium leading-none tracking-tight", className)}
+      className={cn('mb-1 font-medium leading-none tracking-tight', className)}
       {...props}
     />
   )
 }
 
-function AlertDescription({ className, ...props }: React.ComponentProps<"div">) {
+function AlertDescription({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
       data-slot="alert-description"
-      className={cn("text-sm [&_p]:leading-relaxed", className)}
+      className={cn('text-sm [&_p]:leading-relaxed', className)}
       {...props}
     />
   )

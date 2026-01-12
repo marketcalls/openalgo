@@ -1,179 +1,182 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
 import {
-  FileText,
+  ArrowDown,
   ArrowLeft,
-  Download,
-  Search,
+  ArrowUp,
+  Calendar,
   ChevronDown,
-  ChevronUp,
   ChevronLeft,
   ChevronRight,
-  Calendar,
-  Zap,
-  ArrowUp,
-  ArrowDown,
+  ChevronUp,
+  Download,
+  FileText,
   RefreshCw,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible';
-import { toast } from 'sonner';
-import { webClient } from '@/api/client';
+  Search,
+  Zap,
+} from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { toast } from 'sonner'
+import { webClient } from '@/api/client'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Input } from '@/components/ui/input'
 
 interface LogEntry {
-  id: number;
-  api_type: string;
-  request_data: Record<string, unknown>;
-  response_data: Record<string, unknown>;
-  strategy: string;
-  created_at: string;
+  id: number
+  api_type: string
+  request_data: Record<string, unknown>
+  response_data: Record<string, unknown>
+  strategy: string
+  created_at: string
 }
 
 interface LogsResponse {
-  logs: LogEntry[];
-  total_pages: number;
-  current_page: number;
+  logs: LogEntry[]
+  total_pages: number
+  current_page: number
 }
 
 export default function LogsPage() {
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [totalPages, setTotalPages] = useState(1);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [logs, setLogs] = useState<LogEntry[]>([])
+  const [totalPages, setTotalPages] = useState(1)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
   // Filters
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
 
   // Expanded log entries
-  const [expandedLogs, setExpandedLogs] = useState<Set<number>>(new Set());
+  const [expandedLogs, setExpandedLogs] = useState<Set<number>>(new Set())
 
-  const fetchLogs = useCallback(async (page: number = 1) => {
-    try {
-      const params = new URLSearchParams();
-      params.append('page', page.toString());
-      if (startDate) params.append('start_date', startDate);
-      if (endDate) params.append('end_date', endDate);
-      if (searchQuery) params.append('search', searchQuery);
+  const fetchLogs = useCallback(
+    async (page: number = 1) => {
+      try {
+        const params = new URLSearchParams()
+        params.append('page', page.toString())
+        if (startDate) params.append('start_date', startDate)
+        if (endDate) params.append('end_date', endDate)
+        if (searchQuery) params.append('search', searchQuery)
 
-      const response = await webClient.get<LogsResponse>(`/logs/?${params.toString()}`, {
-        headers: {
-          'X-Requested-With': 'XMLHttpRequest',
-        },
-      });
+        const response = await webClient.get<LogsResponse>(`/logs/?${params.toString()}`, {
+          headers: {
+            'X-Requested-With': 'XMLHttpRequest',
+          },
+        })
 
-      setLogs(Array.isArray(response.data.logs) ? response.data.logs : []);
-      setTotalPages(response.data.total_pages || 1);
-      setCurrentPage(response.data.current_page || 1);
-    } catch (error) {
-      console.error('Error fetching logs:', error);
-      toast.error('Failed to load logs');
-    } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }
-  }, [startDate, endDate, searchQuery]);
+        setLogs(Array.isArray(response.data.logs) ? response.data.logs : [])
+        setTotalPages(response.data.total_pages || 1)
+        setCurrentPage(response.data.current_page || 1)
+      } catch (error) {
+        console.error('Error fetching logs:', error)
+        toast.error('Failed to load logs')
+      } finally {
+        setIsLoading(false)
+        setIsRefreshing(false)
+      }
+    },
+    [startDate, endDate, searchQuery]
+  )
 
   useEffect(() => {
-    fetchLogs();
-  }, [fetchLogs]);
+    fetchLogs()
+  }, [fetchLogs])
 
   // Debounced search
   useEffect(() => {
     const timer = setTimeout(() => {
       if (!isLoading) {
-        setCurrentPage(1);
-        fetchLogs(1);
+        setCurrentPage(1)
+        fetchLogs(1)
       }
-    }, 300);
+    }, 300)
 
-    return () => clearTimeout(timer);
+    return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery]);
+  }, [fetchLogs, isLoading])
 
   const handleRefresh = async () => {
-    setIsRefreshing(true);
-    await fetchLogs(currentPage);
-    toast.success('Logs refreshed');
-  };
+    setIsRefreshing(true)
+    await fetchLogs(currentPage)
+    toast.success('Logs refreshed')
+  }
 
   const handleExport = () => {
-    const params = new URLSearchParams();
-    if (startDate) params.append('start_date', startDate);
-    if (endDate) params.append('end_date', endDate);
-    if (searchQuery) params.append('search', searchQuery);
+    const params = new URLSearchParams()
+    if (startDate) params.append('start_date', startDate)
+    if (endDate) params.append('end_date', endDate)
+    if (searchQuery) params.append('search', searchQuery)
 
-    window.open(`/logs/export?${params.toString()}`, '_blank');
-  };
+    window.open(`/logs/export?${params.toString()}`, '_blank')
+  }
 
   const handleDateChange = () => {
-    setCurrentPage(1);
-    fetchLogs(1);
-  };
+    setCurrentPage(1)
+    fetchLogs(1)
+  }
 
   const toggleExpanded = (logId: number) => {
     setExpandedLogs((prev) => {
-      const newSet = new Set(prev);
+      const newSet = new Set(prev)
       if (newSet.has(logId)) {
-        newSet.delete(logId);
+        newSet.delete(logId)
       } else {
-        newSet.add(logId);
+        newSet.add(logId)
       }
-      return newSet;
-    });
-  };
+      return newSet
+    })
+  }
 
   const getApiTypeBadgeColor = (apiType: string) => {
     switch (apiType) {
       case 'placeorder':
-        return 'bg-blue-500 hover:bg-blue-600';
+        return 'bg-blue-500 hover:bg-blue-600'
       case 'placesmartorder':
-        return 'bg-purple-500 hover:bg-purple-600';
+        return 'bg-purple-500 hover:bg-purple-600'
       case 'modifyorder':
-        return 'bg-yellow-500 hover:bg-yellow-600';
+        return 'bg-yellow-500 hover:bg-yellow-600'
       case 'cancelorder':
-        return 'bg-red-500 hover:bg-red-600';
+        return 'bg-red-500 hover:bg-red-600'
       case 'closeposition':
-        return 'bg-green-500 hover:bg-green-600';
+        return 'bg-green-500 hover:bg-green-600'
       default:
-        return 'bg-gray-500 hover:bg-gray-600';
+        return 'bg-gray-500 hover:bg-gray-600'
     }
-  };
+  }
 
   const renderPagination = () => {
-    if (totalPages <= 1) return null;
+    if (totalPages <= 1) return null
 
-    const pages: (number | string)[] = [];
-    const maxVisiblePages = 5;
+    const pages: (number | string)[] = []
+    const maxVisiblePages = 5
 
     if (totalPages <= maxVisiblePages) {
       for (let i = 1; i <= totalPages; i++) {
-        pages.push(i);
+        pages.push(i)
       }
     } else {
-      pages.push(1);
+      pages.push(1)
       if (currentPage > 3) {
-        pages.push('...');
+        pages.push('...')
       }
-      for (let i = Math.max(2, currentPage - 1); i <= Math.min(totalPages - 1, currentPage + 1); i++) {
+      for (
+        let i = Math.max(2, currentPage - 1);
+        i <= Math.min(totalPages - 1, currentPage + 1);
+        i++
+      ) {
         if (!pages.includes(i)) {
-          pages.push(i);
+          pages.push(i)
         }
       }
       if (currentPage < totalPages - 2) {
-        pages.push('...');
+        pages.push('...')
       }
       if (!pages.includes(totalPages)) {
-        pages.push(totalPages);
+        pages.push(totalPages)
       }
     }
 
@@ -207,15 +210,15 @@ export default function LogsPage() {
           <ChevronRight className="h-4 w-4" />
         </Button>
       </div>
-    );
-  };
+    )
+  }
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
-    );
+    )
   }
 
   return (
@@ -232,9 +235,7 @@ export default function LogsPage() {
               Live Trading Logs
             </h1>
           </div>
-          <p className="text-muted-foreground">
-            View and search your real-time API trading logs
-          </p>
+          <p className="text-muted-foreground">View and search your real-time API trading logs</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={handleRefresh} disabled={isRefreshing}>
@@ -309,17 +310,15 @@ export default function LogsPage() {
           </Card>
         ) : (
           logs.map((log) => {
-            const requestData = log.request_data || {};
-            const isExpanded = expandedLogs.has(log.id);
+            const requestData = log.request_data || {}
+            const isExpanded = expandedLogs.has(log.id)
 
             return (
               <Card key={log.id} className="hover:shadow-md transition-shadow">
                 <CardContent className="p-6">
                   {/* Header Badges */}
                   <div className="flex flex-wrap gap-2 mb-4">
-                    <Badge className={getApiTypeBadgeColor(log.api_type)}>
-                      {log.api_type}
-                    </Badge>
+                    <Badge className={getApiTypeBadgeColor(log.api_type)}>{log.api_type}</Badge>
                     <Badge variant="outline" className="gap-1">
                       <Zap className="h-3 w-3" />
                       {log.strategy}
@@ -350,7 +349,10 @@ export default function LogsPage() {
                   </div>
 
                   {/* Order Details */}
-                  {(requestData.symbol || requestData.quantity || requestData.price || requestData.product) ? (
+                  {requestData.symbol ||
+                  requestData.quantity ||
+                  requestData.price ||
+                  requestData.product ? (
                     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
                       {requestData.symbol ? (
                         <div className="bg-muted rounded-lg p-3">
@@ -385,7 +387,9 @@ export default function LogsPage() {
                       {requestData.orderid ? (
                         <div className="bg-muted rounded-lg p-3">
                           <p className="text-xs text-muted-foreground uppercase">Order ID</p>
-                          <p className="font-semibold text-sm truncate">{String(requestData.orderid)}</p>
+                          <p className="font-semibold text-sm truncate">
+                            {String(requestData.orderid)}
+                          </p>
                         </div>
                       ) : null}
                     </div>
@@ -394,7 +398,10 @@ export default function LogsPage() {
                   {/* Collapsible Request/Response */}
                   <Collapsible open={isExpanded} onOpenChange={() => toggleExpanded(log.id)}>
                     <CollapsibleTrigger asChild>
-                      <Button variant="ghost" className="w-full justify-between bg-muted hover:bg-muted/80">
+                      <Button
+                        variant="ghost"
+                        className="w-full justify-between bg-muted hover:bg-muted/80"
+                      >
                         View Request/Response Data
                         {isExpanded ? (
                           <ChevronUp className="h-4 w-4" />
@@ -420,7 +427,7 @@ export default function LogsPage() {
                   </Collapsible>
                 </CardContent>
               </Card>
-            );
+            )
           })
         )}
       </div>
@@ -428,5 +435,5 @@ export default function LogsPage() {
       {/* Pagination */}
       {renderPagination()}
     </div>
-  );
+  )
 }
