@@ -567,6 +567,7 @@ export default function ProfilePage() {
                   const isSelected = mode === themeOption.value && !isAnalyzerMode
                   return (
                     <button
+                      type="button"
                       key={themeOption.value}
                       onClick={() => handleThemeModeChange(themeOption.value)}
                       disabled={isAnalyzerMode}
@@ -609,6 +610,7 @@ export default function ProfilePage() {
                   const isSelected = color === accentColor.value && !isAnalyzerMode
                   return (
                     <button
+                      type="button"
                       key={accentColor.value}
                       onClick={() => handleAccentColorChange(accentColor.value)}
                       disabled={isAnalyzerMode}

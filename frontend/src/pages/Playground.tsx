@@ -516,6 +516,7 @@ export default function Playground() {
               <span className="truncate max-w-[100px]">{tab.endpoint.name}</span>
               {tab.modified && <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />}
               <button
+                type="button"
                 className="opacity-0 group-hover:opacity-100 hover:text-zinc-100 p-0.5 -mr-1"
                 onClick={(e) => closeTab(tab.id, e)}
               >
@@ -595,6 +596,7 @@ export default function Playground() {
               {Object.entries(filteredEndpoints).map(([category, eps]) => (
                 <div key={category} className="mb-2">
                   <button
+                    type="button"
                     className="flex items-center gap-1.5 w-full px-2 py-1 rounded text-[11px] font-medium uppercase tracking-wider text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50"
                     onClick={() => toggleCategory(category)}
                   >
@@ -610,6 +612,7 @@ export default function Playground() {
                     <div className="mt-0.5 space-y-0.5">
                       {eps.map((endpoint, idx) => (
                         <button
+                          type="button"
                           key={idx}
                           className={cn(
                             'w-full flex items-center gap-2 px-2 py-1 rounded text-left text-xs hover:bg-zinc-800/50',

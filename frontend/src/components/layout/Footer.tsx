@@ -2,8 +2,13 @@ import { Github } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
-export function Footer() {
+interface FooterProps {
+  className?: string
+}
+
+export function Footer({ className }: FooterProps) {
   const [version, setVersion] = useState<string>('')
 
   useEffect(() => {
@@ -23,7 +28,7 @@ export function Footer() {
   }, [])
 
   return (
-    <footer className="mt-auto border-t bg-muted/30">
+    <footer className={cn('mt-auto border-t bg-muted/30', className)}>
       <div className="container mx-auto px-4 py-6">
         <div className="flex flex-col md:flex-row items-center justify-center gap-2 md:gap-4 text-sm text-muted-foreground">
           <div className="flex items-center gap-2">

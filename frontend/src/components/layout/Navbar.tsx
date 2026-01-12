@@ -1,26 +1,4 @@
-import {
-  BarChart3,
-  Bell,
-  BookOpen,
-  ClipboardList,
-  Code2,
-  FileBarChart,
-  FileText,
-  FlaskConical,
-  Key,
-  Layers,
-  LayoutDashboard,
-  LogOut,
-  Menu,
-  MessageSquare,
-  Moon,
-  Search,
-  Settings,
-  Sun,
-  TrendingUp,
-  User,
-  Zap,
-} from 'lucide-react'
+import { BarChart3, BookOpen, LogOut, Menu, Moon, Sun, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -35,20 +13,15 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet'
+import {
+  isActiveRoute,
+  mobileSheetItems,
+  navItems,
+  profileMenuItems,
+} from '@/config/navigation'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
-
-const navItems = [
-  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/orderbook', label: 'Orderbook', icon: ClipboardList },
-  { href: '/tradebook', label: 'Tradebook', icon: FileText },
-  { href: '/positions', label: 'Positions', icon: TrendingUp },
-  { href: '/action-center', label: 'Action Center', icon: Bell },
-  { href: '/platforms', label: 'Platforms', icon: Layers },
-  { href: '/strategy', label: 'Strategy', icon: Code2 },
-  { href: '/logs', label: 'Logs', icon: FileBarChart },
-]
 
 export function Navbar() {
   const location = useLocation()
@@ -88,15 +61,15 @@ export function Navbar() {
     }
   }
 
-  const isActive = (href: string) => location.pathname === href
+  const isActive = (href: string) => isActiveRoute(location.pathname, href)
 
   return (
     <nav className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container mx-auto px-4 flex h-14 items-center">
         {/* Mobile Menu */}
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-          <SheetTrigger asChild className="lg:hidden">
-            <Button variant="ghost" size="icon" className="mr-2">
+          <SheetTrigger asChild className="md:hidden">
+            <Button variant="ghost" size="icon" className="mr-2 min-h-[44px] min-w-[44px]">
               <Menu className="h-5 w-5" />
               <span className="sr-only">Toggle menu</span>
             </Button>
@@ -112,14 +85,15 @@ export function Navbar() {
                 <span className="font-semibold">OpenAlgo</span>
               </Link>
               <nav className="flex flex-col gap-1">
-                {navItems.map((item) => (
+                {/* Show secondary items not in bottom nav */}
+                {mobileSheetItems.map((item) => (
                   <Link
                     key={item.href}
                     to={item.href}
                     onClick={() => setMobileOpen(false)}
                     className={cn(
-                      'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
-                      isActive(item.href) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
+                      'flex items-center gap-3 rounded-lg px-3 py-3 text-sm transition-colors min-h-[44px] touch-manipulation',
+                      isActive(item.href) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted active:bg-muted'
                     )}
                   >
                     <item.icon className="h-4 w-4" />
@@ -138,7 +112,7 @@ export function Navbar() {
         </Link>
 
         {/* Desktop Navigation */}
-        <nav className="hidden lg:flex items-center gap-1">
+        <nav className="hidden md:flex items-center gap-1">
           {navItems.map((item) => (
             <Link
               key={item.href}
@@ -222,48 +196,16 @@ export function Navbar() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuItem onSelect={() => navigate('/profile')} className="cursor-pointer">
-                <User className="h-4 w-4 mr-2" />
-                Profile
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => navigate('/apikey')} className="cursor-pointer">
-                <Key className="h-4 w-4 mr-2" />
-                API Key
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => navigate('/telegram')} className="cursor-pointer">
-                <MessageSquare className="h-4 w-4 mr-2" />
-                Telegram Bot
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => navigate('/holdings')} className="cursor-pointer">
-                <ClipboardList className="h-4 w-4 mr-2" />
-                Holdings
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => navigate('/python')} className="cursor-pointer">
-                <Code2 className="h-4 w-4 mr-2" />
-                Python Strategies
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={() => navigate('/pnl-tracker')}
-                className="cursor-pointer"
-              >
-                <BarChart3 className="h-4 w-4 mr-2" />
-                PnL Tracker
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={() => navigate('/search/token')}
-                className="cursor-pointer"
-              >
-                <Search className="h-4 w-4 mr-2" />
-                Search
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => navigate('/sandbox')} className="cursor-pointer">
-                <FlaskConical className="h-4 w-4 mr-2" />
-                Sandbox
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => navigate('/admin')} className="cursor-pointer">
-                <Settings className="h-4 w-4 mr-2" />
-                Admin
-              </DropdownMenuItem>
+              {profileMenuItems.map((item) => (
+                <DropdownMenuItem
+                  key={item.href}
+                  onSelect={() => navigate(item.href)}
+                  className="cursor-pointer"
+                >
+                  <item.icon className="h-4 w-4 mr-2" />
+                  {item.label}
+                </DropdownMenuItem>
+              ))}
               <DropdownMenuItem asChild>
                 <a
                   href="https://docs.openalgo.in"

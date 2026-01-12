@@ -302,6 +302,7 @@ export default function ResetPassword() {
                 </div>
 
                 <button
+                  type="button"
                   onClick={() => handleMethodSelect('totp')}
                   disabled={loading}
                   className="w-full p-4 rounded-lg border bg-muted/50 hover:bg-muted transition-colors text-left"
@@ -321,6 +322,7 @@ export default function ResetPassword() {
                 </button>
 
                 <button
+                  type="button"
                   onClick={() => handleMethodSelect('email')}
                   disabled={loading}
                   className="w-full p-4 rounded-lg border bg-muted/50 hover:bg-muted transition-colors text-left"
