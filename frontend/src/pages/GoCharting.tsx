@@ -168,14 +168,17 @@ export default function GoCharting() {
         </p>
       </div>
 
-      {/* Safety Warning */}
-      <Alert className="mb-8 border-yellow-500 bg-yellow-500/10">
-        <AlertTriangle className="h-5 w-5 text-yellow-500" />
-        <AlertDescription className="ml-2">
-          <strong>Test in Analyze Mode first before live trading!</strong> Enable from navbar
-          toggle.
-        </AlertDescription>
-      </Alert>
+      {/* Localhost Warning */}
+      {(window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && (
+        <Alert variant="destructive" className="mb-8">
+          <AlertTriangle className="h-5 w-5" />
+          <AlertDescription className="ml-2">
+            <strong>Webhook URL not accessible!</strong> GoCharting cannot send alerts to localhost.
+            Use <strong>ngrok</strong>, <strong>Cloudflare Tunnel</strong>, <strong>VS Code Dev Tunnel</strong>,
+            or a <strong>custom domain</strong> to expose your OpenAlgo instance to the internet.
+          </AlertDescription>
+        </Alert>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Left Column - Configuration */}

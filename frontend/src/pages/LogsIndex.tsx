@@ -1,9 +1,7 @@
 import {
   Activity,
-  ArrowLeft,
   ArrowRight,
   BookOpen,
-  CheckCircle,
   ClipboardList,
   Clock,
   FileText,
@@ -11,134 +9,58 @@ import {
   Shield,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
-interface LogCardProps {
-  title: string
-  description: string
-  icon: React.ComponentType<{ className?: string }>
-  href: string
-  features: string[]
-  buttonText: string
-  gradient: string
-  isExternal?: boolean
-}
-
-function LogCard({
-  title,
-  description,
-  icon: Icon,
-  href,
-  features,
-  buttonText,
-  gradient,
-  isExternal,
-}: LogCardProps) {
-  const content = (
-    <Card className="h-full hover:shadow-lg transition-all duration-300 group overflow-hidden">
-      <CardHeader className="text-center pb-2">
-        <div
-          className={`w-20 h-20 mx-auto rounded-2xl ${gradient} flex items-center justify-center mb-4 group-hover:scale-105 transition-transform`}
-        >
-          <Icon className="h-10 w-10 text-white" />
-        </div>
-        <CardTitle className="text-xl">{title}</CardTitle>
-        <CardDescription className="text-sm min-h-[3rem]">{description}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <ul className="space-y-2">
-          {features.map((feature, index) => (
-            <li key={index} className="flex items-center gap-2 text-sm text-muted-foreground">
-              <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
-              <span>{feature}</span>
-            </li>
-          ))}
-        </ul>
-        <Button className={`w-full ${gradient} border-0 text-white hover:opacity-90`}>
-          {buttonText}
-          <ArrowRight className="h-4 w-4 ml-2" />
-        </Button>
-      </CardContent>
-    </Card>
-  )
-
-  if (isExternal) {
-    return (
-      <a href={href} target="_blank" rel="noopener noreferrer" className="block">
-        {content}
-      </a>
-    )
-  }
-
-  return (
-    <Link to={href} className="block">
-      {content}
-    </Link>
-  )
-}
-
 export default function LogsIndex() {
-  const logCards: LogCardProps[] = [
+  const logCards = [
     {
       title: 'Live Logs',
-      description:
-        'View real-time API order logs with detailed request and response data. Filter by date, search, and export logs to CSV.',
+      description: 'View real-time API order logs with request and response data',
       icon: ClipboardList,
       href: '/logs/live',
-      features: ['Order request & response logs', 'Date range filtering', 'CSV export'],
-      buttonText: 'View Live Logs',
-      gradient: 'bg-gradient-to-br from-cyan-400 to-blue-500',
+      color: 'bg-blue-500',
+      countLabel: 'orders',
     },
     {
       title: 'Sandbox Logs',
-      description:
-        'Sandbox testing logs to track and test your trading strategies before going live. Validate strategy performance in a safe environment.',
+      description: 'Track and test your trading strategies before going live',
       icon: FlaskConical,
       href: '/logs/sandbox',
-      features: ['Strategy testing logs', 'Paper trading validation', 'Risk-free testing'],
-      buttonText: 'Open Sandbox',
-      gradient: 'bg-gradient-to-br from-pink-400 to-purple-500',
+      color: 'bg-purple-500',
+      countLabel: 'testing',
     },
     {
       title: 'Latency Monitor',
-      description:
-        'Track order execution latency for your connected broker. View histograms, percentiles, and identify performance bottlenecks.',
+      description: 'Track order execution latency and performance metrics',
       icon: Clock,
       href: '/logs/latency',
-      features: ['Order execution timing', 'Performance metrics', 'Latency histograms'],
-      buttonText: 'View Latency',
-      gradient: 'bg-gradient-to-br from-yellow-400 to-orange-500',
+      color: 'bg-orange-500',
+      countLabel: 'monitoring',
     },
     {
       title: 'Traffic Monitor',
-      description:
-        'Monitor all incoming HTTP requests to your OpenAlgo instance. Track endpoints, methods, status codes, and response times.',
+      description: 'Monitor HTTP requests, endpoints, and response times',
       icon: Activity,
       href: '/logs/traffic',
-      features: ['Request/response tracking', 'Endpoint analytics', 'Response time metrics'],
-      buttonText: 'View Traffic',
-      gradient: 'bg-gradient-to-br from-teal-400 to-cyan-500',
+      color: 'bg-cyan-500',
+      countLabel: 'monitoring',
     },
     {
       title: 'Security Logs',
-      description:
-        'Monitor security events including banned IPs, 404 errors, and invalid API key attempts. Manage IP bans and security thresholds.',
+      description: 'Monitor security events, banned IPs, and threat activity',
       icon: Shield,
       href: '/logs/security',
-      features: ['IP ban management', 'Security event tracking', 'Threat monitoring'],
-      buttonText: 'View Security',
-      gradient: 'bg-gradient-to-br from-red-400 to-pink-500',
+      color: 'bg-red-500',
+      countLabel: 'security',
     },
     {
       title: 'Documentation',
-      description:
-        'Access comprehensive guides, API references, and troubleshooting tips. Learn how to configure and optimize your OpenAlgo setup.',
+      description: 'Access guides, API references, and troubleshooting tips',
       icon: BookOpen,
       href: 'https://docs.openalgo.in',
-      features: ['API documentation', 'Setup guides', 'Troubleshooting tips'],
-      buttonText: 'View Docs',
-      gradient: 'bg-gradient-to-br from-orange-400 to-amber-500',
+      color: 'bg-green-500',
+      countLabel: 'docs',
       isExternal: true,
     },
   ]
@@ -147,25 +69,50 @@ export default function LogsIndex() {
     <div className="py-6 space-y-6">
       {/* Header */}
       <div>
-        <div className="flex items-center gap-2 mb-2">
-          <Link to="/dashboard" className="text-muted-foreground hover:text-foreground">
-            <ArrowLeft className="h-4 w-4" />
-          </Link>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <FileText className="h-6 w-6" />
-            Logs & Monitoring
-          </h1>
-        </div>
-        <p className="text-muted-foreground">
+        <h1 className="text-2xl font-bold flex items-center gap-2">
+          <FileText className="h-6 w-6" />
+          Logs & Monitoring
+        </h1>
+        <p className="text-muted-foreground mt-1">
           Access trading logs, monitor system performance, and track security events
         </p>
       </div>
 
       {/* Log Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {logCards.map((card) => (
-          <LogCard key={card.title} {...card} />
-        ))}
+        {logCards.map((card) => {
+          const CardWrapper = card.isExternal ? 'a' : Link
+          const linkProps = card.isExternal
+            ? { href: card.href, target: '_blank', rel: 'noopener noreferrer' }
+            : { to: card.href }
+
+          return (
+            <CardWrapper key={card.href} {...(linkProps as any)}>
+              <Card className="h-full hover:shadow-lg transition-shadow cursor-pointer group">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div
+                      className={`w-10 h-10 rounded-lg ${card.color} flex items-center justify-center`}
+                    >
+                      <card.icon className="h-5 w-5 text-white" />
+                    </div>
+                    <Badge variant="secondary">{card.countLabel}</Badge>
+                  </div>
+                  <CardTitle className="flex items-center gap-2 group-hover:text-primary transition-colors">
+                    {card.title}
+                    <ArrowRight className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </CardTitle>
+                  <CardDescription>{card.description}</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-sm text-muted-foreground">
+                    Click to view {card.title.toLowerCase()}
+                  </div>
+                </CardContent>
+              </Card>
+            </CardWrapper>
+          )
+        })}
       </div>
     </div>
   )

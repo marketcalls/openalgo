@@ -93,15 +93,18 @@ export default function ChartinkIndex() {
         </div>
       </div>
 
-      {/* Warning Alert */}
-      <Alert variant="destructive" className="border-orange-500 bg-orange-50 dark:bg-orange-950">
-        <AlertTriangle className="h-4 w-4 text-orange-500" />
-        <AlertTitle className="text-orange-700 dark:text-orange-400">Safety First</AlertTitle>
-        <AlertDescription className="text-orange-600 dark:text-orange-300">
-          Test in Analyze Mode first before live trading! Chartink strategies execute automatically
-          when alerts are triggered.
-        </AlertDescription>
-      </Alert>
+      {/* Localhost Warning */}
+      {(window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Webhook URL not accessible!</AlertTitle>
+          <AlertDescription>
+            Chartink cannot send alerts to localhost. Use <strong>ngrok</strong>,{' '}
+            <strong>Cloudflare Tunnel</strong>, <strong>VS Code Dev Tunnel</strong>, or a{' '}
+            <strong>custom domain</strong> to expose your OpenAlgo instance to the internet.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Webhook Info Alert */}
       <Alert>
