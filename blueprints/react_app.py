@@ -4,7 +4,7 @@ Serves the pre-built React app for migrated routes.
 """
 
 from pathlib import Path
-from flask import Blueprint, send_from_directory
+from flask import Blueprint, send_file, send_from_directory
 
 react_bp = Blueprint('react', __name__)
 
@@ -35,7 +35,9 @@ npm run build</pre>
         </body>
         </html>
         """, 503
-    return send_from_directory(FRONTEND_DIST, 'index.html')
+
+    index_path = FRONTEND_DIST / 'index.html'
+    return send_file(index_path, mimetype='text/html')
 
 
 # ============================================================
@@ -113,6 +115,58 @@ def react_apikey():
 # Playground
 @react_bp.route('/playground')
 def react_playground():
+    return serve_react_app()
+
+
+# ============================================================
+# Phase 4 Routes - Charts, WebSocket & Sandbox
+# ============================================================
+
+# Trading Platforms overview
+@react_bp.route('/platforms')
+def react_platforms():
+    return serve_react_app()
+
+
+# TradingView webhook configuration
+@react_bp.route('/tradingview')
+def react_tradingview():
+    return serve_react_app()
+
+
+# GoCharting webhook configuration
+@react_bp.route('/gocharting')
+def react_gocharting():
+    return serve_react_app()
+
+
+# P&L Tracker with real-time chart
+@react_bp.route('/pnl-tracker')
+def react_pnltracker():
+    return serve_react_app()
+
+
+# WebSocket market data test page
+@react_bp.route('/websocket/test')
+def react_websocket_test():
+    return serve_react_app()
+
+
+# Sandbox configuration
+@react_bp.route('/sandbox')
+def react_sandbox():
+    return serve_react_app()
+
+
+# Sandbox P&L history
+@react_bp.route('/sandbox/mypnl')
+def react_sandbox_mypnl():
+    return serve_react_app()
+
+
+# API Request Analyzer
+@react_bp.route('/analyzer')
+def react_analyzer():
     return serve_react_app()
 
 

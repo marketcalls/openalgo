@@ -18,6 +18,15 @@ import Token from '@/pages/Token';
 import Search from '@/pages/Search';
 import ApiKey from '@/pages/ApiKey';
 import Playground from '@/pages/Playground';
+// Phase 4 Pages
+import TradingView from '@/pages/TradingView';
+import GoCharting from '@/pages/GoCharting';
+import PnLTracker from '@/pages/PnLTracker';
+import Sandbox from '@/pages/Sandbox';
+import SandboxPnL from '@/pages/SandboxPnL';
+import Analyzer from '@/pages/Analyzer';
+import WebSocketTest from '@/pages/WebSocketTest';
+import Platforms from '@/pages/Platforms';
 
 function App() {
   return (
@@ -46,6 +55,16 @@ function App() {
               <Route path="/search" element={<Search />} />
               {/* API Key management */}
               <Route path="/apikey" element={<ApiKey />} />
+              {/* Phase 4: Charts & Webhook Configuration */}
+              <Route path="/platforms" element={<Platforms />} />
+              <Route path="/tradingview" element={<TradingView />} />
+              <Route path="/gocharting" element={<GoCharting />} />
+              <Route path="/pnl-tracker" element={<PnLTracker />} />
+              {/* Phase 4: Sandbox & Analyzer */}
+              <Route path="/sandbox" element={<Sandbox />} />
+              <Route path="/sandbox/mypnl" element={<SandboxPnL />} />
+              <Route path="/analyzer" element={<Analyzer />} />
+              <Route path="/websocket/test" element={<WebSocketTest />} />
             </Route>
 
             {/* Full-width protected routes */}
