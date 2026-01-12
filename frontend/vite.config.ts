@@ -34,10 +34,36 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    chunkSizeWarningLimit: 600,
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom'],
+        manualChunks: (id) => {
+          if (id.includes('node_modules')) {
+            // Core React - most stable, cached long-term
+            if (id.includes('/react-dom/') || id.includes('/react/') || id.includes('/scheduler/')) {
+              return 'vendor-react'
+            }
+            // Router
+            if (id.includes('react-router')) {
+              return 'vendor-router'
+            }
+            // Radix UI primitives
+            if (id.includes('@radix-ui')) {
+              return 'vendor-radix'
+            }
+            // Icons - frequently updated
+            if (id.includes('lucide-react')) {
+              return 'vendor-icons'
+            }
+            // Syntax highlighting - only needed on code pages
+            if (id.includes('react-syntax-highlighter') || id.includes('prismjs') || id.includes('refractor')) {
+              return 'vendor-syntax'
+            }
+            // Charts - only needed on chart pages
+            if (id.includes('recharts') || id.includes('d3-')) {
+              return 'vendor-charts'
+            }
+          }
         },
       },
     },
