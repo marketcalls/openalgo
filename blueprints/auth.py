@@ -404,6 +404,9 @@ def change_password():
 @check_session_validity
 def configure_smtp():
     if 'user' not in session:
+        # For AJAX requests, return JSON
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.is_json:
+            return jsonify({'status': 'error', 'message': 'Not authenticated'}), 401
         flash('You must be logged in to configure SMTP settings.', 'warning')
         return redirect(url_for('auth.login'))
 
@@ -438,12 +441,20 @@ def configure_smtp():
                 smtp_helo_hostname=smtp_helo_hostname
             )
 
-        flash('SMTP settings updated successfully.', 'success')
         logger.info(f"SMTP settings updated by user: {session['user']}")
-        
+
+        # For AJAX requests, return JSON
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.is_json or 'multipart/form-data' in request.content_type:
+            return jsonify({'status': 'success', 'message': 'SMTP settings updated successfully'})
+
+        flash('SMTP settings updated successfully.', 'success')
+
     except Exception as e:
-        flash(f'Error updating SMTP settings: {str(e)}', 'error')
         logger.error(f"Error updating SMTP settings: {str(e)}")
+        # For AJAX requests, return JSON
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.is_json:
+            return jsonify({'status': 'error', 'message': f'Error updating SMTP settings: {str(e)}'}), 500
+        flash(f'Error updating SMTP settings: {str(e)}', 'error')
 
     return redirect(url_for('auth.change_password') + '?tab=smtp')
 
@@ -741,3 +752,100 @@ def logout():
 
     # For GET requests (traditional), redirect to login page
     return redirect(url_for('auth.login'))
+
+
+@auth_bp.route('/profile-data', methods=['GET'])
+@check_session_validity
+def get_profile_data():
+    """Return profile data for React SPA."""
+    if 'user' not in session:
+        return jsonify({'status': 'error', 'message': 'Not authenticated'}), 401
+
+    username = session['user']
+
+    try:
+        # Get SMTP settings
+        smtp_settings = get_smtp_settings()
+
+        # Mask SMTP password - just indicate if it's set
+        if smtp_settings and smtp_settings.get('smtp_password'):
+            smtp_settings = dict(smtp_settings)
+            smtp_settings['smtp_password'] = True
+        elif smtp_settings:
+            smtp_settings = dict(smtp_settings)
+            smtp_settings['smtp_password'] = False
+
+        # Generate TOTP QR code
+        user = User.query.filter_by(username=username).first()
+        qr_code = None
+        totp_secret = None
+
+        if user:
+            try:
+                import qrcode
+                import io
+                import base64
+
+                qr = qrcode.QRCode(version=1, box_size=10, border=5)
+                qr.add_data(user.get_totp_uri())
+                qr.make(fit=True)
+
+                img_buffer = io.BytesIO()
+                qr.make_image(fill_color="black", back_color="white").save(img_buffer, format='PNG')
+                qr_code = base64.b64encode(img_buffer.getvalue()).decode()
+                totp_secret = user.totp_secret
+            except Exception as e:
+                logger.error(f"Error generating TOTP QR code: {e}")
+
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'username': username,
+                'smtp_settings': smtp_settings,
+                'qr_code': qr_code,
+                'totp_secret': totp_secret
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting profile data: {e}")
+        return jsonify({'status': 'error', 'message': 'Failed to get profile data'}), 500
+
+
+@auth_bp.route('/change-password', methods=['POST'])
+@check_session_validity
+def change_password_api():
+    """Change password API endpoint for React SPA."""
+    if 'user' not in session:
+        return jsonify({'status': 'error', 'message': 'Not authenticated'}), 401
+
+    username = session['user']
+    old_password = request.form.get('old_password')
+    new_password = request.form.get('new_password')
+    confirm_password = request.form.get('confirm_password')
+
+    if not all([old_password, new_password, confirm_password]):
+        return jsonify({'status': 'error', 'message': 'All fields are required'}), 400
+
+    user = User.query.filter_by(username=username).first()
+
+    if not user or not user.check_password(old_password):
+        return jsonify({'status': 'error', 'message': 'Current password is incorrect'}), 400
+
+    if new_password != confirm_password:
+        return jsonify({'status': 'error', 'message': 'New passwords do not match'}), 400
+
+    # Validate password strength
+    from utils.auth_utils import validate_password_strength
+    is_valid, error_message = validate_password_strength(new_password)
+    if not is_valid:
+        return jsonify({'status': 'error', 'message': error_message}), 400
+
+    try:
+        user.set_password(new_password)
+        db_session.commit()
+        logger.info(f"Password changed successfully for user: {username}")
+        return jsonify({'status': 'success', 'message': 'Password changed successfully'})
+    except Exception as e:
+        logger.error(f"Error changing password: {e}")
+        return jsonify({'status': 'error', 'message': 'Failed to change password'}), 500

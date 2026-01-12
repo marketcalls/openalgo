@@ -62,24 +62,17 @@ export function useSocket() {
     const timeSinceLastAttempt = now - lastAudioTimeRef.current;
 
     if (timeSinceLastAttempt < AUDIO_THROTTLE_MS && lastAudioTimeRef.current !== 0) {
-      console.log('[Audio] Throttled - too soon since last sound');
       return;
     }
 
     lastAudioTimeRef.current = now;
 
     if (audioRef.current) {
-      console.log('[Audio] Attempting to play alert sound...');
       audioRef.current.play()
         .then(() => {
-          console.log('[Audio] Sound played successfully');
           audioEnabledRef.current = true;
         })
-        .catch((error) => {
-          console.error('[Audio] Failed to play:', error);
-        });
-    } else {
-      console.warn('[Audio] No audio element available');
+        .catch(() => {});
     }
   }, []);
 
@@ -104,16 +97,12 @@ export function useSocket() {
   useEffect(() => {
     // Only connect when authenticated
     if (!isAuthenticated) {
-      console.log('[Socket] Not authenticated, skipping socket connection');
       return;
     }
-
-    console.log('[Socket] Initializing socket connection...');
 
     // Create audio element - use Flask static path
     audioRef.current = new Audio('/static/sounds/alert.mp3');
     audioRef.current.preload = 'auto';
-    console.log('[Socket] Audio element created');
 
     // Enable audio on user interaction
     const handleInteraction = () => {
@@ -135,28 +124,20 @@ export function useSocket() {
 
     const socket = socketRef.current;
 
-    socket.on('connect', () => {
-      console.log('[Socket] Connected successfully');
-    });
+    socket.on('connect', () => {});
 
-    socket.on('disconnect', () => {
-      console.log('[Socket] Disconnected');
-    });
+    socket.on('disconnect', () => {});
 
-    socket.on('connect_error', (error) => {
-      console.error('[Socket] Connection error:', error);
-    });
+    socket.on('connect_error', () => {});
 
     // Password change notification
     socket.on('password_change', (data: { message: string }) => {
-      console.log('[Socket] password_change event:', data);
       playAlertSound();
       toast.info(data.message);
     });
 
     // Master contract download notification
     socket.on('master_contract_download', (data: MasterContractData) => {
-      console.log('[Socket] master_contract_download event:', data);
       playAlertSound();
       toast.info(`Master Contract: ${data.message}`);
     });
@@ -180,10 +161,8 @@ export function useSocket() {
 
     // Order placement notification
     socket.on('order_event', (data: OrderEventData) => {
-      console.log('[Socket] order_event received:', data);
       const shouldPlayAudio = !data.batch_order || data.is_last_order;
       if (shouldPlayAudio) {
-        console.log('[Socket] Playing alert sound for order');
         playAlertSound();
       }
 

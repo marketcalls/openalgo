@@ -246,10 +246,6 @@ export function Navbar() {
                 <Search className="h-4 w-4 mr-2" />
                 Search
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => navigate('/playground')} className="cursor-pointer">
-                <Zap className="h-4 w-4 mr-2" />
-                API Playground
-              </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => navigate('/sandbox')} className="cursor-pointer">
                 <FlaskConical className="h-4 w-4 mr-2" />
                 Sandbox

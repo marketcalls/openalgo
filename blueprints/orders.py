@@ -871,7 +871,7 @@ def approve_pending_order_route(order_id):
     from extensions import socketio
 
     # Approve the order
-    success = approve_pending_order(order_id, approved_by=login_username, user_id=login_username)
+    success = approve_pending_order(order_id, login_username, login_username)
 
     if success:
         # Execute the order
@@ -911,7 +911,7 @@ def reject_pending_order_route(order_id):
     from database.action_center_db import reject_pending_order
     from extensions import socketio
 
-    success = reject_pending_order(order_id, reason=reason, rejected_by=login_username, user_id=login_username)
+    success = reject_pending_order(order_id, reason, login_username, login_username)
 
     if success:
         # Emit socket event to notify about order rejection
@@ -938,7 +938,7 @@ def delete_pending_order_route(order_id):
     from database.action_center_db import delete_pending_order
     from extensions import socketio
 
-    success = delete_pending_order(order_id, user_id=login_username)
+    success = delete_pending_order(order_id, login_username)
 
     if success:
         # Emit socket event to notify about order deletion
@@ -992,7 +992,7 @@ def approve_all_pending_orders():
     # Approve and execute each order
     for order in pending_orders:
         # Approve the order
-        success = approve_pending_order(order.id, approved_by=login_username)
+        success = approve_pending_order(order.id, login_username, login_username)
 
         if success:
             approved_count += 1
@@ -1033,3 +1033,47 @@ def approve_all_pending_orders():
         'executed_count': executed_count,
         'failed_executions': failed_executions
     }), 200
+
+
+@orders_bp.route('/action-center/api/data')
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def action_center_api_data():
+    """
+    Action Center JSON API - Get pending/approved/rejected orders data
+    For React SPA consumption
+    """
+    login_username = session['user']
+
+    # Get filter from query params
+    status_filter = request.args.get('status', 'pending')  # pending, approved, rejected, all
+
+    # Get action center data
+    from services.action_center_service import get_action_center_data
+
+    if status_filter == 'all' or not status_filter:
+        success, response, status_code = get_action_center_data(login_username, status_filter=None)
+    else:
+        success, response, status_code = get_action_center_data(login_username, status_filter=status_filter)
+
+    if not success:
+        logger.error(f"Failed to get action center data: {response.get('message', 'Unknown error')}")
+        return jsonify({
+            'status': 'error',
+            'message': response.get('message', 'Failed to get action center data'),
+            'data': {
+                'orders': [],
+                'statistics': {
+                    'total_pending': 0,
+                    'total_approved': 0,
+                    'total_rejected': 0,
+                    'total_buy_orders': 0,
+                    'total_sell_orders': 0
+                }
+            }
+        }), status_code
+
+    return jsonify({
+        'status': 'success',
+        'data': response.get('data', {})
+    })

@@ -165,8 +165,8 @@ export default function Analyzer() {
     <div className="container mx-auto py-6 px-4">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-3xl font-bold">API Request Analyzer</h1>
-        <p className="text-muted-foreground mt-1">Monitor and analyze your API requests</p>
+        <h1 className="text-3xl font-bold">Sandbox Request Monitor</h1>
+        <p className="text-muted-foreground mt-1">Review and validate your sandbox API requests before going live</p>
       </div>
 
       {/* Date Filter */}

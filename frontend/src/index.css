@@ -241,6 +241,86 @@
   }
 }
 
+/* Accent Color Themes - Applied via data-theme attribute */
+/* Green accent */
+[data-theme="green"]:not(.analyzer) {
+  --primary: oklch(0.55 0.2 145);
+  --primary-foreground: oklch(0.98 0 0);
+  --ring: oklch(0.55 0.2 145);
+}
+[data-theme="green"].dark:not(.analyzer) {
+  --primary: oklch(0.65 0.2 145);
+  --ring: oklch(0.65 0.2 145);
+}
+
+/* Blue accent */
+[data-theme="blue"]:not(.analyzer) {
+  --primary: oklch(0.55 0.2 250);
+  --primary-foreground: oklch(0.98 0 0);
+  --ring: oklch(0.55 0.2 250);
+}
+[data-theme="blue"].dark:not(.analyzer) {
+  --primary: oklch(0.65 0.2 250);
+  --ring: oklch(0.65 0.2 250);
+}
+
+/* Violet accent */
+[data-theme="violet"]:not(.analyzer) {
+  --primary: oklch(0.55 0.2 290);
+  --primary-foreground: oklch(0.98 0 0);
+  --ring: oklch(0.55 0.2 290);
+}
+[data-theme="violet"].dark:not(.analyzer) {
+  --primary: oklch(0.65 0.2 290);
+  --ring: oklch(0.65 0.2 290);
+}
+
+/* Orange accent */
+[data-theme="orange"]:not(.analyzer) {
+  --primary: oklch(0.65 0.2 45);
+  --primary-foreground: oklch(0.15 0 0);
+  --ring: oklch(0.65 0.2 45);
+}
+[data-theme="orange"].dark:not(.analyzer) {
+  --primary: oklch(0.7 0.2 45);
+  --ring: oklch(0.7 0.2 45);
+}
+
+/* Slate accent (subtle blue-gray) */
+[data-theme="slate"]:not(.analyzer) {
+  --primary: oklch(0.4 0.03 250);
+  --primary-foreground: oklch(0.98 0 0);
+  --ring: oklch(0.4 0.03 250);
+}
+[data-theme="slate"].dark:not(.analyzer) {
+  --primary: oklch(0.7 0.03 250);
+  --ring: oklch(0.7 0.03 250);
+}
+
+/* Gray accent (pure gray) */
+[data-theme="gray"]:not(.analyzer) {
+  --primary: oklch(0.4 0 0);
+  --primary-foreground: oklch(0.98 0 0);
+  --ring: oklch(0.4 0 0);
+}
+[data-theme="gray"].dark:not(.analyzer) {
+  --primary: oklch(0.7 0 0);
+  --ring: oklch(0.7 0 0);
+}
+
+/* Neutral accent (warm gray) */
+[data-theme="neutral"]:not(.analyzer) {
+  --primary: oklch(0.4 0.01 80);
+  --primary-foreground: oklch(0.98 0 0);
+  --ring: oklch(0.4 0.01 80);
+}
+[data-theme="neutral"].dark:not(.analyzer) {
+  --primary: oklch(0.7 0.01 80);
+  --ring: oklch(0.7 0.01 80);
+}
+
+/* Zinc is default - no override needed */
+
 /* Analyzer Mode - Dark purple theme (like dracula) - placed last for highest priority */
 .analyzer {
   --background: oklch(0.16 0.02 280);

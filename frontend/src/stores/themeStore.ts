@@ -53,6 +53,9 @@ export const useThemeStore = create<ThemeStore>()(
       },
 
       setColor: (color) => {
+        // Only allow color change in live mode
+        if (get().appMode !== 'live') return
+
         set({ color })
         if (typeof document !== 'undefined') {
           document.documentElement.setAttribute('data-theme', color)

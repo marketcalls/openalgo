@@ -37,6 +37,13 @@ import { ChartinkIndex, NewChartinkStrategy, ViewChartinkStrategy, ConfigureChar
 import { AdminIndex, FreezeQty, Holidays, MarketTimings } from '@/pages/admin';
 // Phase 7 Pages - Telegram
 import { TelegramIndex, TelegramConfig, TelegramUsers, TelegramAnalytics } from '@/pages/telegram';
+// Phase 7 Pages - Monitoring
+import { SecurityDashboard, TrafficDashboard, LatencyDashboard } from '@/pages/monitoring';
+// Phase 7 Pages - Settings
+import LogsIndex from '@/pages/LogsIndex';
+import LiveLogs from '@/pages/Logs';
+import Profile from '@/pages/Profile';
+import ActionCenter from '@/pages/ActionCenter';
 
 function App() {
   return (
@@ -100,6 +107,16 @@ function App() {
               <Route path="/telegram/config" element={<TelegramConfig />} />
               <Route path="/telegram/users" element={<TelegramUsers />} />
               <Route path="/telegram/analytics" element={<TelegramAnalytics />} />
+              {/* Phase 7: Logs & Monitoring */}
+              <Route path="/logs" element={<LogsIndex />} />
+              <Route path="/logs/live" element={<LiveLogs />} />
+              <Route path="/logs/sandbox" element={<Analyzer />} />
+              <Route path="/logs/security" element={<SecurityDashboard />} />
+              <Route path="/logs/traffic" element={<TrafficDashboard />} />
+              <Route path="/logs/latency" element={<LatencyDashboard />} />
+              {/* Phase 7: Settings & Action Center */}
+              <Route path="/profile" element={<Profile />} />
+              <Route path="/action-center" element={<ActionCenter />} />
             </Route>
 
             {/* Full-width protected routes */}

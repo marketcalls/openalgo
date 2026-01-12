@@ -51,6 +51,30 @@ export const authClient = axios.create({
   withCredentials: true,
 })
 
+// Add CSRF token to auth client requests (except for initial login)
+authClient.interceptors.request.use(
+  async (config) => {
+    // Skip CSRF for login endpoint (no session yet)
+    const isLoginEndpoint = config.url?.includes('/auth/login');
+
+    if (!isLoginEndpoint && (config.method === 'post' || config.method === 'put' || config.method === 'delete')) {
+      try {
+        const csrfToken = await fetchCSRFToken();
+        if (csrfToken) {
+          config.headers['X-CSRFToken'] = csrfToken;
+        }
+      } catch (e) {
+        console.error('[authClient] Failed to fetch CSRF token:', e);
+        // Continue without CSRF for auth operations - backend may handle differently
+      }
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+)
+
 // Web client for session-based routes (non-API endpoints) with CSRF support
 export const webClient = axios.create({
   baseURL: API_BASE_URL,

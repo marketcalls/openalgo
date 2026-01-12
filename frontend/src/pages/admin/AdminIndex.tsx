@@ -6,6 +6,9 @@ import {
   Calendar,
   Clock,
   ArrowRight,
+  Shield,
+  Activity,
+  Zap,
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -58,6 +61,30 @@ export default function AdminIndex() {
       count: 7,
       countLabel: 'exchanges',
       color: 'bg-purple-500',
+    },
+    {
+      title: 'Security Dashboard',
+      description: 'Monitor IP bans, API abuse, and security threats',
+      icon: Shield,
+      href: '/logs/security',
+      countLabel: 'monitoring',
+      color: 'bg-red-500',
+    },
+    {
+      title: 'Traffic Dashboard',
+      description: 'Monitor HTTP traffic and API request logs',
+      icon: Activity,
+      href: '/logs/traffic',
+      countLabel: 'monitoring',
+      color: 'bg-cyan-500',
+    },
+    {
+      title: 'Latency Dashboard',
+      description: 'Monitor order execution and API latency',
+      icon: Zap,
+      href: '/logs/latency',
+      countLabel: 'monitoring',
+      color: 'bg-orange-500',
     },
   ];
 

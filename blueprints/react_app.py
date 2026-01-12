@@ -106,11 +106,7 @@ def react_search():
     return serve_react_app()
 
 
-# API Key management
-@react_bp.route('/apikey')
-def react_apikey():
-    return serve_react_app()
-
+# API Key management - handled by api_key_bp (supports both JSON and React)
 
 # Playground
 @react_bp.route('/playground')
@@ -289,6 +285,50 @@ def react_telegram_users():
 # Telegram - Analytics
 @react_bp.route('/telegram/analytics', strict_slashes=False)
 def react_telegram_analytics():
+    return serve_react_app()
+
+
+# ============================================================
+# Phase 7 Routes - Monitoring Dashboards
+# ============================================================
+
+# Security Dashboard
+@react_bp.route('/security', strict_slashes=False)
+def react_security():
+    return serve_react_app()
+
+
+# Traffic Dashboard
+@react_bp.route('/traffic', strict_slashes=False)
+def react_traffic():
+    return serve_react_app()
+
+
+# Latency Dashboard
+@react_bp.route('/latency', strict_slashes=False)
+def react_latency():
+    return serve_react_app()
+
+
+# ============================================================
+# Phase 7 Routes - Settings & Action Center
+# ============================================================
+
+# Trading Logs
+@react_bp.route('/logs', strict_slashes=False)
+def react_logs():
+    return serve_react_app()
+
+
+# Profile Settings
+@react_bp.route('/profile', strict_slashes=False)
+def react_profile():
+    return serve_react_app()
+
+
+# Action Center (Semi-automated trading)
+@react_bp.route('/action-center', strict_slashes=False)
+def react_action_center():
     return serve_react_app()
 
 

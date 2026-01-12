@@ -1,10 +1,14 @@
-from flask import Blueprint, jsonify, render_template, request, session, redirect, url_for
+from flask import Blueprint, jsonify, render_template, request, session, redirect, url_for, send_file
+from pathlib import Path
 import os
 from utils.logging import get_logger
 import secrets
 from argon2 import PasswordHasher
 from database.auth_db import upsert_api_key, get_api_key, verify_api_key, get_api_key_for_tradingview, get_order_mode, update_order_mode
 from utils.session import check_session_validity
+
+# Path to React frontend
+FRONTEND_DIST = Path(__file__).parent.parent / 'frontend' / 'dist'
 
 logger = get_logger(__name__)
 
@@ -39,6 +43,12 @@ def manage_api_key():
                 'order_mode': order_mode
             })
 
+        # Serve React app for browser navigation
+        index_path = FRONTEND_DIST / 'index.html'
+        if index_path.exists():
+            return send_file(index_path, mimetype='text/html')
+
+        # Fallback to old template if React build not available
         return render_template('apikey.html',
                              login_username=login_username,
                              has_api_key=has_api_key,
