@@ -795,27 +795,28 @@ open http://127.0.0.1:5000
 
 | Exchange | Symbol | Description |
 |----------|--------|-------------|
-| NFO | `BANKNIFTY24APR24FUT` | Bank Nifty Apr 2024 Future |
-| NFO | `NIFTY30JAN25FUT` | Nifty Jan 2025 Future |
-| NFO | `RELIANCE30JAN25FUT` | Reliance Jan 2025 Future |
-| BFO | `SENSEX24APR24FUT` | Sensex Apr 2024 Future |
-| CDS | `USDINR10MAY24FUT` | USD/INR May 2024 Future |
-| MCX | `CRUDEOILM20MAY24FUT` | Crude Oil May 2024 Future |
-| MCX | `GOLD05FEB25FUT` | Gold Feb 2025 Future |
+| NFO | `BANKNIFTY27JAN26FUT` | Bank Nifty Jan 2026 Future |
+| NFO | `NIFTY27JAN26FUT` | Nifty Jan 2026 Future |
+| NFO | `RELIANCE27FEB26FUT` | Reliance Feb 2026 Future |
+| BFO | `SENSEX27JAN26FUT` | Sensex Jan 2026 Future |
+| CDS | `USDINR27JAN26FUT` | USD/INR Jan 2026 Future |
+| MCX | `CRUDEOILM17JAN26FUT` | Crude Oil Jan 2026 Future |
+| MCX | `GOLD05FEB26FUT` | Gold Feb 2026 Future |
 
 ### Options Symbols
 **Format:** `[Base Symbol][Expiration Date][Strike Price][CE/PE]`
 
 | Exchange | Symbol | Description |
 |----------|--------|-------------|
-| NFO | `NIFTY28MAR2420800CE` | Nifty 20800 Call Mar 2024 |
-| NFO | `NIFTY28MAR2420800PE` | Nifty 20800 Put Mar 2024 |
-| NFO | `BANKNIFTY24APR2448000CE` | Bank Nifty 48000 Call Apr 2024 |
-| NFO | `VEDL25APR24292.5CE` | Vedanta 292.5 Call Apr 2024 |
-| NFO | `RELIANCE30JAN252800CE` | Reliance 2800 Call Jan 2025 |
-| CDS | `USDINR19APR2482CE` | USD/INR 82 Call Apr 2024 |
-| MCX | `CRUDEOIL17APR246750CE` | Crude Oil 6750 Call Apr 2024 |
-| MCX | `GOLD05FEB2578000PE` | Gold 78000 Put Feb 2025 |
+| NFO | `NIFTY27JAN2624000CE` | Nifty 24000 Call Jan 2026 (Monthly) |
+| NFO | `NIFTY13JAN2624000CE` | Nifty 24000 Call Jan 2026 (Weekly) |
+| NFO | `NIFTY27JAN2624000PE` | Nifty 24000 Put Jan 2026 (Monthly) |
+| NFO | `BANKNIFTY27JAN2652000CE` | Bank Nifty 52000 Call Jan 2026 (Monthly) |
+| NFO | `BANKNIFTY13JAN2652000CE` | Bank Nifty 52000 Call Jan 2026 (Weekly) |
+| NFO | `RELIANCE27FEB263200CE` | Reliance 3200 Call Feb 2026 |
+| CDS | `USDINR27JAN2684CE` | USD/INR 84 Call Jan 2026 |
+| MCX | `CRUDEOIL17JAN266750CE` | Crude Oil 6750 Call Jan 2026 |
+| MCX | `GOLD05FEB2680000PE` | Gold 80000 Put Feb 2026 |
 
 ### Test Payloads
 
@@ -833,31 +834,73 @@ open http://127.0.0.1:5000
 }
 ```
 
-**Index Future Order:**
+**Index Future Order (NIFTY):**
 ```json
 {
   "apikey": "YOUR_API_KEY",
   "strategy": "Test",
   "exchange": "NFO",
-  "symbol": "NIFTY30JAN25FUT",
+  "symbol": "NIFTY27JAN26FUT",
   "action": "BUY",
   "product": "NRML",
   "pricetype": "MARKET",
-  "quantity": "25"
+  "quantity": "65"
 }
 ```
 
-**Index Options Order:**
+**Index Future Order (BANKNIFTY):**
 ```json
 {
   "apikey": "YOUR_API_KEY",
   "strategy": "Test",
   "exchange": "NFO",
-  "symbol": "NIFTY30JAN2523500CE",
+  "symbol": "BANKNIFTY27JAN26FUT",
   "action": "BUY",
   "product": "NRML",
   "pricetype": "MARKET",
-  "quantity": "25"
+  "quantity": "30"
+}
+```
+
+**Index Options Order (NIFTY Monthly):**
+```json
+{
+  "apikey": "YOUR_API_KEY",
+  "strategy": "Test",
+  "exchange": "NFO",
+  "symbol": "NIFTY27JAN2624000CE",
+  "action": "BUY",
+  "product": "NRML",
+  "pricetype": "MARKET",
+  "quantity": "65"
+}
+```
+
+**Index Options Order (NIFTY Weekly):**
+```json
+{
+  "apikey": "YOUR_API_KEY",
+  "strategy": "Test",
+  "exchange": "NFO",
+  "symbol": "NIFTY13JAN2624000CE",
+  "action": "BUY",
+  "product": "NRML",
+  "pricetype": "MARKET",
+  "quantity": "65"
+}
+```
+
+**Index Options Order (BANKNIFTY):**
+```json
+{
+  "apikey": "YOUR_API_KEY",
+  "strategy": "Test",
+  "exchange": "NFO",
+  "symbol": "BANKNIFTY27JAN2652000CE",
+  "action": "BUY",
+  "product": "NRML",
+  "pricetype": "MARKET",
+  "quantity": "30"
 }
 ```
 
