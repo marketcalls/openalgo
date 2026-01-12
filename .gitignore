@@ -54,6 +54,7 @@ node_modules/
 
 # Build output
 dist/
+!frontend/dist/
 build/
 .next/
 out/
