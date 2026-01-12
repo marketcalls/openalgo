@@ -51,14 +51,21 @@ export const authClient = axios.create({
   withCredentials: true,
 })
 
-// Add CSRF token to auth client requests (except for initial login)
+// Endpoints that don't require CSRF token (no session yet)
+const CSRF_EXEMPT_ENDPOINTS = ['/auth/login', '/auth/setup']
+
+// Add CSRF token to auth client requests (except for initial login/setup)
 authClient.interceptors.request.use(
   async (config) => {
-    // Skip CSRF for login endpoint (no session yet)
-    const isLoginEndpoint = config.url?.includes('/auth/login')
+    // Check if endpoint is exempt from CSRF (exact match or starts with path + query/fragment)
+    const url = config.url || ''
+    const isExempt = CSRF_EXEMPT_ENDPOINTS.some((exempt) => {
+      // Exact match or match with query string/fragment
+      return url === exempt || url.startsWith(`${exempt}?`) || url.startsWith(`${exempt}#`)
+    })
 
     if (
-      !isLoginEndpoint &&
+      !isExempt &&
       (config.method === 'post' || config.method === 'put' || config.method === 'delete')
     ) {
       try {
@@ -66,8 +73,7 @@ authClient.interceptors.request.use(
         if (csrfToken) {
           config.headers['X-CSRFToken'] = csrfToken
         }
-      } catch (e) {
-        console.error('[authClient] Failed to fetch CSRF token:', e)
+      } catch {
         // Continue without CSRF for auth operations - backend may handle differently
       }
     }
@@ -98,8 +104,7 @@ webClient.interceptors.request.use(
           return Promise.reject(new Error('CSRF token is required for this operation'))
         }
         config.headers['X-CSRFToken'] = csrfToken
-      } catch (e) {
-        console.error('[webClient] Failed to fetch CSRF token:', e)
+      } catch {
         // Reject request if CSRF token fetch fails - security requirement
         return Promise.reject(
           new Error('Failed to fetch CSRF token. Please refresh the page and try again.')
@@ -109,7 +114,6 @@ webClient.interceptors.request.use(
     return config
   },
   (error) => {
-    console.error('[webClient] Request error:', error)
     return Promise.reject(error)
   }
 )

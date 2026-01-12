@@ -167,7 +167,6 @@ export default function OrderBook() {
   const handleCancelOrder = async (orderid: string) => {
     try {
       const response = await tradingApi.cancelOrder(orderid)
-      console.log('[CancelOrder] Response:', response)
       if (response.status === 'success') {
         toast.success(`Order cancelled: ${orderid}`)
         setTimeout(() => fetchOrders(true), 1000)
@@ -175,7 +174,6 @@ export default function OrderBook() {
         toast.error(response.message || 'Failed to cancel order')
       }
     } catch (error) {
-      console.error('[CancelOrder] Error:', error)
       const axiosError = error as { response?: { data?: { message?: string } } }
       const message = axiosError.response?.data?.message || 'Failed to cancel order'
       toast.error(message)
@@ -185,7 +183,6 @@ export default function OrderBook() {
   const handleCancelAllOrders = async () => {
     try {
       const response = await tradingApi.cancelAllOrders()
-      console.log('[CancelAll] Response:', response)
       if (response.status === 'success') {
         toast.success(response.message || 'All orders cancelled')
         // Delay refresh to allow broker to process cancellations
@@ -196,8 +193,6 @@ export default function OrderBook() {
         toast.error(response.message || 'Failed to cancel all orders')
       }
     } catch (error) {
-      console.error('[CancelAll] Error:', error)
-      // Try to extract error message from axios error response
       const axiosError = error as { response?: { data?: { message?: string } } }
       const message = axiosError.response?.data?.message || 'Failed to cancel all orders'
       toast.error(message)
@@ -224,8 +219,8 @@ export default function OrderBook() {
         if (response.status === 'success' && response.data) {
           setQuotes(response.data)
         }
-      } catch (error) {
-        console.error('[Quotes] Error:', error)
+      } catch {
+        // Silently fail - quotes are optional for order modification
       } finally {
         setIsLoadingQuotes(false)
       }
@@ -246,7 +241,6 @@ export default function OrderBook() {
         quantity: modifyForm.quantity,
         trigger_price: modifyForm.trigger_price,
       })
-      console.log('[ModifyOrder] Response:', response)
       if (response.status === 'success') {
         toast.success(`Order modified: ${modifyingOrder.orderid}`)
         setModifyDialogOpen(false)
@@ -255,7 +249,6 @@ export default function OrderBook() {
         toast.error(response.message || 'Failed to modify order')
       }
     } catch (error) {
-      console.error('[ModifyOrder] Error:', error)
       const axiosError = error as { response?: { data?: { message?: string } } }
       const message = axiosError.response?.data?.message || 'Failed to modify order'
       toast.error(message)

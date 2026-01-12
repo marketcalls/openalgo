@@ -94,8 +94,7 @@ export default function BrokerSelect() {
         } else {
           setError(data.message || 'Failed to load broker configuration')
         }
-      } catch (err) {
-        console.error('Error fetching broker config:', err)
+      } catch {
         setError('Failed to load broker configuration')
       } finally {
         setIsLoading(false)
@@ -107,7 +106,6 @@ export default function BrokerSelect() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    console.log('Form submitted, selectedBroker:', selectedBroker, 'brokerConfig:', brokerConfig)
 
     if (!selectedBroker) {
       setError('Please select a broker')
@@ -123,7 +121,6 @@ export default function BrokerSelect() {
     let loginUrl = ''
 
     const { broker_api_key, redirect_url } = brokerConfig
-    console.log('broker_api_key:', broker_api_key, 'redirect_url:', redirect_url)
 
     // Build login URL based on broker type (matching original broker.html logic)
     switch (selectedBroker) {
@@ -191,13 +188,11 @@ export default function BrokerSelect() {
       }
 
       default:
-        console.log('Unknown broker:', selectedBroker)
         setError('Please select a broker')
         setIsSubmitting(false)
         return
     }
 
-    console.log('Redirecting to:', loginUrl)
     // Use setTimeout to ensure state updates complete before navigation
     setTimeout(() => {
       window.location.href = loginUrl
@@ -236,7 +231,9 @@ export default function BrokerSelect() {
 
               <form onSubmit={handleSubmit} className="space-y-6">
                 <div className="space-y-2">
-                  <Label htmlFor="broker-select" className="block text-center">Login with your Broker</Label>
+                  <Label htmlFor="broker-select" className="block text-center">
+                    Login with your Broker
+                  </Label>
                   <Select
                     value={selectedBroker}
                     onValueChange={setSelectedBroker}

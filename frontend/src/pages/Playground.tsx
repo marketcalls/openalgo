@@ -53,35 +53,68 @@ async function fetchCSRFToken(): Promise<string> {
   return data.csrf_token
 }
 
-function syntaxHighlight(json: string): string {
-  if (json.length > 100 * 1024) {
-    return escapeHtml(json)
-  }
-
-  json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  return json.replace(
-    /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
-    (match) => {
-      let cls = 'text-orange-400' // number
-      if (/^"/.test(match)) {
-        if (/:$/.test(match))
-          cls = 'text-sky-400' // key
-        else cls = 'text-emerald-400' // string
-      } else if (/true|false/.test(match))
-        cls = 'text-purple-400' // boolean
-      else if (/null/.test(match)) cls = 'text-red-400' // null
-      return `<span class="${cls}">${match}</span>`
-    }
-  )
+interface SyntaxToken {
+  text: string
+  type: 'key' | 'string' | 'number' | 'boolean' | 'null' | 'plain'
 }
 
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;')
+function tokenizeJson(json: string): SyntaxToken[] {
+  // For very large JSON, return as plain text for performance
+  if (json.length > 100 * 1024) {
+    return [{ text: json, type: 'plain' }]
+  }
+
+  const tokens: SyntaxToken[] = []
+  const regex =
+    /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g
+  let lastIndex = 0
+  let match = regex.exec(json)
+
+  while (match !== null) {
+    // Add plain text before this match
+    if (match.index > lastIndex) {
+      tokens.push({ text: json.slice(lastIndex, match.index), type: 'plain' })
+    }
+
+    const text = match[0]
+    let type: SyntaxToken['type'] = 'number'
+
+    if (/^"/.test(text)) {
+      type = /:$/.test(text) ? 'key' : 'string'
+    } else if (/true|false/.test(text)) {
+      type = 'boolean'
+    } else if (/null/.test(text)) {
+      type = 'null'
+    }
+
+    tokens.push({ text, type })
+    lastIndex = regex.lastIndex
+    match = regex.exec(json)
+  }
+
+  // Add remaining plain text
+  if (lastIndex < json.length) {
+    tokens.push({ text: json.slice(lastIndex), type: 'plain' })
+  }
+
+  return tokens
+}
+
+function getTokenClassName(type: SyntaxToken['type']): string {
+  switch (type) {
+    case 'key':
+      return 'text-sky-400'
+    case 'string':
+      return 'text-emerald-400'
+    case 'number':
+      return 'text-orange-400'
+    case 'boolean':
+      return 'text-purple-400'
+    case 'null':
+      return 'text-red-400'
+    default:
+      return ''
+  }
 }
 
 function isValidApiUrl(url: string): { valid: boolean; error?: string } {
@@ -150,8 +183,8 @@ export default function Playground() {
         const data = await response.json()
         setApiKey(data.api_key || '')
       }
-    } catch (error) {
-      console.error('Error loading API key:', error)
+    } catch {
+      // Silently fail - API key may not exist yet
     }
   }
 
@@ -164,8 +197,7 @@ export default function Playground() {
         const data = await response.json()
         setEndpoints(data)
       }
-    } catch (error) {
-      console.error('Error loading endpoints:', error)
+    } catch {
       toast.error('Failed to load endpoints')
     }
   }
@@ -481,11 +513,7 @@ export default function Playground() {
             <Menu className="h-4 w-4" />
           </Button>
           <div className="flex items-center gap-2 px-2">
-            <img
-              src="/images/android-chrome-192x192.png"
-              alt="OpenAlgo"
-              className="w-6 h-6"
-            />
+            <img src="/images/android-chrome-192x192.png" alt="OpenAlgo" className="w-6 h-6" />
             <span className="font-semibold text-sm">openalgo</span>
           </div>
         </div>
@@ -865,10 +893,13 @@ export default function Playground() {
                             </div>
                             {/* Response Content */}
                             <ScrollArea className="flex-1 p-3">
-                              <pre
-                                className="text-xs font-mono whitespace-pre-wrap break-words leading-5"
-                                dangerouslySetInnerHTML={{ __html: syntaxHighlight(responseData) }}
-                              />
+                              <pre className="text-xs font-mono whitespace-pre-wrap break-words leading-5">
+                                {tokenizeJson(responseData).map((token, i) => (
+                                  <span key={i} className={getTokenClassName(token.type)}>
+                                    {token.text}
+                                  </span>
+                                ))}
+                              </pre>
                             </ScrollArea>
                           </>
                         ) : (
