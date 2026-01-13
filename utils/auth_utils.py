@@ -1,4 +1,4 @@
-from flask import session, redirect, url_for, jsonify
+from flask import session, redirect, url_for, jsonify, request
 from flask import current_app as app
 from threading import Thread
 from utils.session import get_session_expiry_time, set_session_login_time
@@ -9,6 +9,22 @@ import re
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+def is_ajax_request():
+    """Check if the current request is an AJAX/fetch request from React."""
+    # Check for common AJAX indicators
+    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+        return True
+    # Check if request accepts JSON (React fetch typically sends this)
+    accept = request.headers.get('Accept', '')
+    if 'application/json' in accept:
+        return True
+    # Check content type for form submissions from React
+    content_type = request.headers.get('Content-Type', '')
+    if request.method == 'POST' and 'multipart/form-data' in content_type:
+        # React form submissions use FormData
+        return True
+    return False
 
 def validate_password_strength(password):
     """
@@ -158,18 +174,29 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
         init_broker_status(broker)
         thread = Thread(target=async_master_contract_download, args=(broker,))
         thread.start()
-        return jsonify({"status": "success", "message": "Authentication successful", "redirect": "/dashboard"}), 200
+        # Return JSON for AJAX requests (React), redirect for OAuth callbacks
+        if is_ajax_request():
+            return jsonify({"status": "success", "message": "Authentication successful", "redirect": "/dashboard"}), 200
+        else:
+            return redirect(url_for('dashboard_bp.dashboard'))
     else:
         logger.error(f"Failed to upsert auth token for user {user_session_key}")
-        return jsonify({"status": "error", "message": "Failed to store authentication token. Please try again."}), 500
+        if is_ajax_request():
+            return jsonify({"status": "error", "message": "Failed to store authentication token. Please try again."}), 500
+        else:
+            return redirect(url_for('auth.broker_login'))
 
 def handle_auth_failure(error_message, forward_url='broker.html'):
     """
     Handles common tasks after failed authentication.
-    Returns JSON response for React frontend.
+    Returns JSON for AJAX requests, redirect for OAuth callbacks.
     """
     logger.error(f"Authentication error: {error_message}")
-    return jsonify({"status": "error", "message": error_message}), 401
+    if is_ajax_request():
+        return jsonify({"status": "error", "message": error_message}), 401
+    else:
+        # For OAuth callbacks, redirect to broker selection with error
+        return redirect(url_for('auth.broker_login'))
 
 def get_feed_token():
     """
