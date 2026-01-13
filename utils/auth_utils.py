@@ -1,4 +1,4 @@
-from flask import session, redirect, url_for, render_template
+from flask import session, redirect, url_for, jsonify
 from flask import current_app as app
 from threading import Thread
 from utils.session import get_session_expiry_time, set_session_login_time
@@ -158,17 +158,18 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
         init_broker_status(broker)
         thread = Thread(target=async_master_contract_download, args=(broker,))
         thread.start()
-        return redirect(url_for('dashboard_bp.dashboard'))
+        return jsonify({"status": "success", "message": "Authentication successful", "redirect": "/dashboard"}), 200
     else:
         logger.error(f"Failed to upsert auth token for user {user_session_key}")
-        return render_template('broker.html', error_message="Failed to store authentication token. Please try again.")
+        return jsonify({"status": "error", "message": "Failed to store authentication token. Please try again."}), 500
 
 def handle_auth_failure(error_message, forward_url='broker.html'):
     """
     Handles common tasks after failed authentication.
+    Returns JSON response for React frontend.
     """
     logger.error(f"Authentication error: {error_message}")
-    return render_template(forward_url, error_message=error_message)
+    return jsonify({"status": "error", "message": error_message}), 401
 
 def get_feed_token():
     """
