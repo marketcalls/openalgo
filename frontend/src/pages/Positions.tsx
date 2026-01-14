@@ -164,7 +164,7 @@ export default function Positions() {
 
   // Enhance positions with real-time LTP from WebSocket (fallback to REST data)
   // For closed positions (qty=0), preserve the realized PnL from REST API
-  // For open positions (qty!=0), calculate PnL % (REST API may not provide it)
+  // For open positions (qty!=0), only recalculate when WebSocket data is available
   const enhancedPositions = useMemo(() => {
     return positions.map((pos) => {
       const key = `${pos.exchange}:${pos.symbol}`
@@ -175,21 +175,27 @@ export default function Positions() {
       // Check if WebSocket LTP is fresh (< 5 seconds old)
       const hasWsData =
         wsData?.data?.ltp && wsData.lastUpdate && Date.now() - wsData.lastUpdate < 5000
-      const ltp = hasWsData ? wsData.data.ltp : pos.ltp
 
       // For closed positions (qty=0), preserve the realized PnL from REST API
-      // Since qty is 0, we can't calculate investment, so preserve REST pnlpercent
       if (qty === 0) {
+        const ltp = hasWsData ? wsData.data.ltp : pos.ltp
         return { ...pos, ltp: ltp ?? pos.ltp }
       }
 
-      // Open position - calculate PnL using LTP (WebSocket or REST)
-      const currentLtp = ltp ?? pos.ltp ?? avgPrice
-      const pnl = hasWsData ? (currentLtp - avgPrice) * qty : pos.pnl || 0
-      const investment = Math.abs(avgPrice * qty)
-      const pnlpercent = investment > 0 ? (pnl / investment) * 100 : 0
+      // Open position - only recalculate PnL when WebSocket data is available
+      if (hasWsData && wsData?.data?.ltp) {
+        const currentLtp = wsData.data.ltp
+        const pnl = (currentLtp - avgPrice) * qty
+        const investment = Math.abs(avgPrice * qty)
+        const pnlpercent = investment > 0 ? (pnl / investment) * 100 : 0
+        return { ...pos, ltp: currentLtp, pnl, pnlpercent }
+      }
 
-      return { ...pos, ltp: currentLtp, pnl, pnlpercent }
+      // No WebSocket data - preserve REST API values, but ensure pnlpercent is calculated
+      const pnl = pos.pnl || 0
+      const investment = Math.abs(avgPrice * qty)
+      const pnlpercent = pos.pnlpercent ?? (investment > 0 ? (pnl / investment) * 100 : 0)
+      return { ...pos, pnlpercent }
     })
   }, [positions, marketData])
 

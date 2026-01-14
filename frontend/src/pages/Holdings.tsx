@@ -65,63 +65,75 @@ export default function Holdings() {
   })
 
   // Enhance holdings with real-time LTP and calculated average price
+  // Only update values when WebSocket data is available, otherwise preserve REST API values
   const enhancedHoldings = useMemo(() => {
     return holdings.map((holding) => {
       const key = `${holding.exchange}:${holding.symbol}`
       const wsData = marketData.get(key)
       const qty = holding.quantity || 0
+      const originalPnl = holding.pnl || 0
 
       // Check if WebSocket LTP is fresh (< 5 seconds old)
       const hasWsData =
         wsData?.data?.ltp && wsData.lastUpdate && Date.now() - wsData.lastUpdate < 5000
-      const ltp = hasWsData ? wsData.data.ltp : holding.ltp
 
-      // If we have LTP and PnL, calculate average price backwards
-      // PnL = (LTP - AvgPrice) * Qty
+      // Calculate average price from REST data if not provided
       // AvgPrice = LTP - (PnL / Qty)
       let avgPrice = holding.average_price
-      const pnl = holding.pnl || 0
-
-      if (ltp && qty !== 0 && !avgPrice) {
-        avgPrice = ltp - pnl / qty
+      if (!avgPrice && holding.ltp && qty !== 0) {
+        avgPrice = holding.ltp - originalPnl / qty
       }
 
-      // If we have fresh WebSocket LTP, recalculate PnL
-      if (hasWsData && wsData?.data?.ltp && avgPrice && qty !== 0) {
+      // If we have fresh WebSocket LTP and can calculate avgPrice, recalculate PnL
+      if (hasWsData && wsData?.data?.ltp && qty !== 0) {
         const currentLtp = wsData.data.ltp
-        const newPnl = (currentLtp - avgPrice) * qty
-        const investment = Math.abs(avgPrice * qty)
-        const newPnlPercent = investment > 0 ? (newPnl / investment) * 100 : 0
 
-        return {
-          ...holding,
-          ltp: currentLtp,
-          average_price: avgPrice,
-          pnl: newPnl,
-          pnlpercent: newPnlPercent,
+        // Calculate avgPrice from original REST data if needed
+        if (!avgPrice && holding.ltp) {
+          avgPrice = holding.ltp - originalPnl / qty
+        }
+
+        if (avgPrice) {
+          const newPnl = (currentLtp - avgPrice) * qty
+          const investment = Math.abs(avgPrice * qty)
+          const newPnlPercent = investment > 0 ? (newPnl / investment) * 100 : 0
+
+          return {
+            ...holding,
+            ltp: currentLtp,
+            average_price: avgPrice,
+            pnl: newPnl,
+            pnlpercent: newPnlPercent,
+          }
         }
       }
 
-      // Calculate pnlpercent if missing
-      let pnlpercent = holding.pnlpercent
-      if (avgPrice && qty !== 0 && pnlpercent === undefined) {
-        const investment = Math.abs(avgPrice * qty)
-        pnlpercent = investment > 0 ? (pnl / investment) * 100 : 0
-      }
-
+      // No WebSocket data - preserve original REST API values
+      // Only calculate avgPrice if we have LTP from REST
       return {
         ...holding,
-        ltp: ltp ?? holding.ltp,
         average_price: avgPrice,
-        pnlpercent: pnlpercent ?? 0,
+        // Keep original pnl and pnlpercent from REST API
       }
     })
   }, [holdings, marketData])
 
   // Calculate enhanced stats based on real-time data
+  // Only recalculate if we have WebSocket data, otherwise use REST API stats
   const enhancedStats = useMemo(() => {
-    if (!stats || enhancedHoldings.length === 0) return stats
+    if (!stats) return stats
 
+    // Check if any holding has WebSocket data
+    const hasAnyWsData = enhancedHoldings.some((h) => {
+      const key = `${h.exchange}:${h.symbol}`
+      const wsData = marketData.get(key)
+      return wsData?.data?.ltp && wsData.lastUpdate && Date.now() - wsData.lastUpdate < 5000
+    })
+
+    // If no WebSocket data, return original REST stats
+    if (!hasAnyWsData) return stats
+
+    // Recalculate stats with real-time data
     let totalPnl = 0
     let totalInvestment = 0
     let totalHoldingValue = 0
@@ -144,7 +156,7 @@ export default function Holdings() {
       totalprofitandloss: totalPnl,
       totalpnlpercentage: totalPnlPercent,
     }
-  }, [stats, enhancedHoldings])
+  }, [stats, enhancedHoldings, marketData])
 
   const fetchHoldings = useCallback(
     async (showRefresh = false) => {
