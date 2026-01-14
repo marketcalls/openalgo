@@ -14,8 +14,8 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "@tailwindcss/postcss": "^4.1.14",
-    "autoprefixer": "^10.4.20",
+    "@tailwindcss/postcss": "^4.1.18",
+    "autoprefixer": "^10.4.23",
     "cross-env": "^10.1.0",
     "cssnano": "^7.1.2",
     "daisyui": "^5.1.27",
