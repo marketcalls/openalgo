@@ -11,7 +11,8 @@ import {
   TrendingUp,
   X,
 } from 'lucide-react'
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
 import { tradingApi } from '@/api/trading'
 import {
@@ -266,6 +267,40 @@ export default function Positions() {
       fetchPositions()
     })
     return () => unsubscribe()
+  }, [fetchPositions])
+
+  // Listen to Socket.IO events for order placement/execution to trigger position refresh
+  const socketRef = useRef<Socket | null>(null)
+  useEffect(() => {
+    const protocol = window.location.protocol
+    const host = window.location.hostname
+    const port = window.location.port
+
+    socketRef.current = io(`${protocol}//${host}:${port}`, {
+      transports: ['websocket', 'polling'],
+    })
+
+    const socket = socketRef.current
+
+    // Refresh positions when orders are placed/executed
+    socket.on('order_event', () => {
+      // Delay slightly to allow order to be processed
+      setTimeout(() => fetchPositions(), 500)
+    })
+
+    // Refresh positions on analyzer updates (sandbox mode)
+    socket.on('analyzer_update', () => {
+      setTimeout(() => fetchPositions(), 500)
+    })
+
+    // Refresh positions when a position is closed
+    socket.on('close_position_event', () => {
+      setTimeout(() => fetchPositions(), 500)
+    })
+
+    return () => {
+      socket.disconnect()
+    }
   }, [fetchPositions])
 
   // Get group key for a position
