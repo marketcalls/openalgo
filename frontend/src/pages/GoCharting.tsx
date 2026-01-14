@@ -174,8 +174,9 @@ export default function GoCharting() {
           <AlertTriangle className="h-5 w-5" />
           <AlertDescription className="ml-2">
             <strong>Webhook URL not accessible!</strong> GoCharting cannot send alerts to localhost.
-            Use <strong>ngrok</strong>, <strong>Cloudflare Tunnel</strong>, <strong>VS Code Dev Tunnel</strong>,
-            or a <strong>custom domain</strong> to expose your OpenAlgo instance to the internet.
+            Use <strong>ngrok</strong>, <strong>Cloudflare Tunnel</strong>,{' '}
+            <strong>VS Code Dev Tunnel</strong>, or a <strong>custom domain</strong> to expose your
+            OpenAlgo instance to the internet.
           </AlertDescription>
         </Alert>
       )}

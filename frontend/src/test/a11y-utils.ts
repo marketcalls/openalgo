@@ -15,7 +15,7 @@ export const axe = configureAxe({
     'aria-valid-attr': { enabled: true },
     'button-name': { enabled: true },
     'image-alt': { enabled: true },
-    'label': { enabled: true },
+    label: { enabled: true },
     'link-name': { enabled: true },
   },
 })

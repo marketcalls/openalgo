@@ -1,7 +1,7 @@
+import { render, screen } from '@testing-library/react'
 import { axe, toHaveNoViolations } from 'jest-axe'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
 import { bottomNavItems } from '@/config/navigation'
 import { MobileBottomNav } from './MobileBottomNav'
 

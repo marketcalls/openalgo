@@ -164,7 +164,9 @@ function StatCard({
           {status && <StatusOrb status={status} size="sm" />}
         </div>
         <div className="text-lg font-bold font-mono text-foreground tracking-tight">{value}</div>
-        <div className="text-[10px] uppercase tracking-wider text-muted-foreground mt-0.5">{label}</div>
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground mt-0.5">
+          {label}
+        </div>
         {subtitle && <div className="text-[9px] text-muted-foreground/60 mt-1">{subtitle}</div>}
       </div>
     </div>
@@ -668,7 +670,9 @@ export default function WebSocketTest() {
                       TEST
                     </Badge>
                   </h1>
-                  <p className="text-xs text-muted-foreground">Real-time market data testing interface</p>
+                  <p className="text-xs text-muted-foreground">
+                    Real-time market data testing interface
+                  </p>
                 </div>
               </div>
 
@@ -748,7 +752,7 @@ export default function WebSocketTest() {
               label="Symbols"
               value={activeSymbols.size}
               icon={Layers}
-              subtitle={`${Array.from(activeSymbols.values()).filter(s => s.subscriptions.size > 0).length} subscribed`}
+              subtitle={`${Array.from(activeSymbols.values()).filter((s) => s.subscriptions.size > 0).length} subscribed`}
             />
             <StatCard
               label="Status"
@@ -1167,7 +1171,8 @@ export default function WebSocketTest() {
                       log.type === 'info' && 'text-muted-foreground'
                     )}
                   >
-                    <span className="text-muted-foreground/60">[{log.timestamp}]</span> {log.message}
+                    <span className="text-muted-foreground/60">[{log.timestamp}]</span>{' '}
+                    {log.message}
                   </div>
                 ))
               )}

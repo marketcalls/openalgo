@@ -1,5 +1,5 @@
-import { render } from '@testing-library/react'
 import type { RenderOptions } from '@testing-library/react'
+import { render } from '@testing-library/react'
 import type { ReactElement, ReactNode } from 'react'
 import { BrowserRouter } from 'react-router-dom'
 

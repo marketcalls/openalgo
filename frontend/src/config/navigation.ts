@@ -10,12 +10,12 @@ import {
   Key,
   Layers,
   LayoutDashboard,
+  type LucideIcon,
   MessageSquare,
   Search,
   Settings,
   TrendingUp,
   User,
-  type LucideIcon,
 } from 'lucide-react'
 
 export interface NavItem {

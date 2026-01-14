@@ -192,9 +192,10 @@ export default function TradingView() {
         <Alert variant="destructive" className="mb-8">
           <AlertTriangle className="h-5 w-5" />
           <AlertDescription className="ml-2">
-            <strong>Webhook URL not accessible!</strong> TradingView cannot send alerts to localhost.
-            Use <strong>ngrok</strong>, <strong>Cloudflare Tunnel</strong>, <strong>VS Code Dev Tunnel</strong>,
-            or a <strong>custom domain</strong> to expose your OpenAlgo instance to the internet.
+            <strong>Webhook URL not accessible!</strong> TradingView cannot send alerts to
+            localhost. Use <strong>ngrok</strong>, <strong>Cloudflare Tunnel</strong>,{' '}
+            <strong>VS Code Dev Tunnel</strong>, or a <strong>custom domain</strong> to expose your
+            OpenAlgo instance to the internet.
           </AlertDescription>
         </Alert>
       )}
