@@ -5,23 +5,17 @@ import {
   Cable,
   ChevronDown,
   ChevronRight,
-  Clock,
-  Database,
-  Gauge,
   Layers,
   Link2,
   Link2Off,
   Radio,
-  RefreshCcw,
   RefreshCw,
   Search,
-  Server,
   Settings2,
   Terminal,
   Trash2,
   TrendingDown,
   TrendingUp,
-  Users,
   Wifi,
   WifiOff,
   X,
@@ -86,22 +80,6 @@ interface LogEntry {
   type: 'info' | 'success' | 'error' | 'data' | 'warn'
 }
 
-interface HealthStatus {
-  healthy: boolean
-  connected: boolean
-  authenticated: boolean
-  data_flow_healthy: boolean
-  last_data_age_seconds: number
-  cache_size: number
-  total_subscribers: number
-  critical_subscribers: number
-  trade_management_safe: boolean
-  total_updates_processed: number
-  validation_errors: number
-  reconnect_count: number
-  uptime_seconds: number
-}
-
 const EXCHANGES = ['NSE', 'NFO', 'BSE', 'BFO', 'CDS', 'MCX']
 
 function formatPrice(price: number): string {
@@ -128,13 +106,6 @@ function formatTime(timestamp?: string): string {
   })
 }
 
-function formatUptime(seconds: number): string {
-  const h = Math.floor(seconds / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  const s = Math.floor(seconds % 60)
-  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
-}
-
 // Glowing status indicator
 function StatusOrb({
   status,
@@ -153,7 +124,7 @@ function StatusOrb({
           status === 'success' && 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]',
           status === 'warning' && 'bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)]',
           status === 'error' && 'bg-rose-400 shadow-[0_0_8px_rgba(251,113,133,0.8)]',
-          status === 'idle' && 'bg-zinc-600'
+          status === 'idle' && 'bg-muted'
         )}
       />
       {status !== 'idle' && (
@@ -187,14 +158,14 @@ function StatCard({
   return (
     <div className="relative group">
       <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/5 to-transparent rounded-lg opacity-0 group-hover:opacity-100 transition-opacity" />
-      <div className="relative px-4 py-3 rounded-lg bg-[#0d0d14] border border-zinc-800/60 hover:border-zinc-700/60 transition-colors">
+      <div className="relative px-4 py-3 rounded-lg bg-card border border-border hover:border-border/60 transition-colors">
         <div className="flex items-center justify-between mb-1.5">
-          <Icon className="w-3.5 h-3.5 text-zinc-500" />
+          <Icon className="w-3.5 h-3.5 text-muted-foreground" />
           {status && <StatusOrb status={status} size="sm" />}
         </div>
-        <div className="text-lg font-bold font-mono text-zinc-100 tracking-tight">{value}</div>
-        <div className="text-[10px] uppercase tracking-wider text-zinc-500 mt-0.5">{label}</div>
-        {subtitle && <div className="text-[9px] text-zinc-600 mt-1">{subtitle}</div>}
+        <div className="text-lg font-bold font-mono text-foreground tracking-tight">{value}</div>
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground mt-0.5">{label}</div>
+        {subtitle && <div className="text-[9px] text-muted-foreground/60 mt-1">{subtitle}</div>}
       </div>
     </div>
   )
@@ -226,7 +197,7 @@ function DepthLevel({
           style={{ width: `${pct}%` }}
         />
       </div>
-      <span className="relative z-10 flex-1 font-mono text-xs text-zinc-400">
+      <span className="relative z-10 flex-1 font-mono text-xs text-muted-foreground">
         {formatPrice(price)}
       </span>
       <span
@@ -250,8 +221,7 @@ export default function WebSocketTest() {
   const socketRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Health & metrics
-  const [healthStatus, setHealthStatus] = useState<HealthStatus | null>(null)
+  // Metrics
   const [messageCount, setMessageCount] = useState(0)
   const [lastMessageTime, setLastMessageTime] = useState<number | null>(null)
 
@@ -285,27 +255,6 @@ export default function WebSocketTest() {
 
   // CSRF token
   const getCsrfToken = useCallback(async () => fetchCSRFToken(), [])
-
-  // Health status polling
-  const fetchHealthStatus = useCallback(async () => {
-    try {
-      const csrfToken = await getCsrfToken()
-      const response = await fetch('/api/websocket/health', {
-        headers: { 'X-CSRFToken': csrfToken },
-        credentials: 'include',
-      })
-      const data = await response.json()
-      setHealthStatus(data)
-    } catch (err) {
-      console.debug('Health status fetch failed:', err)
-    }
-  }, [getCsrfToken])
-
-  useEffect(() => {
-    fetchHealthStatus()
-    const interval = setInterval(fetchHealthStatus, 5000)
-    return () => clearInterval(interval)
-  }, [fetchHealthStatus])
 
   // WebSocket connection
   const connectWebSocket = async () => {
@@ -684,17 +633,9 @@ export default function WebSocketTest() {
     : isConnecting
       ? 'warning'
       : 'idle'
-  const dataFlowStatus =
-    healthStatus === null
-      ? 'idle'
-      : healthStatus.data_flow_healthy
-        ? 'success'
-        : healthStatus.connected
-          ? 'warning'
-          : 'error'
 
   return (
-    <div className="min-h-screen bg-[#08080c] text-zinc-100">
+    <div className="min-h-screen bg-background text-foreground">
       {/* Background texture */}
       <div
         className="fixed inset-0 opacity-[0.015] pointer-events-none"
@@ -705,7 +646,7 @@ export default function WebSocketTest() {
 
       <div className="relative">
         {/* Header */}
-        <header className="border-b border-zinc-800/60 bg-[#0a0a10]/80 backdrop-blur-xl sticky top-0 z-40">
+        <header className="border-b border-border bg-background/80 backdrop-blur-xl sticky top-0 z-40">
           <div className="container mx-auto px-4 py-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
@@ -727,13 +668,13 @@ export default function WebSocketTest() {
                       TEST
                     </Badge>
                   </h1>
-                  <p className="text-xs text-zinc-500">Real-time market data testing interface</p>
+                  <p className="text-xs text-muted-foreground">Real-time market data testing interface</p>
                 </div>
               </div>
 
               {/* Connection controls */}
               <div className="flex items-center gap-4">
-                <div className="flex items-center gap-2 text-xs text-zinc-500">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Switch checked={autoReconnect} onCheckedChange={setAutoReconnect} />
                   <span>Auto-reconnect</span>
                 </div>
@@ -764,13 +705,13 @@ export default function WebSocketTest() {
                   )}
                 </div>
 
-                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-900/50 border border-zinc-800/60">
+                <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/50 border border-border">
                   {isAuthenticated ? (
                     <Wifi className="w-4 h-4 text-emerald-400" />
                   ) : isConnected ? (
                     <Cable className="w-4 h-4 text-amber-400" />
                   ) : (
-                    <WifiOff className="w-4 h-4 text-zinc-500" />
+                    <WifiOff className="w-4 h-4 text-muted-foreground" />
                   )}
                   <span
                     className={cn(
@@ -779,7 +720,7 @@ export default function WebSocketTest() {
                         ? 'text-emerald-400'
                         : isConnected
                           ? 'text-amber-400'
-                          : 'text-zinc-500'
+                          : 'text-muted-foreground'
                     )}
                   >
                     {isAuthenticated ? 'Authenticated' : isConnected ? 'Connected' : 'Offline'}
@@ -792,59 +733,7 @@ export default function WebSocketTest() {
 
         <main className="container mx-auto px-4 py-6 space-y-6">
           {/* Stats Grid */}
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
-            <StatCard
-              label="System"
-              value={healthStatus?.healthy ? 'OK' : 'WARN'}
-              icon={Server}
-              status={healthStatus?.healthy ? 'success' : healthStatus ? 'warning' : 'idle'}
-            />
-            <StatCard
-              label="Data Flow"
-              value={healthStatus?.data_flow_healthy ? 'Active' : 'Stalled'}
-              icon={Activity}
-              status={dataFlowStatus}
-            />
-            <StatCard
-              label="Trade Safe"
-              value={healthStatus ? (healthStatus.trade_management_safe ? 'Yes' : 'No') : '--'}
-              icon={Gauge}
-              status={
-                healthStatus === null
-                  ? 'idle'
-                  : healthStatus.trade_management_safe
-                    ? 'success'
-                    : 'error'
-              }
-            />
-            <StatCard
-              label="Data Age"
-              value={
-                healthStatus?.last_data_age_seconds !== undefined
-                  ? `${healthStatus.last_data_age_seconds.toFixed(1)}s`
-                  : '--'
-              }
-              icon={Clock}
-              status={
-                healthStatus === null
-                  ? 'idle'
-                  : healthStatus.last_data_age_seconds < 5
-                    ? 'success'
-                    : 'warning'
-              }
-            />
-            <StatCard
-              label="Cache"
-              value={healthStatus?.cache_size ?? 0}
-              icon={Database}
-              subtitle={`${healthStatus?.total_updates_processed ?? 0} updates`}
-            />
-            <StatCard
-              label="Subscribers"
-              value={healthStatus?.total_subscribers ?? 0}
-              icon={Users}
-              subtitle={`${healthStatus?.critical_subscribers ?? 0} critical`}
-            />
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <StatCard
               label="Messages"
               value={messageCount}
@@ -856,55 +745,57 @@ export default function WebSocketTest() {
               }
             />
             <StatCard
-              label="Uptime"
-              value={
-                healthStatus?.uptime_seconds
-                  ? formatUptime(healthStatus.uptime_seconds)
-                  : '--:--:--'
-              }
-              icon={Zap}
-              subtitle={`${healthStatus?.reconnect_count ?? 0} reconnects`}
+              label="Symbols"
+              value={activeSymbols.size}
+              icon={Layers}
+              subtitle={`${Array.from(activeSymbols.values()).filter(s => s.subscriptions.size > 0).length} subscribed`}
+            />
+            <StatCard
+              label="Status"
+              value={isAuthenticated ? 'Ready' : isConnected ? 'Pending' : 'Offline'}
+              icon={isAuthenticated ? Wifi : isConnected ? Cable : WifiOff}
+              status={connectionStatus}
             />
           </div>
 
           {/* Symbol Search & Bulk Controls */}
-          <div className="rounded-xl bg-[#0d0d14] border border-zinc-800/60 p-5">
+          <div className="rounded-xl bg-card border border-border p-5">
             <div className="flex flex-col lg:flex-row gap-4 mb-4">
               {/* Search */}
               <div className="flex-1 relative" ref={searchInputRef}>
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <Input
                     type="text"
                     placeholder="Search symbols..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     onFocus={() => searchQuery.length >= 2 && setShowSearchResults(true)}
-                    className="pl-10 bg-zinc-900/50 border-zinc-700/50 text-zinc-100 placeholder:text-zinc-600 focus:border-cyan-500/50 focus:ring-cyan-500/20"
+                    className="pl-10 bg-muted/50 border-border/50 text-foreground placeholder:text-muted-foreground/60 focus:border-cyan-500/50 focus:ring-cyan-500/20"
                   />
                   {isSearching && (
-                    <RefreshCw className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 animate-spin" />
+                    <RefreshCw className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground animate-spin" />
                   )}
                 </div>
 
                 {showSearchResults && searchResults.length > 0 && (
-                  <div className="absolute z-50 w-full mt-2 rounded-lg border border-zinc-700/50 bg-zinc-900/98 backdrop-blur-xl shadow-2xl overflow-hidden">
+                  <div className="absolute z-50 w-full mt-2 rounded-lg border border-border/50 bg-card backdrop-blur-xl shadow-2xl overflow-hidden">
                     {searchResults.map((result, i) => (
                       <div
                         key={i}
-                        className="px-4 py-3 border-b border-zinc-800/50 last:border-0 hover:bg-cyan-500/5 cursor-pointer transition-colors"
+                        className="px-4 py-3 border-b border-border/50 last:border-0 hover:bg-cyan-500/5 cursor-pointer transition-colors"
                         onClick={() => addSymbol(result.symbol, result.exchange)}
                       >
                         <div className="flex items-center justify-between">
                           <div>
-                            <span className="font-semibold text-zinc-100">{result.symbol}</span>
-                            <p className="text-xs text-zinc-500 mt-0.5 line-clamp-1">
+                            <span className="font-semibold text-foreground">{result.symbol}</span>
+                            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-1">
                               {result.name}
                             </p>
                           </div>
                           <Badge
                             variant="outline"
-                            className="text-[10px] border-zinc-700 text-zinc-400"
+                            className="text-[10px] border-border text-muted-foreground"
                           >
                             {result.exchange}
                           </Badge>
@@ -917,10 +808,10 @@ export default function WebSocketTest() {
 
               {/* Exchange filter */}
               <Select value={searchExchange} onValueChange={setSearchExchange}>
-                <SelectTrigger className="w-full lg:w-40 bg-zinc-900/50 border-zinc-700/50 text-zinc-300">
+                <SelectTrigger className="w-full lg:w-40 bg-muted/50 border-border/50 text-foreground/80">
                   <SelectValue placeholder="All Exchanges" />
                 </SelectTrigger>
-                <SelectContent className="bg-zinc-900 border-zinc-700">
+                <SelectContent className="bg-card border-border">
                   <SelectItem value="_all">All Exchanges</SelectItem>
                   {EXCHANGES.map((ex) => (
                     <SelectItem key={ex} value={ex}>
@@ -929,15 +820,6 @@ export default function WebSocketTest() {
                   ))}
                 </SelectContent>
               </Select>
-
-              {/* Refresh health */}
-              <Button
-                variant="outline"
-                onClick={fetchHealthStatus}
-                className="border-zinc-700/50 hover:bg-zinc-800/50"
-              >
-                <RefreshCcw className="w-4 h-4" />
-              </Button>
             </div>
 
             {/* Active symbols */}
@@ -950,7 +832,7 @@ export default function WebSocketTest() {
                     'gap-1.5 py-1.5 px-3 border transition-colors',
                     data.subscriptions.size > 0
                       ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300'
-                      : 'bg-zinc-800/50 border-zinc-700/50 text-zinc-400'
+                      : 'bg-muted/50 border-border/50 text-muted-foreground'
                   )}
                 >
                   <span className="font-mono text-xs">{key}</span>
@@ -965,7 +847,7 @@ export default function WebSocketTest() {
                 </Badge>
               ))}
               {activeSymbols.size === 0 && (
-                <span className="text-sm text-zinc-600">No symbols. Search to add.</span>
+                <span className="text-sm text-muted-foreground/60">No symbols. Search to add.</span>
               )}
             </div>
 
@@ -1011,7 +893,7 @@ export default function WebSocketTest() {
                 onClick={clearAllSymbols}
                 variant="outline"
                 size="sm"
-                className="border-zinc-700/50 text-zinc-400 hover:bg-zinc-800/50"
+                className="border-border/50 text-muted-foreground hover:bg-muted/50"
               >
                 <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Clear All
               </Button>
@@ -1033,8 +915,8 @@ export default function WebSocketTest() {
                 <div
                   key={key}
                   className={cn(
-                    'rounded-xl border bg-[#0d0d14] overflow-hidden transition-all',
-                    isLive ? 'border-cyan-500/40' : 'border-zinc-800/60'
+                    'rounded-xl border bg-card overflow-hidden transition-all',
+                    isLive ? 'border-cyan-500/40' : 'border-border'
                   )}
                 >
                   {/* Live indicator */}
@@ -1043,7 +925,7 @@ export default function WebSocketTest() {
                   )}
 
                   {/* Card header */}
-                  <div className="flex items-center justify-between p-4 border-b border-zinc-800/40">
+                  <div className="flex items-center justify-between p-4 border-b border-border/40">
                     <div className="flex items-center gap-3">
                       <button
                         type="button"
@@ -1077,7 +959,7 @@ export default function WebSocketTest() {
                               'px-2.5 py-1 text-[10px] font-bold rounded-md transition-all',
                               isActive
                                 ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40'
-                                : 'bg-zinc-800/50 text-zinc-500 border border-zinc-700/50 hover:text-zinc-300'
+                                : 'bg-muted/50 text-muted-foreground border border-border/50 hover:text-foreground'
                             )}
                           >
                             {mode}
@@ -1092,7 +974,7 @@ export default function WebSocketTest() {
                     {/* LTP + Change */}
                     <div className="flex items-end justify-between mb-4">
                       <div>
-                        <div className="text-[10px] uppercase tracking-wider text-zinc-500 mb-1">
+                        <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
                           LTP
                         </div>
                         <div className="text-3xl font-bold font-mono tracking-tight">
@@ -1129,14 +1011,14 @@ export default function WebSocketTest() {
                           { label: 'Close', value: symbolData.data.close },
                           { label: 'Vol', value: symbolData.data.volume, format: 'volume' },
                         ].map((item) => (
-                          <div key={item.label} className="bg-zinc-900/50 rounded-lg px-2 py-1.5">
-                            <div className="text-[8px] uppercase tracking-wider text-zinc-500">
+                          <div key={item.label} className="bg-muted/50 rounded-lg px-2 py-1.5">
+                            <div className="text-[8px] uppercase tracking-wider text-muted-foreground">
                               {item.label}
                             </div>
                             <div
                               className={cn(
                                 'text-xs font-mono font-semibold mt-0.5',
-                                item.color || 'text-zinc-300'
+                                item.color || 'text-foreground/80'
                               )}
                             >
                               {item.value !== undefined
@@ -1156,7 +1038,7 @@ export default function WebSocketTest() {
                         <button
                           type="button"
                           onClick={() => toggleDepth(key)}
-                          className="flex items-center gap-2 text-xs text-zinc-500 hover:text-zinc-300 transition-colors mb-2"
+                          className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors mb-2"
                         >
                           <ChevronDown
                             className={cn(
@@ -1169,7 +1051,7 @@ export default function WebSocketTest() {
                         </button>
 
                         {isDepthExpanded && (
-                          <div className="grid grid-cols-2 gap-4 p-3 bg-zinc-900/30 rounded-lg border border-zinc-800/40">
+                          <div className="grid grid-cols-2 gap-4 p-3 bg-muted/30 rounded-lg border border-border/40">
                             <div>
                               <div className="text-[9px] uppercase tracking-wider text-emerald-400 mb-2 flex items-center gap-1">
                                 <ArrowUp className="w-3 h-3" /> Bids
@@ -1210,7 +1092,7 @@ export default function WebSocketTest() {
                     )}
 
                     {/* Timestamp */}
-                    <div className="text-[10px] text-zinc-600 mt-3 font-mono">
+                    <div className="text-[10px] text-muted-foreground/60 mt-3 font-mono">
                       {formatTime(symbolData.data.timestamp)}
                     </div>
                   </div>
@@ -1220,12 +1102,12 @@ export default function WebSocketTest() {
           </div>
 
           {/* Event Log */}
-          <div className="rounded-xl bg-[#0d0d14] border border-zinc-800/60 overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800/40">
+          <div className="rounded-xl bg-card border border-border overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border/40">
               <div className="flex items-center gap-3">
-                <Terminal className="w-4 h-4 text-zinc-500" />
-                <span className="text-sm font-medium text-zinc-400">Console</span>
-                <Badge variant="outline" className="text-[9px] border-zinc-700 text-zinc-500">
+                <Terminal className="w-4 h-4 text-muted-foreground" />
+                <span className="text-sm font-medium text-muted-foreground">Console</span>
+                <Badge variant="outline" className="text-[9px] border-border text-muted-foreground">
                   {showRawLogs ? rawMessages.length : logs.length}
                 </Badge>
               </div>
@@ -1236,7 +1118,7 @@ export default function WebSocketTest() {
                   onClick={() => setShowRawLogs(!showRawLogs)}
                   className={cn(
                     'h-7 px-2 text-xs',
-                    showRawLogs ? 'text-cyan-400' : 'text-zinc-500'
+                    showRawLogs ? 'text-cyan-400' : 'text-muted-foreground'
                   )}
                 >
                   <Settings2 className="w-3.5 h-3.5 mr-1" />
@@ -1249,7 +1131,7 @@ export default function WebSocketTest() {
                     setLogs([])
                     setRawMessages([])
                   }}
-                  className="h-7 px-2 text-zinc-500 hover:text-zinc-300"
+                  className="h-7 px-2 text-muted-foreground hover:text-foreground"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                 </Button>
@@ -1262,16 +1144,16 @@ export default function WebSocketTest() {
             >
               {showRawLogs ? (
                 rawMessages.length === 0 ? (
-                  <div className="text-zinc-600">No raw messages...</div>
+                  <div className="text-muted-foreground/60">No raw messages...</div>
                 ) : (
                   rawMessages.map((msg, i) => (
-                    <div key={i} className="text-zinc-500 break-all">
+                    <div key={i} className="text-muted-foreground break-all">
                       {msg}
                     </div>
                   ))
                 )
               ) : logs.length === 0 ? (
-                <div className="text-zinc-600">Waiting for events...</div>
+                <div className="text-muted-foreground/60">Waiting for events...</div>
               ) : (
                 logs.map((log, i) => (
                   <div
@@ -1282,10 +1164,10 @@ export default function WebSocketTest() {
                       log.type === 'error' && 'text-rose-400',
                       log.type === 'warn' && 'text-amber-400',
                       log.type === 'data' && 'text-cyan-400',
-                      log.type === 'info' && 'text-zinc-500'
+                      log.type === 'info' && 'text-muted-foreground'
                     )}
                   >
-                    <span className="text-zinc-600">[{log.timestamp}]</span> {log.message}
+                    <span className="text-muted-foreground/60">[{log.timestamp}]</span> {log.message}
                   </div>
                 ))
               )}
