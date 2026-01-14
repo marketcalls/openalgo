@@ -22,6 +22,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useMarketData } from '@/hooks/useMarketData'
+import { useMarketStatus } from '@/hooks/useMarketStatus'
 import { cn, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -47,6 +48,10 @@ export default function Holdings() {
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Market status hook - check if markets are open
+  const { isMarketOpen, isAnyMarketOpen } = useMarketStatus()
+  const anyMarketOpen = isAnyMarketOpen()
+
   // Extract unique symbols for WebSocket subscription
   const holdingSymbols = useMemo(
     () =>
@@ -57,15 +62,18 @@ export default function Holdings() {
     [holdings]
   )
 
-  // WebSocket market data hook - same LTP source for both Live and Sandbox modes
+  // WebSocket market data hook - only enable when market is open
   const { data: marketData, isConnected: wsConnected } = useMarketData({
     symbols: holdingSymbols,
     mode: 'LTP',
-    enabled: holdings.length > 0,
+    enabled: holdings.length > 0 && anyMarketOpen,
   })
 
+  // Effective live status - connected AND market is open
+  const isLive = wsConnected && anyMarketOpen
+
   // Enhance holdings with real-time LTP and calculated average price
-  // Only update values when WebSocket data is available, otherwise preserve REST API values
+  // Only update values when market is open and WebSocket data is available
   const enhancedHoldings = useMemo(() => {
     return holdings.map((holding) => {
       const key = `${holding.exchange}:${holding.symbol}`
@@ -73,9 +81,15 @@ export default function Holdings() {
       const qty = holding.quantity || 0
       const originalPnl = holding.pnl || 0
 
-      // Check if WebSocket LTP is fresh (< 5 seconds old)
+      // Check if market is open for this exchange
+      const exchangeMarketOpen = isMarketOpen(holding.exchange)
+
+      // Check if WebSocket LTP is fresh (< 5 seconds old) AND market is open
       const hasWsData =
-        wsData?.data?.ltp && wsData.lastUpdate && Date.now() - wsData.lastUpdate < 5000
+        exchangeMarketOpen &&
+        wsData?.data?.ltp &&
+        wsData.lastUpdate &&
+        Date.now() - wsData.lastUpdate < 5000
 
       // Calculate average price from REST data if not provided
       // AvgPrice = LTP - (PnL / Qty)
@@ -84,7 +98,7 @@ export default function Holdings() {
         avgPrice = holding.ltp - originalPnl / qty
       }
 
-      // If we have fresh WebSocket LTP and can calculate avgPrice, recalculate PnL
+      // If market is open and we have fresh WebSocket LTP, recalculate PnL
       if (hasWsData && wsData?.data?.ltp && qty !== 0) {
         const currentLtp = wsData.data.ltp
 
@@ -108,7 +122,7 @@ export default function Holdings() {
         }
       }
 
-      // No WebSocket data - preserve original REST API values
+      // Market closed or no WebSocket data - preserve original REST API values
       // Only calculate avgPrice if we have LTP from REST
       return {
         ...holding,
@@ -116,21 +130,27 @@ export default function Holdings() {
         // Keep original pnl and pnlpercent from REST API
       }
     })
-  }, [holdings, marketData])
+  }, [holdings, marketData, isMarketOpen])
 
   // Calculate enhanced stats based on real-time data
-  // Only recalculate if we have WebSocket data, otherwise use REST API stats
+  // Only recalculate if market is open and we have WebSocket data
   const enhancedStats = useMemo(() => {
     if (!stats) return stats
 
-    // Check if any holding has WebSocket data
+    // Check if any holding has fresh WebSocket data with market open
     const hasAnyWsData = enhancedHoldings.some((h) => {
       const key = `${h.exchange}:${h.symbol}`
       const wsData = marketData.get(key)
-      return wsData?.data?.ltp && wsData.lastUpdate && Date.now() - wsData.lastUpdate < 5000
+      const exchangeOpen = isMarketOpen(h.exchange)
+      return (
+        exchangeOpen &&
+        wsData?.data?.ltp &&
+        wsData.lastUpdate &&
+        Date.now() - wsData.lastUpdate < 5000
+      )
     })
 
-    // If no WebSocket data, return original REST stats
+    // If no WebSocket data or all markets closed, return original REST stats
     if (!hasAnyWsData) return stats
 
     // Recalculate stats with real-time data
@@ -156,7 +176,7 @@ export default function Holdings() {
       totalprofitandloss: totalPnl,
       totalpnlpercentage: totalPnlPercent,
     }
-  }, [stats, enhancedHoldings, marketData])
+  }, [stats, enhancedHoldings, marketData, isMarketOpen])
 
   const fetchHoldings = useCallback(
     async (showRefresh = false) => {
@@ -188,11 +208,11 @@ export default function Holdings() {
 
   useEffect(() => {
     fetchHoldings()
-    // Reduce polling interval when WebSocket is connected (30s vs 10s)
-    const intervalMs = wsConnected ? 30000 : 10000
+    // Reduce polling interval when live (WebSocket connected AND market open)
+    const intervalMs = isLive ? 30000 : 10000
     const interval = setInterval(() => fetchHoldings(), intervalMs)
     return () => clearInterval(interval)
-  }, [fetchHoldings, wsConnected])
+  }, [fetchHoldings, isLive])
 
   // Listen for mode changes (live/analyze) and refresh data
   useEffect(() => {
@@ -270,7 +290,7 @@ export default function Holdings() {
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-3xl font-bold tracking-tight">Investor Summary</h1>
-            {wsConnected && (
+            {isLive && (
               <Badge
                 variant="outline"
                 className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30 gap-1"

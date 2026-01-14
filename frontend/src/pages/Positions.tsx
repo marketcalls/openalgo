@@ -49,6 +49,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useMarketData } from '@/hooks/useMarketData'
+import { useMarketStatus } from '@/hooks/useMarketStatus'
 import { cn, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -145,6 +146,10 @@ export default function Positions() {
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
   const [settingsOpen, setSettingsOpen] = useState(false)
 
+  // Market status hook - check if markets are open
+  const { isMarketOpen, isAnyMarketOpen } = useMarketStatus()
+  const anyMarketOpen = isAnyMarketOpen()
+
   // Extract unique symbols for WebSocket subscription
   const positionSymbols = useMemo(
     () =>
@@ -155,16 +160,19 @@ export default function Positions() {
     [positions]
   )
 
-  // WebSocket market data hook - same LTP source for both Live and Sandbox modes
+  // WebSocket market data hook - only enable when market is open
   const { data: marketData, isConnected: wsConnected } = useMarketData({
     symbols: positionSymbols,
     mode: 'LTP',
-    enabled: positions.length > 0,
+    enabled: positions.length > 0 && anyMarketOpen,
   })
+
+  // Effective live status - connected AND market is open
+  const isLive = wsConnected && anyMarketOpen
 
   // Enhance positions with real-time LTP from WebSocket (fallback to REST data)
   // For closed positions (qty=0), preserve the realized PnL from REST API
-  // For open positions (qty!=0), only recalculate when WebSocket data is available
+  // For open positions (qty!=0), only recalculate when market is open and WebSocket data is available
   const enhancedPositions = useMemo(() => {
     return positions.map((pos) => {
       const key = `${pos.exchange}:${pos.symbol}`
@@ -172,9 +180,15 @@ export default function Positions() {
       const qty = pos.quantity || 0
       const avgPrice = pos.average_price || 0
 
-      // Check if WebSocket LTP is fresh (< 5 seconds old)
+      // Check if market is open for this exchange
+      const exchangeMarketOpen = isMarketOpen(pos.exchange)
+
+      // Check if WebSocket LTP is fresh (< 5 seconds old) AND market is open
       const hasWsData =
-        wsData?.data?.ltp && wsData.lastUpdate && Date.now() - wsData.lastUpdate < 5000
+        exchangeMarketOpen &&
+        wsData?.data?.ltp &&
+        wsData.lastUpdate &&
+        Date.now() - wsData.lastUpdate < 5000
 
       // For closed positions (qty=0), preserve the realized PnL from REST API
       if (qty === 0) {
@@ -182,7 +196,7 @@ export default function Positions() {
         return { ...pos, ltp: ltp ?? pos.ltp }
       }
 
-      // Open position - only recalculate PnL when WebSocket data is available
+      // Open position - only recalculate PnL when market is open and WebSocket data is available
       if (hasWsData && wsData?.data?.ltp) {
         const currentLtp = wsData.data.ltp
         const pnl = (currentLtp - avgPrice) * qty
@@ -191,13 +205,13 @@ export default function Positions() {
         return { ...pos, ltp: currentLtp, pnl, pnlpercent }
       }
 
-      // No WebSocket data - preserve REST API values, but ensure pnlpercent is calculated
+      // Market closed or no WebSocket data - preserve REST API values
       const pnl = pos.pnl || 0
       const investment = Math.abs(avgPrice * qty)
       const pnlpercent = pos.pnlpercent ?? (investment > 0 ? (pnl / investment) * 100 : 0)
       return { ...pos, pnlpercent }
     })
-  }, [positions, marketData])
+  }, [positions, marketData, isMarketOpen])
 
   // Load preferences from localStorage
   useEffect(() => {
@@ -256,11 +270,11 @@ export default function Positions() {
 
   useEffect(() => {
     fetchPositions()
-    // Reduce polling interval when WebSocket is connected (30s vs 10s)
-    const intervalMs = wsConnected ? 30000 : 10000
+    // Reduce polling interval when live (WebSocket connected AND market open)
+    const intervalMs = isLive ? 30000 : 10000
     const interval = setInterval(() => fetchPositions(), intervalMs)
     return () => clearInterval(interval)
-  }, [fetchPositions, wsConnected])
+  }, [fetchPositions, isLive])
 
   // Listen for mode changes (live/analyze) and refresh data
   useEffect(() => {
@@ -606,7 +620,7 @@ export default function Positions() {
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-3xl font-bold tracking-tight">Positions</h1>
-            {wsConnected && (
+            {isLive && (
               <Badge
                 variant="outline"
                 className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30 gap-1"
