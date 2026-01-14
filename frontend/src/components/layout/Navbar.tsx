@@ -13,12 +13,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet'
-import {
-  isActiveRoute,
-  mobileSheetItems,
-  navItems,
-  profileMenuItems,
-} from '@/config/navigation'
+import { isActiveRoute, mobileSheetItems, navItems, profileMenuItems } from '@/config/navigation'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
@@ -52,7 +47,7 @@ export function Navbar() {
       if (newMode === 'analyzer') {
         setTimeout(() => {
           toast.warning('⚠️ Analyzer (Sandbox) mode is for testing purposes only', {
-            duration: 20000,
+            duration: 10000,
           })
         }, 2000)
       }
@@ -93,7 +88,9 @@ export function Navbar() {
                     onClick={() => setMobileOpen(false)}
                     className={cn(
                       'flex items-center gap-3 rounded-lg px-3 py-3 text-sm transition-colors min-h-[44px] touch-manipulation',
-                      isActive(item.href) ? 'bg-primary text-primary-foreground' : 'hover:bg-muted active:bg-muted'
+                      isActive(item.href)
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-muted active:bg-muted'
                     )}
                   >
                     <item.icon className="h-4 w-4" />

@@ -1,4 +1,5 @@
 import {
+  BarChart3,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -9,12 +10,15 @@ import {
   Home,
   Key,
   Menu,
+  Moon,
   Plus,
   RefreshCw,
   Search,
   Send,
+  Sun,
   Terminal,
   X,
+  Zap,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -25,6 +29,7 @@ import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
+import { useThemeStore } from '@/stores/themeStore'
 
 interface Endpoint {
   name: string
@@ -140,6 +145,9 @@ function isValidApiUrl(url: string): { valid: boolean; error?: string } {
 }
 
 export default function Playground() {
+  // Theme store
+  const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
+
   const [apiKey, setApiKey] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
   const [endpoints, setEndpoints] = useState<EndpointsByCategory>({})
@@ -428,6 +436,24 @@ export default function Playground() {
     }
   }
 
+  const handleModeToggle = async () => {
+    const result = await toggleAppMode()
+    if (result.success) {
+      const newMode = useThemeStore.getState().appMode
+      toast.success(`Switched to ${newMode === 'live' ? 'Live' : 'Analyze'} mode`)
+
+      if (newMode === 'analyzer') {
+        setTimeout(() => {
+          toast.warning('⚠️ Analyzer (Sandbox) mode is for testing purposes only', {
+            duration: 10000,
+          })
+        }, 2000)
+      }
+    } else {
+      toast.error(result.message || 'Failed to toggle mode')
+    }
+  }
+
   const copyCurl = () => {
     if (!url) return
 
@@ -478,14 +504,14 @@ export default function Playground() {
   }, {} as EndpointsByCategory)
 
   const getStatusColor = (status: number | null) => {
-    if (!status) return 'text-zinc-500'
-    if (status >= 200 && status < 300) return 'text-emerald-400'
-    if (status >= 400) return 'text-red-400'
-    return 'text-yellow-400'
+    if (!status) return 'text-muted-foreground'
+    if (status >= 200 && status < 300) return 'text-emerald-500 dark:text-emerald-400'
+    if (status >= 400) return 'text-red-500 dark:text-red-400'
+    return 'text-yellow-500 dark:text-yellow-400'
   }
 
   const getStatusBg = (status: number | null) => {
-    if (!status) return 'bg-zinc-500/10'
+    if (!status) return 'bg-muted/50'
     if (status >= 200 && status < 300) return 'bg-emerald-500/10'
     if (status >= 400) return 'bg-red-500/10'
     return 'bg-yellow-500/10'
@@ -499,15 +525,15 @@ export default function Playground() {
   const activeTab = openTabs.find((t) => t.id === activeTabId)
 
   return (
-    <div className="h-full flex flex-col bg-zinc-950 text-zinc-100">
+    <div className="h-full flex flex-col bg-background text-foreground">
       {/* Top Header Bar */}
-      <div className="h-12 border-b border-zinc-800 flex items-center px-2 bg-zinc-900/50">
+      <div className="h-12 border-b border-border flex items-center px-2 bg-card/50">
         {/* Left: Logo and Menu */}
         <div className="flex items-center gap-2">
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+            className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent"
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
           >
             <Menu className="h-4 w-4" />
@@ -525,8 +551,8 @@ export default function Playground() {
               key={tab.id}
               className={cn(
                 'flex items-center gap-2 px-3 py-1.5 rounded-md text-xs cursor-pointer group',
-                'hover:bg-zinc-800',
-                tab.id === activeTabId ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400'
+                'hover:bg-accent',
+                tab.id === activeTabId ? 'bg-accent text-foreground' : 'text-muted-foreground'
               )}
               onClick={() => switchTab(tab)}
             >
@@ -545,7 +571,7 @@ export default function Playground() {
               {tab.modified && <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />}
               <button
                 type="button"
-                className="opacity-0 group-hover:opacity-100 hover:text-zinc-100 p-0.5 -mr-1"
+                className="opacity-0 group-hover:opacity-100 hover:text-foreground p-0.5 -mr-1"
                 onClick={(e) => closeTab(tab.id, e)}
               >
                 <X className="h-3 w-3" />
@@ -555,7 +581,7 @@ export default function Playground() {
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6 text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800"
+            className="h-6 w-6 text-muted-foreground hover:text-foreground hover:bg-accent"
             onClick={() => {
               // Select first available endpoint
               const firstCat = Object.keys(endpoints)[0]
@@ -570,23 +596,57 @@ export default function Playground() {
 
         {/* Right: Actions */}
         <div className="flex items-center gap-2 px-2">
+          {/* Mode Badge */}
+          <Badge
+            variant={appMode === 'live' ? 'default' : 'secondary'}
+            className={cn(
+              'text-xs',
+              appMode === 'analyzer' && 'bg-purple-500 hover:bg-purple-600 text-white'
+            )}
+          >
+            <span className="hidden sm:inline">
+              {appMode === 'live' ? 'Live Mode' : 'Analyze Mode'}
+            </span>
+            <span className="sm:hidden">{appMode === 'live' ? 'Live' : 'Analyze'}</span>
+          </Badge>
+
+          {/* Mode Toggle */}
           <Button
             variant="ghost"
-            size="sm"
-            className="h-7 text-xs text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
-            asChild
+            size="icon"
+            className="h-8 w-8"
+            onClick={handleModeToggle}
+            disabled={isTogglingMode}
+            title={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
           >
+            {isTogglingMode ? (
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            ) : appMode === 'live' ? (
+              <Zap className="h-4 w-4" />
+            ) : (
+              <BarChart3 className="h-4 w-4" />
+            )}
+          </Button>
+
+          {/* Theme Toggle */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={toggleMode}
+            disabled={appMode !== 'live'}
+            title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+          >
+            {mode === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </Button>
+
+          <Button variant="ghost" size="sm" className="h-7 text-xs" asChild>
             <Link to="/dashboard">
               <Home className="h-3.5 w-3.5 mr-1.5" />
               Dashboard
             </Link>
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 text-xs text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
-            asChild
-          >
+          <Button variant="ghost" size="sm" className="h-7 text-xs" asChild>
             <Link to="/apikey">
               <Key className="h-3.5 w-3.5 mr-1.5" />
               API Keys
@@ -600,18 +660,18 @@ export default function Playground() {
         {/* Sidebar */}
         <div
           className={cn(
-            'w-56 border-r border-zinc-800 bg-zinc-900/30 flex flex-col overflow-hidden',
+            'w-56 border-r border-border bg-card/30 flex flex-col overflow-hidden',
             'transition-all duration-200',
             isSidebarOpen ? 'translate-x-0' : '-translate-x-full absolute h-full z-50'
           )}
         >
           {/* Search */}
-          <div className="p-2 border-b border-zinc-800 shrink-0">
+          <div className="p-2 border-b border-border shrink-0">
             <div className="relative">
-              <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500" />
+              <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <Input
                 placeholder="search"
-                className="h-7 pl-8 text-xs bg-zinc-800/50 border-zinc-700 text-zinc-100 placeholder:text-zinc-500"
+                className="h-7 pl-8 text-xs bg-secondary/50 border-border text-foreground placeholder:text-muted-foreground"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -625,7 +685,7 @@ export default function Playground() {
                 <div key={category} className="mb-2">
                   <button
                     type="button"
-                    className="flex items-center gap-1.5 w-full px-2 py-1 rounded text-[11px] font-medium uppercase tracking-wider text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50"
+                    className="flex items-center gap-1.5 w-full px-2 py-1 rounded text-[11px] font-medium uppercase tracking-wider text-muted-foreground hover:text-foreground hover:bg-accent/50"
                     onClick={() => toggleCategory(category)}
                   >
                     {collapsedCategories.has(category) ? (
@@ -643,9 +703,9 @@ export default function Playground() {
                           type="button"
                           key={idx}
                           className={cn(
-                            'w-full flex items-center gap-2 px-2 py-1 rounded text-left text-xs hover:bg-zinc-800/50',
+                            'w-full flex items-center gap-2 px-2 py-1 rounded text-left text-xs hover:bg-accent/50',
                             activeTab?.endpoint.path === endpoint.path &&
-                              'bg-zinc-800 text-zinc-100'
+                              'bg-accent text-foreground'
                           )}
                           onClick={() => selectEndpoint(endpoint)}
                         >
@@ -660,7 +720,7 @@ export default function Playground() {
                           >
                             {endpoint.method}
                           </Badge>
-                          <span className="truncate text-zinc-300">{endpoint.name}</span>
+                          <span className="truncate text-foreground/80">{endpoint.name}</span>
                         </button>
                       ))}
                     </div>
@@ -671,20 +731,20 @@ export default function Playground() {
           </div>
 
           {/* API Key Section */}
-          <div className="p-2 border-t border-zinc-800 shrink-0">
-            <div className="flex items-center gap-2 px-2 py-1.5 rounded bg-zinc-800/50">
-              <Key className="h-3 w-3 text-zinc-500" />
+          <div className="p-2 border-t border-border shrink-0">
+            <div className="flex items-center gap-2 px-2 py-1.5 rounded bg-secondary/50">
+              <Key className="h-3 w-3 text-muted-foreground" />
               <Input
                 type={showApiKey ? 'text' : 'password'}
                 value={apiKey}
                 readOnly
-                className="flex-1 h-5 text-[10px] font-mono bg-transparent border-none p-0 text-zinc-400"
+                className="flex-1 h-5 text-[10px] font-mono bg-transparent border-none p-0 text-muted-foreground"
                 placeholder="No API key"
               />
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-5 w-5 text-zinc-500 hover:text-zinc-300"
+                className="h-5 w-5 text-muted-foreground hover:text-foreground"
                 onClick={() => setShowApiKey(!showApiKey)}
               >
                 {showApiKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
@@ -692,7 +752,7 @@ export default function Playground() {
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-5 w-5 text-zinc-500 hover:text-zinc-300"
+                className="h-5 w-5 text-muted-foreground hover:text-foreground"
                 onClick={copyApiKey}
               >
                 <Copy className="h-3 w-3" />
@@ -706,7 +766,7 @@ export default function Playground() {
           {activeTab ? (
             <>
               {/* URL Bar */}
-              <div className="flex items-center gap-2 px-4 py-2 border-b border-zinc-800 bg-zinc-900/30">
+              <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-card/30">
                 <Badge
                   variant="outline"
                   className={cn(
@@ -718,9 +778,9 @@ export default function Playground() {
                 >
                   {method}
                 </Badge>
-                <div className="flex-1 flex items-center gap-1 px-3 py-1.5 rounded bg-zinc-800/50 font-mono text-sm">
-                  <span className="text-zinc-500">http://127.0.0.1:5000</span>
-                  <span className="text-zinc-100">{url}</span>
+                <div className="flex-1 flex items-center gap-1 px-3 py-1.5 rounded bg-secondary/50 font-mono text-sm">
+                  <span className="text-muted-foreground">http://127.0.0.1:5000</span>
+                  <span className="text-foreground">{url}</span>
                 </div>
                 <Button
                   size="sm"
@@ -742,30 +802,30 @@ export default function Playground() {
               {/* Request/Response Panels */}
               <div className="flex-1 flex overflow-hidden">
                 {/* Request Panel */}
-                <div className="flex-1 flex flex-col border-r border-zinc-800 min-w-0">
+                <div className="flex-1 flex flex-col border-r border-border min-w-0">
                   {/* Request Tabs */}
                   <Tabs defaultValue="body" className="flex-1 flex flex-col min-h-0">
-                    <div className="flex items-center justify-between px-4 py-1.5 border-b border-zinc-800 bg-zinc-900/30">
+                    <div className="flex items-center justify-between px-4 py-1.5 border-b border-border bg-card/30">
                       <TabsList className="h-7 bg-transparent p-0 gap-2">
                         <TabsTrigger
                           value="body"
-                          className="h-6 px-2 text-xs data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500"
+                          className="h-6 px-2 text-xs data-[state=active]:bg-accent data-[state=active]:text-foreground text-muted-foreground"
                         >
                           Body
                         </TabsTrigger>
                         <TabsTrigger
                           value="headers"
-                          className="h-6 px-2 text-xs data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500"
+                          className="h-6 px-2 text-xs data-[state=active]:bg-accent data-[state=active]:text-foreground text-muted-foreground"
                         >
                           Headers
                         </TabsTrigger>
                       </TabsList>
                       <div className="flex items-center gap-1">
-                        <span className="text-[10px] text-zinc-500 mr-2">JSON</span>
+                        <span className="text-[10px] text-muted-foreground mr-2">JSON</span>
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="h-6 text-[10px] text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+                          className="h-6 text-[10px] text-muted-foreground hover:text-foreground hover:bg-accent"
                           onClick={prettifyBody}
                         >
                           Prettify
@@ -774,9 +834,9 @@ export default function Playground() {
                     </div>
 
                     <TabsContent value="body" className="flex-1 m-0 overflow-hidden">
-                      <div className="h-full flex bg-zinc-950">
+                      <div className="h-full flex bg-background">
                         {/* Line Numbers */}
-                        <div className="w-10 bg-zinc-900/50 text-zinc-600 text-xs font-mono py-3 px-2 text-right select-none overflow-hidden border-r border-zinc-800">
+                        <div className="w-10 bg-card/50 text-muted-foreground/50 text-xs font-mono py-3 px-2 text-right select-none overflow-hidden border-r border-border">
                           {requestBody.split('\n').map((_, i) => (
                             <div key={i} className="leading-5">
                               {i + 1}
@@ -786,7 +846,7 @@ export default function Playground() {
                         {/* Editor */}
                         <textarea
                           ref={requestBodyRef}
-                          className="flex-1 p-3 font-mono text-xs bg-transparent border-none outline-none resize-none text-zinc-100 leading-5"
+                          className="flex-1 p-3 font-mono text-xs bg-transparent border-none outline-none resize-none text-foreground leading-5"
                           placeholder='{"apikey": ""}'
                           value={requestBody}
                           onChange={(e) => updateCurrentTabBody(e.target.value)}
@@ -797,16 +857,16 @@ export default function Playground() {
 
                     <TabsContent
                       value="headers"
-                      className="flex-1 m-0 p-4 overflow-auto bg-zinc-950"
+                      className="flex-1 m-0 p-4 overflow-auto bg-background"
                     >
                       <div className="text-xs font-mono space-y-2">
                         <div className="flex gap-2">
-                          <span className="text-zinc-500">Content-Type:</span>
-                          <span className="text-zinc-300">application/json</span>
+                          <span className="text-muted-foreground">Content-Type:</span>
+                          <span className="text-foreground/80">application/json</span>
                         </div>
                         <div className="flex gap-2">
-                          <span className="text-zinc-500">Accept:</span>
-                          <span className="text-zinc-300">application/json</span>
+                          <span className="text-muted-foreground">Accept:</span>
+                          <span className="text-foreground/80">application/json</span>
                         </div>
                       </div>
                     </TabsContent>
@@ -817,17 +877,17 @@ export default function Playground() {
                 <div className="flex-1 flex flex-col min-w-0">
                   {/* Response Header */}
                   <Tabs defaultValue="response" className="flex-1 flex flex-col min-h-0">
-                    <div className="flex items-center justify-between px-4 py-1.5 border-b border-zinc-800 bg-zinc-900/30">
+                    <div className="flex items-center justify-between px-4 py-1.5 border-b border-border bg-card/30">
                       <TabsList className="h-7 bg-transparent p-0 gap-2">
                         <TabsTrigger
                           value="response"
-                          className="h-6 px-2 text-xs data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500"
+                          className="h-6 px-2 text-xs data-[state=active]:bg-accent data-[state=active]:text-foreground text-muted-foreground"
                         >
                           Response
                         </TabsTrigger>
                         <TabsTrigger
                           value="headers"
-                          className="h-6 px-2 text-xs data-[state=active]:bg-zinc-800 data-[state=active]:text-zinc-100 text-zinc-500"
+                          className="h-6 px-2 text-xs data-[state=active]:bg-accent data-[state=active]:text-foreground text-muted-foreground"
                         >
                           Headers
                         </TabsTrigger>
@@ -846,13 +906,13 @@ export default function Playground() {
                           </span>
                         )}
                         {responseTime !== null && (
-                          <span className="text-zinc-500 flex items-center gap-1">
+                          <span className="text-muted-foreground flex items-center gap-1">
                             <Clock className="h-3 w-3" />
                             {responseTime}ms
                           </span>
                         )}
                         {responseSize !== null && (
-                          <span className="text-zinc-500 flex items-center gap-1">
+                          <span className="text-muted-foreground flex items-center gap-1">
                             <Download className="h-3 w-3" />
                             {formatSize(responseSize)}
                           </span>
@@ -860,7 +920,7 @@ export default function Playground() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="h-6 text-[10px] text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800"
+                          className="h-6 text-[10px] text-muted-foreground hover:text-foreground hover:bg-accent"
                           onClick={copyCurl}
                         >
                           <Terminal className="h-3 w-3 mr-1" />
@@ -870,7 +930,7 @@ export default function Playground() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-6 w-6 text-zinc-500 hover:text-zinc-100"
+                            className="h-6 w-6 text-muted-foreground hover:text-foreground"
                             onClick={copyResponse}
                           >
                             <Copy className="h-3 w-3" />
@@ -880,11 +940,11 @@ export default function Playground() {
                     </div>
 
                     <TabsContent value="response" className="flex-1 m-0 overflow-hidden">
-                      <div className="h-full flex bg-zinc-950">
+                      <div className="h-full flex bg-background">
                         {responseData ? (
                           <>
                             {/* Line Numbers */}
-                            <div className="w-10 bg-zinc-900/50 text-zinc-600 text-xs font-mono py-3 px-2 text-right select-none overflow-hidden border-r border-zinc-800">
+                            <div className="w-10 bg-card/50 text-muted-foreground/50 text-xs font-mono py-3 px-2 text-right select-none overflow-hidden border-r border-border">
                               {responseData.split('\n').map((_, i) => (
                                 <div key={i} className="leading-5">
                                   {i + 1}
@@ -905,12 +965,12 @@ export default function Playground() {
                         ) : (
                           <div className="flex-1 flex flex-col items-center justify-center text-center">
                             {isLoading ? (
-                              <RefreshCw className="h-8 w-8 text-zinc-700 animate-spin" />
+                              <RefreshCw className="h-8 w-8 text-muted-foreground/50 animate-spin" />
                             ) : (
                               <>
-                                <Send className="h-10 w-10 text-zinc-800 mb-3" />
-                                <p className="text-zinc-600 text-sm">No response yet</p>
-                                <p className="text-zinc-700 text-xs mt-1">
+                                <Send className="h-10 w-10 text-muted-foreground/30 mb-3" />
+                                <p className="text-muted-foreground text-sm">No response yet</p>
+                                <p className="text-muted-foreground/70 text-xs mt-1">
                                   Click Send to make a request
                                 </p>
                               </>
@@ -922,19 +982,19 @@ export default function Playground() {
 
                     <TabsContent
                       value="headers"
-                      className="flex-1 m-0 p-4 overflow-auto bg-zinc-950"
+                      className="flex-1 m-0 p-4 overflow-auto bg-background"
                     >
                       {Object.keys(responseHeaders).length > 0 ? (
                         <div className="text-xs font-mono space-y-2">
                           {Object.entries(responseHeaders).map(([key, value]) => (
                             <div key={key} className="flex gap-2">
-                              <span className="text-zinc-500">{key}:</span>
-                              <span className="text-zinc-300 break-all">{value}</span>
+                              <span className="text-muted-foreground">{key}:</span>
+                              <span className="text-foreground/80 break-all">{value}</span>
                             </div>
                           ))}
                         </div>
                       ) : (
-                        <div className="text-xs text-zinc-600">No headers to display</div>
+                        <div className="text-xs text-muted-foreground">No headers to display</div>
                       )}
                     </TabsContent>
                   </Tabs>
@@ -943,23 +1003,18 @@ export default function Playground() {
             </>
           ) : (
             /* Empty State */
-            <div className="flex-1 flex flex-col items-center justify-center text-center bg-zinc-950">
+            <div className="flex-1 flex flex-col items-center justify-center text-center bg-background">
               <img
                 src="/images/android-chrome-192x192.png"
                 alt="OpenAlgo"
                 className="w-16 h-16 mb-4"
               />
-              <h2 className="text-lg font-semibold text-zinc-300 mb-2">API Playground</h2>
-              <p className="text-zinc-500 text-sm mb-4">
+              <h2 className="text-lg font-semibold text-foreground/80 mb-2">API Playground</h2>
+              <p className="text-muted-foreground text-sm mb-4">
                 Select an endpoint from the sidebar to get started
               </p>
               {!apiKey && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="border-zinc-700 text-zinc-300"
-                  asChild
-                >
+                <Button variant="outline" size="sm" asChild>
                   <Link to="/apikey">
                     <Key className="h-4 w-4 mr-2" />
                     Generate API Key
