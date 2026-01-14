@@ -19,6 +19,7 @@ from sqlalchemy import text
 from database.auth_db import verify_api_key
 from .broker_factory import create_broker_adapter
 from .base_adapter import BaseBrokerWebSocketAdapter
+from services.market_data_service import get_market_data_service
 
 # Initialize logger
 logger = get_logger("websocket_proxy")
@@ -977,13 +978,29 @@ class WebSocketProxy:
                         continue  # Skip this update, too soon
                     self.last_message_time[sub_key] = current_time
 
+                # Feed market data to MarketDataService for backend consumers
+                # (sandbox execution engine, position MTM, RMS, etc.)
+                # This runs regardless of whether WebSocket clients are subscribed
+                try:
+                    mds_data = {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "mode": mode,
+                        "data": market_data
+                    }
+                    market_data_service = get_market_data_service()
+                    market_data_service.process_market_data(mds_data)
+                except Exception as mds_error:
+                    # Don't block WebSocket delivery if MarketDataService has issues
+                    logger.debug(f"MarketDataService processing error: {mds_error}")
+
                 # OPTIMIZATION 2: O(1) lookup using subscription index
                 # Instead of iterating through ALL clients and ALL subscriptions (O(n²)),
                 # directly lookup clients subscribed to this specific (symbol, exchange, mode)
                 client_ids = self.subscription_index.get(sub_key, set()).copy()
 
                 if not client_ids:
-                    continue  # No clients subscribed, skip processing
+                    continue  # No WebSocket clients subscribed, skip delivery
 
                 # OPTIMIZATION 3: Batch message sends for parallel delivery
                 send_tasks = []

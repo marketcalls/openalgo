@@ -26,9 +26,13 @@ from database.sandbox_db import (
 from sandbox.fund_manager import FundManager
 from sandbox.holdings_manager import HoldingsManager
 from services.quotes_service import get_quotes, get_multiquotes
+from services.market_data_service import get_market_data_service
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Maximum age (seconds) for WebSocket data to be considered fresh
+WEBSOCKET_DATA_MAX_AGE = 5
 
 
 def parse_expiry_from_symbol(symbol, exchange):
@@ -468,7 +472,10 @@ class PositionManager:
             return None
 
     def _update_positions_mtm(self, positions):
-        """Update MTM for all positions with live quotes"""
+        """
+        Update MTM for all positions with live quotes.
+        Uses WebSocket data first, falls back to multiquotes API if WebSocket data is stale.
+        """
         try:
             if not positions:
                 return
@@ -476,21 +483,37 @@ class PositionManager:
             # Get unique symbols
             symbols_to_fetch = set()
             for position in positions:
-                symbols_to_fetch.add((position.symbol, position.exchange))
+                if position.quantity != 0:  # Only fetch for open positions
+                    symbols_to_fetch.add((position.symbol, position.exchange))
+
+            if not symbols_to_fetch:
+                return
 
             symbols_list = list(symbols_to_fetch)
 
-            # Fetch quotes using multiquotes (single API call)
-            quote_cache = self._fetch_quotes_batch(symbols_list)
+            # Try WebSocket data first (from MarketDataService)
+            quote_cache = self._fetch_quotes_from_websocket(symbols_list)
+            ws_count = len(quote_cache)
 
-            # Fallback: For any symbols that failed in batch, try individual fetch
-            failed_symbols = [s for s in symbols_list if s not in quote_cache or quote_cache[s] is None]
-            if failed_symbols:
-                logger.debug(f"Fetching {len(failed_symbols)} symbols individually (multiquotes fallback)")
-                for symbol, exchange in failed_symbols:
-                    quote = self._fetch_quote(symbol, exchange)
-                    if quote:
-                        quote_cache[(symbol, exchange)] = quote
+            # Find symbols that need fallback to multiquotes
+            missing_symbols = [s for s in symbols_list if s not in quote_cache or quote_cache[s] is None]
+
+            if missing_symbols:
+                # Fallback to multiquotes for missing symbols
+                logger.debug(f"Positions MTM: {ws_count} from WebSocket, {len(missing_symbols)} need multiquotes fallback")
+                multiquotes_cache = self._fetch_quotes_batch(missing_symbols)
+                quote_cache.update(multiquotes_cache)
+
+                # Final fallback: individual fetch for any still missing
+                still_missing = [s for s in missing_symbols if s not in quote_cache or quote_cache[s] is None]
+                if still_missing:
+                    logger.debug(f"Fetching {len(still_missing)} symbols individually")
+                    for symbol, exchange in still_missing:
+                        quote = self._fetch_quote(symbol, exchange)
+                        if quote:
+                            quote_cache[(symbol, exchange)] = quote
+            else:
+                logger.debug(f"Positions MTM: All {ws_count} symbols from WebSocket (no API calls)")
 
             # Update MTM for each position
             for position in positions:
@@ -529,14 +552,24 @@ class PositionManager:
             logger.error(f"Error updating positions MTM: {e}")
 
     def _update_single_position_mtm(self, position):
-        """Update MTM for a single position"""
+        """
+        Update MTM for a single position.
+        Uses WebSocket data first, falls back to REST API if unavailable.
+        """
         try:
             # Skip MTM update for closed positions (quantity = 0)
             # They already have today's realized P&L stored from when position was closed
             if position.quantity == 0:
                 return
 
-            quote = self._fetch_quote(position.symbol, position.exchange)
+            # Try WebSocket first
+            ws_quotes = self._fetch_quotes_from_websocket([(position.symbol, position.exchange)])
+            quote = ws_quotes.get((position.symbol, position.exchange))
+
+            # Fallback to REST API if WebSocket data not available
+            if not quote:
+                quote = self._fetch_quote(position.symbol, position.exchange)
+
             if quote:
                 ltp = Decimal(str(quote.get('ltp', 0)))
                 if ltp > 0:
@@ -604,6 +637,46 @@ class PositionManager:
         except Exception as e:
             logger.error(f"Error calculating P&L percent: {e}")
             return Decimal('0.00')
+
+    def _fetch_quotes_from_websocket(self, symbols_list):
+        """
+        Fetch LTP from WebSocket (MarketDataService) for multiple symbols.
+        Returns dict mapping (symbol, exchange) to quote data.
+        Only returns data that is fresh (within WEBSOCKET_DATA_MAX_AGE seconds).
+        """
+        quote_cache = {}
+
+        if not symbols_list:
+            return quote_cache
+
+        try:
+            market_data_service = get_market_data_service()
+            current_time = time.time()
+
+            for symbol, exchange in symbols_list:
+                # Get all cached data from MarketDataService
+                data = market_data_service.get_all_data(symbol, exchange)
+
+                if data:
+                    # Check if data is fresh using last_update timestamp
+                    last_update = data.get('last_update', 0)
+                    age = current_time - last_update
+
+                    if age <= WEBSOCKET_DATA_MAX_AGE:
+                        # Get LTP from the ltp sub-dict
+                        ltp_data = data.get('ltp', {})
+                        ltp = ltp_data.get('value') if isinstance(ltp_data, dict) else None
+
+                        if ltp and ltp > 0:
+                            quote_cache[(symbol, exchange)] = {'ltp': ltp}
+                    else:
+                        logger.debug(f"WebSocket data stale for {symbol} (age: {age:.1f}s)")
+
+            return quote_cache
+
+        except Exception as e:
+            logger.debug(f"Error fetching from WebSocket: {e}")
+            return quote_cache
 
     def _fetch_quote(self, symbol, exchange):
         """Fetch real-time quote for a symbol using API key"""

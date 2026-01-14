@@ -6,8 +6,11 @@ Manages the execution engine as a daemon thread that:
 - Starts automatically when analyzer mode is enabled
 - Stops gracefully when analyzer mode is disabled
 - Runs continuously in the background monitoring and executing orders
+- Supports WebSocket-based or polling-based execution
+- Automatic fallback to polling if WebSocket is unavailable
 """
 
+import os
 import threading
 import time
 from utils.logging import get_logger
@@ -17,8 +20,10 @@ logger = get_logger(__name__)
 
 # Global thread instance
 _execution_thread = None
+_websocket_engine = None
 _thread_lock = threading.Lock()
 _stop_event = threading.Event()
+_current_engine_type = None  # Track which engine type is running
 
 
 class ExecutionEngineThread(threading.Thread):
@@ -55,68 +60,178 @@ class ExecutionEngineThread(threading.Thread):
         self.stop_event.set()
 
 
-def start_execution_engine():
+def _is_websocket_proxy_healthy() -> bool:
+    """Check if WebSocket proxy is running and healthy"""
+    try:
+        from services.market_data_service import get_market_data_service, is_data_fresh
+        # Check if we have recent market data (within last 60 seconds)
+        return is_data_fresh(max_age_seconds=60)
+    except Exception:
+        return False
+
+
+def start_execution_engine(engine_type: str = None):
     """
     Start the execution engine daemon thread
     Thread-safe - only one instance will run
+
+    Args:
+        engine_type: 'websocket', 'polling', or None (auto-detect)
+
+    Engine selection priority:
+    1. If engine_type param is provided, use it
+    2. Otherwise, check SANDBOX_ENGINE_TYPE env var
+    3. Default: 'websocket' (with automatic fallback to polling if unavailable)
+
+    Fallback behavior:
+    - Always tries WebSocket first (unless explicitly set to 'polling')
+    - Automatically falls back to polling if WebSocket proxy is unhealthy
+    - WebSocket engine has built-in fallback to polling if data becomes stale
     """
-    global _execution_thread
+    global _execution_thread, _websocket_engine, _current_engine_type
 
     with _thread_lock:
+        # Check if any engine is already running
         if _execution_thread is not None and _execution_thread.is_alive():
-            logger.debug("Execution engine thread already running")
-            return True, "Execution engine already running"
+            logger.debug(f"Polling execution engine already running")
+            return True, f"Execution engine already running (type: polling)"
+
+        if _websocket_engine is not None:
+            from sandbox.websocket_execution_engine import is_websocket_execution_engine_running
+            if is_websocket_execution_engine_running():
+                logger.debug(f"WebSocket execution engine already running")
+                return True, f"Execution engine already running (type: websocket)"
+
+        # Determine engine type - default to websocket (with auto-fallback)
+        if engine_type is None:
+            engine_type = os.getenv('SANDBOX_ENGINE_TYPE', 'websocket').lower()
+
+        logger.info(f"Starting execution engine with type: {engine_type}")
 
         try:
+            if engine_type == 'websocket':
+                # Try WebSocket engine first
+                if _is_websocket_proxy_healthy():
+                    from sandbox.websocket_execution_engine import (
+                        get_websocket_execution_engine,
+                        start_websocket_execution_engine
+                    )
+                    success, message = start_websocket_execution_engine()
+                    if success:
+                        _websocket_engine = get_websocket_execution_engine()
+                        _current_engine_type = 'websocket'
+                        logger.info(f"WebSocket execution engine started (with built-in fallback)")
+                        return True, "WebSocket execution engine started"
+                    else:
+                        logger.warning(f"Failed to start WebSocket engine: {message}, falling back to polling")
+                else:
+                    logger.warning("WebSocket proxy not healthy, falling back to polling engine")
+
+                # Fallback to polling
+                engine_type = 'polling'
+
+            # Start polling engine (default)
             _execution_thread = ExecutionEngineThread()
             _execution_thread.start()
-            logger.debug("Execution engine thread started successfully")
-            return True, "Execution engine started"
+            _current_engine_type = 'polling'
+            logger.debug("Polling execution engine started successfully")
+            return True, "Polling execution engine started"
+
         except Exception as e:
-            logger.error(f"Failed to start execution engine thread: {e}")
+            logger.error(f"Failed to start execution engine: {e}")
             return False, f"Failed to start execution engine: {str(e)}"
 
 
 def stop_execution_engine():
     """
-    Stop the execution engine daemon thread gracefully
+    Stop the execution engine daemon thread gracefully.
+    Handles both WebSocket and polling engine types.
     """
-    global _execution_thread
+    global _execution_thread, _websocket_engine, _current_engine_type
 
     with _thread_lock:
-        if _execution_thread is None or not _execution_thread.is_alive():
-            logger.debug("Execution engine thread not running")
-            return True, "Execution engine not running"
+        stopped_any = False
 
-        try:
-            logger.info("Stopping execution engine thread...")
-            _execution_thread.stop()
+        # Stop WebSocket engine if running
+        if _websocket_engine is not None:
+            try:
+                from sandbox.websocket_execution_engine import stop_websocket_execution_engine
+                success, message = stop_websocket_execution_engine()
+                if success:
+                    logger.info("WebSocket execution engine stopped")
+                    stopped_any = True
+                _websocket_engine = None
+            except Exception as e:
+                logger.error(f"Error stopping WebSocket execution engine: {e}")
 
-            # Wait up to 10 seconds for thread to stop
-            _execution_thread.join(timeout=10)
+        # Stop polling engine if running
+        if _execution_thread is not None and _execution_thread.is_alive():
+            try:
+                logger.info("Stopping polling execution engine thread...")
+                _execution_thread.stop()
 
-            if _execution_thread.is_alive():
-                logger.warning("Execution engine thread did not stop gracefully")
-                return False, "Execution engine failed to stop"
+                # Wait up to 10 seconds for thread to stop
+                _execution_thread.join(timeout=10)
 
-            _execution_thread = None
-            logger.info("Execution engine thread stopped successfully")
+                if _execution_thread.is_alive():
+                    logger.warning("Polling execution engine thread did not stop gracefully")
+                else:
+                    logger.info("Polling execution engine thread stopped successfully")
+                    stopped_any = True
+
+                _execution_thread = None
+            except Exception as e:
+                logger.error(f"Error stopping polling execution engine: {e}")
+
+        _current_engine_type = None
+
+        if stopped_any:
             return True, "Execution engine stopped"
-        except Exception as e:
-            logger.error(f"Error stopping execution engine thread: {e}")
-            return False, f"Error stopping execution engine: {str(e)}"
+        else:
+            return True, "Execution engine not running"
 
 
 def is_execution_engine_running():
-    """Check if execution engine thread is running"""
-    global _execution_thread
-    return _execution_thread is not None and _execution_thread.is_alive()
+    """Check if any execution engine is running"""
+    global _execution_thread, _websocket_engine
+
+    # Check polling engine
+    if _execution_thread is not None and _execution_thread.is_alive():
+        return True
+
+    # Check WebSocket engine
+    if _websocket_engine is not None:
+        try:
+            from sandbox.websocket_execution_engine import is_websocket_execution_engine_running
+            if is_websocket_execution_engine_running():
+                return True
+        except Exception:
+            pass
+
+    return False
 
 
 def get_execution_engine_status():
     """Get status information about the execution engine"""
-    return {
-        'running': is_execution_engine_running(),
-        'thread_name': _execution_thread.name if _execution_thread else None,
-        'check_interval': int(get_config('order_check_interval', '5'))
+    global _current_engine_type
+
+    running = is_execution_engine_running()
+    engine_type = _current_engine_type if running else None
+
+    status = {
+        'running': running,
+        'engine_type': engine_type,
+        'check_interval': int(get_config('order_check_interval', '5')),
+        'configured_type': os.getenv('SANDBOX_ENGINE_TYPE', 'polling'),
     }
+
+    # Add thread info for polling engine
+    if _execution_thread is not None:
+        status['thread_name'] = _execution_thread.name
+        status['thread_alive'] = _execution_thread.is_alive()
+
+    # Add WebSocket engine info if available
+    if _websocket_engine is not None:
+        status['websocket_engine'] = True
+
+    return status

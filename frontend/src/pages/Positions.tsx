@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Download,
   Loader2,
+  Radio,
   RefreshCw,
   Settings2,
   TrendingDown,
@@ -46,6 +47,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { useMarketData } from '@/hooks/useMarketData'
 import { cn, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -142,6 +144,46 @@ export default function Positions() {
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
   const [settingsOpen, setSettingsOpen] = useState(false)
 
+  // Extract unique symbols for WebSocket subscription
+  const positionSymbols = useMemo(
+    () =>
+      positions.map((p) => ({
+        symbol: p.symbol,
+        exchange: p.exchange,
+      })),
+    [positions]
+  )
+
+  // WebSocket market data hook - same LTP source for both Live and Sandbox modes
+  const { data: marketData, isConnected: wsConnected } = useMarketData({
+    symbols: positionSymbols,
+    mode: 'LTP',
+    enabled: positions.length > 0,
+  })
+
+  // Enhance positions with real-time LTP from WebSocket (fallback to REST data)
+  const enhancedPositions = useMemo(() => {
+    return positions.map((pos) => {
+      const key = `${pos.exchange}:${pos.symbol}`
+      const wsData = marketData.get(key)
+
+      // Use WebSocket LTP if fresh (< 5 seconds old), otherwise use REST data
+      if (wsData?.data?.ltp && wsData.lastUpdate && Date.now() - wsData.lastUpdate < 5000) {
+        const ltp = wsData.data.ltp
+        const avgPrice = pos.average_price || 0
+        const qty = pos.quantity || 0
+
+        // Calculate PnL using real-time LTP
+        const pnl = (ltp - avgPrice) * qty
+        const investment = Math.abs(avgPrice * qty)
+        const pnlpercent = investment > 0 ? (pnl / investment) * 100 : 0
+
+        return { ...pos, ltp, pnl, pnlpercent }
+      }
+      return pos
+    })
+  }, [positions, marketData])
+
   // Load preferences from localStorage
   useEffect(() => {
     try {
@@ -199,9 +241,11 @@ export default function Positions() {
 
   useEffect(() => {
     fetchPositions()
-    const interval = setInterval(() => fetchPositions(), 10000)
+    // Reduce polling interval when WebSocket is connected (30s vs 10s)
+    const intervalMs = wsConnected ? 30000 : 10000
+    const interval = setInterval(() => fetchPositions(), intervalMs)
     return () => clearInterval(interval)
-  }, [fetchPositions])
+  }, [fetchPositions, wsConnected])
 
   // Listen for mode changes (live/analyze) and refresh data
   useEffect(() => {
@@ -235,9 +279,9 @@ export default function Positions() {
     [grouping]
   )
 
-  // Filter positions
+  // Filter positions (use enhancedPositions for real-time LTP/PnL)
   const filteredPositions = useMemo(() => {
-    return positions.filter((pos) => {
+    return enhancedPositions.filter((pos) => {
       if (filters.product.length > 0 && !filters.product.includes(pos.product)) return false
 
       const qty = pos.quantity || 0
@@ -254,7 +298,7 @@ export default function Positions() {
 
       return true
     })
-  }, [positions, filters])
+  }, [enhancedPositions, filters])
 
   // Sort positions
   const sortedPositions = useMemo(() => {
@@ -511,7 +555,18 @@ export default function Positions() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Positions</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-bold tracking-tight">Positions</h1>
+            {wsConnected && (
+              <Badge
+                variant="outline"
+                className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30 gap-1"
+              >
+                <Radio className="h-3 w-3 animate-pulse" />
+                Live
+              </Badge>
+            )}
+          </div>
           <p className="text-muted-foreground">Monitor and manage your active trading positions</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
