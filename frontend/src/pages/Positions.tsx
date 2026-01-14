@@ -162,23 +162,36 @@ export default function Positions() {
   })
 
   // Enhance positions with real-time LTP from WebSocket (fallback to REST data)
+  // For closed positions (qty=0), preserve the realized PnL from REST API
+  // For open positions (qty!=0), calculate unrealized PnL using real-time LTP
   const enhancedPositions = useMemo(() => {
     return positions.map((pos) => {
       const key = `${pos.exchange}:${pos.symbol}`
       const wsData = marketData.get(key)
+      const qty = pos.quantity || 0
 
       // Use WebSocket LTP if fresh (< 5 seconds old), otherwise use REST data
       if (wsData?.data?.ltp && wsData.lastUpdate && Date.now() - wsData.lastUpdate < 5000) {
         const ltp = wsData.data.ltp
+
+        // For closed positions (qty=0), keep the realized PnL from REST API
+        // Only recalculate PnL for open positions
+        if (qty === 0) {
+          // Position is closed - preserve realized PnL, just update LTP
+          return { ...pos, ltp }
+        }
+
+        // Open position - calculate unrealized PnL using real-time LTP
         const avgPrice = pos.average_price || 0
-        const qty = pos.quantity || 0
+        const unrealizedPnl = (ltp - avgPrice) * qty
 
-        // Calculate PnL using real-time LTP
-        const pnl = (ltp - avgPrice) * qty
+        // Total PnL = realized (from REST) + unrealized (calculated)
+        // Note: REST API's pnl for open positions is already unrealized,
+        // so we just replace it with our real-time calculation
         const investment = Math.abs(avgPrice * qty)
-        const pnlpercent = investment > 0 ? (pnl / investment) * 100 : 0
+        const pnlpercent = investment > 0 ? (unrealizedPnl / investment) * 100 : 0
 
-        return { ...pos, ltp, pnl, pnlpercent }
+        return { ...pos, ltp, pnl: unrealizedPnl, pnlpercent }
       }
       return pos
     })
