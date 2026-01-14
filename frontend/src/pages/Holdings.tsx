@@ -1,5 +1,13 @@
-import { Download, Loader2, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import {
+  Download,
+  Loader2,
+  Radio,
+  RefreshCw,
+  TrendingDown,
+  TrendingUp,
+} from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { io, type Socket } from 'socket.io-client'
 import { tradingApi } from '@/api/trading'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -8,10 +16,12 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableFooter,
   TableHead,
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { useMarketData } from '@/hooks/useMarketData'
 import { cn, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -36,6 +46,105 @@ export default function Holdings() {
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Extract unique symbols for WebSocket subscription
+  const holdingSymbols = useMemo(
+    () =>
+      holdings.map((h) => ({
+        symbol: h.symbol,
+        exchange: h.exchange,
+      })),
+    [holdings]
+  )
+
+  // WebSocket market data hook - same LTP source for both Live and Sandbox modes
+  const { data: marketData, isConnected: wsConnected } = useMarketData({
+    symbols: holdingSymbols,
+    mode: 'LTP',
+    enabled: holdings.length > 0,
+  })
+
+  // Enhance holdings with real-time LTP and calculated average price
+  const enhancedHoldings = useMemo(() => {
+    return holdings.map((holding) => {
+      const key = `${holding.exchange}:${holding.symbol}`
+      const wsData = marketData.get(key)
+      const qty = holding.quantity || 0
+
+      // Check if WebSocket LTP is fresh (< 5 seconds old)
+      const hasWsData =
+        wsData?.data?.ltp && wsData.lastUpdate && Date.now() - wsData.lastUpdate < 5000
+      const ltp = hasWsData ? wsData.data.ltp : holding.ltp
+
+      // If we have LTP and PnL, calculate average price backwards
+      // PnL = (LTP - AvgPrice) * Qty
+      // AvgPrice = LTP - (PnL / Qty)
+      let avgPrice = holding.average_price
+      const pnl = holding.pnl || 0
+
+      if (ltp && qty !== 0 && !avgPrice) {
+        avgPrice = ltp - pnl / qty
+      }
+
+      // If we have fresh WebSocket LTP, recalculate PnL
+      if (hasWsData && wsData?.data?.ltp && avgPrice && qty !== 0) {
+        const currentLtp = wsData.data.ltp
+        const newPnl = (currentLtp - avgPrice) * qty
+        const investment = Math.abs(avgPrice * qty)
+        const newPnlPercent = investment > 0 ? (newPnl / investment) * 100 : 0
+
+        return {
+          ...holding,
+          ltp: currentLtp,
+          average_price: avgPrice,
+          pnl: newPnl,
+          pnlpercent: newPnlPercent,
+        }
+      }
+
+      // Calculate pnlpercent if missing
+      let pnlpercent = holding.pnlpercent
+      if (avgPrice && qty !== 0 && pnlpercent === undefined) {
+        const investment = Math.abs(avgPrice * qty)
+        pnlpercent = investment > 0 ? (pnl / investment) * 100 : 0
+      }
+
+      return {
+        ...holding,
+        ltp: ltp ?? holding.ltp,
+        average_price: avgPrice,
+        pnlpercent: pnlpercent ?? 0,
+      }
+    })
+  }, [holdings, marketData])
+
+  // Calculate enhanced stats based on real-time data
+  const enhancedStats = useMemo(() => {
+    if (!stats || enhancedHoldings.length === 0) return stats
+
+    let totalPnl = 0
+    let totalInvestment = 0
+    let totalHoldingValue = 0
+
+    enhancedHoldings.forEach((h) => {
+      totalPnl += h.pnl || 0
+      const avgPrice = h.average_price || 0
+      const qty = h.quantity || 0
+      const ltp = h.ltp || avgPrice
+      totalInvestment += avgPrice * qty
+      totalHoldingValue += ltp * qty
+    })
+
+    const totalPnlPercent = totalInvestment > 0 ? (totalPnl / totalInvestment) * 100 : 0
+
+    return {
+      ...stats,
+      totalholdingvalue: totalHoldingValue,
+      totalinvvalue: totalInvestment,
+      totalprofitandloss: totalPnl,
+      totalpnlpercentage: totalPnlPercent,
+    }
+  }, [stats, enhancedHoldings])
 
   const fetchHoldings = useCallback(
     async (showRefresh = false) => {
@@ -67,9 +176,11 @@ export default function Holdings() {
 
   useEffect(() => {
     fetchHoldings()
-    const interval = setInterval(() => fetchHoldings(), 30000)
+    // Reduce polling interval when WebSocket is connected (30s vs 10s)
+    const intervalMs = wsConnected ? 30000 : 10000
+    const interval = setInterval(() => fetchHoldings(), intervalMs)
     return () => clearInterval(interval)
-  }, [fetchHoldings])
+  }, [fetchHoldings, wsConnected])
 
   // Listen for mode changes (live/analyze) and refresh data
   useEffect(() => {
@@ -79,12 +190,51 @@ export default function Holdings() {
     return () => unsubscribe()
   }, [fetchHoldings])
 
+  // Listen to Socket.IO events for order placement to trigger holdings refresh
+  const socketRef = useRef<Socket | null>(null)
+  useEffect(() => {
+    const protocol = window.location.protocol
+    const host = window.location.hostname
+    const port = window.location.port
+
+    socketRef.current = io(`${protocol}//${host}:${port}`, {
+      transports: ['websocket', 'polling'],
+    })
+
+    const socket = socketRef.current
+
+    // Refresh holdings when orders are placed/executed (may affect CNC holdings)
+    socket.on('order_event', () => {
+      setTimeout(() => fetchHoldings(), 500)
+    })
+
+    // Refresh holdings on analyzer updates (sandbox mode)
+    socket.on('analyzer_update', () => {
+      setTimeout(() => fetchHoldings(), 500)
+    })
+
+    return () => {
+      socket.disconnect()
+    }
+  }, [fetchHoldings])
+
   const exportToCSV = () => {
-    const headers = ['Symbol', 'Exchange', 'Quantity', 'Product', 'P&L', 'P&L %']
-    const rows = holdings.map((h) => [
+    const headers = [
+      'Symbol',
+      'Exchange',
+      'Quantity',
+      'Avg Price',
+      'LTP',
+      'Product',
+      'P&L',
+      'P&L %',
+    ]
+    const rows = enhancedHoldings.map((h) => [
       sanitizeCSV(h.symbol),
       sanitizeCSV(h.exchange),
       sanitizeCSV(h.quantity),
+      sanitizeCSV(h.average_price),
+      sanitizeCSV(h.ltp),
       sanitizeCSV(h.product),
       sanitizeCSV(h.pnl),
       sanitizeCSV(h.pnlpercent),
@@ -106,7 +256,18 @@ export default function Holdings() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Investor Summary</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-bold tracking-tight">Investor Summary</h1>
+            {wsConnected && (
+              <Badge
+                variant="outline"
+                className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30 gap-1"
+              >
+                <Radio className="h-3 w-3 animate-pulse" />
+                Live
+              </Badge>
+            )}
+          </div>
           <p className="text-muted-foreground">View your holdings portfolio</p>
         </div>
         <div className="flex items-center gap-2">
@@ -132,7 +293,7 @@ export default function Holdings() {
           <CardHeader className="pb-2">
             <CardDescription>Total Holding Value</CardDescription>
             <CardTitle className="text-2xl text-primary">
-              {stats ? formatCurrency(stats.totalholdingvalue) : '---'}
+              {enhancedStats ? formatCurrency(enhancedStats.totalholdingvalue) : '---'}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -140,7 +301,7 @@ export default function Holdings() {
           <CardHeader className="pb-2">
             <CardDescription>Total Investment Value</CardDescription>
             <CardTitle className="text-2xl">
-              {stats ? formatCurrency(stats.totalinvvalue) : '---'}
+              {enhancedStats ? formatCurrency(enhancedStats.totalinvvalue) : '---'}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -150,17 +311,19 @@ export default function Holdings() {
             <CardTitle
               className={cn(
                 'text-2xl',
-                stats && isProfit(stats.totalprofitandloss) ? 'text-green-600' : 'text-red-600'
+                enhancedStats && isProfit(enhancedStats.totalprofitandloss)
+                  ? 'text-green-600'
+                  : 'text-red-600'
               )}
             >
-              {stats ? (
+              {enhancedStats ? (
                 <div className="flex items-center gap-1">
-                  {isProfit(stats.totalprofitandloss) ? (
+                  {isProfit(enhancedStats.totalprofitandloss) ? (
                     <TrendingUp className="h-5 w-5" />
                   ) : (
                     <TrendingDown className="h-5 w-5" />
                   )}
-                  {formatCurrency(stats.totalprofitandloss)}
+                  {formatCurrency(enhancedStats.totalprofitandloss)}
                 </div>
               ) : (
                 '---'
@@ -174,10 +337,12 @@ export default function Holdings() {
             <CardTitle
               className={cn(
                 'text-2xl',
-                stats && isProfit(stats.totalpnlpercentage) ? 'text-green-600' : 'text-red-600'
+                enhancedStats && isProfit(enhancedStats.totalpnlpercentage)
+                  ? 'text-green-600'
+                  : 'text-red-600'
               )}
             >
-              {stats ? formatPercent(stats.totalpnlpercentage) : '---'}
+              {enhancedStats ? formatPercent(enhancedStats.totalpnlpercentage) : '---'}
             </CardTitle>
           </CardHeader>
         </Card>
@@ -202,19 +367,29 @@ export default function Holdings() {
                     <TableHead>Trading Symbol</TableHead>
                     <TableHead>Exchange</TableHead>
                     <TableHead className="text-right">Quantity</TableHead>
+                    <TableHead className="text-right">Avg Price</TableHead>
+                    <TableHead className="text-right">LTP</TableHead>
                     <TableHead>Product</TableHead>
                     <TableHead className="text-right">Profit and Loss</TableHead>
-                    <TableHead className="text-right">PnL Percentage</TableHead>
+                    <TableHead className="text-right">PnL %</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {holdings.map((holding, index) => (
+                  {enhancedHoldings.map((holding, index) => (
                     <TableRow key={`${holding.symbol}-${holding.exchange}-${index}`}>
                       <TableCell className="font-medium">{holding.symbol}</TableCell>
                       <TableCell>
                         <Badge variant="outline">{holding.exchange}</Badge>
                       </TableCell>
                       <TableCell className="text-right font-mono">{holding.quantity}</TableCell>
+                      <TableCell className="text-right font-mono">
+                        {holding.average_price !== undefined
+                          ? formatCurrency(holding.average_price)
+                          : '-'}
+                      </TableCell>
+                      <TableCell className="text-right font-mono">
+                        {holding.ltp !== undefined ? formatCurrency(holding.ltp) : '-'}
+                      </TableCell>
                       <TableCell>
                         <Badge variant="secondary">{holding.product}</Badge>
                       </TableCell>
@@ -244,6 +419,35 @@ export default function Holdings() {
                     </TableRow>
                   ))}
                 </TableBody>
+                <TableFooter>
+                  <TableRow className="bg-muted/50">
+                    <TableCell colSpan={6} className="text-right text-muted-foreground">
+                      Total P&L:
+                    </TableCell>
+                    <TableCell
+                      className={cn(
+                        'text-right font-bold',
+                        enhancedStats && isProfit(enhancedStats.totalprofitandloss)
+                          ? 'text-green-600'
+                          : 'text-red-600'
+                      )}
+                    >
+                      {enhancedStats
+                        ? `${enhancedStats.totalprofitandloss >= 0 ? '+' : ''}${formatCurrency(enhancedStats.totalprofitandloss)}`
+                        : '-'}
+                    </TableCell>
+                    <TableCell
+                      className={cn(
+                        'text-right font-bold',
+                        enhancedStats && isProfit(enhancedStats.totalpnlpercentage)
+                          ? 'text-green-600'
+                          : 'text-red-600'
+                      )}
+                    >
+                      {enhancedStats ? formatPercent(enhancedStats.totalpnlpercentage) : '-'}
+                    </TableCell>
+                  </TableRow>
+                </TableFooter>
               </Table>
             </div>
           )}

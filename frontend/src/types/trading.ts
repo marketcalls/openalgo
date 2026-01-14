@@ -42,6 +42,8 @@ export interface Holding {
   product: string
   pnl: number
   pnlpercent: number
+  ltp?: number
+  average_price?: number
 }
 
 export interface PortfolioStats {
