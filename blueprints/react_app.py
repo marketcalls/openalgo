@@ -392,6 +392,12 @@ def react_action_center():
     return serve_react_app()
 
 
+# Historify (Historical Data Management)
+@react_bp.route('/historify', strict_slashes=False)
+def react_historify():
+    return serve_react_app()
+
+
 # ============================================================
 # Static Assets - Always served for React app
 # ============================================================

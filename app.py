@@ -50,6 +50,7 @@ from blueprints.logging import logging_bp  # Import the logging blueprint
 from blueprints.playground import playground_bp  # Import the API playground blueprint
 from blueprints.admin import admin_bp  # Import the admin blueprint
 from blueprints.react_app import react_bp, is_react_frontend_available, serve_react_app  # Import React frontend blueprint
+from blueprints.historify import historify_bp  # Import the historify blueprint
 from services.telegram_bot_service import telegram_bot_service
 from database.telegram_db import get_bot_config
 
@@ -228,6 +229,7 @@ def create_app():
     app.register_blueprint(playground_bp)  # Register API playground blueprint
     app.register_blueprint(logging_bp)  # Register Logging blueprint
     app.register_blueprint(admin_bp)  # Register Admin blueprint
+    app.register_blueprint(historify_bp)  # Register Historify blueprint
 
 
     # Exempt webhook endpoints from CSRF protection after app initialization

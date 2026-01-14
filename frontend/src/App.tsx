@@ -45,6 +45,7 @@ const SandboxPnL = lazy(() => import('@/pages/SandboxPnL'))
 const Analyzer = lazy(() => import('@/pages/Analyzer'))
 const WebSocketTest = lazy(() => import('@/pages/WebSocketTest'))
 const Playground = lazy(() => import('@/pages/Playground'))
+const Historify = lazy(() => import('@/pages/Historify'))
 
 // Strategy pages
 const StrategyIndex = lazy(() => import('@/pages/strategy/StrategyIndex'))
@@ -170,6 +171,7 @@ function App() {
               {/* Full-width protected routes */}
               <Route element={<FullWidthLayout />}>
                 <Route path="/playground" element={<Playground />} />
+                <Route path="/historify" element={<Historify />} />
               </Route>
 
               {/* 404 Not Found */}
