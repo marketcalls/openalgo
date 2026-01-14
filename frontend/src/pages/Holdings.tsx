@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { io, type Socket } from 'socket.io-client'
-import { tradingApi } from '@/api/trading'
+import { tradingApi, type QuotesData } from '@/api/trading'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -47,6 +47,8 @@ export default function Holdings() {
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Map of "EXCHANGE:SYMBOL" -> QuotesData for fallback when market closed
+  const [multiQuotes, setMultiQuotes] = useState<Map<string, QuotesData>>(new Map())
 
   // Market status hook - check if markets are open
   const { isMarketOpen, isAnyMarketOpen } = useMarketStatus()
@@ -73,7 +75,7 @@ export default function Holdings() {
   const isLive = wsConnected && anyMarketOpen
 
   // Enhance holdings with real-time LTP and calculated average price
-  // Only update values when market is open and WebSocket data is available
+  // Priority: WebSocket (market open) → MultiQuotes (market closed) → REST API data
   const enhancedHoldings = useMemo(() => {
     return holdings.map((holding) => {
       const key = `${holding.exchange}:${holding.symbol}`
@@ -91,17 +93,29 @@ export default function Holdings() {
         wsData.lastUpdate &&
         Date.now() - wsData.lastUpdate < 5000
 
+      // Check if we have multiquotes data (fallback when WebSocket not available)
+      const multiQuoteData = multiQuotes.get(key)
+      const hasMultiQuoteData = !hasWsData && multiQuoteData?.ltp
+
+      // Determine the best available LTP source
+      let currentLtp: number | undefined
+      if (hasWsData && wsData?.data?.ltp) {
+        currentLtp = wsData.data.ltp
+      } else if (hasMultiQuoteData) {
+        currentLtp = multiQuoteData.ltp
+      } else {
+        currentLtp = holding.ltp
+      }
+
       // Calculate average price from REST data if not provided
       // AvgPrice = LTP - (PnL / Qty)
       let avgPrice = holding.average_price
-      if (!avgPrice && holding.ltp && qty !== 0) {
-        avgPrice = holding.ltp - originalPnl / qty
+      if (!avgPrice && currentLtp && qty !== 0) {
+        avgPrice = currentLtp - originalPnl / qty
       }
 
-      // If market is open and we have fresh WebSocket LTP, recalculate PnL
-      if (hasWsData && wsData?.data?.ltp && qty !== 0) {
-        const currentLtp = wsData.data.ltp
-
+      // If we have a current LTP (from WebSocket or MultiQuotes), recalculate PnL
+      if ((hasWsData || hasMultiQuoteData) && currentLtp && qty !== 0) {
         // Calculate avgPrice from original REST data if needed
         if (!avgPrice && holding.ltp) {
           avgPrice = holding.ltp - originalPnl / qty
@@ -122,15 +136,15 @@ export default function Holdings() {
         }
       }
 
-      // Market closed or no WebSocket data - preserve original REST API values
-      // Only calculate avgPrice if we have LTP from REST
+      // No live data available - use REST API values with calculated avgPrice
       return {
         ...holding,
+        ltp: currentLtp,
         average_price: avgPrice,
         // Keep original pnl and pnlpercent from REST API
       }
     })
-  }, [holdings, marketData, isMarketOpen])
+  }, [holdings, marketData, isMarketOpen, multiQuotes])
 
   // Calculate enhanced stats based on real-time data
   // Only recalculate if market is open and we have WebSocket data
@@ -178,6 +192,35 @@ export default function Holdings() {
     }
   }, [stats, enhancedHoldings, marketData, isMarketOpen])
 
+  // Fetch multiquotes for LTP when market is closed
+  const fetchMultiQuotes = useCallback(
+    async (holdingsList: Holding[]) => {
+      if (!apiKey || holdingsList.length === 0) return
+
+      try {
+        const symbols = holdingsList.map((h) => ({
+          symbol: h.symbol,
+          exchange: h.exchange,
+        }))
+        const response = await tradingApi.getMultiQuotes(apiKey, symbols)
+        if (response.status === 'success' && response.results) {
+          // Convert results array to Map for easy lookup
+          const quotesMap = new Map<string, QuotesData>()
+          response.results.forEach((result) => {
+            const key = `${result.exchange}:${result.symbol}`
+            if (result.data) {
+              quotesMap.set(key, result.data)
+            }
+          })
+          setMultiQuotes(quotesMap)
+        }
+      } catch {
+        // Silently fail - multiquotes is a fallback
+      }
+    },
+    [apiKey]
+  )
+
   const fetchHoldings = useCallback(
     async (showRefresh = false) => {
       if (!apiKey) {
@@ -190,9 +233,15 @@ export default function Holdings() {
       try {
         const response = await tradingApi.getHoldings(apiKey)
         if (response.status === 'success' && response.data) {
-          setHoldings(response.data.holdings || [])
+          const holdingsList = response.data.holdings || []
+          setHoldings(holdingsList)
           setStats(response.data.statistics)
           setError(null)
+
+          // Always fetch multiquotes as fallback for LTP data
+          if (holdingsList.length > 0) {
+            fetchMultiQuotes(holdingsList)
+          }
         } else {
           setError(response.message || 'Failed to fetch holdings')
         }
@@ -203,7 +252,7 @@ export default function Holdings() {
         setIsRefreshing(false)
       }
     },
-    [apiKey]
+    [apiKey, fetchMultiQuotes]
   )
 
   useEffect(() => {

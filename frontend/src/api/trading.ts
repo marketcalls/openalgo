@@ -23,6 +23,24 @@ export interface QuotesData {
   volume: number
 }
 
+export interface MultiQuotesSymbol {
+  symbol: string
+  exchange: string
+}
+
+export interface MultiQuotesResult {
+  symbol: string
+  exchange: string
+  data: QuotesData
+}
+
+// MultiQuotes API has a different response structure (results at root, not in data)
+export interface MultiQuotesApiResponse {
+  status: 'success' | 'error'
+  results?: MultiQuotesResult[]
+  message?: string
+}
+
 export const tradingApi = {
   /**
    * Get real-time quotes for a symbol
@@ -36,6 +54,20 @@ export const tradingApi = {
       apikey: apiKey,
       symbol,
       exchange,
+    })
+    return response.data
+  },
+
+  /**
+   * Get real-time quotes for multiple symbols
+   */
+  getMultiQuotes: async (
+    apiKey: string,
+    symbols: MultiQuotesSymbol[]
+  ): Promise<MultiQuotesApiResponse> => {
+    const response = await apiClient.post<MultiQuotesApiResponse>('/multiquotes', {
+      apikey: apiKey,
+      symbols,
     })
     return response.data
   },
