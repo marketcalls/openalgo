@@ -903,8 +903,9 @@ export default function Historify() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
-      if (!file.name.toLowerCase().endsWith('.csv')) {
-        toast.error('Please select a CSV file')
+      const fileName = file.name.toLowerCase()
+      if (!fileName.endsWith('.csv') && !fileName.endsWith('.parquet')) {
+        toast.error('Please select a CSV or Parquet file')
         return
       }
       setUploadFile(file)
@@ -913,7 +914,7 @@ export default function Historify() {
 
   const uploadCSVData = async () => {
     if (!uploadFile) {
-      toast.warning('Please select a CSV file')
+      toast.warning('Please select a CSV or Parquet file')
       return
     }
     if (!uploadSymbol.trim()) {
@@ -1925,8 +1926,8 @@ NIFTY24DEC25000CE,NFO"
       <Dialog open={uploadDialogOpen} onOpenChange={setUploadDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Import CSV Data</DialogTitle>
-            <DialogDescription>Upload a CSV file with OHLCV data</DialogDescription>
+            <DialogTitle>Import Data</DialogTitle>
+            <DialogDescription>Upload a CSV or Parquet file with OHLCV data</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div>
@@ -1972,17 +1973,23 @@ NIFTY24DEC25000CE,NFO"
               </div>
             </div>
             <div>
-              <Label>CSV File</Label>
+              <Label>Data File</Label>
               <Input
                 ref={fileInputRef}
                 type="file"
-                accept=".csv"
+                accept=".csv,.parquet"
                 onChange={handleFileChange}
                 className="mt-1"
               />
               {uploadFile && (
                 <p className="text-sm text-muted-foreground mt-1">Selected: {uploadFile.name}</p>
               )}
+              <p className="text-xs text-muted-foreground mt-2">
+                Download sample: {' '}
+                <a href="/historify/api/sample/csv" className="text-primary hover:underline">CSV</a>
+                {' | '}
+                <a href="/historify/api/sample/parquet" className="text-primary hover:underline">Parquet</a>
+              </p>
             </div>
           </div>
           <DialogFooter>

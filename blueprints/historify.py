@@ -678,11 +678,11 @@ MAX_UPLOAD_SIZE = 100 * 1024 * 1024
 
 @historify_bp.route('/api/upload', methods=['POST'])
 @check_session_validity
-def upload_csv():
-    """Upload CSV file with OHLCV data."""
+def upload_data():
+    """Upload CSV or Parquet file with OHLCV data."""
     temp_file = None
     try:
-        from services.historify_service import upload_csv_data
+        from services.historify_service import upload_csv_data, upload_parquet_data
 
         # Check if file is present
         if 'file' not in request.files:
@@ -693,8 +693,12 @@ def upload_csv():
         if file.filename == '':
             return jsonify({'status': 'error', 'message': 'No file selected'}), 400
 
-        if not file.filename.lower().endswith('.csv'):
-            return jsonify({'status': 'error', 'message': 'File must be a CSV'}), 400
+        filename_lower = file.filename.lower()
+        is_csv = filename_lower.endswith('.csv')
+        is_parquet = filename_lower.endswith('.parquet')
+
+        if not is_csv and not is_parquet:
+            return jsonify({'status': 'error', 'message': 'File must be CSV or Parquet'}), 400
 
         # Check file size by reading content length or checking stream
         file.seek(0, 2)  # Seek to end
@@ -719,9 +723,10 @@ def upload_csv():
             }), 400
 
         # Save file to secure temporary file with unique name
+        suffix = '.csv' if is_csv else '.parquet'
         temp_file = tempfile.NamedTemporaryFile(
             mode='wb',
-            suffix='.csv',
+            suffix=suffix,
             prefix='historify_upload_',
             delete=False
         )
@@ -730,12 +735,20 @@ def upload_csv():
         temp_file.close()
 
         try:
-            success, response, status_code = upload_csv_data(
-                file_path=temp_path,
-                symbol=symbol,
-                exchange=exchange,
-                interval=interval
-            )
+            if is_csv:
+                success, response, status_code = upload_csv_data(
+                    file_path=temp_path,
+                    symbol=symbol,
+                    exchange=exchange,
+                    interval=interval
+                )
+            else:
+                success, response, status_code = upload_parquet_data(
+                    file_path=temp_path,
+                    symbol=symbol,
+                    exchange=exchange,
+                    interval=interval
+                )
             return jsonify(response), status_code
         finally:
             # Clean up temp file
@@ -743,11 +756,57 @@ def upload_csv():
                 os.remove(temp_path)
 
     except Exception as e:
-        logger.error(f"Error uploading CSV: {e}")
+        logger.error(f"Error uploading data: {e}")
         traceback.print_exc()
         # Clean up temp file on error
         if temp_file and os.path.exists(temp_file.name):
             os.remove(temp_file.name)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/sample/<format_type>', methods=['GET'])
+@check_session_validity
+def download_sample(format_type):
+    """Download sample CSV or Parquet file for import reference."""
+    import io
+    import pandas as pd
+
+    try:
+        # Create sample data
+        sample_data = {
+            'timestamp': [1704067200, 1704153600, 1704240000, 1704326400, 1704412800],
+            'open': [100.0, 102.5, 101.0, 103.0, 104.5],
+            'high': [103.0, 104.0, 103.5, 105.0, 106.0],
+            'low': [99.5, 101.0, 100.5, 102.5, 103.5],
+            'close': [102.5, 101.0, 103.0, 104.5, 105.5],
+            'volume': [10000, 12000, 11000, 15000, 13000],
+            'oi': [0, 0, 0, 0, 0]
+        }
+        df = pd.DataFrame(sample_data)
+
+        if format_type == 'csv':
+            output = io.StringIO()
+            df.to_csv(output, index=False)
+            output.seek(0)
+            return Response(
+                output.getvalue(),
+                mimetype='text/csv',
+                headers={'Content-Disposition': 'attachment; filename=sample_ohlcv.csv'}
+            )
+        elif format_type == 'parquet':
+            output = io.BytesIO()
+            df.to_parquet(output, index=False, compression='zstd')
+            output.seek(0)
+            return Response(
+                output.getvalue(),
+                mimetype='application/octet-stream',
+                headers={'Content-Disposition': 'attachment; filename=sample_ohlcv.parquet'}
+            )
+        else:
+            return jsonify({'status': 'error', 'message': 'Invalid format. Use csv or parquet'}), 400
+
+    except Exception as e:
+        logger.error(f"Error generating sample file: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 

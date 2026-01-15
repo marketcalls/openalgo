@@ -417,14 +417,15 @@ export default function LogsPage() {
                         const responseJson = JSON.stringify(log.response_data, null, 2)
                         const requestLines = requestJson.split('\n').length
                         const responseLines = responseJson.split('\n').length
-                        const requestHeight = Math.min(Math.max(requestLines * 20 + 24, 100), 400)
-                        const responseHeight = Math.min(Math.max(responseLines * 20 + 24, 100), 400)
+                        // Allow up to 600px height, minimum 120px
+                        const requestHeight = Math.min(Math.max(requestLines * 20 + 24, 120), 600)
+                        const responseHeight = Math.min(Math.max(responseLines * 20 + 24, 120), 600)
 
                         return (
                           <>
                             <div className="bg-muted rounded-lg p-4">
                               <h4 className="text-sm font-medium mb-2">Request Data</h4>
-                              <div className="rounded-lg overflow-hidden border bg-card/50" style={{ height: requestHeight }}>
+                              <div className="rounded-lg border bg-card/50" style={{ height: requestHeight }}>
                                 <JsonEditor
                                   value={requestJson}
                                   readOnly={true}
@@ -434,7 +435,7 @@ export default function LogsPage() {
                             </div>
                             <div className="bg-muted rounded-lg p-4">
                               <h4 className="text-sm font-medium mb-2">Response Data</h4>
-                              <div className="rounded-lg overflow-hidden border bg-card/50" style={{ height: responseHeight }}>
+                              <div className="rounded-lg border bg-card/50" style={{ height: responseHeight }}>
                                 <JsonEditor
                                   value={responseJson}
                                   readOnly={true}

@@ -28,6 +28,7 @@ from database.historify_db import (
     get_database_stats,
     delete_market_data,
     import_from_csv as db_import_from_csv,
+    import_from_parquet as db_import_from_parquet,
     SUPPORTED_EXCHANGES,
     STORAGE_INTERVALS,
     COMPUTED_INTERVALS,
@@ -810,6 +811,69 @@ def upload_csv_data(
 
     except Exception as e:
         logger.error(f"Error uploading CSV: {e}")
+        return False, {
+            'status': 'error',
+            'message': str(e)
+        }, 500
+
+
+def upload_parquet_data(
+    file_path: str,
+    symbol: str,
+    exchange: str,
+    interval: str
+) -> Tuple[bool, Dict[str, Any], int]:
+    """
+    Upload Parquet data to the Historify database.
+
+    Args:
+        file_path: Path to the uploaded Parquet file
+        symbol: Trading symbol
+        exchange: Exchange code
+        interval: Time interval
+
+    Returns:
+        Tuple of (success, response_data, status_code)
+    """
+    try:
+        if not symbol or not exchange or not interval:
+            return False, {
+                'status': 'error',
+                'message': 'Symbol, exchange, and interval are required'
+            }, 400
+
+        if exchange.upper() not in SUPPORTED_EXCHANGES:
+            return False, {
+                'status': 'error',
+                'message': f'Invalid exchange. Supported: {", ".join(SUPPORTED_EXCHANGES)}'
+            }, 400
+
+        # Validate interval
+        if interval not in VALID_INTERVALS:
+            return False, {
+                'status': 'error',
+                'message': f'Invalid interval. Supported: {", ".join(sorted(VALID_INTERVALS))}'
+            }, 400
+
+        success, msg, records = db_import_from_parquet(file_path, symbol, exchange, interval)
+
+        if success:
+            return True, {
+                'status': 'success',
+                'message': msg,
+                'symbol': symbol.upper(),
+                'exchange': exchange.upper(),
+                'interval': interval,
+                'records': records
+            }, 200
+        else:
+            return False, {
+                'status': 'error',
+                'message': msg
+            }, 400
+
+    except Exception as e:
+        logger.error(f"Error uploading Parquet: {e}")
         return False, {
             'status': 'error',
             'message': str(e)

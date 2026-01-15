@@ -1363,6 +1363,102 @@ def import_from_csv(
         return False, str(e), 0
 
 
+def import_from_parquet(
+    file_path: str,
+    symbol: str,
+    exchange: str,
+    interval: str
+) -> Tuple[bool, str, int]:
+    """
+    Import OHLCV data from a Parquet file into the database.
+
+    Expected Parquet format - columns:
+        timestamp (int64 epoch seconds), open, high, low, close, volume, oi (optional)
+
+    Args:
+        file_path: Path to the Parquet file
+        symbol: Trading symbol
+        exchange: Exchange code
+        interval: Time interval (e.g., '1m', '5m', 'D')
+
+    Returns:
+        Tuple of (success, message, records_imported)
+    """
+    try:
+        # Read Parquet file
+        df = pd.read_parquet(file_path)
+
+        if df.empty:
+            return False, "Parquet file is empty", 0
+
+        # Normalize column names to lowercase
+        df.columns = df.columns.str.lower().str.strip()
+
+        # Handle timestamp column
+        if 'timestamp' in df.columns:
+            # Check if timestamp is already epoch seconds or milliseconds
+            if pd.api.types.is_numeric_dtype(df['timestamp']):
+                first_val = df['timestamp'].iloc[0]
+                if first_val > 1e12:
+                    df['timestamp'] = df['timestamp'] // 1000
+            else:
+                df['timestamp'] = pd.to_datetime(df['timestamp']).astype('int64') // 10**9
+        elif 'datetime' in df.columns:
+            df['timestamp'] = pd.to_datetime(df['datetime']).astype('int64') // 10**9
+        elif 'date' in df.columns:
+            if 'time' in df.columns:
+                df['datetime'] = df['date'].astype(str) + ' ' + df['time'].astype(str)
+            else:
+                df['datetime'] = df['date'].astype(str)
+            df['timestamp'] = pd.to_datetime(df['datetime']).astype('int64') // 10**9
+        else:
+            return False, "Parquet must have 'timestamp', 'datetime', or 'date' column", 0
+
+        # Validate required OHLCV columns
+        required_cols = ['open', 'high', 'low', 'close', 'volume']
+        missing_cols = [c for c in required_cols if c not in df.columns]
+        if missing_cols:
+            return False, f"Missing required columns: {', '.join(missing_cols)}", 0
+
+        # Add optional columns if missing
+        if 'oi' not in df.columns:
+            df['oi'] = 0
+
+        # Select and order columns
+        df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi']]
+
+        # Convert data types
+        df['timestamp'] = df['timestamp'].astype('int64')
+        df['open'] = pd.to_numeric(df['open'], errors='coerce')
+        df['high'] = pd.to_numeric(df['high'], errors='coerce')
+        df['low'] = pd.to_numeric(df['low'], errors='coerce')
+        df['close'] = pd.to_numeric(df['close'], errors='coerce')
+        df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0).astype('int64')
+        df['oi'] = pd.to_numeric(df['oi'], errors='coerce').fillna(0).astype('int64')
+
+        # Drop rows with NaN values in OHLC
+        initial_count = len(df)
+        df = df.dropna(subset=['open', 'high', 'low', 'close'])
+        dropped_count = initial_count - len(df)
+
+        if df.empty:
+            return False, "No valid data rows after parsing", 0
+
+        # Insert into database
+        records = upsert_market_data(df, symbol, exchange, interval)
+
+        msg = f"Imported {records} records"
+        if dropped_count > 0:
+            msg += f" ({dropped_count} rows skipped due to invalid data)"
+
+        logger.info(f"Parquet import: {msg} for {symbol}:{exchange}:{interval}")
+        return True, msg, records
+
+    except Exception as e:
+        logger.error(f"Error importing Parquet: {e}")
+        return False, str(e), 0
+
+
 # =============================================================================
 # Download Job Operations
 # =============================================================================
