@@ -541,6 +541,93 @@ export default function PythonStrategyGuide() {
                 </ul>
               </AccordionContent>
             </AccordionItem>
+
+            <AccordionItem value="add-libraries">
+              <AccordionTrigger>
+                <span className="flex items-center gap-2">
+                  <Code className="h-4 w-4" />
+                  How do I add new libraries like TA-Lib, pandas-ta, etc.?
+                </span>
+              </AccordionTrigger>
+              <AccordionContent className="text-muted-foreground space-y-3">
+                <p>
+                  If your strategy requires additional Python libraries (e.g., <code>talib</code>,
+                  <code>pandas-ta</code>, <code>numpy</code>), you need to install them in
+                  OpenAlgo's Python virtual environment.
+                </p>
+
+                <div className="bg-primary/10 border border-primary/20 p-4 rounded-lg space-y-4">
+                  <div>
+                    <p className="font-semibold text-primary mb-2">Method 1: Using UV (Recommended)</p>
+                    <p className="text-sm mb-2">
+                      If you installed OpenAlgo using the UV method:
+                    </p>
+                    <ol className="list-decimal list-inside space-y-2 ml-2 text-sm">
+                      <li>
+                        Open <code className="bg-muted px-1 rounded">openalgo/pyproject.toml</code>
+                      </li>
+                      <li>
+                        Add your library to the <code>dependencies</code> section:
+                        <pre className="bg-muted p-2 rounded mt-1 text-xs overflow-x-auto">
+{`[project]
+dependencies = [
+    "openalgo",
+    "TA-Lib",        # Add your library here
+    "pandas-ta",
+]`}
+                        </pre>
+                      </li>
+                      <li>
+                        Run <code className="bg-muted px-1 rounded">uv sync</code> in the openalgo directory
+                      </li>
+                      <li>Restart OpenAlgo</li>
+                    </ol>
+                  </div>
+
+                  <div className="border-t border-primary/20 pt-4">
+                    <p className="font-semibold text-primary mb-2">Method 2: Using Regular Python venv</p>
+                    <p className="text-sm mb-2">
+                      If you installed OpenAlgo using a regular Python virtual environment:
+                    </p>
+                    <ol className="list-decimal list-inside space-y-2 ml-2 text-sm">
+                      <li>
+                        Open <code className="bg-muted px-1 rounded">openalgo/requirements.txt</code>
+                      </li>
+                      <li>
+                        Add your library:
+                        <pre className="bg-muted p-2 rounded mt-1 text-xs overflow-x-auto">
+{`openalgo
+TA-Lib
+pandas-ta`}
+                        </pre>
+                      </li>
+                      <li>
+                        Activate your virtual environment and install:
+                        <pre className="bg-muted p-2 rounded mt-1 text-xs overflow-x-auto">
+{`# Activate venv first
+pip install -r requirements.txt`}
+                        </pre>
+                      </li>
+                      <li>Restart OpenAlgo</li>
+                    </ol>
+                  </div>
+                </div>
+
+                <Alert className="mt-3">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle>TA-Lib Installation Note</AlertTitle>
+                  <AlertDescription>
+                    TA-Lib requires the underlying C library to be installed first.
+                    On Mac: <code>brew install ta-lib</code><br />
+                    On Ubuntu: <code>sudo apt-get install libta-lib-dev</code><br />
+                    On Windows: Download from{' '}
+                    <a href="https://www.lfd.uci.edu/~gohlke/pythonlibs/#ta-lib" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                      unofficial binaries
+                    </a>
+                  </AlertDescription>
+                </Alert>
+              </AccordionContent>
+            </AccordionItem>
           </Accordion>
         </CardContent>
       </Card>
