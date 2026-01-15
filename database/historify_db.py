@@ -1838,8 +1838,9 @@ def export_to_zip(
 
                             if not df.empty:
                                 # Format timestamp as date and time columns
-                                df['date'] = pd.to_datetime(df['ts'], unit='s').dt.strftime('%Y-%m-%d')
-                                df['time'] = pd.to_datetime(df['ts'], unit='s').dt.strftime('%H:%M:%S')
+                                # Add IST offset (19800 seconds) for display since aggregated timestamps are UTC
+                                df['date'] = pd.to_datetime(df['ts'] + ist_offset, unit='s').dt.strftime('%Y-%m-%d')
+                                df['time'] = pd.to_datetime(df['ts'] + ist_offset, unit='s').dt.strftime('%H:%M:%S')
                                 df = df[['date', 'time', 'open', 'high', 'low', 'close', 'volume', 'oi']]
 
                         else:
