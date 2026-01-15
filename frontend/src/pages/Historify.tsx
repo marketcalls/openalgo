@@ -3,7 +3,6 @@ import {
   CheckCircle,
   Clock,
   Database,
-  Download,
   DownloadCloud,
   FileDown,
   HardDrive,
@@ -14,7 +13,6 @@ import {
   Play,
   Plus,
   RefreshCw,
-  Search,
   Settings,
   Square,
   Target,
@@ -40,7 +38,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -103,6 +101,21 @@ interface CatalogItem {
   last_date?: string
 }
 
+// Grouped catalog item - groups all intervals for a symbol
+interface GroupedCatalogItem {
+  symbol: string
+  exchange: string
+  intervals: {
+    interval: string
+    record_count: number
+    first_date?: string
+    last_date?: string
+  }[]
+  total_records: number
+  earliest_date?: string
+  latest_date?: string
+}
+
 interface IntervalData {
   seconds: string[]
   minutes: string[]
@@ -112,17 +125,18 @@ interface IntervalData {
   months: string[]
 }
 
-interface FNOSymbol {
-  symbol: string
-  name: string
-  exchange: string
-  token: string
-  expiry?: string
-  strike?: number
-  lotsize?: number
-  instrumenttype?: string
-  tick_size?: number
-}
+// FNOSymbol interface (will be used when FNO Discovery is enabled)
+// interface FNOSymbol {
+//   symbol: string
+//   name: string
+//   exchange: string
+//   token: string
+//   expiry?: string
+//   strike?: number
+//   lotsize?: number
+//   instrumenttype?: string
+//   tick_size?: number
+// }
 
 interface DownloadJob {
   id: string
@@ -185,7 +199,7 @@ export default function Historify() {
   // Core state
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([])
   const [catalog, setCatalog] = useState<CatalogItem[]>([])
-  const [intervals, setIntervals] = useState<IntervalData | null>(null)
+  const [_intervals, setIntervals] = useState<IntervalData | null>(null)
   const [historifyIntervals, setHistorifyIntervals] = useState<{
     storage_intervals: string[]
     computed_intervals: string[]
@@ -195,7 +209,7 @@ export default function Historify() {
   const [stats, setStats] = useState<Stats>({ database_size_mb: 0, total_records: 0, total_symbols: 0, watchlist_count: 0 })
 
   // Tab state
-  const [activeTab, setActiveTab] = useState<string>('catalog')
+  const [activeTab, setActiveTab] = useState<string>('watchlist')
 
   // Symbol search state
   const [newSymbol, setNewSymbol] = useState('')
@@ -210,18 +224,18 @@ export default function Historify() {
   const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0])
   const [incrementalDownload, setIncrementalDownload] = useState(false)
 
-  // FNO Discovery state
-  const [fnoExchange, setFnoExchange] = useState<string>('NFO')
-  const [fnoUnderlyings, setFnoUnderlyings] = useState<string[]>([])
-  const [fnoSelectedUnderlying, setFnoSelectedUnderlying] = useState<string>('')
-  const [fnoExpiries, setFnoExpiries] = useState<string[]>([])
-  const [fnoSelectedExpiry, setFnoSelectedExpiry] = useState<string>('')
-  const [fnoInstrumentType, setFnoInstrumentType] = useState<string>('__all__')
-  const [fnoStrikeMin, setFnoStrikeMin] = useState<string>('')
-  const [fnoStrikeMax, setFnoStrikeMax] = useState<string>('')
-  const [fnoSymbols, setFnoSymbols] = useState<FNOSymbol[]>([])
-  const [fnoSelectedSymbols, setFnoSelectedSymbols] = useState<Set<string>>(new Set())
-  const [fnoLoading, setFnoLoading] = useState(false)
+  // FNO Discovery state (disabled for now - will be added later)
+  // const [fnoExchange, setFnoExchange] = useState<string>('NFO')
+  // const [fnoUnderlyings, setFnoUnderlyings] = useState<string[]>([])
+  // const [fnoSelectedUnderlying, setFnoSelectedUnderlying] = useState<string>('')
+  // const [fnoExpiries, setFnoExpiries] = useState<string[]>([])
+  // const [fnoSelectedExpiry, setFnoSelectedExpiry] = useState<string>('')
+  // const [fnoInstrumentType, setFnoInstrumentType] = useState<string>('__all__')
+  // const [fnoStrikeMin, setFnoStrikeMin] = useState<string>('')
+  // const [fnoStrikeMax, setFnoStrikeMax] = useState<string>('')
+  // const [fnoSymbols, setFnoSymbols] = useState<FNOSymbol[]>([])
+  // const [fnoSelectedSymbols, setFnoSelectedSymbols] = useState<Set<string>>(new Set())
+  // const [fnoLoading, setFnoLoading] = useState(false)
 
   // Job management state
   const [jobs, setJobs] = useState<DownloadJob[]>([])
@@ -247,8 +261,12 @@ export default function Historify() {
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
   const [exportFormat, setExportFormat] = useState<'csv' | 'txt' | 'zip' | 'parquet'>('csv')
   const [exportSymbols, setExportSymbols] = useState<'all' | 'selected'>('all')
+  const [exportIntervals, setExportIntervals] = useState<Set<string>>(new Set(['D']))  // Multi-select intervals
   const [catalogSelectedSymbols, setCatalogSelectedSymbols] = useState<Set<string>>(new Set())
   const [isExporting, setIsExporting] = useState(false)
+
+  // Watchlist selection state (for downloading specific symbols)
+  const [watchlistSelectedSymbols, setWatchlistSelectedSymbols] = useState<Set<string>>(new Set())
 
   // Catalog filtering
   const [catalogFilter, setCatalogFilter] = useState({ exchange: '', interval: '', search: '' })
@@ -256,19 +274,80 @@ export default function Historify() {
   // Socket.IO for real-time progress
   const { socket } = useSocket()
 
-  // Computed values
-  const allIntervals = intervals
-    ? [...intervals.seconds, ...intervals.minutes, ...intervals.hours, ...intervals.days, ...intervals.weeks, ...intervals.months]
-    : ['D']
+  // Computed values (allIntervals not needed for now since we use storage_intervals)
+  // const allIntervals = intervals
+  //   ? [...intervals.seconds, ...intervals.minutes, ...intervals.hours, ...intervals.days, ...intervals.weeks, ...intervals.months]
+  //   : ['D']
 
-  const filteredCatalog = useMemo(() => {
-    return catalog.filter((item) => {
+  // Group catalog by symbol+exchange to show unique symbols with all their intervals
+  const groupedCatalog = useMemo((): GroupedCatalogItem[] => {
+    const groups = new Map<string, GroupedCatalogItem>()
+
+    for (const item of catalog) {
+      const key = `${item.symbol}:${item.exchange}`
+
+      if (!groups.has(key)) {
+        groups.set(key, {
+          symbol: item.symbol,
+          exchange: item.exchange,
+          intervals: [],
+          total_records: 0,
+          earliest_date: item.first_date,
+          latest_date: item.last_date,
+        })
+      }
+
+      const group = groups.get(key)!
+      group.intervals.push({
+        interval: item.interval,
+        record_count: item.record_count,
+        first_date: item.first_date,
+        last_date: item.last_date,
+      })
+      group.total_records += item.record_count
+
+      // Update date range
+      if (item.first_date && (!group.earliest_date || item.first_date < group.earliest_date)) {
+        group.earliest_date = item.first_date
+      }
+      if (item.last_date && (!group.latest_date || item.last_date > group.latest_date)) {
+        group.latest_date = item.last_date
+      }
+    }
+
+    // Sort intervals within each group
+    for (const group of groups.values()) {
+      group.intervals.sort((a, b) => {
+        const order = ['1m', '5m', '15m', '30m', '1h', 'D', 'W', 'M']
+        return order.indexOf(a.interval) - order.indexOf(b.interval)
+      })
+    }
+
+    return Array.from(groups.values()).sort((a, b) => a.symbol.localeCompare(b.symbol))
+  }, [catalog])
+
+  // Filter grouped catalog
+  const filteredGroupedCatalog = useMemo(() => {
+    return groupedCatalog.filter((item) => {
       if (catalogFilter.exchange && catalogFilter.exchange !== '__all__' && item.exchange !== catalogFilter.exchange) return false
-      if (catalogFilter.interval && catalogFilter.interval !== '__all__' && item.interval !== catalogFilter.interval) return false
+      if (catalogFilter.interval && catalogFilter.interval !== '__all__') {
+        // Show symbols that have the selected interval
+        if (!item.intervals.some((i) => i.interval === catalogFilter.interval)) return false
+      }
       if (catalogFilter.search && !item.symbol.toLowerCase().includes(catalogFilter.search.toLowerCase())) return false
       return true
     })
-  }, [catalog, catalogFilter])
+  }, [groupedCatalog, catalogFilter])
+
+  // Note: filteredCatalog not currently used - export uses catalogSelectedSymbols directly
+  // const filteredCatalog = useMemo(() => {
+  //   return catalog.filter((item) => {
+  //     if (catalogFilter.exchange && catalogFilter.exchange !== '__all__' && item.exchange !== catalogFilter.exchange) return false
+  //     if (catalogFilter.interval && catalogFilter.interval !== '__all__' && item.interval !== catalogFilter.interval) return false
+  //     if (catalogFilter.search && !item.symbol.toLowerCase().includes(catalogFilter.search.toLowerCase())) return false
+  //     return true
+  //   })
+  // }, [catalog, catalogFilter])
 
   // Load data on mount
   useEffect(() => {
@@ -323,14 +402,14 @@ export default function Historify() {
     }
   }, [socket])
 
-  // FNO data loading
-  useEffect(() => {
-    if (fnoExchange) loadFnoUnderlyings()
-  }, [fnoExchange])
+  // FNO data loading (disabled for now)
+  // useEffect(() => {
+  //   if (fnoExchange) loadFnoUnderlyings()
+  // }, [fnoExchange])
 
-  useEffect(() => {
-    if (fnoSelectedUnderlying && fnoExchange) loadFnoExpiries()
-  }, [fnoSelectedUnderlying, fnoExchange])
+  // useEffect(() => {
+  //   if (fnoSelectedUnderlying && fnoExchange) loadFnoExpiries()
+  // }, [fnoSelectedUnderlying, fnoExchange])
 
   // Click outside handler for search
   useEffect(() => {
@@ -544,66 +623,66 @@ export default function Historify() {
     }
   }
 
-  // FNO Discovery functions
-  const loadFnoUnderlyings = async () => {
-    try {
-      const response = await fetch(`/historify/api/fno/underlyings?exchange=${fnoExchange}`, { credentials: 'include' })
-      const data = await response.json()
-      if (data.status === 'success') {
-        setFnoUnderlyings(data.data || [])
-        setFnoSelectedUnderlying('')
-        setFnoExpiries([])
-        setFnoSelectedExpiry('')
-        setFnoSymbols([])
-      }
-    } catch (error) {
-      console.error('Error loading FNO underlyings:', error)
-    }
-  }
+  // FNO Discovery functions (disabled for now)
+  // const loadFnoUnderlyings = async () => {
+  //   try {
+  //     const response = await fetch(`/historify/api/fno/underlyings?exchange=${fnoExchange}`, { credentials: 'include' })
+  //     const data = await response.json()
+  //     if (data.status === 'success') {
+  //       setFnoUnderlyings(data.data || [])
+  //       setFnoSelectedUnderlying('')
+  //       setFnoExpiries([])
+  //       setFnoSelectedExpiry('')
+  //       setFnoSymbols([])
+  //     }
+  //   } catch (error) {
+  //     console.error('Error loading FNO underlyings:', error)
+  //   }
+  // }
 
-  const loadFnoExpiries = async () => {
-    try {
-      const params = new URLSearchParams({ underlying: fnoSelectedUnderlying, exchange: fnoExchange })
-      const response = await fetch(`/historify/api/fno/expiries?${params}`, { credentials: 'include' })
-      const data = await response.json()
-      if (data.status === 'success') {
-        setFnoExpiries(data.data || [])
-        setFnoSelectedExpiry('')
-      }
-    } catch (error) {
-      console.error('Error loading FNO expiries:', error)
-    }
-  }
+  // const loadFnoExpiries = async () => {
+  //   try {
+  //     const params = new URLSearchParams({ underlying: fnoSelectedUnderlying, exchange: fnoExchange })
+  //     const response = await fetch(`/historify/api/fno/expiries?${params}`, { credentials: 'include' })
+  //     const data = await response.json()
+  //     if (data.status === 'success') {
+  //       setFnoExpiries(data.data || [])
+  //       setFnoSelectedExpiry('')
+  //     }
+  //   } catch (error) {
+  //     console.error('Error loading FNO expiries:', error)
+  //   }
+  // }
 
-  const loadFnoChain = async () => {
-    if (!fnoSelectedUnderlying) {
-      toast.warning('Please select an underlying')
-      return
-    }
-    setFnoLoading(true)
-    try {
-      const params = new URLSearchParams({ underlying: fnoSelectedUnderlying, exchange: fnoExchange, limit: '5000' })
-      if (fnoSelectedExpiry) params.append('expiry', fnoSelectedExpiry)
-      if (fnoInstrumentType && fnoInstrumentType !== '__all__') params.append('instrumenttype', fnoInstrumentType)
-      if (fnoStrikeMin) params.append('strike_min', fnoStrikeMin)
-      if (fnoStrikeMax) params.append('strike_max', fnoStrikeMax)
+  // const loadFnoChain = async () => {
+  //   if (!fnoSelectedUnderlying) {
+  //     toast.warning('Please select an underlying')
+  //     return
+  //   }
+  //   setFnoLoading(true)
+  //   try {
+  //     const params = new URLSearchParams({ underlying: fnoSelectedUnderlying, exchange: fnoExchange, limit: '5000' })
+  //     if (fnoSelectedExpiry) params.append('expiry', fnoSelectedExpiry)
+  //     if (fnoInstrumentType && fnoInstrumentType !== '__all__') params.append('instrumenttype', fnoInstrumentType)
+  //     if (fnoStrikeMin) params.append('strike_min', fnoStrikeMin)
+  //     if (fnoStrikeMax) params.append('strike_max', fnoStrikeMax)
 
-      const response = await fetch(`/historify/api/fno/chain?${params}`, { credentials: 'include' })
-      const data = await response.json()
-      if (data.status === 'success') {
-        setFnoSymbols(data.data || [])
-        setFnoSelectedSymbols(new Set())
-        toast.success(`Found ${data.count} symbols`)
-      } else {
-        toast.error(data.message || 'Failed to load FNO chain')
-      }
-    } catch (error) {
-      console.error('Error loading FNO chain:', error)
-      toast.error('Failed to load FNO chain')
-    } finally {
-      setFnoLoading(false)
-    }
-  }
+  //     const response = await fetch(`/historify/api/fno/chain?${params}`, { credentials: 'include' })
+  //     const data = await response.json()
+  //     if (data.status === 'success') {
+  //       setFnoSymbols(data.data || [])
+  //       setFnoSelectedSymbols(new Set())
+  //       toast.success(`Found ${data.count} symbols`)
+  //     } else {
+  //       toast.error(data.message || 'Failed to load FNO chain')
+  //     }
+  //   } catch (error) {
+  //     console.error('Error loading FNO chain:', error)
+  //     toast.error('Failed to load FNO chain')
+  //   } finally {
+  //     setFnoLoading(false)
+  //   }
+  // }
 
   // Job operations
   const createDownloadJob = async (symbols: { symbol: string; exchange: string }[], jobType: string = 'custom') => {
@@ -851,15 +930,19 @@ export default function Historify() {
             const [symbol, exchange] = key.split(':')
             return { symbol, exchange }
           })
-        : null
+        : null  // null means export all symbols
+
+      // Convert Set to array for API
+      const intervalsArray = Array.from(exportIntervals)
 
       const response = await fetch('/historify/api/export/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
         credentials: 'include',
         body: JSON.stringify({
-          format: exportFormat,
+          format: exportFormat === 'csv' && intervalsArray.length > 1 ? 'zip' : exportFormat,  // Force ZIP if multiple intervals
           symbols,
+          intervals: intervalsArray,  // Pass multiple intervals
           compression: 'zstd',
         }),
       })
@@ -890,14 +973,15 @@ export default function Historify() {
     })
   }
 
-  const toggleFnoSymbol = (symbol: string) => {
-    setFnoSelectedSymbols((prev) => {
-      const next = new Set(prev)
-      if (next.has(symbol)) next.delete(symbol)
-      else next.add(symbol)
-      return next
-    })
-  }
+  // FNO toggle (disabled for now)
+  // const toggleFnoSymbol = (symbol: string) => {
+  //   setFnoSelectedSymbols((prev) => {
+  //     const next = new Set(prev)
+  //     if (next.has(symbol)) next.delete(symbol)
+  //     else next.add(symbol)
+  //     return next
+  //   })
+  // }
 
   const getJobStatusColor = (status: string) => {
     switch (status) {
@@ -975,11 +1059,6 @@ export default function Historify() {
           {/* Tab Navigation - Scrollable on mobile */}
           <div className="border-b border-border px-4 overflow-x-auto">
             <TabsList className="h-10 bg-transparent w-max min-w-full sm:w-auto">
-              <TabsTrigger value="catalog" className="gap-1.5 data-[state=active]:bg-muted">
-                <Database className="h-4 w-4" />
-                <span className="hidden sm:inline">Data Catalog</span>
-                <span className="sm:hidden">Catalog</span>
-              </TabsTrigger>
               <TabsTrigger value="watchlist" className="gap-1.5 data-[state=active]:bg-muted">
                 <Target className="h-4 w-4" />
                 <span className="hidden sm:inline">Watchlist</span>
@@ -988,10 +1067,10 @@ export default function Historify() {
                   <Badge variant="secondary" className="ml-1 h-5 min-w-5 text-xs">{watchlist.length}</Badge>
                 )}
               </TabsTrigger>
-              <TabsTrigger value="fno" className="gap-1.5 data-[state=active]:bg-muted">
-                <Search className="h-4 w-4" />
-                <span className="hidden sm:inline">FNO Discovery</span>
-                <span className="sm:hidden">FNO</span>
+              <TabsTrigger value="catalog" className="gap-1.5 data-[state=active]:bg-muted">
+                <Database className="h-4 w-4" />
+                <span className="hidden sm:inline">Data Catalog</span>
+                <span className="sm:hidden">Catalog</span>
               </TabsTrigger>
               <TabsTrigger value="jobs" className="gap-1.5 data-[state=active]:bg-muted">
                 <DownloadCloud className="h-4 w-4" />
@@ -1011,172 +1090,13 @@ export default function Historify() {
             {/* Data Catalog Tab */}
             <TabsContent value="catalog" className="h-full m-0 p-4 overflow-auto">
               <div className="space-y-4">
-                {/* Filters */}
+                {/* Quick Add Symbol */}
                 <Card>
                   <CardContent className="p-4">
                     <div className="flex flex-col sm:flex-row gap-3">
-                      <div className="flex-1">
-                        <Input
-                          placeholder="Search symbols..."
-                          value={catalogFilter.search}
-                          onChange={(e) => setCatalogFilter((prev) => ({ ...prev, search: e.target.value }))}
-                          className="h-9"
-                        />
-                      </div>
-                      <Select
-                        value={catalogFilter.exchange || '__all__'}
-                        onValueChange={(v) => setCatalogFilter((prev) => ({ ...prev, exchange: v }))}
-                      >
-                        <SelectTrigger className="w-full sm:w-32 h-9">
-                          <SelectValue placeholder="Exchange" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__all__">All</SelectItem>
-                          {exchanges.map((ex) => (
-                            <SelectItem key={ex} value={ex}>{ex}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Select
-                        value={catalogFilter.interval || '__all__'}
-                        onValueChange={(v) => setCatalogFilter((prev) => ({ ...prev, interval: v }))}
-                      >
-                        <SelectTrigger className="w-full sm:w-24 h-9">
-                          <SelectValue placeholder="Interval" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__all__">All</SelectItem>
-                          {allIntervals.map((int) => (
-                            <SelectItem key={int} value={int}>{int}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setExportDialogOpen(true)}
-                          disabled={catalog.length === 0}
-                          className="h-9"
-                        >
-                          <FileDown className="h-4 w-4 mr-1" />
-                          Export
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={() => setUploadDialogOpen(true)} className="h-9">
-                          <Upload className="h-4 w-4 mr-1" />
-                          Import
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Catalog Table */}
-                <Card>
-                  <ScrollArea className="h-[calc(100vh-320px)]">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="w-10">
-                            <Checkbox
-                              checked={catalogSelectedSymbols.size === filteredCatalog.length && filteredCatalog.length > 0}
-                              onCheckedChange={(checked) => {
-                                if (checked) {
-                                  setCatalogSelectedSymbols(new Set(filteredCatalog.map((c) => `${c.symbol}:${c.exchange}`)))
-                                } else {
-                                  setCatalogSelectedSymbols(new Set())
-                                }
-                              }}
-                            />
-                          </TableHead>
-                          <TableHead>Symbol</TableHead>
-                          <TableHead className="hidden sm:table-cell">Exchange</TableHead>
-                          <TableHead className="hidden sm:table-cell">Interval</TableHead>
-                          <TableHead className="text-right">Records</TableHead>
-                          <TableHead className="hidden md:table-cell">Date Range</TableHead>
-                          <TableHead className="w-20"></TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {filteredCatalog.length === 0 ? (
-                          <TableRow>
-                            <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                              No data available. Add symbols to watchlist and download data.
-                            </TableCell>
-                          </TableRow>
-                        ) : (
-                          filteredCatalog.map((item) => (
-                            <TableRow key={`${item.symbol}-${item.exchange}-${item.interval}`}>
-                              <TableCell>
-                                <Checkbox
-                                  checked={catalogSelectedSymbols.has(`${item.symbol}:${item.exchange}`)}
-                                  onCheckedChange={() => toggleCatalogSymbol(item.symbol, item.exchange)}
-                                />
-                              </TableCell>
-                              <TableCell className="font-medium">
-                                <div>
-                                  {item.symbol}
-                                  <span className="sm:hidden text-xs text-muted-foreground ml-1">
-                                    ({item.exchange})
-                                  </span>
-                                </div>
-                              </TableCell>
-                              <TableCell className="hidden sm:table-cell">
-                                <Badge variant="outline">{item.exchange}</Badge>
-                              </TableCell>
-                              <TableCell className="hidden sm:table-cell">{item.interval}</TableCell>
-                              <TableCell className="text-right">{item.record_count.toLocaleString()}</TableCell>
-                              <TableCell className="hidden md:table-cell text-muted-foreground text-sm">
-                                {item.first_date} - {item.last_date}
-                              </TableCell>
-                              <TableCell>
-                                <div className="flex gap-1">
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-7 w-7"
-                                    asChild
-                                  >
-                                    <Link to={`/historify/charts/${item.symbol}?exchange=${item.exchange}&interval=${item.interval}`}>
-                                      <LineChart className="h-3.5 w-3.5" />
-                                    </Link>
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-7 w-7 text-destructive hover:text-destructive"
-                                    onClick={() => {
-                                      setDeleteTarget({ symbol: item.symbol, exchange: item.exchange, interval: item.interval })
-                                      setDeleteDialogOpen(true)
-                                    }}
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                  </Button>
-                                </div>
-                              </TableCell>
-                            </TableRow>
-                          ))
-                        )}
-                      </TableBody>
-                    </Table>
-                  </ScrollArea>
-                </Card>
-              </div>
-            </TabsContent>
-
-            {/* Watchlist Tab */}
-            <TabsContent value="watchlist" className="h-full m-0 p-4 overflow-auto">
-              <div className="space-y-4">
-                {/* Add Symbol Form */}
-                <Card>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-base">Add Symbol</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="flex flex-col sm:flex-row gap-3">
                       <div className="flex-1 relative" ref={searchContainerRef}>
                         <Input
-                          placeholder="Search symbol..."
+                          placeholder="Quick add symbol to watchlist..."
                           value={newSymbol}
                           onChange={(e) => setNewSymbol(e.target.value.toUpperCase())}
                           className="h-9"
@@ -1210,11 +1130,11 @@ export default function Historify() {
                           ))}
                         </SelectContent>
                       </Select>
-                      <Button onClick={addToWatchlist} className="h-9">
+                      <Button onClick={addToWatchlist} className="h-9" size="sm">
                         <Plus className="h-4 w-4 mr-1" />
-                        Add
+                        Add to Watchlist
                       </Button>
-                      <Button variant="outline" onClick={() => setBulkAddDialogOpen(true)} className="h-9">
+                      <Button variant="outline" onClick={() => setBulkAddDialogOpen(true)} className="h-9" size="sm">
                         <ListPlus className="h-4 w-4 mr-1" />
                         Bulk
                       </Button>
@@ -1222,15 +1142,242 @@ export default function Historify() {
                   </CardContent>
                 </Card>
 
-                {/* Download Settings */}
+                {/* Filters */}
                 <Card>
+                  <CardContent className="p-4">
+                    <div className="flex flex-col sm:flex-row gap-3">
+                      <div className="flex-1">
+                        <Input
+                          placeholder="Filter catalog symbols..."
+                          value={catalogFilter.search}
+                          onChange={(e) => setCatalogFilter((prev) => ({ ...prev, search: e.target.value }))}
+                          className="h-9"
+                        />
+                      </div>
+                      <Select
+                        value={catalogFilter.exchange || '__all__'}
+                        onValueChange={(v) => setCatalogFilter((prev) => ({ ...prev, exchange: v }))}
+                      >
+                        <SelectTrigger className="w-full sm:w-32 h-9">
+                          <SelectValue placeholder="Exchange" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__all__">All</SelectItem>
+                          {exchanges.map((ex) => (
+                            <SelectItem key={ex} value={ex}>{ex}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select
+                        value={catalogFilter.interval || '__all__'}
+                        onValueChange={(v) => setCatalogFilter((prev) => ({ ...prev, interval: v }))}
+                      >
+                        <SelectTrigger className="w-full sm:w-32 h-9" title="Filter symbols that have this interval">
+                          <SelectValue placeholder="Has Interval" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__all__">All Intervals</SelectItem>
+                          {(historifyIntervals?.storage_intervals || ['1m', 'D']).map((int) => (
+                            <SelectItem key={int} value={int}>Has {int}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setExportDialogOpen(true)}
+                          disabled={catalog.length === 0}
+                          className="h-9"
+                        >
+                          <FileDown className="h-4 w-4 mr-1" />
+                          Export
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => setUploadDialogOpen(true)} className="h-9">
+                          <Upload className="h-4 w-4 mr-1" />
+                          Import
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Catalog Table - Grouped by Symbol */}
+                <Card>
+                  <ScrollArea className="h-[calc(100vh-380px)]">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-10">
+                            <Checkbox
+                              checked={catalogSelectedSymbols.size === filteredGroupedCatalog.length && filteredGroupedCatalog.length > 0}
+                              onCheckedChange={(checked) => {
+                                if (checked) {
+                                  setCatalogSelectedSymbols(new Set(filteredGroupedCatalog.map((c) => `${c.symbol}:${c.exchange}`)))
+                                } else {
+                                  setCatalogSelectedSymbols(new Set())
+                                }
+                              }}
+                            />
+                          </TableHead>
+                          <TableHead>Symbol</TableHead>
+                          <TableHead className="hidden sm:table-cell">Exchange</TableHead>
+                          <TableHead>Available Intervals</TableHead>
+                          <TableHead className="text-right hidden sm:table-cell">Total Records</TableHead>
+                          <TableHead className="hidden md:table-cell">Date Range</TableHead>
+                          <TableHead className="w-20"></TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {filteredGroupedCatalog.length === 0 ? (
+                          <TableRow>
+                            <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                              No data available. Add symbols to watchlist and download data.
+                            </TableCell>
+                          </TableRow>
+                        ) : (
+                          filteredGroupedCatalog.map((item) => (
+                            <TableRow key={`${item.symbol}-${item.exchange}`}>
+                              <TableCell>
+                                <Checkbox
+                                  checked={catalogSelectedSymbols.has(`${item.symbol}:${item.exchange}`)}
+                                  onCheckedChange={() => toggleCatalogSymbol(item.symbol, item.exchange)}
+                                />
+                              </TableCell>
+                              <TableCell className="font-medium">
+                                <div>
+                                  {item.symbol}
+                                  <span className="sm:hidden text-xs text-muted-foreground ml-1">
+                                    ({item.exchange})
+                                  </span>
+                                </div>
+                              </TableCell>
+                              <TableCell className="hidden sm:table-cell">
+                                <Badge variant="outline">{item.exchange}</Badge>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex flex-wrap gap-1">
+                                  {item.intervals.map((int) => (
+                                    <Badge
+                                      key={int.interval}
+                                      variant={int.interval === '1m' ? 'default' : int.interval === 'D' ? 'secondary' : 'outline'}
+                                      className="text-xs cursor-pointer hover:bg-primary/80"
+                                      title={`${int.record_count.toLocaleString()} records (${int.first_date} - ${int.last_date})`}
+                                      onClick={() => {
+                                        // Navigate to charts with this interval
+                                        window.location.href = `/historify/charts/${item.symbol}?exchange=${item.exchange}&interval=${int.interval}`
+                                      }}
+                                    >
+                                      {int.interval}
+                                      <span className="ml-1 opacity-70">{int.record_count > 1000 ? `${Math.round(int.record_count/1000)}k` : int.record_count}</span>
+                                    </Badge>
+                                  ))}
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-right hidden sm:table-cell">{item.total_records.toLocaleString()}</TableCell>
+                              <TableCell className="hidden md:table-cell text-muted-foreground text-sm">
+                                {item.earliest_date} - {item.latest_date}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex gap-1">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    asChild
+                                  >
+                                    <Link to={`/historify/charts/${item.symbol}?exchange=${item.exchange}&interval=${item.intervals[0]?.interval || 'D'}`}>
+                                      <LineChart className="h-3.5 w-3.5" />
+                                    </Link>
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7 text-destructive hover:text-destructive"
+                                    onClick={() => {
+                                      setDeleteTarget({ symbol: item.symbol, exchange: item.exchange })
+                                      setDeleteDialogOpen(true)
+                                    }}
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          ))
+                        )}
+                      </TableBody>
+                    </Table>
+                  </ScrollArea>
+                </Card>
+              </div>
+            </TabsContent>
+
+            {/* Watchlist Tab - Two Column Layout */}
+            <TabsContent value="watchlist" className="h-full m-0 p-4 overflow-auto">
+              {/* Add Symbol Row */}
+              <Card className="mb-4">
+                <CardContent className="p-4">
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <div className="flex-1 relative" ref={searchContainerRef}>
+                      <Input
+                        placeholder="Search symbol to add..."
+                        value={newSymbol}
+                        onChange={(e) => setNewSymbol(e.target.value.toUpperCase())}
+                        className="h-9"
+                      />
+                      {showSearchResults && searchResults.length > 0 && (
+                        <div className="absolute top-full left-0 right-0 mt-1 bg-popover border border-border rounded-md shadow-lg z-50 max-h-60 overflow-auto">
+                          {searchResults.map((result) => (
+                            <div
+                              key={`${result.symbol}-${result.exchange}`}
+                              className="px-3 py-2 hover:bg-muted cursor-pointer"
+                              onClick={() => {
+                                setNewSymbol(result.symbol)
+                                setNewExchange(result.exchange)
+                                setShowSearchResults(false)
+                              }}
+                            >
+                              <div className="font-medium">{result.symbol}</div>
+                              <div className="text-xs text-muted-foreground">{result.name} - {result.exchange}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <Select value={newExchange} onValueChange={setNewExchange}>
+                      <SelectTrigger className="w-full sm:w-28 h-9">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {exchanges.map((ex) => (
+                          <SelectItem key={ex} value={ex}>{ex}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button onClick={addToWatchlist} className="h-9">
+                      <Plus className="h-4 w-4 mr-1" />
+                      Add
+                    </Button>
+                    <Button variant="outline" onClick={() => setBulkAddDialogOpen(true)} className="h-9">
+                      <ListPlus className="h-4 w-4 mr-1" />
+                      Bulk
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Two Column Layout */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 h-[calc(100vh-240px)]">
+                {/* Left Column - Download Settings */}
+                <Card className="flex flex-col">
                   <CardHeader className="pb-3">
                     <CardTitle className="text-base flex items-center gap-2">
                       <Settings className="h-4 w-4" />
                       Download Settings
                     </CardTitle>
                   </CardHeader>
-                  <CardContent>
+                  <CardContent className="flex-1 overflow-auto">
                     <div className="space-y-4">
                       {/* Date Range Quick Buttons */}
                       <div>
@@ -1257,7 +1404,7 @@ export default function Historify() {
                       </div>
 
                       {/* Custom Date Range */}
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="grid grid-cols-2 gap-3">
                         <div>
                           <Label className="text-sm text-muted-foreground">From</Label>
                           <Input
@@ -1276,31 +1423,33 @@ export default function Historify() {
                             className="h-9 mt-1"
                           />
                         </div>
-                        <div>
-                          <Label className="text-sm text-muted-foreground">Interval</Label>
-                          <Select value={selectedInterval} onValueChange={setSelectedInterval}>
-                            <SelectTrigger className="h-9 mt-1">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {(historifyIntervals?.storage_intervals || ['1m', 'D']).map((int) => (
-                                <SelectItem key={int} value={int}>
-                                  {int === '1m' ? '1 Minute' : int === 'D' ? 'Daily' : int}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <p className="text-[10px] text-muted-foreground mt-1">
-                            Other timeframes (5m, 15m, 30m, 1h) computed from 1m data
-                          </p>
-                        </div>
+                      </div>
+
+                      {/* Interval Selection */}
+                      <div>
+                        <Label className="text-sm text-muted-foreground">Interval</Label>
+                        <Select value={selectedInterval} onValueChange={setSelectedInterval}>
+                          <SelectTrigger className="h-9 mt-1">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {(historifyIntervals?.storage_intervals || ['1m', 'D']).map((int) => (
+                              <SelectItem key={int} value={int}>
+                                {int === '1m' ? '1 Minute' : int === 'D' ? 'Daily' : int}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="text-[10px] text-muted-foreground mt-1">
+                          Other timeframes (5m, 15m, 30m, 1h) computed from 1m data
+                        </p>
                       </div>
 
                       {/* Incremental Download Toggle */}
                       <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
                         <div>
                           <Label className="font-medium">Incremental Download</Label>
-                          <p className="text-xs text-muted-foreground">Only download new data after last available timestamp</p>
+                          <p className="text-xs text-muted-foreground">Only download new data after last timestamp</p>
                         </div>
                         <Switch
                           checked={incrementalDownload}
@@ -1308,29 +1457,86 @@ export default function Historify() {
                         />
                       </div>
 
-                      {/* Download Button */}
-                      <Button
-                        className="w-full h-10"
-                        onClick={downloadWatchlist}
-                        disabled={watchlist.length === 0}
-                      >
-                        <DownloadCloud className="h-4 w-4 mr-2" />
-                        Download All Watchlist ({watchlist.length} symbols)
-                      </Button>
+                      {/* Download Buttons */}
+                      <div className="space-y-2 pt-2">
+                        <Button
+                          className="w-full h-10"
+                          onClick={() => {
+                            if (watchlistSelectedSymbols.size === 0) {
+                              downloadWatchlist()
+                            } else {
+                              const selectedSymbols = watchlist
+                                .filter((w) => watchlistSelectedSymbols.has(`${w.symbol}:${w.exchange}`))
+                                .map((w) => ({ symbol: w.symbol, exchange: w.exchange }))
+                              createDownloadJob(selectedSymbols, 'watchlist')
+                            }
+                          }}
+                          disabled={watchlist.length === 0}
+                        >
+                          <DownloadCloud className="h-4 w-4 mr-2" />
+                          {watchlistSelectedSymbols.size > 0
+                            ? `Download Selected (${watchlistSelectedSymbols.size})`
+                            : `Download All (${watchlist.length})`
+                          }
+                        </Button>
+                        {watchlistSelectedSymbols.size > 0 && (
+                          <Button
+                            variant="outline"
+                            className="w-full h-9"
+                            onClick={() => setWatchlistSelectedSymbols(new Set())}
+                          >
+                            Clear Selection
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
 
-                {/* Watchlist Table */}
-                <Card>
+                {/* Right Column - Symbol List */}
+                <Card className="flex flex-col">
                   <CardHeader className="pb-3">
-                    <CardTitle className="text-base">Watchlist ({watchlist.length})</CardTitle>
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-base">
+                        Symbols ({watchlist.length})
+                        {watchlistSelectedSymbols.size > 0 && (
+                          <Badge className="ml-2">{watchlistSelectedSymbols.size} selected</Badge>
+                        )}
+                      </CardTitle>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            if (watchlistSelectedSymbols.size === watchlist.length) {
+                              setWatchlistSelectedSymbols(new Set())
+                            } else {
+                              setWatchlistSelectedSymbols(new Set(watchlist.map((w) => `${w.symbol}:${w.exchange}`)))
+                            }
+                          }}
+                        >
+                          {watchlistSelectedSymbols.size === watchlist.length ? 'Deselect All' : 'Select All'}
+                        </Button>
+                      </div>
+                    </div>
                   </CardHeader>
-                  <CardContent className="p-0">
-                    <ScrollArea className="h-[calc(100vh-580px)]">
+                  <CardContent className="flex-1 p-0 overflow-hidden">
+                    <ScrollArea className="h-full">
                       <Table>
                         <TableHeader>
                           <TableRow>
+                            <TableHead className="w-10">
+                              <Checkbox
+                                checked={watchlistSelectedSymbols.size === watchlist.length && watchlist.length > 0}
+                                onCheckedChange={(checked) => {
+                                  if (checked) {
+                                    setWatchlistSelectedSymbols(new Set(watchlist.map((w) => `${w.symbol}:${w.exchange}`)))
+                                  } else {
+                                    setWatchlistSelectedSymbols(new Set())
+                                  }
+                                }}
+                              />
+                            </TableHead>
                             <TableHead>Symbol</TableHead>
                             <TableHead className="hidden sm:table-cell">Exchange</TableHead>
                             <TableHead className="hidden md:table-cell">Added</TableHead>
@@ -1340,13 +1546,34 @@ export default function Historify() {
                         <TableBody>
                           {watchlist.length === 0 ? (
                             <TableRow>
-                              <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
-                                No symbols in watchlist. Add symbols above.
+                              <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
+                                <Target className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                                <p>No symbols in watchlist</p>
+                                <p className="text-sm mt-1">Add symbols using the search above</p>
                               </TableCell>
                             </TableRow>
                           ) : (
                             watchlist.map((item) => (
-                              <TableRow key={item.id}>
+                              <TableRow
+                                key={item.id}
+                                className={cn(
+                                  watchlistSelectedSymbols.has(`${item.symbol}:${item.exchange}`) && "bg-muted/50"
+                                )}
+                              >
+                                <TableCell>
+                                  <Checkbox
+                                    checked={watchlistSelectedSymbols.has(`${item.symbol}:${item.exchange}`)}
+                                    onCheckedChange={() => {
+                                      setWatchlistSelectedSymbols((prev) => {
+                                        const next = new Set(prev)
+                                        const key = `${item.symbol}:${item.exchange}`
+                                        if (next.has(key)) next.delete(key)
+                                        else next.add(key)
+                                        return next
+                                      })
+                                    }}
+                                  />
+                                </TableCell>
                                 <TableCell className="font-medium">
                                   {item.symbol}
                                   <span className="sm:hidden text-xs text-muted-foreground ml-1">({item.exchange})</span>
@@ -1378,190 +1605,6 @@ export default function Historify() {
               </div>
             </TabsContent>
 
-            {/* FNO Discovery Tab */}
-            <TabsContent value="fno" className="h-full m-0 p-4 overflow-auto">
-              <div className="space-y-4">
-                {/* FNO Filters */}
-                <Card>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-base">FNO Chain Discovery</CardTitle>
-                    <CardDescription>Discover option and futures chains for bulk download</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-                      <div>
-                        <Label className="text-sm text-muted-foreground">Exchange</Label>
-                        <Select value={fnoExchange} onValueChange={setFnoExchange}>
-                          <SelectTrigger className="h-9 mt-1">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {['NFO', 'BFO', 'MCX', 'CDS'].map((ex) => (
-                              <SelectItem key={ex} value={ex}>{ex}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div>
-                        <Label className="text-sm text-muted-foreground">Underlying</Label>
-                        <Select value={fnoSelectedUnderlying} onValueChange={setFnoSelectedUnderlying}>
-                          <SelectTrigger className="h-9 mt-1">
-                            <SelectValue placeholder="Select underlying" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {fnoUnderlyings.map((u) => (
-                              <SelectItem key={u} value={u}>{u}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div>
-                        <Label className="text-sm text-muted-foreground">Expiry</Label>
-                        <Select value={fnoSelectedExpiry} onValueChange={setFnoSelectedExpiry}>
-                          <SelectTrigger className="h-9 mt-1">
-                            <SelectValue placeholder="All expiries" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="__all__">All expiries</SelectItem>
-                            {fnoExpiries.map((exp) => (
-                              <SelectItem key={exp} value={exp}>{exp}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div>
-                        <Label className="text-sm text-muted-foreground">Instrument</Label>
-                        <Select value={fnoInstrumentType} onValueChange={setFnoInstrumentType}>
-                          <SelectTrigger className="h-9 mt-1">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="__all__">All</SelectItem>
-                            <SelectItem value="FUT">Futures</SelectItem>
-                            <SelectItem value="CE">Call (CE)</SelectItem>
-                            <SelectItem value="PE">Put (PE)</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                    <div className="flex flex-col sm:flex-row gap-3">
-                      <div className="flex gap-2 flex-1">
-                        <Input
-                          type="number"
-                          placeholder="Min Strike"
-                          value={fnoStrikeMin}
-                          onChange={(e) => setFnoStrikeMin(e.target.value)}
-                          className="h-9"
-                        />
-                        <Input
-                          type="number"
-                          placeholder="Max Strike"
-                          value={fnoStrikeMax}
-                          onChange={(e) => setFnoStrikeMax(e.target.value)}
-                          className="h-9"
-                        />
-                      </div>
-                      <Button onClick={loadFnoChain} disabled={fnoLoading || !fnoSelectedUnderlying} className="h-9">
-                        {fnoLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Search className="h-4 w-4 mr-1" />}
-                        Search
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* FNO Results */}
-                {fnoSymbols.length > 0 && (
-                  <Card>
-                    <CardHeader className="pb-3">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                        <CardTitle className="text-base">
-                          Found {fnoSymbols.length} symbols
-                          {fnoSelectedSymbols.size > 0 && (
-                            <Badge className="ml-2">{fnoSelectedSymbols.size} selected</Badge>
-                          )}
-                        </CardTitle>
-                        <div className="flex gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setFnoSelectedSymbols(new Set(fnoSymbols.map((s) => s.symbol)))}
-                          >
-                            Select All
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setFnoSelectedSymbols(new Set())}
-                          >
-                            Clear
-                          </Button>
-                          <Button
-                            size="sm"
-                            disabled={fnoSelectedSymbols.size === 0}
-                            onClick={() => {
-                              const symbols = Array.from(fnoSelectedSymbols).map((symbol) => {
-                                const sym = fnoSymbols.find((s) => s.symbol === symbol)
-                                return { symbol, exchange: sym?.exchange || fnoExchange }
-                              })
-                              createDownloadJob(symbols, 'fno_chain')
-                            }}
-                          >
-                            <Download className="h-4 w-4 mr-1" />
-                            Download
-                          </Button>
-                        </div>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="p-0">
-                      <ScrollArea className="h-[calc(100vh-480px)]">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead className="w-10">
-                                <Checkbox
-                                  checked={fnoSelectedSymbols.size === fnoSymbols.length}
-                                  onCheckedChange={(checked) => {
-                                    if (checked) setFnoSelectedSymbols(new Set(fnoSymbols.map((s) => s.symbol)))
-                                    else setFnoSelectedSymbols(new Set())
-                                  }}
-                                />
-                              </TableHead>
-                              <TableHead>Symbol</TableHead>
-                              <TableHead className="hidden sm:table-cell">Type</TableHead>
-                              <TableHead className="hidden sm:table-cell">Expiry</TableHead>
-                              <TableHead className="hidden md:table-cell text-right">Strike</TableHead>
-                              <TableHead className="hidden md:table-cell text-right">Lot Size</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {fnoSymbols.map((sym) => (
-                              <TableRow key={sym.symbol}>
-                                <TableCell>
-                                  <Checkbox
-                                    checked={fnoSelectedSymbols.has(sym.symbol)}
-                                    onCheckedChange={() => toggleFnoSymbol(sym.symbol)}
-                                  />
-                                </TableCell>
-                                <TableCell className="font-medium">{sym.symbol}</TableCell>
-                                <TableCell className="hidden sm:table-cell">
-                                  <Badge variant={sym.instrumenttype === 'FUT' ? 'default' : sym.instrumenttype === 'CE' ? 'secondary' : 'outline'}>
-                                    {sym.instrumenttype}
-                                  </Badge>
-                                </TableCell>
-                                <TableCell className="hidden sm:table-cell">{sym.expiry}</TableCell>
-                                <TableCell className="hidden md:table-cell text-right">{sym.strike}</TableCell>
-                                <TableCell className="hidden md:table-cell text-right">{sym.lotsize}</TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </ScrollArea>
-                    </CardContent>
-                  </Card>
-                )}
-              </div>
-            </TabsContent>
-
             {/* Download Jobs Tab */}
             <TabsContent value="jobs" className="h-full m-0 p-4 overflow-auto">
               <div className="space-y-4">
@@ -1582,7 +1625,7 @@ export default function Historify() {
                         <div className="text-center py-12 text-muted-foreground">
                           <DownloadCloud className="h-12 w-12 mx-auto mb-4 opacity-50" />
                           <p>No download jobs yet</p>
-                          <p className="text-sm mt-1">Start a download from the Watchlist or FNO Discovery tabs</p>
+                          <p className="text-sm mt-1">Start a download from the Watchlist tab</p>
                         </div>
                       ) : (
                         <div className="divide-y divide-border">
@@ -1780,46 +1823,196 @@ NIFTY24DEC25000CE,NFO"
 
       {/* Export Dialog */}
       <Dialog open={exportDialogOpen} onOpenChange={setExportDialogOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Export Data</DialogTitle>
-            <DialogDescription>Export historical data to file</DialogDescription>
+            <DialogDescription>Export historical data with multiple timeframes</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <div>
-              <Label>Export Format</Label>
-              <Select value={exportFormat} onValueChange={(v: any) => setExportFormat(v)}>
-                <SelectTrigger className="mt-1">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="csv">CSV</SelectItem>
-                  <SelectItem value="txt">TXT (Tab-separated)</SelectItem>
-                  <SelectItem value="zip">ZIP Archive</SelectItem>
-                  <SelectItem value="parquet">Parquet (ZSTD)</SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>Export Format</Label>
+                <Select value={exportFormat} onValueChange={(v: any) => setExportFormat(v)}>
+                  <SelectTrigger className="mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="zip">ZIP Archive (Recommended)</SelectItem>
+                    <SelectItem value="csv">CSV (Single file)</SelectItem>
+                    <SelectItem value="parquet">Parquet (ZSTD)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Symbols to Export</Label>
+                <Select value={exportSymbols} onValueChange={(v: any) => setExportSymbols(v)}>
+                  <SelectTrigger className="mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All ({groupedCatalog.length} symbols)</SelectItem>
+                    <SelectItem value="selected">
+                      Selected ({catalogSelectedSymbols.size})
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
+
+            {/* Timeframe Selection */}
             <div>
-              <Label>Symbols</Label>
-              <Select value={exportSymbols} onValueChange={(v: any) => setExportSymbols(v)}>
-                <SelectTrigger className="mt-1">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Data</SelectItem>
-                  <SelectItem value="selected" disabled={catalogSelectedSymbols.size === 0}>
-                    Selected ({catalogSelectedSymbols.size})
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+              <Label className="mb-2 block">Select Timeframes to Export</Label>
+              <p className="text-xs text-muted-foreground mb-3">
+                Each timeframe will be exported as a separate file. Computed timeframes (5m, 15m, 30m, 1h) are aggregated from 1m data.
+              </p>
+              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                {['1m', '5m', '15m', '30m', '1h', 'D'].map((int) => {
+                  const isComputed = ['5m', '15m', '30m', '1h'].includes(int)
+                  const isSelected = exportIntervals.has(int)
+                  return (
+                    <div
+                      key={int}
+                      className={cn(
+                        "flex flex-col items-center p-2 rounded-lg border cursor-pointer transition-colors",
+                        isSelected ? "bg-primary text-primary-foreground border-primary" : "bg-muted/50 hover:bg-muted"
+                      )}
+                      onClick={() => {
+                        setExportIntervals((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(int)) next.delete(int)
+                          else next.add(int)
+                          return next
+                        })
+                      }}
+                    >
+                      <Checkbox
+                        checked={isSelected}
+                        className={cn("mb-1", isSelected && "border-primary-foreground")}
+                        onClick={(e) => e.stopPropagation()}
+                        onCheckedChange={() => {
+                          setExportIntervals((prev) => {
+                            const next = new Set(prev)
+                            if (next.has(int)) next.delete(int)
+                            else next.add(int)
+                            return next
+                          })
+                        }}
+                      />
+                      <span className="font-medium text-sm">{int}</span>
+                      <span className={cn("text-[10px]", isSelected ? "opacity-80" : "text-muted-foreground")}>
+                        {isComputed ? 'Computed' : 'Stored'}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Symbol Selection */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <Label className="text-sm">
+                  {exportSymbols === 'selected' ? 'Selected Symbols' : 'All Symbols'} ({exportSymbols === 'selected' ? catalogSelectedSymbols.size : groupedCatalog.length})
+                </Label>
+                {exportSymbols === 'selected' && (
+                  <div className="flex gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 text-xs"
+                      onClick={() => {
+                        const allKeys = groupedCatalog.map(item => `${item.symbol}:${item.exchange}`)
+                        setCatalogSelectedSymbols(new Set(allKeys))
+                      }}
+                    >
+                      Select All
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 text-xs"
+                      onClick={() => setCatalogSelectedSymbols(new Set())}
+                    >
+                      Clear
+                    </Button>
+                  </div>
+                )}
+              </div>
+              <ScrollArea className="h-40 border rounded-md p-2">
+                <div className="space-y-1">
+                  {groupedCatalog.map((item) => {
+                    const key = `${item.symbol}:${item.exchange}`
+                    const isSelected = catalogSelectedSymbols.has(key)
+
+                    if (exportSymbols === 'all') {
+                      // Show all symbols (no selection UI in "all" mode)
+                      return (
+                        <div key={key} className="flex items-center justify-between text-sm py-1 border-b border-border/50 last:border-0">
+                          <span className="font-medium">{item.symbol}</span>
+                          <Badge variant="outline" className="text-xs">{item.exchange}</Badge>
+                        </div>
+                      )
+                    } else {
+                      // Show selectable list in "selected" mode
+                      return (
+                        <div
+                          key={key}
+                          className={cn(
+                            "flex items-center gap-2 text-sm py-1.5 px-2 rounded cursor-pointer transition-colors border-b border-border/50 last:border-0",
+                            isSelected ? "bg-primary/10" : "hover:bg-muted/50"
+                          )}
+                          onClick={() => {
+                            setCatalogSelectedSymbols((prev) => {
+                              const next = new Set(prev)
+                              if (next.has(key)) next.delete(key)
+                              else next.add(key)
+                              return next
+                            })
+                          }}
+                        >
+                          <Checkbox
+                            checked={isSelected}
+                            onCheckedChange={() => {
+                              setCatalogSelectedSymbols((prev) => {
+                                const next = new Set(prev)
+                                if (next.has(key)) next.delete(key)
+                                else next.add(key)
+                                return next
+                              })
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <span className="font-medium flex-1">{item.symbol}</span>
+                          <Badge variant="outline" className="text-xs">{item.exchange}</Badge>
+                        </div>
+                      )
+                    }
+                  })}
+                </div>
+              </ScrollArea>
+            </div>
+
+            {/* Export Summary */}
+            <div className="bg-muted/50 rounded-lg p-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Export Summary:</span>
+                <span className="font-medium">
+                  {exportSymbols === 'selected' ? catalogSelectedSymbols.size : groupedCatalog.length} symbols x {exportIntervals.size} timeframe{exportIntervals.size !== 1 ? 's' : ''}
+                </span>
+              </div>
+              <div className="text-xs text-muted-foreground mt-1">
+                Files: {Array.from(exportIntervals).sort().join(', ')}
+              </div>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setExportDialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleBulkExport} disabled={isExporting}>
+            <Button
+              onClick={handleBulkExport}
+              disabled={isExporting || exportIntervals.size === 0 || (exportSymbols === 'selected' && catalogSelectedSymbols.size === 0)}
+            >
               {isExporting && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-              Export
+              Export ({exportIntervals.size} timeframe{exportIntervals.size !== 1 ? 's' : ''})
             </Button>
           </DialogFooter>
         </DialogContent>

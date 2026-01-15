@@ -384,7 +384,11 @@ def get_export_preview():
 @historify_bp.route('/api/export/bulk', methods=['POST'])
 @check_session_validity
 def bulk_export():
-    """Export data in various formats (CSV, TXT, ZIP, Parquet)."""
+    """Export data in various formats (CSV, TXT, ZIP, Parquet).
+
+    Supports multi-timeframe export where computed intervals (5m, 15m, 30m, 1h)
+    are aggregated from 1m data and exported as separate files.
+    """
     try:
         from database.historify_db import (
             export_bulk_csv, export_to_txt, export_to_zip, export_to_parquet
@@ -394,11 +398,24 @@ def bulk_export():
         data = request.get_json()
         format_type = data.get('format', 'csv').lower()
         symbols = data.get('symbols')  # Optional list of {symbol, exchange}
-        interval = data.get('interval')
+        interval = data.get('interval')  # Single interval (legacy)
+        intervals = data.get('intervals')  # Multiple intervals (new)
         start_date = data.get('start_date')
         end_date = data.get('end_date')
         split_by = data.get('split_by', 'symbol')  # For ZIP: 'symbol' or 'none'
         compression = data.get('compression', 'zstd')  # For Parquet
+
+        # Validate intervals parameter
+        VALID_INTERVALS = {'1m', '5m', '15m', '30m', '1h', 'D', 'W', 'M'}
+        if intervals is not None:
+            if not isinstance(intervals, list):
+                return jsonify({'status': 'error', 'message': 'intervals must be an array'}), 400
+            if len(intervals) == 0:
+                return jsonify({'status': 'error', 'message': 'At least one interval must be specified'}), 400
+            intervals = list(set(intervals))  # Remove duplicates
+            invalid = [i for i in intervals if i not in VALID_INTERVALS]
+            if invalid:
+                return jsonify({'status': 'error', 'message': f'Invalid intervals: {invalid}'}), 400
 
         # Convert dates to timestamps if provided
         start_timestamp = None
@@ -415,6 +432,10 @@ def bulk_export():
             base_name = f"historify_{symbols[0]['symbol']}_{timestamp_str}"
         else:
             base_name = f"historify_export_{timestamp_str}"
+
+        # If multiple intervals provided, always use ZIP format
+        if intervals and len(intervals) > 1:
+            format_type = 'zip'
 
         # Create temp file path
         if format_type == 'parquet':
@@ -433,7 +454,7 @@ def bulk_export():
             success, message, record_count = export_to_parquet(
                 output_path=output_path,
                 symbols=symbols,
-                interval=interval,
+                interval=intervals[0] if intervals else interval,
                 start_timestamp=start_timestamp,
                 end_timestamp=end_timestamp,
                 compression=compression
@@ -443,7 +464,7 @@ def bulk_export():
             success, message, record_count = export_to_zip(
                 output_path=output_path,
                 symbols=symbols,
-                interval=interval,
+                intervals=intervals if intervals else ([interval] if interval else None),
                 start_timestamp=start_timestamp,
                 end_timestamp=end_timestamp,
                 split_by=split_by
@@ -453,7 +474,7 @@ def bulk_export():
             success, message, record_count = export_to_txt(
                 output_path=output_path,
                 symbols=symbols,
-                interval=interval,
+                interval=intervals[0] if intervals else interval,
                 start_timestamp=start_timestamp,
                 end_timestamp=end_timestamp
             )
@@ -462,7 +483,7 @@ def bulk_export():
             success, message, record_count = export_bulk_csv(
                 output_path=output_path,
                 symbols=symbols if symbols else [],
-                interval=interval,
+                interval=intervals[0] if intervals else interval,
                 start_timestamp=start_timestamp,
                 end_timestamp=end_timestamp
             )

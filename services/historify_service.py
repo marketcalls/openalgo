@@ -1091,6 +1091,9 @@ _job_executor = ThreadPoolExecutor(max_workers=int(os.getenv('HISTORIFY_MAX_WORK
 _running_jobs: Dict[str, bool] = {}
 _paused_jobs: Dict[str, threading.Event] = {}  # Event is set when NOT paused
 
+# Lock for thread-safe access to job state dictionaries
+_job_state_lock = threading.Lock()
+
 
 def create_and_start_job(
     job_type: str,
@@ -1152,9 +1155,11 @@ def create_and_start_job(
             }, 500
 
         # Mark job as running and initialize pause event (set = not paused)
-        _running_jobs[job_id] = True
-        _paused_jobs[job_id] = threading.Event()
-        _paused_jobs[job_id].set()  # Not paused initially
+        # Use lock for thread-safe initialization
+        with _job_state_lock:
+            _running_jobs[job_id] = True
+            _paused_jobs[job_id] = threading.Event()
+            _paused_jobs[job_id].set()  # Not paused initially
 
         # Start background processing
         _job_executor.submit(
@@ -1241,23 +1246,28 @@ def _process_download_job(job_id: str, api_key: str):
         processed_count = already_completed + already_failed
 
         for item in pending_items:
-            # Check for cancellation
-            if not _running_jobs.get(job_id, False):
+            # Check for cancellation with thread-safe access
+            with _job_state_lock:
+                is_cancelled = not _running_jobs.get(job_id, False)
+                pause_event = _paused_jobs.get(job_id)
+
+            if is_cancelled:
                 logger.info(f"Job {job_id} cancelled")
                 update_job_status(job_id, 'cancelled')
                 _cleanup_job(job_id)
                 return
 
             # Check for pause - wait if paused
-            pause_event = _paused_jobs.get(job_id)
             if pause_event:
                 while not pause_event.is_set():
                     # Emit paused status
                     _emit_job_paused(job_id, processed_count, total_items)
                     # Wait for resume signal (check every 1 second)
                     pause_event.wait(timeout=1.0)
-                    # Check for cancellation while paused
-                    if not _running_jobs.get(job_id, False):
+                    # Check for cancellation while paused (with lock)
+                    with _job_state_lock:
+                        is_cancelled = not _running_jobs.get(job_id, False)
+                    if is_cancelled:
                         logger.info(f"Job {job_id} cancelled while paused")
                         update_job_status(job_id, 'cancelled')
                         _cleanup_job(job_id)
@@ -1279,19 +1289,37 @@ def _process_download_job(job_id: str, api_key: str):
                     # Check last available data timestamp
                     data_range = get_data_range(item['symbol'], item['exchange'], job['interval'])
                     if data_range and data_range.get('last_timestamp'):
-                        # Start from day after last data
                         last_ts = data_range['last_timestamp']
-                        last_date = datetime.fromtimestamp(last_ts)
-                        incremental_start = (last_date + timedelta(days=1)).strftime('%Y-%m-%d')
-                        # Only use incremental start if it's before end_date
-                        if incremental_start < end_date:
-                            start_date = incremental_start
-                            logger.debug(f"Incremental: {item['symbol']} starting from {start_date}")
+                        last_datetime = datetime.fromtimestamp(last_ts)
+
+                        # For intraday data (1m), start from the same day to get remaining data
+                        # For daily data (D), start from the next day
+                        if job['interval'] == '1m':
+                            # Start from the same day - broker will return data after last_ts
+                            # We use the same date because there may be more candles on that day
+                            incremental_start = last_datetime.strftime('%Y-%m-%d')
                         else:
+                            # For daily data, start from next day
+                            incremental_start = (last_datetime + timedelta(days=1)).strftime('%Y-%m-%d')
+
+                        # Check if we need to download at all
+                        end_datetime = datetime.strptime(end_date, '%Y-%m-%d')
+                        if incremental_start > end_date:
                             # Data is already up to date
                             update_job_item_status(item['id'], 'skipped', 0, 'Data already up to date')
                             logger.info(f"Skipping {item['symbol']} - data already up to date")
                             continue
+
+                        # For 1m data, also check if we have data up to market close on end_date
+                        if job['interval'] == '1m':
+                            end_of_day_ts = int(end_datetime.timestamp()) + 86400 - 1  # End of end_date
+                            if last_ts >= end_of_day_ts:
+                                update_job_item_status(item['id'], 'skipped', 0, 'Data already up to date')
+                                logger.info(f"Skipping {item['symbol']} - data already up to date")
+                                continue
+
+                        start_date = incremental_start
+                        logger.debug(f"Incremental: {item['symbol']} starting from {start_date} (last data: {last_datetime})")
 
                 # Download data for this symbol
                 success, response, _ = download_data(
@@ -1344,9 +1372,10 @@ def _process_download_job(job_id: str, api_key: str):
 
 
 def _cleanup_job(job_id: str):
-    """Clean up job tracking state."""
-    _running_jobs.pop(job_id, None)
-    _paused_jobs.pop(job_id, None)
+    """Clean up job tracking state with thread-safe access."""
+    with _job_state_lock:
+        _running_jobs.pop(job_id, None)
+        _paused_jobs.pop(job_id, None)
 
 
 def _emit_progress(job_id: str, current: int, total: int, symbol: str):
@@ -1485,12 +1514,14 @@ def cancel_job(job_id: str) -> Tuple[bool, Dict[str, Any], int]:
                 'message': f'Job is not running or paused (status: {job["status"]})'
             }, 400
 
-        # Signal cancellation
-        _running_jobs[job_id] = False
-        # Resume if paused so it can exit cleanly
-        pause_event = _paused_jobs.get(job_id)
-        if pause_event:
-            pause_event.set()
+        # Use lock for thread-safe state modification
+        with _job_state_lock:
+            # Signal cancellation
+            _running_jobs[job_id] = False
+            # Resume if paused so it can exit cleanly
+            pause_event = _paused_jobs.get(job_id)
+            if pause_event:
+                pause_event.set()
 
         return True, {
             'status': 'success',
@@ -1531,28 +1562,31 @@ def pause_job(job_id: str) -> Tuple[bool, Dict[str, Any], int]:
                 'message': f'Job is not running (status: {job["status"]})'
             }, 400
 
-        # Check if already paused
-        pause_event = _paused_jobs.get(job_id)
-        if pause_event and not pause_event.is_set():
-            return False, {
-                'status': 'error',
-                'message': 'Job is already paused'
-            }, 400
+        # Use lock for thread-safe state modification
+        with _job_state_lock:
+            pause_event = _paused_jobs.get(job_id)
 
-        # Signal pause (clear the event)
-        if pause_event:
-            pause_event.clear()
-            update_job_status(job_id, 'paused')
-            logger.info(f"Job {job_id} paused")
-            return True, {
-                'status': 'success',
-                'message': 'Job paused'
-            }, 200
-        else:
-            return False, {
-                'status': 'error',
-                'message': 'Job not found in running jobs'
-            }, 400
+            # Check if already paused
+            if pause_event and not pause_event.is_set():
+                return False, {
+                    'status': 'error',
+                    'message': 'Job is already paused'
+                }, 400
+
+            # Signal pause (clear the event)
+            if pause_event:
+                pause_event.clear()
+                update_job_status(job_id, 'paused')
+                logger.info(f"Job {job_id} paused")
+                return True, {
+                    'status': 'success',
+                    'message': 'Job paused'
+                }, 200
+            else:
+                return False, {
+                    'status': 'error',
+                    'message': 'Job not found in running jobs'
+                }, 400
 
     except Exception as e:
         logger.error(f"Error pausing job: {e}")
@@ -1588,21 +1622,22 @@ def resume_job(job_id: str) -> Tuple[bool, Dict[str, Any], int]:
                 'message': f'Job is not paused (status: {job["status"]})'
             }, 400
 
-        # Signal resume (set the event)
-        pause_event = _paused_jobs.get(job_id)
-        if pause_event:
-            pause_event.set()
-            update_job_status(job_id, 'running')
-            logger.info(f"Job {job_id} resumed")
-            return True, {
-                'status': 'success',
-                'message': 'Job resumed'
-            }, 200
-        else:
-            return False, {
-                'status': 'error',
-                'message': 'Job not found in running jobs'
-            }, 400
+        # Use lock for thread-safe state modification
+        with _job_state_lock:
+            pause_event = _paused_jobs.get(job_id)
+            if pause_event:
+                pause_event.set()
+                update_job_status(job_id, 'running')
+                logger.info(f"Job {job_id} resumed")
+                return True, {
+                    'status': 'success',
+                    'message': 'Job resumed'
+                }, 200
+            else:
+                return False, {
+                    'status': 'error',
+                    'message': 'Job not found in running jobs'
+                }, 400
 
     except Exception as e:
         logger.error(f"Error resuming job: {e}")
@@ -1702,8 +1737,11 @@ def retry_failed_items(job_id: str, api_key: str) -> Tuple[bool, Dict[str, Any],
         # Reset job counters
         update_job_status(job_id, 'pending')
 
-        # Mark job as running
-        _running_jobs[job_id] = True
+        # Mark job as running with thread-safe access
+        with _job_state_lock:
+            _running_jobs[job_id] = True
+            _paused_jobs[job_id] = threading.Event()
+            _paused_jobs[job_id].set()  # Not paused initially
 
         # Start background processing
         _job_executor.submit(

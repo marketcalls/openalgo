@@ -545,11 +545,13 @@ def _get_aggregated_ohlcv(
         # bucket_offset = (trading_seconds / interval_seconds) * interval_seconds
         # candle_timestamp = day_start_utc + market_open_seconds + bucket_offset
 
+        # Use FLOOR() to ensure proper integer division for candle alignment
+        # Without FLOOR(), floating-point division can cause incorrect bucketing
         query = f"""
             SELECT
-                (((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset}) +
+                (FLOOR((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset}) +
                 {market_open_seconds} +
-                ((((timestamp + {ist_offset}) % 86400) - {market_open_seconds}) / {interval_seconds}) * {interval_seconds}
+                FLOOR((((timestamp + {ist_offset}) % 86400) - {market_open_seconds}) / {interval_seconds}) * {interval_seconds}
                 as timestamp,
                 FIRST(open ORDER BY timestamp) as open,
                 MAX(high) as high,
@@ -571,9 +573,9 @@ def _get_aggregated_ohlcv(
             params.append(end_timestamp)
 
         query += f"""
-            GROUP BY (((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset}) +
+            GROUP BY (FLOOR((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset}) +
                      {market_open_seconds} +
-                     ((((timestamp + {ist_offset}) % 86400) - {market_open_seconds}) / {interval_seconds}) * {interval_seconds}
+                     FLOOR((((timestamp + {ist_offset}) % 86400) - {market_open_seconds}) / {interval_seconds}) * {interval_seconds}
             ORDER BY timestamp ASC
         """
 
@@ -1053,24 +1055,46 @@ def create_download_job(
 
     try:
         with get_connection() as conn:
-            # Create the job record
-            conn.execute("""
-                INSERT INTO download_jobs
-                (id, job_type, status, total_symbols, interval, start_date, end_date, config)
-                VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
-            """, [job_id, job_type, len(symbols), interval, start_date, end_date,
-                  json.dumps(config) if config else None])
+            # Begin a transaction for atomicity
+            conn.execute("BEGIN TRANSACTION")
 
-            # Get the current max ID from job_items to avoid duplicates
-            max_id_result = conn.execute("SELECT COALESCE(MAX(id), 0) FROM job_items").fetchone()
-            start_id = max_id_result[0] + 1
-
-            # Create job items for each symbol with globally unique IDs
-            for i, sym in enumerate(symbols):
+            try:
+                # Create the job record
                 conn.execute("""
-                    INSERT INTO job_items (id, job_id, symbol, exchange, status)
-                    VALUES (?, ?, ?, ?, 'pending')
-                """, [start_id + i, job_id, sym['symbol'].upper(), sym['exchange'].upper()])
+                    INSERT INTO download_jobs
+                    (id, job_type, status, total_symbols, interval, start_date, end_date, config)
+                    VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
+                """, [job_id, job_type, len(symbols), interval, start_date, end_date,
+                      json.dumps(config) if config else None])
+
+                # Prepare symbols DataFrame for batch insert
+                # Use atomic ID generation within the same transaction
+                if symbols:
+                    symbols_df = pd.DataFrame([
+                        {
+                            'job_id': job_id,
+                            'symbol': sym['symbol'].upper(),
+                            'exchange': sym['exchange'].upper(),
+                            'status': 'pending'
+                        }
+                        for sym in symbols
+                    ])
+
+                    # Atomic batch insert with computed IDs using ROW_NUMBER
+                    # This generates IDs atomically without race conditions
+                    conn.execute("""
+                        INSERT INTO job_items (id, job_id, symbol, exchange, status)
+                        SELECT
+                            (SELECT COALESCE(MAX(id), 0) FROM job_items) + ROW_NUMBER() OVER () as id,
+                            job_id, symbol, exchange, status
+                        FROM symbols_df
+                    """)
+
+                conn.execute("COMMIT")
+
+            except Exception as inner_e:
+                conn.execute("ROLLBACK")
+                raise inner_e
 
         logger.info(f"Created download job {job_id} with {len(symbols)} symbols")
         return True, f"Job created with {len(symbols)} symbols"
@@ -1675,10 +1699,20 @@ def export_to_txt(
         return False, str(e), 0
 
 
+def _sanitize_filename(name: str) -> str:
+    """Remove path traversal and special characters from filename."""
+    import re
+    # Remove any path separators and null bytes
+    name = name.replace('/', '_').replace('\\', '_').replace('\x00', '')
+    # Keep only alphanumeric, dash, underscore, dot
+    name = re.sub(r'[^A-Za-z0-9_\-.]', '_', name)
+    return name
+
+
 def export_to_zip(
     output_path: str,
     symbols: Optional[List[Dict[str, str]]] = None,
-    interval: Optional[str] = None,
+    intervals: Optional[List[str]] = None,
     start_timestamp: Optional[int] = None,
     end_timestamp: Optional[int] = None,
     split_by: str = 'symbol'
@@ -1686,15 +1720,16 @@ def export_to_zip(
     """
     Export market data to ZIP archive containing CSVs.
 
-    Can split into multiple files by symbol or export as single file.
+    Supports multi-timeframe export where computed intervals (5m, 15m, 30m, 1h)
+    are aggregated from 1m data on-the-fly.
 
     Args:
         output_path: Path to save the ZIP file
         symbols: List of dicts with 'symbol' and 'exchange' keys (optional)
-        interval: Filter by interval (optional)
+        intervals: List of intervals to export (e.g., ['1m', '5m', '15m', 'D'])
         start_timestamp: Start epoch timestamp (optional)
         end_timestamp: End epoch timestamp (optional)
-        split_by: 'symbol' to create one CSV per symbol, 'none' for single file
+        split_by: 'symbol' to create one CSV per symbol/interval, 'none' for combined
 
     Returns:
         Tuple of (success, message, record_count)
@@ -1703,29 +1738,6 @@ def export_to_zip(
     import zipfile
 
     try:
-        # Build base WHERE clause
-        conditions = []
-        params = []
-
-        if symbols and len(symbols) > 0:
-            symbol_conditions = []
-            for sym in symbols:
-                symbol_conditions.append("(symbol = ? AND exchange = ?)")
-                params.extend([sym['symbol'].upper(), sym['exchange'].upper()])
-            conditions.append(f"({' OR '.join(symbol_conditions)})")
-
-        if interval:
-            conditions.append("interval = ?")
-            params.append(interval)
-        if start_timestamp:
-            conditions.append("timestamp >= ?")
-            params.append(start_timestamp)
-        if end_timestamp:
-            conditions.append("timestamp <= ?")
-            params.append(end_timestamp)
-
-        where_clause = " AND ".join(conditions) if conditions else "1=1"
-
         # Validate output path
         temp_dir = tempfile.gettempdir()
         abs_output = os.path.abspath(output_path)
@@ -1733,79 +1745,156 @@ def export_to_zip(
             return False, "Invalid output path: must be within temp directory", 0
 
         total_records = 0
+        skipped_intervals = []  # Track computed intervals with missing 1m data
 
-        with zipfile.ZipFile(abs_output, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+        # IST timezone offset from UTC (5 hours 30 minutes = 19800 seconds)
+        ist_offset = 19800
+
+        with zipfile.ZipFile(abs_output, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
             with get_connection() as conn:
-                if split_by == 'symbol':
-                    # Get distinct symbol/exchange combinations
-                    distinct_query = f"""
-                        SELECT DISTINCT symbol, exchange
-                        FROM market_data
-                        WHERE {where_clause}
+                # Get symbols to export
+                if symbols and len(symbols) > 0:
+                    symbols_list = [(s['symbol'].upper(), s['exchange'].upper()) for s in symbols]
+                else:
+                    # Get all symbols from catalog
+                    symbols_df = conn.execute("""
+                        SELECT DISTINCT symbol, exchange FROM data_catalog
                         ORDER BY symbol, exchange
-                    """
-                    symbols_df = conn.execute(distinct_query, params).fetchdf()
+                    """).fetchdf()
+                    symbols_list = [(row['symbol'], row['exchange']) for _, row in symbols_df.iterrows()]
 
-                    for _, row in symbols_df.iterrows():
-                        sym = row['symbol']
-                        exch = row['exchange']
+                if not symbols_list:
+                    return False, "No symbols found to export", 0
 
-                        query = f"""
-                            SELECT
-                                strftime(to_timestamp(timestamp), '%Y-%m-%d') as date,
-                                strftime(to_timestamp(timestamp), '%H:%M:%S') as time,
-                                open, high, low, close, volume, oi
-                            FROM market_data
-                            WHERE symbol = ? AND exchange = ?
-                            {"AND interval = ?" if interval else ""}
-                            {"AND timestamp >= ?" if start_timestamp else ""}
-                            {"AND timestamp <= ?" if end_timestamp else ""}
-                            ORDER BY timestamp
-                        """
-                        sym_params = [sym, exch]
-                        if interval:
-                            sym_params.append(interval)
-                        if start_timestamp:
-                            sym_params.append(start_timestamp)
-                        if end_timestamp:
-                            sym_params.append(end_timestamp)
+                # Determine intervals to export
+                intervals_to_export = intervals if intervals else ['D']
 
-                        df = conn.execute(query, sym_params).fetchdf()
+                for sym, exch in symbols_list:
+                    market_open_seconds = _get_market_open_seconds(exch)
+
+                    for interval in intervals_to_export:
+                        # Determine if this is a computed interval
+                        is_computed = interval in COMPUTED_INTERVALS
+
+                        if is_computed:
+                            # Check if 1m data exists before attempting aggregation
+                            check_query = """
+                                SELECT COUNT(*) FROM market_data
+                                WHERE symbol = ? AND exchange = ? AND interval = '1m'
+                            """
+                            check_params = [sym, exch]
+                            if start_timestamp:
+                                check_query += " AND timestamp >= ?"
+                                check_params.append(start_timestamp)
+                            if end_timestamp:
+                                check_query += " AND timestamp <= ?"
+                                check_params.append(end_timestamp)
+
+                            count = conn.execute(check_query, check_params).fetchone()[0]
+                            if count == 0:
+                                logger.warning(f"No 1m data for {sym}:{exch}, skipping computed interval {interval}")
+                                skipped_intervals.append(f"{sym}:{exch}:{interval}")
+                                continue
+
+                            # Aggregate from 1m data using the same logic as _get_aggregated_ohlcv
+                            # Filter to only include data after market open to avoid negative timestamp issues
+                            minutes = INTERVAL_MINUTES.get(interval, 5)
+                            interval_seconds = minutes * 60
+
+                            query = f"""
+                                SELECT
+                                    (FLOOR((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset}) +
+                                    {market_open_seconds} +
+                                    FLOOR((((timestamp + {ist_offset}) % 86400) - {market_open_seconds}) / {interval_seconds}) * {interval_seconds}
+                                    as ts,
+                                    FIRST(open ORDER BY timestamp) as open,
+                                    MAX(high) as high,
+                                    MIN(low) as low,
+                                    LAST(close ORDER BY timestamp) as close,
+                                    SUM(volume) as volume,
+                                    LAST(oi ORDER BY timestamp) as oi
+                                FROM market_data
+                                WHERE symbol = ? AND exchange = ? AND interval = '1m'
+                                AND ((timestamp + {ist_offset}) % 86400) >= {market_open_seconds}
+                            """
+                            params = [sym, exch]
+
+                            if start_timestamp:
+                                query += " AND timestamp >= ?"
+                                params.append(start_timestamp)
+
+                            if end_timestamp:
+                                query += " AND timestamp <= ?"
+                                params.append(end_timestamp)
+
+                            query += f"""
+                                GROUP BY (FLOOR((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset}) +
+                                         {market_open_seconds} +
+                                         FLOOR((((timestamp + {ist_offset}) % 86400) - {market_open_seconds}) / {interval_seconds}) * {interval_seconds}
+                                ORDER BY ts ASC
+                            """
+
+                            df = conn.execute(query, params).fetchdf()
+
+                            if not df.empty:
+                                # Format timestamp as date and time columns
+                                df['date'] = pd.to_datetime(df['ts'], unit='s').dt.strftime('%Y-%m-%d')
+                                df['time'] = pd.to_datetime(df['ts'], unit='s').dt.strftime('%H:%M:%S')
+                                df = df[['date', 'time', 'open', 'high', 'low', 'close', 'volume', 'oi']]
+
+                        else:
+                            # Direct query for stored intervals (1m, D)
+                            query = """
+                                SELECT
+                                    strftime(to_timestamp(timestamp), '%Y-%m-%d') as date,
+                                    strftime(to_timestamp(timestamp), '%H:%M:%S') as time,
+                                    open, high, low, close, volume, oi
+                                FROM market_data
+                                WHERE symbol = ? AND exchange = ? AND interval = ?
+                            """
+                            params = [sym, exch, interval]
+
+                            if start_timestamp:
+                                query += " AND timestamp >= ?"
+                                params.append(start_timestamp)
+
+                            if end_timestamp:
+                                query += " AND timestamp <= ?"
+                                params.append(end_timestamp)
+
+                            query += " ORDER BY timestamp"
+
+                            df = conn.execute(query, params).fetchdf()
 
                         if not df.empty:
                             csv_content = df.to_csv(index=False)
-                            filename = f"{sym}_{exch}_{interval or 'all'}.csv"
+                            # Sanitize filename to prevent path traversal
+                            filename = f"{_sanitize_filename(sym)}_{_sanitize_filename(exch)}_{_sanitize_filename(interval)}.csv"
                             zf.writestr(filename, csv_content)
                             total_records += len(df)
-                else:
-                    # Single combined file
-                    query = f"""
-                        SELECT
-                            symbol, exchange, interval,
-                            strftime(to_timestamp(timestamp), '%Y-%m-%d') as date,
-                            strftime(to_timestamp(timestamp), '%H:%M:%S') as time,
-                            open, high, low, close, volume, oi
-                        FROM market_data
-                        WHERE {where_clause}
-                        ORDER BY symbol, exchange, interval, timestamp
-                    """
-                    df = conn.execute(query, params).fetchdf()
-
-                    if not df.empty:
-                        csv_content = df.to_csv(index=False)
-                        zf.writestr("market_data.csv", csv_content)
-                        total_records = len(df)
 
         if total_records == 0:
-            os.remove(abs_output)
+            if os.path.exists(abs_output):
+                os.remove(abs_output)
+            if skipped_intervals:
+                return False, f"No data exported. Missing 1m data for computed intervals: {len(skipped_intervals)} symbol(s)", 0
             return False, "No data matching the criteria", 0
 
         file_size = os.path.getsize(abs_output) / (1024 * 1024)  # MB
-        logger.info(f"Exported {total_records} records to ZIP ({file_size:.2f} MB)")
-        return True, f"Exported {total_records} records ({file_size:.2f} MB)", total_records
+        message = f"Exported {total_records} records ({file_size:.2f} MB)"
+        if skipped_intervals:
+            message += f". Note: {len(skipped_intervals)} computed interval(s) skipped due to missing 1m data."
+        logger.info(message)
+        return True, message, total_records
 
     except Exception as e:
         logger.error(f"Error exporting to ZIP: {e}")
+        # Clean up partial file on error
+        if os.path.exists(abs_output):
+            try:
+                os.remove(abs_output)
+            except Exception:
+                pass
         return False, str(e), 0
 
 
