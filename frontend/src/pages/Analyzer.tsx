@@ -356,32 +356,35 @@ export default function Analyzer() {
           <DialogHeader>
             <DialogTitle>Request Details</DialogTitle>
           </DialogHeader>
-          {selectedRequest && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <h4 className="font-semibold mb-2">Request Data</h4>
-                <div className="rounded-lg overflow-hidden border bg-card/50 h-[400px]">
-                  <JsonEditor
-                    value={JSON.stringify(cleanRequestData(selectedRequest.request_data), null, 2)}
-                    readOnly={true}
-                  />
+          {selectedRequest && (() => {
+            const requestJson = JSON.stringify(cleanRequestData(selectedRequest.request_data), null, 2)
+            const responseJson = JSON.stringify(
+              selectedRequest.response_data || selectedRequest.analysis,
+              null,
+              2
+            )
+            const requestLines = requestJson.split('\n').length
+            const responseLines = responseJson.split('\n').length
+            const maxLines = Math.max(requestLines, responseLines)
+            const height = Math.min(Math.max(maxLines * 20 + 24, 150), 500)
+
+            return (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[70vh] overflow-y-auto">
+                <div>
+                  <h4 className="font-semibold mb-2">Request Data</h4>
+                  <div className="rounded-lg overflow-hidden border bg-card/50" style={{ height }}>
+                    <JsonEditor value={requestJson} readOnly={true} lineWrapping={false} />
+                  </div>
+                </div>
+                <div>
+                  <h4 className="font-semibold mb-2">Response Data</h4>
+                  <div className="rounded-lg overflow-hidden border bg-card/50" style={{ height }}>
+                    <JsonEditor value={responseJson} readOnly={true} lineWrapping={false} />
+                  </div>
                 </div>
               </div>
-              <div>
-                <h4 className="font-semibold mb-2">Response Data</h4>
-                <div className="rounded-lg overflow-hidden border bg-card/50 h-[400px]">
-                  <JsonEditor
-                    value={JSON.stringify(
-                      selectedRequest.response_data || selectedRequest.analysis,
-                      null,
-                      2
-                    )}
-                    readOnly={true}
-                  />
-                </div>
-              </div>
-            </div>
-          )}
+            )
+          })()}
         </DialogContent>
       </Dialog>
     </div>

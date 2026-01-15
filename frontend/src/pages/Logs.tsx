@@ -412,24 +412,39 @@ export default function LogsPage() {
                       </Button>
                     </CollapsibleTrigger>
                     <CollapsibleContent className="mt-4 space-y-4">
-                      <div className="bg-muted rounded-lg p-4">
-                        <h4 className="text-sm font-medium mb-2">Request Data</h4>
-                        <div className="rounded-lg overflow-hidden border bg-card/50 h-[250px]">
-                          <JsonEditor
-                            value={JSON.stringify(requestData, null, 2)}
-                            readOnly={true}
-                          />
-                        </div>
-                      </div>
-                      <div className="bg-muted rounded-lg p-4">
-                        <h4 className="text-sm font-medium mb-2">Response Data</h4>
-                        <div className="rounded-lg overflow-hidden border bg-card/50 h-[250px]">
-                          <JsonEditor
-                            value={JSON.stringify(log.response_data, null, 2)}
-                            readOnly={true}
-                          />
-                        </div>
-                      </div>
+                      {(() => {
+                        const requestJson = JSON.stringify(requestData, null, 2)
+                        const responseJson = JSON.stringify(log.response_data, null, 2)
+                        const requestLines = requestJson.split('\n').length
+                        const responseLines = responseJson.split('\n').length
+                        const requestHeight = Math.min(Math.max(requestLines * 20 + 24, 100), 400)
+                        const responseHeight = Math.min(Math.max(responseLines * 20 + 24, 100), 400)
+
+                        return (
+                          <>
+                            <div className="bg-muted rounded-lg p-4">
+                              <h4 className="text-sm font-medium mb-2">Request Data</h4>
+                              <div className="rounded-lg overflow-hidden border bg-card/50" style={{ height: requestHeight }}>
+                                <JsonEditor
+                                  value={requestJson}
+                                  readOnly={true}
+                                  lineWrapping={false}
+                                />
+                              </div>
+                            </div>
+                            <div className="bg-muted rounded-lg p-4">
+                              <h4 className="text-sm font-medium mb-2">Response Data</h4>
+                              <div className="rounded-lg overflow-hidden border bg-card/50" style={{ height: responseHeight }}>
+                                <JsonEditor
+                                  value={responseJson}
+                                  readOnly={true}
+                                  lineWrapping={false}
+                                />
+                              </div>
+                            </div>
+                          </>
+                        )
+                      })()}
                     </CollapsibleContent>
                   </Collapsible>
                 </CardContent>

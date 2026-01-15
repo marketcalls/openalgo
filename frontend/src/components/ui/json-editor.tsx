@@ -13,6 +13,7 @@ interface JsonEditorProps {
   readOnly?: boolean
   placeholder?: string
   className?: string
+  lineWrapping?: boolean
 }
 
 // Custom theme matching the existing tokenizer colors
@@ -112,19 +113,23 @@ export function JsonEditor({
   readOnly = false,
   placeholder,
   className = '',
+  lineWrapping = true,
 }: JsonEditorProps) {
   const { mode, appMode } = useThemeStore()
   // Dark mode when: explicit dark theme OR analyzer mode (always dark purple theme)
   const isDark = mode === 'dark' || appMode === 'analyzer'
 
   const extensions = useMemo(() => {
-    return [
+    const exts = [
       json(),
       createJsonTheme(isDark),
       createBaseTheme(isDark),
-      EditorView.lineWrapping,
     ]
-  }, [isDark])
+    if (lineWrapping) {
+      exts.push(EditorView.lineWrapping)
+    }
+    return exts
+  }, [isDark, lineWrapping])
 
   return (
     <div className={`h-full w-full ${className}`}>
