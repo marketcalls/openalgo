@@ -128,6 +128,63 @@ def create_database():
         """)
         logger.info("Created data_catalog table")
 
+        # Download Jobs Table - for tracking bulk operations
+        logger.info("Creating download_jobs table...")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS download_jobs (
+                id VARCHAR PRIMARY KEY,
+                job_type VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                total_symbols INTEGER DEFAULT 0,
+                completed_symbols INTEGER DEFAULT 0,
+                failed_symbols INTEGER DEFAULT 0,
+                interval VARCHAR,
+                start_date VARCHAR,
+                end_date VARCHAR,
+                config VARCHAR,
+                created_at TIMESTAMP DEFAULT current_timestamp,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                error_message VARCHAR
+            )
+        """)
+        logger.info("Created download_jobs table")
+
+        # Job Items Table - individual symbol status within a job
+        logger.info("Creating job_items table...")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS job_items (
+                id INTEGER PRIMARY KEY,
+                job_id VARCHAR NOT NULL,
+                symbol VARCHAR NOT NULL,
+                exchange VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                records_downloaded INTEGER DEFAULT 0,
+                error_message VARCHAR,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP
+            )
+        """)
+        logger.info("Created job_items table")
+
+        # Symbol Metadata Table - enriched symbol info for display
+        logger.info("Creating symbol_metadata table...")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS symbol_metadata (
+                symbol VARCHAR NOT NULL,
+                exchange VARCHAR NOT NULL,
+                name VARCHAR,
+                expiry VARCHAR,
+                strike DOUBLE,
+                lotsize INTEGER,
+                instrumenttype VARCHAR,
+                tick_size DOUBLE,
+                last_updated TIMESTAMP DEFAULT current_timestamp,
+                PRIMARY KEY (symbol, exchange)
+            )
+        """)
+        logger.info("Created symbol_metadata table")
+
         # Create indexes for common query patterns
         logger.info("Creating indexes...")
         conn.execute("""
@@ -141,6 +198,14 @@ def create_database():
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_market_data_interval_time
             ON market_data (interval, timestamp)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_job_items_job_id
+            ON job_items (job_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_download_jobs_status
+            ON download_jobs (status)
         """)
         logger.info("Created all indexes")
 
@@ -200,7 +265,8 @@ def status():
 
         try:
             # Check all required tables exist
-            required_tables = ['market_data', 'watchlist', 'data_catalog']
+            required_tables = ['market_data', 'watchlist', 'data_catalog',
+                               'download_jobs', 'job_items', 'symbol_metadata']
             missing_tables = []
 
             for table in required_tables:
@@ -225,6 +291,8 @@ def status():
             """).fetchone()[0]
             watchlist_count = conn.execute("SELECT COUNT(*) FROM watchlist").fetchone()[0]
             catalog_count = conn.execute("SELECT COUNT(*) FROM data_catalog").fetchone()[0]
+            jobs_count = conn.execute("SELECT COUNT(*) FROM download_jobs").fetchone()[0]
+            metadata_count = conn.execute("SELECT COUNT(*) FROM symbol_metadata").fetchone()[0]
 
             # Get database file size
             db_size = os.path.getsize(db_path)
@@ -236,6 +304,8 @@ def status():
             logger.info(f"   Total Symbols: {total_symbols}")
             logger.info(f"   Watchlist Items: {watchlist_count}")
             logger.info(f"   Catalog Entries: {catalog_count}")
+            logger.info(f"   Download Jobs: {jobs_count}")
+            logger.info(f"   Symbol Metadata: {metadata_count}")
 
             conn.close()
             return True

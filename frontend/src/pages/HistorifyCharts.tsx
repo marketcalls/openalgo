@@ -1,0 +1,601 @@
+import {
+  ArrowLeft,
+  Calendar,
+  Database,
+  Maximize2,
+  Minimize2,
+  Moon,
+  RefreshCw,
+  Search,
+  Sun,
+} from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { toast } from 'sonner'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command'
+import { Input } from '@/components/ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { cn } from '@/lib/utils'
+import { useThemeStore } from '@/stores/themeStore'
+import {
+  CandlestickSeries,
+  ColorType,
+  CrosshairMode,
+  createChart,
+  HistogramSeries,
+  type IChartApi,
+  type ISeriesApi,
+} from 'lightweight-charts'
+
+interface CatalogItem {
+  symbol: string
+  exchange: string
+  interval: string
+  first_timestamp: number
+  last_timestamp: number
+  record_count: number
+  first_date?: string
+  last_date?: string
+}
+
+interface OHLCVData {
+  timestamp: number
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+
+interface IntervalData {
+  seconds: string[]
+  minutes: string[]
+  hours: string[]
+  days: string[]
+  weeks: string[]
+  months: string[]
+}
+
+export default function HistorifyCharts() {
+  const { mode, toggleMode } = useThemeStore()
+  const isDarkMode = mode === 'dark'
+  const { symbol: urlSymbol } = useParams()
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // State
+  const [catalog, setCatalog] = useState<CatalogItem[]>([])
+  const [intervals, setIntervals] = useState<IntervalData | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+
+  // Symbol selection
+  const [selectedSymbol, setSelectedSymbol] = useState(urlSymbol || '')
+  const [selectedExchange, setSelectedExchange] = useState(searchParams.get('exchange') || 'NSE')
+  const [selectedInterval, setSelectedInterval] = useState(searchParams.get('interval') || 'D')
+  const [symbolSearchOpen, setSymbolSearchOpen] = useState(false)
+  const [symbolSearch, setSymbolSearch] = useState('')
+
+  // Date range
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date()
+    d.setMonth(d.getMonth() - 6)
+    return d.toISOString().split('T')[0]
+  })
+  const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0])
+
+  // Chart data
+  const [chartData, setChartData] = useState<OHLCVData[]>([])
+  const [dataInfo, setDataInfo] = useState<CatalogItem | null>(null)
+
+  // Chart refs
+  const chartContainerRef = useRef<HTMLDivElement>(null)
+  const chartRef = useRef<IChartApi | null>(null)
+  const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
+  const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
+
+  // All intervals flattened
+  const allIntervals = useMemo(() => {
+    if (!intervals) return ['D']
+    return [
+      ...intervals.seconds,
+      ...intervals.minutes,
+      ...intervals.hours,
+      ...intervals.days,
+      ...intervals.weeks,
+      ...intervals.months,
+    ]
+  }, [intervals])
+
+  // Unique symbols from catalog
+  const uniqueSymbols = useMemo(() => {
+    const symbolMap = new Map<string, { symbol: string; exchange: string; intervals: string[] }>()
+    catalog.forEach((item) => {
+      const key = `${item.symbol}:${item.exchange}`
+      if (!symbolMap.has(key)) {
+        symbolMap.set(key, { symbol: item.symbol, exchange: item.exchange, intervals: [item.interval] })
+      } else {
+        symbolMap.get(key)!.intervals.push(item.interval)
+      }
+    })
+    return Array.from(symbolMap.values())
+  }, [catalog])
+
+  // Filtered symbols for search
+  const filteredSymbols = useMemo(() => {
+    if (!symbolSearch) return uniqueSymbols
+    const search = symbolSearch.toLowerCase()
+    return uniqueSymbols.filter(
+      (s) => s.symbol.toLowerCase().includes(search) || s.exchange.toLowerCase().includes(search)
+    )
+  }, [uniqueSymbols, symbolSearch])
+
+  // Load catalog and intervals on mount
+  useEffect(() => {
+    loadCatalog()
+    loadIntervals()
+  }, [])
+
+  // Update URL when selection changes
+  useEffect(() => {
+    if (selectedSymbol && selectedExchange && selectedInterval) {
+      setSearchParams({ exchange: selectedExchange, interval: selectedInterval })
+    }
+  }, [selectedSymbol, selectedExchange, selectedInterval, setSearchParams])
+
+  // Load chart data when selection changes
+  useEffect(() => {
+    if (selectedSymbol && selectedExchange && selectedInterval) {
+      loadChartData()
+      updateDataInfo()
+    }
+  }, [selectedSymbol, selectedExchange, selectedInterval])
+
+  // Initialize/update chart
+  useEffect(() => {
+    if (!chartContainerRef.current) return
+
+    // Small delay for container sizing
+    const initTimer = setTimeout(() => {
+      if (!chartContainerRef.current) return
+
+      // Clean up existing chart
+      if (chartRef.current) {
+        chartRef.current.remove()
+        chartRef.current = null
+      }
+
+      const container = chartContainerRef.current
+      const containerWidth = container.offsetWidth || 800
+      const containerHeight = container.offsetHeight || 600
+
+      const chart = createChart(container, {
+        width: containerWidth,
+        height: Math.max(containerHeight, 500),
+        layout: {
+          background: { type: ColorType.Solid, color: 'transparent' },
+          textColor: isDarkMode ? '#a6adbb' : '#333',
+        },
+        grid: {
+          vertLines: {
+            color: isDarkMode ? 'rgba(166, 173, 187, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+          },
+          horzLines: {
+            color: isDarkMode ? 'rgba(166, 173, 187, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+          },
+        },
+        rightPriceScale: {
+          borderColor: isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.2)',
+          scaleMargins: {
+            top: 0.1,
+            bottom: 0.25,
+          },
+        },
+        timeScale: {
+          borderColor: isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.2)',
+          timeVisible: true,
+          secondsVisible: false,
+        },
+        crosshair: {
+          mode: CrosshairMode.Normal,
+        },
+      })
+
+      // Add candlestick series
+      const candleSeries = chart.addSeries(CandlestickSeries, {
+        upColor: '#22c55e',
+        downColor: '#ef4444',
+        borderVisible: false,
+        wickUpColor: '#22c55e',
+        wickDownColor: '#ef4444',
+      })
+
+      // Add volume series
+      const volumeSeries = chart.addSeries(HistogramSeries, {
+        color: '#26a69a',
+        priceFormat: {
+          type: 'volume',
+        },
+        priceScaleId: '',
+      })
+      volumeSeries.priceScale().applyOptions({
+        scaleMargins: {
+          top: 0.8,
+          bottom: 0,
+        },
+      })
+
+      chartRef.current = chart
+      candleSeriesRef.current = candleSeries
+      volumeSeriesRef.current = volumeSeries
+
+      // Set data if available
+      if (chartData.length > 0) {
+        const candleData = chartData.map((d) => ({
+          time: d.timestamp as unknown as Parameters<typeof candleSeries.setData>[0][0]['time'],
+          open: d.open,
+          high: d.high,
+          low: d.low,
+          close: d.close,
+        }))
+        candleSeries.setData(candleData)
+
+        const volumeData = chartData.map((d) => ({
+          time: d.timestamp as unknown as Parameters<typeof volumeSeries.setData>[0][0]['time'],
+          value: d.volume,
+          color: d.close >= d.open ? 'rgba(34, 197, 94, 0.5)' : 'rgba(239, 68, 68, 0.5)',
+        }))
+        volumeSeries.setData(volumeData)
+
+        chart.timeScale().fitContent()
+      }
+    }, 100)
+
+    // Handle resize
+    const handleResize = () => {
+      if (chartRef.current && chartContainerRef.current) {
+        const container = chartContainerRef.current
+        chartRef.current.applyOptions({
+          width: container.offsetWidth,
+          height: container.offsetHeight,
+        })
+      }
+    }
+    window.addEventListener('resize', handleResize)
+
+    return () => {
+      clearTimeout(initTimer)
+      window.removeEventListener('resize', handleResize)
+      if (chartRef.current) {
+        chartRef.current.remove()
+        chartRef.current = null
+      }
+    }
+  }, [isDarkMode, chartData, isFullscreen])
+
+  const loadCatalog = async () => {
+    try {
+      const response = await fetch('/historify/api/catalog', { credentials: 'include' })
+      const data = await response.json()
+      if (data.status === 'success') {
+        setCatalog(data.data || [])
+      }
+    } catch (error) {
+      console.error('Error loading catalog:', error)
+    }
+  }
+
+  const loadIntervals = async () => {
+    try {
+      const response = await fetch('/historify/api/intervals', { credentials: 'include' })
+      const data = await response.json()
+      if (data.status === 'success') {
+        setIntervals(data.data)
+      }
+    } catch (error) {
+      console.error('Error loading intervals:', error)
+    }
+  }
+
+  const loadChartData = useCallback(async () => {
+    if (!selectedSymbol || !selectedExchange) return
+
+    setIsLoading(true)
+    try {
+      const params = new URLSearchParams({
+        symbol: selectedSymbol,
+        exchange: selectedExchange,
+        interval: selectedInterval,
+        start_date: startDate,
+        end_date: endDate,
+      })
+
+      const response = await fetch(`/historify/api/data?${params}`, { credentials: 'include' })
+      const data = await response.json()
+
+      if (data.status === 'success') {
+        setChartData(data.data || [])
+        if (data.count === 0) {
+          toast.info('No data available for this range')
+        }
+      } else {
+        toast.error(data.message || 'Failed to load chart data')
+      }
+    } catch (error) {
+      console.error('Error loading chart data:', error)
+      toast.error('Failed to load chart data')
+    } finally {
+      setIsLoading(false)
+    }
+  }, [selectedSymbol, selectedExchange, selectedInterval, startDate, endDate])
+
+  const updateDataInfo = useCallback(() => {
+    const info = catalog.find(
+      (c) =>
+        c.symbol === selectedSymbol &&
+        c.exchange === selectedExchange &&
+        c.interval === selectedInterval
+    )
+    setDataInfo(info || null)
+  }, [catalog, selectedSymbol, selectedExchange, selectedInterval])
+
+  const handleSymbolSelect = (symbol: string, exchange: string) => {
+    setSelectedSymbol(symbol)
+    setSelectedExchange(exchange)
+    setSymbolSearchOpen(false)
+    setSymbolSearch('')
+  }
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen()
+      setIsFullscreen(true)
+    } else {
+      document.exitFullscreen()
+      setIsFullscreen(false)
+    }
+  }
+
+  // Listen for fullscreen changes
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement)
+    }
+    document.addEventListener('fullscreenchange', handleFullscreenChange)
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange)
+  }, [])
+
+  return (
+    <div
+      className={cn(
+        'h-full flex flex-col bg-background text-foreground',
+        isFullscreen && 'fixed inset-0 z-50'
+      )}
+    >
+      {/* Header */}
+      <div className="h-14 border-b border-border flex items-center px-4 bg-card/50">
+        <Button variant="ghost" size="icon" className="mr-2" asChild>
+          <Link to="/historify">
+            <ArrowLeft className="h-5 w-5" />
+          </Link>
+        </Button>
+
+        <div className="flex items-center gap-3">
+          <Database className="h-5 w-5 text-primary" />
+          <span className="font-semibold">Historify Charts</span>
+        </div>
+
+        <div className="flex items-center gap-3 ml-6">
+          {/* Symbol Selector */}
+          <Popover open={symbolSearchOpen} onOpenChange={setSymbolSearchOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="outline" className="w-64 justify-between">
+                {selectedSymbol ? (
+                  <span>
+                    {selectedSymbol}:{selectedExchange}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">Select symbol...</span>
+                )}
+                <Search className="h-4 w-4 ml-2" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-64 p-0" align="start">
+              <Command>
+                <CommandInput
+                  placeholder="Search symbols..."
+                  value={symbolSearch}
+                  onValueChange={setSymbolSearch}
+                />
+                <CommandList>
+                  <CommandEmpty>No symbols found</CommandEmpty>
+                  <CommandGroup>
+                    {filteredSymbols.slice(0, 20).map((s) => (
+                      <CommandItem
+                        key={`${s.symbol}:${s.exchange}`}
+                        value={`${s.symbol}:${s.exchange}`}
+                        onSelect={() => handleSymbolSelect(s.symbol, s.exchange)}
+                      >
+                        <span className="font-medium">{s.symbol}</span>
+                        <Badge variant="outline" className="ml-2 text-[10px]">
+                          {s.exchange}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground ml-auto">
+                          {s.intervals.length} intervals
+                        </span>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
+
+          {/* Interval Selector */}
+          <Select value={selectedInterval} onValueChange={setSelectedInterval}>
+            <SelectTrigger className="w-24">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {allIntervals.map((int) => (
+                <SelectItem key={int} value={int}>
+                  {int}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {/* Date Range */}
+          <div className="flex items-center gap-2">
+            <Calendar className="h-4 w-4 text-muted-foreground" />
+            <Input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="h-9 w-36"
+            />
+            <span className="text-muted-foreground">-</span>
+            <Input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="h-9 w-36"
+            />
+          </div>
+
+          <Button variant="outline" size="icon" onClick={loadChartData} disabled={isLoading}>
+            <RefreshCw className={cn('h-4 w-4', isLoading && 'animate-spin')} />
+          </Button>
+        </div>
+
+        <div className="flex-1" />
+
+        {/* Right actions */}
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="icon" onClick={toggleFullscreen}>
+            {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          </Button>
+          <Button variant="ghost" size="icon" onClick={toggleMode}>
+            {isDarkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </Button>
+        </div>
+      </div>
+
+      {/* Chart Area */}
+      <div className="flex-1 flex flex-col overflow-hidden p-4">
+        {selectedSymbol ? (
+          <div className="h-full flex flex-col">
+            {/* Symbol Info Bar */}
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-3">
+                <span className="text-xl font-bold">
+                  {selectedSymbol}:{selectedExchange}
+                </span>
+                <Badge variant="outline">{selectedInterval}</Badge>
+                {chartData.length > 0 && (
+                  <span className="text-sm text-muted-foreground">
+                    {chartData.length.toLocaleString()} candles
+                  </span>
+                )}
+              </div>
+
+              {dataInfo && (
+                <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                  <span>
+                    Data: {dataInfo.first_date} - {dataInfo.last_date}
+                  </span>
+                  <span>{dataInfo.record_count.toLocaleString()} records stored</span>
+                </div>
+              )}
+            </div>
+
+            {/* Chart Container */}
+            <div className="flex-1 min-h-0 border rounded-lg bg-card overflow-hidden">
+              <div ref={chartContainerRef} className="w-full h-full" />
+            </div>
+
+            {/* Price Info */}
+            {chartData.length > 0 && (
+              <div className="mt-3 grid grid-cols-5 gap-4">
+                <Card>
+                  <CardContent className="p-3">
+                    <div className="text-xs text-muted-foreground">Open</div>
+                    <div className="text-lg font-medium">
+                      {chartData[chartData.length - 1]?.open?.toFixed(2)}
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-3">
+                    <div className="text-xs text-muted-foreground">High</div>
+                    <div className="text-lg font-medium text-green-600">
+                      {chartData[chartData.length - 1]?.high?.toFixed(2)}
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-3">
+                    <div className="text-xs text-muted-foreground">Low</div>
+                    <div className="text-lg font-medium text-red-600">
+                      {chartData[chartData.length - 1]?.low?.toFixed(2)}
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-3">
+                    <div className="text-xs text-muted-foreground">Close</div>
+                    <div className="text-lg font-medium">
+                      {chartData[chartData.length - 1]?.close?.toFixed(2)}
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-3">
+                    <div className="text-xs text-muted-foreground">Volume</div>
+                    <div className="text-lg font-medium">
+                      {chartData[chartData.length - 1]?.volume?.toLocaleString()}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="h-full flex items-center justify-center">
+            <div className="text-center text-muted-foreground">
+              <Database className="h-16 w-16 mx-auto mb-4 opacity-30" />
+              <p className="text-xl font-medium">Select a Symbol</p>
+              <p className="text-sm mt-2">
+                Choose a symbol from your data catalog to view its chart
+              </p>
+              {catalog.length === 0 && (
+                <p className="text-sm mt-4">
+                  No data in catalog.{' '}
+                  <Link to="/historify" className="text-primary underline">
+                    Download data first
+                  </Link>
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

@@ -114,6 +114,57 @@ def init_database():
             )
         """)
 
+        # Download Jobs Table - for tracking bulk operations
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS download_jobs (
+                id VARCHAR PRIMARY KEY,
+                job_type VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                total_symbols INTEGER DEFAULT 0,
+                completed_symbols INTEGER DEFAULT 0,
+                failed_symbols INTEGER DEFAULT 0,
+                interval VARCHAR,
+                start_date VARCHAR,
+                end_date VARCHAR,
+                config VARCHAR,
+                created_at TIMESTAMP DEFAULT current_timestamp,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                error_message VARCHAR
+            )
+        """)
+
+        # Job Items Table - individual symbol status within a job
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS job_items (
+                id INTEGER PRIMARY KEY,
+                job_id VARCHAR NOT NULL,
+                symbol VARCHAR NOT NULL,
+                exchange VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                records_downloaded INTEGER DEFAULT 0,
+                error_message VARCHAR,
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP
+            )
+        """)
+
+        # Symbol Metadata Table - enriched symbol info for display
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS symbol_metadata (
+                symbol VARCHAR NOT NULL,
+                exchange VARCHAR NOT NULL,
+                name VARCHAR,
+                expiry VARCHAR,
+                strike DOUBLE,
+                lotsize INTEGER,
+                instrumenttype VARCHAR,
+                tick_size DOUBLE,
+                last_updated TIMESTAMP DEFAULT current_timestamp,
+                PRIMARY KEY (symbol, exchange)
+            )
+        """)
+
         # Create indexes for common query patterns
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_market_data_timestamp
@@ -126,6 +177,14 @@ def init_database():
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_market_data_interval_time
             ON market_data (interval, timestamp)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_job_items_job_id
+            ON job_items (job_id)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_download_jobs_status
+            ON download_jobs (status)
         """)
 
         logger.info("Historify database initialized successfully")
@@ -159,11 +218,22 @@ def add_to_watchlist(symbol: str, exchange: str, display_name: str = None) -> Tu
     """
     try:
         with get_connection() as conn:
+            # Check if symbol already exists
+            existing = conn.execute("""
+                SELECT id FROM watchlist WHERE symbol = ? AND exchange = ?
+            """, [symbol.upper(), exchange.upper()]).fetchone()
+
+            if existing:
+                return True, f"{symbol} already in watchlist"
+
+            # DuckDB doesn't auto-generate IDs, so we need to calculate the next ID
+            result = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM watchlist").fetchone()
+            next_id = result[0] if result else 1
+
             conn.execute("""
-                INSERT INTO watchlist (symbol, exchange, display_name)
-                VALUES (?, ?, ?)
-                ON CONFLICT (symbol, exchange) DO NOTHING
-            """, [symbol.upper(), exchange.upper(), display_name])
+                INSERT INTO watchlist (id, symbol, exchange, display_name)
+                VALUES (?, ?, ?, ?)
+            """, [next_id, symbol.upper(), exchange.upper(), display_name])
 
         logger.info(f"Added {symbol}:{exchange} to watchlist")
         return True, f"Added {symbol} to watchlist"
@@ -244,27 +314,60 @@ def upsert_market_data(df: pd.DataFrame, symbol: str, exchange: str, interval: s
         df = df[['symbol', 'exchange', 'interval', 'timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi']]
 
         with get_connection() as conn:
-            # Use INSERT OR REPLACE for efficient upsert
+            # Use INSERT with ON CONFLICT for upsert (DuckDB requires explicit conflict target)
             conn.execute("""
-                INSERT OR REPLACE INTO market_data
+                INSERT INTO market_data
                 (symbol, exchange, interval, timestamp, open, high, low, close, volume, oi)
                 SELECT symbol, exchange, interval, timestamp, open, high, low, close, volume, oi
                 FROM df
+                ON CONFLICT (symbol, exchange, interval, timestamp) DO UPDATE SET
+                    open = EXCLUDED.open,
+                    high = EXCLUDED.high,
+                    low = EXCLUDED.low,
+                    close = EXCLUDED.close,
+                    volume = EXCLUDED.volume,
+                    oi = EXCLUDED.oi
             """)
 
-            # Update catalog
-            conn.execute("""
-                INSERT OR REPLACE INTO data_catalog
-                (symbol, exchange, interval, first_timestamp, last_timestamp,
-                 record_count, last_download_at)
-                SELECT
-                    ?, ?, ?,
-                    MIN(timestamp), MAX(timestamp), COUNT(*),
-                    current_timestamp
-                FROM market_data
+            # Update catalog - check if exists first due to multiple constraints
+            existing = conn.execute("""
+                SELECT id FROM data_catalog
                 WHERE symbol = ? AND exchange = ? AND interval = ?
-            """, [symbol.upper(), exchange.upper(), interval,
-                  symbol.upper(), exchange.upper(), interval])
+            """, [symbol.upper(), exchange.upper(), interval]).fetchone()
+
+            if existing:
+                # Update existing record
+                conn.execute("""
+                    UPDATE data_catalog SET
+                        first_timestamp = (SELECT MIN(timestamp) FROM market_data
+                                          WHERE symbol = ? AND exchange = ? AND interval = ?),
+                        last_timestamp = (SELECT MAX(timestamp) FROM market_data
+                                         WHERE symbol = ? AND exchange = ? AND interval = ?),
+                        record_count = (SELECT COUNT(*) FROM market_data
+                                       WHERE symbol = ? AND exchange = ? AND interval = ?),
+                        last_download_at = current_timestamp
+                    WHERE symbol = ? AND exchange = ? AND interval = ?
+                """, [symbol.upper(), exchange.upper(), interval,
+                      symbol.upper(), exchange.upper(), interval,
+                      symbol.upper(), exchange.upper(), interval,
+                      symbol.upper(), exchange.upper(), interval])
+            else:
+                # Insert new record
+                next_id_result = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM data_catalog").fetchone()
+                next_id = next_id_result[0] if next_id_result else 1
+
+                conn.execute("""
+                    INSERT INTO data_catalog
+                    (id, symbol, exchange, interval, first_timestamp, last_timestamp,
+                     record_count, last_download_at)
+                    SELECT
+                        ?, ?, ?, ?,
+                        MIN(timestamp), MAX(timestamp), COUNT(*),
+                        current_timestamp
+                    FROM market_data
+                    WHERE symbol = ? AND exchange = ? AND interval = ?
+                """, [next_id, symbol.upper(), exchange.upper(), interval,
+                      symbol.upper(), exchange.upper(), interval])
 
         logger.info(f"Upserted {len(df)} records for {symbol}:{exchange}:{interval}")
         return len(df)
@@ -272,6 +375,22 @@ def upsert_market_data(df: pd.DataFrame, symbol: str, exchange: str, interval: s
     except Exception as e:
         logger.error(f"Error upserting market data: {e}")
         raise
+
+
+# Storage intervals - only these are physically stored
+STORAGE_INTERVALS = {'1m', 'D'}
+
+# Computed intervals - these are aggregated from 1m data on-the-fly
+COMPUTED_INTERVALS = {'5m', '15m', '30m', '1h'}
+
+# Interval to minutes mapping for aggregation
+INTERVAL_MINUTES = {
+    '1m': 1,
+    '5m': 5,
+    '15m': 15,
+    '30m': 30,
+    '1h': 60,
+}
 
 
 def get_ohlcv(
@@ -283,6 +402,7 @@ def get_ohlcv(
 ) -> pd.DataFrame:
     """
     Retrieve OHLCV data for a symbol.
+    For computed intervals (5m, 15m, 30m, 1h), aggregates 1m data on-the-fly.
 
     Args:
         symbol: Trading symbol
@@ -295,6 +415,17 @@ def get_ohlcv(
         DataFrame with columns: timestamp, open, high, low, close, volume, oi
     """
     try:
+        # Check if this is a computed interval
+        if interval in COMPUTED_INTERVALS:
+            return _get_aggregated_ohlcv(
+                symbol=symbol,
+                exchange=exchange,
+                target_interval=interval,
+                start_timestamp=start_timestamp,
+                end_timestamp=end_timestamp
+            )
+
+        # Standard query for stored intervals (1m, D)
         query = """
             SELECT timestamp, open, high, low, close, volume, oi
             FROM market_data
@@ -319,6 +450,70 @@ def get_ohlcv(
 
     except Exception as e:
         logger.error(f"Error fetching OHLCV data: {e}")
+        return pd.DataFrame()
+
+
+def _get_aggregated_ohlcv(
+    symbol: str,
+    exchange: str,
+    target_interval: str,
+    start_timestamp: Optional[int] = None,
+    end_timestamp: Optional[int] = None
+) -> pd.DataFrame:
+    """
+    Aggregate 1m data to higher timeframes using DuckDB SQL.
+    Uses time_bucket for efficient grouping.
+
+    Args:
+        symbol: Trading symbol
+        exchange: Exchange code
+        target_interval: Target interval (5m, 15m, 30m, 1h)
+        start_timestamp: Start epoch timestamp (optional)
+        end_timestamp: End epoch timestamp (optional)
+
+    Returns:
+        DataFrame with aggregated OHLCV data
+    """
+    try:
+        minutes = INTERVAL_MINUTES.get(target_interval, 5)
+        interval_seconds = minutes * 60
+
+        # Build the aggregation query
+        # DuckDB doesn't have time_bucket, so we use integer division
+        query = f"""
+            SELECT
+                (timestamp / {interval_seconds}) * {interval_seconds} as timestamp,
+                FIRST(open) as open,
+                MAX(high) as high,
+                MIN(low) as low,
+                LAST(close) as close,
+                SUM(volume) as volume,
+                LAST(oi) as oi
+            FROM market_data
+            WHERE symbol = ? AND exchange = ? AND interval = '1m'
+        """
+        params = [symbol.upper(), exchange.upper()]
+
+        if start_timestamp:
+            query += " AND timestamp >= ?"
+            params.append(start_timestamp)
+
+        if end_timestamp:
+            query += " AND timestamp <= ?"
+            params.append(end_timestamp)
+
+        query += f"""
+            GROUP BY (timestamp / {interval_seconds})
+            ORDER BY timestamp ASC
+        """
+
+        with get_connection() as conn:
+            result = conn.execute(query, params).fetchdf()
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error aggregating OHLCV data to {target_interval}: {e}")
         return pd.DataFrame()
 
 
@@ -754,3 +949,972 @@ def import_from_csv(
     except Exception as e:
         logger.error(f"Error importing CSV: {e}")
         return False, str(e), 0
+
+
+# =============================================================================
+# Download Job Operations
+# =============================================================================
+
+def create_download_job(
+    job_id: str,
+    job_type: str,
+    symbols: List[Dict[str, str]],
+    interval: str,
+    start_date: str,
+    end_date: str,
+    config: Dict[str, Any] = None
+) -> Tuple[bool, str]:
+    """
+    Create a new download job with symbol items.
+
+    Args:
+        job_id: Unique job identifier
+        job_type: Type of job ('watchlist', 'option_chain', 'futures_chain', 'custom')
+        symbols: List of dicts with 'symbol' and 'exchange' keys
+        interval: Time interval for download
+        start_date: Start date (YYYY-MM-DD)
+        end_date: End date (YYYY-MM-DD)
+        config: Optional configuration dict (JSON serializable)
+
+    Returns:
+        Tuple of (success, message)
+    """
+    import json
+
+    try:
+        with get_connection() as conn:
+            # Create the job record
+            conn.execute("""
+                INSERT INTO download_jobs
+                (id, job_type, status, total_symbols, interval, start_date, end_date, config)
+                VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
+            """, [job_id, job_type, len(symbols), interval, start_date, end_date,
+                  json.dumps(config) if config else None])
+
+            # Get the current max ID from job_items to avoid duplicates
+            max_id_result = conn.execute("SELECT COALESCE(MAX(id), 0) FROM job_items").fetchone()
+            start_id = max_id_result[0] + 1
+
+            # Create job items for each symbol with globally unique IDs
+            for i, sym in enumerate(symbols):
+                conn.execute("""
+                    INSERT INTO job_items (id, job_id, symbol, exchange, status)
+                    VALUES (?, ?, ?, ?, 'pending')
+                """, [start_id + i, job_id, sym['symbol'].upper(), sym['exchange'].upper()])
+
+        logger.info(f"Created download job {job_id} with {len(symbols)} symbols")
+        return True, f"Job created with {len(symbols)} symbols"
+
+    except Exception as e:
+        logger.error(f"Error creating download job: {e}")
+        return False, str(e)
+
+
+def _safe_timestamp(val) -> Optional[str]:
+    """Convert timestamp to ISO string, handling NaT/None values."""
+    if val is None:
+        return None
+    if pd.isna(val):
+        return None
+    try:
+        if hasattr(val, 'isoformat'):
+            return val.isoformat()
+        return str(val)
+    except:
+        return None
+
+
+def get_download_job(job_id: str) -> Optional[Dict[str, Any]]:
+    """Get a download job by ID."""
+    try:
+        with get_connection() as conn:
+            result = conn.execute("""
+                SELECT id, job_type, status, total_symbols, completed_symbols,
+                       failed_symbols, interval, start_date, end_date, config,
+                       created_at, started_at, completed_at, error_message
+                FROM download_jobs
+                WHERE id = ?
+            """, [job_id]).fetchone()
+
+            if result:
+                return {
+                    'id': result[0],
+                    'job_type': result[1],
+                    'status': result[2],
+                    'total_symbols': result[3],
+                    'completed_symbols': result[4],
+                    'failed_symbols': result[5],
+                    'interval': result[6],
+                    'start_date': result[7],
+                    'end_date': result[8],
+                    'config': result[9],
+                    'created_at': _safe_timestamp(result[10]),
+                    'started_at': _safe_timestamp(result[11]),
+                    'completed_at': _safe_timestamp(result[12]),
+                    'error_message': result[13]
+                }
+            return None
+
+    except Exception as e:
+        logger.error(f"Error fetching download job: {e}")
+        return None
+
+
+def get_all_download_jobs(status: str = None, limit: int = 50) -> List[Dict[str, Any]]:
+    """Get all download jobs, optionally filtered by status."""
+    try:
+        with get_connection() as conn:
+            if status:
+                result = conn.execute("""
+                    SELECT id, job_type, status, total_symbols, completed_symbols,
+                           failed_symbols, interval, start_date, end_date,
+                           created_at, started_at, completed_at
+                    FROM download_jobs
+                    WHERE status = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """, [status, limit]).fetchdf()
+            else:
+                result = conn.execute("""
+                    SELECT id, job_type, status, total_symbols, completed_symbols,
+                           failed_symbols, interval, start_date, end_date,
+                           created_at, started_at, completed_at
+                    FROM download_jobs
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """, [limit]).fetchdf()
+
+            if result.empty:
+                return []
+
+            # Handle NaT (Not a Time) values - replace with None for JSON serialization
+            for col in ['created_at', 'started_at', 'completed_at']:
+                if col in result.columns:
+                    result[col] = result[col].apply(
+                        lambda x: x.isoformat() if pd.notna(x) else None
+                    )
+
+            return result.to_dict('records')
+
+    except Exception as e:
+        logger.error(f"Error fetching download jobs: {e}")
+        return []
+
+
+def get_job_items(job_id: str, status: str = None) -> List[Dict[str, Any]]:
+    """Get all items for a job, optionally filtered by status."""
+    try:
+        with get_connection() as conn:
+            if status:
+                result = conn.execute("""
+                    SELECT id, job_id, symbol, exchange, status,
+                           records_downloaded, error_message, started_at, completed_at
+                    FROM job_items
+                    WHERE job_id = ? AND status = ?
+                    ORDER BY id
+                """, [job_id, status]).fetchdf()
+            else:
+                result = conn.execute("""
+                    SELECT id, job_id, symbol, exchange, status,
+                           records_downloaded, error_message, started_at, completed_at
+                    FROM job_items
+                    WHERE job_id = ?
+                    ORDER BY id
+                """, [job_id]).fetchdf()
+
+            if result.empty:
+                return []
+
+            # Handle NaT (Not a Time) values - replace with None for JSON serialization
+            for col in ['started_at', 'completed_at']:
+                if col in result.columns:
+                    result[col] = result[col].apply(
+                        lambda x: x.isoformat() if pd.notna(x) else None
+                    )
+
+            return result.to_dict('records')
+
+    except Exception as e:
+        logger.error(f"Error fetching job items: {e}")
+        return []
+
+
+def update_job_status(job_id: str, status: str, error_message: str = None) -> bool:
+    """Update the status of a download job."""
+    try:
+        with get_connection() as conn:
+            if status == 'running':
+                conn.execute("""
+                    UPDATE download_jobs
+                    SET status = ?, started_at = current_timestamp
+                    WHERE id = ?
+                """, [status, job_id])
+            elif status in ('completed', 'failed', 'cancelled'):
+                conn.execute("""
+                    UPDATE download_jobs
+                    SET status = ?, completed_at = current_timestamp, error_message = ?
+                    WHERE id = ?
+                """, [status, error_message, job_id])
+            else:
+                conn.execute("""
+                    UPDATE download_jobs
+                    SET status = ?
+                    WHERE id = ?
+                """, [status, job_id])
+
+        logger.info(f"Updated job {job_id} status to {status}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Error updating job status: {e}")
+        return False
+
+
+def update_job_item_status(
+    item_id: int,
+    status: str,
+    records_downloaded: int = 0,
+    error_message: str = None
+) -> bool:
+    """Update the status of a job item."""
+    try:
+        with get_connection() as conn:
+            if status == 'downloading':
+                conn.execute("""
+                    UPDATE job_items
+                    SET status = ?, started_at = current_timestamp
+                    WHERE id = ?
+                """, [status, item_id])
+            elif status in ('success', 'error', 'skipped'):
+                conn.execute("""
+                    UPDATE job_items
+                    SET status = ?, records_downloaded = ?, error_message = ?,
+                        completed_at = current_timestamp
+                    WHERE id = ?
+                """, [status, records_downloaded, error_message, item_id])
+            else:
+                conn.execute("""
+                    UPDATE job_items
+                    SET status = ?
+                    WHERE id = ?
+                """, [status, item_id])
+
+        return True
+
+    except Exception as e:
+        logger.error(f"Error updating job item status: {e}")
+        return False
+
+
+def update_job_progress(job_id: str, completed: int, failed: int) -> bool:
+    """Update job progress counters."""
+    try:
+        with get_connection() as conn:
+            conn.execute("""
+                UPDATE download_jobs
+                SET completed_symbols = ?, failed_symbols = ?
+                WHERE id = ?
+            """, [completed, failed, job_id])
+        return True
+
+    except Exception as e:
+        logger.error(f"Error updating job progress: {e}")
+        return False
+
+
+def delete_download_job(job_id: str) -> Tuple[bool, str]:
+    """Delete a download job and its items."""
+    try:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM job_items WHERE job_id = ?", [job_id])
+            conn.execute("DELETE FROM download_jobs WHERE id = ?", [job_id])
+
+        logger.info(f"Deleted job {job_id}")
+        return True, f"Job {job_id} deleted"
+
+    except Exception as e:
+        logger.error(f"Error deleting job: {e}")
+        return False, str(e)
+
+
+# =============================================================================
+# Symbol Metadata Operations
+# =============================================================================
+
+def upsert_symbol_metadata(symbols: List[Dict[str, Any]]) -> int:
+    """
+    Insert or update symbol metadata.
+
+    Args:
+        symbols: List of dicts with symbol metadata
+
+    Returns:
+        Number of records upserted
+    """
+    if not symbols:
+        return 0
+
+    try:
+        with get_connection() as conn:
+            for sym in symbols:
+                # Check if exists
+                existing = conn.execute("""
+                    SELECT symbol FROM symbol_metadata
+                    WHERE symbol = ? AND exchange = ?
+                """, [sym.get('symbol', '').upper(),
+                      sym.get('exchange', '').upper()]).fetchone()
+
+                if existing:
+                    conn.execute("""
+                        UPDATE symbol_metadata SET
+                            name = ?, expiry = ?, strike = ?, lotsize = ?,
+                            instrumenttype = ?, tick_size = ?,
+                            last_updated = current_timestamp
+                        WHERE symbol = ? AND exchange = ?
+                    """, [
+                        sym.get('name'),
+                        sym.get('expiry'),
+                        sym.get('strike'),
+                        sym.get('lotsize'),
+                        sym.get('instrumenttype'),
+                        sym.get('tick_size'),
+                        sym.get('symbol', '').upper(),
+                        sym.get('exchange', '').upper()
+                    ])
+                else:
+                    conn.execute("""
+                        INSERT INTO symbol_metadata
+                        (symbol, exchange, name, expiry, strike, lotsize, instrumenttype, tick_size)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, [
+                        sym.get('symbol', '').upper(),
+                        sym.get('exchange', '').upper(),
+                        sym.get('name'),
+                        sym.get('expiry'),
+                        sym.get('strike'),
+                        sym.get('lotsize'),
+                        sym.get('instrumenttype'),
+                        sym.get('tick_size')
+                    ])
+
+        logger.info(f"Upserted metadata for {len(symbols)} symbols")
+        return len(symbols)
+
+    except Exception as e:
+        logger.error(f"Error upserting symbol metadata: {e}")
+        return 0
+
+
+def get_symbol_metadata(symbol: str, exchange: str) -> Optional[Dict[str, Any]]:
+    """Get metadata for a specific symbol."""
+    try:
+        with get_connection() as conn:
+            result = conn.execute("""
+                SELECT symbol, exchange, name, expiry, strike, lotsize,
+                       instrumenttype, tick_size, last_updated
+                FROM symbol_metadata
+                WHERE symbol = ? AND exchange = ?
+            """, [symbol.upper(), exchange.upper()]).fetchone()
+
+            if result:
+                return {
+                    'symbol': result[0],
+                    'exchange': result[1],
+                    'name': result[2],
+                    'expiry': result[3],
+                    'strike': result[4],
+                    'lotsize': result[5],
+                    'instrumenttype': result[6],
+                    'tick_size': result[7],
+                    'last_updated': result[8]
+                }
+            return None
+
+    except Exception as e:
+        logger.error(f"Error fetching symbol metadata: {e}")
+        return None
+
+
+def get_catalog_with_metadata() -> List[Dict[str, Any]]:
+    """
+    Get data catalog enriched with symbol metadata.
+
+    Returns:
+        List of catalog entries with metadata joined
+    """
+    try:
+        with get_connection() as conn:
+            result = conn.execute("""
+                SELECT
+                    c.symbol, c.exchange, c.interval,
+                    c.first_timestamp, c.last_timestamp,
+                    c.record_count, c.last_download_at,
+                    m.name, m.expiry, m.strike, m.lotsize,
+                    m.instrumenttype, m.tick_size
+                FROM data_catalog c
+                LEFT JOIN symbol_metadata m
+                    ON c.symbol = m.symbol AND c.exchange = m.exchange
+                ORDER BY c.exchange, m.name, c.symbol, c.interval
+            """).fetchdf()
+
+            if result.empty:
+                return []
+            return result.to_dict('records')
+
+    except Exception as e:
+        logger.error(f"Error fetching catalog with metadata: {e}")
+        return []
+
+
+def get_catalog_grouped(group_by: str = 'underlying') -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Get data catalog grouped by underlying or exchange.
+
+    Args:
+        group_by: 'underlying' or 'exchange'
+
+    Returns:
+        Dictionary with groups as keys and catalog entries as values
+    """
+    try:
+        catalog = get_catalog_with_metadata()
+        grouped = {}
+
+        if group_by == 'underlying':
+            for item in catalog:
+                key = item.get('name') or item.get('symbol', 'Unknown')
+                if key not in grouped:
+                    grouped[key] = []
+                grouped[key].append(item)
+        else:  # exchange
+            for item in catalog:
+                key = item.get('exchange', 'Unknown')
+                if key not in grouped:
+                    grouped[key] = []
+                grouped[key].append(item)
+
+        return grouped
+
+    except Exception as e:
+        logger.error(f"Error grouping catalog: {e}")
+        return {}
+
+
+# =============================================================================
+# Advanced Export Operations
+# =============================================================================
+
+def export_to_parquet(
+    output_path: str,
+    symbols: Optional[List[Dict[str, str]]] = None,
+    interval: Optional[str] = None,
+    start_timestamp: Optional[int] = None,
+    end_timestamp: Optional[int] = None,
+    compression: str = 'zstd'
+) -> Tuple[bool, str, int]:
+    """
+    Export market data to Parquet format with ZSTD compression.
+
+    DuckDB has native Parquet support, making this very efficient
+    for large datasets and ideal for backtesting tools.
+
+    Args:
+        output_path: Path to save the Parquet file
+        symbols: List of dicts with 'symbol' and 'exchange' keys (optional - all if None)
+        interval: Filter by interval (optional)
+        start_timestamp: Start epoch timestamp (optional)
+        end_timestamp: End epoch timestamp (optional)
+        compression: Compression codec ('zstd', 'snappy', 'gzip', 'none')
+
+    Returns:
+        Tuple of (success, message, record_count)
+    """
+    import tempfile
+
+    try:
+        # Build WHERE clause
+        conditions = []
+        params = []
+
+        if symbols and len(symbols) > 0:
+            symbol_conditions = []
+            for sym in symbols:
+                symbol_conditions.append("(symbol = ? AND exchange = ?)")
+                params.extend([sym['symbol'].upper(), sym['exchange'].upper()])
+            conditions.append(f"({' OR '.join(symbol_conditions)})")
+
+        if interval:
+            conditions.append("interval = ?")
+            params.append(interval)
+        if start_timestamp:
+            conditions.append("timestamp >= ?")
+            params.append(start_timestamp)
+        if end_timestamp:
+            conditions.append("timestamp <= ?")
+            params.append(end_timestamp)
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        # Validate output path - must be within temp directory
+        temp_dir = tempfile.gettempdir()
+        abs_output = os.path.abspath(output_path)
+        if not abs_output.startswith(os.path.abspath(temp_dir)):
+            return False, "Invalid output path: must be within temp directory", 0
+
+        # Get record count first
+        count_query = f"SELECT COUNT(*) FROM market_data WHERE {where_clause}"
+
+        with get_connection() as conn:
+            record_count = conn.execute(count_query, params).fetchone()[0]
+
+            if record_count == 0:
+                return False, "No data matching the criteria", 0
+
+            # Export using DuckDB's native COPY TO PARQUET
+            # Build the query string for COPY - need to embed values for COPY command
+            export_query = f"""
+                COPY (
+                    SELECT
+                        symbol, exchange, interval, timestamp,
+                        open, high, low, close, volume, oi,
+                        to_timestamp(timestamp) as datetime
+                    FROM market_data
+                    WHERE {where_clause}
+                    ORDER BY symbol, exchange, interval, timestamp
+                ) TO '{abs_output}'
+                (FORMAT PARQUET, COMPRESSION '{compression}')
+            """
+
+            # For COPY command, we need to execute without parameters
+            # Build the full query with values embedded safely
+            if params:
+                # Re-execute with DataFrame approach for safety
+                select_query = f"""
+                    SELECT
+                        symbol, exchange, interval, timestamp,
+                        open, high, low, close, volume, oi
+                    FROM market_data
+                    WHERE {where_clause}
+                    ORDER BY symbol, exchange, interval, timestamp
+                """
+                df = conn.execute(select_query, params).fetchdf()
+                df['datetime'] = pd.to_datetime(df['timestamp'], unit='s')
+                df.to_parquet(abs_output, compression=compression, index=False)
+            else:
+                # No params - can use COPY directly
+                conn.execute(f"""
+                    COPY (
+                        SELECT
+                            symbol, exchange, interval, timestamp,
+                            open, high, low, close, volume, oi,
+                            to_timestamp(timestamp) as datetime
+                        FROM market_data
+                        ORDER BY symbol, exchange, interval, timestamp
+                    ) TO '{abs_output}'
+                    (FORMAT PARQUET, COMPRESSION '{compression}')
+                """)
+
+        file_size = os.path.getsize(abs_output) / (1024 * 1024)  # MB
+        logger.info(f"Exported {record_count} records to Parquet ({file_size:.2f} MB)")
+        return True, f"Exported {record_count} records ({file_size:.2f} MB)", record_count
+
+    except Exception as e:
+        logger.error(f"Error exporting to Parquet: {e}")
+        return False, str(e), 0
+
+
+def export_to_txt(
+    output_path: str,
+    symbols: Optional[List[Dict[str, str]]] = None,
+    interval: Optional[str] = None,
+    start_timestamp: Optional[int] = None,
+    end_timestamp: Optional[int] = None,
+    delimiter: str = '\t'
+) -> Tuple[bool, str, int]:
+    """
+    Export market data to TXT format (tab or pipe delimited).
+
+    Args:
+        output_path: Path to save the TXT file
+        symbols: List of dicts with 'symbol' and 'exchange' keys (optional)
+        interval: Filter by interval (optional)
+        start_timestamp: Start epoch timestamp (optional)
+        end_timestamp: End epoch timestamp (optional)
+        delimiter: Column delimiter (default: tab)
+
+    Returns:
+        Tuple of (success, message, record_count)
+    """
+    import tempfile
+
+    try:
+        # Build WHERE clause
+        conditions = []
+        params = []
+
+        if symbols and len(symbols) > 0:
+            symbol_conditions = []
+            for sym in symbols:
+                symbol_conditions.append("(symbol = ? AND exchange = ?)")
+                params.extend([sym['symbol'].upper(), sym['exchange'].upper()])
+            conditions.append(f"({' OR '.join(symbol_conditions)})")
+
+        if interval:
+            conditions.append("interval = ?")
+            params.append(interval)
+        if start_timestamp:
+            conditions.append("timestamp >= ?")
+            params.append(start_timestamp)
+        if end_timestamp:
+            conditions.append("timestamp <= ?")
+            params.append(end_timestamp)
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        # Validate output path
+        temp_dir = tempfile.gettempdir()
+        abs_output = os.path.abspath(output_path)
+        if not abs_output.startswith(os.path.abspath(temp_dir)):
+            return False, "Invalid output path: must be within temp directory", 0
+
+        query = f"""
+            SELECT
+                symbol, exchange, interval,
+                strftime(to_timestamp(timestamp), '%Y-%m-%d') as date,
+                strftime(to_timestamp(timestamp), '%H:%M:%S') as time,
+                open, high, low, close, volume, oi
+            FROM market_data
+            WHERE {where_clause}
+            ORDER BY symbol, exchange, interval, timestamp
+        """
+
+        with get_connection() as conn:
+            df = conn.execute(query, params).fetchdf()
+
+            if df.empty:
+                return False, "No data matching the criteria", 0
+
+            df.to_csv(output_path, index=False, sep=delimiter)
+            record_count = len(df)
+
+        logger.info(f"Exported {record_count} records to TXT")
+        return True, f"Exported {record_count} records", record_count
+
+    except Exception as e:
+        logger.error(f"Error exporting to TXT: {e}")
+        return False, str(e), 0
+
+
+def export_to_zip(
+    output_path: str,
+    symbols: Optional[List[Dict[str, str]]] = None,
+    interval: Optional[str] = None,
+    start_timestamp: Optional[int] = None,
+    end_timestamp: Optional[int] = None,
+    split_by: str = 'symbol'
+) -> Tuple[bool, str, int]:
+    """
+    Export market data to ZIP archive containing CSVs.
+
+    Can split into multiple files by symbol or export as single file.
+
+    Args:
+        output_path: Path to save the ZIP file
+        symbols: List of dicts with 'symbol' and 'exchange' keys (optional)
+        interval: Filter by interval (optional)
+        start_timestamp: Start epoch timestamp (optional)
+        end_timestamp: End epoch timestamp (optional)
+        split_by: 'symbol' to create one CSV per symbol, 'none' for single file
+
+    Returns:
+        Tuple of (success, message, record_count)
+    """
+    import tempfile
+    import zipfile
+
+    try:
+        # Build base WHERE clause
+        conditions = []
+        params = []
+
+        if symbols and len(symbols) > 0:
+            symbol_conditions = []
+            for sym in symbols:
+                symbol_conditions.append("(symbol = ? AND exchange = ?)")
+                params.extend([sym['symbol'].upper(), sym['exchange'].upper()])
+            conditions.append(f"({' OR '.join(symbol_conditions)})")
+
+        if interval:
+            conditions.append("interval = ?")
+            params.append(interval)
+        if start_timestamp:
+            conditions.append("timestamp >= ?")
+            params.append(start_timestamp)
+        if end_timestamp:
+            conditions.append("timestamp <= ?")
+            params.append(end_timestamp)
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        # Validate output path
+        temp_dir = tempfile.gettempdir()
+        abs_output = os.path.abspath(output_path)
+        if not abs_output.startswith(os.path.abspath(temp_dir)):
+            return False, "Invalid output path: must be within temp directory", 0
+
+        total_records = 0
+
+        with zipfile.ZipFile(abs_output, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
+            with get_connection() as conn:
+                if split_by == 'symbol':
+                    # Get distinct symbol/exchange combinations
+                    distinct_query = f"""
+                        SELECT DISTINCT symbol, exchange
+                        FROM market_data
+                        WHERE {where_clause}
+                        ORDER BY symbol, exchange
+                    """
+                    symbols_df = conn.execute(distinct_query, params).fetchdf()
+
+                    for _, row in symbols_df.iterrows():
+                        sym = row['symbol']
+                        exch = row['exchange']
+
+                        query = f"""
+                            SELECT
+                                strftime(to_timestamp(timestamp), '%Y-%m-%d') as date,
+                                strftime(to_timestamp(timestamp), '%H:%M:%S') as time,
+                                open, high, low, close, volume, oi
+                            FROM market_data
+                            WHERE symbol = ? AND exchange = ?
+                            {"AND interval = ?" if interval else ""}
+                            {"AND timestamp >= ?" if start_timestamp else ""}
+                            {"AND timestamp <= ?" if end_timestamp else ""}
+                            ORDER BY timestamp
+                        """
+                        sym_params = [sym, exch]
+                        if interval:
+                            sym_params.append(interval)
+                        if start_timestamp:
+                            sym_params.append(start_timestamp)
+                        if end_timestamp:
+                            sym_params.append(end_timestamp)
+
+                        df = conn.execute(query, sym_params).fetchdf()
+
+                        if not df.empty:
+                            csv_content = df.to_csv(index=False)
+                            filename = f"{sym}_{exch}_{interval or 'all'}.csv"
+                            zf.writestr(filename, csv_content)
+                            total_records += len(df)
+                else:
+                    # Single combined file
+                    query = f"""
+                        SELECT
+                            symbol, exchange, interval,
+                            strftime(to_timestamp(timestamp), '%Y-%m-%d') as date,
+                            strftime(to_timestamp(timestamp), '%H:%M:%S') as time,
+                            open, high, low, close, volume, oi
+                        FROM market_data
+                        WHERE {where_clause}
+                        ORDER BY symbol, exchange, interval, timestamp
+                    """
+                    df = conn.execute(query, params).fetchdf()
+
+                    if not df.empty:
+                        csv_content = df.to_csv(index=False)
+                        zf.writestr("market_data.csv", csv_content)
+                        total_records = len(df)
+
+        if total_records == 0:
+            os.remove(abs_output)
+            return False, "No data matching the criteria", 0
+
+        file_size = os.path.getsize(abs_output) / (1024 * 1024)  # MB
+        logger.info(f"Exported {total_records} records to ZIP ({file_size:.2f} MB)")
+        return True, f"Exported {total_records} records ({file_size:.2f} MB)", total_records
+
+    except Exception as e:
+        logger.error(f"Error exporting to ZIP: {e}")
+        return False, str(e), 0
+
+
+def export_bulk_csv(
+    output_path: str,
+    symbols: List[Dict[str, str]],
+    interval: Optional[str] = None,
+    start_timestamp: Optional[int] = None,
+    end_timestamp: Optional[int] = None
+) -> Tuple[bool, str, int]:
+    """
+    Export multiple symbols to a single CSV file.
+
+    Args:
+        output_path: Path to save the CSV file
+        symbols: List of dicts with 'symbol' and 'exchange' keys
+        interval: Filter by interval (optional)
+        start_timestamp: Start epoch timestamp (optional)
+        end_timestamp: End epoch timestamp (optional)
+
+    Returns:
+        Tuple of (success, message, record_count)
+    """
+    import tempfile
+
+    try:
+        if not symbols:
+            return False, "No symbols specified", 0
+
+        # Build symbol filter
+        symbol_conditions = []
+        params = []
+        for sym in symbols:
+            symbol_conditions.append("(symbol = ? AND exchange = ?)")
+            params.extend([sym['symbol'].upper(), sym['exchange'].upper()])
+
+        conditions = [f"({' OR '.join(symbol_conditions)})"]
+
+        if interval:
+            conditions.append("interval = ?")
+            params.append(interval)
+        if start_timestamp:
+            conditions.append("timestamp >= ?")
+            params.append(start_timestamp)
+        if end_timestamp:
+            conditions.append("timestamp <= ?")
+            params.append(end_timestamp)
+
+        where_clause = " AND ".join(conditions)
+
+        # Validate output path
+        temp_dir = tempfile.gettempdir()
+        abs_output = os.path.abspath(output_path)
+        if not abs_output.startswith(os.path.abspath(temp_dir)):
+            return False, "Invalid output path: must be within temp directory", 0
+
+        query = f"""
+            SELECT
+                symbol, exchange, interval,
+                strftime(to_timestamp(timestamp), '%Y-%m-%d') as date,
+                strftime(to_timestamp(timestamp), '%H:%M:%S') as time,
+                open, high, low, close, volume, oi
+            FROM market_data
+            WHERE {where_clause}
+            ORDER BY symbol, exchange, interval, timestamp
+        """
+
+        with get_connection() as conn:
+            df = conn.execute(query, params).fetchdf()
+
+            if df.empty:
+                return False, "No data matching the criteria", 0
+
+            df.to_csv(output_path, index=False)
+            record_count = len(df)
+
+        logger.info(f"Exported {record_count} records to CSV")
+        return True, f"Exported {record_count} records", record_count
+
+    except Exception as e:
+        logger.error(f"Error exporting bulk CSV: {e}")
+        return False, str(e), 0
+
+
+def get_export_preview(
+    symbols: Optional[List[Dict[str, str]]] = None,
+    interval: Optional[str] = None,
+    start_timestamp: Optional[int] = None,
+    end_timestamp: Optional[int] = None
+) -> Dict[str, Any]:
+    """
+    Get a preview of what will be exported (record count, date range, etc.)
+
+    Args:
+        symbols: List of dicts with 'symbol' and 'exchange' keys (optional)
+        interval: Filter by interval (optional)
+        start_timestamp: Start epoch timestamp (optional)
+        end_timestamp: End epoch timestamp (optional)
+
+    Returns:
+        Dictionary with export preview information
+    """
+    try:
+        conditions = []
+        params = []
+
+        if symbols and len(symbols) > 0:
+            symbol_conditions = []
+            for sym in symbols:
+                symbol_conditions.append("(symbol = ? AND exchange = ?)")
+                params.extend([sym['symbol'].upper(), sym['exchange'].upper()])
+            conditions.append(f"({' OR '.join(symbol_conditions)})")
+
+        if interval:
+            conditions.append("interval = ?")
+            params.append(interval)
+        if start_timestamp:
+            conditions.append("timestamp >= ?")
+            params.append(start_timestamp)
+        if end_timestamp:
+            conditions.append("timestamp <= ?")
+            params.append(end_timestamp)
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        query = f"""
+            SELECT
+                COUNT(*) as total_records,
+                COUNT(DISTINCT symbol) as symbol_count,
+                COUNT(DISTINCT exchange) as exchange_count,
+                COUNT(DISTINCT interval) as interval_count,
+                MIN(timestamp) as first_timestamp,
+                MAX(timestamp) as last_timestamp
+            FROM market_data
+            WHERE {where_clause}
+        """
+
+        with get_connection() as conn:
+            result = conn.execute(query, params).fetchone()
+
+            if result[0] == 0:
+                return {
+                    'total_records': 0,
+                    'symbol_count': 0,
+                    'exchange_count': 0,
+                    'interval_count': 0,
+                    'first_date': None,
+                    'last_date': None,
+                    'estimated_size_csv_mb': 0,
+                    'estimated_size_parquet_mb': 0
+                }
+
+            # Estimate file sizes (rough approximation)
+            # CSV: ~100 bytes per row
+            # Parquet with ZSTD: ~20 bytes per row
+            csv_size = (result[0] * 100) / (1024 * 1024)
+            parquet_size = (result[0] * 20) / (1024 * 1024)
+
+            return {
+                'total_records': result[0],
+                'symbol_count': result[1],
+                'exchange_count': result[2],
+                'interval_count': result[3],
+                'first_date': datetime.fromtimestamp(result[4]).strftime('%Y-%m-%d') if result[4] else None,
+                'last_date': datetime.fromtimestamp(result[5]).strftime('%Y-%m-%d') if result[5] else None,
+                'estimated_size_csv_mb': round(csv_size, 2),
+                'estimated_size_parquet_mb': round(parquet_size, 2)
+            }
+
+    except Exception as e:
+        logger.error(f"Error getting export preview: {e}")
+        return {
+            'total_records': 0,
+            'symbol_count': 0,
+            'exchange_count': 0,
+            'interval_count': 0,
+            'first_date': None,
+            'last_date': None,
+            'estimated_size_csv_mb': 0,
+            'estimated_size_parquet_mb': 0,
+            'error': str(e)
+        }

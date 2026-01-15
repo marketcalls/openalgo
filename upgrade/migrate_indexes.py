@@ -96,6 +96,34 @@ def create_index(engine, table_name, index_name, columns, description=""):
         logger.error(f"  [X] Error creating {index_name}: {e}")
         return False
 
+def migrate_symtoken_indexes(engine):
+    """Add indexes to symtoken table for FNO Discovery performance"""
+    logger.info("")
+    logger.info("SymToken (Master Contract) Indexes:")
+    logger.info("-" * 40)
+
+    success = True
+
+    if check_table_exists(engine, 'symtoken'):
+        # Single column indexes for common filters
+        success &= create_index(engine, 'symtoken', 'idx_symtoken_name', 'name',
+                               'speeds up underlying lookups (FNO Discovery)')
+        success &= create_index(engine, 'symtoken', 'idx_symtoken_expiry', 'expiry',
+                               'speeds up expiry date lookups')
+        success &= create_index(engine, 'symtoken', 'idx_symtoken_instrumenttype', 'instrumenttype',
+                               'speeds up instrument type filtering')
+
+        # Composite indexes for FNO chain queries
+        success &= create_index(engine, 'symtoken', 'idx_symtoken_exchange_name', ['exchange', 'name'],
+                               'composite for FNO underlying + exchange')
+        success &= create_index(engine, 'symtoken', 'idx_symtoken_exchange_name_expiry', ['exchange', 'name', 'expiry'],
+                               'composite for FNO chain with expiry filter')
+    else:
+        logger.info("  - Skipping symtoken indexes: table not found")
+
+    return success
+
+
 def migrate_main_db_indexes(engine):
     """Add indexes to main database tables (auth, api_keys, analyzer_logs)"""
     logger.info("")
@@ -207,7 +235,7 @@ def main():
     success = True
 
     # ============================================
-    # MAIN DATABASE (auth, api_keys, analyzer_logs)
+    # MAIN DATABASE (auth, api_keys, analyzer_logs, symtoken)
     # ============================================
     database_url = get_database_url('DATABASE_URL')
     if database_url:
@@ -217,6 +245,10 @@ def main():
             logger.info("[OK] Connected to main database")
 
             if not migrate_main_db_indexes(engine):
+                success = False
+
+            # Add symtoken (master contract) indexes for FNO Discovery
+            if not migrate_symtoken_indexes(engine):
                 success = False
 
             # Verify main DB indexes
@@ -229,6 +261,11 @@ def main():
                 ('analyzer_logs', 'idx_analyzer_api_type'),
                 ('analyzer_logs', 'idx_analyzer_created_at'),
                 ('analyzer_logs', 'idx_analyzer_type_time'),
+                ('symtoken', 'idx_symtoken_name'),
+                ('symtoken', 'idx_symtoken_expiry'),
+                ('symtoken', 'idx_symtoken_instrumenttype'),
+                ('symtoken', 'idx_symtoken_exchange_name'),
+                ('symtoken', 'idx_symtoken_exchange_name_expiry'),
             ]
             verify_indexes(engine, "Main DB", main_indexes)
 
@@ -288,6 +325,7 @@ def main():
         print("    - auth: broker, user_id, is_revoked")
         print("    - api_keys: order_mode, created_at")
         print("    - analyzer_logs: api_type, created_at, (api_type+created_at)")
+        print("    - symtoken: name, expiry, instrumenttype, (exchange+name), (exchange+name+expiry)")
         print()
         print("  Logs DB:")
         print("    - traffic_logs: timestamp, client_ip, status_code, user_id, (client_ip+timestamp)")
@@ -298,6 +336,7 @@ def main():
         print("  - Faster query execution (O(log n) vs O(n) table scans)")
         print("  - Improved security dashboard performance")
         print("  - Better log retrieval and analytics")
+        print("  - Fast FNO Discovery with 1.8 lakh+ symbols")
         print()
     else:
         print("=" * 60)

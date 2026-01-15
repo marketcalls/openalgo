@@ -337,6 +337,219 @@ def download_export():
 
 
 # =============================================================================
+# Bulk Export Endpoints (Parquet, ZIP, TXT, CSV)
+# =============================================================================
+
+@historify_bp.route('/api/export/preview', methods=['POST'])
+@check_session_validity
+def get_export_preview():
+    """Get preview of what will be exported (record count, size estimate)."""
+    try:
+        from database.historify_db import get_export_preview as db_get_preview
+
+        data = request.get_json()
+        symbols = data.get('symbols')  # Optional list of {symbol, exchange}
+        interval = data.get('interval')
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+
+        # Convert dates to timestamps if provided
+        start_timestamp = None
+        end_timestamp = None
+        if start_date:
+            from datetime import datetime
+            start_timestamp = int(datetime.strptime(start_date, '%Y-%m-%d').timestamp())
+        if end_date:
+            from datetime import datetime
+            # End of day
+            end_timestamp = int(datetime.strptime(end_date, '%Y-%m-%d').timestamp()) + 86400
+
+        preview = db_get_preview(
+            symbols=symbols,
+            interval=interval,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp
+        )
+
+        return jsonify({
+            'status': 'success',
+            'data': preview
+        }), 200
+    except Exception as e:
+        logger.error(f"Error getting export preview: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/export/bulk', methods=['POST'])
+@check_session_validity
+def bulk_export():
+    """Export data in various formats (CSV, TXT, ZIP, Parquet)."""
+    try:
+        from database.historify_db import (
+            export_bulk_csv, export_to_txt, export_to_zip, export_to_parquet
+        )
+        from datetime import datetime
+
+        data = request.get_json()
+        format_type = data.get('format', 'csv').lower()
+        symbols = data.get('symbols')  # Optional list of {symbol, exchange}
+        interval = data.get('interval')
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        split_by = data.get('split_by', 'symbol')  # For ZIP: 'symbol' or 'none'
+        compression = data.get('compression', 'zstd')  # For Parquet
+
+        # Convert dates to timestamps if provided
+        start_timestamp = None
+        end_timestamp = None
+        if start_date:
+            start_timestamp = int(datetime.strptime(start_date, '%Y-%m-%d').timestamp())
+        if end_date:
+            # End of day
+            end_timestamp = int(datetime.strptime(end_date, '%Y-%m-%d').timestamp()) + 86400
+
+        # Generate filename
+        timestamp_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+        if symbols and len(symbols) == 1:
+            base_name = f"historify_{symbols[0]['symbol']}_{timestamp_str}"
+        else:
+            base_name = f"historify_export_{timestamp_str}"
+
+        # Create temp file path
+        if format_type == 'parquet':
+            file_ext = '.parquet'
+        elif format_type == 'zip':
+            file_ext = '.zip'
+        elif format_type == 'txt':
+            file_ext = '.txt'
+        else:
+            file_ext = '.csv'
+
+        output_path = os.path.join(tempfile.gettempdir(), f"{base_name}{file_ext}")
+
+        # Execute export based on format
+        if format_type == 'parquet':
+            success, message, record_count = export_to_parquet(
+                output_path=output_path,
+                symbols=symbols,
+                interval=interval,
+                start_timestamp=start_timestamp,
+                end_timestamp=end_timestamp,
+                compression=compression
+            )
+            mime_type = 'application/octet-stream'
+        elif format_type == 'zip':
+            success, message, record_count = export_to_zip(
+                output_path=output_path,
+                symbols=symbols,
+                interval=interval,
+                start_timestamp=start_timestamp,
+                end_timestamp=end_timestamp,
+                split_by=split_by
+            )
+            mime_type = 'application/zip'
+        elif format_type == 'txt':
+            success, message, record_count = export_to_txt(
+                output_path=output_path,
+                symbols=symbols,
+                interval=interval,
+                start_timestamp=start_timestamp,
+                end_timestamp=end_timestamp
+            )
+            mime_type = 'text/plain'
+        else:  # csv
+            success, message, record_count = export_bulk_csv(
+                output_path=output_path,
+                symbols=symbols if symbols else [],
+                interval=interval,
+                start_timestamp=start_timestamp,
+                end_timestamp=end_timestamp
+            )
+            mime_type = 'text/csv'
+
+        if not success:
+            return jsonify({
+                'status': 'error',
+                'message': message
+            }), 400
+
+        # Store file path in session for download
+        session['bulk_export_file'] = output_path
+        session['bulk_export_mime'] = mime_type
+        session['bulk_export_name'] = f"{base_name}{file_ext}"
+
+        return jsonify({
+            'status': 'success',
+            'message': message,
+            'record_count': record_count,
+            'filename': f"{base_name}{file_ext}"
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error in bulk export: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/export/bulk/download', methods=['GET'])
+@check_session_validity
+def download_bulk_export():
+    """Download the bulk exported file."""
+    file_path = None
+    try:
+        file_path = session.get('bulk_export_file')
+        mime_type = session.get('bulk_export_mime', 'application/octet-stream')
+        filename = session.get('bulk_export_name', 'export.bin')
+
+        if not file_path or not os.path.exists(file_path):
+            return jsonify({'status': 'error', 'message': 'Export file not found'}), 404
+
+        # Validate file is within temp directory (security check)
+        temp_dir = tempfile.gettempdir()
+        abs_path = os.path.abspath(file_path)
+        if not abs_path.startswith(os.path.abspath(temp_dir)):
+            return jsonify({'status': 'error', 'message': 'Invalid file path'}), 400
+
+        # Clean up session
+        session.pop('bulk_export_file', None)
+        session.pop('bulk_export_mime', None)
+        session.pop('bulk_export_name', None)
+
+        # Stream file and cleanup after
+        def generate_and_cleanup():
+            try:
+                with open(file_path, 'rb') as f:
+                    while True:
+                        chunk = f.read(65536)  # 64KB chunks for binary files
+                        if not chunk:
+                            break
+                        yield chunk
+            finally:
+                try:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                except Exception:
+                    pass
+
+        return Response(
+            generate_and_cleanup(),
+            mimetype=mime_type,
+            headers={'Content-Disposition': f'attachment; filename={filename}'}
+        )
+    except Exception as e:
+        logger.error(f"Error downloading bulk export: {e}")
+        traceback.print_exc()
+        # Clean up file on error
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# =============================================================================
 # Utility Endpoints
 # =============================================================================
 
@@ -362,6 +575,20 @@ def get_intervals():
         return jsonify(response), status_code
     except Exception as e:
         logger.error(f"Error getting intervals: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/historify-intervals', methods=['GET'])
+@check_session_validity
+def get_historify_intervals():
+    """Get Historify-specific interval configuration (storage vs computed)."""
+    try:
+        from services.historify_service import get_historify_intervals as service_get_intervals
+        success, response, status_code = service_get_intervals()
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error getting historify intervals: {e}")
         traceback.print_exc()
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
@@ -494,4 +721,377 @@ def upload_csv():
         # Clean up temp file on error
         if temp_file and os.path.exists(temp_file.name):
             os.remove(temp_file.name)
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# =============================================================================
+# FNO Discovery Endpoints
+# =============================================================================
+
+@historify_bp.route('/api/fno/underlyings', methods=['GET'])
+@check_session_validity
+def get_fno_underlyings():
+    """Get list of FNO underlyings for an exchange."""
+    try:
+        from services.historify_service import get_fno_underlyings as service_get_underlyings
+
+        exchange = request.args.get('exchange')  # Optional, returns all if not specified
+
+        success, response, status_code = service_get_underlyings(exchange)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error getting FNO underlyings: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/fno/expiries', methods=['GET'])
+@check_session_validity
+def get_fno_expiries():
+    """Get expiries for an underlying."""
+    try:
+        from services.historify_service import get_fno_expiries as service_get_expiries
+
+        underlying = request.args.get('underlying', '').upper()
+        exchange = request.args.get('exchange', 'NFO').upper()
+        instrumenttype = request.args.get('instrumenttype')  # Optional: FUTSTK, FUTIDX, OPTIDX, OPTSTK
+
+        if not underlying:
+            return jsonify({
+                'status': 'error',
+                'message': 'Underlying is required'
+            }), 400
+
+        success, response, status_code = service_get_expiries(underlying, exchange, instrumenttype)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error getting FNO expiries: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/fno/chain', methods=['GET'])
+@check_session_validity
+def get_fno_chain():
+    """Get full option/futures chain for an underlying."""
+    try:
+        from services.historify_service import get_fno_chain as service_get_chain
+
+        underlying = request.args.get('underlying', '').upper()
+        exchange = request.args.get('exchange', 'NFO').upper()
+        expiry = request.args.get('expiry')
+        instrumenttype = request.args.get('instrumenttype')  # CE, PE, FUT
+        strike_min = request.args.get('strike_min', type=float)
+        strike_max = request.args.get('strike_max', type=float)
+        limit = request.args.get('limit', 1000, type=int)
+
+        if not underlying:
+            return jsonify({
+                'status': 'error',
+                'message': 'Underlying is required'
+            }), 400
+
+        success, response, status_code = service_get_chain(
+            underlying=underlying,
+            exchange=exchange,
+            expiry=expiry,
+            instrumenttype=instrumenttype,
+            strike_min=strike_min,
+            strike_max=strike_max,
+            limit=limit
+        )
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error getting FNO chain: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/fno/futures', methods=['GET'])
+@check_session_validity
+def get_futures_chain():
+    """Get all futures contracts for an underlying."""
+    try:
+        from services.historify_service import get_futures_chain as service_get_futures
+
+        underlying = request.args.get('underlying', '').upper()
+        exchange = request.args.get('exchange', 'NFO').upper()
+
+        if not underlying:
+            return jsonify({
+                'status': 'error',
+                'message': 'Underlying is required'
+            }), 400
+
+        success, response, status_code = service_get_futures(underlying, exchange)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error getting futures chain: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/fno/options', methods=['GET'])
+@check_session_validity
+def get_option_chain():
+    """Get option chain symbols for an underlying."""
+    try:
+        from services.historify_service import get_option_chain_symbols as service_get_options
+
+        underlying = request.args.get('underlying', '').upper()
+        exchange = request.args.get('exchange', 'NFO').upper()
+        expiry = request.args.get('expiry')
+        strike_min = request.args.get('strike_min', type=float)
+        strike_max = request.args.get('strike_max', type=float)
+
+        if not underlying:
+            return jsonify({
+                'status': 'error',
+                'message': 'Underlying is required'
+            }), 400
+
+        success, response, status_code = service_get_options(
+            underlying=underlying,
+            exchange=exchange,
+            expiry=expiry,
+            strike_min=strike_min,
+            strike_max=strike_max
+        )
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error getting option chain: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# =============================================================================
+# Download Job Management Endpoints
+# =============================================================================
+
+@historify_bp.route('/api/jobs', methods=['GET'])
+@check_session_validity
+def get_jobs():
+    """Get list of download jobs."""
+    try:
+        from services.historify_service import get_all_jobs
+
+        status = request.args.get('status')  # Optional filter
+        limit = request.args.get('limit', 50, type=int)
+
+        success, response, status_code = get_all_jobs(status, limit)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error getting jobs: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/jobs', methods=['POST'])
+@check_session_validity
+def create_job():
+    """Create and start a new download job."""
+    try:
+        from services.historify_service import create_and_start_job
+        from database.auth_db import get_api_key_for_tradingview
+
+        data = request.get_json()
+        job_type = data.get('job_type', 'custom')
+        symbols = data.get('symbols', [])  # List of {symbol, exchange}
+        interval = data.get('interval', 'D')
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        config = data.get('config', {})
+        incremental = data.get('incremental', False)  # Only download new data
+
+        if not symbols:
+            return jsonify({
+                'status': 'error',
+                'message': 'No symbols provided'
+            }), 400
+
+        # Get API key for the logged-in user
+        user = session.get('user')
+        api_key = get_api_key_for_tradingview(user)
+
+        if not api_key:
+            return jsonify({
+                'status': 'error',
+                'message': 'No API key found. Please generate an API key first.'
+            }), 400
+
+        success, response, status_code = create_and_start_job(
+            job_type=job_type,
+            symbols=symbols,
+            interval=interval,
+            start_date=start_date,
+            end_date=end_date,
+            api_key=api_key,
+            config=config,
+            incremental=incremental
+        )
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error creating job: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/jobs/<job_id>', methods=['GET'])
+@check_session_validity
+def get_job_status(job_id):
+    """Get status and progress of a specific job."""
+    try:
+        from services.historify_service import get_job_status as service_get_job_status
+
+        success, response, status_code = service_get_job_status(job_id)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error getting job status: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/jobs/<job_id>/cancel', methods=['POST'])
+@check_session_validity
+def cancel_job(job_id):
+    """Cancel a running job."""
+    try:
+        from services.historify_service import cancel_job as service_cancel_job
+
+        success, response, status_code = service_cancel_job(job_id)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error cancelling job: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/jobs/<job_id>/pause', methods=['POST'])
+@check_session_validity
+def pause_job(job_id):
+    """Pause a running job."""
+    try:
+        from services.historify_service import pause_job as service_pause_job
+
+        success, response, status_code = service_pause_job(job_id)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error pausing job: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/jobs/<job_id>/resume', methods=['POST'])
+@check_session_validity
+def resume_job_endpoint(job_id):
+    """Resume a paused job."""
+    try:
+        from services.historify_service import resume_job as service_resume_job
+
+        success, response, status_code = service_resume_job(job_id)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error resuming job: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/jobs/<job_id>/retry', methods=['POST'])
+@check_session_validity
+def retry_job(job_id):
+    """Retry failed items in a job."""
+    try:
+        from services.historify_service import retry_failed_items
+        from database.auth_db import get_api_key_for_tradingview
+
+        # Get API key for the logged-in user
+        user = session.get('user')
+        api_key = get_api_key_for_tradingview(user)
+
+        if not api_key:
+            return jsonify({
+                'status': 'error',
+                'message': 'No API key found. Please generate an API key first.'
+            }), 400
+
+        success, response, status_code = retry_failed_items(job_id, api_key)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error retrying job: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/jobs/<job_id>', methods=['DELETE'])
+@check_session_validity
+def delete_job(job_id):
+    """Delete a job and its items."""
+    try:
+        from services.historify_service import delete_job as service_delete_job
+
+        success, response, status_code = service_delete_job(job_id)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error deleting job: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# =============================================================================
+# Enhanced Catalog Endpoints
+# =============================================================================
+
+@historify_bp.route('/api/catalog/grouped', methods=['GET'])
+@check_session_validity
+def get_catalog_grouped():
+    """Get catalog grouped by underlying/exchange/instrument type."""
+    try:
+        from services.historify_service import get_catalog_grouped_service
+
+        group_by = request.args.get('group_by', 'underlying')  # underlying, exchange, instrumenttype
+
+        success, response, status_code = get_catalog_grouped_service(group_by)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error getting grouped catalog: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/catalog/metadata', methods=['GET'])
+@check_session_validity
+def get_catalog_with_metadata():
+    """Get catalog with enriched metadata."""
+    try:
+        from services.historify_service import get_catalog_with_metadata_service
+
+        success, response, status_code = get_catalog_with_metadata_service()
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error getting catalog with metadata: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/metadata/enrich', methods=['POST'])
+@check_session_validity
+def enrich_metadata():
+    """Enrich and save metadata for symbols."""
+    try:
+        from services.historify_service import enrich_and_save_metadata
+
+        data = request.get_json()
+        symbols = data.get('symbols', [])  # List of {symbol, exchange}
+
+        if not symbols:
+            return jsonify({
+                'status': 'error',
+                'message': 'No symbols provided'
+            }), 400
+
+        success, response, status_code = enrich_and_save_metadata(symbols)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error enriching metadata: {e}")
+        traceback.print_exc()
         return jsonify({'status': 'error', 'message': str(e)}), 500

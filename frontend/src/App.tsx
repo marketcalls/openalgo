@@ -46,6 +46,7 @@ const Analyzer = lazy(() => import('@/pages/Analyzer'))
 const WebSocketTest = lazy(() => import('@/pages/WebSocketTest'))
 const Playground = lazy(() => import('@/pages/Playground'))
 const Historify = lazy(() => import('@/pages/Historify'))
+const HistorifyCharts = lazy(() => import('@/pages/HistorifyCharts'))
 
 // Strategy pages
 const StrategyIndex = lazy(() => import('@/pages/strategy/StrategyIndex'))
@@ -172,6 +173,8 @@ function App() {
               <Route element={<FullWidthLayout />}>
                 <Route path="/playground" element={<Playground />} />
                 <Route path="/historify" element={<Historify />} />
+                <Route path="/historify/charts" element={<HistorifyCharts />} />
+                <Route path="/historify/charts/:symbol" element={<HistorifyCharts />} />
               </Route>
 
               {/* 404 Not Found */}
