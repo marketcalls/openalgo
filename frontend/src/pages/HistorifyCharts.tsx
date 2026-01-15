@@ -257,10 +257,17 @@ export default function HistorifyCharts() {
       // Use the computed isIntradayInterval for chart formatting
       const isIntraday = isIntradayInterval
 
+      // Check if this is a daily-aggregated interval (W, MO, Q, Y)
+      // These intervals return timestamps that already represent IST dates
+      const isDailyAggregated = isCustomInterval &&
+        ['W', 'MO', 'Q', 'Y'].includes(customIntervalUnit)
+
       // Helper to format time/date in IST based on interval
       const formatTimeIST = (time: number) => {
         const date = new Date(time * 1000)
-        const istOffset = 5.5 * 60 * 60 * 1000
+        // For daily-aggregated intervals (W, MO, Q, Y), timestamps already represent IST dates
+        // For intraday and daily, we need to add IST offset
+        const istOffset = isDailyAggregated ? 0 : 5.5 * 60 * 60 * 1000
         const istDate = new Date(date.getTime() + istOffset)
         const day = istDate.getUTCDate().toString().padStart(2, '0')
         const month = (istDate.getUTCMonth() + 1).toString().padStart(2, '0')
@@ -306,9 +313,10 @@ export default function HistorifyCharts() {
           secondsVisible: false,
           tickMarkFormatter: (time: number, tickMarkType: number) => {
             // Convert Unix timestamp to IST (UTC+5:30)
+            // For daily-aggregated intervals (W, MO, Q, Y), timestamps already represent IST dates
             const date = new Date(time * 1000)
-            const istOffset = 5.5 * 60 * 60 * 1000
-            const istDate = new Date(date.getTime() + istOffset)
+            const offset = isDailyAggregated ? 0 : 5.5 * 60 * 60 * 1000
+            const istDate = new Date(date.getTime() + offset)
 
             if (isIntraday) {
               // For intraday: show time HH:MM
@@ -431,7 +439,7 @@ export default function HistorifyCharts() {
         chartRef.current = null
       }
     }
-  }, [isDarkMode, chartData, isFullscreen, isIntradayInterval])
+  }, [isDarkMode, chartData, isFullscreen, isIntradayInterval, isCustomInterval, customIntervalUnit])
 
   const loadCatalog = async () => {
     try {

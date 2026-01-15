@@ -832,9 +832,11 @@ def _get_daily_aggregated_ohlcv(
             return pd.DataFrame()
 
         # Build the query - aggregate from D (daily) data
+        # Return timestamp as UTC epoch representing the IST date
+        # (frontend will interpret as UTC which visually shows the IST date)
         query = f"""
             SELECT
-                EPOCH({group_expr}) - {ist_offset} as timestamp,
+                EPOCH({group_expr}) as timestamp,
                 FIRST(open ORDER BY timestamp) as open,
                 MAX(high) as high,
                 MIN(low) as low,
