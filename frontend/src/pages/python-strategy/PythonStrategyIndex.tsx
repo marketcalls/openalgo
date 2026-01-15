@@ -11,7 +11,6 @@ import {
   Play,
   Plus,
   RefreshCw,
-  Settings,
   Square,
   Trash2,
 } from 'lucide-react'
@@ -393,12 +392,6 @@ export default function PythonStrategyIndex() {
                         <DropdownMenuItem onClick={() => handleExport(strategy)}>
                           <Download className="h-4 w-4 mr-2" />
                           Export
-                        </DropdownMenuItem>
-                        <DropdownMenuItem asChild>
-                          <Link to={`/python/${strategy.id}/env`}>
-                            <Settings className="h-4 w-4 mr-2" />
-                            Environment Variables
-                          </Link>
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem
