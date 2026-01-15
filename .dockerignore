@@ -21,10 +21,11 @@ secrets.*
 *.key
 *.pem
 
-# SQLite and runtime files
+# SQLite, DuckDB and runtime files
 *.sqlite
 *.sqlite3
 *.db
+*.duckdb
 *.log
 *.sock
 

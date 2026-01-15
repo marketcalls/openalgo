@@ -19,7 +19,15 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(npm run check:*)",
       "Bash(git push:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(git rm:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(node --version)",
+      "Bash(npm --version)",
+      "Bash(uv run:*)",
+      "Bash(python3:*)"
     ]
   }
 }

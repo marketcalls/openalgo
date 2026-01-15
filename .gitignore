@@ -23,6 +23,7 @@ config.ini
 
 *.egg-info/
 *.db
+*.duckdb
 *.sqlite
 *.log
 *.tmp
