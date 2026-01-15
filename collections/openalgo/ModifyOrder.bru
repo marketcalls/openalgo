@@ -1,0 +1,29 @@
+meta {
+  name: ModifyOrder
+  type: http
+  seq: 6
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/modifyorder
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "a85992a13ab7db424c239c50826116366e9f4fd8c591345a2d23aad01ffa4d00",
+      "strategy": "Test Message",
+      "symbol": "GOLDPETAL31OCT24FUT",
+      "action": "BUY",
+      "exchange": "MCX",
+      "orderid":"427510324509895",
+      "product":"MIS",
+      "pricetype":"LIMIT",
+      "price":"7410",
+      "quantity":"1",
+      "disclosed_quantity":"0",
+      "trigger_price":"0"
+  }
+  
+}

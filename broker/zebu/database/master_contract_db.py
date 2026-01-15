@@ -1,5 +1,5 @@
 import os
-import requests
+import httpx
 import zipfile
 import io
 import pandas as pd
@@ -8,6 +8,11 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, Sequence, 
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from extensions import socketio  # Import SocketIO
+from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 
 
@@ -38,16 +43,16 @@ class SymToken(Base):
     __table_args__ = (Index('idx_symbol_exchange', 'symbol', 'exchange'),)
 
 def init_db():
-    print("Initializing Master Contract DB")
+    logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
 
 def delete_symtoken_table():
-    print("Deleting Symtoken Table")
+    logger.info("Deleting Symtoken Table")
     SymToken.query.delete()
     db_session.commit()
 
 def copy_from_dataframe(df):
-    print("Performing Bulk Insert")
+    logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient='records')
 
@@ -62,11 +67,11 @@ def copy_from_dataframe(df):
         if filtered_data_dict:  # Proceed only if there's anything to insert
             db_session.bulk_insert_mappings(SymToken, filtered_data_dict)
             db_session.commit()
-            print(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
+            logger.info(f"Bulk insert completed successfully with {len(filtered_data_dict)} new records.")
         else:
-            print("No new records to insert.")
+            logger.info("No new records to insert.")
     except Exception as e:
-        print(f"Error during bulk insert: {e}")
+        logger.error(f"Error during bulk insert: {e}")
         db_session.rollback()
 
 # Define the Zebu URLs for downloading the symbol files
@@ -81,9 +86,9 @@ zebu_urls = {
 
 def download_and_unzip_zebu_data(output_path):
     """
-    Downloads and unzips the Zebu text files to the tmp folder.
+    Downloads and unzips the Zebu text files to the tmp folder using httpx with connection pooling.
     """
-    print("Downloading and Unzipping Zebu Data")
+    logger.info("Downloading and Unzipping Zebu Data")
 
     # Create the tmp directory if it doesn't exist
     if not os.path.exists(output_path):
@@ -91,23 +96,26 @@ def download_and_unzip_zebu_data(output_path):
 
     downloaded_files = []
 
+    # Get the shared httpx client
+    client = get_httpx_client()
+
     # Iterate through the Zebu URLs and download/unzip files
     for key, url in zebu_urls.items():
         try:
-            # Send GET request to download the zip file
-            response = requests.get(url, timeout=10)
-            
+            # Send GET request to download the zip file using httpx client
+            response = client.get(url, timeout=10.0)
+
             if response.status_code == 200:
-                print(f"Successfully downloaded {key} from {url}")
-                
+                logger.info(f"Successfully downloaded {key} from {url}")
+
                 # Use in-memory file to handle the downloaded zip file
                 z = zipfile.ZipFile(io.BytesIO(response.content))
                 z.extractall(output_path)
                 downloaded_files.append(f"{key}.txt")
             else:
-                print(f"Failed to download {key} from {url}. Status code: {response.status_code}")
+                logger.error(f"Failed to download {key} from {url}. Status code: {response.status_code}")
         except Exception as e:
-            print(f"Error downloading {key} from {url}: {e}")
+            logger.error(f"Error downloading {key} from {url}: {e}")
 
     return downloaded_files
 
@@ -118,7 +126,7 @@ def process_zebu_nse_data(output_path):
     Processes the Zebu NSE data (NSE_symbols.txt) to generate OpenAlgo symbols.
     Separates EQ, BE symbols, and Index symbols.
     """
-    print("Processing Zebu NSE Data")
+    logger.info("Processing Zebu NSE Data")
     file_path = f'{output_path}/NSE_symbols.txt'
 
     # Read the NSE symbols file, specifying the exact columns to use and ignoring extra columns
@@ -126,6 +134,9 @@ def process_zebu_nse_data(output_path):
 
     # Rename columns to match your schema
     df.columns = ['exchange', 'token', 'lotsize', 'name', 'brsymbol', 'instrumenttype', 'tick_size']
+
+    # Convert token to string to ensure compatibility with Zebu API
+    df['token'] = df['token'].astype(str)
 
     # Add missing columns to ensure DataFrame matches the database structure
     df['symbol'] = df['brsymbol']  # Initialize 'symbol' with 'brsymbol'
@@ -146,7 +157,8 @@ def process_zebu_nse_data(output_path):
 
     # Define Exchange: 'NSE' for EQ and BE, 'NSE_INDEX' for indexes
     df['exchange'] = df.apply(lambda row: 'NSE_INDEX' if row['instrumenttype'] == 'INDEX' else 'NSE', axis=1)
-    df['brexchange'] = df['exchange']  # Broker exchange is the same as exchange
+    # Broker exchange should always be NSE for Zebu API calls
+    df['brexchange'] = 'NSE'
 
     # Set empty columns for 'expiry' and fill -1 for 'strike' where the data is missing
     df['expiry'] = ''  # No expiry for these instruments
@@ -163,6 +175,20 @@ def process_zebu_nse_data(output_path):
     columns_to_keep = ['symbol', 'brsymbol', 'name', 'exchange', 'brexchange', 'token', 'expiry', 'strike', 'lotsize', 'instrumenttype', 'tick_size']
     df_filtered = df[columns_to_keep]
 
+    # Map common NSE index symbols to OpenAlgo format
+    nse_index_mapping = {
+        'NIFTY INDEX': 'NIFTY',
+        'NIFTY BANK': 'BANKNIFTY',
+        'NIFTY FIN SERVICE': 'FINNIFTY',
+        'NIFTY MIDCAP SELECT': 'MIDCPNIFTY',
+        'NIFTY NEXT 50': 'NIFTYNXT50',
+        'INDIA VIX': 'INDIAVIX'
+    }
+
+    # Apply the mapping only to NSE_INDEX symbols
+    df_filtered.loc[df_filtered['exchange'] == 'NSE_INDEX', 'symbol'] = \
+        df_filtered.loc[df_filtered['exchange'] == 'NSE_INDEX', 'symbol'].replace(nse_index_mapping)
+
     # Return the processed DataFrame
     return df_filtered
 
@@ -173,7 +199,7 @@ def process_zebu_nfo_data(output_path):
     Processes the Zebu NFO data (NFO_symbols.txt) to generate OpenAlgo symbols.
     Handles both futures and options formatting.
     """
-    print("Processing Zebu NFO Data")
+    logger.info("Processing Zebu NFO Data")
     file_path = f'{output_path}/NFO_symbols.txt'
 
     # Read the NFO symbols file, specifying the exact columns to use
@@ -181,6 +207,9 @@ def process_zebu_nfo_data(output_path):
 
     # Rename columns to match your schema
     df.columns = ['exchange', 'token', 'lotsize', 'name', 'brsymbol', 'expiry', 'instrumenttype', 'optiontype', 'strike', 'tick_size']
+
+    # Convert token to string to ensure compatibility with Zebu API
+    df['token'] = df['token'].astype(str)
 
     # Add missing columns to ensure DataFrame matches the database structure
     df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
@@ -191,7 +220,7 @@ def process_zebu_nfo_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            print(f"Invalid expiry date format: {date_str}")
+            logger.info(f"Invalid expiry date format: {date_str}")
             return None
 
     # Apply the expiry date format
@@ -240,7 +269,7 @@ def process_zebu_cds_data(output_path):
     Processes the Zebu CDS data (CDS_symbols.txt) to generate OpenAlgo symbols.
     Handles both futures and options formatting.
     """
-    print("Processing Zebu CDS Data")
+    logger.info("Processing Zebu CDS Data")
     file_path = f'{output_path}/CDS_symbols.txt'
 
     # Read the CDS symbols file, specifying the exact columns to use
@@ -248,6 +277,9 @@ def process_zebu_cds_data(output_path):
 
     # Rename columns to match your schema
     df.columns = ['exchange', 'token', 'lotsize', 'precision', 'multiplier', 'name', 'brsymbol', 'expiry', 'instrumenttype', 'optiontype', 'strike', 'tick_size']
+
+    # Convert token to string to ensure compatibility with Zebu API
+    df['token'] = df['token'].astype(str)
 
     # Add missing columns to ensure DataFrame matches the database structure
     df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
@@ -258,7 +290,7 @@ def process_zebu_cds_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            print(f"Invalid expiry date format: {date_str}")
+            logger.info(f"Invalid expiry date format: {date_str}")
             return None
 
     # Apply the expiry date format
@@ -308,7 +340,7 @@ def process_zebu_mcx_data(output_path):
     Processes the Zebu MCX data (MCX_symbols.txt) to generate OpenAlgo symbols.
     Handles both futures and options formatting.
     """
-    print("Processing Zebu MCX Data")
+    logger.info("Processing Zebu MCX Data")
     file_path = f'{output_path}/MCX_symbols.txt'
 
     # Read the MCX symbols file, specifying the exact columns to use
@@ -316,6 +348,9 @@ def process_zebu_mcx_data(output_path):
 
     # Rename columns to match your schema
     df.columns = ['exchange', 'token', 'lotsize', 'gngd', 'name', 'brsymbol', 'expiry', 'instrumenttype', 'optiontype', 'strike', 'tick_size']
+
+    # Convert token to string to ensure compatibility with Zebu API
+    df['token'] = df['token'].astype(str)
 
     # Add missing columns to ensure DataFrame matches the database structure
     df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
@@ -326,7 +361,7 @@ def process_zebu_mcx_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            print(f"Invalid expiry date format: {date_str}")
+            logger.info(f"Invalid expiry date format: {date_str}")
             return None
 
     # Apply the expiry date format
@@ -374,9 +409,9 @@ def process_zebu_mcx_data(output_path):
 def process_zebu_bse_data(output_path):
     """
     Processes the Zebu BSE data (BSE_symbols.txt) to generate OpenAlgo symbols.
-    Ensures that the instrument type is always 'EQ'.
+    Ensures that the instrument type is always 'EQ' (no BSE index symbols available from Zebu).
     """
-    print("Processing Zebu BSE Data")
+    logger.info("Processing Zebu BSE Data")
     file_path = f'{output_path}/BSE_symbols.txt'
 
     # Read the BSE symbols file
@@ -387,6 +422,9 @@ def process_zebu_bse_data(output_path):
 
     # Rename columns to match your schema
     df.columns = ['exchange', 'token', 'lotsize', 'name', 'brsymbol', 'instrumenttype', 'tick_size']
+
+    # Convert token to string to ensure compatibility with Zebu API
+    df['token'] = df['token'].astype(str)
 
 
     # Add missing columns to ensure DataFrame matches the database structure
@@ -399,7 +437,7 @@ def process_zebu_bse_data(output_path):
     # Update the 'symbol' column
     df['symbol'] = df['brsymbol'].apply(get_openalgo_symbol)
 
-    # Set Exchange: 'BSE' for all rows
+    # Set Exchange: 'BSE' for all rows (no BSE index symbols from Zebu)
     df['exchange'] = 'BSE'
     df['brexchange'] = df['exchange']  # Broker exchange is the same as exchange
 
@@ -407,7 +445,7 @@ def process_zebu_bse_data(output_path):
     df['expiry'] = ''  # No expiry for these instruments
     df['strike'] = -1  # Default to -1 for strike price
 
-    # Ensure the instrument type is always 'EQ'
+    # Ensure the instrument type is always 'EQ' since no BSE indices are provided
     df['instrumenttype'] = 'EQ'
 
     # Handle missing or invalid numeric values in 'lotsize' and 'tick_size'
@@ -426,7 +464,7 @@ def process_zebu_bfo_data(output_path):
     Processes the Zebu BFO data (BFO_symbols.txt) to generate OpenAlgo symbols and correctly extract the name column.
     Handles both futures and options formatting, ensuring strike prices are handled as either float or integer.
     """
-    print("Processing Zebu BFO Data")
+    logger.info("Processing Zebu BFO Data")
     file_path = f'{output_path}/BFO_symbols.txt'
 
     # Read the BFO symbols file, specifying the exact columns to use
@@ -434,6 +472,9 @@ def process_zebu_bfo_data(output_path):
 
     # Rename columns to match your schema
     df.columns = ['exchange', 'token', 'lotsize', 'name', 'brsymbol', 'expiry', 'instrumenttype', 'strike', 'tick_size']
+
+    # Convert token to string to ensure compatibility with Zebu API
+    df['token'] = df['token'].astype(str)
 
     # Add missing columns to ensure DataFrame matches the database structure
     df['expiry'] = df['expiry'].fillna('')  # Fill expiry with empty strings if missing
@@ -444,7 +485,7 @@ def process_zebu_bfo_data(output_path):
         try:
             return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
         except ValueError:
-            print(f"Invalid expiry date format: {date_str}")
+            logger.info(f"Invalid expiry date format: {date_str}")
             return None
 
     # Apply the expiry date format
@@ -516,13 +557,13 @@ def delete_zebu_temp_data(output_path):
         file_path = os.path.join(output_path, filename)
         if filename.endswith(".txt") and os.path.isfile(file_path):
             os.remove(file_path)
-            print(f"Deleted {file_path}")
+            logger.info(f"Deleted {file_path}")
 
 def master_contract_download():
     """
     Downloads, processes, and deletes Zebu data.
     """
-    print("Downloading Zebu Master Contract")
+    logger.info("Downloading Zebu Master Contract")
 
     output_path = 'tmp'
     try:
@@ -547,5 +588,5 @@ def master_contract_download():
         
         return socketio.emit('master_contract_download', {'status': 'success', 'message': 'Successfully Downloaded'})
     except Exception as e:
-        print(str(e))
+        logger.info(f"{e}")
         return socketio.emit('master_contract_download', {'status': 'error', 'message': str(e)})

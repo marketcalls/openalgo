@@ -1,36 +1,48 @@
-# Dockerfile
-FROM python:3.11-slim
-
+# ------------------------------ Builder Stage ------------------------------ #
+FROM python:3.12-bullseye AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl build-essential && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-
-ENV PYTHONDONTWRITEBYTECODE 1
-ENV PYTHONUNBUFFERED 1
-
-# Install system dependencies
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc python3-dev libpq-dev \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Python dependencies
-COPY requirements-nginx.txt .
-RUN pip install --no-cache-dir -r requirements-nginx.txt
-RUN pip install gunicorn eventlet>=0.24.1
-
-# Copy project files
-COPY . .
-
-# Create directories and set permissions
-RUN mkdir -p db logs && \
-    chmod -R 777 db logs
-
-# Command to run the application
-CMD ["gunicorn", \
-     "--bind", "0.0.0.0:5000", \
-     "--worker-class", "eventlet", \
-     "--workers", "1", \
-     "--reload", \
-     "--log-level", "debug", \
-     "--access-logfile", "-", \
-     "--error-logfile", "-", \
-     "app:app"]
+COPY pyproject.toml .
+# create isolated virtual-env with uv, then add gunicorn and eventlet with compatible versions
+RUN pip install --no-cache-dir uv && \
+    uv venv .venv && \
+    uv pip install --upgrade pip && \
+    uv sync && \
+    uv pip install gunicorn eventlet==0.35.2 && \
+    rm -rf /root/.cache
+# --------------------------------------------------------------------------- #
+# ------------------------------ Production Stage --------------------------- #
+FROM python:3.12-slim-bullseye AS production
+# 0 – set timezone to IST (Asia/Kolkata)
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata && \
+    ln -fs /usr/share/zoneinfo/Asia/Kolkata /etc/localtime && \
+    dpkg-reconfigure -f noninteractive tzdata && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+# 1 – user & workdir
+RUN useradd --create-home appuser
+WORKDIR /app
+# 2 – copy the ready-made venv and source with correct ownership
+COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
+COPY --chown=appuser:appuser . .
+# 3 – create required directories with proper ownership and permissions
+#     Also create empty .env file with write permissions for Railway deployment
+RUN mkdir -p /app/log /app/log/strategies /app/db /app/strategies /app/strategies/scripts /app/strategies/examples /app/keys /app/logs && \
+    chown -R appuser:appuser /app/log /app/db /app/strategies /app/keys /app/logs && \
+    chmod -R 755 /app/strategies /app/log && \
+    chmod 700 /app/keys && \
+    touch /app/.env && chown appuser:appuser /app/.env && chmod 666 /app/.env
+# 4 – entrypoint script and fix line endings
+COPY --chown=appuser:appuser start.sh /app/start.sh
+RUN sed -i 's/\r$//' /app/start.sh && chmod +x /app/start.sh
+# ---- RUNTIME ENVS --------------------------------------------------------- #
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    TZ=Asia/Kolkata \
+    APP_MODE=standalone
+# --------------------------------------------------------------------------- #
+USER appuser
+EXPOSE 5000
+CMD ["/app/start.sh"]

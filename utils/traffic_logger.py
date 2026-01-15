@@ -1,9 +1,10 @@
 from flask import request, g, has_request_context
 from database.traffic_db import TrafficLog, logs_session
 import time
-import logging
+from utils.logging import get_logger
+from utils.ip_helper import get_real_ip
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class TrafficLoggerMiddleware:
     def __init__(self, app):
@@ -32,7 +33,7 @@ class TrafficLoggerMiddleware:
             try:
                 duration_ms = (time.time() - start_time) * 1000
                 TrafficLog.log_request(
-                    client_ip=request.remote_addr,
+                    client_ip=get_real_ip(),
                     method=request.method,
                     path=request.path,
                     status_code=status_code,

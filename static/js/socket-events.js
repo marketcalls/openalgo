@@ -1,7 +1,26 @@
+// Helper function to check for session expiry (401 response)
+async function checkSessionExpiry(response) {
+    if (response.status === 401) {
+        // Session expired - trigger global handler if available
+        if (typeof window.handleSessionExpiry === 'function') {
+            window.handleSessionExpiry();
+        } else {
+            // Fallback: redirect to login
+            window.location.href = '/auth/login';
+        }
+        return true;
+    }
+    return false;
+}
+
 // Function to fetch and update logs
 async function refreshLogs() {
+    // Skip if session is expired
+    if (window.sessionExpired) return;
+
     try {
         const response = await fetch('/logs');
+        if (await checkSessionExpiry(response)) return;
         const html = await response.text();
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
@@ -17,12 +36,16 @@ async function refreshLogs() {
 
 // Function to fetch and update orderbook
 async function refreshOrderbook() {
+    // Skip if session is expired
+    if (window.sessionExpired) return;
+
     try {
         const response = await fetch('/orderbook');
+        if (await checkSessionExpiry(response)) return;
         const html = await response.text();
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
-        
+
         // Update stats grid
         const newStatsGrid = tempDiv.querySelector('.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-5');
         if (newStatsGrid) {
@@ -31,7 +54,7 @@ async function refreshOrderbook() {
                 currentStatsGrid.innerHTML = newStatsGrid.innerHTML;
             }
         }
-        
+
         // Update table
         const newContent = tempDiv.querySelector('#orderbook-table-container');
         if (newContent) {
@@ -45,25 +68,29 @@ async function refreshOrderbook() {
 
 // Function to fetch and update tradebook
 async function refreshTradebook() {
+    // Skip if session is expired
+    if (window.sessionExpired) return;
+
     try {
         const response = await fetch('/tradebook');
+        if (await checkSessionExpiry(response)) return;
         const html = await response.text();
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
-        
-        // Update stats
-        const newStats = tempDiv.querySelector('.stats');
+
+        // Update stats grid
+        const newStats = tempDiv.querySelector('.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-4');
         if (newStats) {
-            const currentStats = document.querySelector('.stats');
+            const currentStats = document.querySelector('.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-4');
             if (currentStats) {
                 currentStats.innerHTML = newStats.innerHTML;
             }
         }
-        
-        // Update table
-        const newContent = tempDiv.querySelector('#tradebook-table-container');
+
+        // Update table container
+        const newContent = tempDiv.querySelector('.table-container');
         if (newContent) {
-            const currentContainer = document.querySelector('#tradebook-table-container');
+            const currentContainer = document.querySelector('.table-container');
             if (currentContainer) {
                 currentContainer.innerHTML = newContent.innerHTML;
             }
@@ -73,8 +100,12 @@ async function refreshTradebook() {
 
 // Function to fetch and update positions
 async function refreshPositions() {
+    // Skip if session is expired
+    if (window.sessionExpired) return;
+
     try {
         const response = await fetch('/positions');
+        if (await checkSessionExpiry(response)) return;
         const html = await response.text();
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
@@ -90,14 +121,18 @@ async function refreshPositions() {
 
 // Function to fetch and update dashboard funds
 async function refreshDashboard() {
+    // Skip if session is expired
+    if (window.sessionExpired) return;
+
     try {
         const response = await fetch('/dashboard');
+        if (await checkSessionExpiry(response)) return;
         const html = await response.text();
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
-        const newContent = tempDiv.querySelector('.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-4');
+        const newContent = tempDiv.querySelector('.grid-cols-1.sm\\:grid-cols-3.lg\\:grid-cols-5');
         if (newContent) {
-            const currentContainer = document.querySelector('.grid-cols-1.sm\\:grid-cols-2.lg\\:grid-cols-4');
+            const currentContainer = document.querySelector('.grid-cols-1.sm\\:grid-cols-3.lg\\:grid-cols-5');
             if (currentContainer) {
                 currentContainer.innerHTML = newContent.innerHTML;
             }
@@ -107,9 +142,13 @@ async function refreshDashboard() {
 
 // Function to fetch and update analyzer
 async function refreshAnalyzer() {
+    // Skip if session is expired
+    if (window.sessionExpired) return;
+
     try {
         // Update stats
         const statsResponse = await fetch('/analyzer/stats');
+        if (await checkSessionExpiry(statsResponse)) return;
         const statsData = await statsResponse.json();
         
         const totalRequests = document.getElementById('total-requests');
@@ -192,9 +231,9 @@ async function refreshAnalyzer() {
                         </td>
                         <td class="badge-cell">
                             <div class="badge-container">
-                                <button class="btn btn-sm btn-primary view-details" 
-                                        data-request='${JSON.stringify(request.request_data)}'
-                                        data-response='${JSON.stringify(request.response_data)}'>
+                                <button class="btn btn-sm btn-primary view-details"
+                                        data-request="${encodeURIComponent(JSON.stringify(request.request_data))}"
+                                        data-response="${encodeURIComponent(JSON.stringify(request.response_data))}">
                                     View
                                 </button>
                             </div>
@@ -207,14 +246,13 @@ async function refreshAnalyzer() {
             document.querySelectorAll('.view-details').forEach(button => {
                 button.addEventListener('click', function() {
                     try {
-                        const requestData = JSON.parse(this.getAttribute('data-request'));
-                        const responseData = JSON.parse(this.getAttribute('data-response'));
-                        
+                        const requestData = JSON.parse(decodeURIComponent(this.getAttribute('data-request')));
+                        const responseData = JSON.parse(decodeURIComponent(this.getAttribute('data-response')));
                         // Remove apikey from request data if present
                         if (requestData.apikey) {
                             delete requestData.apikey;
                         }
-                        
+
                         document.getElementById('request-data').textContent = JSON.stringify(requestData, null, 2);
                         document.getElementById('response-data').textContent = JSON.stringify(responseData, null, 2);
                         document.getElementById('requestModal').showModal();
@@ -247,11 +285,49 @@ window.refreshCurrentPageContent = function() {
         refreshTradebook();
     } else if (path.includes('/positions')) {
         refreshPositions();
+    } else if (path.includes('/action-center')) {
+        refreshActionCenter();
     } else if (path === '/dashboard' || path === '/') {
         refreshDashboard();
     } else if (path.includes('/analyzer')) {
         refreshAnalyzer();
     }
+}
+
+// Refresh action center
+function refreshActionCenter() {
+    // Skip if session is expired
+    if (window.sessionExpired) return;
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const status = urlParams.get('status') || 'pending';
+    fetch(`/action-center?status=${status}`)
+        .then(response => {
+            if (response.status === 401) {
+                // Session expired - handle gracefully
+                if (typeof window.handleSessionExpiry === 'function') {
+                    window.handleSessionExpiry();
+                } else {
+                    window.location.href = '/auth/login';
+                }
+                return null;
+            }
+            return response.text();
+        })
+        .then(html => {
+            if (!html) return;
+            // Parse the HTML and extract the main content
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const newContent = doc.querySelector('#action-center-content');
+            const currentContent = document.querySelector('#action-center-content');
+            if (newContent && currentContent) {
+                currentContent.innerHTML = newContent.innerHTML;
+            }
+        })
+        .catch(error => {
+            // Silently handle errors
+        });
 }
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -264,22 +340,26 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Password change notification
     socket.on('password_change', function(data) {
-        playAlertSound();
+        playAlertSound('password_change', { message: data.message });
         showToast(data.message, 'info');
-        refreshCurrentPageContent();
+        //refreshCurrentPageContent();
     });
 
     // Master contract download notification
     socket.on('master_contract_download', function(data) {
-        playAlertSound();
+        playAlertSound('master_contract_download', { message: data.message });
         showToast(`Master Contract: ${data.message}`, 'info');
-        refreshCurrentPageContent();
+        //refreshCurrentPageContent();
     });
 
     // Cancel order notification
     socket.on('cancel_order_event', function(data) {
-        playAlertSound();
-        showToast(`Cancel Order ID: ${data.orderid}`, 'warning');
+        // For batch cancel (cancelallorder), skip toast - API response already shows it
+        // Only show toast for single cancel order events
+        if (!data.batch_order) {
+            playAlertSound('cancel_order_event', { orderid: data.orderid });
+            showToast(`Cancel Order ID: ${data.orderid}`, 'warning');
+        }
         if (isOnAnalyzerPage) {
             refreshAnalyzer();
         } else {
@@ -289,53 +369,71 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Modify order notification
     socket.on('modify_order_event', function(data) {
-        playAlertSound();
-        const message = data.status === 'success' 
+        playAlertSound('modify_order_event', { orderid: data.orderid, status: data.status });
+        const message = data.status === 'success'
             ? `Order Modified Successfully - Order ID: ${data.orderid}`
             : `Failed to Modify Order - Order ID: ${data.orderid}`;
         showToast(message, data.status === 'success' ? 'success' : 'error');
         if (isOnAnalyzerPage) {
             refreshAnalyzer();
         } else {
-            refreshOrderbook();
+            //refreshOrderbook();
             refreshCurrentPageContent();
         }
     });
 
     // Close position notification
     socket.on('close_position_event', function(data) {
-        playAlertSound();
+        playAlertSound('close_position_event', { message: data.message, status: data.status });
         showToast(data.message, data.status === 'success' ? 'success' : 'error');
         if (isOnAnalyzerPage) {
             refreshAnalyzer();
         } else {
-            refreshPositions();
-            refreshCurrentPageContent();
+            // Add a 1-second delay before refreshing content
+            setTimeout(() => {
+                refreshCurrentPageContent();
+            }, 1000);
         }
     });
 
     // Order placement notification
     socket.on('order_event', function(data) {
-        playAlertSound();
+        // Only play audio for non-batch orders OR for the last order in a batch
+        const shouldPlayAudio = !data.batch_order || data.is_last_order;
+        if (shouldPlayAudio) {
+            playAlertSound('order_event', {
+                symbol: data.symbol,
+                action: data.action,
+                orderid: data.orderid
+            });
+        }
+
         const type = data.action.toUpperCase() === 'BUY' ? 'success' : 'error';
-        
+
         // Show toast notification
         showToast(`${data.action.toUpperCase()} Order Placed for Symbol: ${data.symbol}, Order ID: ${data.orderid}`, type);
-        
+
         // For batch orders (basket/split), only refresh on the last order
         if (!data.batch_order || data.is_last_order) {
             if (isOnAnalyzerPage) {
                 refreshAnalyzer();
             } else {
-                refreshCurrentPageContent();
+                // Add a 1-second delay before refreshing content
+                setTimeout(() => {
+                    refreshCurrentPageContent();
+                }, 1000);
             }
         }
     });
 
     // Generic order notification handler
     socket.on('order_notification', function(data) {
-        playAlertSound();
-        
+        playAlertSound('order_notification', {
+            symbol: data.symbol,
+            status: data.status,
+            message: data.message
+        });
+
         // Determine notification type based on status
         let type = 'info';
         if (data.status && typeof data.status === 'string') {
@@ -365,12 +463,28 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Analyzer update notification
     socket.on('analyzer_update', function(data) {
-        playAlertSound();
+        // Only play audio for actual trading actions, not for passive monitoring
+        const passiveApiTypes = ['orderstatus', 'openposition', 'orderbook', 'tradebook', 'positions', 'holdings'];
+        const isPassiveMonitoring = passiveApiTypes.includes(data.request.api_type);
+
+        if (!isPassiveMonitoring) {
+            playAlertSound('analyzer_update', {
+                api_type: data.request.api_type,
+                symbol: data.request.symbol,
+                status: data.response.status
+            });
+        }
+
         let message = '';
         let type = data.response.status === 'success' ? 'success' : 'error';
 
         if (data.request.api_type === 'cancelorder') {
             message = `Cancel Order - Order ID: ${data.request.orderid}`;
+            if (!isOnAnalyzerPage && data.response.status === 'success') {
+                setTimeout(() => {
+                    refreshOrderbook();
+                }, 1000);
+            }
         } else if (data.request.api_type === 'cancelallorder') {
             if (data.response.status === 'error') {
                 message = `Error: ${data.response.message}`;
@@ -378,6 +492,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 message = 'Cancel All Orders';
                 if (data.response.canceled_orders) {
                     message += ` - Canceled ${data.response.canceled_orders.length} orders`;
+                }
+                if (!isOnAnalyzerPage) {
+                    setTimeout(() => {
+                        refreshOrderbook();
+                    }, 1000);
                 }
             }
         } else if (data.request.api_type === 'closeposition') {
@@ -410,43 +529,126 @@ document.addEventListener('DOMContentLoaded', function() {
             if (data.response.status === 'error') {
                 message = `Error: ${data.response.message}`;
                 if (symbol) message = `${symbol} - ${message}`;
+            } else if (data.request.api_type === 'placesmartorder' &&
+                       data.response.message &&
+                       (data.response.message.includes('Positions Already Matched') ||
+                        data.response.message.includes('No OpenPosition Found'))) {
+                // Handle special cases for placesmartorder
+                message = data.response.message;
+                type = 'info'; // Change type to info for these cases
             } else {
-                message = `${action} Order Placed for Symbol: ${symbol}`;
-                if (quantity) message += `, Qty: ${quantity}`;
-                if (orderid) message += `, Order ID: ${orderid}`;
-                
-                if (data.request.api_type === 'placesmartorder' && data.request.position_size) {
-                    message += `, Size: ${data.request.position_size}`;
+                // Check if we have valid data before constructing the message
+                if (!action && !symbol && !orderid) {
+                    // Skip toast for empty/undefined responses
+                    return;
+                }
+
+                if (action && symbol) {
+                    message = `${action} Order Placed for Symbol: ${symbol}`;
+                    if (quantity) message += `, Qty: ${quantity}`;
+                    if (orderid) message += `, Order ID: ${orderid}`;
+
+                    if (data.request.api_type === 'placesmartorder' && data.request.position_size) {
+                        message += `, Size: ${data.request.position_size}`;
+                    }
+                } else if (orderid) {
+                    // Fallback if we have orderid but missing other data
+                    message = `Order Placed - ID: ${orderid}`;
+                } else {
+                    // Skip toast if we don't have meaningful data
+                    return;
                 }
             }
         }
-        
+
         showToast(message, type);
         if (isOnAnalyzerPage) {
             refreshAnalyzer();
+        } else {
+            // Refresh current page content for order placements in analyze mode
+            if (data.request.api_type === 'placeorder' ||
+                data.request.api_type === 'placesmartorder' ||
+                data.request.api_type === 'placebasketorder' ||
+                data.request.api_type === 'placesplitorder') {
+                if (data.response.status === 'success') {
+                    setTimeout(() => {
+                        refreshCurrentPageContent();
+                    }, 1000);
+                }
+            }
         }
     });
 
-    // Helper function to play alert sound
-    function playAlertSound() {
+    // Audio throttling configuration
+    let lastAudioAttemptTime = 0;
+    const AUDIO_THROTTLE_MS = 1000; // Minimum time between audio notifications (milliseconds)
+    let audioEnabled = false; // Track if user has interacted with page (for autoplay policy)
+
+    // Helper function to play alert sound with throttling
+    function playAlertSound(eventType = 'unknown', eventData = {}) {
+        const now = Date.now();
+        const isFirstAttempt = lastAudioAttemptTime === 0;
+        const timeSinceLastAttempt = isFirstAttempt ? 0 : now - lastAudioAttemptTime;
+
+        // Throttle: Only play if enough time has passed since last attempt
+        if (timeSinceLastAttempt < AUDIO_THROTTLE_MS && !isFirstAttempt) {
+            return;
+        }
+
+        // Update last attempt time before playing
+        lastAudioAttemptTime = now;
+
+        // Play the sound
         if (alertSound) {
-            alertSound.play().catch(function(error) {});
+            alertSound.play()
+                .then(() => {
+                    audioEnabled = true; // Mark that audio is working
+                })
+                .catch(function(error) {
+                    // Silently handle autoplay policy errors
+                });
         }
     }
+
+    // Enable audio on any user interaction (for browser autoplay policy)
+    function enableAudio() {
+        if (!audioEnabled && alertSound) {
+            // Preload audio by playing it silently (volume 0) to satisfy browser autoplay policy
+            const originalVolume = alertSound.volume;
+            alertSound.volume = 0;
+            alertSound.play()
+                .then(() => {
+                    alertSound.pause();
+                    alertSound.currentTime = 0;
+                    alertSound.volume = originalVolume;
+                    audioEnabled = true;
+                })
+                .catch(() => {
+                    alertSound.volume = originalVolume;
+                    // Silently fail - will try again on next interaction
+                });
+        }
+    }
+
+    // Listen for any user interaction to enable audio
+    ['click', 'touchstart', 'keydown'].forEach(eventType => {
+        document.addEventListener(eventType, enableAudio, { once: true, passive: true });
+    });
 
     // Initial page load - set up click handlers
     if (isOnAnalyzerPage) {
         document.querySelectorAll('.view-details').forEach(button => {
             button.addEventListener('click', function() {
                 try {
-                    const requestData = JSON.parse(this.getAttribute('data-request'));
-                    const responseData = JSON.parse(this.getAttribute('data-response'));
-                    
+                    const requestData = JSON.parse(decodeURIComponent(this.getAttribute('data-request')));
+                    const responseData = JSON.parse(decodeURIComponent(this.getAttribute('data-response')));
+                    console.log(responseData);
+
                     // Remove apikey from request data if present
                     if (requestData.apikey) {
                         delete requestData.apikey;
                     }
-                    
+
                     document.getElementById('request-data').textContent = JSON.stringify(requestData, null, 2);
                     document.getElementById('response-data').textContent = JSON.stringify(responseData, null, 2);
                     document.getElementById('requestModal').showModal();

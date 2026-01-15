@@ -1,0 +1,415 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Strategy - {{ strategy_name }} - OpenAlgo{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/python-editor-simple.css') }}">
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8">
+    <!-- Header -->
+    <div class="mb-6">
+        <div class="flex items-center justify-between">
+            <div class="flex items-center gap-4">
+                <a href="{{ url_for('python_strategy_bp.index') }}" class="btn btn-ghost btn-circle">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                    </svg>
+                </a>
+                <div>
+                    <h1 class="text-2xl font-bold">
+                        {% if can_edit %}Edit{% else %}View{% endif %} Strategy
+                    </h1>
+                    <p class="text-base-content/60 text-sm">{{ strategy_name }}</p>
+                </div>
+            </div>
+            
+            <!-- Status Badge -->
+            <div>
+                {% if is_running %}
+                <div class="badge badge-success badge-lg gap-2">
+                    <div class="w-2 h-2 bg-success rounded-full animate-pulse"></div>
+                    Running (View Only)
+                </div>
+                {% else %}
+                <div class="badge badge-ghost badge-lg">
+                    Stopped (Editable)
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- File Info Bar -->
+    <div class="bg-base-200 rounded-lg p-4 mb-4">
+        <div class="flex flex-wrap gap-6 text-sm">
+            <div>
+                <span class="text-base-content/60">File:</span>
+                <span class="font-mono">{{ file_info.name }}</span>
+            </div>
+            <div>
+                <span class="text-base-content/60">Lines:</span>
+                <span class="font-mono">{{ file_info.lines }}</span>
+            </div>
+            <div>
+                <span class="text-base-content/60">Size:</span>
+                <span class="font-mono">{{ (file_info.size / 1024)|round(2) }} KB</span>
+            </div>
+            <div>
+                <span class="text-base-content/60">Modified:</span>
+                <span class="font-mono">{{ file_info.modified.strftime('%Y-%m-%d %H:%M:%S IST') }}</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="flex justify-between items-center mb-4">
+        <div class="flex gap-2">
+            {% if can_edit %}
+            <button onclick="saveStrategy()" class="btn btn-primary btn-sm">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V2" />
+                </svg>
+                Save Changes
+            </button>
+            <button onclick="resetChanges()" class="btn btn-ghost btn-sm">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Reset
+            </button>
+            {% else %}
+            <div class="alert alert-warning">
+                <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                <span>Strategy is running. Stop it to enable editing.</span>
+            </div>
+            {% endif %}
+            
+            <!-- Export buttons -->
+            <div class="dropdown dropdown-hover">
+                <label tabindex="0" class="btn btn-ghost btn-sm">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    Export
+                </label>
+                <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52">
+                    <li>
+                        <a href="{{ url_for('python_strategy_bp.export_strategy', strategy_id=strategy_id) }}">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V2" />
+                            </svg>
+                            Export Saved Version
+                        </a>
+                    </li>
+                    <li>
+                        <a href="javascript:void(0)" onclick="exportCurrentContent()">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            Export Current Content
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+        
+        <div class="flex gap-2">
+            <button onclick="toggleTheme()" class="btn btn-ghost btn-sm btn-circle" title="Toggle Theme">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                </svg>
+            </button>
+            <button onclick="toggleFullscreen()" class="btn btn-ghost btn-sm btn-circle" title="Fullscreen">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Code Editor -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body p-0">
+            <div id="editor-container" style="min-height: 600px;"></div>
+        </div>
+    </div>
+
+    <!-- Keyboard Shortcuts Help -->
+    <div class="mt-4">
+        <details class="collapse collapse-arrow bg-base-200">
+            <summary class="collapse-title text-sm font-medium">
+                Keyboard Shortcuts
+            </summary>
+            <div class="collapse-content">
+                <div class="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                        <kbd class="kbd kbd-sm">Tab</kbd> Insert 4 spaces
+                    </div>
+                    <div>
+                        <kbd class="kbd kbd-sm">Shift</kbd> + <kbd class="kbd kbd-sm">Tab</kbd> Unindent
+                    </div>
+                    <div>
+                        <kbd class="kbd kbd-sm">Ctrl</kbd> + <kbd class="kbd kbd-sm">S</kbd> Save (when editable)
+                    </div>
+                    <div>
+                        <kbd class="kbd kbd-sm">Ctrl</kbd> + <kbd class="kbd kbd-sm">Z</kbd> Undo
+                    </div>
+                    <div>
+                        <kbd class="kbd kbd-sm">Ctrl</kbd> + <kbd class="kbd kbd-sm">Y</kbd> Redo
+                    </div>
+                    <div>
+                        <kbd class="kbd kbd-sm">F11</kbd> Toggle Fullscreen
+                    </div>
+                </div>
+            </div>
+        </details>
+    </div>
+</div>
+
+<!-- Reset Confirmation Modal -->
+<dialog id="reset_modal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg">Discard Changes</h3>
+        <p class="py-4">Are you sure you want to discard all changes?</p>
+        <p class="text-sm text-warning">Your unsaved changes will be lost.</p>
+        <div class="modal-action">
+            <button onclick="reset_modal.close()" class="btn">Cancel</button>
+            <button onclick="confirmReset()" class="btn btn-warning">Discard Changes</button>
+        </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+    </form>
+</dialog>
+
+<script src="{{ url_for('static', filename='js/python-editor-simple.js') }}"></script>
+<script>
+let editor;
+let originalContent = {{ content|tojson }};
+let currentTheme = localStorage.getItem('editorTheme') || 'dark';
+let hasUnsavedChanges = false;
+
+// Get CSRF token
+function getCSRFToken() {
+    const token = document.querySelector('meta[name="csrf-token"]');
+    if (token) {
+        return token.getAttribute('content');
+    }
+    // Fallback: try to get from cookie
+    const cookieValue = document.cookie
+        .split('; ')
+        .find(row => row.startsWith('csrf_token='));
+    return cookieValue ? cookieValue.split('=')[1] : '';
+}
+
+// Initialize editor
+document.addEventListener('DOMContentLoaded', () => {
+    const container = document.getElementById('editor-container');
+    
+    // Small delay to ensure DOM is fully ready
+    setTimeout(() => {
+        editor = new SimplePythonEditor(container, {
+            value: originalContent,
+            readOnly: {{ 'true' if is_running else 'false' }},
+            theme: currentTheme,
+            onChange: (value) => {
+                hasUnsavedChanges = value !== originalContent;
+                updateSaveButton();
+            }
+        });
+        
+        // Force adjustment after creation
+        setTimeout(() => {
+            if (editor) {
+                editor.adjustHeight();
+                editor.updateLineNumbers();
+            }
+        }, 100);
+        
+        // Focus editor
+        if (!{{ 'true' if is_running else 'false' }}) {
+            editor.focus();
+        }
+    }, 50);
+});
+
+// Save strategy
+async function saveStrategy() {
+    if ({{ 'true' if is_running else 'false' }}) {
+        showToast('Cannot save while strategy is running', 'warning');
+        return;
+    }
+    
+    const content = editor.getValue();
+    
+    try {
+        const response = await fetch('{{ url_for("python_strategy_bp.save_strategy", strategy_id=strategy_id) }}', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({ content: content })
+        });
+        
+        if (!response.ok) {
+            console.error('Save failed with status:', response.status);
+            const errorText = await response.text();
+            console.error('Error response:', errorText);
+            
+            try {
+                const errorData = JSON.parse(errorText);
+                showToast(errorData.message || `Failed to save (${response.status})`, 'error');
+            } catch {
+                showToast(`Failed to save: ${response.status} ${response.statusText}`, 'error');
+            }
+            return;
+        }
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            originalContent = content;
+            hasUnsavedChanges = false;
+            updateSaveButton();
+            showToast(data.message, 'success');
+        } else {
+            showToast(data.message || 'Failed to save', 'error');
+        }
+    } catch (error) {
+        console.error('Save error:', error);
+        showToast('Error saving strategy: ' + error.message, 'error');
+    }
+}
+
+// Reset changes - open modal
+function resetChanges() {
+    if (!hasUnsavedChanges) return;
+    reset_modal.showModal();
+}
+
+// Confirm reset action
+function confirmReset() {
+    reset_modal.close();
+    editor.setValue(originalContent);
+    hasUnsavedChanges = false;
+    updateSaveButton();
+    showToast('Changes discarded', 'info');
+}
+
+// Update save button state
+function updateSaveButton() {
+    const saveBtn = document.querySelector('button[onclick="saveStrategy()"]');
+    if (saveBtn) {
+        if (hasUnsavedChanges) {
+            saveBtn.classList.remove('btn-ghost');
+            saveBtn.classList.add('btn-primary');
+        } else {
+            saveBtn.classList.remove('btn-primary');
+            saveBtn.classList.add('btn-ghost');
+        }
+    }
+}
+
+// Export current content (including unsaved changes)
+function exportCurrentContent() {
+    const content = editor.getValue();
+    const filename = '{{ file_info.name }}';
+    
+    // Create a blob with the content
+    const blob = new Blob([content], { type: 'text/x-python;charset=utf-8' });
+    
+    // Create download link
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    
+    // Trigger download
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    // Clean up
+    URL.revokeObjectURL(link.href);
+    
+    showToast('Strategy exported successfully', 'success');
+}
+
+// Toggle theme
+function toggleTheme() {
+    currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    localStorage.setItem('editorTheme', currentTheme);
+    
+    // Simply update theme on existing editor
+    editor.setTheme(currentTheme);
+}
+
+// Toggle fullscreen
+function toggleFullscreen() {
+    const editorCard = document.querySelector('.card.bg-base-100');
+    
+    if (!document.fullscreenElement) {
+        editorCard.requestFullscreen().catch(err => {
+            showToast('Error entering fullscreen: ' + err.message, 'error');
+        });
+    } else {
+        document.exitFullscreen();
+    }
+}
+
+// Keyboard shortcuts
+document.addEventListener('keydown', (e) => {
+    // Ctrl+S to save
+    if (e.ctrlKey && e.key === 's') {
+        e.preventDefault();
+        if (!{{ 'true' if is_running else 'false' }}) {
+            saveStrategy();
+        }
+    }
+    
+    // F11 for fullscreen
+    if (e.key === 'F11') {
+        e.preventDefault();
+        toggleFullscreen();
+    }
+});
+
+// Warn before leaving with unsaved changes
+window.addEventListener('beforeunload', (e) => {
+    if (hasUnsavedChanges) {
+        e.preventDefault();
+        e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
+    }
+});
+</script>
+
+<style>
+/* Fullscreen styles */
+.card.bg-base-100:fullscreen {
+    padding: 2rem;
+    background: oklch(var(--b1));
+}
+
+.card.bg-base-100:fullscreen #editor-container {
+    height: calc(100vh - 4rem);
+}
+
+/* Save button pulse animation when unsaved */
+.btn-primary:not(.btn-ghost) {
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.8;
+    }
+}
+</style>
+{% endblock %}

@@ -1,0 +1,567 @@
+
+{% extends "base.html" %}
+
+{% block title %}{{ strategy.name }} - Strategy Details{% endblock %}
+
+{% block content %}
+<!-- Delete Strategy Confirmation Modal -->
+<dialog id="delete_strategy_modal" class="modal modal-bottom sm:modal-middle">
+    <form method="dialog" class="modal-box">
+        <h3 class="font-bold text-lg text-error">Delete Strategy</h3>
+        <p class="py-4">Are you sure you want to delete this strategy? This action cannot be undone.</p>
+        <div class="modal-action">
+            <button class="btn" id="cancel_strategy_delete">Cancel</button>
+            <button class="btn btn-error" id="confirm_strategy_delete">Delete Strategy</button>
+        </div>
+    </form>
+    <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+    </form>
+</dialog>
+
+<div class="container mx-auto px-4 py-8">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold">{{ strategy.name }}</h1>
+        <div class="space-x-2">
+            <a href="{{ url_for('strategy_bp.configure_symbols', strategy_id=strategy.id) }}" class="btn">
+                Configure Symbols
+            </a>
+            <a href="{{ url_for('strategy_bp.index') }}" class="btn">
+                Back to Strategies
+            </a>
+        </div>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-2">
+        <!-- Left Column -->
+        <div class="space-y-6">
+            <!-- Strategy Details -->
+            <div class="card bg-base-100 shadow-xl">
+                <div class="card-body">
+                    <h2 class="card-title">Strategy Details</h2>
+                    
+                    <div class="stats stats-vertical shadow">
+                        <div class="stat">
+                            <div class="stat-title">Status</div>
+                            <div class="stat-value text-sm">
+                                <div class="badge {% if strategy.is_active %}badge-success{% else %}badge-error{% endif %} gap-2">
+                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="w-4 h-4 stroke-current">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    </svg>
+                                    {{ 'Active' if strategy.is_active else 'Inactive' }}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="stat">
+                            <div class="stat-title">Type</div>
+                            <div class="stat-value text-sm">
+                                {{ 'Intraday' if strategy.is_intraday else 'Positional' }}
+                            </div>
+                        </div>
+
+                        <div class="stat">
+                            <div class="stat-title">Trading Mode</div>
+                            <div class="stat-value text-sm">
+                                {{ strategy.trading_mode }}
+                            </div>
+                        </div>
+
+                        {% if strategy.is_intraday %}
+                        <div class="stat">
+                            <div class="stat-title">Trading Hours</div>
+                            <div class="stat-value text-sm">
+                                {{ strategy.start_time }} - {{ strategy.end_time }}
+                            </div>
+                        </div>
+
+                        <div class="stat">
+                            <div class="stat-title">Square Off Time</div>
+                            <div class="stat-value text-sm">
+                                {{ strategy.squareoff_time }}
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        <div class="stat">
+                            <div class="stat-title">Created At</div>
+                            <div class="stat-value text-sm">
+                                {{ strategy.created_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card-actions justify-end mt-4 space-y-2">
+                        <form method="POST" action="{{ url_for('strategy_bp.toggle_strategy_route', strategy_id=strategy.id) }}" class="w-full">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                            <button type="submit" class="btn btn-primary btn-block">
+                                {{ 'Deactivate' if strategy.is_active else 'Activate' }} Strategy
+                            </button>
+                        </form>
+                        <button class="btn btn-error btn-block" onclick="document.getElementById('delete_strategy_modal').showModal()">
+                            Delete Strategy
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            {% if strategy.platform == 'tradingview' %}
+            {% endif %}
+
+            <!-- Important Notes -->
+            <div class="alert alert-warning shadow-lg">
+                <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                <div>
+                    <h3 class="font-bold">Important Notes</h3>
+                    <ul class="list-disc list-inside text-sm mt-2 space-y-1">
+                        <li>Keep your webhook URL private</li>
+                        <li>Test with small quantities first</li>
+                        <li>Monitor the first few alerts</li>
+                        {% if strategy.is_intraday %}
+                        <li>Orders only placed during trading hours</li>
+                        <li>Positions squared off at {{ strategy.squareoff_time }}</li>
+                        {% endif %}
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Webhook Request Format -->
+            <div class="card bg-base-100 shadow-xl">
+                <div class="card-body">
+                    <h2 class="card-title text-primary">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-primary shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        Webhook Request Format
+                    </h2>
+                    
+                    <div class="text-sm space-y-4">
+                        <div class="alert bg-base-200/50">
+                            <div class="badge badge-primary">POST</div>
+                            <span class="ml-2">Send a request to your webhook URL with this JSON body:</span>
+                        </div>
+
+                        <div class="mockup-code" id="webhookUrlSample">
+                            <pre><code>{
+  <span class="text-success">"symbol"</span>: <span class="text-info">"SYMBOL"</span>,
+  <span class="text-success">"action"</span>: <span class="text-info">"BUY|SELL"</span>{% if strategy.trading_mode == 'BOTH' %},
+  <span class="text-success">"position_size"</span>: <span class="text-info">"0"</span>{% endif %}
+}</code></pre>
+                        </div>
+
+                        <div class="divider">Trading Instructions</div>
+
+                        {% if strategy.trading_mode == 'LONG' %}
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="alert bg-success/10">
+                                <div class="badge badge-success">ENTRY</div>
+                                <span class="ml-2">Use "BUY" to enter positions</span>
+                            </div>
+                            <div class="alert bg-error/10">
+                                <div class="badge badge-error">EXIT</div>
+                                <span class="ml-2">Use "SELL" to exit positions</span>
+                            </div>
+                        </div>
+                        {% elif strategy.trading_mode == 'SHORT' %}
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="alert bg-success/10">
+                                <div class="badge badge-success">ENTRY</div>
+                                <span class="ml-2">Use "SELL" to enter positions</span>
+                            </div>
+                            <div class="alert bg-error/10">
+                                <div class="badge badge-error">EXIT</div>
+                                <span class="ml-2">Use "BUY" to exit positions</span>
+                            </div>
+                        </div>
+                        {% else %}
+                        <div class="grid gap-4">
+                            <div class="alert alert-info shadow-lg">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                <span>Position size is required for all orders</span>
+                            </div>
+                            <div class="overflow-x-auto">
+                                <table class="table table-zebra bg-base-200/50">
+                                    <thead>
+                                        <tr>
+                                            <th>Action</th>
+                                            <th>Position Size</th>
+                                            <th>Type</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr>
+                                            <td><div class="badge badge-success">BUY</div></td>
+                                            <td>> 0</td>
+                                            <td>Regular long entry</td>
+                                        </tr>
+                                        <tr>
+                                            <td><div class="badge badge-error">SELL</div></td>
+                                            <td>= 0</td>
+                                            <td>Smart long exit</td>
+                                        </tr>
+                                        <tr>
+                                            <td><div class="badge badge-success">SELL</div></td>
+                                            <td>< 0</td>
+                                            <td>Regular short entry</td>
+                                        </tr>
+                                        <tr>
+                                            <td><div class="badge badge-error">BUY</div></td>
+                                            <td>= 0</td>
+                                            <td>Smart short exit</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column -->
+        <div class="space-y-6">
+            <!-- Webhook Configuration -->
+            <div class="card bg-base-100 shadow-xl">
+                <div class="card-body">
+                    <h2 class="text-2xl font-bold mb-6">Webhook Configuration</h2>
+                    
+                    <div class="space-y-4">
+                        <div>
+                            <label class="label">
+                                <span class="label-text">Webhook URL</span>
+                                <span class="label-text-alt">Click to copy</span>
+                            </label>
+                            <div class="mockup-code webhook-url-container" id="webhookUrl">
+                                <pre><code>{{ request.host_url }}strategy/webhook/{{ strategy.webhook_id }}</code></pre>
+                                <div class="absolute right-2 top-1/2 -translate-y-1/2 text-sm opacity-70 hidden copy-hint">
+                                    <span class="badge badge-neutral dark:badge-primary">Copied!</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        {% if strategy.platform != 'tradingview' %}
+                        <!-- Collapsible Credentials Section -->
+                        <div class="collapse bg-base-200 rounded-box">
+                            <input type="checkbox" id="credentialsCollapse" /> 
+                            <div class="collapse-title font-medium">
+                                <div class="flex items-center gap-2">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                                    </svg>
+                                    Click to Show/Hide Credentials
+                                </div>
+                            </div>
+                            <div class="collapse-content"> 
+                                <!-- Host URL -->
+                                <div class="mt-4">
+                                    <label class="label">
+                                        <span class="label-text">Host URL</span>
+                                        <span class="label-text-alt">Click to copy</span>
+                                    </label>
+                                    <div class="mockup-code host-url-container" id="hostUrl">
+                                        <pre><code>{{ request.host_url }}</code></pre>
+                                        <div class="absolute right-2 top-1/2 -translate-y-1/2 text-sm opacity-70 hidden copy-hint">
+                                            <span class="badge badge-neutral dark:badge-primary">Copied!</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Webhook ID -->
+                                <div class="mt-4">
+                                    <label class="label">
+                                        <span class="label-text">Webhook ID</span>
+                                        <span class="label-text-alt">Click to copy</span>
+                                    </label>
+                                    <div class="mockup-code webhook-id-container" id="webhookId">
+                                        <pre><code>{{ strategy.webhook_id }}</code></pre>
+                                        <div class="absolute right-2 top-1/2 -translate-y-1/2 text-sm opacity-70 hidden copy-hint">
+                                            <span class="badge badge-neutral dark:badge-primary">Copied!</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Symbol Mappings -->
+            <div class="card bg-base-100 shadow-xl mt-4">
+                <div class="card-body">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="card-title">Symbol Mappings</h2>
+                        <a href="{{ url_for('strategy_bp.configure_symbols', strategy_id=strategy.id) }}" class="btn btn-sm">
+                            Configure
+                        </a>
+                    </div>
+                    
+                    {% if symbol_mappings %}
+                    <div class="overflow-x-auto">
+                        <table class="table table-zebra w-full">
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Exchange</th>
+                                    <th>Quantity</th>
+                                    <th>Product</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for mapping in symbol_mappings %}
+                                <tr>
+                                    <td>{{ mapping.symbol }}</td>
+                                    <td><div class="badge badge-ghost">{{ mapping.exchange }}</div></td>
+                                    <td>{{ mapping.quantity }}</td>
+                                    <td>{{ mapping.product_type }}</td>
+                                    <td>
+                                        <button class="btn btn-sm btn-ghost btn-square" onclick="copySymbolJson('{{ mapping.symbol }}', '{{ strategy.trading_mode }}')">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                            </svg>
+                                        </button>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <div class="alert alert-info">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                        <div>
+                            <h3 class="font-bold">No symbols configured</h3>
+                            <div class="text-sm">Configure symbols to start trading</div>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if strategy.platform == 'tradingview' %}
+            <!-- TradingView Message Format -->
+            <div class="card bg-base-100 shadow-xl mt-4">
+                <div class="card-body">
+                    <h2 class="card-title text-primary">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-primary shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                        </svg>
+                        TradingView Message Format
+                    </h2>
+                    <div class="mockup-code">
+                        <pre><code>{
+    "symbol": "openalgo_symbol",
+    "action": "{{'{{'}}strategy.order.action}}",{% if strategy.trading_mode == 'BOTH' %}
+    "position_size": "{{'{{'}}strategy.position_size}}"{% endif %}
+}</code></pre>
+                    </div>
+                    <div class="alert bg-info/10 mt-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-info shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        <div>
+                            <h3 class="font-bold">Setup Instructions</h3>
+                            <ol class="list-decimal list-inside mt-2 space-y-1">
+                                <li>Login to TradingView</li>
+                                <li>Open your strategy/indicator</li>
+                                <li>Click "Create Alert" button</li>
+                                <li>Set "Alert name" that includes the action keyword</li>
+                                <li>Set "Message" to the above JSON format</li>
+                                <li>Set "Webhook URL" to the URL provided above</li>
+                                <li>Configure other alert settings as needed</li>
+                                <li>Click "Create" button</li>
+                                <li>Test your alert by triggering it manually</li>
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const csrfTokenInput = document.querySelector('input[name="csrf_token"]');
+    const csrfToken = csrfTokenInput ? csrfTokenInput.value : null;
+
+    if (!csrfToken && document.getElementById('confirm_strategy_delete')) {
+        console.error('CSRF token not found! Strategy deletion and other protected actions may fail.');
+        if (typeof showToast === 'function') showToast('error', 'Security token missing. Actions may fail.');
+    }
+
+    const confirmDeleteButton = document.getElementById('confirm_strategy_delete');
+    if (confirmDeleteButton) {
+        confirmDeleteButton.addEventListener('click', function() {
+            if (!csrfToken) {
+                console.error('CSRF token is missing, cannot delete strategy.');
+                if (typeof showToast === 'function') showToast('error', 'Error: CSRF token missing.');
+                return;
+            }
+            fetch(`{{ url_for('strategy_bp.delete_strategy_route', strategy_id=strategy.id) }}`,
+            {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'X-CSRFToken': csrfToken
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    window.location.href = "{{ url_for('strategy_bp.index') }}";
+                } else {
+                    if (typeof showToast === 'function') showToast('error', data.message || data.error || 'Error deleting strategy');
+                    else alert(data.message || data.error || 'Error deleting strategy');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                if (typeof showToast === 'function') showToast('error', 'Error deleting strategy');
+                else alert('Error deleting strategy');
+            });
+        });
+    }
+
+    // Existing DOMContentLoaded content starts below
+    const webhookUrlContainer = document.getElementById('webhookUrl');
+    // Initialize copy functionality for all copyable containers
+    const copyableContainers = [
+        { id: 'webhookUrl', label: 'Webhook URL' },
+        { id: 'hostUrl', label: 'Host URL' },
+        { id: 'webhookId', label: 'Webhook ID' }
+    ];
+
+    copyableContainers.forEach(container => {
+        const element = document.getElementById(container.id);
+        if (element) {
+            const copyHint = element.querySelector('.copy-hint');
+            const code = element.querySelector('code');
+
+            element.addEventListener('click', function() {
+                navigator.clipboard.writeText(code.textContent.trim()).then(() => {
+                    copyHint.classList.remove('hidden');
+                    setTimeout(() => copyHint.classList.add('hidden'), 2000);
+                    showToast('success', `${container.label} copied to clipboard!`);
+                }).catch(() => {
+                    showToast('error', `Failed to copy ${container.label.toLowerCase()}`);
+                });
+            });
+        }
+    });
+
+});
+
+function showToast(type, message) {
+    const alertClass = type === 'success' ? 'alert-success' : 'alert-error';
+    const icon = type === 'success' ? 
+        '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>' :
+        '<svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>';
+
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-end z-50';
+    toast.innerHTML = `
+        <div class="alert ${alertClass}">
+            ${icon}
+            <span>${message}</span>
+        </div>
+    `;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+}
+
+function copySymbolJson(symbol, tradingMode) {
+    let json = {
+        "symbol": symbol,
+        "action": "{{'{{'}}strategy.order.action}}"
+    };
+    if (tradingMode === 'BOTH') {
+        json.position_size = "{{'{{'}}strategy.position_size}}";
+    }
+    navigator.clipboard.writeText(JSON.stringify(json, null, 4));
+    
+    // Show toast notification
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-top toast-end';
+    toast.innerHTML = `
+        <div class="alert alert-success">
+            <span>JSON copied for ${symbol}</span>
+        </div>
+    `;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+}
+</script>
+{% endblock %}
+
+{% block styles %}
+<style>
+#webhookUrl {
+    cursor: pointer;
+    position: relative;
+    transition: all 0.2s ease;
+}
+
+#webhookUrl:hover {
+    opacity: 0.95;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+#webhookUrl pre {
+    margin: 0;
+    background: transparent;
+    padding: 1rem;
+}
+
+#webhookUrl code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.copy-hint {
+    z-index: 10;
+}
+
+.copy-hint .badge {
+    font-size: 0.75rem;
+    padding: 0.5rem 1rem;
+}
+
+.mockup-code .text-success {
+    color: #4ade80 !important;
+}
+
+.mockup-code .text-info {
+    color: #60a5fa !important;
+}
+
+/* Theme-specific styles */
+[data-theme="light"] .mockup-code,
+[data-theme="garden"] .mockup-code {
+    background-color: #1a1a1a !important;
+    color: #ffffff !important;
+}
+
+[data-theme="light"] .mockup-code .badge,
+[data-theme="garden"] .mockup-code .badge {
+    background-color: #ffffff !important;
+    color: #1a1a1a !important;
+}
+
+[data-theme="dark"] .mockup-code {
+    background-color: hsl(var(--p)) !important;
+    color: hsl(var(--pc)) !important;
+}
+
+.toast {
+    position: fixed;
+    bottom: 1rem;
+    right: 1rem;
+    z-index: 1000;
+}
+</style>
+{% endblock %}
+{% endblock %}

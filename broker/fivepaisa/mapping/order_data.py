@@ -3,6 +3,10 @@ import re
 from datetime import datetime, timedelta
 from database.token_db import get_symbol, get_oa_symbol 
 from broker.fivepaisa.mapping.transform_data import reverse_map_exchange
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def convert_date_string(date_str):
     # Extract the timestamp and timezone offset using regular expressions
@@ -34,31 +38,29 @@ def map_order_data(order_data):
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
-        # Check if 'data' is None
+    # Check if 'data' is None
     if order_data['body']['OrderBookDetail'] is None:
         # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data['body']['OrderBookDetail']
-        
-
 
     if order_data:
         for order in order_data:
+            # CRITICAL FIX: Ensure BrokerOrderId is always stored as a string to maintain consistent comparison
+            if 'BrokerOrderId' in order:
+                order['BrokerOrderId'] = str(order['BrokerOrderId'])
+
             # Extract the instrument_token and exchange for the current order
             symboltoken = order['ScripCode']
             Exch = order['Exch']
             ExchType = order['ExchType']
 
-            exchange = reverse_map_exchange(Exch,ExchType)
-            
+            exchange = reverse_map_exchange(Exch, ExchType)
             
             # Use the get_symbol function to fetch the symbol from the database
             symbol_from_db = get_symbol(symboltoken, exchange)
-            
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol_from_db:
@@ -73,7 +75,7 @@ def map_order_data(order_data):
                 elif order['Exch'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['DelvIntra'] == 'D':
                     order['DelvIntra'] = 'NRML'
             else:
-                print(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
+                logger.info(f"Symbol not found for token {{symboltoken}} and exchange {exchange}. Keeping original trading symbol.")
                 
     return order_data
 
@@ -91,7 +93,7 @@ def calculate_order_statistics(order_data):
     """
     # Initialize counters
     total_buy_orders = total_sell_orders = 0
-    total_completed_orders = total_open_orders = total_rejected_orders = 0
+    total_completed_orders = total_open_orders = total_rejected_orders = total_cancelled_orders = 0
 
     if order_data:
         for order in order_data:
@@ -104,15 +106,21 @@ def calculate_order_statistics(order_data):
                 order['BuySell'] = 'SELL'
             
             # Count orders based on their status
-            if order['OrderStatus'] == 'Fully Executed':
+            status = order['OrderStatus'].strip() if order['OrderStatus'] else ''
+            
+            # Normalize status to standardized values
+            if status == 'Fully Executed':
                 total_completed_orders += 1
                 order['OrderStatus'] = 'complete'
-            elif order['OrderStatus'] == 'Pending' or order['OrderStatus'] == 'Modified':
+            elif status in ['Pending', 'Modified', 'Open']:
                 total_open_orders += 1
                 order['OrderStatus'] = 'open'
-            elif order['OrderStatus'] == 'Rejected By 5P' or order['OrderStatus'] == 'Rejected by Exch' or order['OrderStatus'] == 'Rejected by Exch    ':
+            elif 'Rejected' in status:
                 total_rejected_orders += 1
                 order['OrderStatus'] = 'rejected'
+            elif status == 'Cancelled':
+                total_cancelled_orders += 1
+                order['OrderStatus'] = 'cancelled'
 
     # Compile and return the statistics
     return {
@@ -120,7 +128,8 @@ def calculate_order_statistics(order_data):
         'total_sell_orders': total_sell_orders,
         'total_completed_orders': total_completed_orders,
         'total_open_orders': total_open_orders,
-        'total_rejected_orders': total_rejected_orders
+        'total_rejected_orders': total_rejected_orders,
+        'total_cancelled_orders': total_cancelled_orders
     }
 
 
@@ -135,36 +144,50 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
+            logger.warning(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
 
         pricetype = ""
 
-        stoplevel = float(order.get('SLTriggerRate'))
+        # Handle potential null/None SLTriggerRate safely
+        sl_trigger_rate = order.get('SLTriggerRate', 0)
+        stoplevel = float(sl_trigger_rate) if sl_trigger_rate is not None else 0
 
-        if order.get("AtMarket") == 'Y' and stoplevel ==0:
+        if order.get("AtMarket") == 'Y' and stoplevel == 0:
             pricetype = "MARKET"
-        if order.get("AtMarket") == 'N' and stoplevel ==0:
+        elif order.get("AtMarket") == 'N' and stoplevel == 0:
+            pricetype = "LIMIT"
+        elif order.get("AtMarket") == 'Y' and stoplevel > 0:
+            pricetype = "SL-M"
+        elif order.get("AtMarket") == 'N' and stoplevel > 0:
+            pricetype = "SL"
+        else:
+            # Default to LIMIT for any other scenario
             pricetype = "LIMIT"
 
-        if order.get("AtMarket") == 'Y' and stoplevel >0:
-            pricetype = "SL-M"
-        if order.get("AtMarket") == 'N' and stoplevel >0:
-            pricetype = "SL"
+        # Extract quantity based on availability (TradedQty or PendingQty)
+        quantity = order.get("TradedQty", 0)
+        # If TradedQty is 0 but there's a PendingQty, use that instead for rejected/canceled orders
+        if quantity == 0 and order.get("Qty") is not None:
+            quantity = order.get("Qty")
 
+        # CRITICAL FIX: Ensure BrokerOrderId is properly converted to string consistently
+        # This ensures the same format is used when comparing in the orderstatus endpoint
+        orderid = str(order.get("BrokerOrderId", ""))
 
         transformed_order = {
             "symbol": order.get("ScripName", ""),
             "exchange": order.get("Exch", ""),
             "action": order.get("BuySell", ""),
-            "quantity": order.get("TradedQty", 0),
+            "quantity": quantity,
             "price": order.get("Rate", 0.0),
-            "trigger_price": order.get("SLTriggerRate", 0.0),
+            "trigger_price": stoplevel,
             "pricetype": pricetype,
             "product": order.get("DelvIntra", ""),
-            "orderid": order.get("ExchOrderID", ""),
+            "orderid": orderid,  # String formatted order ID
             "order_status": order.get("OrderStatus", ""),
-            "timestamp": convert_date_string(order.get("BrokerOrderTime", ""))
+            "timestamp": convert_date_string(order.get("BrokerOrderTime", "")),
+            "reason": order.get("Reason", "")  # Add rejection reason if present
         }
 
         transformed_orders.append(transformed_order)
@@ -188,7 +211,7 @@ def map_trade_data(trade_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         trade_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         trade_data = trade_data['body']['TradeBookDetail']
@@ -228,7 +251,7 @@ def map_trade_data(trade_data):
                     order['BuySell'] = 'SELL'
                 
             else:
-                print(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
+                logger.info(f"Symbol not found for token {{symboltoken}} and exchange {exchange}. Keeping original trading symbol.")
           
     return trade_data
 
@@ -276,12 +299,12 @@ def map_position_data(position_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         position_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         position_data = position_data['body']['NetPositionDetail'] 
         
-    print(position_data)
+    logger.info(f"{position_data}")
 
     if position_data:
         for position in position_data:
@@ -313,7 +336,7 @@ def map_position_data(position_data):
              
                 
             else:
-                print(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
+                logger.info(f"Symbol not found for token {{symboltoken}} and exchange {exchange}. Keeping original trading symbol.")
           
     return position_data
 
@@ -356,7 +379,7 @@ def map_portfolio_data(portfolio_data):
     """
     # Check if 'data' is None or doesn't contain 'holdings'
     if portfolio_data['body']['Data'] is None:
-        print("No data available.")
+        logger.info("No data available.")
         # Return an empty structure or handle this scenario as needed
         return {}
 

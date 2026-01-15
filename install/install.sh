@@ -67,16 +67,63 @@ check_timezone() {
     fi
 }
 
+# Function to wait for dpkg lock to be released (Ubuntu/Debian)
+wait_for_dpkg_lock() {
+    local max_wait=300  # 5 minutes max wait
+    local waited=0
+
+    while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+          sudo fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
+          sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+
+        if [ $waited -eq 0 ]; then
+            log_message "Package manager is locked (unattended-upgrades running)" "$YELLOW"
+            log_message "Waiting for it to complete... (max 5 minutes)" "$YELLOW"
+        fi
+
+        if [ $waited -ge $max_wait ]; then
+            log_message "Timeout waiting for package manager lock" "$RED"
+            log_message "Please run: sudo killall unattended-upgr && sudo rm /var/lib/dpkg/lock*" "$YELLOW"
+            exit 1
+        fi
+
+        printf "."
+        sleep 5
+        waited=$((waited + 5))
+    done
+
+    if [ $waited -gt 0 ]; then
+        echo ""
+        log_message "Package manager is now available" "$GREEN"
+    fi
+}
+
 # Function to generate random hex string
 generate_hex() {
-    python3 -c "import secrets; print(secrets.token_hex(32))"
+    $PYTHON_CMD -c "import secrets; print(secrets.token_hex(32))"
 }
+
+
+
 
 # Function to validate broker name
 validate_broker() {
     local broker=$1
-    local valid_brokers="fivepaisa,aliceblue,angel,dhan,fyers,icici,kotak,shoonya,upstox,zebu,zerodha"
+
+    local valid_brokers="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
+
     if [[ $valid_brokers == *"$broker"* ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Function to check if broker is XTS based
+is_xts_broker() {
+    local broker=$1
+    local xts_brokers="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,wisdom"
+    if [[ $xts_brokers == *"$broker"* ]]; then
         return 0
     else
         return 1
@@ -118,9 +165,163 @@ handle_existing() {
     return 0
 }
 
+# Function to check and configure swap memory
+check_and_configure_swap() {
+    # Get total RAM in MB
+    TOTAL_RAM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+    TOTAL_RAM_MB=$((TOTAL_RAM_KB / 1024))
+    TOTAL_RAM_GB=$((TOTAL_RAM_MB / 1024))
+    
+    log_message "System RAM: ${TOTAL_RAM_MB}MB (${TOTAL_RAM_GB}GB)" "$BLUE"
+    
+    # Check if RAM is less than 2GB
+    if [ $TOTAL_RAM_MB -lt 2048 ]; then
+        log_message "System has less than 2GB RAM. Checking swap configuration..." "$YELLOW"
+        
+        # Check current swap
+        SWAP_TOTAL=$(free -m | grep Swap | awk '{print $2}')
+        log_message "Current swap: ${SWAP_TOTAL}MB" "$BLUE"
+        
+        if [ $SWAP_TOTAL -lt 3072 ]; then
+            log_message "Insufficient swap memory. Creating 3GB swap file..." "$YELLOW"
+            
+            # Check available disk space
+            AVAILABLE_SPACE=$(df / | tail -1 | awk '{print $4}')
+            REQUIRED_SPACE=3145728  # 3GB in KB
+            
+            if [ $AVAILABLE_SPACE -lt $REQUIRED_SPACE ]; then
+                log_message "Error: Not enough disk space for swap file" "$RED"
+                log_message "Available: ${AVAILABLE_SPACE}KB, Required: ${REQUIRED_SPACE}KB" "$RED"
+                exit 1
+            fi
+            
+            # Create swap file
+            log_message "Creating 3GB swap file at /swapfile..." "$BLUE"
+            sudo fallocate -l 3G /swapfile
+            if [ $? -ne 0 ]; then
+                # Fallback to dd if fallocate fails
+                log_message "fallocate failed, using dd instead..." "$YELLOW"
+                sudo dd if=/dev/zero of=/swapfile bs=1M count=3072 status=progress
+            fi
+            check_status "Failed to create swap file"
+            
+            # Set permissions
+            sudo chmod 600 /swapfile
+            check_status "Failed to set swap file permissions"
+            
+            # Setup swap
+            sudo mkswap /swapfile
+            check_status "Failed to setup swap"
+            
+            # Enable swap
+            sudo swapon /swapfile
+            check_status "Failed to enable swap"
+            
+            # Make swap permanent
+            if ! grep -q "/swapfile" /etc/fstab; then
+                echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab
+                log_message "Swap file added to /etc/fstab for persistence" "$GREEN"
+            fi
+            
+            # Verify swap is active
+            NEW_SWAP=$(free -m | grep Swap | awk '{print $2}')
+            log_message "Swap configured successfully. Total swap: ${NEW_SWAP}MB" "$GREEN"
+            
+            # Configure swappiness for better performance
+            sudo sysctl vm.swappiness=10
+            echo "vm.swappiness=10" | sudo tee -a /etc/sysctl.conf
+            log_message "Swappiness set to 10 for better performance" "$GREEN"
+        else
+            log_message "Sufficient swap already exists: ${SWAP_TOTAL}MB" "$GREEN"
+        fi
+    else
+        log_message "System has sufficient RAM (${TOTAL_RAM_GB}GB)" "$GREEN"
+        
+        # Still check swap for optimal performance
+        SWAP_TOTAL=$(free -m | grep Swap | awk '{print $2}')
+        if [ $SWAP_TOTAL -eq 0 ]; then
+            log_message "No swap configured. Consider adding swap for optimal performance." "$YELLOW"
+        else
+            log_message "Swap configured: ${SWAP_TOTAL}MB" "$GREEN"
+        fi
+    fi
+}
+
 # Start logging
 log_message "Starting OpenAlgo installation log at: $LOG_FILE" "$BLUE"
 log_message "----------------------------------------" "$BLUE"
+
+# Detect OS type and version
+OS_TYPE=$(grep -w "ID" /etc/os-release | cut -d "=" -f 2 | tr -d '"')
+
+# Handle OS variants - map to base distributions
+case "$OS_TYPE" in
+    "pop")
+        OS_TYPE="ubuntu"
+        log_message "Detected Pop!_OS, using Ubuntu packages" "$BLUE"
+        ;;
+    "linuxmint")
+        OS_TYPE="ubuntu"
+        log_message "Detected Linux Mint, using Ubuntu packages" "$BLUE"
+        ;;
+    "zorin")
+        OS_TYPE="ubuntu"
+        log_message "Detected Zorin OS, using Ubuntu packages" "$BLUE"
+        ;;
+    "manjaro" | "manjaro-arm" | "endeavouros" | "cachyos")
+        OS_TYPE="arch"
+        log_message "Detected $OS_TYPE, using Arch Linux packages" "$BLUE"
+        ;;
+    "rocky" | "almalinux" | "ol")
+        OS_TYPE="rhel"
+        log_message "Detected $OS_TYPE, using RHEL-compatible packages" "$BLUE"
+        ;;
+esac
+
+# Get OS version
+if [ "$OS_TYPE" = "arch" ]; then
+    OS_VERSION="rolling"
+else
+    OS_VERSION=$(grep -w "VERSION_ID" /etc/os-release | cut -d "=" -f 2 | tr -d '"')
+fi
+
+# Validate supported OS
+case "$OS_TYPE" in
+    arch | ubuntu | debian | raspbian | centos | fedora | rhel | rocky | almalinux | amzn)
+        log_message "Detected OS: $OS_TYPE $OS_VERSION" "$GREEN"
+        ;;
+    *)
+        log_message "Error: Unsupported operating system: $OS_TYPE" "$RED"
+        log_message "Supported: Ubuntu, Debian, Raspbian, CentOS, Fedora, RHEL, Rocky, AlmaLinux, Amazon Linux, Arch Linux" "$YELLOW"
+        exit 1
+        ;;
+esac
+
+# Detect web server user and Python command based on OS
+case "$OS_TYPE" in
+    ubuntu | debian | raspbian)
+        WEB_USER="www-data"
+        WEB_GROUP="www-data"
+        PYTHON_CMD="python3"
+        ;;
+    centos | fedora | rhel | amzn)
+        WEB_USER="nginx"
+        WEB_GROUP="nginx"
+        PYTHON_CMD="python3"
+        ;;
+    arch)
+        WEB_USER="http"
+        WEB_GROUP="http"
+        PYTHON_CMD="python"
+        ;;
+esac
+
+log_message "Web server user: $WEB_USER:$WEB_GROUP" "$BLUE"
+log_message "Python command: $PYTHON_CMD" "$BLUE"
+
+# Check system requirements (RAM and swap)
+log_message "Checking system requirements..." "$BLUE"
+check_and_configure_swap
 
 # Check timezone before proceeding with installation
 check_timezone
@@ -153,7 +354,9 @@ done
 
 # Get broker name
 while true; do
-    log_message "\nValid brokers: fivepaisa, aliceblue, angel, dhan, firstock,flattrade, fyers, icici, kotak, shoonya, upstox, zebu, zerodha" "$BLUE"
+
+    log_message "\nValid brokers: fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha" "$BLUE"
+
     read -p "Enter your broker name: " BROKER_NAME
     if validate_broker "$BROKER_NAME"; then
         break
@@ -178,6 +381,20 @@ if [ -z "$BROKER_API_KEY" ] || [ -z "$BROKER_API_SECRET" ]; then
     exit 1
 fi
 
+# Check if the broker is XTS-based and ask for additional credentials if needed
+BROKER_API_KEY_MARKET=""
+BROKER_API_SECRET_MARKET=""
+if is_xts_broker "$BROKER_NAME"; then
+    log_message "\nThis broker ($BROKER_NAME) is XTS API-based and requires additional market data credentials." "$YELLOW"
+    read -p "Enter your broker market data API key: " BROKER_API_KEY_MARKET
+    read -p "Enter your broker market data API secret: " BROKER_API_SECRET_MARKET
+    
+    if [ -z "$BROKER_API_KEY_MARKET" ] || [ -z "$BROKER_API_SECRET_MARKET" ]; then
+        log_message "Error: Market data API credentials are required for XTS-based brokers" "$RED"
+        exit 1
+    fi
+fi
+
 # Generate random keys
 APP_KEY=$(generate_hex)
 API_KEY_PEPPER=$(generate_hex)
@@ -191,22 +408,199 @@ SOCKET_PATH="$BASE_PATH"
 SOCKET_FILE="$SOCKET_PATH/openalgo.sock"
 SERVICE_NAME="openalgo-$DEPLOY_NAME"
 
+# Set Nginx configuration paths based on OS
+case "$OS_TYPE" in
+    ubuntu | debian | raspbian)
+        NGINX_AVAILABLE="/etc/nginx/sites-available"
+        NGINX_ENABLED="/etc/nginx/sites-enabled"
+        NGINX_CONFIG_MODE="sites"
+        ;;
+    centos | fedora | rhel | amzn | arch)
+        NGINX_AVAILABLE="/etc/nginx/conf.d"
+        NGINX_ENABLED="/etc/nginx/conf.d"
+        NGINX_CONFIG_MODE="confd"
+        # Create conf.d directory if it doesn't exist (Arch Linux)
+        sudo mkdir -p "$NGINX_AVAILABLE"
+        ;;
+esac
+NGINX_CONFIG_FILE="$NGINX_AVAILABLE/$DOMAIN.conf"
+
 log_message "\nStarting OpenAlgo installation for $DEPLOY_NAME..." "$YELLOW"
 
 # Update system packages
 log_message "\nUpdating system packages..." "$BLUE"
-sudo apt-get update && sudo apt-get upgrade -y
-check_status "Failed to update system packages"
+case "$OS_TYPE" in
+    ubuntu | debian | raspbian)
+        # Wait for any running package manager operations to complete
+        wait_for_dpkg_lock
+        sudo apt-get update && sudo apt-get upgrade -y
+        check_status "Failed to update system packages"
+        ;;
+    centos | fedora | rhel | amzn)
+        if ! command -v dnf >/dev/null 2>&1; then
+            sudo yum update -y
+        else
+            sudo dnf update -y
+        fi
+        check_status "Failed to update system packages"
+        ;;
+    arch)
+        sudo pacman -Syu --noconfirm
+        check_status "Failed to update system packages"
+        ;;
+esac
 
 # Install required packages including Certbot
 log_message "\nInstalling required packages..." "$BLUE"
-sudo apt-get install -y python3 python3-venv python3-pip nginx git software-properties-common
-check_status "Failed to install required packages"
+case "$OS_TYPE" in
+    ubuntu | debian | raspbian)
+        # Wait for any running package manager operations to complete
+        wait_for_dpkg_lock
+        sudo apt-get install -y python3 python3-venv python3-pip nginx git software-properties-common
+        # Try to install python3-full if available (Ubuntu 23.04+)
+        sudo apt-get install -y python3-full 2>/dev/null || log_message "python3-full not available, skipping" "$YELLOW"
+        # Try to install snapd, but don't fail if unavailable
+        sudo apt-get install -y snapd 2>/dev/null || log_message "snapd not available, will use pip for uv installation" "$YELLOW"
+        check_status "Failed to install required packages"
+        ;;
+    centos | fedora | rhel | amzn)
+        if ! command -v dnf >/dev/null 2>&1; then
+            sudo yum install -y python3 python3-pip nginx git epel-release
+            # Install SELinux management tools for RHEL-based systems
+            sudo yum install -y policycoreutils-python-utils 2>/dev/null || log_message "SELinux tools already installed" "$YELLOW"
+            # Try to install snapd, but don't fail if unavailable (we use pip for uv anyway)
+            sudo yum install -y snapd 2>/dev/null || log_message "snapd not available, will use pip for uv installation" "$YELLOW"
+        else
+            # Install EPEL repository first for access to additional packages
+            sudo dnf install -y epel-release 2>/dev/null || log_message "EPEL repository already installed or not available" "$YELLOW"
+            sudo dnf install -y python3 python3-pip nginx git
+            # Install SELinux management tools for RHEL-based systems
+            sudo dnf install -y policycoreutils-python-utils 2>/dev/null || log_message "SELinux tools already installed" "$YELLOW"
+            # Try to install snapd, but don't fail if unavailable (we use pip for uv anyway)
+            sudo dnf install -y snapd 2>/dev/null || log_message "snapd not available, will use pip for uv installation" "$YELLOW"
+        fi
+        check_status "Failed to install required packages"
+        # Enable and start snapd if it was successfully installed
+        if command -v snap >/dev/null 2>&1; then
+            sudo systemctl enable --now snapd.socket
+        fi
+        ;;
+    arch)
+        sudo pacman -Sy --noconfirm --needed python python-pip nginx git
+        # Try to install snapd, but don't fail if unavailable (we use pip for uv anyway)
+        sudo pacman -Sy --noconfirm --needed snapd 2>/dev/null || log_message "snapd not available, will use pip for uv installation" "$YELLOW"
+        check_status "Failed to install required packages"
+        # Enable and start snapd if it was successfully installed
+        if command -v snap >/dev/null 2>&1; then
+            sudo systemctl enable --now snapd.socket
+        fi
+        ;;
+esac
+
+# Install uv package installer
+log_message "\nInstalling uv package installer..." "$BLUE"
+case "$OS_TYPE" in
+    ubuntu | debian | raspbian)
+        # Use snap for Ubuntu/Debian (native support)
+        if command -v snap >/dev/null 2>&1; then
+            if [ ! -e /snap ] && [ -d /var/lib/snapd/snap ]; then
+                sudo ln -s /var/lib/snapd/snap /snap
+            fi
+            sleep 2
+            if sudo snap install astral-uv --classic 2>/dev/null; then
+                log_message "uv installed via snap" "$GREEN"
+            else
+                log_message "Snap installation failed, using pip fallback" "$YELLOW"
+                sudo $PYTHON_CMD -m pip install uv
+            fi
+        else
+            sudo $PYTHON_CMD -m pip install uv
+        fi
+        check_status "Failed to install uv"
+        ;;
+    centos | fedora | rhel | amzn)
+        # Use pip for RHEL (more reliable than snap)
+        log_message "Installing uv via pip for better compatibility..." "$BLUE"
+        sudo $PYTHON_CMD -m pip install uv
+        check_status "Failed to install uv"
+        ;;
+    arch)
+        # Try pacman first, then pip with --break-system-packages for Arch
+        log_message "Installing uv for Arch Linux..." "$BLUE"
+        if sudo pacman -Sy --noconfirm --needed python-uv 2>/dev/null; then
+            log_message "uv installed via pacman" "$GREEN"
+        else
+            log_message "uv not available in pacman, using pip..." "$YELLOW"
+            sudo $PYTHON_CMD -m pip install --break-system-packages uv
+            check_status "Failed to install uv"
+        fi
+        ;;
+esac
 
 # Install Certbot
 log_message "\nInstalling Certbot..." "$BLUE"
-sudo apt-get install -y certbot python3-certbot-nginx
-check_status "Failed to install Certbot"
+case "$OS_TYPE" in
+    ubuntu | debian | raspbian)
+        # Wait for any running package manager operations to complete
+        wait_for_dpkg_lock
+        sudo apt-get install -y certbot python3-certbot-nginx
+        check_status "Failed to install Certbot"
+        ;;
+    centos | fedora | rhel | amzn)
+        # Try to install from package manager first
+        CERTBOT_INSTALLED=false
+        if ! command -v dnf >/dev/null 2>&1; then
+            if sudo yum install -y certbot python3-certbot-nginx >/dev/null 2>&1; then
+                CERTBOT_INSTALLED=true
+                log_message "Certbot installed via yum" "$GREEN"
+            fi
+        else
+            if sudo dnf install -y certbot python3-certbot-nginx >/dev/null 2>&1; then
+                CERTBOT_INSTALLED=true
+                log_message "Certbot installed via dnf" "$GREEN"
+            fi
+        fi
+
+        # If package manager installation failed, try snap
+        if [ "$CERTBOT_INSTALLED" = false ]; then
+            log_message "Certbot not available in repositories, trying snap installation..." "$YELLOW"
+            if command -v snap >/dev/null 2>&1; then
+                if sudo snap install --classic certbot >/dev/null 2>&1; then
+                    CERTBOT_INSTALLED=true
+                    # Create symlink if installed via snap
+                    sudo ln -sf /snap/bin/certbot /usr/bin/certbot 2>/dev/null || true
+                    log_message "Certbot installed via snap" "$GREEN"
+                fi
+            fi
+        fi
+
+        # If still not installed, use pip as last resort
+        if [ "$CERTBOT_INSTALLED" = false ]; then
+            log_message "Installing Certbot via pip..." "$YELLOW"
+            sudo $PYTHON_CMD -m pip install certbot certbot-nginx >/dev/null 2>&1
+            if [ $? -eq 0 ]; then
+                CERTBOT_INSTALLED=true
+                log_message "Certbot installed via pip" "$GREEN"
+            fi
+        fi
+
+        if [ "$CERTBOT_INSTALLED" = false ]; then
+            log_message "Failed to install Certbot via all methods" "$RED"
+            exit 1
+        fi
+        ;;
+    arch)
+        sudo pacman -Sy --noconfirm --needed certbot certbot-nginx
+        check_status "Failed to install Certbot"
+        ;;
+esac
+
+# Verify certbot is accessible
+if ! command -v certbot >/dev/null 2>&1; then
+    log_message "Error: Certbot installation failed - command not found" "$RED"
+    exit 1
+fi
+log_message "Certbot installed successfully" "$GREEN"
 
 # Check and handle existing OpenAlgo installation
 handle_existing "$BASE_PATH" "installation directory" "OpenAlgo directory for $DEPLOY_NAME"
@@ -221,19 +615,53 @@ log_message "\nCloning OpenAlgo repository..." "$BLUE"
 sudo git clone https://github.com/marketcalls/openalgo.git $OPENALGO_PATH
 check_status "Failed to clone OpenAlgo repository"
 
-# Create and activate virtual environment
-log_message "\nSetting up Python virtual environment..." "$BLUE"
+# Create virtual environment using uv
+log_message "\nSetting up Python virtual environment with uv..." "$BLUE"
 if [ -d "$VENV_PATH" ]; then
     log_message "Warning: Virtual environment already exists, removing..." "$YELLOW"
     sudo rm -rf "$VENV_PATH"
 fi
-sudo python3 -m venv $VENV_PATH
-check_status "Failed to create virtual environment"
+# Create directory if it doesn't exist
+sudo mkdir -p $(dirname $VENV_PATH)
 
-# Install Python dependencies
-log_message "\nInstalling Python dependencies..." "$BLUE"
-sudo $VENV_PATH/bin/pip install -r $OPENALGO_PATH/requirements-nginx.txt
+# Detect how uv is installed and set the appropriate command
+if command -v uv >/dev/null 2>&1; then
+    # uv is available as a standalone command (snap or astral installer)
+    UV_CMD="uv"
+    log_message "Using standalone uv command" "$GREEN"
+elif $PYTHON_CMD -m uv --version >/dev/null 2>&1; then
+    # uv is available as a Python module
+    UV_CMD="$PYTHON_CMD -m uv"
+    log_message "Using uv as Python module" "$GREEN"
+else
+    log_message "Error: uv is not available" "$RED"
+    exit 1
+fi
+
+# Create virtual environment using uv
+sudo $UV_CMD venv $VENV_PATH
+check_status "Failed to create virtual environment with uv"
+
+# Install Python dependencies using uv (faster installation)
+log_message "\nInstalling Python dependencies with uv..." "$BLUE"
+# First activate the virtual environment path for uv
+ACTIVATE_CMD="source $VENV_PATH/bin/activate"
+# Install dependencies using uv
+sudo $UV_CMD pip install --python $VENV_PATH/bin/python -r $OPENALGO_PATH/requirements-nginx.txt
 check_status "Failed to install Python dependencies"
+
+# Verify gunicorn and eventlet installation
+log_message "\nVerifying gunicorn and eventlet installation..." "$BLUE"
+if ! sudo bash -c "$ACTIVATE_CMD && pip freeze | grep -q 'gunicorn=='"; then
+    log_message "Installing gunicorn..." "$YELLOW"
+    sudo $UV_CMD pip install --python $VENV_PATH/bin/python gunicorn
+    check_status "Failed to install gunicorn"
+fi
+if ! sudo bash -c "$ACTIVATE_CMD && pip freeze | grep -q 'eventlet=='"; then
+    log_message "Installing eventlet..." "$YELLOW"
+    sudo $UV_CMD pip install --python $VENV_PATH/bin/python eventlet
+    check_status "Failed to install eventlet"
+fi
 
 # Configure .env file
 log_message "\nConfiguring environment file..." "$BLUE"
@@ -242,18 +670,42 @@ handle_existing "$OPENALGO_PATH/.env" "environment file" ".env file"
 sudo cp $OPENALGO_PATH/.sample.env $OPENALGO_PATH/.env
 sudo sed -i "s|YOUR_BROKER_API_KEY|$BROKER_API_KEY|g" $OPENALGO_PATH/.env
 sudo sed -i "s|YOUR_BROKER_API_SECRET|$BROKER_API_SECRET|g" $OPENALGO_PATH/.env
+
+# Update market data API credentials if the broker is XTS-based
+if is_xts_broker "$BROKER_NAME"; then
+    sudo sed -i "s|YOUR_BROKER_MARKET_API_KEY|$BROKER_API_KEY_MARKET|g" $OPENALGO_PATH/.env
+    sudo sed -i "s|YOUR_BROKER_MARKET_API_SECRET|$BROKER_API_SECRET_MARKET|g" $OPENALGO_PATH/.env
+fi
+
 sudo sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" $OPENALGO_PATH/.env
 sudo sed -i "s|<broker>|$BROKER_NAME|g" $OPENALGO_PATH/.env
 sudo sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" $OPENALGO_PATH/.env
 sudo sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$API_KEY_PEPPER|g" $OPENALGO_PATH/.env
+
+# Update WebSocket URL for production
+sudo sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" $OPENALGO_PATH/.env
+
+# Update host bindings to allow external connections
+sudo sed -i "s|WEBSOCKET_HOST='127.0.0.1'|WEBSOCKET_HOST='0.0.0.0'|g" $OPENALGO_PATH/.env
+sudo sed -i "s|ZMQ_HOST='127.0.0.1'|ZMQ_HOST='0.0.0.0'|g" $OPENALGO_PATH/.env
+
 check_status "Failed to configure environment file"
 
 # Check and handle existing Nginx configuration
-handle_existing "/etc/nginx/sites-available/$DOMAIN" "Nginx configuration" "Nginx config file"
+handle_existing "$NGINX_CONFIG_FILE" "Nginx configuration" "Nginx config file"
+
+# Fix Arch Linux nginx.conf to include conf.d directory
+if [ "$OS_TYPE" = "arch" ]; then
+    if ! grep -q "include.*conf.d/\*.conf" /etc/nginx/nginx.conf; then
+        log_message "Adding conf.d include to nginx.conf for Arch Linux..." "$YELLOW"
+        sudo sed -i '/http {/a\    include /etc/nginx/conf.d/*.conf;' /etc/nginx/nginx.conf
+        log_message "conf.d include added to nginx.conf" "$GREEN"
+    fi
+fi
 
 # Configure initial Nginx for SSL certificate obtention
 log_message "\nConfiguring initial Nginx setup..." "$BLUE"
-sudo tee /etc/nginx/sites-available/$DOMAIN > /dev/null << EOL
+sudo tee $NGINX_CONFIG_FILE > /dev/null << EOL
 server {
     listen 80;
     listen [::]:80;
@@ -267,24 +719,79 @@ server {
 EOL
 
 # Enable site and remove default configuration
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo ln -sf /etc/nginx/sites-available/$DOMAIN /etc/nginx/sites-enabled/
-check_status "Failed to enable Nginx site"
+if [ "$NGINX_CONFIG_MODE" = "sites" ]; then
+    sudo rm -f /etc/nginx/sites-enabled/default
+    sudo ln -sf $NGINX_CONFIG_FILE /etc/nginx/sites-enabled/
+    check_status "Failed to enable Nginx site"
+else
+    # For conf.d mode, config is already active, just remove default if it exists
+    sudo rm -f /etc/nginx/conf.d/default.conf
+fi
 
-# Reload Nginx for initial configuration
-log_message "\nTesting and reloading Nginx..." "$BLUE"
-sudo nginx -t && sudo systemctl reload nginx
-check_status "Failed to reload Nginx"
+# Start or reload Nginx for initial configuration
+log_message "\nTesting and starting/reloading Nginx..." "$BLUE"
+sudo nginx -t
+check_status "Failed to validate Nginx configuration"
 
-# Configure UFW firewall
+# Check if nginx is running, start or reload accordingly
+if sudo systemctl is-active --quiet nginx; then
+    sudo systemctl reload nginx
+    log_message "Nginx reloaded successfully" "$GREEN"
+else
+    sudo systemctl enable nginx
+    sudo systemctl start nginx
+    log_message "Nginx started successfully" "$GREEN"
+fi
+check_status "Failed to start/reload Nginx"
+
+# Configure firewall
 log_message "\nConfiguring firewall rules..." "$BLUE"
-sudo apt-get install -y ufw
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
-sudo ufw allow ssh
-sudo ufw allow 'Nginx Full'
-sudo ufw --force enable
-check_status "Failed to configure firewall"
+case "$OS_TYPE" in
+    ubuntu | debian | raspbian)
+        # Wait for any running package manager operations to complete
+        wait_for_dpkg_lock
+        sudo apt-get install -y ufw
+        sudo ufw default deny incoming
+        sudo ufw default allow outgoing
+        sudo ufw allow ssh
+        sudo ufw allow 'Nginx Full'
+        sudo ufw --force enable
+        check_status "Failed to configure firewall"
+        ;;
+    centos | fedora | rhel | amzn)
+        # Install and configure firewalld
+        if ! command -v firewall-cmd >/dev/null 2>&1; then
+            if ! command -v dnf >/dev/null 2>&1; then
+                sudo yum install -y firewalld
+            else
+                sudo dnf install -y firewalld
+            fi
+        fi
+        sudo systemctl enable firewalld
+        sudo systemctl start firewalld
+        sudo firewall-cmd --permanent --add-service=ssh
+        sudo firewall-cmd --permanent --add-service=http
+        sudo firewall-cmd --permanent --add-service=https
+        sudo firewall-cmd --reload
+        check_status "Failed to configure firewall"
+        ;;
+    arch)
+        # Install ufw on Arch
+        if ! command -v ufw >/dev/null 2>&1; then
+            sudo pacman -Sy --noconfirm --needed ufw
+        fi
+        sudo systemctl enable ufw
+        sudo systemctl start ufw
+        sudo ufw default deny incoming
+        sudo ufw default allow outgoing
+        sudo ufw allow ssh
+        # Use direct port rules instead of application profile on Arch
+        sudo ufw allow 80/tcp
+        sudo ufw allow 443/tcp
+        sudo ufw --force enable
+        check_status "Failed to configure firewall"
+        ;;
+esac
 
 # Obtain SSL certificate
 log_message "\nObtaining SSL certificate..." "$BLUE"
@@ -293,16 +800,41 @@ if [ "$IS_SUBDOMAIN" = true ]; then
 else
     sudo certbot --nginx -d $DOMAIN -d www.$DOMAIN --non-interactive --agree-tos --email admin@$DOMAIN
 fi
-check_status "Failed to obtain SSL certificate"
+
+# Check if certificate was obtained (even if auto-install failed)
+if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+    log_message "Failed to obtain SSL certificate" "$RED"
+    exit 1
+else
+    log_message "SSL certificate obtained successfully" "$GREEN"
+fi
 
 # Configure final Nginx setup with SSL and socket
 log_message "\nConfiguring final Nginx setup..." "$BLUE"
-sudo tee /etc/nginx/sites-available/$DOMAIN > /dev/null << EOL
+# Remove old config files to ensure clean write (with and without .conf extension)
+sudo rm -f $NGINX_CONFIG_FILE
+sudo rm -f ${NGINX_AVAILABLE}/${DOMAIN}
+if [ "$NGINX_CONFIG_MODE" = "sites" ]; then
+    sudo rm -f /etc/nginx/sites-enabled/${DOMAIN}
+    sudo rm -f /etc/nginx/sites-enabled/${DOMAIN}.conf
+fi
+# Write the new configuration
+sudo tee $NGINX_CONFIG_FILE > /dev/null << EOL
 server {
     listen 80;
     listen [::]:80;
     server_name $DOMAIN;
 
+    # WebSocket path exceptions to avoid 301 redirect loop
+    location = /ws {
+        return 301 https://\$host\$request_uri;
+    }
+
+    location /ws/ {
+        return 301 https://\$host\$request_uri;
+    }
+
+    # All other HTTP requests get redirected to HTTPS
     location / {
         return 301 https://\$host\$request_uri;
     }
@@ -333,21 +865,81 @@ server {
     add_header X-Content-Type-Options nosniff;
     add_header X-XSS-Protection "1; mode=block";
     add_header Strict-Transport-Security "max-age=63072000" always;
-    
+
+    # WebSocket without trailing slash
+    location = /ws {
+        proxy_pass http://127.0.0.1:8765;
+        proxy_http_version 1.1;
+        
+        # Extended timeouts for long-running connections (up to 24 hours)
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        
+        # Disable proxy buffering for real-time data
+        proxy_buffering off;
+        
+        # WebSocket headers
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # Other headers
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+    }
+
+    # WebSocket with trailing slash
+    location /ws/ {
+        proxy_pass http://127.0.0.1:8765/;
+        proxy_http_version 1.1;
+        
+        # Extended timeouts for long-running connections (up to 24 hours)
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        
+        # Disable proxy buffering for real-time data
+        proxy_buffering off;
+        
+        # WebSocket headers
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # Other headers
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header X-Forwarded-Host \$host;
+    }
+
+    # Main app (Gunicorn UDS)
     location / {
         proxy_pass http://unix:$SOCKET_FILE;
+        proxy_http_version 1.1;
+
+        # Extended timeouts for broker authentication (cold start can take 60-90s)
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_redirect off;
-        
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
     }
 }
 EOL
+
+# Recreate symlink for sites-enabled if needed
+if [ "$NGINX_CONFIG_MODE" = "sites" ]; then
+    sudo ln -sf $NGINX_CONFIG_FILE /etc/nginx/sites-enabled/
+    log_message "Recreated nginx symlink" "$GREEN"
+fi
 
 # Test Nginx configuration
 log_message "\nTesting Nginx configuration..." "$BLUE"
@@ -365,13 +957,20 @@ Description=OpenAlgo Gunicorn Daemon ($DEPLOY_NAME)
 After=network.target
 
 [Service]
+User=$WEB_USER
+Group=$WEB_GROUP
 WorkingDirectory=$OPENALGO_PATH
-Environment="PATH=$VENV_PATH/bin"
-ExecStart=$VENV_PATH/bin/gunicorn \
+# Simplified approach to ensure Python environment is properly loaded
+ExecStart=/bin/bash -c 'source $VENV_PATH/bin/activate && $VENV_PATH/bin/gunicorn \
     --worker-class eventlet \
     -w 1 \
     --bind unix:$SOCKET_FILE \
-    app:app
+    --log-level info \
+    app:app'
+# Restart settings
+Restart=always
+RestartSec=5
+TimeoutSec=60
 
 [Install]
 WantedBy=multi-user.target
@@ -382,17 +981,28 @@ check_status "Failed to create systemd service"
 log_message "\nSetting permissions..." "$BLUE"
 
 # Set permissions for base directory
-sudo chown -R www-data:www-data $BASE_PATH
+sudo chown -R $WEB_USER:$WEB_GROUP $BASE_PATH
 sudo chmod -R 755 $BASE_PATH
 
 # Create and set permissions for required directories
 sudo mkdir -p $OPENALGO_PATH/db
 sudo mkdir -p $OPENALGO_PATH/tmp
-sudo chown -R www-data:www-data $OPENALGO_PATH
+# Create directories for Python strategy feature
+sudo mkdir -p $OPENALGO_PATH/strategies/scripts
+sudo mkdir -p $OPENALGO_PATH/strategies/examples
+sudo mkdir -p $OPENALGO_PATH/log/strategies
+sudo mkdir -p $OPENALGO_PATH/keys
+# Set ownership and permissions
+sudo chown -R $WEB_USER:$WEB_GROUP $OPENALGO_PATH
 sudo chmod -R 755 $OPENALGO_PATH
+# Set more restrictive permissions for sensitive directories
+sudo chmod 700 $OPENALGO_PATH/keys
 
 # Remove existing socket file if it exists
 [ -S "$SOCKET_FILE" ] && sudo rm -f $SOCKET_FILE
+
+# Ensure socket directory is accessible to nginx
+sudo chmod 755 $SOCKET_PATH
 
 # Verify permissions
 log_message "\nVerifying permissions..." "$BLUE"
@@ -407,8 +1017,41 @@ sudo systemctl start $SERVICE_NAME
 sudo systemctl restart nginx
 check_status "Failed to start services"
 
+# Configure SELinux for RHEL-based systems
+if [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ] || [ "$OS_TYPE" = "amzn" ]; then
+    if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" != "Disabled" ]; then
+        log_message "\nConfiguring SELinux permissions..." "$BLUE"
+
+        # Set SELinux context for the application directory
+        sudo semanage fcontext -a -t httpd_sys_rw_content_t "$BASE_PATH(/.*)?" 2>/dev/null || true
+        sudo restorecon -Rv $BASE_PATH >/dev/null 2>&1
+
+        # Enable httpd network connections
+        sudo setsebool -P httpd_can_network_connect on 2>/dev/null || true
+
+        # Check for SELinux denials and create policy if needed
+        if sudo ausearch -m avc -ts recent 2>/dev/null | grep -q "httpd_t.*initrc_t.*unix_stream_socket"; then
+            log_message "Creating SELinux policy for nginx-gunicorn connection..." "$YELLOW"
+
+            # Generate and install SELinux policy for httpd to connect to gunicorn socket
+            sudo ausearch -m avc -ts recent 2>/dev/null | sudo audit2allow -M httpd_gunicorn 2>/dev/null || true
+            if [ -f httpd_gunicorn.pp ]; then
+                sudo semodule -i httpd_gunicorn.pp 2>/dev/null || true
+                sudo rm -f httpd_gunicorn.pp httpd_gunicorn.te 2>/dev/null || true
+                log_message "SELinux policy installed successfully" "$GREEN"
+
+                # Restart nginx to apply new policy
+                sudo systemctl restart nginx
+            fi
+        fi
+
+        log_message "SELinux configuration completed" "$GREEN"
+    fi
+fi
+
 log_message "\nInstallation completed successfully!" "$GREEN"
 log_message "\nInstallation Summary:" "$YELLOW"
+log_message "Operating System: $OS_TYPE $OS_VERSION" "$BLUE"
 log_message "Deployment Name: $DEPLOY_NAME" "$BLUE"
 log_message "Domain: $DOMAIN" "$BLUE"
 log_message "Broker: $BROKER_NAME" "$BLUE"
@@ -416,7 +1059,7 @@ log_message "Installation Directory: $OPENALGO_PATH" "$BLUE"
 log_message "Environment File: $OPENALGO_PATH/.env" "$BLUE"
 log_message "Socket File: $SOCKET_FILE" "$BLUE"
 log_message "Service Name: $SERVICE_NAME" "$BLUE"
-log_message "Nginx Config: /etc/nginx/sites-available/$DOMAIN" "$BLUE"
+log_message "Nginx Config: $NGINX_CONFIG_FILE" "$BLUE"
 log_message "SSL: Enabled with Let's Encrypt" "$BLUE"
 log_message "Installation Log: $LOG_FILE" "$BLUE"
 

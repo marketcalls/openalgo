@@ -1,0 +1,468 @@
+{% extends "base.html" %}
+
+{% block title %}Configure Symbols - {{ strategy.name }}{% endblock %}
+
+{% block content %}
+<!-- Delete Confirmation Modal -->
+<dialog id="delete_confirm_modal" class="modal modal-bottom sm:modal-middle">
+    <form method="dialog" class="modal-box">
+        <h3 class="font-bold text-lg">Delete Symbol</h3>
+        <p class="py-4">Are you sure you want to delete this symbol mapping?</p>
+        <div class="modal-action">
+            <button class="btn" id="cancel_delete">Cancel</button>
+            <button class="btn btn-error" id="confirm_delete">Delete</button>
+        </div>
+    </form>
+    <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+    </form>
+</dialog>
+
+<div class="container mx-auto px-4 py-8">
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-2xl font-bold">Configure Symbols - {{ strategy.name }}</h1>
+        <div class="space-x-2">
+            <a href="{{ url_for('strategy_bp.view_strategy', strategy_id=strategy.id) }}" class="btn">
+                Back to Strategy
+            </a>
+        </div>
+    </div>
+
+    <div class="grid gap-6 lg:grid-cols-2">
+        <!-- Single Symbol Form -->
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title">Add Single Symbol</h2>
+                
+                <form id="singleSymbolForm" class="space-y-4">
+                    <div class="form-control w-full">
+                        <label class="label">
+                            <span class="label-text">Symbol</span>
+                            <span class="label-text-alt text-error">*</span>
+                        </label>
+                        <div class="relative">
+                            <input type="text" id="symbolSearch" name="symbol" class="input input-bordered w-full"
+                                   placeholder="Search symbol..." required readonly>
+                            <div id="searchResults" class="absolute z-10 w-full mt-1 hidden">
+                                <ul class="menu bg-base-200 rounded-box shadow-lg max-h-60 overflow-y-auto">
+                                    <!-- Search results will be populated here -->
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-control w-full">
+                        <label class="label">
+                            <span class="label-text">Exchange</span>
+                            <span class="label-text-alt text-error">*</span>
+                        </label>
+                        <select name="exchange" class="select select-bordered w-full" required>
+                            <option value="NSE" selected>NSE</option>
+                            <option value="BSE">BSE</option>
+                            <option value="NFO">NFO</option>
+                            <option value="CDS">CDS</option>
+                            <option value="BFO">BFO</option>
+                            <option value="BCD">BCD</option>
+                            <option value="MCX">MCX</option>
+                            <option value="NCDEX">NCDEX</option>
+                        </select>
+                    </div>
+
+                    <div class="form-control w-full">
+                        <label class="label">
+                            <span class="label-text">Quantity</span>
+                            <span class="label-text-alt text-error">*</span>
+                        </label>
+                        <input type="number" name="quantity" class="input input-bordered w-full"
+                               min="1" step="1" required>
+                    </div>
+
+                    <div class="form-control w-full">
+                        <label class="label">
+                            <span class="label-text">Product Type</span>
+                            <span class="label-text-alt text-error">*</span>
+                        </label>
+                        <select name="product_type" class="select select-bordered w-full" required>
+                            <option value="MIS">MIS (Intraday)</option>
+                            <option value="CNC">CNC (Delivery)</option>
+                            <option value="NRML">NRML (Normal)</option>
+                        </select>
+                    </div>
+
+                    <div class="card-actions justify-end">
+                        <button type="submit" class="btn btn-primary">Add Symbol</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Bulk Symbols Form -->
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body">
+                <h2 class="card-title">Add Multiple Symbols</h2>
+                
+                <form id="bulkSymbolsForm" class="space-y-4">
+                    <div class="form-control w-full">
+                        <label class="label">
+                            <span class="label-text">Symbols (CSV format)</span>
+                            <span class="label-text-alt text-error">*</span>
+                        </label>
+                        <textarea name="symbols" class="textarea textarea-bordered w-full h-48" required
+                                  placeholder="Format: Symbol,Exchange,Quantity,Product&#10;Example:&#10;SBIN,NSE,100,MIS&#10;INFY,NSE,50,CNC"></textarea>
+                    </div>
+
+                    <div class="alert alert-info">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        <div>
+                            <h3 class="font-bold">CSV Format</h3>
+                            <p class="text-sm">Each line should contain: Symbol,Exchange,Quantity,Product</p>
+                            <ul class="list-disc list-inside text-sm mt-2">
+                                <li>Exchange: NSE, BSE, NFO, CDS, BFO, BCD, MCX, or NCDEX</li>
+                                <li>Product: MIS (Intraday), CNC (Delivery), or NRML (Normal)</li>
+                                <li>Note: CNC is only available for NSE/BSE, NRML for derivatives</li>
+                                <li>Quantity: Whole numbers only</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="card-actions justify-end">
+                        <button type="submit" class="btn btn-primary">Add Symbols</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Current Mappings -->
+    <div class="card bg-base-100 shadow-xl mt-6">
+        <div class="card-body">
+            <h2 class="card-title">Current Symbol Mappings</h2>
+
+            {% if symbol_mappings %}
+            <div class="overflow-x-auto">
+                <table class="table table-zebra w-full" id="symbolTable">
+                    <thead>
+                        <tr>
+                            <th>Symbol</th>
+                            <th>Exchange</th>
+                            <th>Quantity</th>
+                            <th>Product</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for mapping in symbol_mappings %}
+                        <tr data-mapping-id="{{ mapping.id }}">
+                            <td>{{ mapping.symbol }}</td>
+                            <td><div class="badge badge-ghost">{{ mapping.exchange }}</div></td>
+                            <td>{{ mapping.quantity }}</td>
+                            <td>{{ mapping.product_type }}</td>
+                            <td>
+                                <button class="btn btn-error btn-xs delete-symbol">
+                                    Delete
+                                </button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="text-center py-8">
+                <h3 class="text-lg font-semibold mb-2">No symbols configured</h3>
+                <p class="text-base-content/70">Add symbols using the forms above</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const strategyId = "{{ strategy.id }}";
+    const symbolSearch = document.getElementById('symbolSearch');
+    const searchResults = document.getElementById('searchResults');
+    const singleSymbolForm = document.getElementById('singleSymbolForm');
+    const bulkSymbolsForm = document.getElementById('bulkSymbolsForm');
+    const symbolTable = document.getElementById('symbolTable');
+    const deleteModal = document.getElementById('delete_confirm_modal');
+    let currentMappingId = null;
+    let currentRow = null;
+
+    // Symbol search with debouncing
+    let debounceTimer;
+    const searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.className = 'input input-bordered w-full';
+    searchInput.placeholder = 'Type to search...';
+    
+    symbolSearch.parentNode.insertBefore(searchInput, symbolSearch);
+    symbolSearch.style.display = 'none';
+
+    searchInput.addEventListener('input', function() {
+        clearTimeout(debounceTimer);
+        const query = this.value.trim();
+        
+        if (query.length < 2) {
+            searchResults.classList.add('hidden');
+            return;
+        }
+
+        debounceTimer = setTimeout(() => {
+            const exchange = document.querySelector('select[name="exchange"]').value;
+            fetch(`{{ url_for('strategy_bp.search_symbols') }}?q=${encodeURIComponent(query)}&exchange=${exchange}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    const results = data.results || [];
+                    searchResults.innerHTML = '';
+                    
+                    if (results.length === 0) {
+                        searchResults.innerHTML = '<li class="p-2 text-center">No results found</li>';
+                    } else {
+                        const ul = document.createElement('ul');
+                        ul.className = 'menu bg-base-200 rounded-box shadow-lg max-h-60 overflow-y-auto';
+                        
+                        results.forEach(result => {
+                            const li = document.createElement('li');
+                            li.innerHTML = `<a class="search-result" data-symbol="${result.symbol}" data-exchange="${result.exchange}">${result.symbol} - ${result.name || ''} (${result.exchange})</a>`;
+                            ul.appendChild(li);
+                        });
+                        
+                        searchResults.appendChild(ul);
+                    }
+                    
+                    searchResults.classList.remove('hidden');
+                })
+                .catch(error => {
+                    console.error('Error searching symbols:', error);
+                    searchResults.innerHTML = '<li class="p-2 text-center text-error">Error searching symbols. Please try again.</li>';
+                    searchResults.classList.remove('hidden');
+                });
+        }, 300);
+    });
+
+    // Handle search result selection
+    searchResults.addEventListener('click', function(e) {
+        if (e.target.classList.contains('search-result')) {
+            const symbol = e.target.dataset.symbol;
+            const exchange = e.target.dataset.exchange;
+            symbolSearch.value = symbol;
+            searchInput.value = symbol;
+            document.querySelector('select[name="exchange"]').value = exchange;
+            searchResults.classList.add('hidden');
+        }
+    });
+
+    // Hide search results when clicking outside
+    document.addEventListener('click', function(e) {
+        if (!searchResults.contains(e.target) && e.target !== searchInput) {
+            searchResults.classList.add('hidden');
+        }
+    });
+
+    // Handle single symbol form submission
+    singleSymbolForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const submitButton = this.querySelector('button[type="submit"]');
+        const originalButtonText = submitButton.innerHTML;
+        
+        // Validate form
+        const formData = new FormData(this);
+        const symbol = formData.get('symbol');
+        const exchange = formData.get('exchange');
+        const quantity = formData.get('quantity');
+        const product_type = formData.get('product_type');
+        
+        if (!symbol || !exchange || !quantity || !product_type) {
+            return;
+        }
+        
+        // Show loading state
+        submitButton.classList.add('btn-loading');
+        submitButton.innerHTML = 'Adding...';
+        
+        const payload = {
+            symbol: symbol,
+            exchange: exchange,
+            quantity: quantity,
+            product_type: product_type
+        };
+        
+        fetch(`{{ url_for('strategy_bp.configure_symbols', strategy_id=strategy.id) }}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify(payload)
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.status === 'success') {
+                // Reset form and reload immediately
+                singleSymbolForm.reset();
+                searchInput.value = '';
+                location.reload();
+            } else {
+                // Reset button state
+                submitButton.classList.remove('btn-loading');
+                submitButton.innerHTML = originalButtonText;
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            // Reset button state
+            submitButton.classList.remove('btn-loading');
+            submitButton.innerHTML = originalButtonText;
+        });
+    });
+
+    // Handle bulk symbols form submission
+    bulkSymbolsForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const submitButton = this.querySelector('button[type="submit"]');
+        const originalButtonText = submitButton.innerHTML;
+        
+        // Show loading state
+        submitButton.classList.add('btn-loading');
+        submitButton.innerHTML = 'Adding...';
+        
+        const formData = new FormData(this);
+        const symbols = formData.get('symbols');
+        
+        fetch(`{{ url_for('strategy_bp.configure_symbols', strategy_id=strategy.id) }}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                'X-CSRFToken': getCSRFToken()
+            },
+            body: JSON.stringify({
+                symbols: symbols
+            })
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.status === 'success') {
+                // Reset form and reload immediately
+                bulkSymbolsForm.reset();
+                location.reload();
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+        })
+        .finally(() => {
+            // Reset button state
+            submitButton.classList.remove('btn-loading');
+            submitButton.innerHTML = originalButtonText;
+        });
+    });
+
+    // Handle symbol deletion
+    if (symbolTable) {
+        symbolTable.addEventListener('click', function(e) {
+            if (e.target.classList.contains('delete-symbol')) {
+                const row = e.target.closest('tr');
+                currentMappingId = row.dataset.mappingId;
+                currentRow = row;
+                deleteModal.showModal();
+            }
+        });
+    }
+
+    // Handle delete confirmation
+    document.getElementById('confirm_delete').addEventListener('click', function() {
+        if (currentMappingId) {
+            deleteSymbol(currentMappingId, currentRow);
+        }
+    });
+
+    // Handle delete cancellation
+    document.getElementById('cancel_delete').addEventListener('click', function() {
+        currentMappingId = null;
+        currentRow = null;
+    });
+
+    function deleteSymbol(mappingId, row) {
+        fetch(`/strategy/${strategyId}/symbol/${mappingId}/delete`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': getCSRFToken()
+            }
+        })
+        .then(response => {
+            if (response.ok) {
+                row.remove();
+                
+                // If no more symbols, reload to show empty state
+                if (symbolTable.getElementsByTagName('tr').length <= 1) {
+                    location.reload();
+                }
+            } else {
+                throw new Error('Failed to delete symbol');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+        });
+    }
+});
+</script>
+{% endblock %}
+
+{% block styles %}
+<style>
+    .btn-loading {
+        position: relative;
+        pointer-events: none;
+        opacity: 0.8;
+    }
+    
+    .btn-loading:after {
+        content: "";
+        position: absolute;
+        width: 16px;
+        height: 16px;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        margin: auto;
+        border: 4px solid transparent;
+        border-top-color: currentColor;
+        border-radius: 50%;
+        animation: btn-loading-spinner 1s ease infinite;
+    }
+
+    @keyframes btn-loading-spinner {
+        from {
+            transform: rotate(0turn);
+        }
+        to {
+            transform: rotate(1turn);
+        }
+    }
+</style>
+{% endblock %}
+
+{% endblock %}

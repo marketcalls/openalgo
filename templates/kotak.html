@@ -13,45 +13,82 @@
                         <img class="h-20 w-auto" src="{{ url_for('static', filename='favicon/apple-touch-icon.png') }}" alt="OpenAlgo">
                     </div>
 
-                    <form action="/kotak/loginflow" method="POST" class="space-y-4" id="kotakForm">
-                        <div class="form-control">
+                    <form action="/kotak/callback" method="POST" class="space-y-6" id="kotakForm">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                        
+                        <!-- Mobile Number Field -->
+                        <div class="form-control w-full">
                             <label class="label">
                                 <span class="label-text">Mobile Number</span>
                                 <span class="label-text-alt">
-                                    <div class="tooltip" data-tip="Enter your 10-digit mobile number">
+                                    <div class="tooltip" data-tip="Enter your mobile number without +91">
                                         <button class="btn btn-circle btn-xs btn-ghost">?</button>
                                     </div>
                                 </span>
                             </label>
-                            <div class="join w-full">
-                                <span class="join-item flex items-center px-3 bg-base-200">+91</span>
-                                <input type="tel" 
-                                       id="mobileInput" 
-                                       required 
-                                       class="input input-bordered join-item flex-1" 
+                            <div class="flex w-full">
+                                <span class="inline-flex items-center px-3 text-sm bg-base-200 border border-r-0 border-base-300 rounded-l-md">
+                                    +91
+                                </span>
+                                <input type="tel"
+                                       id="mobilenumber"
+                                       name="mobilenumber"
+                                       required
+                                       class="input input-bordered w-full rounded-l-none"
                                        placeholder="9999955555"
                                        pattern="[0-9]{10}"
                                        title="Please enter a valid 10-digit mobile number" />
-                                <!-- Hidden input that will contain the number with +91 prefix -->
-                                <input type="hidden" id="mobilenumber" name="mobilenumber" />
                             </div>
-                            <label class="label">
+                            <label class="label pt-2">
                                 <span class="label-text-alt text-info">Your registered mobile number</span>
                             </label>
                         </div>
 
-                        <div class="form-control">
+                        <!-- MPIN Field -->
+                        <div class="form-control w-full">
                             <label class="label">
-                                <span class="label-text">Password</span>
+                                <span class="label-text">MPIN</span>
+                                <span class="label-text-alt">
+                                    <div class="tooltip" data-tip="Your 6-digit trading MPIN">
+                                        <button class="btn btn-circle btn-xs btn-ghost">?</button>
+                                    </div>
+                                </span>
                             </label>
-                            <input type="password" 
-                                   id="password" 
-                                   name="password" 
-                                   required 
-                                   class="input input-bordered" 
-                                   placeholder="Enter your password" />
+                            <input type="password"
+                                   id="mpin"
+                                   name="mpin"
+                                   required
+                                   class="input input-bordered w-full"
+                                   placeholder="******"
+                                   pattern="[0-9]{6}"
+                                   maxlength="6"
+                                   title="Enter your 6-digit trading MPIN" />
+                            <label class="label pt-2">
+                                <span class="label-text-alt text-info">Your 6-digit trading PIN</span>
+                            </label>
+                        </div>
+
+                        <!-- TOTP Code Field -->
+                        <div class="form-control w-full">
                             <label class="label">
-                                <span class="label-text-alt text-info">Your Kotak Securities trading password</span>
+                                <span class="label-text">TOTP Code</span>
+                                <span class="label-text-alt">
+                                    <div class="tooltip" data-tip="6-digit code from Google/Microsoft Authenticator">
+                                        <button class="btn btn-circle btn-xs btn-ghost">?</button>
+                                    </div>
+                                </span>
+                            </label>
+                            <input type="text"
+                                   id="totp"
+                                   name="totp"
+                                   required
+                                   class="input input-bordered w-full"
+                                   placeholder="123456"
+                                   pattern="[0-9]{6}"
+                                   maxlength="6"
+                                   title="Enter 6-digit TOTP from your authenticator app" />
+                            <label class="label pt-2">
+                                <span class="label-text-alt text-info">From Google or Microsoft Authenticator app</span>
                             </label>
                         </div>
 
@@ -65,8 +102,8 @@
                         {% endif %}
 
                         <div class="form-control mt-6">
-                            <button type="submit" class="btn btn-primary w-full">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <button type="submit" class="btn btn-primary w-full flex items-center justify-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
                                 </svg>
                                 Connect Account
@@ -76,8 +113,8 @@
 
                     <div class="divider">OR</div>
 
-                    <a href="{{ url_for('auth.broker_login') }}" class="btn btn-outline btn-block">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <a href="{{ url_for('auth.broker_login') }}" class="btn btn-outline btn-block flex items-center justify-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 15l-3-3m0 0l3-3m-3 3h8M3 12a9 9 0 1118 0 9 9 0 01-18 0z" />
                         </svg>
                         Back to Broker Selection
@@ -89,16 +126,29 @@
             <div class="flex-1 max-w-xl text-center lg:text-left order-2 lg:order-1">
                 <h1 class="text-4xl lg:text-5xl font-bold mb-6">Connect <span class="text-primary">Kotak</span></h1>
                 <p class="text-lg lg:text-xl mb-8 opacity-80">
-                    Enter your Kotak Securities credentials to connect your trading account with OpenAlgo. Your credentials are securely encrypted and stored.
+                    Authenticate using TOTP-based login to connect your Kotak Securities trading account with OpenAlgo. Your credentials are securely encrypted and stored.
                 </p>
                 <div class="flex flex-col gap-4">
+                    <div class="alert alert-warning shadow-lg">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                        </svg>
+                        <div>
+                            <h3 class="font-bold">TOTP Registration Required</h3>
+                            <div class="text-sm">You must register for TOTP in the NEO app before logging in. Go to: Invest → Trade API → API Dashboard → TOTP Registration</div>
+                        </div>
+                    </div>
                     <div class="alert alert-info shadow-lg">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                         </svg>
                         <div>
-                            <h3 class="font-bold">Mobile Number Format</h3>
-                            <div class="text-sm">Enter your 10-digit mobile number registered with Kotak Securities.</div>
+                            <h3 class="font-bold">What You Need</h3>
+                            <div class="text-sm">
+                                • Mobile number (registered with Kotak)<br>
+                                • MPIN (6-digit trading PIN)<br>
+                                • TOTP code (from Google/Microsoft Authenticator)
+                            </div>
                         </div>
                     </div>
                     <div class="flex justify-center lg:justify-start gap-4">
@@ -123,24 +173,56 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const mobileInput = document.getElementById('mobileInput');
-    const hiddenMobileNumber = document.getElementById('mobilenumber');
     const form = document.getElementById('kotakForm');
+    const mobileInput = document.getElementById('mobilenumber');
+    const totpInput = document.getElementById('totp');
+    const mpinInput = document.getElementById('mpin');
 
-    // Update hidden input whenever visible input changes
-    mobileInput.addEventListener('input', function() {
-        hiddenMobileNumber.value = '+91' + this.value;
-    });
-
-    // Handle form submission
     form.addEventListener('submit', function(e) {
-        if (mobileInput.value.length !== 10) {
-            e.preventDefault();
+        e.preventDefault();
+
+        // Validate mobile number
+        const mobileNumber = mobileInput.value.replace(/\D/g, '');
+        if (mobileNumber.length !== 10) {
             alert('Please enter a valid 10-digit mobile number');
             return;
         }
-        // Ensure the hidden field has the complete number with prefix
-        hiddenMobileNumber.value = '+91' + mobileInput.value;
+
+        // Validate MPIN
+        const mpin = mpinInput.value.replace(/\D/g, '');
+        if (mpin.length !== 6) {
+            alert('Please enter a valid 6-digit MPIN');
+            return;
+        }
+
+        // Validate TOTP
+        const totp = totpInput.value.replace(/\D/g, '');
+        if (totp.length !== 6) {
+            alert('Please enter a valid 6-digit TOTP code');
+            return;
+        }
+
+        // Add +91 prefix to mobile number
+        const formattedNumber = '+91' + mobileNumber;
+        mobileInput.value = formattedNumber;
+
+        // Submit form
+        this.submit();
+    });
+
+    // Clean up mobile number input - remove any non-digits
+    mobileInput.addEventListener('input', function() {
+        this.value = this.value.replace(/\D/g, '');
+    });
+
+    // Clean up TOTP input - remove any non-digits and limit to 6
+    totpInput.addEventListener('input', function() {
+        this.value = this.value.replace(/\D/g, '').substring(0, 6);
+    });
+
+    // Clean up MPIN input - remove any non-digits and limit to 6
+    mpinInput.addEventListener('input', function() {
+        this.value = this.value.replace(/\D/g, '').substring(0, 6);
     });
 });
 </script>

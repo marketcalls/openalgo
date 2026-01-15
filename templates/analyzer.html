@@ -57,6 +57,34 @@
     <div class="mb-6">
         <h1 class="text-3xl font-bold">API Request Analyzer</h1>
         <p class="text-base-content/60">Monitor and analyze your API requests</p>
+        
+        <!-- Date Filter and Export Section -->
+        <div class="mt-4 flex flex-wrap gap-4 items-center">
+            <form id="dateFilterForm" class="flex flex-wrap gap-4 items-center" method="get">
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text">Start Date</span>
+                    </label>
+                    <input type="date" name="start_date" class="input input-bordered" value="{{ start_date or '' }}">
+                </div>
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text">End Date</span>
+                    </label>
+                    <input type="date" name="end_date" class="input input-bordered" value="{{ end_date or '' }}">
+                </div>
+                <div class="form-control mt-8">
+                    <button type="submit" class="btn btn-primary">Filter</button>
+                </div>
+            </form>
+            
+            <div class="form-control mt-8">
+                <a href="{{ url_for('analyzer_bp.export_requests', start_date=start_date, end_date=end_date) }}" 
+                   class="btn btn-secondary">
+                    Export to CSV
+                </a>
+            </div>
+        </div>
     </div>
 
     <!-- Stats Grid -->

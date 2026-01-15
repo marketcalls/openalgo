@@ -1,0 +1,736 @@
+{% extends 'base.html' %}
+
+{% block head %}
+<style>
+    .chart-container {
+        @apply bg-base-100 rounded-lg shadow-lg p-6;
+    }
+
+    .metric-value {
+        @apply text-2xl font-bold font-mono;
+    }
+
+    .metric-time {
+        @apply text-sm text-base-content/70;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="w-full">
+    <!-- Header Section -->
+    <div class="mb-6 flex justify-between items-center">
+        <div>
+            <h1 class="text-3xl font-bold">PnL Tracker</h1>
+            <p class="text-base-content/60">Monitor your intraday profit and loss</p>
+        </div>
+        <div class="flex gap-2">
+            <button id="screenshot-btn" class="btn btn-secondary">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                Screenshot
+            </button>
+            <button id="refresh-btn" class="btn btn-primary">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Refresh
+            </button>
+        </div>
+    </div>
+
+    <!-- Screenshot Container - wrap everything that should be in screenshot -->
+    <div id="screenshot-container">
+        <!-- Metrics Cards (moved inside screenshot container) -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8" id="metrics-section">
+            <!-- Current MTM -->
+            <div class="stat">
+                <div class="stat-title">Current MTM</div>
+                <div class="stat-value" id="current-mtm">₹ 0.00</div>
+                <div class="stat-desc" id="current-mtm-percent">0.00%</div>
+            </div>
+
+            <!-- Max MTM -->
+            <div class="stat">
+                <div class="stat-title">Max MTM</div>
+                <div class="stat-value text-success" id="max-mtm">₹ 0.00</div>
+                <div class="stat-desc" id="max-mtm-time">--:--</div>
+            </div>
+
+            <!-- Min MTM -->
+            <div class="stat">
+                <div class="stat-title">Min MTM</div>
+                <div class="stat-value text-error" id="min-mtm">₹ 0.00</div>
+                <div class="stat-desc" id="min-mtm-time">--:--</div>
+            </div>
+
+            <!-- Max Drawdown -->
+            <div class="stat">
+                <div class="stat-title">Max Drawdown</div>
+                <div class="stat-value text-warning" id="max-drawdown">₹ 0.00</div>
+                <div class="stat-desc">Peak to trough</div>
+            </div>
+        </div>
+
+        <!-- Chart Container -->
+        <div class="chart-container">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold">Intraday PnL Curve</h2>
+                <div class="text-sm text-base-content/60">
+                    <span class="mr-4">
+                        <span class="inline-block w-3 h-3 bg-primary rounded-full mr-1"></span>
+                        MTM PnL
+                    </span>
+                    <span>
+                        <span class="inline-block w-3 h-3 bg-error rounded-full mr-1"></span>
+                        Drawdown
+                    </span>
+                </div>
+            </div>
+            
+            <!-- Chart -->
+            <div id="pnl-chart" style="height: 500px; position: relative;">
+                <!-- Custom Tooltip -->
+                <div id="chart-tooltip" class="hidden absolute p-2 bg-base-300 text-base-content rounded-lg shadow-lg text-sm pointer-events-none z-50 border border-base-content/20">
+                    <div id="tooltip-time" class="font-semibold text-xs mb-1"></div>
+                    <div id="tooltip-pnl" class="font-mono"></div>
+                    <div id="tooltip-drawdown" class="font-mono text-error"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="hidden fixed inset-0 bg-base-300/50 z-50 flex items-center justify-center">
+        <div class="bg-base-100 rounded-lg p-8 shadow-xl">
+            <div class="flex items-center space-x-3">
+                <span class="loading loading-spinner loading-lg"></span>
+                <span class="text-lg">Loading PnL data...</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Include TradingView Lightweight Charts -->
+<script src="/static/js/lightweight-charts.standalone.production.js"></script>
+<!-- Include html2canvas-pro with oklch support for screenshots -->
+<script src="/static/js/html2canvas-oklch-fix.js"></script>
+
+<script>
+let chart = null;
+let pnlSeries = null;
+let drawdownSeries = null;
+
+function formatCurrency(value) {
+    return new Intl.NumberFormat('en-IN', {
+        style: 'currency',
+        currency: 'INR',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+    }).format(value);
+}
+
+function getTheme() {
+    // Get theme from DaisyUI data-theme attribute
+    const htmlElement = document.documentElement;
+    const currentTheme = htmlElement.getAttribute('data-theme');
+    
+    // Determine if it's a dark theme
+    const darkThemes = ['dark', 'synthwave', 'halloween', 'forest', 'black', 'luxury', 'dracula', 'night', 'coffee', 'dim', 'sunset'];
+    return darkThemes.includes(currentTheme) ? 'dark' : 'light';
+}
+
+function initChart() {
+    const chartContainer = document.getElementById('pnl-chart');
+    const theme = getTheme();
+    const isDarkMode = theme === 'dark';
+    
+    chart = LightweightCharts.createChart(chartContainer, {
+        width: chartContainer.offsetWidth,
+        height: 500,
+        layout: {
+            background: {
+                type: 'solid',
+                color: 'transparent'
+            },
+            textColor: isDarkMode ? '#a6adbb' : '#333'
+        },
+        grid: {
+            vertLines: {
+                color: isDarkMode ? 'rgba(166, 173, 187, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                style: 1,
+                visible: true
+            },
+            horzLines: {
+                color: isDarkMode ? 'rgba(166, 173, 187, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+                style: 1,
+                visible: true
+            }
+        },
+        rightPriceScale: {
+            borderColor: isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.2)',
+            scaleMargins: {
+                top: 0.1,
+                bottom: 0.1
+            }
+        },
+        timeScale: {
+            borderColor: isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.2)',
+            timeVisible: true,
+            secondsVisible: false,
+            // Custom IST time formatter
+            tickMarkFormatter: (time, tickMarkType, locale) => {
+                // Convert Unix timestamp to IST
+                const date = new Date(time * 1000);
+                const istOffset = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
+                const istDate = new Date(date.getTime() + istOffset);
+                
+                const hours = istDate.getUTCHours().toString().padStart(2, '0');
+                const minutes = istDate.getUTCMinutes().toString().padStart(2, '0');
+                
+                // Return time in HH:MM format
+                return `${hours}:${minutes}`;
+            }
+        },
+        crosshair: {
+            mode: LightweightCharts.CrosshairMode.Normal,
+            vertLine: {
+                width: 1,
+                color: isDarkMode ? 'rgba(166, 173, 187, 0.5)' : 'rgba(0, 0, 0, 0.3)',
+                style: 2,
+                labelVisible: false  // Hide the default time label
+            },
+            horzLine: {
+                width: 1,
+                color: isDarkMode ? 'rgba(166, 173, 187, 0.5)' : 'rgba(0, 0, 0, 0.3)',
+                style: 2,
+                labelBackgroundColor: isDarkMode ? '#1f2937' : '#2563eb'
+            }
+        }
+    });
+    
+    // Add OpenAlgo watermark
+    const watermark = document.createElement('div');
+    watermark.style.position = 'absolute';
+    watermark.style.zIndex = '2';
+    watermark.style.color = isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.15)';
+    watermark.style.fontFamily = 'Arial, sans-serif';
+    watermark.style.fontSize = '48px';
+    watermark.style.fontWeight = 'bold';
+    watermark.style.userSelect = 'none';
+    watermark.style.pointerEvents = 'none';
+    watermark.textContent = 'OpenAlgo';
+    chartContainer.appendChild(watermark);
+    
+    // Position the watermark in the center of the chart
+    const positionWatermark = () => {
+        const chartRect = chartContainer.getBoundingClientRect();
+        watermark.style.left = (chartRect.width / 2 - watermark.offsetWidth / 2) + 'px';
+        watermark.style.top = (chartRect.height / 2 - watermark.offsetHeight / 2) + 'px';
+    };
+    
+    // Position the watermark initially and on resize
+    setTimeout(positionWatermark, 0);
+    window.addEventListener('resize', positionWatermark);
+
+    // Create PnL series (Area) - Using v5.0 API with standalone version
+    // In standalone version, use LightweightCharts.AreaSeries
+    pnlSeries = chart.addSeries(LightweightCharts.AreaSeries, {
+        lineColor: '#570df8',
+        topColor: 'rgba(87, 13, 248, 0.4)',
+        bottomColor: 'rgba(87, 13, 248, 0.0)',
+        lineWidth: 2,
+        priceScaleId: 'right',
+        priceFormat: {
+            type: 'custom',
+            formatter: (price) => formatCurrency(price)
+        }
+    });
+
+    // Create Drawdown series (Area) - Using v5.0 API with standalone version
+    drawdownSeries = chart.addSeries(LightweightCharts.AreaSeries, {
+        lineColor: '#f000b8',
+        topColor: 'rgba(240, 0, 184, 0.0)',
+        bottomColor: 'rgba(240, 0, 184, 0.4)',
+        lineWidth: 2,
+        priceScaleId: 'right',
+        priceFormat: {
+            type: 'custom',
+            formatter: (price) => formatCurrency(price)
+        }
+    });
+
+    // Custom tooltip handler
+    const tooltip = document.getElementById('chart-tooltip');
+    const tooltipTime = document.getElementById('tooltip-time');
+    const tooltipPnl = document.getElementById('tooltip-pnl');
+    const tooltipDrawdown = document.getElementById('tooltip-drawdown');
+    
+    // Subscribe to crosshair move events for custom tooltip
+    chart.subscribeCrosshairMove((param) => {
+        if (!param.time || !param.point) {
+            tooltip.classList.add('hidden');
+            return;
+        }
+        
+        // Apply the SAME IST conversion as x-axis tickMarkFormatter
+        const timestamp = param.time;
+        const date = new Date(timestamp * 1000);
+        const istOffset = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
+        const istDate = new Date(date.getTime() + istOffset);
+        
+        const hours = istDate.getUTCHours().toString().padStart(2, '0');
+        const minutes = istDate.getUTCMinutes().toString().padStart(2, '0');
+        const day = istDate.getUTCDate().toString().padStart(2, '0');
+        const month = (istDate.getUTCMonth() + 1).toString().padStart(2, '0');
+        
+        // Get series data
+        const pnlData = param.seriesData.get(pnlSeries);
+        const drawdownData = param.seriesData.get(drawdownSeries);
+        
+        // Update tooltip content with IST time
+        tooltipTime.textContent = `${day}/${month} ${hours}:${minutes} IST`;
+        
+        if (pnlData) {
+            const pnlValue = pnlData.value !== undefined ? pnlData.value : 0;
+            tooltipPnl.textContent = `PnL: ${formatCurrency(pnlValue)}`;
+            tooltipPnl.className = `font-mono ${pnlValue >= 0 ? 'text-success' : 'text-error'}`;
+        }
+        
+        if (drawdownData) {
+            const ddValue = drawdownData.value !== undefined ? drawdownData.value : 0;
+            tooltipDrawdown.textContent = `Drawdown: ${formatCurrency(Math.abs(ddValue))}`;
+        }
+        
+        // Position tooltip near cursor
+        const chartRect = chartContainer.getBoundingClientRect();
+        const tooltipX = param.point.x - 75;
+        const tooltipY = param.point.y - 60;
+        
+        // Keep tooltip within chart bounds
+        const adjustedX = Math.max(10, Math.min(tooltipX, chartContainer.offsetWidth - 200));
+        const adjustedY = Math.max(10, Math.min(tooltipY, chartContainer.offsetHeight - 100));
+        
+        tooltip.style.left = adjustedX + 'px';
+        tooltip.style.top = adjustedY + 'px';
+        tooltip.classList.remove('hidden');
+    });
+
+    // Handle resize
+    window.addEventListener('resize', () => {
+        chart.applyOptions({
+            width: chartContainer.offsetWidth
+        });
+        positionWatermark();
+    });
+
+    // Listen for theme changes
+    const observer = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+            if (mutation.type === 'attributes' && mutation.attributeName === 'data-theme') {
+                // Reinitialize chart with new theme
+                if (chart) {
+                    chart.remove();
+                    chart = null;
+                    pnlSeries = null;
+                    drawdownSeries = null;
+                }
+                initChart();
+                loadPnLData();
+            }
+        });
+    });
+
+    observer.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['data-theme']
+    });
+}
+
+async function loadPnLData() {
+    const overlay = document.getElementById('loading-overlay');
+    overlay.classList.remove('hidden');
+    
+    try {
+        const response = await fetch('/pnltracker/api/pnl', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': document.querySelector('meta[name="csrf-token"]')?.content || ''
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to fetch PnL data');
+        }
+
+        const result = await response.json();
+        
+        if (result.status === 'success') {
+            updateMetrics(result.data);
+            updateChart(result.data);
+        } else {
+            console.error('Error:', result.message);
+            // Show toast notification
+            const toast = document.createElement('div');
+            toast.className = 'toast toast-end';
+            toast.innerHTML = `
+                <div class="alert alert-error">
+                    <span>Error loading PnL data: ${result.message}</span>
+                </div>
+            `;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 5000);
+        }
+    } catch (error) {
+        console.error('Error loading PnL data:', error);
+        // Show toast notification
+        const toast = document.createElement('div');
+        toast.className = 'toast toast-end';
+        toast.innerHTML = `
+            <div class="alert alert-error">
+                <span>Failed to load PnL data. Please try again.</span>
+            </div>
+        `;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 5000);
+    } finally {
+        overlay.classList.add('hidden');
+    }
+}
+
+function updateMetrics(data) {
+    // Update Current MTM
+    const currentMtmEl = document.getElementById('current-mtm');
+    const currentMtmPercentEl = document.getElementById('current-mtm-percent');
+    currentMtmEl.textContent = formatCurrency(data.current_mtm);
+    currentMtmEl.className = `stat-value ${data.current_mtm >= 0 ? 'text-success' : 'text-error'}`;
+    
+    // Calculate percentage (assuming some base capital)
+    const baseCapital = 100000; // Example base capital
+    const percentChange = (data.current_mtm / baseCapital) * 100;
+    currentMtmPercentEl.textContent = `${percentChange >= 0 ? '+' : ''}${percentChange.toFixed(2)}%`;
+    currentMtmPercentEl.className = `stat-desc ${data.current_mtm >= 0 ? 'text-success' : 'text-error'}`;
+    
+    // Update Max MTM
+    document.getElementById('max-mtm').textContent = formatCurrency(data.max_mtm);
+    document.getElementById('max-mtm-time').textContent = data.max_mtm_time ? `at ${data.max_mtm_time}` : '--:--';
+    
+    // Update Min MTM
+    document.getElementById('min-mtm').textContent = formatCurrency(data.min_mtm);
+    document.getElementById('min-mtm-time').textContent = data.min_mtm_time ? `at ${data.min_mtm_time}` : '--:--';
+    
+    // Update Max Drawdown
+    document.getElementById('max-drawdown').textContent = formatCurrency(Math.abs(data.max_drawdown));
+}
+
+function updateChart(data) {
+    if (!chart) {
+        initChart();
+    }
+    
+    // Validate and process PnL data
+    if (data.pnl_series && Array.isArray(data.pnl_series)) {
+        const pnlData = data.pnl_series
+            .map(point => ({
+                time: Math.floor(point.time / 1000),
+                value: point.value
+            }))
+            .sort((a, b) => a.time - b.time); // Ensure chronological order
+        
+        if (pnlData.length > 0) {
+            pnlSeries.setData(pnlData);
+        }
+    }
+    
+    // Validate and process drawdown data
+    if (data.drawdown_series && Array.isArray(data.drawdown_series)) {
+        const drawdownData = data.drawdown_series
+            .map(point => ({
+                time: Math.floor(point.time / 1000),
+                value: point.value
+            }))
+            .sort((a, b) => a.time - b.time); // Ensure chronological order
+        
+        if (drawdownData.length > 0) {
+            drawdownSeries.setData(drawdownData);
+        }
+    }
+    
+    // Fit content
+    if (chart && chart.timeScale) {
+        chart.timeScale().fitContent();
+    }
+}
+
+// Debug function to check chart status
+function debugChart() {
+    console.log('Chart Status:', {
+        chartExists: !!chart,
+        pnlSeriesExists: !!pnlSeries,
+        drawdownSeriesExists: !!drawdownSeries,
+        lightweightChartsLoaded: typeof LightweightCharts !== 'undefined'
+    });
+    
+    if (typeof LightweightCharts === 'undefined') {
+        console.error('LightweightCharts library not loaded!');
+        // Try to reload the library
+        const script = document.createElement('script');
+        script.src = '/static/js/lightweight-charts.standalone.production.js';
+        script.onload = function() {
+            console.log('LightweightCharts library loaded successfully');
+            initChart();
+            loadPnLData();
+        };
+        script.onerror = function() {
+            console.error('Failed to load LightweightCharts library');
+        };
+        document.head.appendChild(script);
+    }
+}
+
+// Screenshot function - capture the entire PnL tracker including statistics
+async function takeScreenshot() {
+    // Show loading state on button
+    const screenshotBtn = document.getElementById('screenshot-btn');
+    const originalContent = screenshotBtn.innerHTML;
+    screenshotBtn.innerHTML = '<span class="loading loading-spinner loading-sm mr-2"></span> Capturing...';
+    screenshotBtn.disabled = true;
+    
+    // Use html2canvas to capture the entire section including stats
+    await captureFullSection();
+    
+    // Restore button state
+    setTimeout(() => {
+        screenshotBtn.innerHTML = originalContent;
+        screenshotBtn.disabled = false;
+    }, 1000);
+}
+
+// Capture the full PnL tracker section including stats and chart
+async function captureFullSection() {
+    const screenshotContainer = document.getElementById('screenshot-container');
+    
+    // Hide tooltip before capture
+    const tooltip = document.getElementById('chart-tooltip');
+    if (tooltip) {
+        tooltip.style.display = 'none';
+    }
+    
+    // Create a temporary date/time header
+    const dateTimeHeader = document.createElement('div');
+    dateTimeHeader.id = 'screenshot-datetime';
+    dateTimeHeader.style.cssText = `
+        text-align: center;
+        font-size: 18px;
+        font-weight: bold;
+        margin-bottom: 20px;
+        color: #333;
+        font-family: Arial, sans-serif;
+    `;
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('en-IN', { 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric' 
+    });
+    const timeStr = now.toLocaleTimeString('en-IN', { 
+        hour: '2-digit', 
+        minute: '2-digit', 
+        second: '2-digit',
+        hour12: true 
+    });
+    dateTimeHeader.textContent = `PnL Tracker - ${dateStr} | ${timeStr}`;
+    
+    // Insert date/time header at the beginning of screenshot container
+    screenshotContainer.insertBefore(dateTimeHeader, screenshotContainer.firstChild);
+    
+    // Temporarily set white background
+    const originalBg = screenshotContainer.style.backgroundColor;
+    screenshotContainer.style.backgroundColor = 'white';
+    screenshotContainer.style.padding = '20px';
+    
+    try {
+        await performFullCapture(screenshotContainer);
+    } finally {
+        // Clean up - remove date/time header and restore styles
+        if (dateTimeHeader && dateTimeHeader.parentNode) {
+            dateTimeHeader.remove();
+        }
+        screenshotContainer.style.backgroundColor = originalBg;
+        screenshotContainer.style.padding = '';
+    }
+}
+
+async function performFullCapture(element) {
+    try {
+        // Make sure watermark is visible
+        const watermark = element.querySelector('div[style*="OpenAlgo"]');
+        let originalWatermarkStyle = null;
+        if (watermark) {
+            originalWatermarkStyle = watermark.style.cssText;
+            // Temporarily make watermark more visible
+            watermark.style.color = 'rgba(100, 100, 100, 0.4)';
+            watermark.style.fontSize = '60px';
+            watermark.style.fontWeight = 'bold';
+        }
+        
+        // html2canvas-pro supports oklch colors natively
+        const canvas = await html2canvas(element, {
+            backgroundColor: '#ffffff',
+            scale: 2,
+            logging: false,
+            useCORS: true,
+            allowTaint: true,
+            width: element.scrollWidth,
+            height: element.scrollHeight,
+            windowWidth: element.scrollWidth,
+            windowHeight: element.scrollHeight,
+            onclone: function(clonedDoc) {
+                // Ensure all styles are applied in the cloned document
+                const clonedElement = clonedDoc.getElementById('screenshot-container');
+                if (clonedElement) {
+                    clonedElement.style.backgroundColor = 'white';
+                    clonedElement.style.padding = '20px';
+                }
+                
+                // Ensure stat cards have proper styling
+                const statCards = clonedDoc.querySelectorAll('.stat');
+                statCards.forEach(card => {
+                    card.style.backgroundColor = '#f9f9f9';
+                    card.style.border = '1px solid #e5e5e5';
+                    card.style.borderRadius = '8px';
+                    card.style.padding = '16px';
+                });
+                
+                // Ensure date/time header is styled properly
+                const clonedDateTime = clonedDoc.getElementById('screenshot-datetime');
+                if (clonedDateTime) {
+                    clonedDateTime.style.cssText = `
+                        text-align: center;
+                        font-size: 18px;
+                        font-weight: bold;
+                        margin-bottom: 20px;
+                        color: #333;
+                        font-family: Arial, sans-serif;
+                    `;
+                }
+                
+                // Ensure watermark is visible in clone
+                const clonedWatermark = clonedDoc.querySelector('div[style*="OpenAlgo"]');
+                if (clonedWatermark) {
+                    clonedWatermark.style.color = 'rgba(100, 100, 100, 0.3)';
+                    clonedWatermark.style.fontSize = '60px';
+                    clonedWatermark.style.position = 'absolute';
+                    clonedWatermark.style.zIndex = '1000';
+                }
+            }
+        });
+        
+        // Restore watermark style
+        if (watermark && originalWatermarkStyle) {
+            watermark.style.cssText = originalWatermarkStyle;
+        }
+        
+        // Convert to blob and download
+        canvas.toBlob(function(blob) {
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+            link.download = `PnL_Tracker_${timestamp}.png`;
+            link.href = url;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            
+            showSuccessToast('Screenshot saved successfully!');
+        }, 'image/png', 1.0);
+    } catch (error) {
+        showErrorToast('Failed to capture screenshot. Please try again.');
+        console.error('Capture error:', error);
+        
+        // Restore watermark on error
+        const watermark = element.querySelector('div[style*="OpenAlgo"]');
+        if (watermark && typeof originalWatermarkStyle !== 'undefined') {
+            watermark.style.cssText = originalWatermarkStyle;
+        }
+    }
+}
+
+function showSuccessToast(message) {
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-end';
+    toast.innerHTML = `
+        <div class="alert alert-success">
+            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>${message}</span>
+        </div>
+    `;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+}
+
+
+function showErrorToast(message) {
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-end';
+    toast.innerHTML = `
+        <div class="alert alert-error">
+            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>${message}</span>
+        </div>
+    `;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 5000);
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', function() {
+    // Check if library is loaded
+    if (typeof LightweightCharts === 'undefined') {
+        console.error('LightweightCharts not loaded, attempting to load...');
+        debugChart();
+    } else {
+        console.log('LightweightCharts loaded, version:', LightweightCharts.version || 'unknown');
+        initChart();
+        loadPnLData();
+    }
+    
+    // Manual refresh button
+    document.getElementById('refresh-btn').addEventListener('click', function() {
+        loadPnLData();
+    });
+    
+    // Screenshot button
+    document.getElementById('screenshot-btn').addEventListener('click', function() {
+        takeScreenshot();
+    });
+    
+    // Add debug info on error
+    window.addEventListener('error', function(e) {
+        if (e.message && e.message.includes('LightweightCharts')) {
+            console.error('LightweightCharts error:', e);
+            debugChart();
+        }
+    });
+});
+
+// Clean up on page unload
+window.addEventListener('beforeunload', function() {
+    if (chart) {
+        try {
+            chart.remove();
+        } catch (e) {
+            console.error('Error removing chart:', e);
+        }
+    }
+});
+</script>
+{% endblock %}

@@ -1,5 +1,9 @@
 import json
 from database.token_db import get_symbol, get_oa_symbol 
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def map_order_data(order_data):
     """
@@ -16,7 +20,7 @@ def map_order_data(order_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data
@@ -54,7 +58,7 @@ def map_order_data(order_data):
                     order['prctyp']="SL"
                 
             else:
-                print(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
+                logger.info(f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol.")
                 
     return order_data
 
@@ -110,7 +114,7 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
+            logger.warning(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
 
         transformed_order = {
@@ -148,7 +152,7 @@ def map_trade_data(trade_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         trade_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         trade_data = trade_data
@@ -183,7 +187,7 @@ def map_trade_data(trade_data):
                 
                 
             else:
-                print(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
+                logger.info(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
                 
     return trade_data
 
@@ -193,6 +197,12 @@ def map_trade_data(trade_data):
 def transform_tradebook_data(tradebook_data):
     transformed_data = []
     for trade in tradebook_data:
+        # Parse the timestamp from Zebu format "HH:MM:SS DD-MM-YYYY" to just "HH:MM:SS"
+        timestamp = trade.get('norentm', '')
+        if timestamp and ' ' in timestamp:
+            # Extract just the time part (HH:MM:SS) from "HH:MM:SS DD-MM-YYYY"
+            timestamp = timestamp.split(' ')[0]
+
         transformed_trade = {
             "symbol": trade.get('tsym', ''),
             "exchange": trade.get('exch', ''),
@@ -202,7 +212,7 @@ def transform_tradebook_data(tradebook_data):
             "average_price": trade.get('avgprc', 0.0),
             "trade_value": float(trade.get('avgprc', 0)) * int(trade.get('qty', 0)),
             "orderid": trade.get('norenordno', ''),
-            "timestamp": trade.get('norentm', '')
+            "timestamp": timestamp  # Now just "HH:MM:SS"
         }
         transformed_data.append(transformed_trade)
     return transformed_data
@@ -214,7 +224,7 @@ def map_position_data(position_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         position_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         position_data = position_data
@@ -246,7 +256,7 @@ def map_position_data(position_data):
                 
                 
             else:
-                print(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
+                logger.info(f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol.")
                 
     return position_data
 
@@ -254,12 +264,32 @@ def map_position_data(position_data):
 def transform_positions_data(positions_data):
     transformed_data = []
     for position in positions_data:
+        # Get position values
+        netqty = float(position.get('netqty', 0))
+        netavgprc = float(position.get('netavgprc', 0.0))
+        lp = float(position.get('lp', 0.0))  # Last Price from Zebu
+
+        # Calculate PnL only if there's an open position
+        if netqty != 0 and lp > 0:
+            if netqty > 0:
+                # Long position
+                pnl = (lp - netavgprc) * netqty
+            else:
+                # Short position
+                pnl = (netavgprc - lp) * abs(netqty)
+        else:
+            # No position or no LTP available
+            pnl = 0.0
+            lp = 0.0 if netqty == 0 else lp  # Set LTP to 0 if position is closed
+
         transformed_position = {
             "symbol": position.get('tsym', ''),
             "exchange": position.get('exch', ''),
             "product": position.get('prd', ''),
-            "quantity": position.get('netqty', 0),
-            "average_price": position.get('netavgprc', 0.0),
+            "quantity": netqty,
+            "average_price": netavgprc,
+            "ltp": lp,
+            "pnl": pnl
         }
         transformed_data.append(transformed_position)
     return transformed_data
@@ -277,14 +307,14 @@ def map_portfolio_data(portfolio_data):
     """
     # Check if 'portfolio_data' is a list
     if not portfolio_data or not isinstance(portfolio_data, list):
-        print("No data available or incorrect data format.")
+        logger.info("No data available or incorrect data format.")
         return []
 
     # Iterate over the portfolio_data list and process each entry
     for portfolio in portfolio_data:
         # Ensure 'stat' is 'Ok' before proceeding
         if portfolio.get('stat') != 'Ok':
-            print(f"Error: {portfolio.get('emsg', 'Unknown error occurred.')}")
+            logger.info(f"Error: {portfolio.get('emsg', 'Unknown error occurred.')}")
             continue
 
         # Process the 'exch_tsym' list inside each portfolio entry
@@ -298,7 +328,7 @@ def map_portfolio_data(portfolio_data):
             if symbol_from_db:
                 exch_tsym['tsym'] = symbol_from_db
             else:
-                print(f"Zebu Portfolio - Product Value for {symbol} Not Found or Changed.")
+                logger.info(f"Zebu Portfolio - Product Value for {symbol} Not Found or Changed.")
     
     return portfolio_data
 
@@ -310,7 +340,7 @@ def calculate_portfolio_statistics(holdings_data):
 
     # Check if the data is valid or contains an error
     if not holdings_data or not isinstance(holdings_data, list):
-        print("Error: Invalid or missing holdings data.")
+        logger.info("Error: Invalid or missing holdings data.")
         return {
             'totalholdingvalue': totalholdingvalue,
             'totalinvvalue': totalinvvalue,
@@ -322,7 +352,7 @@ def calculate_portfolio_statistics(holdings_data):
     for holding in holdings_data:
         # Ensure 'stat' is 'Ok' before proceeding
         if holding.get('stat') != 'Ok':
-            print(f"Error: {holding.get('emsg', 'Unknown error occurred.')}")
+            logger.info(f"Error: {holding.get('emsg', 'Unknown error occurred.')}")
             continue
 
         # Filter out the NSE entry and ignore BSE for the same symbol
@@ -358,8 +388,8 @@ def calculate_portfolio_statistics(holdings_data):
 
         # Valuation formula from API
         valuation = ((btstqty + holdqty + brkcolqty + unplgdqty + benqty + max(npoadqty, dpqty)) - usedqty)*upload_price
-        print("test valuation :"+str(npoadqty))
-        print("test valuation :"+str(upload_price))
+        logger.info(f"test valuation :{npoadqty}")
+        logger.info(f"test valuation :{upload_price}")
         # Accumulate total valuation
         totalholdingvalue += valuation
 

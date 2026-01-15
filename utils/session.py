@@ -2,10 +2,10 @@ from datetime import datetime, timedelta
 import pytz
 from functools import wraps
 from flask import session, redirect, url_for
-import logging
+from utils.logging import get_logger
 import os
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def get_session_expiry_time():
     """Get session expiry time set to 3 AM IST next day"""
@@ -65,12 +65,86 @@ def is_session_valid():
     logger.debug(f"Session valid. Current time: {now_ist}, Login time: {login_time}, Daily expiry: {daily_expiry}")
     return True
 
+def revoke_user_tokens():
+    """Revoke auth tokens for the current user when session expires"""
+    if 'user' in session:
+        username = session.get('user')
+        try:
+            from database.auth_db import upsert_auth, auth_cache, feed_token_cache
+
+            # Clear cache entries first to prevent stale data access
+            cache_key_auth = f"auth-{username}"
+            cache_key_feed = f"feed-{username}"
+            if cache_key_auth in auth_cache:
+                del auth_cache[cache_key_auth]
+            if cache_key_feed in feed_token_cache:
+                del feed_token_cache[cache_key_feed]
+
+            # Clear symbol cache on logout/session expiry
+            try:
+                from database.master_contract_cache_hook import clear_cache_on_logout
+                clear_cache_on_logout()
+            except Exception as cache_error:
+                logger.error(f"Error clearing symbol cache: {cache_error}")
+
+            # Clear settings cache on logout/session expiry
+            try:
+                from database.settings_db import clear_settings_cache
+                clear_settings_cache()
+            except Exception as cache_error:
+                logger.error(f"Error clearing settings cache: {cache_error}")
+
+            # Clear strategy cache on logout/session expiry
+            try:
+                from database.strategy_db import clear_strategy_cache
+                clear_strategy_cache()
+            except Exception as cache_error:
+                logger.error(f"Error clearing strategy cache: {cache_error}")
+
+            # Clear telegram cache on logout/session expiry
+            try:
+                from database.telegram_db import clear_telegram_cache
+                clear_telegram_cache()
+            except Exception as cache_error:
+                logger.error(f"Error clearing telegram cache: {cache_error}")
+
+            # Revoke the auth token in database
+            inserted_id = upsert_auth(username, "", "", revoke=True)
+            if inserted_id is not None:
+                logger.info(f"Auto-expiry: Revoked auth tokens for user: {username}")
+            else:
+                logger.error(f"Auto-expiry: Failed to revoke auth tokens for user: {username}")
+        except Exception as e:
+            logger.error(f"Error revoking tokens during auto-expiry for user {username}: {e}")
+
 def check_session_validity(f):
     """Decorator to check session validity before executing route"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not is_session_valid():
+            # Revoke tokens before clearing session
+            revoke_user_tokens()
             session.clear()
+
+            # Check if this is an AJAX/fetch request
+            from flask import request, jsonify
+            is_ajax = (
+                request.headers.get('X-Requested-With') == 'XMLHttpRequest' or
+                request.headers.get('Accept', '').startswith('application/json') or
+                request.content_type == 'application/json' or
+                request.is_json
+            )
+
+            if is_ajax:
+                # Return JSON response for AJAX requests instead of redirect
+                # This prevents consuming rate limits on the login endpoint
+                logger.info("Invalid session detected - returning 401 for AJAX request")
+                return jsonify({
+                    'status': 'error',
+                    'error': 'session_expired',
+                    'message': 'Your session has expired. Please log in again.'
+                }), 401
+
             logger.info("Invalid session detected - redirecting to login")
             return redirect(url_for('auth.login'))
         logger.debug("Session validated successfully")
@@ -83,6 +157,8 @@ def invalidate_session_if_invalid(f):
     def decorated_function(*args, **kwargs):
         if not is_session_valid():
             logger.info("Invalid session detected - clearing session")
+            # Revoke tokens before clearing session
+            revoke_user_tokens()
             session.clear()
         return f(*args, **kwargs)
     return decorated_function

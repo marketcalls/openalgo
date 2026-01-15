@@ -14,10 +14,14 @@ function regenerateApiKey() {
     
     const userId = userInfo.getAttribute('data-login-username');
 
+    // Use fetchWithCSRF if available, otherwise fallback to regular fetch with CSRF header
+    const csrfToken = typeof getCSRFToken === 'function' ? getCSRFToken() : '';
+    
     fetch('/apikey', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
+            'X-CSRFToken': csrfToken
         },
         body: JSON.stringify({ user_id: userId })
     })

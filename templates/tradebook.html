@@ -23,13 +23,21 @@
 {% block content %}
 <div class="w-full">
     <!-- Header Section -->
-    <div class="mb-6">
-        <h1 class="text-3xl font-bold">Trade Book</h1>
-        <p class="text-base-content/60">View your trading history and executed orders</p>
+    <div class="mb-6 flex justify-between items-center">
+        <div>
+            <h1 class="text-3xl font-bold">Trade Book</h1>
+            <p class="text-base-content/60">View your executed trades</p>
+        </div>
+        <a href="{{ url_for('orders_bp.export_tradebook') }}" class="btn btn-primary">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
+            </svg>
+            Export to CSV
+        </a>
     </div>
 
     <!-- Trade Summary -->
-    <div class="stats shadow w-full">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <div class="stat">
             <div class="stat-title">Total Trades</div>
             <div class="stat-value">{{ tradebook_data|length }}</div>
@@ -68,7 +76,7 @@
     </div>
 
     <!-- Trades Table -->
-    <div id="tradebook-table-container" class="table-container">
+    <div class="table-container">
         <table class="table w-full">
             <thead class="table-header">
                 <tr>
@@ -138,20 +146,13 @@
         </table>
     </div>
 
-    <!-- Export Options -->
-    <div class="flex justify-end mt-6 gap-4">
-        <button class="btn btn-outline btn-sm gap-2">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" />
-            </svg>
-            Export CSV
-        </button>
-        <button class="btn btn-outline btn-sm gap-2">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-            </svg>
-            Export PDF
-        </button>
+    <!-- Pagination -->
+    <div class="flex justify-end mt-6">
+        <div class="join">
+            <button class="join-item btn btn-sm">«</button>
+            <button class="join-item btn btn-sm">Page 1</button>
+            <button class="join-item btn btn-sm">»</button>
+        </div>
     </div>
 </div>
 

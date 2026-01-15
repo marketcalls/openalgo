@@ -8,110 +8,185 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
     }
 
-    // Set initial badge text to prevent flash of empty content
-    modeBadge.textContent = 'Live Mode';
-    modeBadge.classList.add('badge-success');
+    // State management variables
+    let isInitialized = false;
+    let currentMode = false; // false = Live Mode, true = Analyze Mode
 
-    function updateBadge(isAnalyzeMode) {
-        if (isAnalyzeMode) {
-            // Store current theme before switching to garden
-            const currentTheme = document.documentElement.getAttribute('data-theme');
-            if (currentTheme !== 'garden') {
-                localStorage.setItem('previousTheme', currentTheme);
-                sessionStorage.setItem('previousTheme', currentTheme);
-            }
-            
-            // Set garden theme when switching to analyze mode
-            window.themeManager.setTheme('garden');
-            
-            modeBadge.textContent = 'Analyze Mode';
-            modeBadge.classList.remove('badge-success');
-            modeBadge.classList.add('badge-warning');
-        } else {
-            modeBadge.textContent = 'Live Mode';
-            modeBadge.classList.remove('badge-warning');
-            modeBadge.classList.add('badge-success');
-            
-            // Only restore theme if we're switching from analyze mode
-            const currentTheme = document.documentElement.getAttribute('data-theme');
-            if (currentTheme === 'garden') {
-                window.themeManager.restorePreviousTheme();
-            }
+    function updateBadge(isAnalyzeMode, skipThemeChange = false) {
+        // Prevent unnecessary updates if mode hasn't actually changed
+        if (isInitialized && currentMode === isAnalyzeMode) {
+            return;
         }
-    }
 
-    // Initialize mode from server
-    fetch('/settings/analyze-mode')
-        .then(response => response.json())
-        .then(data => {
-            modeToggle.checked = data.analyze_mode;
-            
-            if (data.analyze_mode) {
-                // If in analyze mode, ensure we store the current theme before switching
+        currentMode = isAnalyzeMode;
+
+        // Only update toggle state if it's different to prevent icon flip
+        if (modeToggle.checked !== isAnalyzeMode) {
+            modeToggle.checked = isAnalyzeMode;
+        }
+
+        // Clear all badge classes first
+        modeBadge.classList.remove('badge-success', 'badge-warning', 'badge-neutral');
+
+        // Hide theme switcher BEFORE theme change to prevent icon flip
+        const themeSwitcher = document.querySelector('.theme-switcher');
+        if (!skipThemeChange && themeSwitcher) {
+            themeSwitcher.style.transition = 'none';
+            themeSwitcher.style.opacity = '0';
+        }
+
+        // Check if mobile (screen width < 640px)
+        const isMobile = window.innerWidth < 640;
+
+        if (isAnalyzeMode) {
+            modeBadge.textContent = isMobile ? 'Analyze' : 'Analyze Mode';
+            modeBadge.classList.add('badge-warning');
+            modeBadge.style.opacity = '1';
+
+            if (!skipThemeChange && window.themeManager) {
+                // Store current theme before switching to dracula (analyze theme)
                 const currentTheme = document.documentElement.getAttribute('data-theme');
-                if (currentTheme !== 'garden') {
+                if (currentTheme !== 'dracula') {
                     localStorage.setItem('previousTheme', currentTheme);
                     sessionStorage.setItem('previousTheme', currentTheme);
                 }
-                window.themeManager.setTheme('garden');
+                window.themeManager.setTheme('dracula');
             }
-            updateBadge(data.analyze_mode);
-        })
-        .catch(error => {
-            console.error('[Mode] Error fetching analyze mode:', error);
-            // Ensure badge shows Live Mode if fetch fails
-            updateBadge(false);
-        });
+        } else {
+            modeBadge.textContent = isMobile ? 'Live' : 'Live Mode';
+            modeBadge.classList.add('badge-success');
+            modeBadge.style.opacity = '1';
+
+            if (!skipThemeChange && window.themeManager) {
+                // Only restore theme if we're switching from dracula (analyze) mode
+                const currentTheme = document.documentElement.getAttribute('data-theme');
+                if (currentTheme === 'dracula') {
+                    window.themeManager.restorePreviousTheme();
+                }
+            }
+        }
+
+        // Show theme switcher after theme change is complete
+        if (!skipThemeChange && themeSwitcher) {
+            setTimeout(() => {
+                themeSwitcher.style.transition = '';
+                themeSwitcher.style.opacity = '1';
+            }, 10);
+        }
+
+        // Update session storage
+        sessionStorage.setItem('analyzeMode', isAnalyzeMode.toString());
+        localStorage.setItem('analyzeMode', isAnalyzeMode.toString()); // For cross-tab sync
+    }
+
+    // Initialize mode from server (authoritative source)
+    function initializeFromServer() {
+        fetch('/settings/analyze-mode')
+            .then(response => response.json())
+            .then(data => {
+                const serverMode = Boolean(data.analyze_mode);
+                updateBadge(serverMode);
+                isInitialized = true;
+            })
+            .catch(error => {
+                console.error('[Mode] Error fetching analyze mode:', error);
+                // Fallback to Live Mode if server fetch fails
+                updateBadge(false);
+                isInitialized = true;
+            });
+    }
+    
+    // Initialize immediately
+    initializeFromServer();
 
     // Handle mode toggle
     modeToggle.addEventListener('change', function(e) {
-        const mode = e.target.checked ? 1 : 0;
+        // Prevent multiple rapid clicks
+        if (!isInitialized) {
+            e.target.checked = currentMode;
+            return;
+        }
         
-        fetch(`/settings/analyze-mode/${mode}`, {
+        const newMode = e.target.checked ? 1 : 0;
+        const newModeBoolean = Boolean(newMode);
+        
+        // Optimistically update UI
+        updateBadge(newModeBoolean);
+        
+        fetch(`/settings/analyze-mode/${newMode}`, {
             method: 'POST',
+            headers: {
+                'X-CSRFToken': getCSRFToken()
+            }
         })
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                updateBadge(data.analyze_mode);
+                // Ensure UI matches server response
+                updateBadge(Boolean(data.analyze_mode));
                 showToast(data.message, 'success');
-                
-                // Store current state in sessionStorage before reload
-                sessionStorage.setItem('analyzeMode', data.analyze_mode);
-                
-                // Reload page to ensure all components update
-                setTimeout(() => window.location.reload(), 1000);
+
+                // Show disclaimer toast when enabling analyzer mode
+                if (newModeBoolean === true) {
+                    setTimeout(() => {
+                        showToast('⚠️ Analyzer (Sandbox) mode is for testing purposes only', 'warning', 20000);
+                    }, 2000); // Slight delay to show after success toast
+                }
+
+                // Refresh current page content to reflect the mode change
+                // Use the refreshCurrentPageContent function if available
+                if (typeof refreshCurrentPageContent === 'function') {
+                    setTimeout(() => {
+                        refreshCurrentPageContent();
+                    }, 500); // Small delay to ensure mode is properly set
+                } else {
+                    // Fallback: reload the page if refresh function is not available
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 500);
+                }
+            } else {
+                throw new Error(data.error || 'Unknown error');
             }
         })
         .catch(error => {
             console.error('[Mode] Error updating mode:', error);
             showToast('Failed to update mode', 'error');
-            // Reset toggle state
-            e.target.checked = !e.target.checked;
+
+            // Revert to previous state on error
+            updateBadge(!newModeBoolean);
         });
     });
 
-    // Handle page visibility changes
+    // Handle page visibility changes - re-sync with server when page becomes visible
     document.addEventListener('visibilitychange', function() {
-        if (!document.hidden) {
-            // When page becomes visible, check and restore theme state
-            const analyzeMode = sessionStorage.getItem('analyzeMode') === 'true';
-            if (analyzeMode) {
-                const currentTheme = document.documentElement.getAttribute('data-theme');
-                if (currentTheme !== 'garden') {
-                    window.themeManager.setTheme('garden');
-                }
-            }
-            updateBadge(analyzeMode);
+        if (!document.hidden && isInitialized) {
+            // Re-sync with server when page becomes visible
+            initializeFromServer();
         }
     });
 
     // Handle storage events for cross-tab consistency
     window.addEventListener('storage', function(e) {
-        if (e.key === 'analyzeMode') {
+        if (e.key === 'analyzeMode' && isInitialized) {
             const isAnalyzeMode = e.newValue === 'true';
-            modeToggle.checked = isAnalyzeMode;
-            updateBadge(isAnalyzeMode);
+            updateBadge(isAnalyzeMode, true); // Skip theme change for storage events
         }
+    });
+
+    // Handle window resize to update badge text for mobile/desktop
+    let resizeTimer;
+    window.addEventListener('resize', function() {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function() {
+            if (isInitialized && modeBadge) {
+                const isMobile = window.innerWidth < 640;
+                if (currentMode) {
+                    modeBadge.textContent = isMobile ? 'Analyze' : 'Analyze Mode';
+                } else {
+                    modeBadge.textContent = isMobile ? 'Live' : 'Live Mode';
+                }
+            }
+        }, 100); // Debounce resize events
     });
 });

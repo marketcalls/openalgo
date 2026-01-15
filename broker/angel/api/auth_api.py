@@ -1,6 +1,7 @@
-import http.client
+import httpx
 import json
 import os
+from utils.httpx_client import get_httpx_client
 
 def authenticate_broker(clientcode, broker_pin, totp_code):
     """
@@ -9,7 +10,9 @@ def authenticate_broker(clientcode, broker_pin, totp_code):
     api_key = os.getenv('BROKER_API_KEY')
 
     try:
-        conn = http.client.HTTPSConnection("apiconnect.angelbroking.com")
+        # Get the shared httpx client
+        client = get_httpx_client()
+        
         payload = json.dumps({
             "clientcode": clientcode,
             "password": broker_pin,
@@ -26,16 +29,24 @@ def authenticate_broker(clientcode, broker_pin, totp_code):
             'X-PrivateKey': api_key
         }
 
-        conn.request("POST", "/rest/auth/angelbroking/user/v1/loginByPassword", payload, headers)
-        res = conn.getresponse()
-        data = res.read()
-        mydata = data.decode("utf-8")
-
-        data_dict = json.loads(mydata)
+        response = client.post(
+            "https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword",
+            headers=headers,
+            content=payload
+        )
+        
+        # Add status attribute for compatibility with the existing codebase
+        response.status = response.status_code
+        
+        data = response.text
+        data_dict = json.loads(data)
 
         if 'data' in data_dict and 'jwtToken' in data_dict['data']:
-            return data_dict['data']['jwtToken'], None
+            # Return both JWT token and feed token if available (None if not)
+            auth_token = data_dict['data']['jwtToken']
+            feed_token = data_dict['data'].get('feedToken', None)
+            return auth_token, feed_token, None
         else:
-            return None, data_dict.get('message', 'Authentication failed. Please try again.')
+            return None, None, data_dict.get('message', 'Authentication failed. Please try again.')
     except Exception as e:
-        return None, str(e)
+        return None, None, str(e)

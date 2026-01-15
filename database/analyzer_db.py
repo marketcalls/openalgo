@@ -2,22 +2,36 @@
 
 import os
 import json
-from sqlalchemy import create_engine, Column, Integer, DateTime, Text, String
+from sqlalchemy import create_engine, Column, Integer, DateTime, Text, String, Index
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
+from sqlalchemy.pool import NullPool
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import pytz
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 
-engine = create_engine(
-    DATABASE_URL,
-    pool_size=50,
-    max_overflow=100,
-    pool_timeout=10
-)
+# Conditionally create engine based on DB type
+if DATABASE_URL and 'sqlite' in DATABASE_URL:
+    # SQLite: Use NullPool to prevent connection pool exhaustion
+    engine = create_engine(
+        DATABASE_URL,
+        poolclass=NullPool,
+        connect_args={'check_same_thread': False}
+    )
+else:
+    # For other databases like PostgreSQL, use connection pooling
+    engine = create_engine(
+        DATABASE_URL,
+        pool_size=50,
+        max_overflow=100,
+        pool_timeout=10
+    )
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
@@ -30,6 +44,13 @@ class AnalyzerLog(Base):
     request_data = Column(Text, nullable=False)
     response_data = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), default=func.now())
+
+    # Performance indexes for analyzer queries
+    __table_args__ = (
+        Index('idx_analyzer_api_type', 'api_type'),         # Speeds up filtering by API type
+        Index('idx_analyzer_created_at', 'created_at'),     # Speeds up time-based queries and log retrieval
+        Index('idx_analyzer_type_time', 'api_type', 'created_at'),  # Composite for API type + time range queries
+    )
 
     def to_dict(self):
         """Convert log entry to dictionary"""
@@ -50,11 +71,11 @@ class AnalyzerLog(Base):
 
 def init_db():
     """Initialize the analyzer table"""
-    print("Initializing Analyzer Table")
-    Base.metadata.create_all(bind=engine)
+    from database.db_init_helper import init_db_with_logging
+    init_db_with_logging(Base, engine, "Analyzer DB", logger)
 
 # Executor for asynchronous tasks
-executor = ThreadPoolExecutor(2)
+executor = ThreadPoolExecutor(10)  # Increased from 2 to 10 for better concurrency
 
 def async_log_analyzer(request_data, response_data, api_type='placeorder'):
     """Asynchronously log analyzer request"""
@@ -76,7 +97,7 @@ def async_log_analyzer(request_data, response_data, api_type='placeorder'):
         db_session.add(analyzer_log)
         db_session.commit()
     except Exception as e:
-        print(f"Error saving analyzer log: {e}")
+        logger.error(f"Error saving analyzer log: {e}")
         db_session.rollback()
     finally:
         db_session.remove()

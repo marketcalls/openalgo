@@ -1,5 +1,9 @@
 import json
 from database.token_db import get_symbol , get_oa_symbol
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def map_order_data(order_data):
     """
@@ -16,12 +20,12 @@ def map_order_data(order_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data['data']
         
-    #print(order_data)
+    #logger.info(f"{order_data}")
 
     if order_data:
         for order in order_data:
@@ -32,9 +36,9 @@ def map_order_data(order_data):
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol:
-                order['tradingsymbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+                order['tradingsymbol'] = get_oa_symbol(brsymbol=symbol,exchange=exchange)
             else:
-                print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
+                logger.info(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
     return order_data
 
@@ -91,7 +95,7 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
+            logger.warning(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
             continue
 
         if(order.get("status", "")=="COMPLETE"):
@@ -159,12 +163,12 @@ def map_position_data(position_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         position_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         position_data = position_data['data']['net']
         
-    #print(order_data)
+    #logger.info(f"{order_data}")
 
     if position_data:
         for position in position_data:
@@ -175,9 +179,9 @@ def map_position_data(position_data):
             
             # Check if a symbol was found; if so, update the trading_symbol in the current order
             if symbol:
-                position['tradingsymbol'] = get_oa_symbol(symbol=symbol,exchange=exchange)
+                position['tradingsymbol'] = get_oa_symbol(brsymbol=symbol, exchange=exchange)
             else:
-                print(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
+                logger.info(f"{symbol} and exchange {exchange} not found. Keeping original trading symbol.")
                 
     return position_data
     
@@ -194,21 +198,32 @@ def transform_positions_data(positions_data):
             "exchange": position.get('exchange', ''),
             "product": position.get('product', ''),
             "quantity": position.get('quantity', '0'),
+            "pnl": round(position.get('pnl', 0.0), 2),  # Rounded to two decimals
             "average_price": average_price_formatted,
+            "ltp": round(position.get('last_price', 0.0), 2)
         }
         transformed_data.append(transformed_position)
     return transformed_data
 
 def transform_holdings_data(holdings_data):
     transformed_data = []
-    for holdings in holdings_data:
+    for holdings in holdings_data:  
+        # Handle zero average price case
+        average_price = float(holdings.get('average_price') or 0.0)
+        if average_price == 0:
+            logger.debug(f"Encountering zero average price for symbol: {holdings.get('tradingsymbol', 'Unknown')}")
+            pnlpercent = 0.0
+        else:
+            pnlpercent = round((holdings.get('last_price', 0) - average_price) / average_price * 100, 2)
+        
         transformed_position = {
             "symbol": holdings.get('tradingsymbol', ''),
             "exchange": holdings.get('exchange', ''),
             "quantity": holdings.get('quantity', 0),
             "product": holdings.get('product', ''),
+            "average_price": average_price,
             "pnl": round(holdings.get('pnl', 0.0), 2),  # Rounded to two decimals
-            "pnlpercent": round((holdings.get('last_price', 0) - holdings.get('average_price', 0.0)) / holdings.get('average_price', 0.0) * 100, 2)  # Rounded to two decimals
+            "pnlpercent": pnlpercent  # Rounded to two decimals
         
         }
         transformed_data.append(transformed_position)
@@ -230,7 +245,7 @@ def map_portfolio_data(portfolio_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.info("No data available.")
         portfolio_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         portfolio_data = portfolio_data['data']
@@ -243,7 +258,7 @@ def map_portfolio_data(portfolio_data):
                 portfolio['product'] = 'CNC'
 
             else:
-                print(f"Zerodha Portfolio - Product Value for Delivery Not Found or Changed.")
+                logger.info("Zerodha Portfolio - Product Value for Delivery Not Found or Changed.")
                 
     return portfolio_data
 

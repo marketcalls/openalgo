@@ -1,17 +1,40 @@
-version: '3.8'
-
 services:
-  web:
-    build: .
+  openalgo:
+    image: openalgo:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: openalgo-web
     ports:
-      - "5000:5000"
+      - "${FLASK_PORT:-5000}:5000"
+      - "${WEBSOCKET_PORT:-8765}:8765"
+
+    # persistent DB, logs + mount the host .env read-only so dotenv can read it
     volumes:
-      - .:/app
-      - ./db:/app/db
-    env_file:
-      - .env
+      - openalgo_db:/app/db
+      - openalgo_logs:/app/logs          # Use named volume for logs
+      - openalgo_log:/app/log            # Application logs (named volume)
+      - openalgo_strategies:/app/strategies  # Python strategies (named volume - fixes permission issues)
+      - openalgo_keys:/app/keys          # API keys/certificates (named volume)
+      - ./.env:/app/.env:ro
+
+    # (optional) extra env-vars that are NOT in .env
     environment:
-      - FLASK_DEBUG=True
-      - FLASK_ENV=development
-      - DATABASE_URL=sqlite:///db/openalgo.db
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - FLASK_DEBUG=${FLASK_DEBUG:-0}
+
     restart: unless-stopped
+
+# Define named volumes for database and logs persistence
+volumes:
+  openalgo_db:
+    driver: local
+  openalgo_logs:
+    driver: local
+  openalgo_log:
+    driver: local
+  openalgo_strategies:
+    driver: local
+  openalgo_keys:
+    driver: local

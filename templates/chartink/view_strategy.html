@@ -85,6 +85,7 @@
 
                     <div class="card-actions justify-end mt-4 space-y-2">
                         <form method="POST" action="{{ url_for('chartink_bp.toggle_strategy_route', strategy_id=strategy.id) }}" class="w-full">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
                             <button type="submit" class="btn btn-primary btn-block">
                                 {{ 'Deactivate' if strategy.is_active else 'Activate' }} Strategy
                             </button>
@@ -127,10 +128,10 @@
                                 <span class="label-text">Webhook URL</span>
                                 <span class="label-text-alt">Click to copy</span>
                             </label>
-                            <div class="mockup-code cursor-pointer relative" id="webhookUrl">
+                            <div class="mockup-code bg-neutral text-neutral-content dark:bg-primary dark:text-primary-content cursor-pointer" id="webhookUrl">
                                 <pre><code>{{ request.host_url }}chartink/webhook/{{ strategy.webhook_id }}</code></pre>
                                 <div class="absolute right-2 top-1/2 -translate-y-1/2 text-sm opacity-70 hidden copy-hint">
-                                    Copied!
+                                    <span class="badge badge-neutral dark:badge-primary">Copied!</span>
                                 </div>
                             </div>
                         </div>
@@ -248,13 +249,21 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    // Copy webhook URL on click
+    const csrfTokenInput = document.querySelector('input[name="csrf_token"]');
+    const csrfToken = csrfTokenInput ? csrfTokenInput.value : null;
+
+    if (!csrfToken && document.getElementById('confirm_strategy_delete')) {
+        console.error('CSRF token not found! Strategy deletion and other protected actions may fail.');
+        showToast('error', 'Security token missing. Actions may fail.');
+    }
+    const deleteModal = document.getElementById('delete_strategy_modal');
     const webhookUrlContainer = document.getElementById('webhookUrl');
     const copyHint = webhookUrlContainer.querySelector('.copy-hint');
-    const webhookUrl = webhookUrlContainer.querySelector('code');
-    
+    const webhookUrl = webhookUrlContainer.querySelector('code').textContent;
+
+    // Copy webhook URL on click
     webhookUrlContainer.addEventListener('click', function() {
-        navigator.clipboard.writeText(webhookUrl.textContent).then(() => {
+        navigator.clipboard.writeText(webhookUrl).then(() => {
             copyHint.classList.remove('hidden');
             setTimeout(() => copyHint.classList.add('hidden'), 2000);
             showToast('success', 'Webhook URL copied to clipboard!');
@@ -269,7 +278,8 @@ document.addEventListener('DOMContentLoaded', function() {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                'X-CSRFToken': csrfToken
             }
         })
         .then(response => response.json())
@@ -312,14 +322,58 @@ function showToast(type, message) {
 #webhookUrl {
     cursor: pointer;
     position: relative;
+    transition: all 0.2s ease;
 }
+
 #webhookUrl:hover {
-    background-color: var(--base-200);
+    opacity: 0.95;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
 }
+
+#webhookUrl pre {
+    margin: 0;
+    background: transparent;
+    padding: 1rem;
+}
+
+#webhookUrl code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
 .copy-hint {
-    background-color: var(--base-100);
-    padding: 0.25rem 0.5rem;
-    border-radius: 0.25rem;
+    z-index: 10;
+}
+
+.copy-hint .badge {
+    font-size: 0.75rem;
+    padding: 0.5rem 1rem;
+}
+
+.mockup-code .text-success {
+    color: #4ade80 !important;
+}
+
+.mockup-code .text-info {
+    color: #60a5fa !important;
+}
+
+/* Theme-specific styles */
+[data-theme="light"] .mockup-code,
+[data-theme="garden"] .mockup-code {
+    background-color: #1a1a1a !important;
+    color: #ffffff !important;
+}
+
+[data-theme="light"] .mockup-code .badge,
+[data-theme="garden"] .mockup-code .badge {
+    background-color: #ffffff !important;
+    color: #1a1a1a !important;
+}
+
+[data-theme="dark"] .mockup-code {
+    background-color: hsl(var(--p)) !important;
+    color: hsl(var(--pc)) !important;
 }
 </style>
 {% endblock %}

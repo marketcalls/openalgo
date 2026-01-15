@@ -1,0 +1,17 @@
+meta {
+  name: Ping
+  type: http
+  seq: 22
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/ping
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": ""
+  }
+}

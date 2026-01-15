@@ -1,0 +1,18 @@
+meta {
+  name: Market Timings
+  type: http
+  seq: 16
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/market/timings
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "date": "2025-04-30"
+  }
+}

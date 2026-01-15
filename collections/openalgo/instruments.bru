@@ -1,0 +1,19 @@
+meta {
+  name: Instruments
+  type: http
+  seq: 17
+}
+
+get {
+  url: http://127.0.0.1:5000/api/v1/instruments
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "exchange": "NSE_INDEX",
+      "format": "json"
+  }
+}

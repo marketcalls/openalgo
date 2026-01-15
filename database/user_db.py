@@ -5,20 +5,56 @@ from sqlalchemy import create_engine, Column, Integer, String, Boolean
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.pool import NullPool
 from cachetools import TTLCache
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 import pyotp
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 # Initialize Argon2 hasher
 ph = PasswordHasher()
 
 # Database connection details
 DATABASE_URL = os.getenv('DATABASE_URL')
-PASSWORD_PEPPER = os.getenv('API_KEY_PEPPER')  # We'll use the same pepper for consistency
+
+# Security: Require API_KEY_PEPPER environment variable (fail fast if missing)
+# Pepper must be at least 32 bytes (64 hex characters) for cryptographic security
+_pepper_value = os.getenv('API_KEY_PEPPER')
+if not _pepper_value:
+    raise RuntimeError(
+        "CRITICAL: API_KEY_PEPPER environment variable is not set. "
+        "This is required for secure password hashing. "
+        "Generate one using: python -c \"import secrets; print(secrets.token_hex(32))\""
+    )
+if len(_pepper_value) < 32:
+    raise RuntimeError(
+        f"CRITICAL: API_KEY_PEPPER must be at least 32 characters (got {len(_pepper_value)}). "
+        "Generate a secure pepper using: python -c \"import secrets; print(secrets.token_hex(32))\""
+    )
+PASSWORD_PEPPER = _pepper_value
 
 # Engine and session setup
-engine = create_engine(DATABASE_URL, echo=False)
+# Conditionally create engine based on DB type
+if DATABASE_URL and 'sqlite' in DATABASE_URL:
+    # SQLite: Use NullPool to prevent connection pool exhaustion
+    engine = create_engine(
+        DATABASE_URL,
+        echo=False,
+        poolclass=NullPool,
+        connect_args={'check_same_thread': False}
+    )
+else:
+    # For other databases like PostgreSQL, use connection pooling
+    engine = create_engine(
+        DATABASE_URL,
+        echo=False,
+        pool_size=50,
+        max_overflow=100,
+        pool_timeout=10
+    )
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()
@@ -66,8 +102,8 @@ class User(Base):
         return totp.verify(token)
 
 def init_db():
-    print("Initializing User DB")
-    Base.metadata.create_all(bind=engine)
+    from database.db_init_helper import init_db_with_logging
+    init_db_with_logging(Base, engine, "User DB", logger)
 
 def add_user(username, email, password, is_admin=False):
     try:

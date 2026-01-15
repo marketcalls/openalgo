@@ -1,16 +1,46 @@
-**/__pycache__
-**/*.pyc
-**/*.pyo
-**/*.pyd
-.Python
+# Ignore stateful content (these will be generated again)
+db/
+log/
+
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
 env/
 venv/
-.env*
-!.env.example
+.venv/
+.Python
+
+# Environment and secrets
+.env
+!.sample.env
+secrets.*
+*.key
+*.pem
+
+# SQLite and runtime files
 *.sqlite
-.git
-.gitignore
-.docker
-Dockerfile
-README.md
+*.sqlite3
+*.db
+*.log
 *.sock
+
+# Version control
+.git/
+.gitignore
+
+# Docker and CI/CD
+Dockerfile
+docker-compose.yml
+.docker/
+.dockerignore
+
+# IDE config
+.vscode/
+.idea/
+
+# Project docs (EXPLICITLY INCLUDED)
+!docs/

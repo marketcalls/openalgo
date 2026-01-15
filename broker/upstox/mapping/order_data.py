@@ -1,5 +1,9 @@
 import json
 from database.token_db import get_symbol 
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 def map_order_data(order_data):
     """
@@ -16,7 +20,7 @@ def map_order_data(order_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.debug("No order data available to map.")
         order_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         order_data = order_data['data']
@@ -44,7 +48,7 @@ def map_order_data(order_data):
                 elif order['exchange'] in ['NFO', 'MCX', 'BFO', 'CDS'] and order['product'] == 'D':
                     order['product'] = 'NRML'
             else:
-                print(f"Symbol not found for token {instrument_token} and exchange {exchange}. Keeping original trading symbol.")
+                logger.warning(f"Symbol not found for token {instrument_token} and exchange {exchange}. Keeping original trading symbol.")
                 
     return order_data
 
@@ -101,7 +105,7 @@ def transform_order_data(orders):
     for order in orders:
         # Make sure each item is indeed a dictionary
         if not isinstance(order, dict):
-            print(f"Warning: Expected a dict, but found a {type(order)}. Skipping this item.")
+            logger.warning(f"Expected a dict, but found {type(order)}. Skipping this item.")
             continue
 
         transformed_order = {
@@ -149,12 +153,47 @@ def map_position_data(position_data):
 def transform_positions_data(positions_data):
     transformed_data = []
     for position in positions_data:
+        # Handle null average_price from Upstox API
+        # According to Upstox API docs:
+        # - average_price: Average price at which the net position quantity was acquired
+        # - buy_price: Average price at which quantities were bought
+        # - sell_price: Average price at which quantities were sold
+        # - day_buy_price: Average price at which the day qty was bought
+        # - day_sell_price: Average price at which the day quantity was sold
+
+        avg_price = position.get('average_price')
+        quantity = position.get('quantity', 0)
+
+        # If average_price is null or 0, calculate it from available data
+        if avg_price is None or avg_price == 0:
+            if quantity > 0:
+                # Net LONG position
+                # Priority: buy_price (overall average) > day_buy_price (intraday only)
+                avg_price = position.get('buy_price', 0.0)
+                if avg_price == 0 or avg_price is None:
+                    avg_price = position.get('day_buy_price', 0.0)
+
+            elif quantity < 0:
+                # Net SHORT position
+                # Priority: sell_price (overall average) > day_sell_price (intraday only)
+                avg_price = position.get('sell_price', 0.0)
+                if avg_price == 0 or avg_price is None:
+                    avg_price = position.get('day_sell_price', 0.0)
+            else:
+                # quantity == 0: Position is closed
+                avg_price = 0.0
+
+        # Final conversion to float, handling None
+        average_price = float(avg_price) if avg_price is not None else 0.0
+
         transformed_position = {
             "symbol": position.get('tradingsymbol', ''),
             "exchange": position.get('exchange', ''),
             "product": position.get('product', ''),
             "quantity": position.get('quantity', 0),
-            "average_price": position.get('average_price', 0.0),
+            "average_price": average_price,
+            "pnl": position.get('pnl', 0.0),
+            "ltp": position.get('last_price', 0.0)
         }
         transformed_data.append(transformed_position)
     return transformed_data
@@ -190,7 +229,7 @@ def map_portfolio_data(portfolio_data):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
-        print("No data available.")
+        logger.debug("No portfolio data available to map.")
         portfolio_data = {}  # or set it to an empty list if it's supposed to be a list
     else:
         portfolio_data = portfolio_data['data']
@@ -203,7 +242,7 @@ def map_portfolio_data(portfolio_data):
                 portfolio['product'] = 'CNC'
 
             else:
-                print(f"Upstox Portfolio - Product Value for Delivery Not Found or Changed.")
+                logger.warning("Upstox Portfolio - Product value for Delivery not found or changed.")
                 
     return portfolio_data
 

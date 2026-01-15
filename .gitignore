@@ -1,6 +1,10 @@
 venopenalgo
+.venv/
 .env
 openalgo.db
+*.db-shm
+*.db-wal
+*.db-journal
 .env
 .flaskenv
 *.pyc
@@ -12,16 +16,28 @@ Thumbs.db
 .idea/
 .python-version
 config.ini
+.venvv
+.cloudflared/*.json
 
-
-#DB Files and Log/Tmp Files
+#DB Files, CSV Files and Log/Tmp Files
 
 *.egg-info/
 *.db
 *.sqlite
 *.log
 *.tmp
+checkpoint.txt
+checkpoints.json
 
+
+# Strategy encryption key
+db/strategy_encryption.key
+
+# CSV Files (except specific data files)
+*.csv
+!symbols.csv
+!all_symbols.csv
+!data/qtyfreeze.csv
 
 # Environments 
 .env 
@@ -43,4 +59,3 @@ venv.bak/
 
 # Tailwind CSS output
 # **/output.css
-

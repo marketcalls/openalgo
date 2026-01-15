@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+
+{% block title %}New Strategy{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8 max-w-2xl">
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title mb-6">Create New Strategy</h2>
+            
+            <form method="POST" class="space-y-6">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+                <!-- Strategy Name -->
+                <div class="form-control w-full">
+                    <label class="label">
+                        <span class="label-text">Strategy Name</span>
+                    </label>
+                    <input type="text" name="name" id="strategyName" class="input input-bordered w-full" required
+                           pattern="[a-zA-Z0-9\s\-_]+" 
+                           title="Use only letters, numbers, spaces, hyphens, and underscores"
+                           placeholder="Enter strategy name">
+                    <label class="label">
+                        <span class="label-text-alt">Final name: <span id="finalName" class="font-mono">platform_strategyname</span></span>
+                    </label>
+                </div>
+
+                <!-- Platform -->
+                <div class="form-control w-full">
+                    <label class="label">
+                        <span class="label-text">Platform</span>
+                    </label>
+                    <select name="platform" id="platform" class="select select-bordered w-full" required>
+                        <option value="tradingview">Tradingview</option>
+                        <option value="amibroker">Amibroker</option>
+                        <option value="python">Python</option>
+                        <option value="metatrader">Metatrader</option>
+                        <option value="excel">Excel</option>
+                        <option value="others">Others</option>
+                    </select>
+                </div>
+
+                <!-- Strategy Type -->
+                <div class="form-control w-full">
+                    <label class="label">
+                        <span class="label-text">Strategy Type</span>
+                    </label>
+                    <select name="type" class="select select-bordered w-full" id="strategyType">
+                        <option value="intraday">Intraday</option>
+                        <option value="positional">Positional</option>
+                    </select>
+                </div>
+
+                <!-- Trading Mode -->
+                <div class="form-control w-full">
+                    <label class="label">
+                        <span class="label-text">Trading Mode</span>
+                        <span class="label-text-alt">
+                            <div class="tooltip" data-tip="LONG: Only long trades (BUY to enter, SELL to exit). SHORT: Only short trades (SELL to enter, BUY to exit). BOTH: Both long and short trades (requires position size)">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="w-4 h-4 stroke-current"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                            </div>
+                        </span>
+                    </label>
+                    <select name="trading_mode" class="select select-bordered w-full" id="tradingMode">
+                        <option value="LONG">LONG Only</option>
+                        <option value="SHORT">SHORT Only</option>
+                        <option value="BOTH">BOTH (Long & Short)</option>
+                    </select>
+                    <label class="label">
+                        <span class="label-text-alt text-warning" id="tradingModeHint"></span>
+                    </label>
+                </div>
+
+                <!-- Trading Times (for intraday) -->
+                <div id="tradingTimes" class="space-y-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="form-control w-full">
+                            <label class="label">
+                                <span class="label-text">Start Time</span>
+                            </label>
+                            <input type="time" name="start_time" class="input input-bordered w-full" value="09:15">
+                        </div>
+
+                        <div class="form-control w-full">
+                            <label class="label">
+                                <span class="label-text">End Time</span>
+                            </label>
+                            <input type="time" name="end_time" class="input input-bordered w-full" value="15:00">
+                        </div>
+                    </div>
+
+                    <div class="form-control w-full">
+                        <label class="label">
+                            <span class="label-text">Square Off Time</span>
+                        </label>
+                        <input type="time" name="squareoff_time" class="input input-bordered w-full" value="15:15">
+                    </div>
+                </div>
+
+                <div class="card-actions justify-end mt-6">
+                    <a href="{{ url_for('strategy_bp.index') }}" class="btn">Cancel</a>
+                    <button type="submit" class="btn btn-primary">Create Strategy</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const strategyType = document.getElementById('strategyType');
+    const tradingTimes = document.getElementById('tradingTimes');
+    const tradingMode = document.getElementById('tradingMode');
+    const tradingModeHint = document.getElementById('tradingModeHint');
+    const platform = document.getElementById('platform');
+    const strategyName = document.getElementById('strategyName');
+    const finalName = document.getElementById('finalName');
+    
+    function toggleTradingTimes() {
+        if (strategyType.value === 'intraday') {
+            tradingTimes.classList.remove('hidden');
+        } else {
+            tradingTimes.classList.add('hidden');
+        }
+    }
+    
+    function updateTradingModeHint() {
+        const mode = tradingMode.value;
+        if (mode === 'LONG') {
+            tradingModeHint.textContent = 'Use BUY to enter positions, SELL to exit';
+        } else if (mode === 'SHORT') {
+            tradingModeHint.textContent = 'Use SELL to enter positions, BUY to exit';
+        } else {
+            tradingModeHint.textContent = 'Position size required for all orders';
+        }
+    }
+
+    function updateFinalName() {
+        const platformValue = platform.value;
+        const nameValue = strategyName.value;
+        finalName.textContent = platformValue && nameValue ? `${platformValue}_${nameValue}` : 'platform_strategyname';
+    }
+    
+    strategyType.addEventListener('change', toggleTradingTimes);
+    tradingMode.addEventListener('change', updateTradingModeHint);
+    platform.addEventListener('change', updateFinalName);
+    strategyName.addEventListener('input', updateFinalName);
+    
+    toggleTradingTimes();
+    updateTradingModeHint();
+    updateFinalName();
+});
+</script>
+{% endblock %}
+
+{% endblock %}
