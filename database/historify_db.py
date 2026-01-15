@@ -402,13 +402,16 @@ def parse_interval(interval: str) -> Optional[Dict[str, Any]]:
     - Hours: '1h', '2h', '3h', '4h', etc.
     - Days: 'D', '1D', '2D', '3D', etc.
     - Weeks: 'W', '1W', '2W', etc.
+    - Months: 'MO', '1MO', '2MO', '3MO', etc.
+    - Quarters: 'Q', '1Q', '2Q', etc.
+    - Years: 'Y', '1Y', '2Y', etc.
 
     Args:
-        interval: Interval string (e.g., '25m', '2h', '3D')
+        interval: Interval string (e.g., '25m', '2h', '3D', 'W', 'MO', 'Q', 'Y')
 
     Returns:
-        Dictionary with 'minutes' (for intraday) or 'days' (for daily+),
-        'type' ('intraday' or 'daily'), and 'value' (numeric value).
+        Dictionary with 'minutes' (for intraday), 'days' (for daily/weekly),
+        or 'months' (for monthly+), 'type', and 'value' (numeric value).
         Returns None if parsing fails.
     """
     import re
@@ -418,16 +421,29 @@ def parse_interval(interval: str) -> Optional[Dict[str, Any]]:
 
     interval = interval.strip().upper()
 
-    # Handle single letter 'D' as '1D'
+    # Handle single letter shortcuts
     if interval == 'D':
         return {'type': 'daily', 'days': 1, 'value': 1, 'unit': 'D'}
-
-    # Handle single letter 'W' as '1W'
     if interval == 'W':
-        return {'type': 'daily', 'days': 7, 'value': 1, 'unit': 'W'}
+        return {'type': 'weekly', 'days': 7, 'value': 1, 'unit': 'W'}
+    if interval == 'MO':
+        return {'type': 'monthly', 'months': 1, 'value': 1, 'unit': 'MO'}
+    if interval == 'Q':
+        return {'type': 'quarterly', 'months': 3, 'value': 1, 'unit': 'Q'}
+    if interval == 'Y':
+        return {'type': 'yearly', 'months': 12, 'value': 1, 'unit': 'Y'}
 
-    # Parse format: number + unit (e.g., '25m', '2h', '3D')
-    match = re.match(r'^(\d+)([MHDW])$', interval)
+    # Parse format: number + unit (e.g., '25m', '2h', '3D', '2W', '3MO', '2Q', '1Y')
+    # Try multi-char units first (MO)
+    match = re.match(r'^(\d+)(MO)$', interval)
+    if match:
+        value = int(match.group(1))
+        if value <= 0:
+            return None
+        return {'type': 'monthly', 'months': value, 'value': value, 'unit': 'MO'}
+
+    # Single char units
+    match = re.match(r'^(\d+)([MHDWQY])$', interval)
     if not match:
         return None
 
@@ -447,17 +463,23 @@ def parse_interval(interval: str) -> Optional[Dict[str, Any]]:
         # Days
         return {'type': 'daily', 'days': value, 'value': value, 'unit': 'D'}
     elif unit == 'W':
-        # Weeks - convert to days
-        return {'type': 'daily', 'days': value * 7, 'value': value, 'unit': 'W'}
+        # Weeks
+        return {'type': 'weekly', 'days': value * 7, 'value': value, 'unit': 'W'}
+    elif unit == 'Q':
+        # Quarters - 3 months each
+        return {'type': 'quarterly', 'months': value * 3, 'value': value, 'unit': 'Q'}
+    elif unit == 'Y':
+        # Years - 12 months each
+        return {'type': 'yearly', 'months': value * 12, 'value': value, 'unit': 'Y'}
 
     return None
 
 
 def is_custom_interval(interval: str) -> bool:
     """
-    Check if an interval is a custom interval that needs computation.
+    Check if an interval is a custom intraday interval that needs computation from 1m data.
 
-    Custom intervals are any intervals that:
+    Custom intraday intervals are any intervals that:
     1. Are not storage intervals (1m, D)
     2. Can be computed from 1m data (any minute/hour interval)
 
@@ -465,7 +487,7 @@ def is_custom_interval(interval: str) -> bool:
         interval: Interval string
 
     Returns:
-        True if custom interval that can be computed, False otherwise
+        True if custom intraday interval that can be computed from 1m, False otherwise
     """
     if interval in STORAGE_INTERVALS:
         return False
@@ -475,8 +497,31 @@ def is_custom_interval(interval: str) -> bool:
         return False
 
     # Only intraday custom intervals can be computed from 1m data
-    # Daily+ intervals need D data (which we currently don't aggregate)
     return parsed['type'] == 'intraday'
+
+
+def is_daily_aggregated_interval(interval: str) -> bool:
+    """
+    Check if an interval needs aggregation from Daily (D) data.
+
+    Daily-aggregated intervals are:
+    - W (Weekly)
+    - MO (Monthly)
+    - Q (Quarterly)
+    - Y (Yearly)
+
+    Args:
+        interval: Interval string
+
+    Returns:
+        True if interval needs daily aggregation, False otherwise
+    """
+    parsed = parse_interval(interval)
+    if not parsed:
+        return False
+
+    # Weekly, Monthly, Quarterly, Yearly need aggregation from D data
+    return parsed['type'] in ('weekly', 'monthly', 'quarterly', 'yearly')
 
 
 def get_ohlcv(
@@ -488,17 +533,17 @@ def get_ohlcv(
 ) -> pd.DataFrame:
     """
     Retrieve OHLCV data for a symbol.
-    For computed intervals (standard or custom like 25m, 2h), aggregates 1m data on-the-fly.
+    For computed intervals, aggregates from base data on-the-fly.
 
     Supports:
     - Storage intervals: 1m, D (retrieved directly)
-    - Standard computed: 5m, 15m, 30m, 1h (aggregated from 1m)
-    - Custom intervals: 25m, 45m, 2h, 3h, etc. (aggregated from 1m)
+    - Intraday computed: 5m, 15m, 30m, 1h, 25m, 2h, etc. (aggregated from 1m)
+    - Daily-based: W, MO, Q, Y (aggregated from D)
 
     Args:
         symbol: Trading symbol
         exchange: Exchange code
-        interval: Time interval (e.g., '1m', '25m', '2h', 'D')
+        interval: Time interval (e.g., '1m', '25m', '2h', 'D', 'W', 'MO', 'Q', 'Y')
         start_timestamp: Start epoch timestamp (optional)
         end_timestamp: End epoch timestamp (optional)
 
@@ -506,7 +551,17 @@ def get_ohlcv(
         DataFrame with columns: timestamp, open, high, low, close, volume, oi
     """
     try:
-        # Check if this is a computed interval (standard or custom)
+        # Check if this is a daily-aggregated interval (W, MO, Q, Y)
+        if is_daily_aggregated_interval(interval):
+            return _get_daily_aggregated_ohlcv(
+                symbol=symbol,
+                exchange=exchange,
+                target_interval=interval,
+                start_timestamp=start_timestamp,
+                end_timestamp=end_timestamp
+            )
+
+        # Check if this is an intraday computed interval (standard or custom)
         if interval in COMPUTED_INTERVALS or is_custom_interval(interval):
             return _get_aggregated_ohlcv(
                 symbol=symbol,
@@ -688,6 +743,129 @@ def _get_aggregated_ohlcv(
 
     except Exception as e:
         logger.error(f"Error aggregating OHLCV data to {target_interval}: {e}")
+        return pd.DataFrame()
+
+
+def _get_daily_aggregated_ohlcv(
+    symbol: str,
+    exchange: str,
+    target_interval: str,
+    start_timestamp: Optional[int] = None,
+    end_timestamp: Optional[int] = None
+) -> pd.DataFrame:
+    """
+    Aggregate Daily (D) data to higher timeframes (W, MO, Q, Y) using DuckDB SQL.
+
+    Supports:
+    - W (Weekly): Groups by ISO week
+    - MO (Monthly): Groups by calendar month
+    - Q (Quarterly): Groups by calendar quarter
+    - Y (Yearly): Groups by calendar year
+
+    Args:
+        symbol: Trading symbol
+        exchange: Exchange code
+        target_interval: Target interval (W, MO, Q, Y, or multiples like 2W, 3MO)
+        start_timestamp: Start epoch timestamp (optional)
+        end_timestamp: End epoch timestamp (optional)
+
+    Returns:
+        DataFrame with aggregated OHLCV data
+    """
+    try:
+        parsed = parse_interval(target_interval)
+        if not parsed:
+            logger.error(f"Cannot parse interval: {target_interval}")
+            return pd.DataFrame()
+
+        interval_type = parsed['type']
+        interval_value = parsed.get('value', 1)
+
+        # IST timezone offset from UTC (5 hours 30 minutes = 19800 seconds)
+        ist_offset = 19800
+
+        # Build the GROUP BY expression based on interval type
+        if interval_type == 'weekly':
+            # Group by ISO week number, adjusting for multi-week intervals
+            # ISO week starts on Monday
+            if interval_value == 1:
+                group_expr = f"DATE_TRUNC('week', to_timestamp(timestamp + {ist_offset}))"
+            else:
+                # For multi-week intervals, group weeks together
+                group_expr = f"""
+                    DATE_TRUNC('week', to_timestamp(timestamp + {ist_offset})) -
+                    INTERVAL ((EXTRACT(WEEK FROM to_timestamp(timestamp + {ist_offset})) - 1) % {interval_value}) WEEK
+                """
+        elif interval_type == 'monthly':
+            # Group by calendar month
+            if interval_value == 1:
+                group_expr = f"DATE_TRUNC('month', to_timestamp(timestamp + {ist_offset}))"
+            else:
+                # For multi-month intervals, group months together
+                group_expr = f"""
+                    DATE_TRUNC('month', to_timestamp(timestamp + {ist_offset})) -
+                    INTERVAL ((EXTRACT(MONTH FROM to_timestamp(timestamp + {ist_offset})) - 1) % {interval_value}) MONTH
+                """
+        elif interval_type == 'quarterly':
+            # Group by calendar quarter (3 months)
+            months = parsed.get('months', 3)
+            if months == 3:
+                group_expr = f"DATE_TRUNC('quarter', to_timestamp(timestamp + {ist_offset}))"
+            else:
+                # For multi-quarter intervals
+                group_expr = f"""
+                    DATE_TRUNC('quarter', to_timestamp(timestamp + {ist_offset})) -
+                    INTERVAL ((EXTRACT(QUARTER FROM to_timestamp(timestamp + {ist_offset})) - 1) % {interval_value}) QUARTER
+                """
+        elif interval_type == 'yearly':
+            # Group by calendar year
+            if interval_value == 1:
+                group_expr = f"DATE_TRUNC('year', to_timestamp(timestamp + {ist_offset}))"
+            else:
+                # For multi-year intervals
+                group_expr = f"""
+                    DATE_TRUNC('year', to_timestamp(timestamp + {ist_offset})) -
+                    INTERVAL ((EXTRACT(YEAR FROM to_timestamp(timestamp + {ist_offset})) % {interval_value})) YEAR
+                """
+        else:
+            logger.error(f"Unsupported interval type for daily aggregation: {interval_type}")
+            return pd.DataFrame()
+
+        # Build the query - aggregate from D (daily) data
+        query = f"""
+            SELECT
+                EPOCH({group_expr}) - {ist_offset} as timestamp,
+                FIRST(open ORDER BY timestamp) as open,
+                MAX(high) as high,
+                MIN(low) as low,
+                LAST(close ORDER BY timestamp) as close,
+                SUM(volume) as volume,
+                LAST(oi ORDER BY timestamp) as oi
+            FROM market_data
+            WHERE symbol = ? AND exchange = ? AND interval = 'D'
+        """
+        params = [symbol.upper(), exchange.upper()]
+
+        if start_timestamp:
+            query += " AND timestamp >= ?"
+            params.append(start_timestamp)
+
+        if end_timestamp:
+            query += " AND timestamp <= ?"
+            params.append(end_timestamp)
+
+        query += f"""
+            GROUP BY {group_expr}
+            ORDER BY timestamp ASC
+        """
+
+        with get_connection() as conn:
+            result = conn.execute(query, params).fetchdf()
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error aggregating daily OHLCV data to {target_interval}: {e}")
         return pd.DataFrame()
 
 
@@ -1822,15 +2000,14 @@ def export_to_zip(
     """
     Export market data to ZIP archive containing CSVs.
 
-    Supports multi-timeframe export where computed intervals (standard or custom)
-    are aggregated from 1m data on-the-fly.
-
-    Custom intervals supported: 25m, 45m, 2h, 3h, etc.
+    Supports multi-timeframe export where intervals are aggregated on-the-fly:
+    - Intraday (from 1m): 5m, 15m, 30m, 1h, 25m, 2h, etc.
+    - Daily-based (from D): W, MO, Q, Y
 
     Args:
         output_path: Path to save the ZIP file
         symbols: List of dicts with 'symbol' and 'exchange' keys (optional)
-        intervals: List of intervals to export (e.g., ['1m', '5m', '25m', '2h', 'D'])
+        intervals: List of intervals to export (e.g., ['1m', '5m', 'D', 'W', 'MO', 'Q', 'Y'])
         start_timestamp: Start epoch timestamp (optional)
         end_timestamp: End epoch timestamp (optional)
         split_by: 'symbol' to create one CSV per symbol/interval, 'none' for combined
@@ -1877,10 +2054,60 @@ def export_to_zip(
                     market_open_seconds = _get_market_open_seconds(exch)
 
                     for interval in intervals_to_export:
-                        # Determine if this is a computed interval (standard or custom)
-                        is_computed = interval in COMPUTED_INTERVALS or is_custom_interval(interval)
+                        # Determine if this is a daily-aggregated interval (W, MO, Q, Y)
+                        is_daily_agg = is_daily_aggregated_interval(interval)
 
-                        if is_computed:
+                        # Determine if this is an intraday computed interval (standard or custom)
+                        is_intraday_computed = interval in COMPUTED_INTERVALS or is_custom_interval(interval)
+
+                        if is_daily_agg:
+                            # Check if D data exists before attempting aggregation
+                            check_query = """
+                                SELECT COUNT(*) FROM market_data
+                                WHERE symbol = ? AND exchange = ? AND interval = 'D'
+                            """
+                            check_params = [sym, exch]
+                            if start_timestamp:
+                                check_query += " AND timestamp >= ?"
+                                check_params.append(start_timestamp)
+                            if end_timestamp:
+                                check_query += " AND timestamp <= ?"
+                                check_params.append(end_timestamp)
+
+                            count = conn.execute(check_query, check_params).fetchone()[0]
+                            if count == 0:
+                                logger.warning(f"No D data for {sym}:{exch}, skipping daily-aggregated interval {interval}")
+                                skipped_intervals.append(f"{sym}:{exch}:{interval}")
+                                continue
+
+                            # Use get_ohlcv which handles daily aggregation
+                            df = _get_daily_aggregated_ohlcv(
+                                symbol=sym,
+                                exchange=exch,
+                                target_interval=interval,
+                                start_timestamp=start_timestamp,
+                                end_timestamp=end_timestamp
+                            )
+
+                            if not df.empty:
+                                # Format timestamp as date and time columns
+                                df['date'] = pd.to_datetime(df['timestamp'] + ist_offset, unit='s').dt.strftime('%Y-%m-%d')
+                                df['time'] = pd.to_datetime(df['timestamp'] + ist_offset, unit='s').dt.strftime('%H:%M:%S')
+                                df = df[['date', 'time', 'open', 'high', 'low', 'close', 'volume', 'oi']]
+
+                                # Create CSV content
+                                csv_buffer = df.to_csv(index=False)
+
+                                # Sanitize filename
+                                safe_sym = _sanitize_filename(sym)
+                                safe_exch = _sanitize_filename(exch)
+                                safe_int = _sanitize_filename(interval)
+                                filename = f"{safe_sym}_{safe_exch}_{safe_int}.csv"
+
+                                zf.writestr(filename, csv_buffer)
+                                total_records += len(df)
+
+                        elif is_intraday_computed:
                             # Check if 1m data exists before attempting aggregation
                             check_query = """
                                 SELECT COUNT(*) FROM market_data

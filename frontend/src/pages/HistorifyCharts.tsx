@@ -135,7 +135,7 @@ export default function HistorifyCharts() {
   // Custom interval state
   const [isCustomInterval, setIsCustomInterval] = useState(false)
   const [customIntervalValue, setCustomIntervalValue] = useState('25')
-  const [customIntervalUnit, setCustomIntervalUnit] = useState<'m' | 'h'>('m')
+  const [customIntervalUnit, setCustomIntervalUnit] = useState<'m' | 'h' | 'W' | 'MO' | 'Q' | 'Y'>('m')
 
   // Date range
   const [startDate, setStartDate] = useState(() => {
@@ -171,6 +171,12 @@ export default function HistorifyCharts() {
   // Effective interval (either selected standard interval or custom)
   const effectiveInterval = useMemo(() => {
     if (isCustomInterval) {
+      // For W, MO, Q, Y with value 1, just use the unit (e.g., 'W', 'MO')
+      // For values > 1, use value + unit (e.g., '2W', '3MO')
+      if (['W', 'MO', 'Q', 'Y'].includes(customIntervalUnit)) {
+        const val = parseInt(customIntervalValue) || 1
+        return val === 1 ? customIntervalUnit : `${val}${customIntervalUnit}`
+      }
       return `${customIntervalValue}${customIntervalUnit}`
     }
     return selectedInterval
@@ -180,10 +186,11 @@ export default function HistorifyCharts() {
   const isIntradayInterval = useMemo(() => {
     const intradayPatterns = ['1s', '5s', '10s', '15s', '30s', '1m', '2m', '3m', '5m', '10m', '15m', '30m', '1h', '2h', '4h']
     if (intradayPatterns.includes(effectiveInterval)) return true
-    // Custom intervals ending with 'm' or 'h' are intraday
-    if (isCustomInterval) return true
+    // Custom intervals with 'm' or 'h' are intraday
+    if (isCustomInterval && ['m', 'h'].includes(customIntervalUnit)) return true
+    // W, MO, Q, Y are NOT intraday
     return false
-  }, [effectiveInterval, isCustomInterval])
+  }, [effectiveInterval, isCustomInterval, customIntervalUnit])
 
   // Unique symbols from catalog
   const uniqueSymbols = useMemo(() => {
@@ -618,16 +625,20 @@ export default function HistorifyCharts() {
                 max="999"
                 value={customIntervalValue}
                 onChange={(e) => setCustomIntervalValue(e.target.value)}
-                className="h-9 w-16 text-center"
-                placeholder="25"
+                className="h-9 w-14 text-center"
+                placeholder="1"
               />
-              <Select value={customIntervalUnit} onValueChange={(v) => setCustomIntervalUnit(v as 'm' | 'h')}>
-                <SelectTrigger className="w-16 h-9">
+              <Select value={customIntervalUnit} onValueChange={(v) => setCustomIntervalUnit(v as 'm' | 'h' | 'W' | 'MO' | 'Q' | 'Y')}>
+                <SelectTrigger className="w-20 h-9">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="m">min</SelectItem>
                   <SelectItem value="h">hr</SelectItem>
+                  <SelectItem value="W">Week</SelectItem>
+                  <SelectItem value="MO">Month</SelectItem>
+                  <SelectItem value="Q">Qtr</SelectItem>
+                  <SelectItem value="Y">Year</SelectItem>
                 </SelectContent>
               </Select>
             </div>
