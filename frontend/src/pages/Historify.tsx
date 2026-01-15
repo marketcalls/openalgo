@@ -1093,8 +1093,16 @@ export default function Historify() {
               {mode === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </Button>
 
-            {/* Charts Link */}
-            <Link to="/historify/charts">
+            {/* Charts Link - navigates with first available symbol */}
+            <Link
+              to={
+                watchlist.length > 0
+                  ? `/historify/charts/${watchlist[0].symbol}?exchange=${watchlist[0].exchange}&interval=D`
+                  : groupedCatalog.length > 0
+                    ? `/historify/charts/${groupedCatalog[0].symbol}?exchange=${groupedCatalog[0].exchange}&interval=D`
+                    : '/historify/charts'
+              }
+            >
               <Button variant="outline" size="sm">
                 <LineChart className="h-4 w-4 mr-1" />
                 <span className="hidden sm:inline">Charts</span>
@@ -1594,7 +1602,7 @@ export default function Historify() {
                             <TableHead>Symbol</TableHead>
                             <TableHead className="hidden sm:table-cell">Exchange</TableHead>
                             <TableHead className="hidden md:table-cell">Added</TableHead>
-                            <TableHead className="w-10"></TableHead>
+                            <TableHead className="w-20 text-right">Actions</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -1639,14 +1647,28 @@ export default function Historify() {
                                   {new Date(item.added_at).toLocaleDateString()}
                                 </TableCell>
                                 <TableCell>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-7 w-7 text-destructive hover:text-destructive"
-                                    onClick={() => removeFromWatchlist(item.symbol, item.exchange)}
-                                  >
-                                    <X className="h-4 w-4" />
-                                  </Button>
+                                  <div className="flex items-center justify-end gap-1">
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-7 w-7"
+                                      asChild
+                                      title="View chart"
+                                    >
+                                      <Link to={`/historify/charts/${item.symbol}?exchange=${item.exchange}&interval=D`}>
+                                        <LineChart className="h-4 w-4" />
+                                      </Link>
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-7 w-7 text-destructive hover:text-destructive"
+                                      onClick={() => removeFromWatchlist(item.symbol, item.exchange)}
+                                      title="Remove from watchlist"
+                                    >
+                                      <X className="h-4 w-4" />
+                                    </Button>
+                                  </div>
                                 </TableCell>
                               </TableRow>
                             ))
