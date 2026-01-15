@@ -125,7 +125,7 @@ export default function HistorifyCharts() {
   // Custom interval state
   const [isCustomInterval, setIsCustomInterval] = useState(false)
   const [customIntervalValue, setCustomIntervalValue] = useState('25')
-  const [customIntervalUnit, setCustomIntervalUnit] = useState<'m' | 'h' | 'W' | 'MO' | 'Q' | 'Y'>('m')
+  const [customIntervalUnit, setCustomIntervalUnit] = useState<'m' | 'h' | 'W' | 'M' | 'Q' | 'Y'>('m')
 
   // Date range
   const [startDate, setStartDate] = useState(() => {
@@ -149,15 +149,15 @@ export default function HistorifyCharts() {
   const CHART_TIMEFRAMES = [
     '1m', '2m', '3m', '5m', '10m', '15m', '30m',
     '1h', '2h', '4h',
-    'D', 'W', 'MO', 'Q', 'Y'
+    'D', 'W', 'M', 'Q', 'Y'
   ]
 
   // Effective interval (either selected standard interval or custom)
   const effectiveInterval = useMemo(() => {
     if (isCustomInterval) {
-      // For W, MO, Q, Y with value 1, just use the unit (e.g., 'W', 'MO')
+      // For W, MO, Q, Y with value 1, just use the unit (e.g., 'W', 'M')
       // For values > 1, use value + unit (e.g., '2W', '3MO')
-      if (['W', 'MO', 'Q', 'Y'].includes(customIntervalUnit)) {
+      if (['W', 'M', 'Q', 'Y'].includes(customIntervalUnit)) {
         const val = parseInt(customIntervalValue) || 1
         return val === 1 ? customIntervalUnit : `${val}${customIntervalUnit}`
       }
@@ -243,7 +243,7 @@ export default function HistorifyCharts() {
       // Check if this is a daily-aggregated interval (W, MO, Q, Y)
       // These intervals return timestamps that already represent IST dates
       const isDailyAggregated = isCustomInterval &&
-        ['W', 'MO', 'Q', 'Y'].includes(customIntervalUnit)
+        ['W', 'M', 'Q', 'Y'].includes(customIntervalUnit)
 
       // Helper to format time/date in IST based on interval
       const formatTimeIST = (time: number) => {
@@ -607,7 +607,7 @@ export default function HistorifyCharts() {
                 className="h-9 w-14 text-center"
                 placeholder="1"
               />
-              <Select value={customIntervalUnit} onValueChange={(v) => setCustomIntervalUnit(v as 'm' | 'h' | 'W' | 'MO' | 'Q' | 'Y')}>
+              <Select value={customIntervalUnit} onValueChange={(v) => setCustomIntervalUnit(v as 'm' | 'h' | 'W' | 'M' | 'Q' | 'Y')}>
                 <SelectTrigger className="w-20 h-9">
                   <SelectValue />
                 </SelectTrigger>

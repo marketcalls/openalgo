@@ -398,16 +398,16 @@ def parse_interval(interval: str) -> Optional[Dict[str, Any]]:
     Parse an interval string into its components.
 
     Supports formats:
-    - Minutes: '1m', '5m', '25m', '45m', etc.
-    - Hours: '1h', '2h', '3h', '4h', etc.
+    - Minutes: '1m', '5m', '25m', '45m', etc. (lowercase m)
+    - Hours: '1h', '2h', '3h', '4h', etc. (lowercase h)
     - Days: 'D', '1D', '2D', '3D', etc.
     - Weeks: 'W', '1W', '2W', etc.
-    - Months: 'MO', '1MO', '2MO', '3MO', etc.
+    - Months: 'M', '1M', '2M', '3M', etc. (uppercase M)
     - Quarters: 'Q', '1Q', '2Q', etc.
     - Years: 'Y', '1Y', '2Y', etc.
 
     Args:
-        interval: Interval string (e.g., '25m', '2h', '3D', 'W', 'MO', 'Q', 'Y')
+        interval: Interval string (e.g., '25m', '2h', '3D', 'W', 'M', 'Q', 'Y')
 
     Returns:
         Dictionary with 'minutes' (for intraday), 'days' (for daily/weekly),
@@ -419,31 +419,24 @@ def parse_interval(interval: str) -> Optional[Dict[str, Any]]:
     if not interval:
         return None
 
-    interval = interval.strip().upper()
+    interval = interval.strip()
 
-    # Handle single letter shortcuts
+    # Handle single letter shortcuts (case-sensitive)
     if interval == 'D':
         return {'type': 'daily', 'days': 1, 'value': 1, 'unit': 'D'}
     if interval == 'W':
         return {'type': 'weekly', 'days': 7, 'value': 1, 'unit': 'W'}
-    if interval == 'MO':
-        return {'type': 'monthly', 'months': 1, 'value': 1, 'unit': 'MO'}
+    if interval == 'M':
+        # Uppercase M = Monthly
+        return {'type': 'monthly', 'months': 1, 'value': 1, 'unit': 'M'}
     if interval == 'Q':
         return {'type': 'quarterly', 'months': 3, 'value': 1, 'unit': 'Q'}
     if interval == 'Y':
         return {'type': 'yearly', 'months': 12, 'value': 1, 'unit': 'Y'}
 
-    # Parse format: number + unit (e.g., '25m', '2h', '3D', '2W', '3MO', '2Q', '1Y')
-    # Try multi-char units first (MO)
-    match = re.match(r'^(\d+)(MO)$', interval)
-    if match:
-        value = int(match.group(1))
-        if value <= 0:
-            return None
-        return {'type': 'monthly', 'months': value, 'value': value, 'unit': 'MO'}
-
-    # Single char units
-    match = re.match(r'^(\d+)([MHDWQY])$', interval)
+    # Parse format: number + unit (e.g., '25m', '2h', '3D', '2W', '2M', '2Q', '1Y')
+    # Case-sensitive: lowercase m/h for intraday, uppercase for higher timeframes
+    match = re.match(r'^(\d+)([mhDWMQY])$', interval)
     if not match:
         return None
 
@@ -453,18 +446,21 @@ def parse_interval(interval: str) -> Optional[Dict[str, Any]]:
     if value <= 0:
         return None
 
-    if unit == 'M':
-        # Minutes
-        return {'type': 'intraday', 'minutes': value, 'value': value, 'unit': 'M'}
-    elif unit == 'H':
-        # Hours - convert to minutes
-        return {'type': 'intraday', 'minutes': value * 60, 'value': value, 'unit': 'H'}
+    if unit == 'm':
+        # Lowercase m = Minutes
+        return {'type': 'intraday', 'minutes': value, 'value': value, 'unit': 'm'}
+    elif unit == 'h':
+        # Lowercase h = Hours - convert to minutes
+        return {'type': 'intraday', 'minutes': value * 60, 'value': value, 'unit': 'h'}
     elif unit == 'D':
         # Days
         return {'type': 'daily', 'days': value, 'value': value, 'unit': 'D'}
     elif unit == 'W':
         # Weeks
         return {'type': 'weekly', 'days': value * 7, 'value': value, 'unit': 'W'}
+    elif unit == 'M':
+        # Uppercase M = Monthly
+        return {'type': 'monthly', 'months': value, 'value': value, 'unit': 'M'}
     elif unit == 'Q':
         # Quarters - 3 months each
         return {'type': 'quarterly', 'months': value * 3, 'value': value, 'unit': 'Q'}
@@ -506,7 +502,7 @@ def is_daily_aggregated_interval(interval: str) -> bool:
 
     Daily-aggregated intervals are:
     - W (Weekly)
-    - MO (Monthly)
+    - M (Monthly)
     - Q (Quarterly)
     - Y (Yearly)
 
@@ -538,12 +534,12 @@ def get_ohlcv(
     Supports:
     - Storage intervals: 1m, D (retrieved directly)
     - Intraday computed: 5m, 15m, 30m, 1h, 25m, 2h, etc. (aggregated from 1m)
-    - Daily-based: W, MO, Q, Y (aggregated from D)
+    - Daily-based: W, M, Q, Y (aggregated from D)
 
     Args:
         symbol: Trading symbol
         exchange: Exchange code
-        interval: Time interval (e.g., '1m', '25m', '2h', 'D', 'W', 'MO', 'Q', 'Y')
+        interval: Time interval (e.g., '1m', '25m', '2h', 'D', 'W', 'M', 'Q', 'Y')
         start_timestamp: Start epoch timestamp (optional)
         end_timestamp: End epoch timestamp (optional)
 
@@ -754,18 +750,18 @@ def _get_daily_aggregated_ohlcv(
     end_timestamp: Optional[int] = None
 ) -> pd.DataFrame:
     """
-    Aggregate Daily (D) data to higher timeframes (W, MO, Q, Y) using DuckDB SQL.
+    Aggregate Daily (D) data to higher timeframes (W, M, Q, Y) using DuckDB SQL.
 
     Supports:
     - W (Weekly): Groups by ISO week
-    - MO (Monthly): Groups by calendar month
+    - M (Monthly): Groups by calendar month
     - Q (Quarterly): Groups by calendar quarter
     - Y (Yearly): Groups by calendar year
 
     Args:
         symbol: Trading symbol
         exchange: Exchange code
-        target_interval: Target interval (W, MO, Q, Y, or multiples like 2W, 3MO)
+        target_interval: Target interval (W, M, Q, Y, or multiples like 2W, 3M)
         start_timestamp: Start epoch timestamp (optional)
         end_timestamp: End epoch timestamp (optional)
 
@@ -2004,12 +2000,12 @@ def export_to_zip(
 
     Supports multi-timeframe export where intervals are aggregated on-the-fly:
     - Intraday (from 1m): 5m, 15m, 30m, 1h, 25m, 2h, etc.
-    - Daily-based (from D): W, MO, Q, Y
+    - Daily-based (from D): W, M, Q, Y
 
     Args:
         output_path: Path to save the ZIP file
         symbols: List of dicts with 'symbol' and 'exchange' keys (optional)
-        intervals: List of intervals to export (e.g., ['1m', '5m', 'D', 'W', 'MO', 'Q', 'Y'])
+        intervals: List of intervals to export (e.g., ['1m', '5m', 'D', 'W', 'M', 'Q', 'Y'])
         start_timestamp: Start epoch timestamp (optional)
         end_timestamp: End epoch timestamp (optional)
         split_by: 'symbol' to create one CSV per symbol/interval, 'none' for combined

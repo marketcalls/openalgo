@@ -283,7 +283,7 @@ export default function Historify() {
 
   // Custom export interval state
   const [customExportValue, setCustomExportValue] = useState('25')
-  const [customExportUnit, setCustomExportUnit] = useState<'m' | 'h' | 'W' | 'MO' | 'Q' | 'Y'>('m')
+  const [customExportUnit, setCustomExportUnit] = useState<'m' | 'h' | 'W' | 'M' | 'Q' | 'Y'>('m')
 
   // Watchlist selection state (for downloading specific symbols)
   const [watchlistSelectedSymbols, setWatchlistSelectedSymbols] = useState<Set<string>>(new Set())
@@ -2037,12 +2037,12 @@ NIFTY24DEC25000CE,NFO"
             <div>
               <Label className="mb-2 block">Select Timeframes to Export</Label>
               <p className="text-xs text-muted-foreground mb-3">
-                Intraday computed from 1m data. W/MO/Q/Y computed from Daily data.
+                Intraday computed from 1m data. W/M/Q/Y computed from Daily data.
               </p>
               <div className="grid grid-cols-5 sm:grid-cols-10 gap-2">
-                {['1m', '5m', '15m', '30m', '1h', 'D', 'W', 'MO', 'Q', 'Y'].map((int) => {
+                {['1m', '5m', '15m', '30m', '1h', 'D', 'W', 'M', 'Q', 'Y'].map((int) => {
                   const isIntradayComputed = ['5m', '15m', '30m', '1h'].includes(int)
-                  const isDailyComputed = ['W', 'MO', 'Q', 'Y'].includes(int)
+                  const isDailyComputed = ['W', 'M', 'Q', 'Y'].includes(int)
                   const isComputed = isIntradayComputed || isDailyComputed
                   const isSelected = exportIntervals.has(int)
                   return (
@@ -2096,7 +2096,7 @@ NIFTY24DEC25000CE,NFO"
                     className="h-8 w-14 text-center"
                     placeholder="1"
                   />
-                  <Select value={customExportUnit} onValueChange={(v) => setCustomExportUnit(v as 'm' | 'h' | 'W' | 'MO' | 'Q' | 'Y')}>
+                  <Select value={customExportUnit} onValueChange={(v) => setCustomExportUnit(v as 'm' | 'h' | 'W' | 'M' | 'Q' | 'Y')}>
                     <SelectTrigger className="w-20 h-8">
                       <SelectValue />
                     </SelectTrigger>
@@ -2104,7 +2104,7 @@ NIFTY24DEC25000CE,NFO"
                       <SelectItem value="m">min</SelectItem>
                       <SelectItem value="h">hr</SelectItem>
                       <SelectItem value="W">Week</SelectItem>
-                      <SelectItem value="MO">Month</SelectItem>
+                      <SelectItem value="M">Month</SelectItem>
                       <SelectItem value="Q">Qtr</SelectItem>
                       <SelectItem value="Y">Year</SelectItem>
                     </SelectContent>
@@ -2115,9 +2115,9 @@ NIFTY24DEC25000CE,NFO"
                     className="h-8"
                     onClick={() => {
                       const val = parseInt(customExportValue) || 1
-                      // For W, MO, Q, Y with value 1, just use the unit
+                      // For W, M, Q, Y with value 1, just use the unit
                       let customInterval: string
-                      if (['W', 'MO', 'Q', 'Y'].includes(customExportUnit)) {
+                      if (['W', 'M', 'Q', 'Y'].includes(customExportUnit)) {
                         customInterval = val === 1 ? customExportUnit : `${val}${customExportUnit}`
                       } else {
                         customInterval = `${customExportValue}${customExportUnit}`
@@ -2132,9 +2132,9 @@ NIFTY24DEC25000CE,NFO"
                   </Button>
                 </div>
                 {/* Show added custom intervals */}
-                {Array.from(exportIntervals).filter(int => !['1m', '5m', '15m', '30m', '1h', 'D', 'W', 'MO', 'Q', 'Y'].includes(int)).length > 0 && (
+                {Array.from(exportIntervals).filter(int => !['1m', '5m', '15m', '30m', '1h', 'D', 'W', 'M', 'Q', 'Y'].includes(int)).length > 0 && (
                   <div className="flex flex-wrap gap-1 mt-2">
-                    {Array.from(exportIntervals).filter(int => !['1m', '5m', '15m', '30m', '1h', 'D', 'W', 'MO', 'Q', 'Y'].includes(int)).map(int => (
+                    {Array.from(exportIntervals).filter(int => !['1m', '5m', '15m', '30m', '1h', 'D', 'W', 'M', 'Q', 'Y'].includes(int)).map(int => (
                       <Badge
                         key={int}
                         variant="secondary"
