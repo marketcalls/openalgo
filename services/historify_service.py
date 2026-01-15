@@ -1095,6 +1095,41 @@ _paused_jobs: Dict[str, threading.Event] = {}  # Event is set when NOT paused
 _job_state_lock = threading.Lock()
 
 
+def cleanup_zombie_jobs():
+    """
+    Clean up zombie jobs on server startup.
+
+    Jobs that are in 'running' or 'paused' state but have no corresponding
+    in-memory thread tracking are zombie jobs (likely from a server restart).
+    This function marks them as 'failed' so users can retry them.
+    """
+    from database.historify_db import get_all_download_jobs, update_job_status
+
+    try:
+        # Get running jobs
+        running_jobs = get_all_download_jobs(status='running', limit=100)
+        paused_jobs = get_all_download_jobs(status='paused', limit=100)
+        all_active_jobs = running_jobs + paused_jobs
+        zombie_count = 0
+
+        for job in all_active_jobs:
+            # Check if there's an in-memory tracking for this job
+            with _job_state_lock:
+                has_in_memory_state = job['id'] in _running_jobs or job['id'] in _paused_jobs
+
+            if not has_in_memory_state:
+                # This is a zombie job - mark it as failed
+                update_job_status(job['id'], 'failed')
+                logger.warning(f"Marked zombie job {job['id']} as failed (was: {job['status']})")
+                zombie_count += 1
+
+        if zombie_count > 0:
+            logger.info(f"Cleaned up {zombie_count} zombie job(s)")
+
+    except Exception as e:
+        logger.error(f"Error cleaning up zombie jobs: {e}")
+
+
 def create_and_start_job(
     job_type: str,
     symbols: List[Dict[str, str]],
@@ -1422,6 +1457,18 @@ def _emit_job_paused(job_id: str, current: int, total: int):
         logger.debug(f"Could not emit job paused: {e}")
 
 
+def _emit_job_cancelled(job_id: str):
+    """Emit Socket.IO job cancelled event."""
+    try:
+        from extensions import socketio
+        socketio.emit('historify_job_cancelled', {
+            'job_id': job_id,
+            'status': 'cancelled'
+        })
+    except Exception as e:
+        logger.debug(f"Could not emit job cancelled: {e}")
+
+
 def get_job_status(job_id: str) -> Tuple[bool, Dict[str, Any], int]:
     """
     Get status of a download job.
@@ -1514,18 +1561,27 @@ def cancel_job(job_id: str) -> Tuple[bool, Dict[str, Any], int]:
                 'message': f'Job is not running or paused (status: {job["status"]})'
             }, 400
 
+        # Immediately update database status to 'cancelled'
+        update_job_status(job_id, 'cancelled')
+        logger.info(f"Job {job_id} cancelled")
+
         # Use lock for thread-safe state modification
         with _job_state_lock:
-            # Signal cancellation
+            # Signal cancellation to stop the processing thread
             _running_jobs[job_id] = False
-            # Resume if paused so it can exit cleanly
+            # Resume if paused so thread can exit cleanly
             pause_event = _paused_jobs.get(job_id)
             if pause_event:
                 pause_event.set()
+            # Clean up in-memory state
+            _cleanup_job(job_id)
+
+        # Emit cancellation event to frontend
+        _emit_job_cancelled(job_id)
 
         return True, {
             'status': 'success',
-            'message': 'Job cancellation requested'
+            'message': 'Job cancelled'
         }, 200
 
     except Exception as e:
@@ -1900,3 +1956,15 @@ def get_catalog_grouped_service(group_by: str = 'underlying') -> Tuple[bool, Dic
             'status': 'error',
             'message': str(e)
         }, 500
+
+
+# =============================================================================
+# Module Initialization
+# =============================================================================
+
+# Clean up any zombie jobs from previous server runs
+# This runs once when the module is first imported
+try:
+    cleanup_zombie_jobs()
+except Exception as e:
+    logger.error(f"Failed to cleanup zombie jobs on startup: {e}")

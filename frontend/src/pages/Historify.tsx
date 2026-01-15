@@ -407,14 +407,29 @@ export default function Historify() {
       )
     }
 
+    const handleJobCancelled = (data: { job_id: string }) => {
+      setJobs((prevJobs) =>
+        prevJobs.map((job) => (job.id === data.job_id ? { ...job, status: 'cancelled' } : job))
+      )
+      // Clear progress for cancelled job
+      setJobProgress((prev) => {
+        const newProgress = { ...prev }
+        delete newProgress[data.job_id]
+        return newProgress
+      })
+      toast.info('Job cancelled')
+    }
+
     socket.on('historify_progress', handleProgress)
     socket.on('historify_job_complete', handleJobComplete)
     socket.on('historify_job_paused', handleJobPaused)
+    socket.on('historify_job_cancelled', handleJobCancelled)
 
     return () => {
       socket.off('historify_progress', handleProgress)
       socket.off('historify_job_complete', handleJobComplete)
       socket.off('historify_job_paused', handleJobPaused)
+      socket.off('historify_job_cancelled', handleJobCancelled)
     }
   }, [socket])
 
