@@ -162,11 +162,19 @@ def get_history_from_db(
     """
     try:
         from database.historify_db import get_ohlcv
-        from datetime import datetime
+        from datetime import datetime, date
 
-        # Convert dates to timestamps
-        start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-        end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+        # Convert dates to timestamps (handle both string and date objects)
+        if isinstance(start_date, date):
+            start_dt = datetime.combine(start_date, datetime.min.time())
+        else:
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+
+        if isinstance(end_date, date):
+            end_dt = datetime.combine(end_date, datetime.min.time())
+        else:
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+
         # Set end_date to end of day
         end_dt = end_dt.replace(hour=23, minute=59, second=59)
 
