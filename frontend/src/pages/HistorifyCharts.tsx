@@ -225,7 +225,10 @@ export default function HistorifyCharts() {
       const containerWidth = container.offsetWidth || 800
       const containerHeight = container.offsetHeight || 600
 
-      // Helper to format time in IST
+      // Check if interval is intraday (needs time display) or daily+ (needs date display)
+      const isIntraday = ['1s', '5s', '10s', '15s', '30s', '1m', '2m', '3m', '5m', '10m', '15m', '30m', '1h', '2h', '4h'].includes(selectedInterval)
+
+      // Helper to format time/date in IST based on interval
       const formatTimeIST = (time: number) => {
         const date = new Date(time * 1000)
         const istOffset = 5.5 * 60 * 60 * 1000
@@ -235,7 +238,12 @@ export default function HistorifyCharts() {
         const year = istDate.getUTCFullYear().toString().slice(-2)
         const hours = istDate.getUTCHours().toString().padStart(2, '0')
         const minutes = istDate.getUTCMinutes().toString().padStart(2, '0')
-        return `${day}/${month}/${year} ${hours}:${minutes}`
+
+        if (isIntraday) {
+          return `${day}/${month}/${year} ${hours}:${minutes}`
+        } else {
+          return `${day}/${month}/${year}`
+        }
       }
 
       const chart = createChart(container, {
@@ -265,16 +273,25 @@ export default function HistorifyCharts() {
         },
         timeScale: {
           borderColor: isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.2)',
-          timeVisible: true,
+          timeVisible: isIntraday,
           secondsVisible: false,
           tickMarkFormatter: (time: number) => {
             // Convert Unix timestamp to IST (UTC+5:30)
             const date = new Date(time * 1000)
             const istOffset = 5.5 * 60 * 60 * 1000
             const istDate = new Date(date.getTime() + istOffset)
-            const hours = istDate.getUTCHours().toString().padStart(2, '0')
-            const minutes = istDate.getUTCMinutes().toString().padStart(2, '0')
-            return `${hours}:${minutes}`
+
+            if (isIntraday) {
+              // For intraday: show time HH:MM
+              const hours = istDate.getUTCHours().toString().padStart(2, '0')
+              const minutes = istDate.getUTCMinutes().toString().padStart(2, '0')
+              return `${hours}:${minutes}`
+            } else {
+              // For daily and above: show date DD/MM
+              const day = istDate.getUTCDate().toString().padStart(2, '0')
+              const month = (istDate.getUTCMonth() + 1).toString().padStart(2, '0')
+              return `${day}/${month}`
+            }
           },
         },
         crosshair: {
