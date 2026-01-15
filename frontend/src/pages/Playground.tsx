@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  BookOpen,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -9,6 +10,7 @@ import {
   EyeOff,
   Home,
   Key,
+  LogOut,
   Menu,
   Moon,
   Plus,
@@ -21,14 +23,24 @@ import {
   Zap,
 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
+import { authApi } from '@/api/auth'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { profileMenuItems } from '@/config/navigation'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import { JsonEditor } from '@/components/ui/json-editor'
 
@@ -146,8 +158,22 @@ function isValidApiUrl(url: string): { valid: boolean; error?: string } {
 }
 
 export default function Playground() {
+  const navigate = useNavigate()
   // Theme store
   const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
+  const { user, logout } = useAuthStore()
+
+  const handleLogout = async () => {
+    try {
+      await authApi.logout()
+      logout()
+      navigate('/login')
+      toast.success('Logged out successfully')
+    } catch {
+      logout()
+      navigate('/login')
+    }
+  }
 
   const [apiKey, setApiKey] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
@@ -646,12 +672,52 @@ export default function Playground() {
               Dashboard
             </Link>
           </Button>
-          <Button variant="ghost" size="sm" className="h-7 text-xs" asChild>
-            <Link to="/apikey">
-              <Key className="h-3.5 w-3.5 mr-1.5" />
-              API Keys
-            </Link>
-          </Button>
+
+          {/* Profile Dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 rounded-full bg-primary text-primary-foreground"
+              >
+                <span className="text-sm font-medium">
+                  {user?.username?.[0]?.toUpperCase() || 'O'}
+                </span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              {profileMenuItems.map((item) => (
+                <DropdownMenuItem
+                  key={item.href}
+                  onSelect={() => navigate(item.href)}
+                  className="cursor-pointer"
+                >
+                  <item.icon className="h-4 w-4 mr-2" />
+                  {item.label}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuItem asChild>
+                <a
+                  href="https://docs.openalgo.in"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2"
+                >
+                  <BookOpen className="h-4 w-4" />
+                  Docs
+                </a>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={handleLogout}
+                className="text-destructive focus:text-destructive"
+              >
+                <LogOut className="h-4 w-4 mr-2" />
+                Logout
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 

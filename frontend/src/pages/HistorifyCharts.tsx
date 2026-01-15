@@ -1,17 +1,24 @@
 import {
   ArrowLeft,
+  BarChart3,
+  BookOpen,
   Calendar,
   Database,
+  Home,
+  Loader2,
+  LogOut,
   Maximize2,
   Minimize2,
   Moon,
   RefreshCw,
   Search,
   Sun,
+  Zap,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { authApi } from '@/api/auth'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -32,7 +39,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { profileMenuItems } from '@/config/navigation'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 import {
   CandlestickSeries,
@@ -74,10 +90,34 @@ interface IntervalData {
 }
 
 export default function HistorifyCharts() {
-  const { mode, toggleMode } = useThemeStore()
-  const isDarkMode = mode === 'dark'
+  const navigate = useNavigate()
+  const { mode, toggleMode, appMode, toggleAppMode, isTogglingMode } = useThemeStore()
+  const { user, logout } = useAuthStore()
+  const isDarkMode = mode === 'dark' || appMode === 'analyzer'
   const { symbol: urlSymbol } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
+
+  const handleLogout = async () => {
+    try {
+      await authApi.logout()
+      logout()
+      navigate('/login')
+      toast.success('Logged out successfully')
+    } catch {
+      logout()
+      navigate('/login')
+    }
+  }
+
+  const handleModeToggle = async () => {
+    const result = await toggleAppMode()
+    if (result.success) {
+      const newMode = useThemeStore.getState().appMode
+      toast.success(`Switched to ${newMode === 'live' ? 'Live' : 'Analyze'} mode`)
+    } else {
+      toast.error(result.message || 'Failed to toggle mode')
+    }
+  }
 
   // State
   const [catalog, setCatalog] = useState<CatalogItem[]>([])
@@ -185,6 +225,19 @@ export default function HistorifyCharts() {
       const containerWidth = container.offsetWidth || 800
       const containerHeight = container.offsetHeight || 600
 
+      // Helper to format time in IST
+      const formatTimeIST = (time: number) => {
+        const date = new Date(time * 1000)
+        const istOffset = 5.5 * 60 * 60 * 1000
+        const istDate = new Date(date.getTime() + istOffset)
+        const day = istDate.getUTCDate().toString().padStart(2, '0')
+        const month = (istDate.getUTCMonth() + 1).toString().padStart(2, '0')
+        const year = istDate.getUTCFullYear().toString().slice(-2)
+        const hours = istDate.getUTCHours().toString().padStart(2, '0')
+        const minutes = istDate.getUTCMinutes().toString().padStart(2, '0')
+        return `${day}/${month}/${year} ${hours}:${minutes}`
+      }
+
       const chart = createChart(container, {
         width: containerWidth,
         height: Math.max(containerHeight, 500),
@@ -199,6 +252,9 @@ export default function HistorifyCharts() {
           horzLines: {
             color: isDarkMode ? 'rgba(166, 173, 187, 0.1)' : 'rgba(0, 0, 0, 0.1)',
           },
+        },
+        localization: {
+          timeFormatter: formatTimeIST,
         },
         rightPriceScale: {
           borderColor: isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.2)',
@@ -289,20 +345,27 @@ export default function HistorifyCharts() {
       }
     }, 100)
 
-    // Handle resize
+    // Handle resize with ResizeObserver for better flex layout support
     const handleResize = () => {
       if (chartRef.current && chartContainerRef.current) {
         const container = chartContainerRef.current
-        chartRef.current.applyOptions({
-          width: container.offsetWidth,
-          height: container.offsetHeight,
-        })
+        const width = container.offsetWidth
+        const height = container.offsetHeight
+        if (width > 0 && height > 0) {
+          chartRef.current.applyOptions({ width, height })
+        }
       }
+    }
+
+    const resizeObserver = new ResizeObserver(handleResize)
+    if (chartContainerRef.current) {
+      resizeObserver.observe(chartContainerRef.current)
     }
     window.addEventListener('resize', handleResize)
 
     return () => {
       clearTimeout(initTimer)
+      resizeObserver.disconnect()
       window.removeEventListener('resize', handleResize)
       if (chartRef.current) {
         chartRef.current.remove()
@@ -510,12 +573,111 @@ export default function HistorifyCharts() {
 
         {/* Right actions */}
         <div className="flex items-center gap-2">
+          {/* Broker Badge */}
+          {user?.broker && (
+            <Badge variant="outline" className="text-xs">
+              {user.broker.toUpperCase()}
+            </Badge>
+          )}
+
+          {/* Mode Badge */}
+          <Badge
+            variant={appMode === 'live' ? 'default' : 'secondary'}
+            className={cn(
+              'text-xs cursor-pointer',
+              appMode === 'analyzer' && 'bg-purple-500 hover:bg-purple-600 text-white'
+            )}
+            onClick={handleModeToggle}
+          >
+            {appMode === 'live' ? <Zap className="h-3 w-3 mr-1" /> : <BarChart3 className="h-3 w-3 mr-1" />}
+            {appMode === 'live' ? 'Live' : 'Analyze'}
+          </Badge>
+
+          {/* Mode Toggle */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={handleModeToggle}
+            disabled={isTogglingMode}
+            title={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
+          >
+            {isTogglingMode ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : appMode === 'live' ? (
+              <Zap className="h-4 w-4" />
+            ) : (
+              <BarChart3 className="h-4 w-4" />
+            )}
+          </Button>
+
+          {/* Theme Toggle */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={toggleMode}
+            disabled={appMode !== 'live'}
+            title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+          >
+            {mode === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </Button>
+
           <Button variant="ghost" size="icon" onClick={toggleFullscreen}>
             {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </Button>
-          <Button variant="ghost" size="icon" onClick={toggleMode}>
-            {isDarkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          <Button variant="ghost" size="sm" className="h-8 text-xs" asChild>
+            <Link to="/dashboard">
+              <Home className="h-4 w-4 mr-1.5" />
+              Dashboard
+            </Link>
           </Button>
+
+          {/* Profile Dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 rounded-full bg-primary text-primary-foreground"
+              >
+                <span className="text-sm font-medium">
+                  {user?.username?.[0]?.toUpperCase() || 'O'}
+                </span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              {profileMenuItems.map((item) => (
+                <DropdownMenuItem
+                  key={item.href}
+                  onSelect={() => navigate(item.href)}
+                  className="cursor-pointer"
+                >
+                  <item.icon className="h-4 w-4 mr-2" />
+                  {item.label}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuItem asChild>
+                <a
+                  href="https://docs.openalgo.in"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2"
+                >
+                  <BookOpen className="h-4 w-4" />
+                  Docs
+                </a>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={handleLogout}
+                className="text-destructive focus:text-destructive"
+              >
+                <LogOut className="h-4 w-4 mr-2" />
+                Logout
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
@@ -548,8 +710,8 @@ export default function HistorifyCharts() {
             </div>
 
             {/* Chart Container */}
-            <div className="flex-1 min-h-0 border rounded-lg bg-card overflow-hidden">
-              <div ref={chartContainerRef} className="w-full h-full" />
+            <div className="flex-1 min-h-0 border rounded-lg bg-card overflow-hidden relative">
+              <div ref={chartContainerRef} className="absolute inset-0" />
             </div>
 
             {/* Price Info */}

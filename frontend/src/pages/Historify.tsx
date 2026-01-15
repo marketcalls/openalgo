@@ -1,13 +1,16 @@
 import {
   BarChart3,
+  BookOpen,
   CheckCircle,
   Database,
   DownloadCloud,
   FileDown,
   HardDrive,
+  Home,
   LineChart,
   ListPlus,
   Loader2,
+  LogOut,
   Moon,
   Pause,
   Play,
@@ -25,7 +28,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   AlertDialog,
@@ -70,9 +73,18 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
 import { useSocket } from '@/hooks/useSocket'
 import { cn } from '@/lib/utils'
+import { profileMenuItems } from '@/config/navigation'
+import { authApi } from '@/api/auth'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 
@@ -197,7 +209,8 @@ function getDateFromPreset(months: number): string {
 
 export default function Historify() {
   const { appMode, toggleAppMode, mode, toggleMode, isTogglingMode } = useThemeStore()
-  const { user } = useAuthStore()
+  const { user, logout } = useAuthStore()
+  const navigate = useNavigate()
 
   // Core state
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([])
@@ -1008,6 +1021,18 @@ export default function Historify() {
     }
   }
 
+  const handleLogout = async () => {
+    try {
+      await authApi.logout()
+      logout()
+      navigate('/login')
+      toast.success('Logged out successfully')
+    } catch {
+      logout()
+      navigate('/login')
+    }
+  }
+
   // Render
   return (
     <div className="h-full flex flex-col bg-background">
@@ -1108,6 +1133,60 @@ export default function Historify() {
                 <span className="hidden sm:inline">Charts</span>
               </Button>
             </Link>
+
+            {/* Dashboard Link */}
+            <Link to="/dashboard">
+              <Button variant="outline" size="sm">
+                <Home className="h-4 w-4 mr-1" />
+                <span className="hidden sm:inline">Dashboard</span>
+              </Button>
+            </Link>
+
+            {/* Profile Menu */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 rounded-full bg-primary text-primary-foreground"
+                >
+                  <span className="text-sm font-medium">
+                    {user?.username?.[0]?.toUpperCase() || 'O'}
+                  </span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                {profileMenuItems.map((item) => (
+                  <DropdownMenuItem
+                    key={item.href}
+                    onSelect={() => navigate(item.href)}
+                    className="cursor-pointer"
+                  >
+                    <item.icon className="h-4 w-4 mr-2" />
+                    {item.label}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuItem asChild>
+                  <a
+                    href="https://docs.openalgo.in"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-2"
+                  >
+                    <BookOpen className="h-4 w-4" />
+                    Docs
+                  </a>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={handleLogout}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <LogOut className="h-4 w-4 mr-2" />
+                  Logout
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
       </div>
