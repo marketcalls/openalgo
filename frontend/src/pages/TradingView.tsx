@@ -1,7 +1,5 @@
 import { AlertTriangle, BookOpen, Copy, ExternalLink, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { toast } from 'sonner'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -16,7 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { useThemeStore } from '@/stores/themeStore'
+import { JsonEditor } from '@/components/ui/json-editor'
 
 interface SearchResult {
   symbol: string
@@ -41,9 +39,6 @@ const PRODUCTS = [
 ]
 
 export default function TradingView() {
-  const { mode: themeMode } = useThemeStore()
-  const isDarkMode = themeMode === 'dark'
-
   // Form state
   const [alertMode, setAlertMode] = useState<'strategy' | 'line'>('strategy')
   const [symbol, setSymbol] = useState('NHPC')
@@ -378,20 +373,9 @@ export default function TradingView() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="rounded-lg overflow-hidden border">
+              <div className="rounded-lg overflow-hidden border bg-background h-64">
                 {generatedJson ? (
-                  <SyntaxHighlighter
-                    language="json"
-                    style={isDarkMode ? oneDark : oneLight}
-                    customStyle={{
-                      margin: 0,
-                      padding: '1rem',
-                      fontSize: '0.875rem',
-                      background: isDarkMode ? '#1e1e1e' : '#f8f8f8',
-                    }}
-                  >
-                    {generatedJson}
-                  </SyntaxHighlighter>
+                  <JsonEditor value={generatedJson} readOnly className="h-full" />
                 ) : (
                   <div className="p-8 text-center text-muted-foreground">
                     <p>Fill in the form and click "Generate JSON" to see the output</p>
