@@ -9,8 +9,6 @@ import {
   Users,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -25,7 +23,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { useThemeStore } from '@/stores/themeStore'
+import { JsonEditor } from '@/components/ui/json-editor'
 
 interface ApiRequest {
   timestamp: string
@@ -73,9 +71,6 @@ const EXCHANGE_COLORS: Record<string, string> = {
 }
 
 export default function Analyzer() {
-  const { mode } = useThemeStore()
-  const isDarkMode = mode === 'dark'
-
   const [data, setData] = useState<AnalyzerData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [startDate, setStartDate] = useState('')
@@ -357,7 +352,7 @@ export default function Analyzer() {
 
       {/* Request Details Dialog */}
       <Dialog open={showDetailsDialog} onOpenChange={setShowDetailsDialog}>
-        <DialogContent className="max-w-5xl">
+        <DialogContent className="max-w-7xl">
           <DialogHeader>
             <DialogTitle>Request Details</DialogTitle>
           </DialogHeader>
@@ -365,42 +360,24 @@ export default function Analyzer() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <h4 className="font-semibold mb-2">Request Data</h4>
-                <div className="rounded-lg overflow-hidden border">
-                  <SyntaxHighlighter
-                    language="json"
-                    style={isDarkMode ? oneDark : oneLight}
-                    customStyle={{
-                      margin: 0,
-                      padding: '1rem',
-                      fontSize: '0.75rem',
-                      maxHeight: '400px',
-                      background: isDarkMode ? '#1e1e1e' : '#f8f8f8',
-                    }}
-                  >
-                    {JSON.stringify(cleanRequestData(selectedRequest.request_data), null, 2)}
-                  </SyntaxHighlighter>
+                <div className="rounded-lg overflow-hidden border bg-card/50 h-[400px]">
+                  <JsonEditor
+                    value={JSON.stringify(cleanRequestData(selectedRequest.request_data), null, 2)}
+                    readOnly={true}
+                  />
                 </div>
               </div>
               <div>
                 <h4 className="font-semibold mb-2">Response Data</h4>
-                <div className="rounded-lg overflow-hidden border">
-                  <SyntaxHighlighter
-                    language="json"
-                    style={isDarkMode ? oneDark : oneLight}
-                    customStyle={{
-                      margin: 0,
-                      padding: '1rem',
-                      fontSize: '0.75rem',
-                      maxHeight: '400px',
-                      background: isDarkMode ? '#1e1e1e' : '#f8f8f8',
-                    }}
-                  >
-                    {JSON.stringify(
+                <div className="rounded-lg overflow-hidden border bg-card/50 h-[400px]">
+                  <JsonEditor
+                    value={JSON.stringify(
                       selectedRequest.response_data || selectedRequest.analysis,
                       null,
                       2
                     )}
-                  </SyntaxHighlighter>
+                    readOnly={true}
+                  />
                 </div>
               </div>
             </div>

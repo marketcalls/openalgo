@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
+import { JsonEditor } from '@/components/ui/json-editor'
 
 interface LogEntry {
   id: number
@@ -413,15 +414,21 @@ export default function LogsPage() {
                     <CollapsibleContent className="mt-4 space-y-4">
                       <div className="bg-muted rounded-lg p-4">
                         <h4 className="text-sm font-medium mb-2">Request Data</h4>
-                        <pre className="text-sm bg-background rounded p-3 overflow-x-auto">
-                          {JSON.stringify(requestData, null, 2)}
-                        </pre>
+                        <div className="rounded-lg overflow-hidden border bg-card/50 h-[250px]">
+                          <JsonEditor
+                            value={JSON.stringify(requestData, null, 2)}
+                            readOnly={true}
+                          />
+                        </div>
                       </div>
                       <div className="bg-muted rounded-lg p-4">
                         <h4 className="text-sm font-medium mb-2">Response Data</h4>
-                        <pre className="text-sm bg-background rounded p-3 overflow-x-auto">
-                          {JSON.stringify(log.response_data, null, 2)}
-                        </pre>
+                        <div className="rounded-lg overflow-hidden border bg-card/50 h-[250px]">
+                          <JsonEditor
+                            value={JSON.stringify(log.response_data, null, 2)}
+                            readOnly={true}
+                          />
+                        </div>
                       </div>
                     </CollapsibleContent>
                   </Collapsible>

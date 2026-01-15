@@ -242,6 +242,68 @@ def add_to_watchlist(symbol: str, exchange: str, display_name: str = None) -> Tu
         return False, str(e)
 
 
+def bulk_add_to_watchlist(symbols: List[Dict[str, str]]) -> Tuple[int, int, List[Dict[str, str]]]:
+    """
+    Add multiple symbols to the watchlist in a single transaction.
+
+    Args:
+        symbols: List of dicts with 'symbol', 'exchange', and optional 'display_name' keys
+
+    Returns:
+        Tuple of (added_count, skipped_count, failed_list)
+    """
+    added = 0
+    skipped = 0
+    failed = []
+
+    try:
+        with get_connection() as conn:
+            # Get existing symbols in one query
+            existing_result = conn.execute("""
+                SELECT symbol, exchange FROM watchlist
+            """).fetchall()
+            existing_set = {(row[0], row[1]) for row in existing_result}
+
+            # Get the current max ID
+            max_id_result = conn.execute("SELECT COALESCE(MAX(id), 0) FROM watchlist").fetchone()
+            next_id = max_id_result[0] + 1
+
+            # Prepare records for bulk insert
+            records_to_insert = []
+            for item in symbols:
+                symbol = item.get('symbol', '').upper()
+                exchange = item.get('exchange', '').upper()
+                display_name = item.get('display_name')
+
+                if not symbol or not exchange:
+                    failed.append({'symbol': symbol, 'exchange': exchange, 'error': 'Missing symbol or exchange'})
+                    continue
+
+                # Skip if already exists
+                if (symbol, exchange) in existing_set:
+                    skipped += 1
+                    continue
+
+                records_to_insert.append((next_id, symbol, exchange, display_name))
+                existing_set.add((symbol, exchange))  # Prevent duplicates within batch
+                next_id += 1
+
+            # Bulk insert all records at once
+            if records_to_insert:
+                conn.executemany("""
+                    INSERT INTO watchlist (id, symbol, exchange, display_name)
+                    VALUES (?, ?, ?, ?)
+                """, records_to_insert)
+                added = len(records_to_insert)
+
+        logger.info(f"Bulk added {added} symbols to watchlist (skipped {skipped} existing)")
+        return added, skipped, failed
+
+    except Exception as e:
+        logger.error(f"Error bulk adding to watchlist: {e}")
+        return 0, 0, [{'symbol': 'batch', 'exchange': '', 'error': str(e)}]
+
+
 def remove_from_watchlist(symbol: str, exchange: str) -> Tuple[bool, str]:
     """
     Remove a symbol from the watchlist.

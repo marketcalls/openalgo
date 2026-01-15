@@ -18,6 +18,7 @@ from database.historify_db import (
     get_watchlist as db_get_watchlist,
     add_to_watchlist as db_add_to_watchlist,
     remove_from_watchlist as db_remove_from_watchlist,
+    bulk_add_to_watchlist as db_bulk_add_to_watchlist,
     upsert_market_data,
     get_ohlcv,
     get_data_catalog as db_get_data_catalog,
@@ -152,7 +153,7 @@ def remove_from_watchlist(symbol: str, exchange: str) -> Tuple[bool, Dict[str, A
 
 def bulk_add_to_watchlist(symbols: List[Dict[str, str]]) -> Tuple[bool, Dict[str, Any], int]:
     """
-    Add multiple symbols to the watchlist.
+    Add multiple symbols to the watchlist in a single bulk operation.
 
     Args:
         symbols: List of dicts with 'symbol' and 'exchange' keys
@@ -161,27 +162,13 @@ def bulk_add_to_watchlist(symbols: List[Dict[str, str]]) -> Tuple[bool, Dict[str
         Tuple of (success, response_data, status_code)
     """
     try:
-        added = 0
-        failed = []
-
-        for item in symbols:
-            symbol = item.get('symbol', '').upper()
-            exchange = item.get('exchange', '').upper()
-            display_name = item.get('display_name')
-
-            if not symbol or not exchange:
-                failed.append({'symbol': symbol, 'exchange': exchange, 'error': 'Missing symbol or exchange'})
-                continue
-
-            success, msg = db_add_to_watchlist(symbol, exchange, display_name)
-            if success:
-                added += 1
-            else:
-                failed.append({'symbol': symbol, 'exchange': exchange, 'error': msg})
+        # Use bulk insert for better performance
+        added, skipped, failed = db_bulk_add_to_watchlist(symbols)
 
         return True, {
             'status': 'success',
             'added': added,
+            'skipped': skipped,
             'failed': failed,
             'total': len(symbols)
         }, 200
