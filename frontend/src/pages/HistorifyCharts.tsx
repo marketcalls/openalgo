@@ -211,9 +211,31 @@ export default function HistorifyCharts() {
           borderColor: isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.2)',
           timeVisible: true,
           secondsVisible: false,
+          tickMarkFormatter: (time: number) => {
+            // Convert Unix timestamp to IST (UTC+5:30)
+            const date = new Date(time * 1000)
+            const istOffset = 5.5 * 60 * 60 * 1000
+            const istDate = new Date(date.getTime() + istOffset)
+            const hours = istDate.getUTCHours().toString().padStart(2, '0')
+            const minutes = istDate.getUTCMinutes().toString().padStart(2, '0')
+            return `${hours}:${minutes}`
+          },
         },
         crosshair: {
           mode: CrosshairMode.Normal,
+          vertLine: {
+            width: 1,
+            color: isDarkMode ? 'rgba(166, 173, 187, 0.5)' : 'rgba(0, 0, 0, 0.3)',
+            style: 2,
+            labelVisible: true,
+            labelBackgroundColor: isDarkMode ? '#1f2937' : '#374151',
+          },
+          horzLine: {
+            width: 1,
+            color: isDarkMode ? 'rgba(166, 173, 187, 0.5)' : 'rgba(0, 0, 0, 0.3)',
+            style: 2,
+            labelBackgroundColor: isDarkMode ? '#1f2937' : '#374151',
+          },
         },
       })
 
