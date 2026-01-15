@@ -20,7 +20,7 @@ import {
   X,
   Zap,
 } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
@@ -30,6 +30,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
 import { useThemeStore } from '@/stores/themeStore'
+import { JsonEditor } from '@/components/ui/json-editor'
 
 interface Endpoint {
   name: string
@@ -174,7 +175,6 @@ export default function Playground() {
   // Mobile sidebar
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
 
-  const requestBodyRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     loadApiKey()
@@ -833,26 +833,13 @@ export default function Playground() {
                       </div>
                     </div>
 
-                    <TabsContent value="body" className="flex-1 m-0 overflow-hidden">
-                      <div className="h-full flex bg-background">
-                        {/* Line Numbers */}
-                        <div className="w-10 bg-card/50 text-muted-foreground/50 text-xs font-mono py-3 px-2 text-right select-none overflow-hidden border-r border-border">
-                          {requestBody.split('\n').map((_, i) => (
-                            <div key={i} className="leading-5">
-                              {i + 1}
-                            </div>
-                          ))}
-                        </div>
-                        {/* Editor */}
-                        <textarea
-                          ref={requestBodyRef}
-                          className="flex-1 p-3 font-mono text-xs bg-transparent border-none outline-none resize-none text-foreground leading-5"
-                          placeholder='{"apikey": ""}'
-                          value={requestBody}
-                          onChange={(e) => updateCurrentTabBody(e.target.value)}
-                          spellCheck={false}
-                        />
-                      </div>
+                    <TabsContent value="body" className="flex-1 m-0 overflow-hidden flex flex-col">
+                      <JsonEditor
+                        value={requestBody}
+                        onChange={updateCurrentTabBody}
+                        placeholder='{"apikey": ""}'
+                        className="flex-1 min-h-0"
+                      />
                     </TabsContent>
 
                     <TabsContent
