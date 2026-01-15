@@ -116,8 +116,9 @@ export function JsonEditor({
   placeholder,
   className = '',
 }: JsonEditorProps) {
-  const { mode } = useThemeStore()
-  const isDark = mode === 'dark'
+  const { mode, appMode } = useThemeStore()
+  // Dark mode when: explicit dark theme OR analyzer mode (always dark purple theme)
+  const isDark = mode === 'dark' || appMode === 'analyzer'
 
   const extensions = useMemo(() => {
     return [
