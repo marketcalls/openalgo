@@ -80,15 +80,6 @@ interface OHLCVData {
   volume: number
 }
 
-interface IntervalData {
-  seconds: string[]
-  minutes: string[]
-  hours: string[]
-  days: string[]
-  weeks: string[]
-  months: string[]
-}
-
 export default function HistorifyCharts() {
   const navigate = useNavigate()
   const { mode, toggleMode, appMode, toggleAppMode, isTogglingMode } = useThemeStore()
@@ -121,7 +112,6 @@ export default function HistorifyCharts() {
 
   // State
   const [catalog, setCatalog] = useState<CatalogItem[]>([])
-  const [intervals, setIntervals] = useState<IntervalData | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
 
@@ -155,18 +145,12 @@ export default function HistorifyCharts() {
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null)
 
-  // All intervals flattened
-  const allIntervals = useMemo(() => {
-    if (!intervals) return ['D']
-    return [
-      ...intervals.seconds,
-      ...intervals.minutes,
-      ...intervals.hours,
-      ...intervals.days,
-      ...intervals.weeks,
-      ...intervals.months,
-    ]
-  }, [intervals])
+  // Standard chart timeframes (not broker-specific)
+  const CHART_TIMEFRAMES = [
+    '1m', '2m', '3m', '5m', '10m', '15m', '30m',
+    '1h', '2h', '4h',
+    'D', 'W', 'MO', 'Q', 'Y'
+  ]
 
   // Effective interval (either selected standard interval or custom)
   const effectiveInterval = useMemo(() => {
@@ -215,10 +199,9 @@ export default function HistorifyCharts() {
     )
   }, [uniqueSymbols, symbolSearch])
 
-  // Load catalog and intervals on mount
+  // Load catalog on mount
   useEffect(() => {
     loadCatalog()
-    loadIntervals()
   }, [])
 
   // Update URL when selection changes
@@ -453,18 +436,6 @@ export default function HistorifyCharts() {
     }
   }
 
-  const loadIntervals = async () => {
-    try {
-      const response = await fetch('/historify/api/intervals', { credentials: 'include' })
-      const data = await response.json()
-      if (data.status === 'success') {
-        setIntervals(data.data)
-      }
-    } catch (error) {
-      console.error('Error loading intervals:', error)
-    }
-  }
-
   const loadChartData = useCallback(async () => {
     if (!selectedSymbol || !selectedExchange) return
 
@@ -615,7 +586,7 @@ export default function HistorifyCharts() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {allIntervals.map((int) => (
+              {CHART_TIMEFRAMES.map((int) => (
                 <SelectItem key={int} value={int}>
                   {int}
                 </SelectItem>
