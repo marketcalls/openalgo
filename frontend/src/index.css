@@ -379,3 +379,29 @@
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
+
+/* Date input styling - make the native calendar icon more visible */
+.date-input-styled::-webkit-calendar-picker-indicator {
+  filter: invert(0.5);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+}
+.date-input-styled::-webkit-calendar-picker-indicator:hover {
+  filter: invert(0.7);
+  background-color: rgba(128, 128, 128, 0.2);
+}
+.dark .date-input-styled::-webkit-calendar-picker-indicator {
+  filter: invert(1) brightness(1.5);
+}
+.dark .date-input-styled::-webkit-calendar-picker-indicator:hover {
+  filter: invert(1) brightness(2);
+  background-color: rgba(255, 255, 255, 0.1);
+}
+.analyzer .date-input-styled::-webkit-calendar-picker-indicator {
+  filter: invert(1) sepia(1) saturate(5) hue-rotate(240deg);
+}
+.analyzer .date-input-styled::-webkit-calendar-picker-indicator:hover {
+  filter: invert(1) sepia(1) saturate(5) hue-rotate(240deg) brightness(1.3);
+  background-color: rgba(128, 90, 213, 0.2);
+}

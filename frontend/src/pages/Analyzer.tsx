@@ -2,7 +2,6 @@ import {
   Activity,
   AlertTriangle,
   BarChart3,
-  Calendar,
   CheckCircle,
   Download,
   Eye,
@@ -184,29 +183,23 @@ export default function Analyzer() {
           <form onSubmit={handleFilter} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
             <div className="space-y-2">
               <Label htmlFor="start_date" className="text-sm font-medium">Start Date</Label>
-              <div className="relative">
-                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  id="start_date"
-                  type="date"
-                  value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
+              <Input
+                id="start_date"
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="date-input-styled"
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="end_date" className="text-sm font-medium">End Date</Label>
-              <div className="relative">
-                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  id="end_date"
-                  type="date"
-                  value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
+              <Input
+                id="end_date"
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="date-input-styled"
+              />
             </div>
             <div className="flex gap-2 pt-6">
               <Button type="submit">
@@ -373,7 +366,7 @@ export default function Analyzer() {
 
       {/* Request Details Dialog */}
       <Dialog open={showDetailsDialog} onOpenChange={setShowDetailsDialog}>
-        <DialogContent className="max-w-[98vw] w-[98vw] p-4">
+        <DialogContent className="max-w-[98vw] w-[98vw] sm:max-w-[98vw] p-4">
           <DialogHeader>
             <DialogTitle>Request Details</DialogTitle>
           </DialogHeader>
@@ -387,11 +380,11 @@ export default function Analyzer() {
             const requestLines = requestJson.split('\n').length
             const responseLines = responseJson.split('\n').length
             const maxLines = Math.max(requestLines, responseLines)
-            // Allow up to 600px height
-            const height = Math.min(Math.max(maxLines * 20 + 24, 150), 600)
+            // Allow up to 70vh height
+            const height = Math.min(Math.max(maxLines * 20 + 24, 200), window.innerHeight * 0.7)
 
             return (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 max-h-[75vh] overflow-y-auto">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 max-h-[85vh] overflow-y-auto">
                 <div className="min-w-0 overflow-hidden">
                   <h4 className="font-semibold mb-2">Request Data</h4>
                   <div className="rounded-lg border bg-card/50 overflow-auto" style={{ height }}>

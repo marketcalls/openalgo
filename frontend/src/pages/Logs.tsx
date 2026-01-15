@@ -2,7 +2,6 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowUp,
-  Calendar,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -259,34 +258,28 @@ export default function LogsPage() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="space-y-2">
               <label className="text-sm font-medium">Start Date</label>
-              <div className="relative">
-                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  type="date"
-                  value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
-                  onBlur={handleDateChange}
-                  className="pl-10"
-                />
-              </div>
+              <Input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                onBlur={handleDateChange}
+                className="date-input-styled"
+              />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium">End Date</label>
-              <div className="relative">
-                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  type="date"
-                  value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
-                  onBlur={handleDateChange}
-                  className="pl-10"
-                />
-              </div>
+              <Input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                onBlur={handleDateChange}
+                className="date-input-styled"
+              />
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium">Search</label>
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-primary" />
                 <Input
                   type="text"
                   placeholder="Search logs..."
@@ -417,9 +410,10 @@ export default function LogsPage() {
                         const responseJson = JSON.stringify(log.response_data, null, 2)
                         const requestLines = requestJson.split('\n').length
                         const responseLines = responseJson.split('\n').length
-                        // Allow up to 600px height, minimum 120px
-                        const requestHeight = Math.min(Math.max(requestLines * 20 + 24, 120), 600)
-                        const responseHeight = Math.min(Math.max(responseLines * 20 + 24, 120), 600)
+                        // Allow up to 70vh height, minimum 120px
+                        const maxHeight = typeof window !== 'undefined' ? window.innerHeight * 0.7 : 600
+                        const requestHeight = Math.min(Math.max(requestLines * 20 + 24, 120), maxHeight)
+                        const responseHeight = Math.min(Math.max(responseLines * 20 + 24, 120), maxHeight)
 
                         return (
                           <>
