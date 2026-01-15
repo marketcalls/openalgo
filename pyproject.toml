@@ -88,6 +88,7 @@ dependencies = [
   "packaging==24.1",
   "pandas==2.3.3",
   "pyarrow==22.0.0",
+  "fastparquet==2025.12.0",
   "parso==0.8.4",
   "pexpect==4.9.0",
   "pillow==12.0.0",
