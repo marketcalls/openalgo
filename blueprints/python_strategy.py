@@ -23,9 +23,6 @@ import json
 import pytz
 import platform
 import threading
-from cryptography.fernet import Fernet
-import base64
-import hashlib
 from database.market_calendar_db import is_market_holiday
 
 # Setup logging
@@ -48,8 +45,6 @@ IST = pytz.timezone('Asia/Kolkata')
 STRATEGIES_DIR = Path('strategies') / 'scripts'
 LOGS_DIR = Path('log') / 'strategies'  # Using existing log folder
 CONFIG_FILE = Path('strategies') / 'strategy_configs.json'
-ENV_FILE = Path('strategies') / 'strategy_env.json'  # Environment variables storage
-SECURE_ENV_FILE = Path('strategies') / '.secure_env'  # Encrypted sensitive variables
 
 # Detect operating system
 OS_TYPE = platform.system().lower()  # 'windows', 'linux', 'darwin'
@@ -123,100 +118,6 @@ def ensure_directories():
     except Exception as e:
         logger.error(f"Failed to create directories: {e}")
         # Continue anyway, individual operations will handle missing directories
-
-def get_or_create_encryption_key():
-    """Get or create encryption key for sensitive data"""
-    # Store in secure location in keys folder
-    key_file = Path('keys') / '.encryption_key'
-    
-    if key_file.exists():
-        with open(key_file, 'rb') as f:
-            return f.read()
-    else:
-        # Generate new key
-        key = Fernet.generate_key()
-        key_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(key_file, 'wb') as f:
-            f.write(key)
-        # Set restrictive permissions
-        if not IS_WINDOWS:
-            os.chmod(key_file, 0o600)
-        return key
-
-# Initialize encryption
-ENCRYPTION_KEY = get_or_create_encryption_key()
-CIPHER_SUITE = Fernet(ENCRYPTION_KEY)
-
-def load_env_variables(strategy_id):
-    """Load environment variables for a strategy"""
-    env_vars = {}
-    
-    # Load regular environment variables
-    if ENV_FILE.exists():
-        try:
-            with open(ENV_FILE, 'r', encoding='utf-8') as f:
-                all_env = json.load(f)
-                env_vars.update(all_env.get(strategy_id, {}))
-        except Exception as e:
-            logger.error(f"Failed to load env variables: {e}")
-    
-    # Load secure environment variables
-    if SECURE_ENV_FILE.exists():
-        try:
-            with open(SECURE_ENV_FILE, 'rb') as f:
-                encrypted_data = f.read()
-                decrypted_data = CIPHER_SUITE.decrypt(encrypted_data)
-                secure_env = json.loads(decrypted_data.decode('utf-8'))
-                env_vars.update(secure_env.get(strategy_id, {}))
-        except Exception as e:
-            logger.error(f"Failed to load secure env variables: {e}")
-    
-    return env_vars
-
-def save_env_variables(strategy_id, regular_vars, secure_vars=None):
-    """Save environment variables for a strategy"""
-    # Save regular variables
-    all_env = {}
-    if ENV_FILE.exists():
-        try:
-            with open(ENV_FILE, 'r', encoding='utf-8') as f:
-                all_env = json.load(f)
-        except:
-            pass
-    
-    all_env[strategy_id] = regular_vars
-    
-    ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(ENV_FILE, 'w', encoding='utf-8') as f:
-        json.dump(all_env, f, indent=2)
-    
-    # Save secure variables if provided
-    if secure_vars is not None:
-        all_secure = {}
-        if SECURE_ENV_FILE.exists():
-            try:
-                with open(SECURE_ENV_FILE, 'rb') as f:
-                    encrypted_data = f.read()
-                    decrypted_data = CIPHER_SUITE.decrypt(encrypted_data)
-                    all_secure = json.loads(decrypted_data.decode('utf-8'))
-            except:
-                pass
-        
-        # Merge new secure vars with existing ones (only update those provided)
-        if strategy_id not in all_secure:
-            all_secure[strategy_id] = {}
-        
-        # Update only the provided secure variables, keep existing ones
-        all_secure[strategy_id].update(secure_vars)
-        
-        # Encrypt and save
-        encrypted_data = CIPHER_SUITE.encrypt(json.dumps(all_secure).encode('utf-8'))
-        with open(SECURE_ENV_FILE, 'wb') as f:
-            f.write(encrypted_data)
-        
-        # Set restrictive permissions
-        if not IS_WINDOWS:
-            os.chmod(SECURE_ENV_FILE, 0o600)
 
 def get_active_broker():
     """Get the active broker from database (last logged in user's broker)"""
@@ -392,17 +293,7 @@ def start_strategy_process(strategy_id):
             subprocess_args['stdout'] = log_handle
             subprocess_args['stderr'] = subprocess.STDOUT
             subprocess_args['cwd'] = str(Path.cwd())
-            
-            # Load and set environment variables
-            env_vars = load_env_variables(strategy_id)
-            if env_vars:
-                # Start with current environment
-                process_env = os.environ.copy()
-                # Add strategy-specific environment variables
-                process_env.update(env_vars)
-                subprocess_args['env'] = process_env
-                logger.info(f"Loaded {len(env_vars)} environment variables for strategy {strategy_id}")
-            
+
             # Start the process
             # Use Python unbuffered mode for real-time output
             cmd = [get_python_executable(), '-u', str(file_path.absolute())]
@@ -1542,93 +1433,6 @@ def save_strategy(strategy_id):
     except Exception as e:
         logger.error(f"Failed to save strategy {strategy_id}: {e}")
         return jsonify({'success': False, 'message': f'Failed to save: {str(e)}'}), 500
-
-@python_strategy_bp.route('/env/<strategy_id>', methods=['GET', 'POST'])
-@check_session_validity
-def manage_env_variables(strategy_id):
-    """Manage environment variables for a strategy"""
-    user_id = session.get('user')
-    if not user_id:
-        return jsonify({'success': False, 'message': 'Session expired'}), 401
-
-    # Verify ownership
-    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
-    if not is_owner:
-        return error_response
-
-    config = STRATEGY_CONFIGS[strategy_id]
-    is_running = config.get('is_running', False)
-    
-    if request.method == 'GET':
-        # Load environment variables
-        try:
-            # Load regular variables
-            regular_vars = {}
-            if ENV_FILE.exists():
-                with open(ENV_FILE, 'r', encoding='utf-8') as f:
-                    all_env = json.load(f)
-                    regular_vars = all_env.get(strategy_id, {})
-            
-            # Load secure variable keys only (not values for security)
-            secure_keys = []
-            if SECURE_ENV_FILE.exists():
-                try:
-                    with open(SECURE_ENV_FILE, 'rb') as f:
-                        encrypted_data = f.read()
-                        decrypted_data = CIPHER_SUITE.decrypt(encrypted_data)
-                        secure_env = json.loads(decrypted_data.decode('utf-8'))
-                        secure_keys = list(secure_env.get(strategy_id, {}).keys())
-                except Exception as e:
-                    logger.error(f"Failed to load secure env keys: {e}")
-            
-            return jsonify({
-                'success': True,
-                'regular_vars': regular_vars,
-                'secure_vars': secure_keys,
-                'is_running': is_running,
-                'read_only': is_running
-            })
-            
-        except Exception as e:
-            logger.error(f"Failed to load env variables: {e}")
-            return jsonify({'success': False, 'message': f'Failed to load variables: {str(e)}'}), 500
-    
-    elif request.method == 'POST':
-        # Check if strategy is running - prevent changes for safety
-        if is_running:
-            return jsonify({
-                'success': False, 
-                'message': 'Cannot modify environment variables while strategy is running. Please stop the strategy first.',
-                'error_code': 'STRATEGY_RUNNING'
-            }), 400
-        
-        # Save environment variables
-        try:
-            data = request.get_json()
-            if not data:
-                return jsonify({'success': False, 'message': 'No data provided'}), 400
-            
-            regular_vars = data.get('regular_vars', {})
-            secure_vars = data.get('secure_vars', {})
-            
-            # Filter out empty values
-            regular_vars = {k: v for k, v in regular_vars.items() if k.strip()}
-            secure_vars = {k: v for k, v in secure_vars.items() if k.strip()}
-            
-            # Save variables
-            save_env_variables(strategy_id, regular_vars, secure_vars if secure_vars else None)
-            
-            logger.info(f"Environment variables updated for strategy {strategy_id}")
-            return jsonify({
-                'success': True,
-                'message': f'Environment variables saved successfully',
-                'regular_count': len(regular_vars),
-                'secure_count': len(secure_vars)
-            })
-            
-        except Exception as e:
-            logger.error(f"Failed to save env variables: {e}")
-            return jsonify({'success': False, 'message': f'Failed to save variables: {str(e)}'}), 500
 
 # Cleanup on shutdown
 def cleanup_on_exit():
