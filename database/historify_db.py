@@ -1921,17 +1921,18 @@ def export_bulk_csv(
     import tempfile
 
     try:
-        if not symbols:
-            return False, "No symbols specified", 0
-
         # Build symbol filter
-        symbol_conditions = []
+        conditions = []
         params = []
-        for sym in symbols:
-            symbol_conditions.append("(symbol = ? AND exchange = ?)")
-            params.extend([sym['symbol'].upper(), sym['exchange'].upper()])
 
-        conditions = [f"({' OR '.join(symbol_conditions)})"]
+        if symbols and len(symbols) > 0:
+            # Export specific symbols
+            symbol_conditions = []
+            for sym in symbols:
+                symbol_conditions.append("(symbol = ? AND exchange = ?)")
+                params.extend([sym['symbol'].upper(), sym['exchange'].upper()])
+            conditions.append(f"({' OR '.join(symbol_conditions)})")
+        # If no symbols specified, export all (no symbol filter needed)
 
         if interval:
             conditions.append("interval = ?")
@@ -1943,7 +1944,7 @@ def export_bulk_csv(
             conditions.append("timestamp <= ?")
             params.append(end_timestamp)
 
-        where_clause = " AND ".join(conditions)
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
 
         # Validate output path
         temp_dir = tempfile.gettempdir()

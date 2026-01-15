@@ -433,8 +433,14 @@ def bulk_export():
         else:
             base_name = f"historify_export_{timestamp_str}"
 
-        # If multiple intervals provided, always use ZIP format
-        if intervals and len(intervals) > 1:
+        # Computed intervals that require aggregation from 1m data
+        COMPUTED_INTERVALS = {'5m', '15m', '30m', '1h'}
+
+        # Force ZIP format if:
+        # 1. Multiple intervals selected, OR
+        # 2. Any computed interval is selected (since only ZIP supports aggregation)
+        has_computed = intervals and any(i in COMPUTED_INTERVALS for i in intervals)
+        if (intervals and len(intervals) > 1) or has_computed:
             format_type = 'zip'
 
         # Create temp file path
