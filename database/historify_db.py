@@ -453,6 +453,49 @@ def get_ohlcv(
         return pd.DataFrame()
 
 
+# Market open times in seconds from midnight IST for each exchange
+# Used for aligning aggregation buckets to market open (not midnight)
+# NSE/BSE/NFO/BFO: 9:15 AM = 9*3600 + 15*60 = 33300 seconds
+# MCX/CDS/BCD: 9:00 AM = 9*3600 = 32400 seconds
+EXCHANGE_MARKET_OPEN_SECONDS = {
+    'NSE': 33300,       # 09:15
+    'BSE': 33300,       # 09:15
+    'NFO': 33300,       # 09:15
+    'BFO': 33300,       # 09:15
+    'CDS': 32400,       # 09:00
+    'BCD': 32400,       # 09:00
+    'MCX': 32400,       # 09:00
+    'NSE_INDEX': 33300, # 09:15
+    'BSE_INDEX': 33300, # 09:15
+}
+
+
+def _get_market_open_seconds(exchange: str) -> int:
+    """
+    Get market open time in seconds from midnight for an exchange.
+    Tries to fetch from database first (in case admin changed it),
+    falls back to defaults.
+
+    Args:
+        exchange: Exchange code
+
+    Returns:
+        Seconds from midnight when market opens
+    """
+    try:
+        # Try to get from market_calendar_db if available
+        from database.market_calendar_db import get_market_timing
+        timing = get_market_timing(exchange.upper())
+        if timing and timing.get('start_offset'):
+            # start_offset is in milliseconds, convert to seconds
+            return timing['start_offset'] // 1000
+    except Exception:
+        pass
+
+    # Fallback to defaults
+    return EXCHANGE_MARKET_OPEN_SECONDS.get(exchange.upper(), 33300)
+
+
 def _get_aggregated_ohlcv(
     symbol: str,
     exchange: str,
@@ -462,11 +505,14 @@ def _get_aggregated_ohlcv(
 ) -> pd.DataFrame:
     """
     Aggregate 1m data to higher timeframes using DuckDB SQL.
-    Uses time_bucket for efficient grouping.
+    Aligns candle boundaries to exchange market open time.
+
+    Example: For NSE (opens 9:15), hourly candles are 9:15-10:15, 10:15-11:15, etc.
+    For MCX (opens 9:00), hourly candles are 9:00-10:00, 10:00-11:00, etc.
 
     Args:
         symbol: Trading symbol
-        exchange: Exchange code
+        exchange: Exchange code (determines candle alignment)
         target_interval: Target interval (5m, 15m, 30m, 1h)
         start_timestamp: Start epoch timestamp (optional)
         end_timestamp: End epoch timestamp (optional)
@@ -478,17 +524,39 @@ def _get_aggregated_ohlcv(
         minutes = INTERVAL_MINUTES.get(target_interval, 5)
         interval_seconds = minutes * 60
 
-        # Build the aggregation query
-        # DuckDB doesn't have time_bucket, so we use integer division
+        # Get market open time for this exchange (in seconds from midnight)
+        market_open_seconds = _get_market_open_seconds(exchange)
+
+        # IST timezone offset from UTC (5 hours 30 minutes = 19800 seconds)
+        # We need this because timestamps are in UTC epoch
+        ist_offset = 19800
+
+        # Candle alignment algorithm:
+        # 1. Convert UTC timestamp to IST by adding ist_offset
+        # 2. Get seconds from midnight: (timestamp + ist_offset) % 86400
+        # 3. Get trading seconds: seconds_from_midnight - market_open_seconds
+        # 4. Calculate bucket: (trading_seconds / interval_seconds) * interval_seconds
+        # 5. Candle start = day_start + market_open_seconds + bucket
+        #
+        # In SQL:
+        # day_start_utc = ((timestamp + ist_offset) / 86400) * 86400 - ist_offset
+        # seconds_from_midnight_ist = (timestamp + ist_offset) % 86400
+        # trading_seconds = seconds_from_midnight_ist - market_open_seconds
+        # bucket_offset = (trading_seconds / interval_seconds) * interval_seconds
+        # candle_timestamp = day_start_utc + market_open_seconds + bucket_offset
+
         query = f"""
             SELECT
-                (timestamp / {interval_seconds}) * {interval_seconds} as timestamp,
-                FIRST(open) as open,
+                (((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset}) +
+                {market_open_seconds} +
+                ((((timestamp + {ist_offset}) % 86400) - {market_open_seconds}) / {interval_seconds}) * {interval_seconds}
+                as timestamp,
+                FIRST(open ORDER BY timestamp) as open,
                 MAX(high) as high,
                 MIN(low) as low,
-                LAST(close) as close,
+                LAST(close ORDER BY timestamp) as close,
                 SUM(volume) as volume,
-                LAST(oi) as oi
+                LAST(oi ORDER BY timestamp) as oi
             FROM market_data
             WHERE symbol = ? AND exchange = ? AND interval = '1m'
         """
@@ -503,7 +571,9 @@ def _get_aggregated_ohlcv(
             params.append(end_timestamp)
 
         query += f"""
-            GROUP BY (timestamp / {interval_seconds})
+            GROUP BY (((timestamp + {ist_offset}) / 86400) * 86400 - {ist_offset}) +
+                     {market_open_seconds} +
+                     ((((timestamp + {ist_offset}) % 86400) - {market_open_seconds}) / {interval_seconds}) * {interval_seconds}
             ORDER BY timestamp ASC
         """
 
