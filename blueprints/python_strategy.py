@@ -197,7 +197,7 @@ def create_subprocess_args():
         'universal_newlines': False,  # Handle bytes for better compatibility
         'bufsize': 1,  # Line buffered
     }
-    
+
     if IS_WINDOWS:
         # Windows-specific: CREATE_NEW_PROCESS_GROUP for better process isolation
         args['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -207,16 +207,69 @@ def create_subprocess_args():
     else:
         # Unix-like systems (Linux, macOS)
         # Try to create new session for better process control
-        # But don't use preexec_fn as it can fail in restricted environments
         try:
             args['start_new_session'] = True  # Create new process group
-            # Note: Removed preexec_fn = os.setsid as it can cause issues in some environments
-            # start_new_session already creates a new session group which is sufficient
         except Exception as e:
             logger.warning(f"Could not set start_new_session: {e}")
-            # Continue without session isolation - process will still work
-    
+
+        # Apply resource limits to prevent runaway strategies
+        args['preexec_fn'] = set_resource_limits
+
     return args
+
+
+# Resource limits for strategy processes (Unix only)
+# Prevents buggy strategies from crashing the system
+STRATEGY_MEMORY_LIMIT_MB = 512  # Max memory per strategy (512 MB)
+STRATEGY_CPU_TIME_LIMIT_SEC = 3600  # Max CPU time (1 hour) - resets on each run
+
+
+def set_resource_limits():
+    """
+    Set resource limits for strategy subprocess (Unix/Mac only).
+    Called via preexec_fn before the strategy process starts.
+    Prevents runaway strategies from exhausting system resources.
+    """
+    if IS_WINDOWS:
+        return  # resource module not available on Windows
+
+    try:
+        import resource
+
+        # Memory limit (virtual memory) - prevents memory bombs
+        memory_bytes = STRATEGY_MEMORY_LIMIT_MB * 1024 * 1024
+        try:
+            resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
+            # Also limit data segment for additional protection
+            resource.setrlimit(resource.RLIMIT_DATA, (memory_bytes, memory_bytes))
+        except (ValueError, resource.error) as e:
+            # Some systems may not support these limits
+            logger.debug(f"Could not set memory limit: {e}")
+
+        # CPU time limit - prevents infinite loops from hogging CPU forever
+        # Note: This is cumulative CPU time, not wall clock time
+        try:
+            resource.setrlimit(resource.RLIMIT_CPU, (STRATEGY_CPU_TIME_LIMIT_SEC, STRATEGY_CPU_TIME_LIMIT_SEC))
+        except (ValueError, resource.error) as e:
+            logger.debug(f"Could not set CPU limit: {e}")
+
+        # Limit number of open files - prevents file descriptor exhaustion
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
+        except (ValueError, resource.error) as e:
+            logger.debug(f"Could not set file descriptor limit: {e}")
+
+        # Limit number of processes - prevents fork bombs
+        try:
+            resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
+        except (ValueError, resource.error) as e:
+            logger.debug(f"Could not set process limit: {e}")
+
+    except ImportError:
+        # resource module not available (Windows)
+        pass
+    except Exception as e:
+        logger.warning(f"Could not set resource limits: {e}")
 
 def start_strategy_process(strategy_id):
     """Start a strategy in a new process - cross-platform implementation"""
