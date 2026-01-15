@@ -739,4 +739,13 @@ if __name__ == '__main__':
     print(f"{B}{BL}{H * (W - 2)}{BR}{RESET}")
     print()
 
-    socketio.run(app, host=host_ip, port=port, debug=debug)
+    # Exclude strategies and logs directories from reloader to prevent crashes when editing strategy files
+    reloader_options = {
+        'exclude_patterns': [
+            '*/strategies/*',
+            '*/log/*',
+            '*.log',
+            '*.bak',
+        ]
+    }
+    socketio.run(app, host=host_ip, port=port, debug=debug, reloader_options=reloader_options)
