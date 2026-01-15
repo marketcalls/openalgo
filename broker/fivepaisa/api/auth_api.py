@@ -60,10 +60,10 @@ def authenticate_broker(clientcode: str, broker_pin: str, totp_code: str) -> Tup
         totp_response.raise_for_status()
         totp_data = totp_response.json()
 
-        logger.info(f"The Request Token response is :{totp_data}")
+        logger.debug(f"The Request Token response is :{totp_data}")
 
         request_token = totp_data.get('body', {}).get('RequestToken')
-        logger.info(f"The Request Token is :{request_token}")
+        logger.debug(f"The Request Token is :{request_token}")
 
         if not request_token:
             error_message = totp_data.get('body', {}).get('Message', 'Failed to obtain request token. Please try again.')
@@ -79,7 +79,7 @@ def authenticate_broker(clientcode: str, broker_pin: str, totp_code: str) -> Tup
             }
         }
 
-        logger.info(f"The Access Token request is :{json.dumps(access_token_data)}")
+        logger.debug(f"The Access Token request is :{json.dumps(access_token_data)}")
 
         token_response = client.post(
             "https://Openapi.5paisa.com/VendorsAPI/Service1.svc/GetAccessToken",
@@ -89,7 +89,7 @@ def authenticate_broker(clientcode: str, broker_pin: str, totp_code: str) -> Tup
         token_response.raise_for_status()
         token_data = token_response.json()
 
-        logger.info(f"The Access Token response is :{token_data}")
+        logger.debug(f"The Access Token response is :{token_data}")
 
         if 'body' in token_data and 'AccessToken' in token_data['body']:
             return token_data['body']['AccessToken'], None

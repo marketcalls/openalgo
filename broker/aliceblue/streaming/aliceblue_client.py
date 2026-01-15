@@ -192,7 +192,7 @@ class Aliceblue:
     def _user_authorization(self):
 
         return {
-            'Authorization': f'Bearer {self.session_id}'
+            'Authorization': f'Bearer {self.user_id} {self.session_id}'
         }
 
     # 
@@ -202,13 +202,25 @@ class Aliceblue:
     def _request(self, method, req_type, data=None):
 
         headers = self._user_agent()
-        
+
         if req_type != '':
             headers.update(self._user_authorization())
 
         url = self.base + method
-        
+
+        # Debug logging for WebSocket session creation
+        if 'createWsSession' in method:
+            logger.info(f"Creating WebSocket session - URL: {url}")
+            logger.info(f"Request headers: {headers}")
+            logger.info(f"Request data: {data}")
+
         response = requests.post(url, json=data, headers=headers, verify=not self.disable_ssl)
+
+        # Debug logging for WebSocket session response
+        if 'createWsSession' in method:
+            logger.info(f"Response status: {response.status_code}")
+            logger.info(f"Response headers: {dict(response.headers)}")
+            logger.info(f"Response content: {response.text}")
 
         if response.status_code == 200:
             if 'json' in response.headers.get('content-type'):

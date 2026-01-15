@@ -1,0 +1,383 @@
+{% extends "base.html" %}
+
+{% block head %}
+<style>
+    .stats-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+    }
+    .bot-status-card {
+        transition: all 0.3s ease;
+    }
+    .bot-status-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto p-4">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-3xl font-bold">Telegram Bot Control Panel</h1>
+        <div class="flex gap-2">
+            {% if bot_status.is_configured %}
+                {% if bot_status.is_running %}
+                <button id="stopBotBtn" class="btn btn-error">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h4a1 1 0 001-1V8a1 1 0 00-1-1H8z" clip-rule="evenodd" />
+                    </svg>
+                    Stop Bot
+                </button>
+                {% else %}
+                <button id="startBotBtn" class="btn btn-success">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
+                    </svg>
+                    Start Bot
+                </button>
+                {% endif %}
+            {% endif %}
+            <a href="{{ url_for('telegram_bp.configuration') }}" class="btn btn-primary">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clip-rule="evenodd" />
+                </svg>
+                Configuration
+            </a>
+        </div>
+    </div>
+
+    <!-- Bot Status Card -->
+    <div class="card bg-base-100 shadow-xl mb-6 bot-status-card">
+        <div class="card-body">
+            <h2 class="card-title text-2xl mb-4">Bot Status</h2>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div class="stat">
+                    <div class="stat-title">Status</div>
+                    <div class="stat-value text-lg">
+                        {% if bot_status.is_running %}
+                        <span class="badge badge-success badge-lg">Running</span>
+                        {% else %}
+                        <span class="badge badge-error badge-lg">Stopped</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="stat">
+                    <div class="stat-title">Bot Username</div>
+                    <div class="stat-value text-lg">
+                        {% if bot_status.bot_username %}
+                        @{{ bot_status.bot_username }}
+                        {% else %}
+                        Not configured
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="stat">
+                    <div class="stat-title">Connection</div>
+                    <div class="stat-value text-lg">
+                        <span class="badge badge-info badge-lg">Active</span>
+                    </div>
+                </div>
+                <div class="stat">
+                    <div class="stat-title">Linked Users</div>
+                    <div class="stat-value text-lg">
+                        <span class="badge badge-info badge-lg">{{ users|length }} Users</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Statistics Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <div class="card bg-primary text-primary-content">
+            <div class="card-body">
+                <h2 class="card-title">Total Users</h2>
+                <div class="stat-value">{{ users|length }}</div>
+                <div class="stat-desc text-primary-content">Active telegram users</div>
+            </div>
+        </div>
+        <div class="card bg-secondary text-secondary-content">
+            <div class="card-body">
+                <h2 class="card-title">Commands (7 days)</h2>
+                <div class="stat-value">{{ stats.total_commands }}</div>
+                <div class="stat-desc text-secondary-content">Total commands executed</div>
+            </div>
+        </div>
+        <div class="card bg-accent text-accent-content">
+            <div class="card-body">
+                <h2 class="card-title">Active Users (7 days)</h2>
+                <div class="stat-value">{{ stats.active_users }}</div>
+                <div class="stat-desc text-accent-content">Users who used the bot</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="card bg-base-100 shadow-xl mb-6">
+        <div class="card-body">
+            <h2 class="card-title text-xl mb-4">Quick Actions</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <button id="testMessageBtn" class="btn btn-outline btn-primary">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M2 5a2 2 0 012-2h7a2 2 0 012 2v4a2 2 0 01-2 2H9l-3 3v-3H4a2 2 0 01-2-2V5z" />
+                        <path d="M15 7v2a4 4 0 01-4 4H9.828l-1.766 1.767c.28.149.599.233.938.233h2l3 3v-3h2a2 2 0 002-2V9a2 2 0 00-2-2h-1z" />
+                    </svg>
+                    Send Test Message
+                </button>
+                <a href="{{ url_for('telegram_bp.users') }}" class="btn btn-outline btn-info">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z" />
+                    </svg>
+                    Manage Users
+                </a>
+                <a href="{{ url_for('telegram_bp.analytics') }}" class="btn btn-outline btn-success">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z" />
+                    </svg>
+                    View Analytics
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Commands -->
+    <div class="card bg-base-100 shadow-xl mb-6">
+        <div class="card-body">
+            <h2 class="card-title text-xl mb-4">Popular Commands (Last 7 Days)</h2>
+            <div class="overflow-x-auto">
+                <table class="table table-zebra">
+                    <thead>
+                        <tr>
+                            <th>Command</th>
+                            <th>Count</th>
+                            <th>Percentage</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for command, count in stats.commands_by_type.items() %}
+                        <tr>
+                            <td>/{{ command }}</td>
+                            <td>{{ count }}</td>
+                            <td>
+                                <div class="flex items-center gap-2">
+                                    <progress class="progress progress-primary w-20"
+                                             value="{{ (count / stats.total_commands * 100) if stats.total_commands > 0 else 0 }}"
+                                             max="100"></progress>
+                                    <span class="text-xs">{{ "%.1f"|format((count / stats.total_commands * 100) if stats.total_commands > 0 else 0) }}%</span>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Broadcast Message -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title text-xl mb-4">Broadcast Message</h2>
+            <div class="form-control">
+                <label class="label">
+                    <span class="label-text">Message to broadcast to all users</span>
+                </label>
+                <textarea id="broadcastMessage" class="textarea textarea-bordered h-24"
+                          placeholder="Enter your message here..."></textarea>
+            </div>
+            <div class="card-actions justify-end mt-4">
+                <button id="broadcastBtn" class="btn btn-primary" onclick="showBroadcastModal()">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M15 8a3 3 0 10-2.977-2.63l-4.94 2.47a3 3 0 100 4.319l4.94 2.47a3 3 0 10.895-1.789l-4.94-2.47a3.027 3.027 0 000-.74l4.94-2.47C13.456 7.68 14.19 8 15 8z" />
+                    </svg>
+                    Send Broadcast
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Broadcast Confirmation Modal -->
+<dialog id="broadcast_modal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg">Confirm Broadcast</h3>
+        <p class="py-4">Are you sure you want to send this message to all users?</p>
+        <div class="bg-base-200 p-3 rounded-lg">
+            <p class="text-sm" id="broadcast_preview"></p>
+        </div>
+        <p class="text-sm text-info mt-2" id="user_count_info"></p>
+        <div class="modal-action">
+            <button class="btn" onclick="broadcast_modal.close()">Cancel</button>
+            <button class="btn btn-primary" onclick="confirmBroadcast()">Send Broadcast</button>
+        </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+    </form>
+</dialog>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Start Bot
+    const startBotBtn = document.getElementById('startBotBtn');
+    if (startBotBtn) {
+        startBotBtn.addEventListener('click', async function() {
+            startBotBtn.disabled = true;
+            startBotBtn.innerHTML = '<span class="loading loading-spinner"></span> Starting...';
+
+            try {
+                const response = await fetchWithCSRF('/telegram/bot/start', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    showToast('Bot started successfully', 'success');
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    showToast(data.message || 'Failed to start bot', 'error');
+                    startBotBtn.disabled = false;
+                    startBotBtn.innerHTML = 'Start Bot';
+                }
+            } catch (error) {
+                showToast('Error starting bot', 'error');
+                startBotBtn.disabled = false;
+                startBotBtn.innerHTML = 'Start Bot';
+            }
+        });
+    }
+
+    // Stop Bot
+    const stopBotBtn = document.getElementById('stopBotBtn');
+    if (stopBotBtn) {
+        stopBotBtn.addEventListener('click', async function() {
+            stopBotBtn.disabled = true;
+            stopBotBtn.innerHTML = '<span class="loading loading-spinner"></span> Stopping...';
+
+            try {
+                const response = await fetchWithCSRF('/telegram/bot/stop', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    showToast('Bot stopped successfully', 'success');
+                    setTimeout(() => location.reload(), 1500);
+                } else {
+                    showToast(data.message || 'Failed to stop bot', 'error');
+                    stopBotBtn.disabled = false;
+                    stopBotBtn.innerHTML = 'Stop Bot';
+                }
+            } catch (error) {
+                showToast('Error stopping bot', 'error');
+                stopBotBtn.disabled = false;
+                stopBotBtn.innerHTML = 'Stop Bot';
+            }
+        });
+    }
+
+    // Send Test Message
+    const testMessageBtn = document.getElementById('testMessageBtn');
+    if (testMessageBtn) {
+        testMessageBtn.addEventListener('click', async function() {
+            testMessageBtn.disabled = true;
+            testMessageBtn.innerHTML = '<span class="loading loading-spinner"></span> Sending...';
+
+            try {
+                const response = await fetchWithCSRF('/telegram/test-message', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({})
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    showToast('Test message sent! Check your Telegram.', 'success');
+                } else {
+                    showToast(data.message || 'Failed to send test message', 'error');
+                }
+            } catch (error) {
+                showToast('Error sending test message', 'error');
+            } finally {
+                testMessageBtn.disabled = false;
+                testMessageBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor"><path d="M2 5a2 2 0 012-2h7a2 2 0 012 2v4a2 2 0 01-2 2H9l-3 3v-3H4a2 2 0 01-2-2V5z" /><path d="M15 7v2a4 4 0 01-4 4H9.828l-1.766 1.767c.28.149.599.233.938.233h2l3 3v-3h2a2 2 0 002-2V9a2 2 0 00-2-2h-1z" /></svg>Send Test Message';
+            }
+        });
+    }
+
+    // Broadcast functions
+    const broadcastMessage = document.getElementById('broadcastMessage');
+});
+
+// Show broadcast modal
+function showBroadcastModal() {
+    const broadcastMessage = document.getElementById('broadcastMessage');
+    const message = broadcastMessage.value.trim();
+
+    if (!message) {
+        showToast('Please enter a message to broadcast', 'warning');
+        return;
+    }
+
+    // Update modal with preview
+    document.getElementById('broadcast_preview').textContent = message;
+
+    // Get user count dynamically from page data
+    const userCards = document.querySelectorAll('.stat-value');
+    const userCount = userCards[0] ? userCards[0].textContent : '0';
+    const activeCount = userCards[1] ? userCards[1].textContent : '0';
+    document.getElementById('user_count_info').textContent =
+        `This will be sent to ${activeCount} active users (${userCount} total users)`;
+
+    // Show modal
+    const modal = document.getElementById('broadcast_modal');
+    if (modal) {
+        modal.showModal();
+    }
+}
+
+// Confirm and send broadcast
+async function confirmBroadcast() {
+    const broadcastMessage = document.getElementById('broadcastMessage');
+    const message = broadcastMessage.value.trim();
+    const broadcastBtn = document.getElementById('broadcastBtn');
+
+    const modal = document.getElementById('broadcast_modal');
+    if (modal) {
+        modal.close();
+    }
+
+    broadcastBtn.disabled = true;
+    broadcastBtn.innerHTML = '<span class="loading loading-spinner"></span> Broadcasting...';
+
+    try {
+        const response = await fetchWithCSRF('/telegram/broadcast', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ message: message })
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            showToast(data.message, 'success');
+            broadcastMessage.value = '';
+        } else {
+            showToast(data.message || 'Failed to broadcast message', 'error');
+        }
+    } catch (error) {
+        showToast('Error broadcasting message', 'error');
+    } finally {
+        broadcastBtn.disabled = false;
+        broadcastBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor"><path d="M15 8a3 3 0 10-2.977-2.63l-4.94 2.47a3 3 0 100 4.319l4.94 2.47a3 3 0 10.895-1.789l-4.94-2.47a3.027 3.027 0 000-.74l4.94-2.47C13.456 7.68 14.19 8 15 8z" /></svg>Send Broadcast';
+    }
+}
+</script>
+{% endblock %}

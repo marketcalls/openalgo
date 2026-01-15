@@ -1,0 +1,23 @@
+meta {
+  name: Chartink
+  type: http
+  seq: 21
+}
+
+post {
+  url: http://8d32-49-207-193-1.ngrok-free.app/chartink/webhook/0fd7ee15-c83b-4f6e-97ae-68cb4b9bdf95
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "stocks": "RELIANCE",
+      "trigger_prices": "3.75,541.8,2.1,0.2,329.6,166.8,1.25",
+      "triggered_at": "2:34 pm",
+      "scan_name": "SELL",
+      "scan_url": "short-term-breakouts",
+      "alert_name": "Alert for Short term breakouts",
+      "webhook_url": "http://8d32-49-207-193-1.ngrok-free.app/chartink/webhook/835e678a-b278-4371-bb4a-f8055426b28e"
+  }
+}

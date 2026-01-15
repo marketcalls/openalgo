@@ -36,7 +36,7 @@ def map_order_data(order_data):
             
             # Convert broker symbol to OpenAlgo format
             if symbol and exchange:
-                oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
+                oa_symbol = get_oa_symbol(brsymbol=symbol, exchange=exchange)
                 if oa_symbol:
                     order['tradingsymbol'] = oa_symbol
                     
@@ -183,7 +183,7 @@ def map_trade_data(trade_data):
             
             # Convert broker symbol to OpenAlgo format
             if symbol and exchange:
-                oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
+                oa_symbol = get_oa_symbol(brsymbol=symbol, exchange=exchange)
                 if oa_symbol:
                     trade['tradingsymbol'] = oa_symbol
                 else:
@@ -296,7 +296,7 @@ def map_position_data(position_data):
             
             # Convert broker symbol to OpenAlgo format
             if symbol and exchange:
-                oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
+                oa_symbol = get_oa_symbol(brsymbol=symbol, exchange=exchange)
                 if oa_symbol:
                     position['tradingsymbol'] = oa_symbol
                 else:
@@ -395,7 +395,7 @@ def map_portfolio_data(portfolio_data):
             
             # Convert broker symbol to OpenAlgo format
             if symbol and exchange:
-                oa_symbol = get_oa_symbol(symbol=symbol, exchange=exchange)
+                oa_symbol = get_oa_symbol(brsymbol=symbol, exchange=exchange)
                 if oa_symbol:
                     holding['tradingsymbol'] = oa_symbol
                 else:

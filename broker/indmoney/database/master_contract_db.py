@@ -113,7 +113,7 @@ def copy_from_dataframe(df):
                     
                     # Log progress every 20 chunks (10,000 records)
                     if (i // chunk_size + 1) % 20 == 0:
-                        logger.info(f"Processed {total_inserted} records so far...")
+                        logger.debug(f"Processed {total_inserted} records so far...")
                     
                 except Exception as chunk_error:
                     logger.warning(f"Error inserting chunk {i//chunk_size + 1}, retrying: {chunk_error}")

@@ -14,11 +14,15 @@ def format_decimal(value):
     return value
 
 def format_position_data(position_data):
-    """Format all numeric values in position data to 2 decimal places"""
+    """Format all numeric values in position data to 2 decimal places, except quantity fields"""
+    # Fields that should remain as integers
+    quantity_fields = {'quantity', 'qty', 'netqty', 'net_qty', 'buyqty', 'buy_quantity', 'sellqty', 'sell_quantity', 'daybuyqty', 'daysellqty'}
+
     if isinstance(position_data, list):
         return [
             {
-                key: format_decimal(value) if isinstance(value, (int, float)) else value
+                key: int(value) if (key.lower() in quantity_fields and isinstance(value, (int, float)))
+                     else (format_decimal(value) if isinstance(value, (int, float)) else value)
                 for key, value in item.items()
             }
             for item in position_data
@@ -49,20 +53,37 @@ def import_broker_module(broker_name: str) -> Optional[Dict[str, Any]]:
         logger.error(f"Error importing broker modules: {error}")
         return None
 
-def get_positionbook_with_auth(auth_token: str, broker: str) -> Tuple[bool, Dict[str, Any], int]:
+def get_positionbook_with_auth(auth_token: str, broker: str, original_data: Dict[str, Any] = None) -> Tuple[bool, Dict[str, Any], int]:
     """
     Get position book details using provided auth token.
-    
+
     Args:
         auth_token: Authentication token for the broker API
         broker: Name of the broker
-        
+        original_data: Original request data (for sandbox mode, optional for internal calls)
+
     Returns:
         Tuple containing:
         - Success status (bool)
         - Response data (dict)
         - HTTP status code (int)
     """
+    # If in analyze mode AND we have original_data (API call), route to sandbox
+    # If original_data is None (internal call), use live broker
+    from database.settings_db import get_analyze_mode
+    if get_analyze_mode() and original_data:
+        from services.sandbox_service import sandbox_get_positions
+
+        api_key = original_data.get('apikey')
+        if not api_key:
+            return False, {
+                'status': 'error',
+                'message': 'API key required for sandbox mode',
+                'mode': 'analyze'
+            }, 400
+
+        return sandbox_get_positions(api_key, original_data)
+
     broker_funcs = import_broker_module(broker)
     if broker_funcs is None:
         return False, {
@@ -127,11 +148,12 @@ def get_positionbook(
                 'status': 'error',
                 'message': 'Invalid openalgo apikey'
             }, 403
-        return get_positionbook_with_auth(AUTH_TOKEN, broker_name)
-    
+        original_data = {'apikey': api_key}
+        return get_positionbook_with_auth(AUTH_TOKEN, broker_name, original_data)
+
     # Case 2: Direct internal call with auth_token and broker
     elif auth_token and broker:
-        return get_positionbook_with_auth(auth_token, broker)
+        return get_positionbook_with_auth(auth_token, broker, None)
     
     # Case 3: Invalid parameters
     else:

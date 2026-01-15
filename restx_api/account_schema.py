@@ -1,4 +1,4 @@
-from marshmallow import Schema, fields, validate
+from marshmallow import Schema, fields, validate, INCLUDE
 
 class FundsSchema(Schema):
     apikey = fields.Str(required=True)
@@ -35,4 +35,14 @@ class AnalyzerToggleSchema(Schema):
     mode = fields.Bool(required=True)
 
 class PingSchema(Schema):
+    apikey = fields.Str(required=True)
+
+class ChartSchema(Schema):
+    apikey = fields.Str(required=True)
+
+    class Meta:
+        # Allow unknown fields - chart preferences can have any key-value pairs
+        unknown = INCLUDE
+
+class PnlSymbolsSchema(Schema):
     apikey = fields.Str(required=True)

@@ -1,0 +1,540 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mx-auto p-4">
+    <h1 class="text-3xl font-bold mb-6">Security Dashboard</h1>
+
+    <!-- Security Settings Card -->
+    <div class="card bg-base-200 mb-6">
+        <div class="card-body">
+            <h2 class="card-title mb-4">Security Threshold Settings</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <!-- 404 Error Settings -->
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-semibold">404 Error Threshold</span>
+                        <span class="label-text-alt">per day</span>
+                    </label>
+                    <input type="number" id="threshold_404" value="{{ security_settings['404_threshold'] }}"
+                           min="1" max="1000" class="input input-bordered input-sm" />
+                </div>
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-semibold">404 Ban Duration</span>
+                        <span class="label-text-alt">hours</span>
+                    </label>
+                    <input type="number" id="ban_duration_404" value="{{ security_settings['404_ban_duration'] }}"
+                           min="1" max="8760" class="input input-bordered input-sm" />
+                </div>
+
+                <!-- API Key Settings -->
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-semibold">Invalid API Threshold</span>
+                        <span class="label-text-alt">per day</span>
+                    </label>
+                    <input type="number" id="threshold_api" value="{{ security_settings['api_threshold'] }}"
+                           min="1" max="100" class="input input-bordered input-sm" />
+                </div>
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-semibold">API Ban Duration</span>
+                        <span class="label-text-alt">hours</span>
+                    </label>
+                    <input type="number" id="ban_duration_api" value="{{ security_settings['api_ban_duration'] }}"
+                           min="1" max="8760" class="input input-bordered input-sm" />
+                </div>
+
+                <!-- Repeat Offender Settings -->
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text font-semibold">Repeat Offender Limit</span>
+                        <span class="label-text-alt">before permanent</span>
+                    </label>
+                    <input type="number" id="repeat_offender_limit" value="{{ security_settings['repeat_offender_limit'] }}"
+                           min="1" max="10" class="input input-bordered input-sm" />
+                </div>
+
+                <!-- Save Button -->
+                <div class="form-control justify-end">
+                    <button onclick="saveSecuritySettings()" class="btn btn-primary btn-sm">Save Settings</button>
+                </div>
+            </div>
+            <div class="divider my-2"></div>
+            <div class="text-xs text-base-content/70">
+                <p>• <strong>404 Threshold:</strong> Number of 404 errors per day before auto-ban</p>
+                <p>• <strong>API Threshold:</strong> Number of invalid API attempts per day before auto-ban</p>
+                <p>• <strong>Repeat Limit:</strong> Number of bans before permanent ban</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Security Stats Cards -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div class="stat bg-base-200 rounded-lg">
+            <div class="stat-title">Total Bans</div>
+            <div class="stat-value text-error" id="total-bans">0</div>
+        </div>
+        <div class="stat bg-base-200 rounded-lg">
+            <div class="stat-title">Permanent Bans</div>
+            <div class="stat-value text-warning" id="permanent-bans">0</div>
+        </div>
+        <div class="stat bg-base-200 rounded-lg">
+            <div class="stat-title">Suspicious IPs</div>
+            <div class="stat-value text-info" id="suspicious-ips">0</div>
+        </div>
+        <div class="stat bg-base-200 rounded-lg">
+            <div class="stat-title">Near Threshold</div>
+            <div class="stat-value text-accent" id="near-threshold">0</div>
+        </div>
+    </div>
+
+    <!-- Manual Ban Form -->
+    <div class="card bg-base-200 mb-6">
+        <div class="card-body">
+            <h2 class="card-title mb-4">Manual IP Ban</h2>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <input type="text" id="ban-ip" placeholder="IP Address" class="input input-bordered" />
+                <input type="text" id="ban-reason" placeholder="Reason" class="input input-bordered" />
+                <select id="ban-duration" class="select select-bordered">
+                    <option value="24">24 Hours</option>
+                    <option value="48">48 Hours</option>
+                    <option value="168">1 Week</option>
+                    <option value="permanent">Permanent</option>
+                </select>
+                <button onclick="banIP()" class="btn btn-error">Ban IP</button>
+            </div>
+
+            <!-- Host Ban Form -->
+            <div class="divider">OR</div>
+            <h3 class="text-lg font-semibold mb-2">Ban by Host/Domain</h3>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <input type="text" id="ban-host" placeholder="Host/Domain (e.g., example.com)" class="input input-bordered" />
+                <div class="form-control">
+                    <label class="label cursor-pointer">
+                        <span class="label-text">Permanent Ban</span>
+                        <input type="checkbox" id="host-permanent" class="checkbox checkbox-error" />
+                    </label>
+                </div>
+                <button onclick="banHost()" class="btn btn-error">Ban Host</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Banned IPs Table -->
+    <div class="card bg-base-200 mb-6">
+        <div class="card-body">
+            <h2 class="card-title mb-4">Banned IPs</h2>
+            <div class="overflow-x-auto">
+                <table class="table table-zebra w-full">
+                    <thead>
+                        <tr>
+                            <th>IP Address</th>
+                            <th>Reason</th>
+                            <th>Banned At</th>
+                            <th>Expires At</th>
+                            <th>Ban Count</th>
+                            <th>Created By</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="banned-ips-table">
+                        {% for ban in banned_ips %}
+                        <tr>
+                            <td class="font-mono">{{ ban.ip_address }}</td>
+                            <td>{{ ban.ban_reason }}</td>
+                            <td>{{ ban.banned_at }}</td>
+                            <td>
+                                {% if ban.is_permanent %}
+                                    <span class="badge badge-error">Permanent</span>
+                                {% else %}
+                                    {{ ban.expires_at }}
+                                {% endif %}
+                            </td>
+                            <td>
+                                <span class="badge {{ 'badge-error' if ban.ban_count >= 3 else 'badge-warning' }}">
+                                    {{ ban.ban_count }}
+                                </span>
+                            </td>
+                            <td>{{ ban.created_by }}</td>
+                            <td>
+                                <button onclick="showUnbanModal('{{ ban.ip_address }}')" class="btn btn-sm btn-success">Unban</button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% if not banned_ips %}
+                <div class="text-center py-4 text-gray-500">No banned IPs</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Invalid API Key Attempts Table -->
+    <div class="card bg-base-200 mb-6">
+        <div class="card-body">
+            <h2 class="card-title mb-4">Invalid API Key Attempts</h2>
+            <div class="overflow-x-auto">
+                <table class="table table-zebra w-full">
+                    <thead>
+                        <tr>
+                            <th>IP Address</th>
+                            <th>Attempts</th>
+                            <th>First Attempt</th>
+                            <th>Last Attempt</th>
+                            <th>API Keys Tried</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="api-abuse-table">
+                        {% for tracker in api_abuse_ips %}
+                        <tr class="{{ 'bg-error bg-opacity-20' if tracker.attempt_count >= 8 else '' }}">
+                            <td class="font-mono">{{ tracker.ip_address }}</td>
+                            <td>
+                                <span class="badge {{ 'badge-error' if tracker.attempt_count >= security_settings['api_threshold'] * 0.8 else 'badge-warning' if tracker.attempt_count >= security_settings['api_threshold'] * 0.5 else 'badge-info' }}">
+                                    {{ tracker.attempt_count }}/{{ security_settings['api_threshold'] }}
+                                </span>
+                            </td>
+                            <td>{{ tracker.first_attempt_at }}</td>
+                            <td>{{ tracker.last_attempt_at }}</td>
+                            <td>
+                                <details class="cursor-pointer">
+                                    <summary class="text-sm">View Keys (Hashed)</summary>
+                                    <div class="text-xs font-mono mt-2 max-h-32 overflow-y-auto">
+                                        {{ tracker.api_keys_tried }}
+                                    </div>
+                                </details>
+                            </td>
+                            <td>
+                                <button onclick="banIP('{{ tracker.ip_address }}')" class="btn btn-sm btn-error">Ban</button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% if not api_abuse_ips %}
+                <div class="text-center py-4 text-gray-500">No invalid API key attempts detected</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Suspicious IPs Table -->
+    <div class="card bg-base-200">
+        <div class="card-body">
+            <h2 class="card-title mb-4">Suspicious IPs (404 Tracker)</h2>
+            <div class="overflow-x-auto">
+                <table class="table table-zebra w-full">
+                    <thead>
+                        <tr>
+                            <th>IP Address</th>
+                            <th>404 Count</th>
+                            <th>First Error</th>
+                            <th>Last Error</th>
+                            <th>Sample Paths</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="suspicious-ips-table">
+                        {% for tracker in suspicious_ips %}
+                        <tr class="{{ 'bg-error bg-opacity-20' if tracker.error_count >= 15 else '' }}">
+                            <td class="font-mono">{{ tracker.ip_address }}</td>
+                            <td>
+                                <span class="badge {{ 'badge-error' if tracker.error_count >= security_settings['404_threshold'] * 0.75 else 'badge-warning' if tracker.error_count >= security_settings['404_threshold'] * 0.5 else 'badge-info' }}">
+                                    {{ tracker.error_count }}/{{ security_settings['404_threshold'] }}
+                                </span>
+                            </td>
+                            <td>{{ tracker.first_error_at }}</td>
+                            <td>{{ tracker.last_error_at }}</td>
+                            <td>
+                                <details class="cursor-pointer">
+                                    <summary class="text-sm">View Paths</summary>
+                                    <div class="text-xs font-mono mt-2 max-h-32 overflow-y-auto">
+                                        {{ tracker.paths_attempted }}
+                                    </div>
+                                </details>
+                            </td>
+                            <td>
+                                <div class="flex gap-2">
+                                    <button onclick="banIP('{{ tracker.ip_address }}')" class="btn btn-sm btn-error">Ban</button>
+                                    <button onclick="clear404Tracker('{{ tracker.ip_address }}')" class="btn btn-sm btn-ghost">Clear</button>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% if not suspicious_ips %}
+                <div class="text-center py-4 text-gray-500">No suspicious IPs detected</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Unban Confirmation Modal -->
+<dialog id="unban_modal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg">Confirm Unban</h3>
+        <p class="py-4">Are you sure you want to unban IP address <span id="unban_ip_display" class="font-mono font-bold"></span>?</p>
+        <div class="modal-action">
+            <button class="btn btn-ghost" onclick="closeUnbanModal()">Cancel</button>
+            <button class="btn btn-success" id="confirm_unban_btn">Unban</button>
+        </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+    </form>
+</dialog>
+
+<!-- Clear 404 Tracker Confirmation Modal -->
+<dialog id="clear_tracker_modal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg">Clear 404 Tracker</h3>
+        <p class="py-4">Clear 404 tracking data for IP address <span id="clear_ip_display" class="font-mono font-bold"></span>?</p>
+        <p class="text-sm text-warning">This will reset the 404 error count for this IP.</p>
+        <div class="modal-action">
+            <button class="btn btn-ghost" onclick="closeClearModal()">Cancel</button>
+            <button class="btn btn-warning" id="confirm_clear_btn">Clear</button>
+        </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+    </form>
+</dialog>
+
+<script>
+// Load security stats on page load
+document.addEventListener('DOMContentLoaded', function() {
+    loadSecurityStats();
+    // Refresh stats every 30 seconds
+    setInterval(loadSecurityStats, 30000);
+});
+
+function loadSecurityStats() {
+    fetchWithCSRF('/security/stats')
+        .then(response => response.json())
+        .then(data => {
+            document.getElementById('total-bans').textContent = data.total_bans || 0;
+            document.getElementById('permanent-bans').textContent = data.permanent_bans || 0;
+            document.getElementById('suspicious-ips').textContent = data.suspicious_ips || 0;
+            document.getElementById('near-threshold').textContent = data.near_threshold || 0;
+        })
+        .catch(error => console.error('Error loading stats:', error));
+}
+
+function banIP(ip = null) {
+    const ipAddress = ip || document.getElementById('ban-ip').value.trim();
+    const reason = document.getElementById('ban-reason').value.trim() || 'Manual ban';
+    const duration = document.getElementById('ban-duration').value;
+
+    if (!ipAddress) {
+        showToast('Please enter an IP address', 'error');
+        return;
+    }
+
+    const data = {
+        ip_address: ipAddress,
+        reason: reason,
+        permanent: duration === 'permanent',
+        duration_hours: duration === 'permanent' ? 0 : parseInt(duration)
+    };
+
+    fetchWithCSRF('/security/ban', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast(data.message, 'success');
+            setTimeout(() => location.reload(), 1500);
+        } else {
+            showToast(data.error || 'Failed to ban IP', 'error');
+        }
+    })
+    .catch(error => {
+        showToast('Error banning IP', 'error');
+        console.error('Error:', error);
+    });
+}
+
+function banHost() {
+    const host = document.getElementById('ban-host').value.trim();
+    const permanent = document.getElementById('host-permanent').checked;
+
+    if (!host) {
+        showToast('Please enter a host/domain', 'error');
+        return;
+    }
+
+    const data = {
+        host: host,
+        reason: `Banned host: ${host}`,
+        permanent: permanent
+    };
+
+    fetchWithCSRF('/security/ban-host', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast(data.message, 'success');
+            setTimeout(() => location.reload(), 1500);
+        } else {
+            showToast(data.error || 'Failed to ban host', 'error');
+        }
+    })
+    .catch(error => {
+        showToast('Error banning host', 'error');
+        console.error('Error:', error);
+    });
+}
+
+let currentUnbanIP = null;
+let currentClearIP = null;
+
+function showUnbanModal(ipAddress) {
+    currentUnbanIP = ipAddress;
+    document.getElementById('unban_ip_display').textContent = ipAddress;
+    document.getElementById('unban_modal').showModal();
+}
+
+function closeUnbanModal() {
+    document.getElementById('unban_modal').close();
+    currentUnbanIP = null;
+}
+
+function showClearModal(ipAddress) {
+    currentClearIP = ipAddress;
+    document.getElementById('clear_ip_display').textContent = ipAddress;
+    document.getElementById('clear_tracker_modal').showModal();
+}
+
+function closeClearModal() {
+    document.getElementById('clear_tracker_modal').close();
+    currentClearIP = null;
+}
+
+// Handle unban confirmation
+document.getElementById('confirm_unban_btn').addEventListener('click', function() {
+    if (!currentUnbanIP) return;
+
+    fetchWithCSRF('/security/unban', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ ip_address: currentUnbanIP })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast(data.message, 'success');
+            closeUnbanModal();
+            setTimeout(() => location.reload(), 1500);
+        } else {
+            showToast(data.error || 'Failed to unban IP', 'error');
+        }
+    })
+    .catch(error => {
+        showToast('Error unbanning IP', 'error');
+        console.error('Error:', error);
+    });
+});
+
+// Handle clear tracker confirmation
+document.getElementById('confirm_clear_btn').addEventListener('click', function() {
+    if (!currentClearIP) return;
+
+    fetchWithCSRF('/security/clear-404', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ ip_address: currentClearIP })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast(data.message, 'success');
+            closeClearModal();
+            setTimeout(() => location.reload(), 1500);
+        } else {
+            showToast(data.error || 'Failed to clear tracker', 'error');
+        }
+    })
+    .catch(error => {
+        showToast('Error clearing tracker', 'error');
+        console.error('Error:', error);
+    });
+});
+
+function clear404Tracker(ipAddress) {
+    showClearModal(ipAddress);
+}
+
+function saveSecuritySettings() {
+    const settings = {
+        threshold_404: parseInt(document.getElementById('threshold_404').value),
+        ban_duration_404: parseInt(document.getElementById('ban_duration_404').value),
+        threshold_api: parseInt(document.getElementById('threshold_api').value),
+        ban_duration_api: parseInt(document.getElementById('ban_duration_api').value),
+        repeat_offender_limit: parseInt(document.getElementById('repeat_offender_limit').value)
+    };
+
+    // Validate inputs
+    if (isNaN(settings.threshold_404) || settings.threshold_404 < 1 || settings.threshold_404 > 1000) {
+        showToast('404 threshold must be between 1 and 1000', 'error');
+        return;
+    }
+    if (isNaN(settings.ban_duration_404) || settings.ban_duration_404 < 1 || settings.ban_duration_404 > 8760) {
+        showToast('Ban duration must be between 1 hour and 1 year', 'error');
+        return;
+    }
+    if (isNaN(settings.threshold_api) || settings.threshold_api < 1 || settings.threshold_api > 100) {
+        showToast('API threshold must be between 1 and 100', 'error');
+        return;
+    }
+    if (isNaN(settings.ban_duration_api) || settings.ban_duration_api < 1 || settings.ban_duration_api > 8760) {
+        showToast('Ban duration must be between 1 hour and 1 year', 'error');
+        return;
+    }
+    if (isNaN(settings.repeat_offender_limit) || settings.repeat_offender_limit < 1 || settings.repeat_offender_limit > 10) {
+        showToast('Repeat offender limit must be between 1 and 10', 'error');
+        return;
+    }
+
+    fetchWithCSRF('/security/settings', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(settings)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showToast(data.message, 'success');
+            // Update stats after a moment
+            setTimeout(loadSecurityStats, 500);
+        } else {
+            showToast(data.error || 'Failed to update settings', 'error');
+        }
+    })
+    .catch(error => {
+        showToast('Error updating settings', 'error');
+        console.error('Error:', error);
+    });
+}
+</script>
+{% endblock %}

@@ -1,0 +1,20 @@
+meta {
+  name: Expiry
+  type: http
+  seq: 13
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/expiry
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "symbol": "NIFTY",
+      "exchange": "NFO",
+      "instrumenttype": "options"
+  }
+}

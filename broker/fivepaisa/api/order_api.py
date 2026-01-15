@@ -147,7 +147,7 @@ def get_positions(auth: str) -> Dict[str, Any]:
             
         except httpx.TimeoutException as e:
             current_retry += 1
-            logger.info(f"Timeout getting positions (attempt {current_retry}/{max_retries}): {e}")
+            logger.debug(f"Timeout getting positions (attempt {current_retry}/{max_retries}): {e}")
             if current_retry >= max_retries:
                 logger.info("Maximum retries reached for positions data. Returning empty result.")
                 return {"body": {"NetPositionDetail": []}}  # Return empty position structure
@@ -191,8 +191,8 @@ def get_open_position(tradingsymbol: str, exchange: str, Exch: str, ExchType: st
         tradingsymbol = get_br_symbol(tradingsymbol, exchange)
         positions_data = get_positions(auth)
         
-        logger.info("Token : ", token)
-        logger.info("Product Type : ", producttype)
+        logger.debug("Token : ", token)
+        logger.debug("Product Type : ", producttype)
         
         # Only print positions if we have data
         if positions_data and positions_data.get('body') and positions_data['body'].get('NetPositionDetail'):

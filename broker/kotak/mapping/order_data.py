@@ -122,12 +122,20 @@ def transform_order_data(orders):
         elif order.get('prcTp') == 'SL-M':
             order['prcTp'] = 'SL-M'
         
+        # For limit orders, show the order price (prc) instead of average price (avgPrc)
+        # avgPrc is only relevant for executed orders
+        order_price = order.get("avgPrc", 0.0)
+        if order.get("prcTp") in ["LIMIT", "SL"]:
+            # If order is not executed/complete, use the limit price
+            if order.get("ordSt") != "complete":
+                order_price = order.get("prc", 0.0)
+
         transformed_order = {
             "symbol": order.get("trdSym", ""),
             "exchange": order.get("exSeg", ""),
             "action": order.get("trnsTp", ""),
             "quantity": order.get("qty", 0),
-            "price": order.get("avgPrc", 0.0),
+            "price": order_price,
             "trigger_price": order.get("trgPrc", 0.0),
             "pricetype": order.get("prcTp", ""),
             "product": order.get("prod", ""),
@@ -229,12 +237,18 @@ def transform_positions_data(positions_data):
             "quantity": (int(position.get('flBuyQty', 0)) - int(position.get('flSellQty', 0)))+(int(position.get('cfBuyQty', 0)) - int(position.get('cfSellQty', 0))),
             "average_price": position.get('avgnetprice', 0.0),
         }
-        if transformed_position['quantity'] > 0:
-            transformed_position["average_price"] = round(float(position['buyAmt'])/float(position['flBuyQty']),2)
-        elif transformed_position['quantity'] < 0:
-            transformed_position["average_price"] = round(float(position['sellAmt'])/float(position['flSellQty']),2)
+        buy_qty = float(position.get('flBuyQty', 0))
+        sell_qty = float(position.get('flSellQty', 0))
 
+        if transformed_position['quantity'] > 0 and buy_qty > 0:
+            transformed_position["average_price"] = round(float(position.get('buyAmt', 0)) / buy_qty, 2)
+        elif transformed_position['quantity'] < 0 and sell_qty > 0:
+            transformed_position["average_price"] = round(float(position.get('sellAmt', 0)) / sell_qty, 2)
+        elif transformed_position['quantity'] != 0:
+            transformed_position["average_price"] = 0.0
+            
         transformed_data.append(transformed_position)
+        
     return transformed_data
 
 def transform_holdings_data(holdings_data):

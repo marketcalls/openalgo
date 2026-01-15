@@ -135,9 +135,22 @@ class ColoredFormatter(logging.Formatter):
     def format(self, record):
         if not self.enable_colors:
             return super().format(record)
-        
+
         # Get the original formatted message
-        original_format = super().format(record)
+        # Wrap in try-except to handle format string mismatches from external libraries
+        try:
+            original_format = super().format(record)
+        except (TypeError, ValueError) as e:
+            # Handle cases where external libraries (like hpack) pass wrong types
+            # Example: hpack passes strings like '2' to %d format specifier
+            # Fallback to basic formatting without the problematic args
+            try:
+                record.message = str(record.msg)  # Convert message to string
+                record.args = None  # Clear args to avoid format issues
+                original_format = super().format(record)
+            except Exception:
+                # Last resort: return raw message
+                return f"[{record.levelname}] {record.msg}"
         
         # Apply colors to different components
         level_color = LOG_COLORS.get(record.levelname, '')
@@ -249,6 +262,19 @@ def setup_logging():
     logging.getLogger('requests').setLevel(logging.WARNING)
     logging.getLogger('httpx').setLevel(logging.WARNING)
     logging.getLogger('httpcore').setLevel(logging.WARNING)
+    # Suppress hpack DEBUG logs - they have format string bugs and are not useful
+    logging.getLogger('hpack.hpack').setLevel(logging.INFO)
+    logging.getLogger('hpack').setLevel(logging.INFO)
+    # Suppress APScheduler verbose logs
+    logging.getLogger('apscheduler').setLevel(logging.WARNING)
+    logging.getLogger('apscheduler.scheduler').setLevel(logging.WARNING)
+    logging.getLogger('apscheduler.executors').setLevel(logging.WARNING)
+    # Suppress websockets library logs
+    logging.getLogger('websockets').setLevel(logging.WARNING)
+    logging.getLogger('websockets.server').setLevel(logging.WARNING)
+    # Suppress telegram-bot library logs
+    logging.getLogger('telegram').setLevel(logging.WARNING)
+    logging.getLogger('telegram.ext').setLevel(logging.WARNING)
     
 
 def highlight_url(url: str, text: str = None) -> str:

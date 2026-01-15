@@ -109,7 +109,7 @@ class ZerodhaWebSocket:
         self._connecting = False  # Flag to prevent concurrent connection attempts
         self._last_connection_attempt = 0
         
-        self._log_event("INIT", "Enhanced Zerodha WebSocket client initialized")
+        #self._log_event("INIT", "Enhanced Zerodha WebSocket client initialized")
         self.logger.info("✅ Enhanced Zerodha WebSocket client initialized")
     
     def _log_event(self, event_type: str, message: str, data: Any = None):
@@ -154,13 +154,13 @@ class ZerodhaWebSocket:
         with self.lock:
             self.token_exchange_map.update(token_exchange_map)
         
-        self._log_event("MAPPING", f"Updated token exchange mapping for {len(token_exchange_map)} tokens")
-        self.logger.info(f"✅ Updated token exchange mapping for {len(token_exchange_map)} tokens")
+        #self._log_event("MAPPING", f"Updated token exchange mapping for {len(token_exchange_map)} tokens")
+        self.logger.debug(f"✅ Updated token exchange mapping for {len(token_exchange_map)} tokens")
     
     def start(self) -> bool:
         """Start the WebSocket client in a separate thread"""
         if self.running:
-            self.logger.info("✅ WebSocket client already running")
+            self.logger.debug("✅ WebSocket client already running")
             return True
         
         try:
@@ -178,7 +178,7 @@ class ZerodhaWebSocket:
                     self.loop.run_until_complete(self._run_forever())
                     
                 except asyncio.CancelledError:
-                    self.logger.info("🔄 WebSocket thread cancelled gracefully")
+                    self.logger.debug("🔄 WebSocket thread cancelled gracefully")
                 except RuntimeError as e:
                     if "Event loop stopped before Future completed" in str(e):
                         self.logger.debug("🔄 Event loop stopped during shutdown (normal)")
@@ -207,7 +207,7 @@ class ZerodhaWebSocket:
                     except Exception as e:
                         self.logger.debug(f"Error closing event loop: {e}")
                     
-                    self.logger.info("🧹 WebSocket thread cleanup completed")
+                    self.logger.info(" WebSocket thread cleanup completed")
             
             # Start the thread
             self.ws_thread = threading.Thread(target=_run_in_thread, daemon=True, name="ZerodhaWS")
@@ -216,7 +216,7 @@ class ZerodhaWebSocket:
             # Wait for thread to start
             time.sleep(0.5)
             
-            self.logger.info("🚀 WebSocket client started")
+            self.logger.debug("🚀 WebSocket client started")
             return True
             
         except Exception as e:
@@ -227,7 +227,7 @@ class ZerodhaWebSocket:
     def stop(self):
         """Stop the WebSocket client"""
         try:
-            self.logger.info("🛑 Stopping WebSocket client...")
+            self.logger.debug("🛑 Stopping WebSocket client...")
             
             # Signal stop
             self.running = False
@@ -252,7 +252,7 @@ class ZerodhaWebSocket:
             self.connected = False
             self.websocket = None
             
-            self.logger.info("🛑 WebSocket client stopped")
+            self.logger.debug("🛑 WebSocket client stopped")
             
         except Exception as e:
             self.logger.error(f"❌ Error stopping WebSocket client: {e}")
@@ -295,8 +295,8 @@ class ZerodhaWebSocket:
             for token in tokens:
                 self.pending_subscriptions.append((token, mode))
         
-        self._log_event("SUBSCRIBE", f"Queued {len(tokens)} tokens for subscription in {mode} mode", 
-                       {'count': len(tokens), 'mode': mode})
+        #self._log_event("SUBSCRIBE", f"Queued {len(tokens)} tokens for subscription in {mode} mode", 
+        #               {'count': len(tokens), 'mode': mode})
         
         # Trigger subscription processing
         if self.loop and not self.loop.is_closed():
@@ -365,7 +365,7 @@ class ZerodhaWebSocket:
                 self.logger.error("Failed to send subscription message")
                 return False
             
-            self.logger.info(f"✅ Subscribed to batch of {len(tokens)} tokens")
+            self.logger.debug(f"✅ Subscribed to batch of {len(tokens)} tokens")
             
             # Wait for subscription to be processed by Zerodha
             await asyncio.sleep(1.0)
@@ -381,7 +381,7 @@ class ZerodhaWebSocket:
                     for token in tokens:
                         self.mode_map[token] = mode
                         self.subscribed_tokens.add(token)
-                self.logger.info(f"✅ Set mode {mode} for {len(tokens)} tokens")
+                self.logger.debug(f"✅ Set mode {mode} for {len(tokens)} tokens")
                 
                 # Additional delay after mode setting - important for large batches
                 await asyncio.sleep(1.0)
@@ -425,7 +425,7 @@ class ZerodhaWebSocket:
                     # ✅ NEW: Clean up exchange mapping
                     self.token_exchange_map.pop(token, None)
             
-            self.logger.info(f"✅ Unsubscribed from {len(tokens)} tokens")
+            self.logger.debug(f"✅ Unsubscribed from {len(tokens)} tokens")
             return True
             
         except Exception as e:
@@ -569,7 +569,7 @@ class ZerodhaWebSocket:
                 
                 self.websocket = None
             
-            self.logger.info("🔌 WebSocket disconnected")
+            self.logger.debug("🔌 WebSocket disconnected")
             
             if self.on_disconnect:
                 try:
@@ -599,7 +599,7 @@ class ZerodhaWebSocket:
     
     async def _run_forever(self):
         """Main WebSocket message loop with improved error handling"""
-        self.logger.info("🚀 Starting WebSocket message loop...")
+        self.logger.debug("🚀 Starting WebSocket message loop...")
         
         try:
             while self.running and not self._stop_event.is_set():
@@ -629,7 +629,7 @@ class ZerodhaWebSocket:
                         self.connected = False
                     
                     except websockets.exceptions.ConnectionClosed as e:
-                        self.logger.warning(f"🔌 Connection closed: {e}")
+                        #self.logger.warning(f"🔌 Connection closed: {e}")
                         self.connected = False
                         if self.running:  # Only reconnect if we're still supposed to be running
                             await asyncio.sleep(2)  # Brief delay before reconnection
@@ -640,7 +640,7 @@ class ZerodhaWebSocket:
                         self.error_count += 1
                 
                 except asyncio.CancelledError:
-                    self.logger.info("🔄 Message loop cancelled")
+                    self.logger.debug("🔄 Message loop cancelled")
                     break
                 except Exception as e:
                     self.logger.error(f"❌ Error in message loop: {e}")
@@ -654,7 +654,7 @@ class ZerodhaWebSocket:
                     break
             
         except asyncio.CancelledError:
-            self.logger.info("🔄 WebSocket message loop cancelled")
+            self.logger.debug("🔄 WebSocket message loop cancelled")
         except Exception as e:
             self.logger.error(f"❌ Unexpected error in message loop: {e}")
         finally:
@@ -664,7 +664,7 @@ class ZerodhaWebSocket:
             except Exception as e:
                 self.logger.debug(f"Error during final disconnect: {e}")
             
-            self.logger.info("🛑 WebSocket message loop stopped")
+            self.logger.debug("🛑 WebSocket message loop stopped")
     
     async def _process_message(self, message):
         """Process incoming WebSocket message"""
@@ -707,7 +707,7 @@ class ZerodhaWebSocket:
                     if msg_type == 'error':
                         self.logger.error(f"❌ WebSocket error: {data.get('data', '')}")
                     elif msg_type == 'order':
-                        self.logger.info(f"📊 Order update: {data}")
+                        self.logger.debug(f"📊 Order update: {data}")
                     else:
                         self.logger.debug(f"📝 JSON message: {data}")
                         
@@ -915,7 +915,7 @@ class ZerodhaWebSocket:
         if not self.subscribed_tokens:
             return
         
-        self.logger.info(f"🔄 Re-subscribing to {len(self.subscribed_tokens)} tokens...")
+        self.logger.debug(f"🔄 Re-subscribing to {len(self.subscribed_tokens)} tokens...")
         
         # Group tokens by mode
         mode_groups = {}

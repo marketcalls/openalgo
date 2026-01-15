@@ -12,6 +12,8 @@ EXCHANGE_BFO = 'BFO'    # BSE Futures & Options
 EXCHANGE_BCD = 'BCD'    # BSE Currency
 EXCHANGE_MCX = 'MCX'    # MCX Commodity
 EXCHANGE_NCDEX = 'NCDEX'  # NCDEX Commodity
+EXCHANGE_NSE_INDEX = 'NSE_INDEX'  # NSE Index
+EXCHANGE_BSE_INDEX = 'BSE_INDEX'  # BSE Index
 
 VALID_EXCHANGES = [
     EXCHANGE_NSE,
@@ -21,7 +23,9 @@ VALID_EXCHANGES = [
     EXCHANGE_BFO,
     EXCHANGE_BCD,
     EXCHANGE_MCX,
-    EXCHANGE_NCDEX
+    EXCHANGE_NCDEX,
+    EXCHANGE_NSE_INDEX,
+    EXCHANGE_BSE_INDEX
 ]
 
 # Product Types
@@ -66,7 +70,9 @@ EXCHANGE_BADGE_COLORS = {
     EXCHANGE_BFO: 'badge-warning',
     EXCHANGE_BCD: 'badge-error',
     EXCHANGE_MCX: 'badge-primary',
-    EXCHANGE_NCDEX: 'badge-success'
+    EXCHANGE_NCDEX: 'badge-success',
+    EXCHANGE_NSE_INDEX: 'badge-accent',
+    EXCHANGE_BSE_INDEX: 'badge-neutral'
 }
 
 # Required Fields for Order Placement

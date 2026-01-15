@@ -3,7 +3,7 @@ import os
 from utils.logging import get_logger
 import secrets
 from argon2 import PasswordHasher
-from database.auth_db import upsert_api_key, get_api_key, verify_api_key, get_api_key_for_tradingview
+from database.auth_db import upsert_api_key, get_api_key, verify_api_key, get_api_key_for_tradingview, get_order_mode, update_order_mode
 from utils.session import check_session_validity
 
 logger = get_logger(__name__)
@@ -26,11 +26,14 @@ def manage_api_key():
         # Get the decrypted API key if it exists
         api_key = get_api_key_for_tradingview(login_username)
         has_api_key = api_key is not None
-        logger.info(f"Checking API key status for user: {login_username}")
-        return render_template('apikey.html', 
-                             login_username=login_username, 
+        # Get order mode (default to 'auto' if not set)
+        order_mode = get_order_mode(login_username) or 'auto'
+        logger.info(f"Checking API key status for user: {login_username}, order_mode: {order_mode}")
+        return render_template('apikey.html',
+                             login_username=login_username,
                              has_api_key=has_api_key,
-                             api_key=api_key)
+                             api_key=api_key,
+                             order_mode=order_mode)
     else:
         user_id = request.json.get('user_id')
         if not user_id:
@@ -53,3 +56,36 @@ def manage_api_key():
         else:
             logger.error(f"Failed to update API key for user: {user_id}")
             return jsonify({'error': 'Failed to update API key'}), 500
+
+@api_key_bp.route('/apikey/mode', methods=['POST'])
+@check_session_validity
+def update_api_key_mode():
+    """Update order mode (auto/semi_auto) for a user"""
+    try:
+        user_id = request.json.get('user_id')
+        mode = request.json.get('mode')
+
+        if not user_id:
+            logger.error("Order mode update attempted without user ID")
+            return jsonify({'error': 'User ID is required'}), 400
+
+        if not mode or mode not in ['auto', 'semi_auto']:
+            logger.error(f"Invalid order mode: {mode}")
+            return jsonify({'error': 'Invalid mode. Must be "auto" or "semi_auto"'}), 400
+
+        # Update the order mode
+        success = update_order_mode(user_id, mode)
+
+        if success:
+            logger.info(f"Order mode updated successfully for user: {user_id}, new mode: {mode}")
+            return jsonify({
+                'message': f'Order mode updated to {mode}',
+                'mode': mode
+            })
+        else:
+            logger.error(f"Failed to update order mode for user: {user_id}")
+            return jsonify({'error': 'Failed to update order mode'}), 500
+
+    except Exception as e:
+        logger.error(f"Error updating order mode: {e}")
+        return jsonify({'error': 'An error occurred while updating order mode'}), 500

@@ -375,29 +375,32 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
             import uuid
             unique_id = str(uuid.uuid4())[:8]
             correlation_id = f"{symbol}_{exchange}_{mode}_{unique_id}"
-
-            # Check if we need to subscribe to WebSocket
             base_correlation_id = f"{symbol}_{exchange}_{mode}"
-            already_ws_subscribed = any(
-                cid.startswith(base_correlation_id)
-                for cid in self.subscriptions.keys()
-            )
 
-            if already_ws_subscribed:
-                self.logger.info(f"[SUBSCRIBE] WebSocket already subscribed for {base_correlation_id}, adding client subscription {correlation_id}")
-            else:
-                self.logger.info(f"[SUBSCRIBE] New WebSocket subscription needed for {correlation_id}")
+            # CRITICAL: Entire check-store-subscribe operation must be atomic to prevent race conditions
+            # with unsubscribe_all() or other concurrent operations
+            with self.lock:
+                # Check if we need to subscribe to WebSocket
+                already_ws_subscribed = any(
+                    cid.startswith(base_correlation_id)
+                    for cid in self.subscriptions.keys()
+                )
 
-            # Always store the subscription (each client gets their own entry)
-            self._store_subscription(correlation_id, subscription)
+                if already_ws_subscribed:
+                    self.logger.info(f"[SUBSCRIBE] WebSocket already subscribed for {base_correlation_id}, adding client subscription {correlation_id}")
+                else:
+                    self.logger.info(f"[SUBSCRIBE] New WebSocket subscription needed for {correlation_id}")
 
-            # Subscribe via WebSocket (reference counting will handle duplicates)
-            if self.connected:
-                self._websocket_subscribe(subscription)
-                if not already_ws_subscribed:
+                # Store the subscription (inline to avoid nested locks)
+                self.subscriptions[correlation_id] = subscription
+                self.token_to_symbol[subscription['token']] = (subscription['symbol'], subscription['exchange'])
+
+                # Subscribe via WebSocket if needed (reference counting will handle duplicates)
+                if self.connected and not already_ws_subscribed:
+                    self._websocket_subscribe(subscription)
                     self.logger.info(f"[SUBSCRIBE] WebSocket subscription sent for {subscription['scrip']}")
-            else:
-                self.logger.warning(f"[SUBSCRIBE] Not connected, cannot subscribe to {subscription['scrip']}")
+                elif not self.connected:
+                    self.logger.warning(f"[SUBSCRIBE] Not connected, cannot subscribe to {subscription['scrip']}")
 
             # Log current ZMQ port and subscription state
             self.logger.info(f"[SUBSCRIBE] Publishing to ZMQ port: {self.zmq_port}")
@@ -818,6 +821,69 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def clear_market_data_cache(self, token: str = None) -> None:
         """Clear market data cache"""
         self.market_cache.clear(token)
+
+    def unsubscribe_all(self) -> Dict[str, Any]:
+        """
+        Unsubscribe from all active data streams without disconnecting WebSocket.
+        This implements the persistent session model for Flattrade to avoid
+        server-side session cooldown issues.
+        
+        Returns:
+            Dict: Response indicating success/failure
+        """
+        try:
+            with self.lock:
+                if not self.connected or not self.ws_client:
+                    self.logger.warning("Cannot unsubscribe_all: WebSocket not connected")
+                    return self._create_error_response("NOT_CONNECTED", "WebSocket not connected")
+
+                # Collect all unique scrips for batch unsubscription
+                touchline_scrips = set()
+                depth_scrips = set()
+
+                # Group subscriptions by type
+                for subscription in self.subscriptions.values():
+                    scrip = subscription['scrip']
+                    mode = subscription['mode']
+
+                    if mode in [Config.MODE_LTP, Config.MODE_QUOTE]:
+                        touchline_scrips.add(scrip)
+                    elif mode == Config.MODE_DEPTH:
+                        depth_scrips.add(scrip)
+
+                # Unsubscribe from touchline data
+                if touchline_scrips:
+                    scrip_list = '#'.join(touchline_scrips)
+                    self.logger.info(f"Unsubscribing from {len(touchline_scrips)} touchline scrips")
+                    self.ws_client.unsubscribe_touchline(scrip_list)
+
+                # Unsubscribe from depth data
+                if depth_scrips:
+                    scrip_list = '#'.join(depth_scrips)
+                    self.logger.info(f"Unsubscribing from {len(depth_scrips)} depth scrips")
+                    self.ws_client.unsubscribe_depth(scrip_list)
+
+                # Clear all subscription tracking but keep WebSocket connection alive
+                subscription_count = len(self.subscriptions)
+                self.subscriptions.clear()
+                self.token_to_symbol.clear()
+                self.ws_subscription_refs.clear()
+                
+                # Clear market data cache
+                self.market_cache.clear()
+
+                self.logger.info(f"Unsubscribed from all {subscription_count} subscriptions. "
+                               f"WebSocket connection remains active for fast reconnection.")
+
+                return self._create_success_response(
+                    f"Unsubscribed from all {subscription_count} subscriptions. Connection kept alive.",
+                    unsubscribed_count=subscription_count,
+                    connection_status="active"
+                )
+
+        except Exception as e:
+            self.logger.error(f"Error in unsubscribe_all: {e}")
+            return self._create_error_response("UNSUBSCRIBE_ALL_ERROR", str(e))
 
 
 # Utility functions

@@ -78,7 +78,7 @@ def get_positions(auth):
     payload = json.dumps({
     "ret": "NET"
     })
-    
+
     return get_api_response("/rest/AliceBlueAPIService/api/positionAndHoldings/positionBook",auth,"POST",payload=payload)
 
 def get_holdings(auth):
@@ -88,7 +88,7 @@ def get_open_position(tradingsymbol, exchange, product,auth):
 
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol,exchange)
-    
+
 
     position_data = get_positions(auth)
 

@@ -127,7 +127,7 @@ class WisdomWebSocketClient:
                 'Content-Type': 'application/json'
             }
             
-            self.logger.info(f"[MARKET DATA LOGIN] Attempting login to: {login_url}")
+            self.logger.debug(f"[MARKET DATA LOGIN] Attempting login to: {login_url}")
             
             response = requests.post(
                 login_url,
@@ -138,7 +138,7 @@ class WisdomWebSocketClient:
             
             if response.status_code == 200:
                 result = response.json()
-                self.logger.info(f"[MARKET DATA LOGIN] Response: {result}")
+                self.logger.debug(f"[MARKET DATA LOGIN] Response: {result}")
                 
                 if result.get("type") == "success":
                     login_result = result.get("result", {})
@@ -146,7 +146,7 @@ class WisdomWebSocketClient:
                     self.actual_user_id = login_result.get("userID")
                     
                     if self.market_data_token and self.actual_user_id:
-                        self.logger.info(f"[MARKET DATA LOGIN] Success! Token obtained, UserID: {self.actual_user_id}")
+                        self.logger.debug(f"[MARKET DATA LOGIN] Success! Token obtained, UserID: {self.actual_user_id}")
                         return True
                     else:
                         self.logger.error(f"[MARKET DATA LOGIN] Missing token or userID in response")
@@ -176,7 +176,7 @@ class WisdomWebSocketClient:
             # Use the market data token and actual user ID from login response
             connection_url = f"{self.base_url}/?token={self.market_data_token}&userID={self.actual_user_id}&publishFormat={publish_format}&broadcastMode={broadcast_mode}"
             
-            self.logger.info(f"Connecting to Wisdom XTS Socket.IO: {connection_url}")
+            self.logger.debug(f"Connecting to Wisdom XTS Socket.IO: {connection_url}")
             
             # Connect to Socket.IO server
             self.sio.connect(
@@ -203,14 +203,14 @@ class WisdomWebSocketClient:
         try:
             if self.sio and self.sio.connected:
                 self.sio.disconnect()
-                self.logger.info("Socket.IO client disconnected")
+                self.logger.debug("Socket.IO client disconnected")
         except Exception as e:
             self.logger.warning(f"Error during Wisdom XTS Socket.IO disconnect: {e}")
         
         # Clear subscriptions
         self.subscriptions.clear()
         
-        self.logger.info("Disconnected from Wisdom XTS Socket.IO")
+        self.logger.debug("Disconnected from Wisdom XTS Socket.IO")
     
     def subscribe(self, correlation_id: str, mode: int, instruments: List[Dict]):
         """
@@ -268,7 +268,7 @@ class WisdomWebSocketClient:
             
             if response.status_code == 200:
                 result = response.json()
-                self.logger.info(f"[SUBSCRIPTION SUCCESS] Code: {xts_message_code}, Instruments: {len(instruments)}, Response: {result}")
+                self.logger.debug(f"[SUBSCRIPTION SUCCESS] Code: {xts_message_code}, Instruments: {len(instruments)}, Response: {result}")
                 
                 # Process initial quote data from listQuotes if available
                 if result.get('type') == 'success' and 'result' in result:
@@ -276,7 +276,7 @@ class WisdomWebSocketClient:
                     for quote_str in list_quotes:
                         try:
                             quote_data = json.loads(quote_str)
-                            self.logger.info(f"[INITIAL QUOTE] Processing initial quote: {quote_data}")
+                            self.logger.debug(f"[INITIAL QUOTE] Processing initial quote: {quote_data}")
                             if self.on_data:
                                 self.on_data(self, quote_data)
                         except json.JSONDecodeError as e:
@@ -287,7 +287,7 @@ class WisdomWebSocketClient:
         except Exception as e:
             self.logger.error(f"[SUBSCRIPTION EXCEPTION] Error: {e}")
         
-        self.logger.info(f"Subscribed to {len(instruments)} instruments with XTS code {xts_message_code} (mode {mode})")
+        self.logger.debug(f"Subscribed to {len(instruments)} instruments with XTS code {xts_message_code} (mode {mode})")
     
     def unsubscribe(self, correlation_id: str, mode: int, instruments: List[Dict]):
         """
@@ -332,14 +332,14 @@ class WisdomWebSocketClient:
             
             if response.status_code == 200:
                 result = response.json()
-                self.logger.info(f"[UNSUBSCRIPTION SUCCESS] Code: {xts_message_code}, Instruments: {len(instruments)}, Response: {result}")
+                self.logger.debug(f"[UNSUBSCRIPTION SUCCESS] Code: {xts_message_code}, Instruments: {len(instruments)}, Response: {result}")
             else:
                 self.logger.error(f"[UNSUBSCRIPTION ERROR] Status: {response.status_code}, Response: {response.text}")
                 
         except Exception as e:
             self.logger.error(f"[UNSUBSCRIPTION EXCEPTION] Error: {e}")
         
-        self.logger.info(f"Unsubscribed from {len(instruments)} instruments")
+        self.logger.debug(f"Unsubscribed from {len(instruments)} instruments")
     
     def _on_connect(self):
         """Socket.IO connect event handler"""
@@ -361,31 +361,31 @@ class WisdomWebSocketClient:
     
     def _on_message_handler(self, data):
         """General message handler"""
-        self.logger.info(f"[GENERAL MESSAGE] Received: {data}")
+        self.logger.debug(f"[GENERAL MESSAGE] Received: {data}")
         if self.on_message:
             self.on_message(self, data)
     
     # XTS specific message handlers for different market data types
     def _on_message_1501_json_full(self, data):
         """Handle 1501 JSON full messages (LTP)"""
-        self.logger.info(f"[1501-JSON-FULL] Received LTP data: {data}")
+        self.logger.debug(f"[1501-JSON-FULL] Received LTP data: {data}")
         if self.on_data:
             self.on_data(self, data)
     
     def _on_message_1501_json_partial(self, data):
         """Handle 1501 JSON partial messages"""
-        self.logger.info(f"[1501-JSON-PARTIAL] Received LTP partial: {data}")
+        self.logger.debug(f"[1501-JSON-PARTIAL] Received LTP partial: {data}")
         if self.on_data:
             self.on_data(self, data)
     
     def _on_message_1502_json_full(self, data):
         """Handle 1502 JSON full messages (Market Depth)"""
-        self.logger.info(f"[1502-JSON-FULL] Received Market Depth data: {data}")
+        self.logger.debug(f"[1502-JSON-FULL] Received Market Depth data: {data}")
         # Parse JSON string if needed
         if isinstance(data, str):
             try:
                 data = json.loads(data)
-                self.logger.info(f"[1502-JSON-FULL] Parsed depth data: {data}")
+                self.logger.debug(f"[1502-JSON-FULL] Parsed depth data: {data}")
             except json.JSONDecodeError as e:
                 self.logger.error(f"[1502-JSON-FULL] Failed to parse JSON: {e}")
                 return
@@ -394,12 +394,12 @@ class WisdomWebSocketClient:
     
     def _on_message_1502_json_partial(self, data):
         """Handle 1502 JSON partial messages (Market Depth updates)"""
-        self.logger.info(f"[1502-JSON-PARTIAL] Received Market Depth partial: {data}")
+        self.logger.debug(f"[1502-JSON-PARTIAL] Received Market Depth partial: {data}")
         # Parse JSON string if needed
         if isinstance(data, str):
             try:
                 data = json.loads(data)
-                self.logger.info(f"[1502-JSON-PARTIAL] Parsed depth update: {data}")
+                self.logger.debug(f"[1502-JSON-PARTIAL] Parsed depth update: {data}")
             except json.JSONDecodeError as e:
                 self.logger.error(f"[1502-JSON-PARTIAL] Failed to parse JSON: {e}")
                 return
@@ -408,43 +408,43 @@ class WisdomWebSocketClient:
     
     def _on_message_1505_json_full(self, data):
         """Handle 1505 JSON full messages (Market depth)"""
-        self.logger.info(f"[1505-JSON-FULL] Received Market depth: {data}")
+        self.logger.debug(f"[1505-JSON-FULL] Received Market depth: {data}")
         if self.on_data:
             self.on_data(self, data)
     
     def _on_message_1505_json_partial(self, data):
         """Handle 1505 JSON partial messages"""
-        self.logger.info(f"[1505-JSON-PARTIAL] Received Depth partial: {data}")
+        self.logger.debug(f"[1505-JSON-PARTIAL] Received Depth partial: {data}")
         if self.on_data:
             self.on_data(self, data)
     
     def _on_message_1510_json_full(self, data):
         """Handle 1510 JSON full messages (Open interest)"""
-        self.logger.info(f"[1510-JSON-FULL] Received Open interest: {data}")
+        self.logger.debug(f"[1510-JSON-FULL] Received Open interest: {data}")
         if self.on_data:
             self.on_data(self, data)
     
     def _on_message_1510_json_partial(self, data):
         """Handle 1510 JSON partial messages"""
-        self.logger.info(f"[1510-JSON-PARTIAL] Received OI partial: {data}")
+        self.logger.debug(f"[1510-JSON-PARTIAL] Received OI partial: {data}")
         if self.on_data:
             self.on_data(self, data)
     
     def _on_message_1512_json_full(self, data):
         """Handle 1512 JSON full messages (Full market data)"""
-        self.logger.info(f"[1512-JSON-FULL] Received Full market data: {data}")
+        self.logger.debug(f"[1512-JSON-FULL] Received Full market data: {data}")
         if self.on_data:
             self.on_data(self, data)
     
     def _on_message_1512_json_partial(self, data):
         """Handle 1512 JSON partial messages"""
-        self.logger.info(f"[1512-JSON-PARTIAL] Received Full data partial: {data}")
+        self.logger.debug(f"[1512-JSON-PARTIAL] Received Full data partial: {data}")
         if self.on_data:
             self.on_data(self, data)
     
     def _on_message_1105_json_full(self, data):
         """Handle 1105 JSON full messages (Binary market data)"""
-        self.logger.info(f"[1105-JSON-FULL] Received binary market data: {data}")
+        self.logger.debug(f"[1105-JSON-FULL] Received binary market data: {data}")
         self._process_1105_data(data)
     
     def _on_message_1105_json_partial(self, data):
@@ -519,7 +519,7 @@ class WisdomWebSocketClient:
                     except ValueError:
                         market_data[field_name] = value
             
-            self.logger.info(f"[1105-PROCESSED] Subscribed instrument data: {market_data}")
+            self.logger.debug(f"[1105-PROCESSED] Subscribed instrument data: {market_data}")
             
             # Call the standard data handler
             if self.on_data:
@@ -532,10 +532,10 @@ class WisdomWebSocketClient:
         """Catch-all handler for any unhandled Socket.IO events"""
         # Don't log connect/disconnect/joined events as they are handled separately
         if event not in ['connect', 'disconnect', 'joined', 'message']:
-            self.logger.info(f"[CATCH-ALL] Unhandled event: {event}")
+            self.logger.debug(f"[CATCH-ALL] Unhandled event: {event}")
             if args:
                 for i, arg in enumerate(args):
-                    self.logger.info(f"  Arg[{i}]: Type={type(arg)}, Value={str(arg)[:200]}...")
+                    self.logger.debug(f"  Arg[{i}]: Type={type(arg)}, Value={str(arg)[:200]}...")
     
     def resubscribe_all(self):
         """Resubscribe to all stored subscriptions after reconnection"""

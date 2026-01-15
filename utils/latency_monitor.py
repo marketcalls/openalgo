@@ -1,7 +1,7 @@
 import time
 from functools import wraps
 from flask import g, request
-from database.latency_db import OrderLatency, latency_session, init_latency_db
+from database.latency_db import OrderLatency, latency_session, init_latency_db, purge_old_data_logs
 from database.auth_db import get_broker_name
 from utils.logging import get_logger
 from flask_restx import Resource
@@ -60,20 +60,25 @@ def track_latency(api_type):
             # Initialize latency tracker
             tracker = LatencyTracker()
             g.latency_tracker = tracker
-            
+
             try:
+                # Record the actual start time for overhead calculation
+                # (after Flask routing/middleware has completed)
+                endpoint_start_time = time.time()
+                g.endpoint_start_time = endpoint_start_time
+
                 # Start validation stage
                 tracker.start_stage('validation')
-                
+
                 # Get request data for logging
                 request_data = request.get_json() if request.is_json else {}
-                
+
                 # End validation stage after getting request data
                 tracker.end_stage()
-                
+
                 # Start broker request stage
                 tracker.start_stage('broker_request')
-                
+
                 # Execute the actual endpoint
                 response = f(*args, **kwargs)
                 
@@ -100,10 +105,30 @@ def track_latency(api_type):
                 else:
                     status_code = getattr(response, 'status_code', 200)
                 
-                # Calculate latencies
-                rtt = tracker.get_rtt()
-                overhead = tracker.get_overhead()
-                total = rtt + overhead
+                # Calculate latencies using actual broker API time
+                # Get actual broker API call time (if available from httpx_client)
+                broker_api_time = getattr(g, 'broker_api_time', None)
+                endpoint_start_time = getattr(g, 'endpoint_start_time', None)
+
+                if broker_api_time is not None and endpoint_start_time is not None:
+                    # Calculate total time from when endpoint actually started executing
+                    # (excludes Flask routing/middleware overhead)
+                    current_time = time.time()
+                    total_time = (current_time - endpoint_start_time) * 1000  # ms
+
+                    # Broker API time is what the httpx hook captured
+                    rtt = broker_api_time
+
+                    # Platform overhead is everything except the broker API call
+                    overhead = total_time - broker_api_time
+
+                    # Total is the sum
+                    total = total_time
+                else:
+                    # Fallback to old calculation if broker API time not available
+                    rtt = tracker.get_rtt()
+                    overhead = tracker.get_overhead()
+                    total = rtt + overhead
                 
                 # Log the latency data
                 # Handle the case where orderid might be null in the response
@@ -129,8 +154,8 @@ def track_latency(api_type):
                         'overhead': overhead,
                         'total': total
                     },
-                    request_body=request_data,
-                    response_body=response_data,
+                    request_body=None,  # Not storing to save database space
+                    response_body=None,  # Not storing to save database space
                     status='SUCCESS' if status_code < 400 else 'FAILED',
                     error=response_data.get('message') if status_code >= 400 else None
                 )
@@ -138,10 +163,19 @@ def track_latency(api_type):
                 return response
                 
             except Exception as e:
-                # Log error latency
-                total_time = tracker.get_total_time()
-                rtt = tracker.get_rtt()
-                overhead = tracker.get_overhead()
+                # Log error latency using actual broker API time if available
+                broker_api_time = getattr(g, 'broker_api_time', None)
+                endpoint_start_time = getattr(g, 'endpoint_start_time', None)
+
+                if broker_api_time is not None and endpoint_start_time is not None:
+                    current_time = time.time()
+                    total_time = (current_time - endpoint_start_time) * 1000
+                    rtt = broker_api_time
+                    overhead = total_time - broker_api_time
+                else:
+                    total_time = tracker.get_total_time()
+                    rtt = tracker.get_rtt()
+                    overhead = tracker.get_overhead()
                 
                 # Get broker name from auth_db using API key if available
                 broker_name = None
@@ -161,8 +195,8 @@ def track_latency(api_type):
                         'overhead': overhead,
                         'total': total_time
                     },
-                    request_body=request_data if 'request_data' in locals() else None,
-                    response_body=None,
+                    request_body=None,  # Not storing to save database space
+                    response_body=None,  # Not storing to save database space
                     status='FAILED',
                     error=str(e)
                 )
@@ -187,18 +221,30 @@ def init_latency_monitoring(app):
     """Initialize latency monitoring"""
     # Initialize the latency database
     init_latency_db()
-    
+
+    # Auto-purge old data endpoint logs (keep order logs forever, purge data logs after 7 days)
+    purge_old_data_logs(days=7)
+
     # Import all RESTX API resources
     from restx_api import api
     
     # Map of endpoint names to their types
+    # ORDER endpoints: Keep latency logs forever
+    # DATA endpoints: Auto-purge after 7 days
     api_types = {
+        # Order execution endpoints (keep forever)
         'place_order': 'PLACE',
         'place_smart_order': 'SMART',
         'modify_order': 'MODIFY',
         'cancel_order': 'CANCEL',
         'close_position': 'CLOSE',
         'cancel_all_order': 'CANCEL_ALL',
+        'basket_order': 'BASKET',
+        'split_order': 'SPLIT',
+        'options_order': 'OPTIONS',
+        'options_multiorder': 'OPTIONS_MULTI',
+
+        # Data/Account endpoints (auto-purge after 7 days)
         'quotes': 'QUOTES',
         'history': 'HISTORY',
         'depth': 'DEPTH',
@@ -208,11 +254,26 @@ def init_latency_monitoring(app):
         'tradebook': 'TRADEBOOK',
         'positionbook': 'POSITIONBOOK',
         'holdings': 'HOLDINGS',
-        'basket_order': 'BASKET',
-        'split_order': 'SPLIT',
         'orderstatus': 'STATUS',
-        'openposition': 'POSITION'
+        'openposition': 'POSITION',
+        'instruments': 'INSTRUMENTS',
+        'search': 'SEARCH',
+        'symbol': 'SYMBOL',
+        'expiry': 'EXPIRY',
+        'margin': 'MARGIN',
+        'option_greeks': 'GREEKS',
+        'option_symbol': 'OPTION_SYMBOL',
+        'synthetic_future': 'SYNTHETIC',
+        'ticker': 'TICKER',
+        'ping': 'PING',
+        'analyzer': 'ANALYZER',
+        'chart': 'CHART',
+        'market/holidays': 'MARKET_HOLIDAYS',
+        'market/timings': 'MARKET_TIMINGS'
     }
+
+    # Order types that should be kept forever (not purged)
+    ORDER_TYPES = {'PLACE', 'SMART', 'MODIFY', 'CANCEL', 'CLOSE', 'CANCEL_ALL', 'BASKET', 'SPLIT', 'OPTIONS', 'OPTIONS_MULTI'}
     
     # Wrap all API endpoints with latency tracking
     for namespace in api.namespaces:

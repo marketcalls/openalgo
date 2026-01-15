@@ -1,6 +1,7 @@
 from flask import Blueprint, render_template, request, jsonify, session, redirect, url_for
 from flask_cors import cross_origin
-from datetime import datetime, time, timedelta
+from datetime import datetime, time as dt_time, timedelta
+import time as time_module
 import pandas as pd
 import numpy as np
 from importlib import import_module
@@ -11,8 +12,109 @@ from services.tradebook_service import get_tradebook
 from services.history_service import get_history
 import traceback
 import pytz
+import threading
 
 logger = get_logger(__name__)
+
+def parse_trade_timestamp(timestamp_str, fallback_date=None):
+    """
+    Safely parse trade timestamp from various broker formats.
+    
+    Supported formats:
+    - "17-Dec-2025 10:54:03" (AngelOne)
+    - "09:41:01 17-12-2025" (Flattrade)
+    - "10:30:52" (Time only)
+    - Unix timestamp (int/float)
+    - ISO format strings
+    
+    Returns: timezone-aware datetime in IST, or None if parsing fails
+    """
+    ist = pytz.timezone('Asia/Kolkata')
+    
+    if timestamp_str is None:
+        return None
+    
+    # Handle numeric timestamps (Unix epoch)
+    if isinstance(timestamp_str, (int, float)):
+        try:
+            dt = pd.to_datetime(timestamp_str, unit='s')
+            if dt.tz is None:
+                return dt.tz_localize('UTC').tz_convert(ist)
+            return dt.tz_convert(ist)
+        except Exception as e:
+            logger.warning(f"Failed to parse numeric timestamp {timestamp_str}: {e}")
+            return None
+    
+    if not isinstance(timestamp_str, str):
+        return None
+    
+    timestamp_str = timestamp_str.strip()
+    if not timestamp_str:
+        return None
+    
+    # List of formats to try (order matters - more specific first)
+    formats = [
+        '%d-%b-%Y %H:%M:%S',   # AngelOne: "17-Dec-2025 10:54:03"
+        '%H:%M:%S %d-%m-%Y',   # Flattrade: "09:41:01 17-12-2025"
+        '%d-%m-%Y %H:%M:%S',   # "17-12-2025 09:41:01"
+        '%Y-%m-%d %H:%M:%S',   # ISO-like: "2025-12-17 10:30:00"
+        '%Y-%m-%dT%H:%M:%S',   # ISO: "2025-12-17T10:30:00"
+    ]
+    
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(timestamp_str, fmt)
+            return ist.localize(dt)
+        except ValueError:
+            continue
+    
+    # Try time-only format: "HH:MM:SS"
+    if ':' in timestamp_str and ' ' not in timestamp_str:
+        try:
+            time_parts = timestamp_str.split(':')
+            if len(time_parts) >= 2 and len(time_parts[0]) <= 2:
+                today = fallback_date or datetime.now(ist).date()
+                dt = datetime.combine(today, dt_time(
+                    int(time_parts[0]),
+                    int(time_parts[1]),
+                    int(time_parts[2]) if len(time_parts) > 2 else 0
+                ))
+                return ist.localize(dt)
+        except (ValueError, IndexError):
+            pass
+    
+    # Fallback: try pandas auto-parsing
+    try:
+        dt = pd.to_datetime(timestamp_str)
+        if dt.tz is None:
+            return dt.tz_localize(ist)
+        return dt.tz_convert(ist)
+    except Exception as e:
+        logger.warning(f"Failed to auto-parse timestamp '{timestamp_str}': {e}")
+    
+    return None
+
+# Rate limiter for historical data API calls
+class RateLimiter:
+    """Thread-safe rate limiter for API calls"""
+    def __init__(self, calls_per_second=2):
+        self.calls_per_second = calls_per_second
+        self.min_interval = 1.0 / calls_per_second  # Time between calls
+        self.last_call_time = 0
+        self.lock = threading.Lock()
+
+    def wait(self):
+        """Wait if necessary to respect rate limit"""
+        with self.lock:
+            current_time = time_module.time()
+            elapsed = current_time - self.last_call_time
+            if elapsed < self.min_interval:
+                sleep_time = self.min_interval - elapsed
+                time_module.sleep(sleep_time)
+            self.last_call_time = time_module.time()
+
+# Global rate limiter instance - 2 calls per second (conservative limit)
+history_rate_limiter = RateLimiter(calls_per_second=2)
 
 # Define the blueprint
 pnltracker_bp = Blueprint('pnltracker_bp', __name__, url_prefix='/')
@@ -117,17 +219,17 @@ def get_pnl_data():
                 'message': 'API key not configured. Please generate an API key in /apikey'
             }), 401
 
-        # Get today's date
-        today = datetime.now().date()
-        today_str = today.strftime("%Y-%m-%d")
-        
+        # Default to today's date for historical data (will be overridden by trade date if trades exist)
+        ist = pytz.timezone('Asia/Kolkata')
+        today_str = datetime.now(ist).date().strftime("%Y-%m-%d")
+
         # Get tradebook data using the service (with API key)
         success, tradebook_response, status_code = get_tradebook(api_key=api_key)
-        
+
         if not success:
             logger.error(f"Error fetching tradebook: {tradebook_response}")
             return jsonify(tradebook_response), status_code
-        
+
         trades = tradebook_response.get('data', [])
         
         # Log trades for debugging
@@ -135,32 +237,15 @@ def get_pnl_data():
         if trades and len(trades) > 0:
             logger.info(f"Sample trade: {trades[0]}")
         
-        # Get positions using dynamic import (same as orders.py)
-        api_funcs = dynamic_import(broker, 'api.order_api', ['get_positions'])
-        mapping_funcs = dynamic_import(broker, 'mapping.order_data', [
-            'map_position_data', 'transform_positions_data'
-        ])
-        
-        if not api_funcs or not mapping_funcs:
-            logger.error(f"Error loading broker-specific modules for {broker}")
-            return jsonify({
-                'status': 'error',
-                'message': 'Error loading broker-specific modules'
-            }), 500
-        
-        # Get current positions for real-time P&L
+        # Get current positions using positionbook service (handles sandbox mode)
+        from services.positionbook_service import get_positionbook
         current_positions = {}
         try:
-            get_positions = api_funcs['get_positions']
-            positions_data = get_positions(auth_token)
-            
-            if positions_data and ('status' not in positions_data or positions_data['status'] != 'error'):
-                map_position_data = mapping_funcs['map_position_data']
-                transform_positions_data = mapping_funcs['transform_positions_data']
-                
-                positions_data = map_position_data(positions_data)
-                positions_data = transform_positions_data(positions_data)
-                
+            success, positions_response, _ = get_positionbook(api_key=api_key)
+
+            if success and 'data' in positions_response:
+                positions_data = positions_response.get('data', [])
+
                 # Store current positions for reference
                 logger.info(f"Number of positions: {len(positions_data) if positions_data else 0}")
                 for pos in positions_data:
@@ -177,7 +262,7 @@ def get_pnl_data():
                         avg_price = 0
                         ltp = 0
                         pnl = 0
-                    
+
                     current_positions[key] = {
                         'quantity': qty,
                         'average_price': avg_price,
@@ -185,6 +270,8 @@ def get_pnl_data():
                         'pnl': pnl
                     }
                     logger.info(f"Position {key}: qty={qty}, avg={avg_price}, ltp={ltp}, pnl={pnl}")
+            else:
+                logger.warning(f"Could not fetch positions: {positions_response}")
         except Exception as e:
             logger.warning(f"Error fetching positions: {e}")
             # Continue without positions data
@@ -211,68 +298,28 @@ def get_pnl_data():
         
         # Find the earliest trade time
         for trade in trades:
-            # Try to parse trade timestamp - prioritize timestamp field which appears to be in HH:MM:SS format
             trade_timestamp = trade.get('timestamp') or trade.get('fill_timestamp') or trade.get('fill_time')
             if trade_timestamp:
-                try:
-                    # Check if it's a time string in HH:MM:SS format
-                    if isinstance(trade_timestamp, str) and ':' in trade_timestamp and len(trade_timestamp.split(':')[0]) <= 2:
-                        # Parse as time string (e.g., "10:30:52")
-                        ist = pytz.timezone('Asia/Kolkata')
-                        today = datetime.now(ist).date()
-                        time_parts = trade_timestamp.split(':')
-                        trade_time = ist.localize(datetime.combine(today, time(
-                            int(time_parts[0]), 
-                            int(time_parts[1]), 
-                            int(time_parts[2]) if len(time_parts) > 2 else 0
-                        )))
-                    elif isinstance(trade_timestamp, (int, float)):
-                        # Unix timestamp
-                        trade_time = pd.to_datetime(trade_timestamp, unit='s')
-                        ist = pytz.timezone('Asia/Kolkata')
-                        if trade_time.tz is None:
-                            trade_time = trade_time.tz_localize('UTC').tz_convert(ist)
-                        else:
-                            trade_time = trade_time.tz_convert(ist)
-                    else:
-                        # String timestamp in datetime format
-                        trade_time = pd.to_datetime(trade_timestamp)
-                        ist = pytz.timezone('Asia/Kolkata')
-                        if trade_time.tz is None:
-                            # Assume it's already in IST
-                            trade_time = trade_time.tz_localize(ist)
-                        else:
-                            trade_time = trade_time.tz_convert(ist)
-                    
-                    # Track the earliest trade time
+                trade_time = parse_trade_timestamp(trade_timestamp)
+                if trade_time:
                     if first_trade_time is None or trade_time < first_trade_time:
                         first_trade_time = trade_time
                         logger.info(f"Found trade at {trade_time.strftime('%H:%M:%S')} for {trade['symbol']}")
-                except Exception as e:
-                    logger.warning(f"Could not parse trade timestamp {trade_timestamp}: {e}")
+                else:
+                    logger.warning(f"Could not parse trade timestamp {trade_timestamp}")
         
         # If we couldn't determine first trade time from timestamps, try from fill_time field
         if first_trade_time is None and trades:
-            # Look for fill_time in format HH:MM:SS or timestamp
             for trade in trades:
                 fill_time_str = trade.get('fill_time', '')
                 if fill_time_str:
-                    try:
-                        # Try parsing as time string (e.g., "10:30:52")
-                        if ':' in str(fill_time_str):
-                            ist = pytz.timezone('Asia/Kolkata')
-                            today = datetime.now(ist).date()
-                            time_parts = str(fill_time_str).split(':')
-                            trade_time = ist.localize(datetime.combine(today, time(
-                                int(time_parts[0]), 
-                                int(time_parts[1]), 
-                                int(time_parts[2]) if len(time_parts) > 2 else 0
-                            )))
-                            if first_trade_time is None or trade_time < first_trade_time:
-                                first_trade_time = trade_time
-                                logger.info(f"Found trade at {trade_time.strftime('%H:%M:%S')} from fill_time for {trade['symbol']}")
-                    except Exception as e:
-                        logger.warning(f"Could not parse fill_time {fill_time_str}: {e}")
+                    trade_time = parse_trade_timestamp(fill_time_str)
+                    if trade_time:
+                        if first_trade_time is None or trade_time < first_trade_time:
+                            first_trade_time = trade_time
+                            logger.info(f"Found trade at {trade_time.strftime('%H:%M:%S')} from fill_time for {trade['symbol']}")
+                    else:
+                        logger.warning(f"Could not parse fill_time {fill_time_str}")
         
         # Log the first trade time
         if first_trade_time:
@@ -281,7 +328,13 @@ def get_pnl_data():
             logger.warning("Could not determine first trade time, using market open time")
             ist = pytz.timezone('Asia/Kolkata')
             first_trade_time = datetime.now(ist).replace(hour=9, minute=15, second=0, microsecond=0)
-        
+
+        # Determine the trading date from first trade time (handles overnight session spanning)
+        # This ensures we query historical data for the correct date when trades are from previous day
+        trade_date = first_trade_time.date()
+        today_str = trade_date.strftime("%Y-%m-%d")
+        logger.info(f"Using trade date for historical data: {today_str}")
+
         # Group trades by symbol to track entry and exit
         symbol_trades = {}
         for trade in trades:
@@ -296,29 +349,11 @@ def get_pnl_data():
                 if symbol_key not in symbol_trades:
                     symbol_trades[symbol_key] = []
                 
-                # Parse trade time
+                # Parse trade time using universal parser
                 trade_timestamp = trade.get('timestamp') or trade.get('fill_timestamp') or trade.get('fill_time')
-                trade_time = None
-                if trade_timestamp:
-                    try:
-                        if isinstance(trade_timestamp, str) and ':' in trade_timestamp and len(trade_timestamp.split(':')[0]) <= 2:
-                            ist = pytz.timezone('Asia/Kolkata')
-                            today = datetime.now(ist).date()
-                            time_parts = trade_timestamp.split(':')
-                            trade_time = ist.localize(datetime.combine(today, time(
-                                int(time_parts[0]), 
-                                int(time_parts[1]), 
-                                int(time_parts[2]) if len(time_parts) > 2 else 0
-                            )))
-                        else:
-                            trade_time = pd.to_datetime(trade_timestamp)
-                            ist = pytz.timezone('Asia/Kolkata')
-                            if trade_time.tz is None:
-                                trade_time = trade_time.tz_localize(ist)
-                            else:
-                                trade_time = trade_time.tz_convert(ist)
-                    except Exception as e:
-                        logger.warning(f"Could not parse trade time for {trade}: {e}")
+                trade_time = parse_trade_timestamp(trade_timestamp) if trade_timestamp else None
+                if trade_timestamp and trade_time is None:
+                    logger.warning(f"Could not parse trade time for {trade['symbol']}: {trade_timestamp}")
                 
                 trade['parsed_time'] = trade_time
                 symbol_trades[symbol_key].append(trade)
@@ -416,6 +451,10 @@ def get_pnl_data():
             
             # Now get historical data and calculate PnL for each position window
             try:
+                # Apply rate limiting before API call (2 calls/sec to stay under broker's 3/sec limit)
+                history_rate_limiter.wait()
+                logger.debug(f"Fetching historical data for {symbol} on {exchange}")
+
                 success, hist_response, _ = get_history(
                     symbol=symbol,
                     exchange=exchange,
@@ -456,49 +495,65 @@ def get_pnl_data():
                             for window in position_windows_sorted:
                                 if window['start_time'] is None:
                                     continue
-                                    
+
                                 # Determine the time range for this position
                                 start = window['start_time']
                                 end = window['end_time'] if window['end_time'] else current_time
-                                
+
                                 # Create mask for this time window
                                 mask = (df_hist.index >= start) & (df_hist.index <= end)
-                                
-                                # Skip if no data points in this window
-                                if not mask.any():
-                                    logger.warning(f"No data points found for position window from {start} to {end}")
+
+                                # Handle sub-minute trades: if position is closed with entry/exit prices,
+                                # calculate realized PnL even if no historical data points exist in the window
+                                has_data_points = mask.any()
+                                is_closed_position = window['end_time'] is not None and window.get('exit_price') is not None
+
+                                if not has_data_points and not is_closed_position:
+                                    # Skip only if no data points AND position is still open
+                                    logger.warning(f"No data points found for open position window from {start} to {end}")
                                     continue
-                                
-                                # Calculate PnL for this window
-                                if window['action'] == 'BUY':
-                                    position_pnl = (df_hist.loc[mask, f'{symbol}_price'] - window['price']) * window['qty']
-                                    df_hist.loc[mask, f'{symbol}_pnl'] += position_pnl
-                                    
-                                    # If position is closed, calculate realized PnL using actual exit price
-                                    if window['end_time'] and window.get('exit_price'):
+
+                                # Calculate mark-to-market PnL for this window (only if we have data points)
+                                if has_data_points:
+                                    if window['action'] == 'BUY':
+                                        position_pnl = (df_hist.loc[mask, f'{symbol}_price'] - window['price']) * window['qty']
+                                        df_hist.loc[mask, f'{symbol}_pnl'] += position_pnl
+                                    else:  # SELL
+                                        position_pnl = (window['price'] - df_hist.loc[mask, f'{symbol}_price']) * window['qty']
+                                        df_hist.loc[mask, f'{symbol}_pnl'] += position_pnl
+
+                                # Calculate realized PnL for closed positions using actual entry/exit prices
+                                # This works even for sub-minute trades without historical data points
+                                if is_closed_position:
+                                    if window['action'] == 'BUY':
                                         realized = (window['exit_price'] - window['price']) * window['qty']
-                                        cumulative_realized_pnl += realized
-                                        logger.info(f"Closed BUY position: entry={window['price']}, exit={window['exit_price']}, "
-                                                  f"qty={window['qty']}, realized PnL={realized}")
-                                else:  # SELL
-                                    position_pnl = (window['price'] - df_hist.loc[mask, f'{symbol}_price']) * window['qty']
-                                    df_hist.loc[mask, f'{symbol}_pnl'] += position_pnl
-                                    
-                                    # If position is closed, calculate realized PnL using actual exit price
-                                    if window['end_time'] and window.get('exit_price'):
+                                    else:  # SELL
                                         realized = (window['price'] - window['exit_price']) * window['qty']
-                                        cumulative_realized_pnl += realized
-                                        logger.info(f"Closed SELL position: entry={window['price']}, exit={window['exit_price']}, "
-                                                  f"qty={window['qty']}, realized PnL={realized}")
-                                
-                                # After a position is closed, add the cumulative realized PnL to all future timestamps
-                                if window['end_time'] and cumulative_realized_pnl != 0:
+
+                                    cumulative_realized_pnl += realized
+                                    logger.info(f"Closed {window['action']} position: entry={window['price']}, exit={window['exit_price']}, "
+                                              f"qty={window['qty']}, realized PnL={realized}"
+                                              f"{' (sub-minute trade)' if not has_data_points else ''}")
+
+                                # After a position is closed, set the cumulative realized PnL for all future timestamps
+                                # IMPORTANT: Always update even when cumulative is 0 (e.g., when +225 and -225 cancel out)
+                                # Otherwise the previous non-zero value remains in the dataframe
+                                if window['end_time'] is not None:
                                     future_mask = df_hist.index > window['end_time']
-                                    df_hist.loc[future_mask, f'{symbol}_pnl'] = cumulative_realized_pnl
-                                
+                                    if future_mask.any():
+                                        df_hist.loc[future_mask, f'{symbol}_pnl'] = cumulative_realized_pnl
+                                    elif cumulative_realized_pnl != 0:
+                                        # Edge case: trade closed at/after last candle (e.g., near market close)
+                                        # Add realized PnL to the last available candle (only if non-zero)
+                                        if len(df_hist) > 0:
+                                            last_idx = df_hist.index[-1]
+                                            df_hist.loc[last_idx, f'{symbol}_pnl'] = cumulative_realized_pnl
+                                            logger.info(f"Sub-minute trade near market close: added realized PnL to last candle {last_idx}")
+
                                 logger.info(f"Position window for {symbol}: {window['action']} {window['qty']} @ {window['price']}, "
                                           f"from {start.strftime('%H:%M:%S') if start else 'None'} "
-                                          f"to {end.strftime('%H:%M:%S') if end else 'current'}")
+                                          f"to {end.strftime('%H:%M:%S') if end else 'current'}"
+                                          f"{' (no historical data in window)' if not has_data_points else ''}")
                             
                             # Add to portfolio
                             if portfolio_pnl is None:
@@ -537,6 +592,10 @@ def get_pnl_data():
                     continue
                     
                 try:
+                    # Apply rate limiting before API call (2 calls/sec to stay under broker's 3/sec limit)
+                    history_rate_limiter.wait()
+                    logger.debug(f"Fetching historical data for position {symbol} on {exchange}")
+
                     # Get historical data for this position
                     success, hist_response, _ = get_history(
                         symbol=symbol,

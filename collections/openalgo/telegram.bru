@@ -1,0 +1,20 @@
+meta {
+  name: Telegram Notify
+  type: http
+  seq: 23
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/telegram/notify
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "username": "your_openalgo_username",
+      "message": "Test alert from OpenAlgo API",
+      "priority": 5
+  }
+}

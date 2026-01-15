@@ -98,7 +98,7 @@ def check_env_version_compatibility():
             print(f"\n✅ Your .env version ({env_version}) is newer than sample ({sample_version})")
             
         else:
-            print(f"\n✅ Configuration version check passed ({env_version})")
+            print(f"\n\033[94m🔄\033[0m Configuration version check passed (\033[92m{env_version}\033[0m)")
             
     except Exception as e:
         print(f"\nWarning: Could not parse version numbers: {e}")
@@ -112,7 +112,7 @@ def load_and_check_env_variables():
     # First, check version compatibility
     if not check_env_version_compatibility():
         sys.exit(1)
-    
+
     # Define the path to the .env file in the main application path
     env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
 
@@ -207,6 +207,19 @@ def load_and_check_env_variables():
             print("  BROKER_API_SECRET = 'your_api_secret'")
             print("\nFor detailed instructions, please refer to:")
             print("  https://docs.openalgo.in/connect-brokers/brokers/flattrade")
+            sys.exit(1)
+
+    # Validate dhan API key format
+    elif broker_name == 'dhan':
+        if ':::' not in broker_api_key or broker_api_key.count(':::') != 1:
+            print("\nError: Invalid Dhan API key format detected!")
+            print("The BROKER_API_KEY for Dhan must be in the format:")
+            print("  BROKER_API_KEY = 'client_id:::api_key'")
+            print("\nExample:")
+            print("  BROKER_API_KEY = '1234567890:::your_dhan_apikey'")
+            print("  BROKER_API_SECRET = 'your_dhan_apisecret'")
+            print("\nFor detailed instructions, please refer to:")
+            print("  https://docs.openalgo.in/connect-brokers/brokers/dhan")
             sys.exit(1)
 
     # Validate environment variable values

@@ -1,0 +1,18 @@
+meta {
+  name: Market Holidays
+  type: http
+  seq: 15
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/market/holidays
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "year": 2025
+  }
+}

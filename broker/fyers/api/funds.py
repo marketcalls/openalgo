@@ -5,6 +5,8 @@ import json
 from typing import Dict, Any, Optional
 import httpx
 from utils.httpx_client import get_httpx_client
+from broker.fyers.api.order_api import get_positions
+from broker.fyers.mapping.order_data import map_position_data
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -101,13 +103,26 @@ def get_margin_data(auth_token: str) -> Dict[str, str]:
             utilized_equity = float(utilized.get('equity_amount', 0))
             utilized_commodity = float(utilized.get('commodity_amount', 0))
             total_utilized = utilized_equity + utilized_commodity
-            
+
+            # Get unrealized P&L from position book
+            position_book_raw = get_positions(auth_token)
+            logger.info(f"Fyers position book raw response: {json.dumps(position_book_raw, indent=2)}")
+            position_book = map_position_data(position_book_raw)
+            logger.info(f"Fyers position book mapped: {position_book}")
+
+            def sum_realised_unrealised(position_book):
+                total_realised = sum(float(position.get('realized_profit', 0)) for position in position_book)
+                total_unrealised = sum(float(position.get('unrealized_profit', 0)) for position in position_book)
+                return total_realised, total_unrealised
+
+            total_realised, total_unrealised = sum_realised_unrealised(position_book)
+
             # Format and return the response
             return {
                 "availablecash": "{:.2f}".format(total_balance),
                 "collateral": "{:.2f}".format(total_collateral),
-                "m2munrealized": "{:.2f}".format(total_collateral),  # Using collateral as unrealized M2M
-                "m2mrealized": "{:.2f}".format(total_real_pnl),
+                "m2munrealized": "{:.2f}".format(total_unrealised),
+                "m2mrealized": "{:.2f}".format(total_realised),
                 "utiliseddebits": "{:.2f}".format(total_utilized)
             }
             

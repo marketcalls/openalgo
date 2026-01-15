@@ -14,22 +14,29 @@ def format_decimal(value):
     return value
 
 def format_order_data(order_data):
-    """Format all numeric values in order data to 2 decimal places and adjust price for market orders"""
+    """Format all numeric values in order data to 2 decimal places and adjust price for market orders, except quantity fields"""
+    # Fields that should remain as integers
+    quantity_fields = {'quantity', 'qty', 'filledqty', 'filled_quantity', 'tradedqty', 'traded_quantity', 'pendingqty', 'pending_quantity', 'unfilledqty', 'unfilled_quantity'}
+
     if isinstance(order_data, list):
         formatted_orders = []
         for item in order_data:
             formatted_item = {}
             for key, value in item.items():
                 if isinstance(value, (int, float)):
-                    formatted_item[key] = format_decimal(value)
+                    # Keep quantity fields as integers
+                    if key.lower() in quantity_fields:
+                        formatted_item[key] = int(value)
+                    else:
+                        formatted_item[key] = format_decimal(value)
                 else:
                     formatted_item[key] = value
-            
+
             # Set price to 0 for market orders, keep actual price for limit orders
             pricetype = formatted_item.get('pricetype', '').upper()
             if pricetype == 'MARKET':
                 formatted_item['price'] = 0.0
-            
+
             formatted_orders.append(formatted_item)
         return formatted_orders
     return order_data
@@ -75,20 +82,37 @@ def import_broker_module(broker_name: str) -> Optional[Dict[str, Any]]:
         logger.error(f"Error importing broker modules: {error}")
         return None
 
-def get_orderbook_with_auth(auth_token: str, broker: str) -> Tuple[bool, Dict[str, Any], int]:
+def get_orderbook_with_auth(auth_token: str, broker: str, original_data: Dict[str, Any] = None) -> Tuple[bool, Dict[str, Any], int]:
     """
     Get order book details using provided auth token.
-    
+
     Args:
         auth_token: Authentication token for the broker API
         broker: Name of the broker
-        
+        original_data: Original request data (for sandbox mode, optional for internal calls)
+
     Returns:
         Tuple containing:
         - Success status (bool)
         - Response data (dict)
         - HTTP status code (int)
     """
+    # If in analyze mode AND we have original_data (API call), route to sandbox
+    # If original_data is None (internal call), use live broker
+    from database.settings_db import get_analyze_mode
+    if get_analyze_mode() and original_data:
+        from services.sandbox_service import sandbox_get_orderbook
+
+        api_key = original_data.get('apikey')
+        if not api_key:
+            return False, {
+                'status': 'error',
+                'message': 'API key required for sandbox mode',
+                'mode': 'analyze'
+            }, 400
+
+        return sandbox_get_orderbook(api_key, original_data)
+
     broker_funcs = import_broker_module(broker)
     if broker_funcs is None:
         return False, {
@@ -158,11 +182,12 @@ def get_orderbook(
                 'status': 'error',
                 'message': 'Invalid openalgo apikey'
             }, 403
-        return get_orderbook_with_auth(AUTH_TOKEN, broker_name)
-    
+        original_data = {'apikey': api_key}
+        return get_orderbook_with_auth(AUTH_TOKEN, broker_name, original_data)
+
     # Case 2: Direct internal call with auth_token and broker
     elif auth_token and broker:
-        return get_orderbook_with_auth(auth_token, broker)
+        return get_orderbook_with_auth(auth_token, broker, None)
     
     # Case 3: Invalid parameters
     else:

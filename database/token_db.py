@@ -14,6 +14,7 @@ from database.token_db_enhanced import (
     get_oa_symbol,
     get_br_symbol,
     get_brexchange,
+    get_symbol_info,
     get_symbol_count,
     # Additional functions for backward compatibility
     get_token_dbquery,
@@ -21,6 +22,9 @@ from database.token_db_enhanced import (
     get_oa_symbol_dbquery,
     get_br_symbol_dbquery,
     get_brexchange_dbquery,
+    get_symbol_info_dbquery,
+    # Data types
+    SymbolData,
     # New bulk operations (optional - won't break existing code)
     get_tokens_bulk,
     get_symbols_bulk,
@@ -43,13 +47,17 @@ __all__ = [
     'get_oa_symbol',
     'get_br_symbol',
     'get_brexchange',
+    'get_symbol_info',
     'get_symbol_count',
     'get_token_dbquery',
     'get_symbol_dbquery',
     'get_oa_symbol_dbquery',
     'get_br_symbol_dbquery',
     'get_brexchange_dbquery',
+    'get_symbol_info_dbquery',
     'token_cache',  # For backward compatibility
+    # Data types
+    'SymbolData',
     # New functions (won't affect existing code)
     'get_tokens_bulk',
     'get_symbols_bulk',

@@ -51,6 +51,7 @@
     <!-- Tab Navigation -->
     <div class="tabs tabs-boxed mb-8 justify-center">
         <a class="tab tab-active" data-tab="account">Account & Password</a>
+        <a class="tab" data-tab="theme">Theme Preferences</a>
         <a class="tab" data-tab="smtp">SMTP Configuration</a>
         <a class="tab" data-tab="totp">TOTP Authentication</a>
     </div>
@@ -174,6 +175,49 @@
                         </button>
                     </div>
                 </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Theme Preferences Tab -->
+    <div id="theme-tab" class="tab-content hidden">
+        <!-- Mode Check Alert -->
+        <div id="theme-mode-alert" class="alert alert-warning mb-6 hidden">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+            </svg>
+            <div>
+                <h3 class="font-bold">Theme Selection Only Available in Live Mode</h3>
+                <div class="text-sm">Please switch to Live Mode to change your theme preferences.</div>
+            </div>
+        </div>
+
+        <!-- Current Theme Display -->
+        <div class="card bg-base-100 shadow-lg mb-6">
+            <div class="card-body p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <div>
+                        <h3 class="font-semibold text-lg">Current Theme</h3>
+                        <p class="text-sm text-base-content/70">Active: <span class="font-bold" id="current-theme-badge">light</span></p>
+                    </div>
+                    <div class="flex gap-2">
+                        <div class="w-8 h-8 rounded-md bg-primary"></div>
+                        <div class="w-8 h-8 rounded-md bg-secondary"></div>
+                        <div class="w-8 h-8 rounded-md bg-accent"></div>
+                        <div class="w-8 h-8 rounded-md bg-success"></div>
+                        <div class="w-8 h-8 rounded-md bg-error"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Theme Grid -->
+        <div class="card bg-base-100 shadow-lg">
+            <div class="card-body">
+                <h3 class="font-semibold text-lg mb-4">Select Theme</h3>
+                <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3" id="theme-grid">
+                    <!-- Themes will be populated by JavaScript -->
+                </div>
             </div>
         </div>
     </div>
@@ -826,6 +870,104 @@ document.addEventListener('DOMContentLoaded', function() {
             alert(message);
         }
     }
+});
+
+// Theme Preferences Functionality
+document.addEventListener('DOMContentLoaded', function() {
+    const themeModeAlert = document.getElementById('theme-mode-alert');
+    const currentThemeBadge = document.getElementById('current-theme-badge');
+    const themeGrid = document.getElementById('theme-grid');
+
+    // All available themes
+    const allThemes = [
+        'light', 'dark', 'cupcake', 'bumblebee', 'emerald', 'corporate',
+        'synthwave', 'retro', 'cyberpunk', 'valentine', 'halloween', 'garden',
+        'aqua', 'lofi', 'pastel', 'fantasy', 'wireframe',
+        'luxury', 'dracula', 'cmyk', 'autumn', 'business', 'acid', 'lemonade',
+        'night', 'coffee', 'winter', 'dim', 'nord', 'sunset'
+    ];
+
+    function isLiveMode() {
+        const modeController = document.querySelector('.mode-controller');
+        return modeController ? !modeController.checked : true;
+    }
+
+    function getCurrentTheme() {
+        return document.documentElement.getAttribute('data-theme') || 'light';
+    }
+
+    function updateCurrentThemeDisplay() {
+        const currentTheme = getCurrentTheme();
+        if (currentThemeBadge) {
+            currentThemeBadge.textContent = currentTheme;
+        }
+        // Update active state in grid
+        document.querySelectorAll('.theme-card').forEach(card => {
+            if (card.dataset.theme === currentTheme) {
+                card.classList.add('ring-2', 'ring-primary');
+            } else {
+                card.classList.remove('ring-2', 'ring-primary');
+            }
+        });
+    }
+
+    function applyTheme(themeName) {
+        // Check if in analyze mode using themeManager if available
+        const inAnalyzeMode = window.themeManager && typeof window.themeManager.isAnalyzeMode === 'function'
+            ? window.themeManager.isAnalyzeMode()
+            : !isLiveMode();
+
+        if (inAnalyzeMode) {
+            showToast('Cannot change theme while in Analyze Mode', 'error');
+            return;
+        }
+
+        if (themeName === 'dracula') {
+            showToast('Dracula theme is reserved for Analyze Mode', 'info');
+            return;
+        }
+
+        if (window.themeManager && typeof window.themeManager.setTheme === 'function') {
+            window.themeManager.setTheme(themeName, true);
+        } else {
+            document.documentElement.setAttribute('data-theme', themeName);
+            localStorage.setItem('theme', themeName);
+        }
+        updateCurrentThemeDisplay();
+        showToast(`Theme changed to ${themeName}`, 'success');
+    }
+
+    // Populate theme grid
+    if (themeGrid) {
+        allThemes.forEach(theme => {
+            const card = document.createElement('button');
+            card.className = 'theme-card btn btn-sm btn-outline justify-start normal-case h-auto py-2';
+            card.dataset.theme = theme;
+            card.textContent = theme;
+            card.addEventListener('click', () => applyTheme(theme));
+            themeGrid.appendChild(card);
+        });
+        updateCurrentThemeDisplay();
+    }
+
+    // Update UI based on mode
+    function updateThemeUIBasedOnMode() {
+        if (!isLiveMode()) {
+            if (themeModeAlert) themeModeAlert.classList.remove('hidden');
+        } else {
+            if (themeModeAlert) themeModeAlert.classList.add('hidden');
+        }
+    }
+
+    const modeController = document.querySelector('.mode-controller');
+    if (modeController) {
+        modeController.addEventListener('change', () => setTimeout(updateThemeUIBasedOnMode, 100));
+    }
+
+    updateThemeUIBasedOnMode();
+
+    // Update theme display periodically
+    setInterval(updateCurrentThemeDisplay, 1000);
 });
 </script>
 {% endblock %}

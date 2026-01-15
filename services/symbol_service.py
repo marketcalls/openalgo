@@ -44,6 +44,10 @@ def get_symbol_info_with_auth(
             }
             return False, error_response, 404
         
+        # Get freeze quantity
+        from database.qty_freeze_db import get_freeze_qty_for_option
+        freeze_qty = get_freeze_qty_for_option(result.symbol, result.exchange)
+
         # Transform the SymToken object to a dictionary
         symbol_info = {
             'id': result.id,
@@ -57,7 +61,8 @@ def get_symbol_info_with_auth(
             'strike': result.strike,
             'lotsize': result.lotsize,
             'instrumenttype': result.instrumenttype,
-            'tick_size': result.tick_size
+            'tick_size': result.tick_size,
+            'freeze_qty': freeze_qty
         }
         
         response_data = {

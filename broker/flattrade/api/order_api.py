@@ -40,16 +40,24 @@ def get_api_response(endpoint, auth, method="GET", payload=''):
     return json.loads(data)
 
 def get_order_book(auth):
-    return get_api_response("/PiConnectTP/OrderBook",auth,method="POST")
+    response = get_api_response("/PiConnectTP/OrderBook",auth,method="POST")
+    logger.debug(f"Flattrade OrderBook Response: {response}")
+    return response
 
 def get_trade_book(auth):
-    return get_api_response("/PiConnectTP/TradeBook",auth,method="POST")
+    response = get_api_response("/PiConnectTP/TradeBook",auth,method="POST")
+    logger.debug(f"Flattrade TradeBook Response: {response}")
+    return response
 
 def get_positions(auth):
-    return get_api_response("/PiConnectTP/PositionBook",auth,method="POST")
+    response = get_api_response("/PiConnectTP/PositionBook",auth,method="POST")
+    logger.debug(f"Flattrade PositionBook Response: {response}")
+    return response
 
 def get_holdings(auth):
-    return get_api_response("/PiConnectTP/Holdings",auth,method="POST")
+    response = get_api_response("/PiConnectTP/Holdings",auth,method="POST")
+    logger.debug(f"Flattrade Holdings Response: {response}")
+    return response
 
 def get_open_position(tradingsymbol, exchange, producttype,auth):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
@@ -80,7 +88,7 @@ def place_order_api(data,auth):
     BROKER_API_KEY = full_api_key.split(':::')[0]
     data['apikey'] = BROKER_API_KEY
     token = get_token(data['symbol'], data['exchange'])
-    newdata = transform_data(data, token)  
+    newdata = transform_data(data, token, AUTH_TOKEN)
     headers = {'Content-Type': 'application/x-www-form-urlencoded'}
 
     payload = "jData=" + json.dumps(newdata) + "&jKey=" + AUTH_TOKEN
@@ -288,18 +296,23 @@ def modify_order(data,auth):
     data['symbol'] = get_br_symbol(data['symbol'],data['exchange'])
     data["apikey"] = api_key
 
-    transformed_data = transform_modify_order_data(data, token)  # You need to implement this function
+    transformed_data = transform_modify_order_data(data, token)
     # Set up the request headers
-    headers = {'Content-Type': 'application/json'}
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
     payload = "jData=" + json.dumps(transformed_data) + "&jKey=" + AUTH_TOKEN
 
+    logger.info(f"Modify Order Payload: {payload}")
+    logger.info(f"Modify Order Data: {transformed_data}")
 
     # Get the shared httpx client
     client = get_httpx_client()
-    
+
     url = "https://piconnect.flattrade.in/PiConnectTP/ModifyOrder"
     res = client.post(url, content=payload, headers=headers)
     response = res.json()
+
+    logger.info(f"Modify Order Response: {response}")
+    logger.info(f"Modify Order Status Code: {res.status_code}")
 
     if response.get("stat")=='Ok':
         return {"status": "success", "orderid": data["orderid"]}, 200

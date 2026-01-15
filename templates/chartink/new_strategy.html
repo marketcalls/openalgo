@@ -21,10 +21,10 @@
                         <span class="label-text-alt text-error">*</span>
                     </label>
                     <div class="join w-full">
-                        <div class="join-item flex items-center px-4 bg-base-200 border border-r-0 rounded-l-lg">
+                        <span class="join-item flex items-center px-4 bg-base-200">
                             chartink_
-                        </div>
-                        <input type="text" name="name" class="input input-bordered join-item rounded-l-none w-full" required 
+                        </span>
+                        <input type="text" name="name" class="input input-bordered join-item flex-1" required
                                placeholder="Enter strategy name"
                                pattern="[A-Za-z0-9\s\-_]+"
                                title="Only letters, numbers, spaces, hyphens and underscores allowed">
@@ -34,12 +34,12 @@
                     </label>
                 </div>
 
-                <div class="form-control">
+                <div class="form-control w-full">
                     <label class="label">
                         <span class="label-text">Strategy Type</span>
                         <span class="label-text-alt text-error">*</span>
                     </label>
-                    <select name="type" class="select select-bordered" id="strategyType" required>
+                    <select name="type" class="select select-bordered w-full" id="strategyType" required>
                         <option value="intraday">Intraday</option>
                         <option value="positional">Positional</option>
                     </select>
@@ -50,36 +50,36 @@
 
                 <div id="intradaySettings" class="space-y-4">
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div class="form-control">
+                        <div class="form-control w-full">
                             <label class="label">
                                 <span class="label-text">Start Time</span>
                                 <span class="label-text-alt text-error">*</span>
                             </label>
-                            <input type="time" name="start_time" class="input input-bordered"
+                            <input type="time" name="start_time" class="input input-bordered w-full"
                                    value="09:15">
                             <label class="label">
                                 <span class="label-text-alt">When to start taking trades</span>
                             </label>
                         </div>
 
-                        <div class="form-control">
+                        <div class="form-control w-full">
                             <label class="label">
                                 <span class="label-text">End Time</span>
                                 <span class="label-text-alt text-error">*</span>
                             </label>
-                            <input type="time" name="end_time" class="input input-bordered"
+                            <input type="time" name="end_time" class="input input-bordered w-full"
                                    value="15:00">
                             <label class="label">
                                 <span class="label-text-alt">Last trade entry time</span>
                             </label>
                         </div>
 
-                        <div class="form-control">
+                        <div class="form-control w-full">
                             <label class="label">
                                 <span class="label-text">Square Off Time</span>
                                 <span class="label-text-alt text-error">*</span>
                             </label>
-                            <input type="time" name="squareoff_time" class="input input-bordered"
+                            <input type="time" name="squareoff_time" class="input input-bordered w-full"
                                    value="15:15">
                             <label class="label">
                                 <span class="label-text-alt">Auto square off time</span>

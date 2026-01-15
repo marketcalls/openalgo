@@ -90,27 +90,39 @@ def get_histogram_data(broker=None):
         }
 
 def generate_csv(logs):
-    """Generate CSV file from latency logs"""
+    """Generate CSV file from latency logs with trader-friendly column names"""
     output = io.StringIO()
     writer = csv.writer(output)
-    
-    # Write header
-    writer.writerow(['Timestamp', 'Broker', 'Order ID', 'Symbol', 'Order Type', 'RTT (ms)', 'Overhead (ms)', 'Total Latency (ms)', 'Status'])
-    
+
+    # Write header with accurate, trader-friendly names
+    writer.writerow([
+        'Date & Time (IST)',
+        'Broker',
+        'Order ID',
+        'Symbol',
+        'Order Type',
+        'Broker Confirmation (ms)',
+        'Platform Overhead (ms)',
+        'Total Latency (ms)',
+        'Status',
+        'Error (if any)'
+    ])
+
     # Write data
     for log in logs:
         writer.writerow([
             format_ist_time(log.timestamp),
-            log.broker,
+            log.broker or 'N/A',
             log.order_id,
-            log.symbol,
+            log.symbol or 'N/A',
             log.order_type,
             round(log.rtt_ms, 2),
             round(log.overhead_ms, 2),
             round(log.total_latency_ms, 2),
-            log.status
+            log.status,
+            log.error or ''
         ])
-    
+
     return output.getvalue()
 
 @latency_bp.route('/', methods=['GET'])
@@ -120,23 +132,40 @@ def latency_dashboard():
     """Display latency monitoring dashboard"""
     stats = OrderLatency.get_latency_stats()
     recent_logs = OrderLatency.get_recent_logs(limit=100)
-    
+
     # Get histogram data for each broker
     broker_histograms = {}
     brokers = [b[0] for b in OrderLatency.query.with_entities(OrderLatency.broker).distinct().all()]
     for broker in brokers:
         if broker:  # Skip None values
             broker_histograms[broker] = get_histogram_data(broker)
-    
+
     # logger.info(f"Broker histograms data: {broker_histograms}")  # Commented out to reduce log verbosity
-    
-    # Format timestamps in IST
+
+    # Format timestamps in IST and convert to JSON-serializable format
+    logs_json = []
     for log in recent_logs:
         log.formatted_timestamp = format_ist_time(log.timestamp)
-    
+        logs_json.append({
+            'id': log.id,
+            'order_id': log.order_id,
+            'broker': log.broker,
+            'symbol': log.symbol,
+            'order_type': log.order_type,
+            'rtt_ms': log.rtt_ms,
+            'validation_latency_ms': log.validation_latency_ms,
+            'response_latency_ms': log.response_latency_ms,
+            'overhead_ms': log.overhead_ms,
+            'total_latency_ms': log.total_latency_ms,
+            'status': log.status,
+            'error': log.error,
+            'timestamp': convert_to_ist(log.timestamp).isoformat()
+        })
+
     return render_template('latency/dashboard.html',
                          stats=stats,
                          logs=recent_logs,
+                         logs_json=logs_json,
                          broker_histograms=broker_histograms)
 
 @latency_bp.route('/api/logs', methods=['GET'])

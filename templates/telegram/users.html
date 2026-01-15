@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mx-auto p-4">
+    <!-- Header -->
+    <div class="flex justify-between items-center mb-6">
+        <h1 class="text-3xl font-bold">Telegram Users</h1>
+        <a href="{{ url_for('telegram_bp.index') }}" class="btn btn-ghost">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
+            </svg>
+            Back to Dashboard
+        </a>
+    </div>
+
+    <!-- Statistics Summary -->
+    <div class="stats shadow mb-6 w-full">
+        <div class="stat">
+            <div class="stat-title">Total Users</div>
+            <div class="stat-value">{{ users|length }}</div>
+            <div class="stat-desc">Linked accounts</div>
+        </div>
+        <div class="stat">
+            <div class="stat-title">Active Users</div>
+            <div class="stat-value">{{ users|selectattr('notifications_enabled')|list|length }}</div>
+            <div class="stat-desc">Notifications enabled</div>
+        </div>
+        <div class="stat">
+            <div class="stat-title">Total Commands (30d)</div>
+            <div class="stat-value">{{ stats.total_commands }}</div>
+            <div class="stat-desc">Last 30 days</div>
+        </div>
+    </div>
+
+    <!-- Users Table -->
+    <div class="card bg-base-100 shadow-xl">
+        <div class="card-body">
+            <h2 class="card-title text-xl mb-4">Linked Users</h2>
+
+            {% if users %}
+            <div class="overflow-x-auto">
+                <table class="table table-zebra">
+                    <thead>
+                        <tr>
+                            <th>Telegram Username</th>
+                            <th>OpenAlgo Username</th>
+                            <th>Name</th>
+                            <th>Broker</th>
+                            <th>Notifications</th>
+                            <th>Linked Since</th>
+                            <th>Last Activity</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for user in users %}
+                        <tr>
+                            <td>
+                                {% if user.telegram_username %}
+                                @{{ user.telegram_username }}
+                                {% else %}
+                                <span class="text-gray-500">Not set</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <span class="font-semibold">{{ user.openalgo_username }}</span>
+                            </td>
+                            <td>
+                                {{ user.first_name }} {{ user.last_name or '' }}
+                            </td>
+                            <td>
+                                <span class="badge badge-info">{{ user.broker }}</span>
+                            </td>
+                            <td>
+                                {% if user.notifications_enabled %}
+                                <span class="badge badge-success">Enabled</span>
+                                {% else %}
+                                <span class="badge badge-error">Disabled</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <span class="text-sm">{{ user.created_at.strftime('%Y-%m-%d %H:%M') if user.created_at else 'N/A' }}</span>
+                            </td>
+                            <td>
+                                {% if user.last_command_at %}
+                                <span class="text-sm">{{ user.last_command_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                                {% else %}
+                                <span class="text-gray-500">Never</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="flex gap-2">
+                                    <button onclick="sendMessage({{ user.telegram_id }}, '{{ user.first_name }}')"
+                                            class="btn btn-sm btn-primary">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                            <path d="M2 5a2 2 0 012-2h7a2 2 0 012 2v4a2 2 0 01-2 2H9l-3 3v-3H4a2 2 0 01-2-2V5z" />
+                                        </svg>
+                                    </button>
+                                    <button onclick="unlinkUser({{ user.telegram_id }}, '{{ user.first_name }}')"
+                                            class="btn btn-sm btn-error">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="alert alert-info">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+                <span>No users have linked their Telegram accounts yet.</span>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Top Active Users -->
+    {% if stats.top_users %}
+    <div class="card bg-base-100 shadow-xl mt-6">
+        <div class="card-body">
+            <h2 class="card-title text-xl mb-4">Most Active Users (30 days)</h2>
+            <div class="overflow-x-auto">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Rank</th>
+                            <th>Username</th>
+                            <th>Commands</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for username, count in stats.top_users[:10] %}
+                        <tr>
+                            <td>{{ loop.index }}</td>
+                            <td>@{{ username or 'Unknown' }}</td>
+                            <td>{{ count }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Send Message Modal -->
+<dialog id="send_message_modal" class="modal">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg mb-4">Send Message</h3>
+        <div class="form-control">
+            <label class="label">
+                <span class="label-text">To: <span id="recipient_name"></span></span>
+            </label>
+            <textarea id="message_content" class="textarea textarea-bordered h-32"
+                      placeholder="Enter your message..."></textarea>
+        </div>
+        <div class="modal-action">
+            <button class="btn" onclick="send_message_modal.close()">Cancel</button>
+            <button class="btn btn-primary" onclick="confirmSendMessage()">Send</button>
+        </div>
+    </div>
+    <form method="dialog" class="modal-backdrop">
+        <button>close</button>
+    </form>
+</dialog>
+
+<script>
+let selectedUserId = null;
+
+function sendMessage(userId, userName) {
+    selectedUserId = userId;
+    document.getElementById('recipient_name').textContent = userName;
+    document.getElementById('message_content').value = '';
+    send_message_modal.showModal();
+}
+
+async function confirmSendMessage() {
+    const message = document.getElementById('message_content').value;
+
+    if (!message.trim()) {
+        showToast('Please enter a message', 'warning');
+        return;
+    }
+
+    try {
+        const response = await fetchWithCSRF('/telegram/send-message', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                telegram_id: selectedUserId,
+                message: message
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            showToast('Message sent successfully', 'success');
+            send_message_modal.close();
+        } else {
+            showToast(data.message || 'Failed to send message', 'error');
+        }
+    } catch (error) {
+        showToast('Error sending message', 'error');
+    }
+}
+
+async function unlinkUser(userId, userName) {
+    if (!confirm(`Are you sure you want to unlink ${userName}'s Telegram account?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetchWithCSRF(`/telegram/user/${userId}/unlink`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'}
+        });
+
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            showToast('User unlinked successfully', 'success');
+            setTimeout(() => location.reload(), 1500);
+        } else {
+            showToast(data.message || 'Failed to unlink user', 'error');
+        }
+    } catch (error) {
+        showToast('Error unlinking user', 'error');
+    }
+}
+</script>
+{% endblock %}

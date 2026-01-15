@@ -11,14 +11,15 @@ def authenticate_broker(request_token):
     The authentication flow works as follows:
     1. Navigate to Paytm Money API endpoint: https://login.paytmmoney.com/merchant-login?apiKey={api_key}&state={state_key}
     2. After successful login, a request_token is returned as URL parameter to the registered redirect URL
-    3. Use the request_token to generate an access_token
+    3. Use the request_token to generate tokens
 
     Args:
-        code: The request token received from the redirect URL after successful login
+        request_token: The request token received from the redirect URL after successful login
 
     Returns:
-        tuple: (access_token, error_message)
-            - access_token: The token to use for subsequent API calls
+        tuple: (access_token, feed_token, error_message)
+            - access_token: The token to use for REST API calls
+            - feed_token: The public_access_token for WebSocket streaming
             - error_message: Error details if authentication fails, None on success
     """
     try:
@@ -37,14 +38,30 @@ def authenticate_broker(request_token):
 
         if response.status_code == 200:
             response_data = response.json()
-            if 'access_token' in response_data:
-                logger.debug("Successfully authenticated and received access token.")
-                return response_data['access_token'], None
+            logger.debug(f"Token: {response_data}")
+
+            # Paytm returns multiple tokens:
+            # - access_token: For REST API calls
+            # - public_access_token: For WebSocket streaming (stored as feed_token)
+            # - read_access_token: For read-only operations
+
+            if 'access_token' in response_data and 'public_access_token' in response_data:
+                logger.debug("Successfully authenticated and received tokens.")
+                access_token = response_data['access_token']
+                public_access_token = response_data['public_access_token']
+
+                # Return access_token and public_access_token as feed_token
+                return access_token, public_access_token, None
+            elif 'access_token' in response_data:
+                # Fallback if public_access_token is not present
+                logger.warning("public_access_token not found in response, using access_token for both")
+                access_token = response_data['access_token']
+                return access_token, access_token, None
             else:
                 error_msg = "Authentication succeeded but no access token was returned."
                 logger.error(error_msg)
                 logger.debug(f"Full response: {response_data}")
-                return None, error_msg
+                return None, None, error_msg
         else:
             # Parsing the error message from the API response
             try:
@@ -56,7 +73,7 @@ def authenticate_broker(request_token):
                 error_msg = f"Authentication failed with status code {response.status_code} and non-JSON response: {response.text}"
 
             logger.error(f"Authentication failed with status code {response.status_code}. Error: {error_msg}")
-            return None, error_msg
+            return None, None, error_msg
     except Exception:
         logger.exception("An exception occurred during authentication.")
-        return None, "An unexpected error occurred during authentication."
+        return None, None, "An unexpected error occurred during authentication."

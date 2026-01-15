@@ -39,11 +39,15 @@ def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dic
     # Log to analyzer database
     log_executor.submit(async_log_analyzer, analyzer_request, error_response, 'orderstatus')
     
-    # Emit socket event
-    socketio.emit('analyzer_update', {
+    # Emit socket event asynchronously (non-blocking)
+    socketio.start_background_task(
+        socketio.emit,
+        'analyzer_update',
+        {
         'request': analyzer_request,
         'response': error_response
-    })
+    }
+    )
     
     return error_response
 
@@ -77,44 +81,21 @@ def get_order_status_with_auth(
     orderid = status_data.get('orderid')
     logger.info(f"[OrderStatus] Processing order status request - Mode: {'ANALYZE' if is_analyze_mode else 'LIVE'}, OrderID: {orderid}, Broker: {broker}")
     
-    # In analyze mode, return hardcoded response for any order ID
+    # In analyze mode, route to sandbox for real order status
     if is_analyze_mode and orderid:
-        # Return hardcoded response for any order ID in analyzer mode
-        logger.info(f"[OrderStatus] Returning hardcoded response for order ID {orderid} in analyzer mode")
-        
-        response_data = {
-            'mode': 'analyze',
-            'status': 'success',
-            'data': {
-                'action': 'BUY',
-                'average_price': 100.00,
-                'exchange': 'NSE',
-                'order_status': 'complete',
-                'orderid': str(orderid),  # Use the actual order ID from request
-                'price': 100.00,
-                'pricetype': 'MARKET',
-                'product': 'MIS',
-                'quantity': '1',
-                'symbol': 'SBIN',
-                'timestamp': '28-Aug-2025 09:59:10',
-                'trigger_price': 99.75
-            }
-        }
-        
-        # Store complete request data without apikey
-        analyzer_request = request_data.copy()
-        analyzer_request['api_type'] = 'orderstatus'
-        
-        # Log to analyzer database
-        log_executor.submit(async_log_analyzer, analyzer_request, response_data, 'orderstatus')
-        
-        # Emit socket event for toast notification
-        socketio.emit('analyzer_update', {
-            'request': analyzer_request,
-            'response': response_data
-        })
-        
-        return True, response_data, 200
+        from services.sandbox_service import sandbox_get_order_status
+
+        logger.info(f"[OrderStatus] Routing to sandbox for order ID {orderid} in analyzer mode")
+
+        api_key = original_data.get('apikey')
+        if not api_key:
+            return False, {
+                'status': 'error',
+                'message': 'API key required for sandbox mode',
+                'mode': 'analyze'
+            }, 400
+
+        return sandbox_get_order_status(status_data, api_key, original_data)
     
     # For live mode or real orders in analyze mode, fetch from orderbook
     # Both analyze mode and live mode use the same logic - fetch from orderbook
@@ -142,11 +123,15 @@ def get_order_status_with_auth(
             error_response['mode'] = 'analyze'
             # Log to analyzer database
             log_executor.submit(async_log_analyzer, request_data, error_response, 'orderstatus')
-            # Emit socket event
-            socketio.emit('analyzer_update', {
+            # Emit socket event asynchronously (non-blocking)
+            socketio.start_background_task(
+                socketio.emit,
+                'analyzer_update',
+                {
                 'request': request_data,
                 'response': error_response
-            })
+            }
+            )
         else:
             log_executor.submit(async_log_order, 'orderstatus', original_data, error_response)
         return False, error_response, status_code
@@ -185,11 +170,15 @@ def get_order_status_with_auth(
             error_response['mode'] = 'analyze'
             # Log to analyzer database
             log_executor.submit(async_log_analyzer, request_data, error_response, 'orderstatus')
-            # Emit socket event
-            socketio.emit('analyzer_update', {
+            # Emit socket event asynchronously (non-blocking)
+            socketio.start_background_task(
+                socketio.emit,
+                'analyzer_update',
+                {
                 'request': request_data,
                 'response': error_response
-            })
+            }
+            )
         else:
             log_executor.submit(async_log_order, 'orderstatus', original_data, error_response)
         return False, error_response, 404
@@ -264,11 +253,15 @@ def get_order_status_with_auth(
         log_executor.submit(async_log_analyzer, analyzer_request, response_data, 'orderstatus')
         logger.debug(f"[OrderStatus] Logged to analyzer database")
         
-        # Emit socket event for toast notification
-        socketio.emit('analyzer_update', {
+        # Emit socket event for toast notification asynchronously (non-blocking)
+        socketio.start_background_task(
+            socketio.emit,
+            'analyzer_update',
+            {
             'request': analyzer_request,
             'response': response_data
-        })
+        }
+        )
         logger.debug(f"[OrderStatus] Emitted socket event for analyzer update")
     else:
         logger.info(f"[OrderStatus] LIVE mode - Preparing response for OrderID {orderid} with status: {order_found.get('order_status')}")

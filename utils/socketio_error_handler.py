@@ -55,4 +55,4 @@ def init_socketio_error_handling(socketio_instance):
         logger.error(f"Socket.IO error: {e}")
         return True  # Let the error propagate
     
-    logger.info("Socket.IO error handling initialized")
+    logger.debug("Socket.IO error handling initialized")

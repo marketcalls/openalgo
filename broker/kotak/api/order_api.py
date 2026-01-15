@@ -1,4 +1,4 @@
-import http.client
+import httpx
 import json
 import urllib.parse
 import os
@@ -6,44 +6,50 @@ from database.auth_db import get_auth_token
 from database.token_db import get_token , get_br_symbol, get_symbol
 from broker.kotak.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data, reverse_map_exchange,map_exchange
 from utils.logging import get_logger
-
-logger = get_logger(__name__)
-
+from utils.httpx_client import get_httpx_client
 
 logger = get_logger(__name__)
 
 def get_api_response(endpoint, auth_token, method="GET", payload=''):
+    """
+    Updated for Kotak Neo API v2 - uses dynamic baseUrl, httpx connection pooling, and new header structure
+    """
+    session_token, session_sid, base_url, access_token = auth_token.split(":::")
 
-    token, sid, hsServerId, access_token = auth_token.split(":::")
+    # Debug logging for baseUrl
+    logger.info(f"ORDER API - Using baseUrl: {base_url}")
 
-    conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
-    payload = ''
-    query_params = {"sId": hsServerId}
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+
     headers = {
-    'accept': 'application/json',
-    'Sid': sid,
-    'Auth': token,
-    'neo-fin-key': 'neotradeapi',
-    'Authorization': f'Bearer {access_token}'
+        'accept': 'application/json',
+        'Sid': session_sid,
+        'Auth': session_token,
+        'neo-fin-key': 'neotradeapi'
     }
-    conn.request(method, f"{endpoint}?" + urllib.parse.urlencode(query_params), payload, headers)
-    res = conn.getresponse()
-    data = res.read()
-    logger.info(f"{data.decode('utf-8')}")
-        
-    return json.loads(data.decode("utf-8"))
+
+    # Construct full URL
+    url = f"{base_url}{endpoint}"
+
+    # Make request using httpx
+    response = client.request(method, url, headers=headers, content=payload if payload else None)
+
+    logger.info(f"ORDER API Response: {response.text}")
+
+    return json.loads(response.text)
 
 def get_order_book(auth_token):
-    return get_api_response("/Orders/2.0/quick/user/orders", auth_token)
+    return get_api_response("/quick/user/orders", auth_token)
 
 def get_trade_book(auth_token):
-    return get_api_response("/Orders/2.0/quick/user/trades", auth_token)
+    return get_api_response("/quick/user/trades", auth_token)
 
 def get_positions(auth_token):
-    return get_api_response("/Orders/2.0/quick/user/positions", auth_token)
+    return get_api_response("/quick/user/positions", auth_token)
 
 def get_holdings(auth_token):
-    return get_api_response("/Portfolio/1.0/portfolio/v1/holdings?alt=false", auth_token)
+    return get_api_response("/portfolio/v1/holdings", auth_token)
 
 def get_open_position(tradingsymbol, exchange, producttype, auth_token):
     #Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
@@ -63,33 +69,44 @@ def get_open_position(tradingsymbol, exchange, producttype, auth_token):
     return net_qty
 
 def place_order_api(data, auth_token):
-    token, sid, hsServerId, access_token = auth_token.split(":::")
-    
-    conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
+    session_token, session_sid, base_url, access_token = auth_token.split(":::")
+
+    # Debug logging for baseUrl
+    logger.info(f"PLACE ORDER API - Using baseUrl: {base_url}")
+
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+
     token_id = get_token(data['symbol'], data['exchange'])
     newdata = transform_data(data, token_id)
-    
+
     json_string = json.dumps(newdata)
     payload = f'jData={urllib.parse.quote(json_string)}'
-    query_params = {"sId": hsServerId}
-    
+
     headers = {
         'accept': 'application/json',
-        'Sid': sid,
-        'Auth': token,
+        'Sid': session_sid,
+        'Auth': session_token,
         'neo-fin-key': 'neotradeapi',
-        'Authorization': f'Bearer {access_token}',
         'Content-Type': 'application/x-www-form-urlencoded'
     }
 
-    conn.request("POST", "/Orders/2.0/quick/order/rule/ms/place?" + urllib.parse.urlencode(query_params), payload, headers)
+    # Construct full URL
+    url = f"{base_url}/quick/order/rule/ms/place"
+
     try:
-        res = conn.getresponse()
-        data = res.read()
-        response_data = json.loads(data.decode("utf-8"))
-        
+        response = client.post(url, headers=headers, content=payload)
+
+        # Add status attribute for compatibility with the existing codebase
+        response.status = response.status_code
+
+        response_data = json.loads(response.text)
+
         orderid = response_data['nOrdNo'] if response_data['stat'] == 'Ok' else None
-        return res, response_data, orderid
+        return response, response_data, orderid
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error in place_order_api: {e}")
+        return None, {"stat": "NotOk", "error": str(e)}, None
     except Exception as e:
         logger.error(f"Error in place_order_api: {e}")
         return None, {"stat": "NotOk", "error": str(e)}, None
@@ -217,71 +234,93 @@ def close_all_positions(current_api_key, auth_token):
             # Place the order to close the position
             res, response, orderid =   place_order_api(place_order_payload, auth_token)
 
-            logger.info(f"{res}")
+            #logger.info(f"{res}")
             logger.info(f"{response}")
-            logger.info(f"{orderid}")
+            #logger.info(f"{orderid}")
 
             # Note: Ensure place_order_api handles any errors and logs accordingly
 
     return {'status': 'success', "message": "All Open Positions SquaredOff"}, 200
 
 def cancel_order(orderid, auth_token):
-    token, sid, hsServerId, access_token = auth_token.split(":::")
-    
-    conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
-    payload = f'jData={urllib.parse.quote(json.dumps({"on": orderid}))}'
-    query_params = {"sId": hsServerId}
+    session_token, session_sid, base_url, access_token = auth_token.split(":::")
+
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+
+    payload = f'jData={urllib.parse.quote(json.dumps({"on": orderid, "am": "NO"}))}'
 
     headers = {
         'accept': 'application/json',
-        'Sid': sid,
-        'Auth': token,
+        'Sid': session_sid,
+        'Auth': session_token,
         'neo-fin-key': 'neotradeapi',
-        'Authorization': f'Bearer {access_token}',
         'Content-Type': 'application/x-www-form-urlencoded'
     }
-    
-    conn.request("POST", "/Orders/2.0/quick/order/cancel?" + urllib.parse.urlencode(query_params), payload, headers)
+
+    # Construct full URL
+    url = f"{base_url}/quick/order/cancel"
+
     try:
-        res = conn.getresponse()
-        data = res.read()
-        response_data = json.loads(data.decode("utf-8"))
-        
-        if response_data.get("stat"):
-            return {"status": "success", "orderid": response_data.get("result")}, 200
-        return {"status": "error", "message": response_data.get("message", "Failed to cancel order")}, res.status
+        response = client.post(url, headers=headers, content=payload)
+        response_data = json.loads(response.text)
+
+        if response_data.get("stat") == "Ok":
+            return {"status": "success", "orderid": response_data.get("nOrdNo")}, 200
+        return {"status": "error", "message": response_data.get("emsg", "Failed to cancel order")}, response.status_code
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error in cancel_order: {e}")
+        return {"status": "error", "message": str(e)}, 500
     except Exception as e:
         logger.error(f"Error in cancel_order: {e}")
         return {"status": "error", "message": str(e)}, 500
 
 def modify_order(data, auth_token):
-    token, sid, hsServerId, access_token = auth_token.split(":::")
-    
-    conn = http.client.HTTPSConnection("gw-napi.kotaksecurities.com")
+    session_token, session_sid, base_url, access_token = auth_token.split(":::")
+
+    # Debug logging for baseUrl
+    logger.info(f"MODIFY ORDER API - Using baseUrl: {base_url}")
+
+    # Get the shared httpx client with connection pooling
+    client = get_httpx_client()
+
     token_id = get_token(data['symbol'], data['exchange'])
     newdata = transform_modify_order_data(data, token_id)
-    
+
+    logger.info(f"MODIFY ORDER - Transformed data: {newdata}")
+
     payload = f'jData={urllib.parse.quote(json.dumps(newdata))}'
-    query_params = {"sId": hsServerId}
 
     headers = {
         'accept': 'application/json',
-        'Sid': sid,
-        'Auth': token,
+        'Sid': session_sid,
+        'Auth': session_token,
         'neo-fin-key': 'neotradeapi',
-        'Authorization': f'Bearer {access_token}',
         'Content-Type': 'application/x-www-form-urlencoded'
     }
-    
-    conn.request("POST", "/Orders/2.0/quick/order/vr/modify?" + urllib.parse.urlencode(query_params), payload, headers)
+
+    # Construct full URL
+    url = f"{base_url}/quick/order/vr/modify"
+
+    logger.info(f"MODIFY ORDER - Making POST request to: {url}")
+
     try:
-        res = conn.getresponse()
-        data = res.read()
-        response_data = json.loads(data.decode("utf-8"))
-        
+        response = client.post(url, headers=headers, content=payload)
+
+        logger.info(f"MODIFY ORDER - Response status: {response.status_code}")
+        logger.info(f"MODIFY ORDER - Response: {response.text}")
+
+        response_data = json.loads(response.text)
+
         if response_data.get("stat") == "Ok":
             return {"status": "success", "orderid": response_data["nOrdNo"]}, 200
-        return {"status": "error", "message": response_data.get("message", "Failed to modify order")}, res.status
+        return {"status": "error", "message": response_data.get("emsg", "Failed to modify order")}, response.status_code
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error in modify_order: {e}")
+        return {"status": "error", "message": f"HTTP error: {str(e)}"}, 500
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON decode error in modify_order: {e}")
+        return {"status": "error", "message": f"JSON decode error: {str(e)}"}, 500
     except Exception as e:
         logger.error(f"Error in modify_order: {e}")
         return {"status": "error", "message": str(e)}, 500

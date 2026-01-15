@@ -1,212 +1,585 @@
 # WebSocket Architecture
 
-## Overview
+OpenAlgo implements a dual-channel WebSocket architecture with Flask-SocketIO for UI integration and a native WebSocket proxy for high-performance market data streaming, connected via ZeroMQ message bus.
 
-OpenAlgo features a comprehensive WebSocket infrastructure that enables real-time market data streaming from multiple brokers to client applications. The architecture is designed to be broker-agnostic, scalable, and fault-tolerant.
+## Architecture Overview
 
-## Architecture Components
-
-### 1. WebSocket Proxy Server
-
-The `WebSocketProxy` class in `websocket_proxy/server.py` serves as the central hub for WebSocket connections:
-
-- **Client Management**: Handles multiple concurrent WebSocket client connections
-- **Authentication**: Validates API keys and manages user sessions
-- **Subscription Management**: Tracks client subscriptions to specific market data feeds
-- **Message Routing**: Routes market data from broker adapters to appropriate clients
-- **Dynamic Port Allocation**: Automatically finds available ports to avoid conflicts
-
-### 2. Broker Adapter Factory
-
-The `broker_factory.py` implements a factory pattern for creating broker-specific WebSocket adapters:
-
-- **Dynamic Loading**: Automatically discovers and loads broker adapters
-- **Registry Pattern**: Maintains a registry of available broker adapters
-- **Fallback Mechanism**: Supports multiple import paths for adapter discovery
-
-### 3. Base Broker Adapter
-
-The `BaseBrokerWebSocketAdapter` class provides a common interface for all broker implementations:
-
-- **Abstract Interface**: Defines standard methods for subscribe, unsubscribe, connect, disconnect
-- **ZeroMQ Integration**: Built-in ZeroMQ publisher for internal message distribution
-- **Port Management**: Handles dynamic port allocation with conflict resolution
-- **Subscription Tracking**: Maintains state of active subscriptions
-
-### 4. ZeroMQ Message Broker
-
-Internal communication uses ZeroMQ for efficient message passing:
-
-- **Publisher-Subscriber Pattern**: Broker adapters publish market data, proxy subscribes
-- **Topic-Based Routing**: Messages are tagged with topics for efficient filtering
-- **Asynchronous Processing**: Non-blocking message processing for high throughput
-
-## Data Flow Architecture
-
-```mermaid
-sequenceDiagram
-    participant Client as WebSocket Client
-    participant Proxy as WebSocket Proxy
-    participant Factory as Adapter Factory
-    participant Adapter as Broker Adapter
-    participant ZMQ as ZeroMQ Broker
-    participant Broker as External Broker WebSocket
-
-    Client->>Proxy: Connect & Authenticate
-    Proxy->>Factory: Create Broker Adapter
-    Factory->>Adapter: Initialize with credentials
-    Adapter->>Broker: Establish WebSocket connection
-    
-    Client->>Proxy: Subscribe to symbol
-    Proxy->>Adapter: Forward subscription request
-    Adapter->>Broker: Send subscription message
-    
-    Broker->>Adapter: Market data update
-    Adapter->>ZMQ: Publish via topic
-    ZMQ->>Proxy: Forward message
-    Proxy->>Client: Send market data
+```
++------------------+     +------------------+     +------------------+
+|   Web Browser    |     | Trading Client   |     |  Python Script   |
+|   (Socket.IO)    |     |   (WebSocket)    |     |   (WebSocket)    |
++--------+---------+     +--------+---------+     +--------+---------+
+         |                        |                        |
+         v                        v                        v
++------------------+     +----------------------------------------+
+| Flask-SocketIO   |     |         WebSocket Proxy Server         |
+| Port 5000        |     |              Port 8765                 |
+| (UI Events)      |     |         (Market Data Streaming)        |
++--------+---------+     +-------------------+--------------------+
+         |                                   |
+         |                                   v
+         |               +----------------------------------------+
+         |               |           ZeroMQ Message Bus            |
+         |               |              Port 5555                  |
+         |               +-------------------+--------------------+
+         |                                   |
+         |                                   v
+         |               +----------------------------------------+
+         |               |         Broker Adapter Factory          |
+         |               +-------------------+--------------------+
+         |                                   |
+         v                                   v
++--------+---------+     +------------------+---------------------+
+|   REST API       |     |              Broker Adapters           |
+| (Order Execution)|     | Angel | Zerodha | Upstox | Dhan | ...  |
++------------------+     +----------------------------------------+
+                                            |
+                                            v
+                         +----------------------------------------+
+                         |        External Broker WebSockets       |
+                         +----------------------------------------+
 ```
 
-## Subscription Management
+## Dual WebSocket Channels
 
-### Topic Format
+### Channel 1: Flask-SocketIO (Port 5000)
+
+UI integration and event-driven communication:
+
+```python
+# extensions.py
+from flask_socketio import SocketIO
+
+socketio = SocketIO(
+    cors_allowed_origins='*',
+    async_mode='threading',
+    ping_timeout=10,
+    ping_interval=5,
+    logger=False,
+    engineio_logger=False
+)
+```
+
+**Configuration:**
+- Threading mode (not eventlet) to avoid greenlet errors
+- CORS enabled for all origins
+- Ping/pong heartbeat: 5-second interval, 10-second timeout
+
+### Channel 2: Native WebSocket Proxy (Port 8765)
+
+High-performance market data streaming:
+
+```python
+# websocket_proxy/server.py
+import asyncio
+import websockets
+
+class WebSocketProxy:
+    async def start_server(self):
+        server = await websockets.serve(
+            self.handle_client,
+            host=os.getenv('WEBSOCKET_HOST', '127.0.0.1'),
+            port=int(os.getenv('WEBSOCKET_PORT', 8765))
+        )
+```
+
+## ZeroMQ Message Bus
+
+Internal communication between broker adapters and WebSocket proxy:
+
+### Publisher (Broker Adapters)
+
+```python
+# websocket_proxy/base_adapter.py
+import zmq
+
+class BaseBrokerWebSocketAdapter:
+    def __init__(self):
+        self.context = zmq.Context()
+        self.socket = self.context.socket(zmq.PUB)
+        self.socket.setsockopt(zmq.SNDHWM, 1000)  # High water mark
+        self.socket.setsockopt(zmq.LINGER, 1000)  # 1 second linger
+        self.socket.bind(f"tcp://*:{ZMQ_PORT}")
+
+    def publish_market_data(self, topic: str, data: dict):
+        """Publish market data to ZeroMQ subscribers"""
+        self.socket.send_multipart([
+            topic.encode('utf-8'),
+            json.dumps(data).encode('utf-8')
+        ])
+```
+
+### Subscriber (WebSocket Proxy)
+
+```python
+# websocket_proxy/server.py
+class WebSocketProxy:
+    def __init__(self):
+        self.context = zmq.asyncio.Context()
+        self.socket = self.context.socket(zmq.SUB)
+        self.socket.connect(f"tcp://{ZMQ_HOST}:{ZMQ_PORT}")
+        self.socket.setsockopt(zmq.SUBSCRIBE, b"")  # Subscribe to all
+```
+
+## Data Flow
+
+```
+Broker WebSocket
+       |
+       v
++------------------+
+| Broker Adapter   |
+| (Transform Data) |
++--------+---------+
+         |
+         v
++------------------+
+| ZeroMQ Publisher |
+| Topic: broker_   |
+| exchange_symbol_ |
+| mode             |
++--------+---------+
+         |
+         v
++------------------+
+| ZeroMQ Subscriber|
+| (WebSocket Proxy)|
++--------+---------+
+         |
+         v
++------------------+
+| Subscription     |
+| Index Lookup     |
+| O(1) routing     |
++--------+---------+
+         |
+         v
++------------------+
+| WebSocket Clients|
+| (Broadcast)      |
++------------------+
+```
+
+## Topic Format
 
 Market data topics follow a standardized format:
-- Standard: `BROKER_EXCHANGE_SYMBOL_MODE`
-- Index data: `BROKER_NSE_INDEX_SYMBOL_MODE`
-- Legacy support: `EXCHANGE_SYMBOL_MODE`
 
-### Subscription Modes
+```
+BROKER_EXCHANGE_SYMBOL_MODE
+```
 
-1. **LTP (Last Traded Price)**: Mode 1 - Basic price updates
-2. **Quote**: Mode 2 - Bid/ask prices with volume
-3. **Depth**: Mode 3 - Full market depth (5/20/30 levels)
+**Examples:**
+- `zerodha_NSE_RELIANCE_QUOTE`
+- `angel_NFO_NIFTY24DEC19500CE_LTP`
+- `dhan_NSE_INDEX_NIFTY_50_DEPTH`
+
+**Special Cases:**
+```python
+# NSE_INDEX and BSE_INDEX have underscores
+if parts[0] == "NSE" and parts[1] == "INDEX":
+    exchange = "NSE_INDEX"
+    symbol = parts[2]
+    mode_str = parts[3]
+```
+
+## Subscription Modes
+
+| Mode | Value | Data Included | Throttle |
+|------|-------|---------------|----------|
+| LTP | 1 | Last traded price only | 50ms |
+| Quote | 2 | Bid/ask, OHLC, volume | None |
+| Depth | 3 | Full market depth (5/20/30 levels) | None |
+
+## Client Connection Management
 
 ### State Management
 
-- **Client Subscriptions**: Tracked per client with JSON serialization
-- **Broker Connections**: Maintained per user to avoid duplicate connections
-- **Cleanup Handling**: Automatic cleanup on client disconnect with broker-specific logic
+```python
+class WebSocketProxy:
+    def __init__(self):
+        self.clients = {}           # client_id -> websocket
+        self.subscriptions = {}     # client_id -> set of subscriptions
+        self.user_mapping = {}      # client_id -> user_id
+        self.broker_adapters = {}   # user_id -> broker adapter
+        self.subscription_index = defaultdict(set)  # (symbol, exchange, mode) -> set(client_ids)
+```
 
-## Broker-Specific Implementations
+### Connection Lifecycle
 
-Each broker has its own adapter implementation in `broker/{broker_name}/streaming/`:
+```python
+async def handle_client(self, websocket, path):
+    client_id = id(websocket)
+    self.clients[client_id] = websocket
 
-### Example: Angel One Adapter
-- **Location**: `broker/angel/streaming/angel_adapter.py`
-- **Features**: Supports LTP, Quote, and Depth modes
-- **WebSocket**: Native Angel One WebSocket API integration
+    try:
+        async for message in websocket:
+            await self.process_message(client_id, message)
+    finally:
+        await self.cleanup_client(client_id)
+```
 
-### Example: Flattrade Adapter
-- **Location**: `broker/flattrade/streaming/flattrade_adapter.py`
-- **Features**: Persistent connection management
-- **Special Handling**: Keeps connections alive on client disconnect
+### Subscription Index (O(1) Lookup)
+
+```python
+# Optimized routing using subscription index
+subscription_index: Dict[Tuple[str, str, int], Set[int]] = defaultdict(set)
+
+# Adding subscription
+sub_key = (symbol, exchange, mode)
+subscription_index[sub_key].add(client_id)
+
+# Fast lookup during broadcast
+def get_subscribed_clients(symbol, exchange, mode):
+    return subscription_index.get((symbol, exchange, mode), set())
+```
+
+## WebSocket Protocol
+
+### Authentication
+
+```json
+{
+    "action": "authenticate",
+    "api_key": "your-openalgo-api-key"
+}
+```
+
+**Response:**
+```json
+{
+    "type": "auth_response",
+    "status": "success",
+    "message": "Authentication successful"
+}
+```
+
+### Subscribe
+
+```json
+{
+    "action": "subscribe",
+    "symbols": [
+        {"symbol": "RELIANCE", "exchange": "NSE"},
+        {"symbol": "TCS", "exchange": "NSE"}
+    ],
+    "mode": "Quote"
+}
+```
+
+### Unsubscribe
+
+```json
+{
+    "action": "unsubscribe",
+    "symbols": [
+        {"symbol": "RELIANCE", "exchange": "NSE"}
+    ]
+}
+```
+
+### Market Data Response
+
+```json
+{
+    "type": "market_data",
+    "symbol": "RELIANCE",
+    "exchange": "NSE",
+    "mode": 2,
+    "data": {
+        "ltp": 2850.50,
+        "open": 2820.00,
+        "high": 2860.00,
+        "low": 2815.00,
+        "close": 2848.25,
+        "volume": 1500000,
+        "bid": 2850.45,
+        "ask": 2850.55,
+        "bid_qty": 500,
+        "ask_qty": 750
+    }
+}
+```
+
+## Broker Adapter Pattern
+
+### Base Adapter
+
+```python
+# websocket_proxy/base_adapter.py
+from abc import ABC, abstractmethod
+
+class BaseBrokerWebSocketAdapter(ABC):
+
+    @abstractmethod
+    def initialize(self, broker_name: str, user_id: str, auth_data: dict = None):
+        """Initialize with broker credentials"""
+        pass
+
+    @abstractmethod
+    def connect(self):
+        """Establish connection to broker WebSocket"""
+        pass
+
+    @abstractmethod
+    def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5):
+        """Subscribe to market data"""
+        pass
+
+    @abstractmethod
+    def unsubscribe(self, symbol: str, exchange: str, mode: int = 2):
+        """Unsubscribe from market data"""
+        pass
+
+    @abstractmethod
+    def disconnect(self):
+        """Disconnect from broker"""
+        pass
+
+    def publish_market_data(self, topic: str, data: dict):
+        """Publish to ZeroMQ (implemented in base)"""
+        pass
+```
+
+### Broker Factory
+
+```python
+# websocket_proxy/broker_factory.py
+def create_broker_adapter(broker_name: str) -> BaseBrokerWebSocketAdapter:
+    """Create broker-specific adapter dynamically"""
+
+    # Import from broker-specific directory
+    module_name = f"broker.{broker_name}.streaming.{broker_name}_adapter"
+    class_name = f"{broker_name.capitalize()}WebSocketAdapter"
+
+    module = importlib.import_module(module_name)
+    adapter_class = getattr(module, class_name)
+    return adapter_class()
+```
 
 ### Example: Zerodha Adapter
-- **Location**: `broker/zerodha/streaming/zerodha_adapter.py`
-- **Features**: KiteConnect WebSocket integration
-- **Mapping**: Symbol normalization and data transformation
 
-## Error Handling and Resilience
+```python
+# broker/zerodha/streaming/zerodha_adapter.py
+class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
-### Connection Management
-- **Auto-reconnection**: Automatic reconnection on broker WebSocket failures
-- **Graceful Degradation**: Service continues for other clients on individual failures
-- **Resource Cleanup**: Proper cleanup of ZMQ resources and port allocations
+    def connect(self):
+        self.kws = KiteTicker(api_key, access_token)
+        self.kws.on_ticks = self._handle_ticks
+        self.kws.connect(threaded=True)
 
-### Error Categories
-1. **Authentication Errors**: Invalid API keys or expired sessions
-2. **Broker Errors**: Connection failures or API limitations
-3. **Subscription Errors**: Invalid symbols or unsupported modes
-4. **Network Errors**: WebSocket connection drops or timeouts
+    def _handle_ticks(self, ticks: List[Dict]):
+        for tick in ticks:
+            transformed = self._transform_tick(tick)
+            topic = self._generate_topic(symbol, exchange, mode)
+            self.publish_market_data(topic, transformed)
 
-### Logging Integration
-- **Structured Logging**: Consistent log format across all components
-- **Error Tracking**: Detailed error messages with context
-- **Performance Monitoring**: Connection and subscription metrics
+    def _transform_tick(self, tick: dict) -> dict:
+        """Transform Zerodha tick to standard format"""
+        return {
+            'ltp': tick.get('last_price'),
+            'open': tick.get('ohlc', {}).get('open'),
+            'high': tick.get('ohlc', {}).get('high'),
+            'low': tick.get('ohlc', {}).get('low'),
+            'close': tick.get('ohlc', {}).get('close'),
+            'volume': tick.get('volume_traded')
+        }
+```
+
+## Flask-SocketIO Events
+
+### Market Namespace (/market)
+
+```python
+# blueprints/websocket_example.py
+@socketio.on('connect', namespace='/market')
+def handle_connect():
+    """Client connected"""
+    emit('connected', {'status': 'ok'})
+
+@socketio.on('subscribe', namespace='/market')
+def handle_subscribe(data):
+    """Subscribe to market data via REST API"""
+    symbols = data.get('symbols', [])
+    mode = data.get('mode', 'Quote')
+    # Proxies to WebSocket server
+
+@socketio.on('get_ltp', namespace='/market')
+def handle_get_ltp(data):
+    """Poll current LTP"""
+    symbol = data.get('symbol')
+    exchange = data.get('exchange')
+    # Returns cached LTP
+
+@socketio.on('get_quote', namespace='/market')
+def handle_get_quote(data):
+    """Poll quote data"""
+    pass
+
+@socketio.on('get_depth', namespace='/market')
+def handle_get_depth(data):
+    """Poll market depth"""
+    pass
+```
+
+## Performance Optimizations
+
+### Message Throttling
+
+```python
+# LTP mode: 50ms minimum between updates
+last_message_time = {}
+
+async def should_send_update(symbol, exchange, mode):
+    if mode != 1:  # LTP mode
+        return True
+
+    key = (symbol, exchange)
+    now = time.time()
+    last = last_message_time.get(key, 0)
+
+    if now - last >= 0.05:  # 50ms
+        last_message_time[key] = now
+        return True
+    return False
+```
+
+### Batch Broadcasting
+
+```python
+async def broadcast_to_clients(client_ids: Set[int], message: str):
+    """Batch send to multiple clients"""
+    tasks = []
+    for client_id in client_ids:
+        ws = self.clients.get(client_id)
+        if ws:
+            tasks.append(ws.send(message))
+
+    await asyncio.gather(*tasks, return_exceptions=True)
+```
+
+### ZeroMQ High Water Mark
+
+```python
+# Prevent memory exhaustion on slow consumers
+self.socket.setsockopt(zmq.SNDHWM, 1000)  # 1000 messages max buffer
+self.socket.setsockopt(zmq.RCVHWM, 1000)
+```
 
 ## Configuration
 
 ### Environment Variables
 
 ```bash
-# WebSocket Server Configuration
-WEBSOCKET_HOST=localhost
+# WebSocket Server
+WEBSOCKET_HOST=127.0.0.1
 WEBSOCKET_PORT=8765
+WEBSOCKET_URL=ws://127.0.0.1:8765
 
-# ZeroMQ Configuration
-ZMQ_HOST=localhost
+# ZeroMQ
+ZMQ_HOST=127.0.0.1
 ZMQ_PORT=5555
-
-# Broker Configuration
-VALID_BROKERS=angel,zerodha,flattrade
-BROKER_API_KEY=your_api_key
-BROKER_API_SECRET=your_api_secret
 ```
 
-### Dynamic Configuration
-- **Port Auto-discovery**: Automatically finds available ports
-- **Broker Auto-detection**: Determines user's broker from database
-- **Capability Detection**: Discovers broker-specific features
+### Production Configuration
 
-## Security Considerations
+```bash
+# Production with TLS
+WEBSOCKET_URL=wss://yourdomain.com:8765
+```
 
-### Authentication
-- **API Key Validation**: All connections require valid API keys
-- **User Isolation**: Each user's data is isolated from others
-- **Session Management**: Proper session cleanup on disconnect
+## Error Handling
 
-### Data Protection
-- **Sensitive Data Filtering**: Automatic redaction of credentials in logs
-- **Secure Transmission**: WebSocket connections support TLS
-- **Access Control**: Subscription access based on user permissions
+### Connection Errors
 
-## Performance Optimization
+```python
+async def handle_client(self, websocket, path):
+    try:
+        async for message in websocket:
+            await self.process_message(client_id, message)
+    except websockets.exceptions.ConnectionClosed:
+        logger.info(f"Client {client_id} disconnected")
+    except Exception as e:
+        logger.error(f"Error handling client: {e}")
+    finally:
+        await self.cleanup_client(client_id)
+```
 
-### Connection Pooling
-- **Shared Connections**: One broker connection per user across multiple clients
-- **Resource Reuse**: Efficient use of WebSocket connections
-- **Memory Management**: Proper cleanup of inactive connections
+### Broker-Specific Cleanup
 
-### Message Processing
-- **Asynchronous Processing**: Non-blocking message handling
-- **Batch Processing**: Efficient handling of multiple subscriptions
-- **Topic Filtering**: ZeroMQ topic-based filtering for performance
+```python
+async def cleanup_client(self, client_id):
+    """Clean up when client disconnects"""
+    user_id = self.user_mapping.get(client_id)
+    adapter = self.broker_adapters.get(user_id)
 
-### Scalability Features
-- **Horizontal Scaling**: Multiple proxy instances can run concurrently
-- **Load Distribution**: ZeroMQ handles load distribution automatically
-- **Resource Monitoring**: Built-in monitoring of connection and subscription counts
+    if adapter:
+        broker_name = adapter.broker_name
+        # Special handling for persistent connections
+        if broker_name in ['flattrade', 'shoonya']:
+            adapter.unsubscribe_all()  # Keep connection alive
+        else:
+            adapter.disconnect()  # Full disconnect
+```
 
-## Monitoring and Debugging
+### Socket.IO Error Handler
 
-### Logging Features
-- **Component-specific Loggers**: Separate loggers for proxy, adapters, and factory
-- **Color-coded Output**: Enhanced readability with colored log levels
-- **URL Highlighting**: Prominent display of service URLs
-- **Sensitive Data Protection**: Automatic redaction of credentials
+```python
+# utils/socketio_error_handler.py
+def init_socketio_error_handling(socketio_instance):
+    @socketio_instance.on_error_default
+    def default_error_handler(e):
+        if "Session is disconnected" in str(e):
+            logger.debug(f"Socket.IO session disconnected")
+            return False
+        logger.error(f"Socket.IO error: {e}")
+```
 
-### Metrics Collection
-- **Connection Metrics**: Track active connections and subscription counts
-- **Performance Metrics**: Monitor message throughput and latency
-- **Error Rates**: Track error frequencies by type and broker
+## Client SDK
 
-### Debugging Tools
-- **Detailed Error Messages**: Comprehensive error information with context
-- **Connection State Tracking**: Real-time visibility into connection states
-- **Message Tracing**: Ability to trace message flow through the system
+### Python Client
 
-## Future Enhancements
+```python
+# services/websocket_client.py
+class OpenAlgoWebSocketClient:
+    """Singleton WebSocket client with auto-reconnection"""
 
-### Planned Features
-1. **WebSocket Clustering**: Multi-instance deployment with load balancing
-2. **Enhanced Monitoring**: Integration with monitoring systems like Prometheus
-3. **Circuit Breakers**: Automatic fault isolation for failing brokers
-4. **Rate Limiting**: Prevent abuse with subscription rate limits
-5. **Data Persistence**: Optional persistence of market data streams
+    def __init__(self, api_key: str, ws_url: str = None):
+        self.api_key = api_key
+        self.ws_url = ws_url or os.getenv('WEBSOCKET_URL')
+        self.ws = None
+        self.callbacks = {}
+        self.subscriptions = set()
+        self.market_data_cache = {}
+        self._reconnect_attempts = 0
+        self._max_reconnects = 5
 
-### Extensibility
-- **Plugin Architecture**: Easy addition of new broker adapters
-- **Custom Protocols**: Support for broker-specific WebSocket protocols
-- **Data Transformation**: Pluggable data transformation pipelines
-- **Authentication Providers**: Support for additional authentication methods
+    async def connect(self):
+        """Connect with exponential backoff"""
+        pass
+
+    async def subscribe(self, symbols: List[dict], mode: str = 'Quote'):
+        """Subscribe to market data"""
+        pass
+
+    def on_tick(self, callback: Callable):
+        """Register tick callback"""
+        self.callbacks['tick'] = callback
+```
+
+## Performance Metrics
+
+| Metric | Value |
+|--------|-------|
+| LTP Updates | 20/second (50ms throttle) |
+| Quote/Depth Updates | Unlimited |
+| Max Clients | 1000+ per adapter |
+| Subscription Lookup | O(1) |
+| ZeroMQ Buffer | 1000 messages |
+| Reconnect Backoff | Exponential (max 5 attempts) |
+
+## Related Documentation
+
+- [Configuration](./07_configuration.md) - WebSocket configuration options
+- [Broker Integration](./03_broker_integration.md) - Broker adapter details
+- [API Layer](./02_api_layer.md) - REST API for market data
+- [Utilities](./08_utilities.md) - Error handling utilities

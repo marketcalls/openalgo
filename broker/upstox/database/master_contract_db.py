@@ -114,6 +114,9 @@ def process_upstox_json(path):
     logger.info("Processing Upstox Data")
     df = pd.read_json(path)
 
+    # Filter out NSE_COM instruments
+    df = df[df['segment'] != 'NSE_COM']
+
     #return df
 
     # Assume your JSON structure requires some transformations to match your schema

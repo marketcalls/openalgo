@@ -1,0 +1,19 @@
+meta {
+  name: Search
+  type: http
+  seq: 11
+}
+
+post {
+  url: http://127.0.0.1:5000/api/v1/search
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+      "apikey": "",
+      "query": "NIFTY 25000 CE",
+      "exchange": "NFO"
+  }
+}

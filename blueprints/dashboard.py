@@ -1,5 +1,6 @@
 from flask import Blueprint, render_template, session, redirect, url_for
-from database.auth_db import get_auth_token
+from database.auth_db import get_auth_token, get_api_key_for_tradingview
+from database.settings_db import get_analyze_mode
 from services.funds_service import get_funds
 from utils.session import check_session_validity
 from utils.logging import get_logger
@@ -14,7 +15,7 @@ scalper_process = None
 def dashboard():
     login_username = session['user']
     AUTH_TOKEN = get_auth_token(login_username)
-    
+
     if AUTH_TOKEN is None:
         logger.warning(f"No auth token found for user {login_username}")
         return redirect(url_for('auth.logout'))
@@ -23,9 +24,19 @@ def dashboard():
     if not broker:
         logger.error("Broker not set in session")
         return "Broker not set in session", 400
-    
-    # Use the centralized funds service
-    success, response, status_code = get_funds(auth_token=AUTH_TOKEN, broker=broker)
+
+    # Check if in analyze mode and route accordingly
+    if get_analyze_mode():
+        # Get API key for sandbox mode
+        api_key = get_api_key_for_tradingview(login_username)
+        if api_key:
+            success, response, status_code = get_funds(api_key=api_key)
+        else:
+            logger.error("No API key found for analyze mode")
+            return "API key required for analyze mode", 400
+    else:
+        # Use live broker
+        success, response, status_code = get_funds(auth_token=AUTH_TOKEN, broker=broker)
     
     if not success:
         logger.error(f"Failed to get funds data: {response.get('message', 'Unknown error')}")

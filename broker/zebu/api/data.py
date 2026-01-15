@@ -2,11 +2,17 @@ import httpx
 import json
 import os
 import pandas as pd
+import time
+import asyncio
 from datetime import datetime, timedelta
 import urllib.parse
 from database.token_db import get_token, get_br_symbol, get_oa_symbol
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from concurrent.futures import ThreadPoolExecutor
+
+# Toggle between async and threaded approach
+USE_ASYNC = True  # Set to True to use asyncio (better performance)
 
 logger = get_logger(__name__)
 
@@ -108,6 +114,254 @@ class BrokerData:
             
         except Exception as e:
             raise Exception(f"Error fetching quotes: {str(e)}")
+
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols with automatic batching
+        Zebu API Rate Limit: 10 requests per second per user
+
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            # Zebu API rate limit: 10 requests per second per user
+            BATCH_SIZE = 10  # Process 10 symbols per batch (matches rate limit)
+            RATE_LIMIT_DELAY = 1.0  # 1 second delay between batches
+
+            if len(symbols) > BATCH_SIZE:
+                logger.debug(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.info(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    batch_results = self._process_quotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                    # Rate limit delay between batches
+                    if i + BATCH_SIZE < len(symbols):
+                        time.sleep(RATE_LIMIT_DELAY)
+
+                logger.info(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
+                return all_results
+            else:
+                return self._process_quotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _fetch_single_quote_sync(self, symbol: str, exchange: str, api_exchange: str, token: str, api_key: str) -> dict:
+        """
+        Fetch quote for a single symbol synchronously (for ThreadPoolExecutor)
+        """
+        try:
+            data = {
+                "uid": api_key,
+                "exch": api_exchange,
+                "token": token
+            }
+
+            payload_str = "jData=" + json.dumps(data) + "&jKey=" + self.auth_token
+            headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+            url = "https://go.mynt.in/NorenWClientTP/GetQuotes"
+
+            # Use httpx.post for sync requests
+            http_response = httpx.post(url, content=payload_str, headers=headers, timeout=10.0)
+            response = http_response.json()
+
+            if response.get('stat') != 'Ok':
+                return {
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': response.get('emsg', 'Unknown error')
+                }
+
+            return {
+                'symbol': symbol,
+                'exchange': exchange,
+                'data': {
+                    'bid': float(response.get('bp1', 0)),
+                    'ask': float(response.get('sp1', 0)),
+                    'open': float(response.get('o', 0)),
+                    'high': float(response.get('h', 0)),
+                    'low': float(response.get('l', 0)),
+                    'ltp': float(response.get('lp', 0)),
+                    'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
+                    'volume': int(response.get('v', 0)),
+                    'oi': int(response.get('oi', 0))
+                }
+            }
+
+        except Exception as e:
+            return {
+                'symbol': symbol,
+                'exchange': exchange,
+                'error': str(e)
+            }
+
+    async def _fetch_single_quote_async(self, client: httpx.AsyncClient, symbol: str, exchange: str, api_exchange: str, token: str, api_key: str) -> dict:
+        """
+        Fetch quote for a single symbol asynchronously
+        """
+        try:
+            data = {
+                "uid": api_key,
+                "exch": api_exchange,
+                "token": token
+            }
+
+            payload_str = "jData=" + json.dumps(data) + "&jKey=" + self.auth_token
+            headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+            url = "https://go.mynt.in/NorenWClientTP/GetQuotes"
+
+            # Use async httpx client
+            http_response = await client.post(url, content=payload_str, headers=headers)
+            response = http_response.json()
+
+            if response.get('stat') != 'Ok':
+                logger.warning(f"Error fetching quote for {symbol}@{exchange}: {response.get('emsg', 'Unknown error')}")
+                return {
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': response.get('emsg', 'Unknown error')
+                }
+
+            return {
+                'symbol': symbol,
+                'exchange': exchange,
+                'data': {
+                    'bid': float(response.get('bp1', 0)),
+                    'ask': float(response.get('sp1', 0)),
+                    'open': float(response.get('o', 0)),
+                    'high': float(response.get('h', 0)),
+                    'low': float(response.get('l', 0)),
+                    'ltp': float(response.get('lp', 0)),
+                    'prev_close': float(response.get('c', 0)) if 'c' in response else 0,
+                    'volume': int(response.get('v', 0)),
+                    'oi': int(response.get('oi', 0))
+                }
+            }
+
+        except Exception as e:
+            logger.warning(f"Error processing quote for {symbol}@{exchange}: {str(e)}")
+            return {
+                'symbol': symbol,
+                'exchange': exchange,
+                'error': str(e)
+            }
+
+    async def _process_quotes_batch_async(self, symbols: list, api_key: str) -> list:
+        """
+        Process a batch of symbols using async httpx
+        """
+        results = []
+
+        # High connection limits for maximum concurrency
+        limits = httpx.Limits(max_connections=100, max_keepalive_connections=100)
+        async with httpx.AsyncClient(timeout=10.0, limits=limits) as client:
+            tasks = [
+                self._fetch_single_quote_async(
+                    client,
+                    item['symbol'],
+                    item['exchange'],
+                    item['api_exchange'],
+                    item['token'],
+                    api_key
+                )
+                for item in symbols
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Convert exceptions to error dicts
+        final_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                final_results.append({
+                    'symbol': symbols[i]['symbol'],
+                    'exchange': symbols[i]['exchange'],
+                    'error': str(result)
+                })
+            else:
+                final_results.append(result)
+
+        return final_results
+
+    def _process_quotes_batch(self, symbols: list) -> list:
+        """
+        Process a single batch of symbols using concurrent API calls
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys (max 40)
+        Returns:
+            list: List of quote data for the batch
+        """
+        skipped_symbols = []
+        prepared_symbols = []
+
+        # Pre-fetch API key
+        api_key = os.getenv('BROKER_API_KEY')
+
+        # Step 1: Pre-resolve all tokens sequentially (database access)
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            br_symbol = get_br_symbol(symbol, exchange)
+            token = get_token(symbol, exchange)
+
+            if not br_symbol or not token:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve broker symbol or token")
+                skipped_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': 'Could not resolve broker symbol or token'
+                })
+                continue
+
+            # Map exchange to API format
+            api_exchange = exchange
+            if exchange == "NSE_INDEX":
+                api_exchange = "NSE"
+            elif exchange == "BSE_INDEX":
+                api_exchange = "BSE"
+
+            prepared_symbols.append({
+                'symbol': symbol,
+                'exchange': exchange,
+                'api_exchange': api_exchange,
+                'token': token
+            })
+
+        if not prepared_symbols:
+            logger.warning("No valid symbols to fetch quotes for")
+            return skipped_symbols
+
+        # Step 2: Make concurrent API calls
+        if USE_ASYNC:
+            # Async approach with httpx.AsyncClient
+            results = asyncio.run(self._process_quotes_batch_async(prepared_symbols, api_key))
+        else:
+            # ThreadPoolExecutor approach
+            with ThreadPoolExecutor(max_workers=min(len(prepared_symbols), 20)) as executor:
+                futures = [
+                    executor.submit(
+                        self._fetch_single_quote_sync,
+                        item['symbol'],
+                        item['exchange'],
+                        item['api_exchange'],
+                        item['token'],
+                        api_key
+                    )
+                    for item in prepared_symbols
+                ]
+                results = [f.result() for f in futures]
+
+        return skipped_symbols + results
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """

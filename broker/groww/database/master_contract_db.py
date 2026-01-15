@@ -587,6 +587,18 @@ def process_groww_data(path):
         df_mapped['strike'] = df_mapped['temp_strike']
         df_mapped.drop('temp_strike', axis=1, inplace=True)
         df_mapped['tick_size'] = pd.to_numeric(df_mapped['tick_size'], errors='coerce').fillna(0.05)
+
+        # Convert expiry from yyyy-mm-dd to DD-MMM-YY format (to match Zerodha/other brokers)
+        def convert_expiry_format(expiry_val):
+            if pd.isna(expiry_val) or expiry_val == '':
+                return ''
+            try:
+                expiry_date = pd.to_datetime(expiry_val)
+                return expiry_date.strftime('%d-%b-%y').upper()
+            except Exception:
+                return expiry_val
+
+        df_mapped['expiry'] = df_mapped['expiry'].apply(convert_expiry_format)
         
         # Map instrument types directly from Groww's data
         # We want CE, PE, FUT values to be preserved as is

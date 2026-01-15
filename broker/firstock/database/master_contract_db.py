@@ -238,10 +238,10 @@ def process_firstock_nfo_data(output_path):
     df['expiry'] = df['expiry'].fillna('')
     df['strike'] = df['strike'].fillna(-1)
 
-    # Format expiry date as DDMMMYY
+    # Format expiry date as DD-MMM-YY (with hyphens for option_symbol_service compatibility)
     def format_expiry_date(date_str):
         try:
-            return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
+            return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d-%b-%y').upper()
         except ValueError:
             logger.info(f"Invalid expiry date format: {date_str}")
             return None
@@ -252,14 +252,16 @@ def process_firstock_nfo_data(output_path):
     # Set instrument type based on option type
     df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['optiontype'] == 'XX' else row['optiontype'], axis=1)
 
-    # Format symbol based on instrument type
+    # Format symbol based on instrument type (expiry without hyphens in symbol)
     def format_symbol(row):
+        # Remove hyphens from expiry for symbol construction
+        expiry_no_hyphen = row['expiry'].replace('-', '') if row['expiry'] else ''
         if row['instrumenttype'] == 'FUT':
-            return f"{row['name']}{row['expiry']}FUT"
+            return f"{row['name']}{expiry_no_hyphen}FUT"
         else:
             # Ensure strike prices are either integers or floats
             formatted_strike = int(row['strike']) if float(row['strike']).is_integer() else row['strike']
-            return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
+            return f"{row['name']}{expiry_no_hyphen}{formatted_strike}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
 
@@ -373,10 +375,10 @@ def process_firstock_bfo_data(output_path):
     df['expiry'] = df['expiry'].fillna('')
     df['strike'] = df['strike'].fillna(-1)
 
-    # Format expiry date as DDMMMYY
+    # Format expiry date as DD-MMM-YY (with hyphens for option_symbol_service compatibility)
     def format_expiry_date(date_str):
         try:
-            return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d%b%y').upper()
+            return datetime.strptime(date_str, '%d-%b-%Y').strftime('%d-%b-%y').upper()
         except ValueError:
             logger.info(f"Invalid expiry date format: {date_str}")
             return None
@@ -387,14 +389,16 @@ def process_firstock_bfo_data(output_path):
     # Set instrument type based on option type
     df['instrumenttype'] = df.apply(lambda row: 'FUT' if row['optiontype'] == 'XX' else row['optiontype'], axis=1)
 
-    # Format symbol based on instrument type
+    # Format symbol based on instrument type (expiry without hyphens in symbol)
     def format_symbol(row):
+        # Remove hyphens from expiry for symbol construction
+        expiry_no_hyphen = row['expiry'].replace('-', '') if row['expiry'] else ''
         if row['instrumenttype'] == 'FUT':
-            return f"{row['name']}{row['expiry']}FUT"
+            return f"{row['name']}{expiry_no_hyphen}FUT"
         else:
             # Ensure strike prices are either integers or floats
             formatted_strike = int(row['strike']) if float(row['strike']).is_integer() else row['strike']
-            return f"{row['name']}{row['expiry']}{formatted_strike}{row['instrumenttype']}"
+            return f"{row['name']}{expiry_no_hyphen}{formatted_strike}{row['instrumenttype']}"
 
     df['symbol'] = df.apply(format_symbol, axis=1)
 

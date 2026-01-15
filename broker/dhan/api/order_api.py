@@ -1,7 +1,7 @@
 import httpx
 import json
 import os
-from database.auth_db import get_auth_token
+from database.auth_db import get_auth_token, get_user_id, verify_api_key
 from database.token_db import get_token
 from database.token_db import get_br_symbol , get_oa_symbol, get_symbol
 from broker.dhan.mapping.transform_data import transform_data , map_product_type, reverse_map_product_type, transform_modify_order_data
@@ -105,16 +105,38 @@ def get_open_position(tradingsymbol, exchange, product, auth):
 def place_order_api(data,auth):
     AUTH_TOKEN = auth
     BROKER_API_KEY = os.getenv('BROKER_API_KEY')
+
+    # Extract client_id from BROKER_API_KEY if format is client_id:::api_key
+    client_id = None
+    if ':::' in BROKER_API_KEY:
+        client_id, BROKER_API_KEY = BROKER_API_KEY.split(':::')
+
+    # If client_id not found in API key, try to fetch from database
+    if not client_id:
+        api_key = data.get('apikey')
+        user_id = verify_api_key(api_key)
+        client_id = get_user_id(user_id)
+
+    # Add client_id to the data
+    if client_id:
+        data['dhan_client_id'] = client_id
+
     data['apikey'] = BROKER_API_KEY
     token = get_token(data['symbol'], data['exchange'])
-    newdata = transform_data(data, token)  
+    newdata = transform_data(data, token)
     headers = {
         'access-token': AUTH_TOKEN,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
     }
+
+    # Add client-id header if available
+    if client_id:
+        headers['client-id'] = client_id
     payload = json.dumps(newdata)
 
+    logger.debug(f"Placing order with client_id: {client_id}")
+    logger.debug(f"Placing order with headers: {headers}")
     logger.debug(f"Placing order with payload: {payload}")
 
     # Get the shared httpx client with connection pooling

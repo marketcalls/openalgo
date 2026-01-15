@@ -1,5 +1,7 @@
 import json
 import os
+import time
+import threading
 from datetime import datetime, timedelta
 import pandas as pd
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
@@ -13,29 +15,72 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Rate limiter for Dhan API - max 1 request per second
+_last_api_call_time = 0
+_rate_limit_lock = threading.Lock()
+DHAN_MIN_REQUEST_INTERVAL = 1.0  # seconds between requests
 
-def get_api_response(endpoint, auth, method="POST", payload=''):
+
+def _apply_rate_limit():
+    """Apply rate limiting to avoid Dhan API error 805 (too many requests)"""
+    global _last_api_call_time
+    sleep_time = 0
+
+    with _rate_limit_lock:
+        current_time = time.time()
+        time_since_last_call = current_time - _last_api_call_time
+        if time_since_last_call < DHAN_MIN_REQUEST_INTERVAL:
+            sleep_time = DHAN_MIN_REQUEST_INTERVAL - time_since_last_call
+        # Update timestamp immediately to reserve this slot
+        _last_api_call_time = current_time + sleep_time
+
+    # Sleep outside the lock to avoid blocking other threads
+    if sleep_time > 0:
+        logger.debug(f"Rate limiting: sleeping {sleep_time:.2f}s before Dhan API call")
+        time.sleep(sleep_time)
+
+
+def get_api_response(endpoint, auth, method="POST", payload='', retry_count=0):
+    """Make API request to Dhan with rate limiting and retry logic"""
+    MAX_RETRIES = 3
+    RETRY_DELAY = 2.0  # Base delay for exponential backoff
+
+    # Apply rate limiting before making the request
+    _apply_rate_limit()
+
     AUTH_TOKEN = auth
-    client_id = os.getenv('BROKER_API_KEY')
-    
+
+    # Get client_id from BROKER_API_KEY environment variable
+    # Format: client_id:::api_key
+    broker_api_key = os.getenv('BROKER_API_KEY')
+    if not broker_api_key:
+        raise Exception("BROKER_API_KEY not found in environment variables")
+
+    if ':::' in broker_api_key:
+        client_id = broker_api_key.split(':::')[0]
+    else:
+        client_id = broker_api_key
+
     if not client_id:
-        raise Exception("Could not extract client ID from auth token")
-    
+        raise Exception("Could not extract client ID from BROKER_API_KEY")
+
+    logger.debug(f"Using client_id: {client_id} for Dhan API request")
+
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
-    
+
     headers = {
         'access-token': AUTH_TOKEN,
         'client-id': client_id,
         'Content-Type': 'application/json',
         'Accept': 'application/json',
     }
-    
+
     url = get_url(endpoint)
-    
-    logger.info(f"Making request to {url}")
-    logger.info(f"Headers: {headers}")
-    logger.info(f"Payload: {payload}")
+
+    logger.debug(f"Making request to {url}")
+    #logger.debug(f"Headers: {headers}")
+    #logger.debug(f"Payload: {payload}")
     
     if method == "GET":
         res = client.get(url, headers=headers)
@@ -48,23 +93,31 @@ def get_api_response(endpoint, auth, method="POST", payload=''):
     res.status = res.status_code
     response = json.loads(res.text)
     
-    logger.info(f"Response status: {res.status}")
-    logger.info(f"Response: {json.dumps(response, indent=2)}")
+    logger.debug(f"Response status: {res.status}")
+    logger.debug(f"Response: {json.dumps(response, indent=2)}")
     
     # Handle Dhan API error codes
     if response.get('status') == 'failed':
-        error_data = response.get('data', {})  
+        error_data = response.get('data', {})
         error_code = list(error_data.keys())[0] if error_data else 'unknown'
         error_message = error_data.get(error_code, 'Unknown error')
-        
+
+        # Handle rate limit error (805) with retry
+        if error_code == '805' and retry_count < MAX_RETRIES:
+            retry_delay = RETRY_DELAY * (2 ** retry_count)  # Exponential backoff
+            logger.warning(f"Rate limit hit (805). Retrying in {retry_delay}s... (attempt {retry_count + 1}/{MAX_RETRIES})")
+            time.sleep(retry_delay)
+            return get_api_response(endpoint, auth, method, payload, retry_count + 1)
+
         error_mapping = {
+            '805': "Rate limit exceeded. Please wait before making more requests.",
             '806': "Data APIs not subscribed. Please subscribe to Dhan's market data service.",
             '810': "Authentication failed: Invalid client ID",
             '401': "Invalid or expired access token",
             '820': "Market data subscription required",
             '821': "Market data subscription required"
         }
-        
+
         error_msg = error_mapping.get(error_code, f"Dhan API Error {error_code}: {error_message}")
         logger.error(f"API Error: {error_msg}")
         raise Exception(error_msg)
@@ -93,7 +146,7 @@ class BrokerData:
         # Extract security ID and determine exchange segment
         # This needs to be implemented based on your symbol mapping logic
         security_id = get_token(symbol, exchange)  # This should be mapped to Dhan's security ID
-        logger.info(f"exchange: {exchange}")
+        #logger.info(f"exchange: {exchange}")
         if exchange == "NSE":
             exchange_segment = "NSE_EQ"
         elif exchange == "BSE":
@@ -134,7 +187,7 @@ class BrokerData:
             return int(ist_dt.timestamp())
 
     def _get_intraday_chunks(self, start_date, end_date) -> list:
-        """Split date range into 5-day chunks for intraday data"""
+        """Split date range into 90-day chunks for intraday data (Dhan API limit)"""
         # Handle both string and datetime.date objects
         if isinstance(start_date, str):
             start = datetime.strptime(start_date, "%Y-%m-%d")
@@ -148,7 +201,7 @@ class BrokerData:
         chunks = []
         
         while start < end:
-            chunk_end = min(start + timedelta(days=5), end)
+            chunk_end = min(start + timedelta(days=90), end)
             chunks.append((
                 start.strftime("%Y-%m-%d"),
                 chunk_end.strftime("%Y-%m-%d")
@@ -308,18 +361,18 @@ class BrokerData:
                 else:
                     end_dt = datetime.combine(end_date, datetime.min.time()) + timedelta(days=1)
                 end_date = end_dt.strftime("%Y-%m-%d")
-                logger.info(f"Start and end dates are same, increasing end date to: {end_date}")
+                #logger.info(f"Start and end dates are same, increasing end date to: {end_date}")
 
             # Convert symbol to broker format and get securityId
             security_id = get_token(symbol, exchange)
             if not security_id:
                 raise Exception(f"Could not find security ID for {symbol} on {exchange}")
-            logger.info(f"exchange: {exchange}")
+            #logger.info(f"exchange: {exchange}")
             # Get exchange segment and instrument type
             exchange_segment = self._get_exchange_segment(exchange)
             if not exchange_segment:
                 raise Exception(f"Unsupported exchange: {exchange}")
-            logger.info(f"exchange segment: {exchange_segment}")
+            #logger.info(f"exchange segment: {exchange_segment}")
             instrument_type = self._get_instrument_type(exchange, symbol)
             
             all_candles = []
@@ -351,8 +404,8 @@ class BrokerData:
                 if instrument_type == 'EQUITY':
                     request_data["expiryCode"] = 0
                 
-                logger.info(f"Making daily history request to {endpoint}")
-                logger.info(f"Request data: {json.dumps(request_data, indent=2)}")
+                logger.debug(f"Making daily history request to {endpoint}")
+                logger.debug(f"Request data: {json.dumps(request_data, indent=2)}")
                 
                 response = get_api_response(endpoint, self.auth_token, "POST", json.dumps(request_data))
                 
@@ -402,8 +455,8 @@ class BrokerData:
                         "oi": True
                     }
                     
-                    logger.info(f"Making intraday history request to {endpoint}")
-                    logger.info(f"Request data: {json.dumps(request_data, indent=2)}")
+                    logger.debug(f"Making intraday history request to {endpoint}")
+                    logger.debug(f"Request data: {json.dumps(request_data, indent=2)}")
                     
                     try:
                         response = get_api_response(endpoint, self.auth_token, "POST", json.dumps(request_data))
@@ -454,8 +507,8 @@ class BrokerData:
                             "oi": True
                         }
                         
-                        logger.info(f"Making intraday history request to {endpoint}")
-                        logger.info(f"Request data: {json.dumps(request_data, indent=2)}")
+                        logger.debug(f"Making intraday history request to {endpoint}")
+                        logger.debug(f"Request data: {json.dumps(request_data, indent=2)}")
                         
                         try:
                             response = get_api_response(endpoint, self.auth_token, "POST", json.dumps(request_data))
@@ -536,42 +589,51 @@ class BrokerData:
         try:
             security_id = get_token(symbol, exchange)
             exchange_type = self._get_exchange_segment(exchange)  # Use the correct method for exchange type
-            
-            logger.info(f"Getting quotes for symbol: {symbol}, exchange: {exchange}")
-            logger.info(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
-            
+
+            logger.debug(f"Getting quotes for symbol: {symbol}, exchange: {exchange}")
+            logger.debug(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
+
             payload = {
                 exchange_type: [int(security_id)]  # Use the proper exchange type for indices
             }
-            
+
             try:
                 response = get_api_response("/v2/marketfeed/quote", self.auth_token, "POST", json.dumps(payload))
-                logger.info(f"Quotes_Response: {response}")
+                logger.debug(f"Quotes_Response: {response}")
                 quote_data = response.get('data', {}).get(exchange_type, {}).get(str(security_id), {})
-                
+
                 if not quote_data:
+                    logger.warning(f"No quote data found for {symbol} ({exchange_type}:{security_id})")
                     return {
                         'ltp': 0,
                         'open': 0,
                         'high': 0,
                         'low': 0,
                         'volume': 0,
+                        'oi': 0,
                         'bid': 0,
                         'ask': 0,
                         'prev_close': 0
                     }
-                
+
+                # Debug: Log actual quote_data keys to verify field names
+                logger.debug(f"Quote data keys for {symbol}: {list(quote_data.keys())}")
+
+                # Handle both last_price (documented) and lastPrice (potential camelCase)
+                last_price = quote_data.get('last_price') or quote_data.get('lastPrice') or 0
+                ohlc = quote_data.get('ohlc', {})
+
                 # Transform to expected format
                 result = {
-                    'ltp': float(quote_data.get('last_price', 0)),
-                    'open': float(quote_data.get('ohlc', {}).get('open', 0)),
-                    'high': float(quote_data.get('ohlc', {}).get('high', 0)),
-                    'low': float(quote_data.get('ohlc', {}).get('low', 0)),
-                    'volume': int(quote_data.get('volume', 0)),
-                    'oi': int(quote_data.get('oi', 0)),
+                    'ltp': float(last_price),
+                    'open': float(ohlc.get('open', 0)),
+                    'high': float(ohlc.get('high', 0)),
+                    'low': float(ohlc.get('low', 0)),
+                    'volume': int(float(quote_data.get('volume', 0))),
+                    'oi': int(float(quote_data.get('oi') or quote_data.get('open_interest') or 0)),
                     'bid': 0,  # Will be updated from depth
                     'ask': 0,  # Will be updated from depth
-                    'prev_close': float(quote_data.get('ohlc', {}).get('close', 0))
+                    'prev_close': float(ohlc.get('close', 0))
                 }
                 
                 # Update bid/ask from depth if available
@@ -602,10 +664,197 @@ class BrokerData:
                         'error': str(e)
                     }
                 raise
-            
+
         except Exception as e:
             logger.error(f"Error in get_quotes: {str(e)}", exc_info=True)
             raise Exception(f"Error fetching quotes: {str(e)}")
+
+    def get_multiquotes(self, symbols: list) -> list:
+        """
+        Get real-time quotes for multiple symbols with automatic batching
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+                     Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
+        Returns:
+            list: List of quote data for each symbol with format:
+                  [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
+        """
+        try:
+            BATCH_SIZE = 1000  # Dhan API supports up to 1000 per request
+            RATE_LIMIT_DELAY = 1.0  # 1 request/sec = 1000 symbols/sec
+
+            # If symbols exceed batch size, process in batches
+            if len(symbols) > BATCH_SIZE:
+                logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                all_results = []
+
+                # Split symbols into batches
+                for i in range(0, len(symbols), BATCH_SIZE):
+                    batch = symbols[i:i + BATCH_SIZE]
+                    logger.debug(f"Processing batch {i//BATCH_SIZE + 1}: symbols {i+1} to {min(i+BATCH_SIZE, len(symbols))}")
+
+                    # Process this batch
+                    batch_results = self._process_quotes_batch(batch)
+                    all_results.extend(batch_results)
+
+                    # Rate limit delay between batches
+                    if i + BATCH_SIZE < len(symbols):
+                        time.sleep(RATE_LIMIT_DELAY)
+
+                logger.info(f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches")
+                return all_results
+            else:
+                # Single batch processing
+                return self._process_quotes_batch(symbols)
+
+        except Exception as e:
+            logger.exception(f"Error fetching multiquotes")
+            raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _process_quotes_batch(self, symbols: list) -> list:
+        """
+        Process a single batch of symbols (internal method)
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys (max 100)
+        Returns:
+            list: List of quote data for the batch
+        """
+        # Group symbols by exchange segment and build security ID map
+        exchange_securities = {}  # {exchange_segment: [security_id1, security_id2, ...]}
+        security_map = {}  # {exchange_segment:security_id -> {symbol, exchange}}
+
+        skipped_symbols = []
+        for item in symbols:
+            symbol = item['symbol']
+            exchange = item['exchange']
+
+            try:
+                security_id = get_token(symbol, exchange)
+                exchange_segment = self._get_exchange_segment(exchange)
+
+                # Skip if security_id or exchange_segment is None
+                if not security_id:
+                    logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve security ID")
+                    skipped_symbols.append(symbol)
+                    continue
+                if not exchange_segment:
+                    logger.warning(f"Skipping symbol {symbol} on {exchange}: unsupported exchange")
+                    skipped_symbols.append(symbol)
+                    continue
+
+                # Add to exchange group
+                if exchange_segment not in exchange_securities:
+                    exchange_securities[exchange_segment] = []
+                exchange_securities[exchange_segment].append(int(security_id))
+
+                # Store mapping for response parsing
+                security_map[f"{exchange_segment}:{security_id}"] = {
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'security_id': security_id
+                }
+
+            except Exception as e:
+                logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
+                skipped_symbols.append(symbol)
+                continue
+
+        if skipped_symbols:
+            logger.warning(f"Skipped {len(skipped_symbols)} symbols: {skipped_symbols[:5]}...")
+
+        # Return empty if no valid securities
+        if not exchange_securities:
+            logger.warning("No valid securities to fetch quotes for")
+            return []
+
+        logger.info(f"Requesting quotes for {sum(len(s) for s in exchange_securities.values())} instruments across {len(exchange_securities)} exchange segments")
+        logger.info(f"Exchange securities request (first 10): {dict(list(exchange_securities.items())[:1])}")
+        # Log the first 10 security IDs being requested
+        for seg, ids in exchange_securities.items():
+            logger.info(f"Requesting {seg}: {ids[:10]}... (total: {len(ids)})")
+
+        # Make API call
+        try:
+            response = get_api_response("/v2/marketfeed/quote", self.auth_token, "POST", json.dumps(exchange_securities))
+            logger.info(f"Multiquotes raw response status: {response.get('status')}")
+            logger.info(f"Multiquotes response data keys: {list(response.get('data', {}).keys()) if response.get('data') else 'No data'}")
+            # Log first few security IDs from response for each segment
+            for seg, seg_data in response.get('data', {}).items():
+                if isinstance(seg_data, dict):
+                    sample_ids = list(seg_data.keys())[:5]
+                    # Check how many have actual LTP data
+                    with_ltp = sum(1 for sid, sdata in seg_data.items()
+                                   if isinstance(sdata, dict) and (sdata.get('last_price') or sdata.get('lastPrice')))
+                    logger.info(f"Response segment '{seg}': {len(seg_data)} instruments, {with_ltp} with LTP data, sample IDs: {sample_ids}")
+                    # Log first instrument's data structure for debugging
+                    if sample_ids:
+                        first_data = seg_data.get(sample_ids[0], {})
+                        logger.debug(f"Sample data for {sample_ids[0]}: last_price={first_data.get('last_price')}, volume={first_data.get('volume')}")
+                else:
+                    logger.warning(f"Unexpected response format for segment '{seg}': {type(seg_data)}")
+        except Exception as e:
+            logger.error(f"API Error: {str(e)}")
+            raise Exception(f"API Error: {str(e)}")
+
+        # Parse response and build results
+        results = []
+        response_data = response.get('data', {})
+
+        logger.debug(f"Response data keys: {response_data.keys()}")
+        logger.debug(f"Security map keys: {list(security_map.keys())}")
+
+        # Build results from security_map
+        for key, original in security_map.items():
+            exchange_segment, security_id = key.split(':')
+            segment_data = response_data.get(exchange_segment, {})
+            quote_data = segment_data.get(str(security_id), {})
+
+            # Check if security_id exists in segment_data
+            security_id_found = str(security_id) in segment_data if segment_data else False
+            logger.debug(f"Looking for {exchange_segment}:{security_id} - segment has {len(segment_data) if segment_data else 0} items, security_id found: {security_id_found}")
+
+            if not quote_data:
+                logger.warning(f"No quote data found for {original['symbol']} (requested: {exchange_segment}:{security_id})")
+                results.append({
+                    'symbol': original['symbol'],
+                    'exchange': original['exchange'],
+                    'error': 'No quote data available'
+                })
+                continue
+
+            # Debug: Log the actual quote_data structure to identify field names
+            raw_last_price = quote_data.get('last_price') or quote_data.get('lastPrice')
+            logger.debug(f"Quote data for {original['symbol']}: keys={list(quote_data.keys())}, last_price={raw_last_price}, volume={quote_data.get('volume')}")
+
+            # Parse and format quote data - handle both snake_case and camelCase
+            ohlc = quote_data.get('ohlc', {})
+            depth = quote_data.get('depth') or {}  # Guard against null depth
+            buy_orders = depth.get('buy', [])
+            sell_orders = depth.get('sell', [])
+
+            # Handle both last_price (documented) and lastPrice (potential camelCase)
+            last_price = quote_data.get('last_price') or quote_data.get('lastPrice') or 0
+            volume = quote_data.get('volume') or 0
+            oi = quote_data.get('oi') or quote_data.get('open_interest') or 0
+
+            result_item = {
+                'symbol': original['symbol'],
+                'exchange': original['exchange'],
+                'data': {
+                    'bid': float(buy_orders[0].get('price', 0)) if buy_orders else 0,
+                    'ask': float(sell_orders[0].get('price', 0)) if sell_orders else 0,
+                    'open': float(ohlc.get('open', 0)),
+                    'high': float(ohlc.get('high', 0)),
+                    'low': float(ohlc.get('low', 0)),
+                    'ltp': float(last_price),
+                    'prev_close': float(ohlc.get('close', 0)),
+                    'volume': int(float(volume)),
+                    'oi': int(float(oi))
+                }
+            }
+            results.append(result_item)
+
+        return results
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
@@ -620,8 +869,8 @@ class BrokerData:
             security_id = get_token(symbol, exchange)
             exchange_type = self._get_exchange_segment(exchange)  # Use the correct method for exchange type
             
-            logger.info(f"Getting depth for symbol: {symbol}, exchange: {exchange}")
-            logger.info(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
+            #logger.info(f"Getting depth for symbol: {symbol}, exchange: {exchange}")
+            #logger.info(f"Mapped security_id: {security_id}, exchange_type: {exchange_type}")
             
             payload = {
                 exchange_type: [int(security_id)]  # Use the proper exchange type for indices
@@ -716,3 +965,4 @@ class BrokerData:
         except Exception as e:
             logger.error(f"Error in get_depth: {str(e)}", exc_info=True)
             raise Exception(f"Error fetching market depth: {str(e)}")
+        

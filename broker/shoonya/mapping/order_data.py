@@ -16,12 +16,12 @@ def map_order_data(order_data):
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
         # Check if 'data' is None
-    if order_data is None or (isinstance(order_data, dict) and (order_data['stat'] == "Not_Ok")):
+    if order_data is None or (isinstance(order_data, dict) and (order_data.get('stat') == "Not_Ok")):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
         logger.info("No data available.")
-        order_data = {}  # or set it to an empty list if it's supposed to be a list
+        order_data = []  # Return empty list for consistency with expected format
     else:
         order_data = order_data
         
@@ -140,20 +140,20 @@ def transform_order_data(orders):
 def map_trade_data(trade_data):
     """
     Processes and modifies a list of order dictionaries based on specific conditions.
-    
+
     Parameters:
     - order_data: A list of dictionaries, where each dictionary represents an order.
-    
+
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
         # Check if 'data' is None
-    if trade_data is None or (isinstance(trade_data, dict) and (trade_data['stat'] == "Not_Ok")):
+    if trade_data is None or (isinstance(trade_data, dict) and (trade_data.get('stat') == "Not_Ok")):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
         logger.info("No data available.")
-        trade_data = {}  # or set it to an empty list if it's supposed to be a list
+        trade_data = []  # Return empty list for consistency with expected format
     else:
         trade_data = trade_data
         
@@ -220,12 +220,12 @@ def transform_tradebook_data(tradebook_data):
 
 def map_position_data(position_data):
 
-    if  position_data is None or (isinstance(position_data, dict) and (position_data['stat'] == "Not_Ok")):
+    if  position_data is None or (isinstance(position_data, dict) and (position_data.get('stat') == "Not_Ok")):
         # Handle the case where there is no data
         # For example, you might want to display a message to the user
         # or pass an empty list or dictionary to the template.
         logger.info("No data available.")
-        position_data = {}  # or set it to an empty list if it's supposed to be a list
+        position_data = []  # Return empty list for consistency with expected format
     else:
         position_data = position_data
         

@@ -60,15 +60,15 @@ def transform_data(data, token):
             adjusted_price = ltp * 1.001
             price = str(round(adjusted_price, 2))
             logger.info(f"Adjusted BUY price: LTP {ltp} + 0.1% = {price}")
-            # Change order type to LIMIT
-            order_type = "limit"
+            # Change order type to LIMIT (uppercase required by API)
+            order_type = "LIMIT"
         elif action == "SELL":
             # Subtract 0.1% from LTP for SELL orders
             adjusted_price = ltp * 0.999
             price = str(round(adjusted_price, 2))
             logger.info(f"Adjusted SELL price: LTP {ltp} - 0.1% = {price}")
-            # Change order type to LIMIT
-            order_type = "limit"
+            # Change order type to LIMIT (uppercase required by API)
+            order_type = "LIMIT"
     
     # Basic mapping from OpenAlgo to Indmoney
     segment = map_segment(data["exchange"])
@@ -81,7 +81,8 @@ def transform_data(data, token):
         "validity": "DAY",  # Default to DAY
         "security_id": token,  # Security ID from token
         "qty": int(data["quantity"]),  # Order quantity
-        "is_amo": data.get("is_amo", False)  # After market order flag
+        "is_amo": data.get("is_amo", False),  # After market order flag
+        "algo_id": "99999"  # Required by API - use 99999 for regular orders
     }
     
     # Log the segment mapping for debugging
@@ -91,7 +92,7 @@ def transform_data(data, token):
     # Add limit_price for LIMIT orders
     if data.get("pricetype") == "LIMIT" and data.get("price"):
         transformed["limit_price"] = float(data["price"])
-    elif transformed["order_type"] == "limit":
+    elif transformed["order_type"] == "LIMIT":
         # For LIMIT orders, price is required
         transformed["limit_price"] = float(price if price != "0" else data.get("price", 0))
     
@@ -102,7 +103,7 @@ def transform_data(data, token):
     # For equity orders, ensure we have all required fields
     if transformed["segment"] == "EQUITY":
         # Ensure limit_price is set for LIMIT orders
-        if transformed["order_type"] == "limit" and "limit_price" not in transformed:
+        if transformed["order_type"] == "LIMIT" and "limit_price" not in transformed:
             transformed["limit_price"] = float(price if price != "0" else data.get("price", 0))
     
     logger.info(f"transformed data: {transformed}")
@@ -129,8 +130,8 @@ def map_order_type(pricetype):
     """
     order_type_mapping = {
         "MARKET": "MARKET",
-        "LIMIT": "limit",
-        "SL": "limit",  # Stop loss as limit order
+        "LIMIT": "LIMIT",  # Must be uppercase as per API requirement
+        "SL": "LIMIT",  # Stop loss as limit order
         "SL-M": "MARKET"  # Stop loss market as market order
     }
     return order_type_mapping.get(pricetype, "MARKET")

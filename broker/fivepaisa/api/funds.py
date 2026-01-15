@@ -8,8 +8,6 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-
-
 # Retrieve the BROKER_API_KEY environment variable
 broker_api_key = os.getenv('BROKER_API_KEY')
 

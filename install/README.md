@@ -3,8 +3,11 @@
 ## Prerequisites
 
 ### System Requirements
-- Ubuntu Server (22.04 LTS or later recommended)
-- Minimum 2GB RAM
+- **Supported Linux Distributions:**
+  - **Debian-based:** Ubuntu (22.04+ LTS), Debian, Raspbian, Pop!_OS, Linux Mint, Zorin OS
+  - **RHEL-based:** CentOS, RHEL, Fedora, Rocky Linux, AlmaLinux, Amazon Linux, Oracle Linux
+  - **Arch-based:** Arch Linux, Manjaro, EndeavourOS, CachyOS
+- Minimum 2GB RAM (script will configure swap if needed)
 - Clean installation recommended
 
 ### Domain and DNS Setup (Required)
@@ -46,7 +49,7 @@
 
 ### 1. Download Installation Script
 ```bash
-# Connect to your Ubuntu server via SSH
+# Connect to your Linux server via SSH
 ssh user@your_server_ip
 
 # Create a directory for installation
@@ -55,6 +58,9 @@ cd ~/openalgo-install
 
 # Download the installation script
 wget https://raw.githubusercontent.com/marketcalls/openalgo/main/install/install.sh
+
+# Or using curl
+curl -O https://raw.githubusercontent.com/marketcalls/openalgo/main/install/install.sh
 
 # Make the script executable
 chmod +x install.sh
@@ -72,11 +78,17 @@ The script will interactively prompt you for:
 - Broker API credentials
 
 The installation process will:
-- Install required packages
-- Configure Nginx with SSL
-- Set up the OpenAlgo application
+- **Detect your Linux distribution** and use appropriate package managers
+- Install required packages (Python, Nginx, Git, Certbot, UV)
+- Configure system swap memory if needed (for systems with <2GB RAM)
+- Set timezone to IST (optional)
+- Configure firewall (UFW for Debian/Arch, firewalld for RHEL)
+- **Auto-configure SELinux** on RHEL-based systems
+- Obtain and install Let's Encrypt SSL certificate
+- Configure Nginx with SSL and WebSocket support
+- Set up the OpenAlgo application with unique deployment name
 - Create systemd service with unique name based on domain and broker
-- Generate installation logs in the logs directory
+- Generate detailed installation logs in the logs directory
 
 #### Multi-Domain Deployment
 The installation script supports deploying multiple instances on the same server:
@@ -122,11 +134,15 @@ After installation completes, verify each deployment:
    ```bash
    # Test overall Nginx configuration
    sudo nginx -t
-   
+
    # Check specific site configurations
+   # For Debian/Ubuntu (sites-enabled):
    ls -l /etc/nginx/sites-enabled/
    cat /etc/nginx/sites-enabled/fyers.yourdomain.com
-   cat /etc/nginx/sites-enabled/zerodha.yourdomain.com
+
+   # For RHEL/CentOS/Arch (conf.d):
+   ls -l /etc/nginx/conf.d/
+   cat /etc/nginx/conf.d/fyers.yourdomain.com.conf
    ```
 
 3. **Access Web Interfaces**
@@ -194,6 +210,68 @@ After installation completes, verify each deployment:
    cat install/logs/install_20240101_143000.log  # Zerodha installation
    ```
 
+### Distribution-Specific Troubleshooting
+
+#### Arch Linux
+
+1. **Nginx not listening on port 443**
+   ```bash
+   # Check if conf.d is included in nginx.conf
+   grep "conf.d" /etc/nginx/nginx.conf
+
+   # If missing, add it manually
+   sudo sed -i '/http {/a\    include /etc/nginx/conf.d/*.conf;' /etc/nginx/nginx.conf
+   sudo systemctl restart nginx
+   ```
+
+2. **UV installation issues**
+   ```bash
+   # Install via pacman
+   sudo pacman -Sy python-uv
+
+   # Or use pip with system packages override
+   sudo python -m pip install --break-system-packages uv
+   ```
+
+#### RHEL/CentOS/Fedora
+
+1. **SELinux blocking Nginx**
+   ```bash
+   # Check SELinux status
+   getenforce
+
+   # View SELinux denials
+   sudo ausearch -m avc -ts recent
+
+   # The script auto-configures SELinux, but if issues persist:
+   sudo setsebool -P httpd_can_network_connect on
+   sudo semanage fcontext -a -t httpd_sys_rw_content_t "/var/python/openalgo-flask(/.*)?"
+   sudo restorecon -Rv /var/python/openalgo-flask
+   ```
+
+2. **Firewalld not configured**
+   ```bash
+   # Check firewall status
+   sudo firewall-cmd --list-all
+
+   # Manually add rules if needed
+   sudo firewall-cmd --permanent --add-service=http
+   sudo firewall-cmd --permanent --add-service=https
+   sudo firewall-cmd --reload
+   ```
+
+#### Cloudflare 521 Error
+
+1. **Set SSL/TLS mode to "Full (strict)"**
+   - Go to Cloudflare Dashboard → SSL/TLS → Overview
+   - Change encryption mode from "Flexible" to "Full (strict)"
+
+2. **Temporarily disable proxy for testing**
+   - Go to DNS tab
+   - Click orange cloud icon → turns grey (DNS only)
+   - Test your site directly
+   - Re-enable proxy after confirming server works
+
 ### Managing Multiple Deployments
 
 1. **Service Management Examples**
@@ -253,18 +331,40 @@ After installation completes, verify each deployment:
 ## Security Notes
 
 1. **Firewall**
-   - The installation configures UFW to allow only HTTP, HTTPS, and SSH
+   - **Debian/Ubuntu/Arch:** Configures UFW to allow only HTTP, HTTPS, and SSH
+   - **RHEL/CentOS/Fedora:** Configures firewalld to allow only HTTP, HTTPS, and SSH
    - Additional ports can be opened if needed:
      ```bash
+     # For UFW (Debian/Ubuntu/Arch)
      sudo ufw allow <port_number>
+
+     # For firewalld (RHEL/CentOS/Fedora)
+     sudo firewall-cmd --permanent --add-port=<port_number>/tcp
+     sudo firewall-cmd --reload
      ```
 
-2. **SSL/TLS**
+2. **SELinux (RHEL-based systems)**
+   - The installation script **automatically configures SELinux** for OpenAlgo
+   - Sets correct contexts for application directories
+   - Enables httpd network connections
+   - Creates custom policies if needed
+   - No manual SELinux configuration required!
+
+3. **SSL/TLS**
    - Certificates are automatically renewed by Certbot
    - The installation configures modern SSL parameters
    - Regular updates are recommended:
      ```bash
+     # For Debian/Ubuntu
      sudo apt update && sudo apt upgrade -y
+
+     # For RHEL/CentOS/Fedora
+     sudo dnf update -y
+     # or on older systems
+     sudo yum update -y
+
+     # For Arch Linux
+     sudo pacman -Syu
      ```
 
 ## Post-Installation

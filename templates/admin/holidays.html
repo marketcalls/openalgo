@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="mb-8">
+    <div class="flex items-center justify-between flex-wrap gap-4">
+        <div>
+            <div class="flex items-center gap-2 mb-2">
+                <a href="{{ url_for('admin_bp.index') }}" class="btn btn-ghost btn-sm">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                    </svg>
+                    Back to Admin
+                </a>
+            </div>
+            <h1 class="text-3xl font-bold text-base-content">Market Holidays</h1>
+            <p class="text-base-content/60 mt-2">Configure trading holidays for different exchanges</p>
+        </div>
+        <div class="flex gap-3 items-center">
+            <!-- Year Selector -->
+            <form method="GET" action="{{ url_for('admin_bp.holidays') }}" class="flex gap-2">
+                <select name="year" class="select select-bordered" onchange="this.form.submit()">
+                    {% for y in years %}
+                    <option value="{{ y }}" {{ 'selected' if y == current_year }}>{{ y }}</option>
+                    {% endfor %}
+                </select>
+            </form>
+            <button onclick="document.getElementById('add-modal').checked = true" class="btn btn-primary">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                </svg>
+                Add Holiday
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Stats Cards -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+    <div class="card bg-base-100 shadow">
+        <div class="card-body py-4">
+            <h3 class="text-base-content/60 text-sm">Total Holidays ({{ current_year }})</h3>
+            <p class="text-2xl font-bold text-primary">{{ holidays|length }}</p>
+        </div>
+    </div>
+    <div class="card bg-base-100 shadow">
+        <div class="card-body py-4">
+            <h3 class="text-base-content/60 text-sm">Trading Holidays</h3>
+            <p class="text-2xl font-bold text-warning">{{ holidays|selectattr('holiday_type', 'equalto', 'TRADING_HOLIDAY')|list|length }}</p>
+        </div>
+    </div>
+    <div class="card bg-base-100 shadow">
+        <div class="card-body py-4">
+            <h3 class="text-base-content/60 text-sm">Special Days</h3>
+            <p class="text-2xl font-bold text-success">{{ holidays|rejectattr('holiday_type', 'equalto', 'TRADING_HOLIDAY')|list|length }}</p>
+        </div>
+    </div>
+</div>
+
+<!-- Holidays Table -->
+<div class="card bg-base-100 shadow-lg">
+    <div class="card-body">
+        <h2 class="card-title text-xl mb-4">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            Holidays for {{ current_year }}
+        </h2>
+
+        <div class="overflow-x-auto">
+            <table class="table table-zebra">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Day</th>
+                        <th>Description</th>
+                        <th>Type</th>
+                        <th>Closed Exchanges</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for holiday in holidays %}
+                    <tr>
+                        <td class="font-mono">{{ holiday.date }}</td>
+                        <td>{{ holiday.day_name }}</td>
+                        <td class="font-semibold">{{ holiday.description }}</td>
+                        <td>
+                            {% if holiday.holiday_type == 'TRADING_HOLIDAY' %}
+                            <span class="badge badge-warning">Trading Holiday</span>
+                            {% elif holiday.holiday_type == 'SPECIAL_SESSION' %}
+                            <span class="badge badge-info">Special Session</span>
+                            {% else %}
+                            <span class="badge badge-ghost">{{ holiday.holiday_type }}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% for exchange in holiday.closed_exchanges %}
+                            <span class="badge badge-error badge-sm mr-1">{{ exchange }}</span>
+                            {% endfor %}
+                        </td>
+                        <td>
+                            <form method="POST" action="{{ url_for('admin_bp.holiday_delete', id=holiday.id) }}" onsubmit="return confirm('Delete {{ holiday.description }}?')">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="btn btn-ghost btn-sm text-error">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                    </svg>
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="6" class="text-center text-base-content/60">No holidays configured for {{ current_year }}. Add holidays using the button above.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Add Holiday Modal -->
+<input type="checkbox" id="add-modal" class="modal-toggle" />
+<div class="modal" role="dialog">
+    <div class="modal-box">
+        <h3 class="font-bold text-lg mb-4">Add Market Holiday</h3>
+        <form method="POST" action="{{ url_for('admin_bp.holiday_add') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+            <div class="form-control mb-4">
+                <label class="label"><span class="label-text">Date</span></label>
+                <input type="date" name="date" class="input input-bordered" required>
+            </div>
+
+            <div class="form-control mb-4">
+                <label class="label"><span class="label-text">Description</span></label>
+                <input type="text" name="description" class="input input-bordered" placeholder="e.g., Republic Day, Diwali" required>
+            </div>
+
+            <div class="form-control mb-4">
+                <label class="label"><span class="label-text">Holiday Type</span></label>
+                <select name="holiday_type" class="select select-bordered">
+                    <option value="TRADING_HOLIDAY" selected>Trading Holiday</option>
+                    <option value="SPECIAL_SESSION">Special Session</option>
+                    <option value="SETTLEMENT_HOLIDAY">Settlement Holiday</option>
+                </select>
+            </div>
+
+            <div class="form-control mb-4">
+                <label class="label"><span class="label-text">Closed Exchanges</span></label>
+                <div class="grid grid-cols-3 gap-2">
+                    {% for exchange in exchanges %}
+                    <label class="cursor-pointer flex items-center gap-2">
+                        <input type="checkbox" name="closed_exchanges" value="{{ exchange }}" class="checkbox checkbox-sm" checked>
+                        <span class="text-sm">{{ exchange }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div class="modal-action">
+                <label for="add-modal" class="btn btn-ghost">Cancel</label>
+                <button type="submit" class="btn btn-primary">Add Holiday</button>
+            </div>
+        </form>
+    </div>
+    <label class="modal-backdrop" for="add-modal"></label>
+</div>
+
+{% endblock %}
