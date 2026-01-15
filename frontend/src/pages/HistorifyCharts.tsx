@@ -275,7 +275,7 @@ export default function HistorifyCharts() {
           borderColor: isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.2)',
           timeVisible: isIntraday,
           secondsVisible: false,
-          tickMarkFormatter: (time: number) => {
+          tickMarkFormatter: (time: number, tickMarkType: number) => {
             // Convert Unix timestamp to IST (UTC+5:30)
             const date = new Date(time * 1000)
             const istOffset = 5.5 * 60 * 60 * 1000
@@ -287,10 +287,23 @@ export default function HistorifyCharts() {
               const minutes = istDate.getUTCMinutes().toString().padStart(2, '0')
               return `${hours}:${minutes}`
             } else {
-              // For daily and above: show date DD/MM
-              const day = istDate.getUTCDate().toString().padStart(2, '0')
-              const month = (istDate.getUTCMonth() + 1).toString().padStart(2, '0')
-              return `${day}/${month}`
+              // For daily and above: TradingView-style tick marks
+              // tickMarkType: 0=Year, 1=Month, 2=DayOfMonth, 3=Time, 4=TimeWithSeconds
+              const day = istDate.getUTCDate()
+              const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+              const month = istDate.getUTCMonth()
+              const year = istDate.getUTCFullYear()
+
+              if (tickMarkType === 0) {
+                // Year tick - show year
+                return year.toString()
+              } else if (tickMarkType === 1) {
+                // Month tick - show month name
+                return monthNames[month]
+              } else {
+                // Day tick - show just day number
+                return day.toString()
+              }
             }
           },
         },
