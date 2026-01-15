@@ -12,7 +12,7 @@ import os
 import subprocess
 import psutil
 import logging
-from datetime import datetime, time
+from datetime import datetime, time, date
 from pathlib import Path
 from werkzeug.utils import secure_filename
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -26,6 +26,7 @@ import threading
 from cryptography.fernet import Fernet
 import base64
 import hashlib
+from database.market_calendar_db import is_market_holiday
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -642,48 +643,124 @@ def cleanup_dead_processes():
             save_configs()
             logger.info(f"Cleaned up {len(dead_strategies)} dead processes")
 
+def is_trading_day() -> bool:
+    """
+    Check if today is a valid trading day (not weekend, not holiday).
+    Uses the market calendar service for accurate holiday detection.
+
+    Returns:
+        True if today is a trading day, False otherwise
+    """
+    try:
+        today = datetime.now(IST).date()
+
+        # Check using market calendar service (includes weekend check)
+        if is_market_holiday(today, exchange='NSE'):
+            logger.info(f"Today ({today}) is a market holiday or weekend - skipping scheduled strategy")
+            return False
+
+        return True
+    except Exception as e:
+        logger.error(f"Error checking trading day status: {e}")
+        # On error, default to NOT running to be safe
+        return False
+
+
+def is_within_market_hours() -> bool:
+    """
+    Check if current time is within market trading hours (09:15 - 15:30 IST).
+
+    Returns:
+        True if within market hours, False otherwise
+    """
+    try:
+        now = datetime.now(IST)
+        current_time = now.time()
+
+        # Market hours: 09:15 - 15:30 IST
+        market_open = time(9, 15)
+        market_close = time(15, 30)
+
+        if current_time < market_open or current_time > market_close:
+            logger.info(f"Current time ({current_time}) is outside market hours (09:15 - 15:30 IST)")
+            return False
+
+        return True
+    except Exception as e:
+        logger.error(f"Error checking market hours: {e}")
+        return False
+
+
+def scheduled_start_strategy(strategy_id: str):
+    """
+    Wrapper function for scheduled strategy start.
+    Enforces holiday and market hours check before starting.
+    """
+    # STRONGLY ENFORCE: Check if today is a trading day
+    if not is_trading_day():
+        logger.warning(f"Strategy {strategy_id} scheduled start BLOCKED - not a trading day")
+        return
+
+    # STRONGLY ENFORCE: Check if within market hours (optional - comment out if strategies should start before market)
+    # Note: We only check trading day, not market hours for start,
+    # since strategies might need to start before market opens for pre-market setup
+
+    logger.info(f"Trading day confirmed - proceeding to start strategy {strategy_id}")
+    start_strategy_process(strategy_id)
+
+
+def scheduled_stop_strategy(strategy_id: str):
+    """
+    Wrapper function for scheduled strategy stop.
+    Always stops the strategy regardless of market status (for safety).
+    """
+    # Always stop - this is a safety measure to prevent strategies from running after hours
+    logger.info(f"Scheduled stop triggered for strategy {strategy_id}")
+    stop_strategy_process(strategy_id)
+
+
 def schedule_strategy(strategy_id, start_time, stop_time=None, days=None):
     """Schedule a strategy to run at specific times (IST)"""
     if not days:
         days = ['mon', 'tue', 'wed', 'thu', 'fri']  # Default to weekdays
-    
+
     # Create job ID
     start_job_id = f"start_{strategy_id}"
     stop_job_id = f"stop_{strategy_id}"
-    
+
     # Remove existing jobs if any
     if SCHEDULER.get_job(start_job_id):
         SCHEDULER.remove_job(start_job_id)
     if SCHEDULER.get_job(stop_job_id):
         SCHEDULER.remove_job(stop_job_id)
-    
-    # Schedule start (time is already in IST from frontend)
+
+    # Schedule start with holiday check wrapper (time is already in IST from frontend)
     hour, minute = map(int, start_time.split(':'))
     SCHEDULER.add_job(
-        func=lambda: start_strategy_process(strategy_id),
+        func=lambda: scheduled_start_strategy(strategy_id),
         trigger=CronTrigger(hour=hour, minute=minute, day_of_week=','.join(days), timezone=IST),
         id=start_job_id,
         replace_existing=True
     )
-    
-    # Schedule stop if provided
+
+    # Schedule stop if provided (always runs for safety)
     if stop_time:
         hour, minute = map(int, stop_time.split(':'))
         SCHEDULER.add_job(
-            func=lambda: stop_strategy_process(strategy_id),
+            func=lambda: scheduled_stop_strategy(strategy_id),
             trigger=CronTrigger(hour=hour, minute=minute, day_of_week=','.join(days), timezone=IST),
             id=stop_job_id,
             replace_existing=True
         )
-    
+
     # Update config
     STRATEGY_CONFIGS[strategy_id]['is_scheduled'] = True
     STRATEGY_CONFIGS[strategy_id]['schedule_start'] = start_time
     STRATEGY_CONFIGS[strategy_id]['schedule_stop'] = stop_time
     STRATEGY_CONFIGS[strategy_id]['schedule_days'] = days
     save_configs()
-    
-    logger.info(f"Scheduled strategy {strategy_id}: {start_time} - {stop_time} IST on {days}")
+
+    logger.info(f"Scheduled strategy {strategy_id}: {start_time} - {stop_time} IST on {days} (holiday check enforced)")
 
 def unschedule_strategy(strategy_id):
     """Remove scheduling for a strategy"""
@@ -758,57 +835,75 @@ def index():
 def new_strategy():
     """Upload a new strategy"""
     user_id = session.get('user')
+    is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.content_type.startswith('multipart/form-data')
+
     if not user_id:
+        if is_ajax:
+            return jsonify({'status': 'error', 'message': 'Session expired'}), 401
         flash('Session expired', 'error')
         return redirect(url_for('auth.login'))
 
     if request.method == 'POST':
         if 'strategy_file' not in request.files:
+            if is_ajax:
+                return jsonify({'status': 'error', 'message': 'No file selected'}), 400
             flash('No file selected', 'error')
             return redirect(request.url)
-        
+
         file = request.files['strategy_file']
         if file.filename == '':
+            if is_ajax:
+                return jsonify({'status': 'error', 'message': 'No file selected'}), 400
             flash('No file selected', 'error')
             return redirect(request.url)
-        
+
         if file and file.filename.endswith('.py'):
             # Generate unique ID with IST timestamp
             ist_now = get_ist_time()
             strategy_id = Path(file.filename).stem + '_' + ist_now.strftime('%Y%m%d%H%M%S')
-            
+
             # Save file
             filename = secure_filename(file.filename)
             file_path = STRATEGIES_DIR / f"{strategy_id}.py"
             STRATEGIES_DIR.mkdir(parents=True, exist_ok=True)
             file.save(str(file_path))
-            
+
             # Make file executable on Unix-like systems
             if not IS_WINDOWS:
                 try:
                     os.chmod(file_path, 0o755)
                 except:
                     pass
-            
+
             # Get form data
             strategy_name = request.form.get('strategy_name', Path(file.filename).stem)
-            
+
             # Save configuration (no params needed)
             STRATEGY_CONFIGS[strategy_id] = {
                 'name': strategy_name,
                 'file_path': str(file_path),
+                'file_name': f"{strategy_id}.py",
                 'is_running': False,
                 'is_scheduled': False,
                 'created_at': ist_now.isoformat(),
                 'user_id': user_id
             }
             save_configs()
-            
+
+            if is_ajax:
+                return jsonify({
+                    'status': 'success',
+                    'message': f'Strategy "{strategy_name}" uploaded successfully',
+                    'data': {'strategy_id': strategy_id}
+                })
+
             flash(f'Strategy "{strategy_name}" uploaded successfully', 'success')
             return redirect(url_for('python_strategy_bp.index'))
         else:
+            if is_ajax:
+                return jsonify({'status': 'error', 'message': 'Please upload a Python (.py) file'}), 400
             flash('Please upload a Python (.py) file', 'error')
-    
+
     return render_template('python_strategy/new.html')
 
 @python_strategy_bp.route('/start/<strategy_id>', methods=['POST'])
@@ -817,7 +912,7 @@ def start_strategy(strategy_id):
     """Start a strategy"""
     user_id = session.get('user')
     if not user_id:
-        return jsonify({'success': False, 'message': 'Session expired'}), 401
+        return jsonify({'status': 'error', 'message': 'Session expired'}), 401
 
     # Verify ownership
     is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
@@ -827,7 +922,7 @@ def start_strategy(strategy_id):
     # Ensure initialization is done when starting strategies
     initialize_with_app_context()
     success, message = start_strategy_process(strategy_id)
-    return jsonify({'success': success, 'message': message})
+    return jsonify({'status': 'success' if success else 'error', 'message': message})
 
 @python_strategy_bp.route('/stop/<strategy_id>', methods=['POST'])
 @check_session_validity
@@ -835,7 +930,7 @@ def stop_strategy(strategy_id):
     """Stop a strategy"""
     user_id = session.get('user')
     if not user_id:
-        return jsonify({'success': False, 'message': 'Session expired'}), 401
+        return jsonify({'status': 'error', 'message': 'Session expired'}), 401
 
     # Verify ownership
     is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
@@ -843,7 +938,7 @@ def stop_strategy(strategy_id):
         return error_response
 
     success, message = stop_strategy_process(strategy_id)
-    return jsonify({'success': success, 'message': message})
+    return jsonify({'status': 'success' if success else 'error', 'message': message})
 
 @python_strategy_bp.route('/schedule/<strategy_id>', methods=['POST'])
 @check_session_validity
@@ -916,7 +1011,7 @@ def delete_strategy(strategy_id):
     """Delete a strategy"""
     user_id = session.get('user')
     if not user_id:
-        return jsonify({'success': False, 'message': 'Session expired'}), 401
+        return jsonify({'status': 'error', 'message': 'Session expired'}), 401
 
     # Verify ownership
     is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
@@ -945,9 +1040,9 @@ def delete_strategy(strategy_id):
             del STRATEGY_CONFIGS[strategy_id]
             save_configs()
 
-            return jsonify({'success': True, 'message': 'Strategy deleted successfully'})
+            return jsonify({'status': 'success', 'message': 'Strategy deleted successfully'})
 
-        return jsonify({'success': False, 'message': 'Strategy not found'})
+        return jsonify({'status': 'error', 'message': 'Strategy not found'})
 
 @python_strategy_bp.route('/logs/<strategy_id>')
 @check_session_validity
@@ -1215,21 +1310,31 @@ def api_get_strategy_content(strategy_id):
 
     config = STRATEGY_CONFIGS[strategy_id]
     file_name = config.get('file_name')
+    file_path = config.get('file_path')
 
-    if not file_name:
+    # Try file_name first, fall back to file_path
+    if file_name:
+        strategy_path = STRATEGIES_DIR / file_name
+    elif file_path:
+        strategy_path = Path(file_path)
+        file_name = strategy_path.name
+    else:
         return jsonify({'status': 'error', 'message': 'Strategy file not found'}), 404
 
-    strategy_path = STRATEGIES_DIR / file_name
     if not strategy_path.exists():
         return jsonify({'status': 'error', 'message': 'Strategy file not found on disk'}), 404
 
     try:
         content = strategy_path.read_text(encoding='utf-8')
+        file_stats = strategy_path.stat()
         return jsonify({
             'name': config.get('name', ''),
             'file_name': file_name,
             'content': content,
-            'is_running': config.get('is_running', False)
+            'is_running': config.get('is_running', False),
+            'line_count': content.count('\n') + 1,
+            'size_kb': file_stats.st_size / 1024,
+            'last_modified': datetime.fromtimestamp(file_stats.st_mtime, tz=IST).isoformat()
         })
     except Exception as e:
         logger.error(f"Error reading strategy file: {e}")
@@ -1251,8 +1356,8 @@ def api_get_log_files(strategy_id):
         stats = log_file.stat()
         logs.append({
             'name': log_file.name,
-            'size': stats.st_size,
-            'modified': datetime.fromtimestamp(stats.st_mtime).isoformat()
+            'size_kb': stats.st_size / 1024,
+            'last_modified': datetime.fromtimestamp(stats.st_mtime, tz=IST).isoformat()
         })
 
     return jsonify({'logs': logs})
@@ -1273,10 +1378,14 @@ def api_get_log_content(strategy_id, log_name):
 
     try:
         content = log_path.read_text(encoding='utf-8', errors='replace')
+        stats = log_path.stat()
+        line_count = content.count('\n') + 1 if content else 0
         return jsonify({
             'name': safe_log_name,
             'content': content,
-            'size': log_path.stat().st_size
+            'lines': line_count,
+            'size_kb': stats.st_size / 1024,
+            'last_updated': datetime.fromtimestamp(stats.st_mtime, tz=IST).isoformat()
         })
     except Exception as e:
         logger.error(f"Error reading log file: {e}")

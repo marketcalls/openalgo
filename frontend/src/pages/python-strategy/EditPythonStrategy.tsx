@@ -5,12 +5,10 @@ import {
   FileCode,
   Maximize2,
   Minimize2,
-  Moon,
   RotateCcw,
   Save,
-  Sun,
 } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { pythonStrategyApi } from '@/api/python-strategy'
@@ -24,6 +22,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { PythonEditor } from '@/components/ui/python-editor'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { PythonStrategy, PythonStrategyContent } from '@/types/python-strategy'
 
@@ -36,9 +35,6 @@ export default function EditPythonStrategy() {
   const [originalCode, setOriginalCode] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [darkTheme, setDarkTheme] = useState(() => {
-    return localStorage.getItem('editor-theme') === 'dark'
-  })
   const [isFullscreen, setIsFullscreen] = useState(false)
 
   const hasChanges = code !== originalCode
@@ -54,8 +50,8 @@ export default function EditPythonStrategy() {
       ])
       setStrategy(strategyData)
       setContent(contentData)
-      setCode(contentData.content)
-      setOriginalCode(contentData.content)
+      setCode(contentData.content || '')
+      setOriginalCode(contentData.content || '')
     } catch (error) {
       console.error('Failed to fetch strategy:', error)
       toast.error('Failed to load strategy')
@@ -69,11 +65,6 @@ export default function EditPythonStrategy() {
     fetchData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  // Save theme preference
-  useEffect(() => {
-    localStorage.setItem('editor-theme', darkTheme ? 'dark' : 'light')
-  }, [darkTheme])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -132,7 +123,7 @@ export default function EditPythonStrategy() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = strategy.file_name
+      a.download = strategy.file_name || `${strategy.name}.py`
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
@@ -143,46 +134,6 @@ export default function EditPythonStrategy() {
       toast.error('Failed to export strategy')
     }
   }
-
-  const handleTabKey = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === 'Tab') {
-        e.preventDefault()
-        const target = e.target as HTMLTextAreaElement
-        const start = target.selectionStart
-        const end = target.selectionEnd
-
-        if (e.shiftKey) {
-          // Unindent: Remove leading spaces/tab
-          const beforeCursor = code.substring(0, start)
-          const lineStart = beforeCursor.lastIndexOf('\n') + 1
-          const lineContent = code.substring(lineStart, start)
-
-          if (lineContent.startsWith('    ')) {
-            const newCode = code.substring(0, lineStart) + code.substring(lineStart + 4)
-            setCode(newCode)
-            setTimeout(() => {
-              target.selectionStart = target.selectionEnd = start - 4
-            }, 0)
-          } else if (lineContent.startsWith('\t')) {
-            const newCode = code.substring(0, lineStart) + code.substring(lineStart + 1)
-            setCode(newCode)
-            setTimeout(() => {
-              target.selectionStart = target.selectionEnd = start - 1
-            }, 0)
-          }
-        } else {
-          // Indent: Add 4 spaces
-          const newCode = `${code.substring(0, start)}    ${code.substring(end)}`
-          setCode(newCode)
-          setTimeout(() => {
-            target.selectionStart = target.selectionEnd = start + 4
-          }, 0)
-        }
-      }
-    },
-    [code]
-  )
 
   if (loading) {
     return (
@@ -204,9 +155,6 @@ export default function EditPythonStrategy() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold">{strategy.name}</h2>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => setDarkTheme(!darkTheme)}>
-              {darkTheme ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            </Button>
             <Button variant="outline" size="sm" onClick={() => setIsFullscreen(false)}>
               <Minimize2 className="h-4 w-4" />
             </Button>
@@ -223,21 +171,15 @@ export default function EditPythonStrategy() {
         </div>
       )}
 
-      <textarea
-        value={code}
-        onChange={(e) => setCode(e.target.value)}
-        onKeyDown={handleTabKey}
-        readOnly={isRunning}
-        className={`w-full font-mono text-sm p-4 rounded-lg border focus:outline-none focus:ring-2 focus:ring-primary resize-none ${
-          darkTheme
-            ? 'bg-gray-900 text-gray-100 border-gray-700'
-            : 'bg-white text-gray-900 border-gray-300'
-        } ${isFullscreen ? 'h-[calc(100vh-120px)]' : 'min-h-[600px]'} ${
-          isRunning ? 'opacity-75 cursor-not-allowed' : ''
-        }`}
-        spellCheck={false}
-        placeholder="# Your Python strategy code here..."
-      />
+      <div className={`rounded-lg border overflow-hidden ${isRunning ? 'opacity-75' : ''}`}>
+        <PythonEditor
+          value={code}
+          onChange={isRunning ? undefined : setCode}
+          readOnly={isRunning}
+          height={isFullscreen ? 'calc(100vh - 140px)' : '600px'}
+          placeholder="# Your Python strategy code here..."
+        />
+      </div>
 
       {/* Line count footer */}
       <div className="flex items-center justify-between mt-2 text-xs text-muted-foreground">
@@ -282,9 +224,6 @@ export default function EditPythonStrategy() {
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => setDarkTheme(!darkTheme)}>
-            {darkTheme ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          </Button>
           <Button variant="outline" size="sm" onClick={() => setIsFullscreen(true)}>
             <Maximize2 className="h-4 w-4" />
           </Button>
@@ -334,12 +273,24 @@ export default function EditPythonStrategy() {
       {/* File Info */}
       <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
         <span>File: {content.file_name}</span>
-        <span>•</span>
-        <span>{content.line_count} lines</span>
-        <span>•</span>
-        <span>{content.size_kb.toFixed(2)} KB</span>
-        <span>•</span>
-        <span>Last modified: {new Date(content.last_modified).toLocaleString()}</span>
+        {content.line_count && (
+          <>
+            <span>•</span>
+            <span>{content.line_count} lines</span>
+          </>
+        )}
+        {content.size_kb != null && (
+          <>
+            <span>•</span>
+            <span>{content.size_kb.toFixed(2)} KB</span>
+          </>
+        )}
+        {content.last_modified && (
+          <>
+            <span>•</span>
+            <span>Last modified: {new Date(content.last_modified).toLocaleString()}</span>
+          </>
+        )}
       </div>
 
       {/* Editor */}

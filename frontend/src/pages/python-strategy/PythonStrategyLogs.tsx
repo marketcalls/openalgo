@@ -1,5 +1,5 @@
 import { ArrowLeft, Clock, FileText, HardDrive, RefreshCw, ScrollText, Trash2 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { pythonStrategyApi } from '@/api/python-strategy'
@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
+import { LogViewer } from '@/components/ui/log-viewer'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { LogContent, LogFile, PythonStrategy } from '@/types/python-strategy'
@@ -30,8 +31,7 @@ export default function PythonStrategyLogs() {
   const [loadingContent, setLoadingContent] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [clearDialogOpen, setClearDialogOpen] = useState(false)
-  const [autoScroll, setAutoScroll] = useState(true)
-  const logContainerRef = useRef<HTMLDivElement>(null)
+  const [autoRefresh, setAutoRefresh] = useState(true)
 
   const fetchData = async () => {
     if (!strategyId) return
@@ -62,15 +62,6 @@ export default function PythonStrategyLogs() {
       setLoadingContent(true)
       const content = await pythonStrategyApi.getLogContent(strategyId, logName)
       setLogContent(content)
-
-      // Auto-scroll to bottom
-      if (autoScroll && logContainerRef.current) {
-        setTimeout(() => {
-          if (logContainerRef.current) {
-            logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight
-          }
-        }, 100)
-      }
     } catch (error) {
       console.error('Failed to fetch log content:', error)
       toast.error('Failed to load log content')
@@ -91,16 +82,16 @@ export default function PythonStrategyLogs() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLog])
 
-  // Auto-refresh if strategy is running
+  // Auto-refresh if strategy is running and auto-refresh is enabled
   useEffect(() => {
-    if (strategy?.status === 'running' && selectedLog) {
+    if (strategy?.status === 'running' && selectedLog && autoRefresh) {
       const interval = setInterval(() => {
         fetchLogContent(selectedLog)
-      }, 5000)
+      }, 3000)
       return () => clearInterval(interval)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strategy?.status, selectedLog])
+  }, [strategy?.status, selectedLog, autoRefresh])
 
   const handleClearLogs = async () => {
     if (!strategyId) return
@@ -131,27 +122,6 @@ export default function PythonStrategyLogs() {
       return parts.slice(1).join('_').replace('.log', '')
     }
     return name.replace('.log', '')
-  }
-
-  const highlightLog = (content: string) => {
-    // Add colors for different log levels
-    return content.split('\n').map((line, index) => {
-      let className = 'text-gray-300'
-      if (line.includes('ERROR') || line.includes('error') || line.includes('Error')) {
-        className = 'text-red-400'
-      } else if (line.includes('WARNING') || line.includes('warning') || line.includes('Warning')) {
-        className = 'text-yellow-400'
-      } else if (line.includes('SUCCESS') || line.includes('success') || line.includes('Success')) {
-        className = 'text-green-400'
-      } else if (line.includes('INFO') || line.includes('info') || line.includes('Info')) {
-        className = 'text-blue-400'
-      }
-      return (
-        <div key={index} className={className}>
-          {line || '\u00A0'}
-        </div>
-      )
-    })
   }
 
   if (loading) {
@@ -189,12 +159,12 @@ export default function PythonStrategyLogs() {
         <div className="flex gap-2">
           <div className="flex items-center space-x-2">
             <Checkbox
-              id="auto-scroll"
-              checked={autoScroll}
-              onCheckedChange={(checked) => setAutoScroll(checked as boolean)}
+              id="auto-refresh"
+              checked={autoRefresh}
+              onCheckedChange={(checked) => setAutoRefresh(checked as boolean)}
             />
-            <Label htmlFor="auto-scroll" className="text-sm">
-              Auto-scroll
+            <Label htmlFor="auto-refresh" className="text-sm">
+              Auto-refresh
             </Label>
           </div>
           <Button
@@ -294,12 +264,7 @@ export default function PythonStrategyLogs() {
                 <RefreshCw className="h-6 w-6 animate-spin" />
               </div>
             ) : logContent ? (
-              <div
-                ref={logContainerRef}
-                className="h-[500px] overflow-auto bg-gray-900 rounded-lg p-4 font-mono text-xs"
-              >
-                {highlightLog(logContent.content)}
-              </div>
+              <LogViewer value={logContent.content} height="500px" />
             ) : (
               <div className="flex items-center justify-center h-[500px] text-muted-foreground">
                 No content available

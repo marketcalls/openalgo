@@ -47,8 +47,8 @@ export const pythonStrategyApi = {
     file: File
   ): Promise<ApiResponse<{ strategy_id: string }>> => {
     const formData = new FormData()
-    formData.append('name', name)
-    formData.append('file', file)
+    formData.append('strategy_name', name)
+    formData.append('strategy_file', file)
 
     const response = await webClient.post<ApiResponse<{ strategy_id: string }>>(
       '/python/new',
