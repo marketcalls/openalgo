@@ -59,19 +59,35 @@ def parse_bru_file(filepath):
                         if params:
                             endpoint['params'] = params
 
-        # Extract body:json block
-        body_match = re.search(r'body:json\s*\{([\s\S]*)\}(?:\s*$|\s*\n)', content)
-        if body_match:
-            body_content = body_match.group(1).strip()
-            try:
-                # Use object_pairs_hook to preserve field order from .bru file
-                body_json = json.loads(body_content, object_pairs_hook=OrderedDict)
-                # Clear the hardcoded API key
-                if isinstance(body_json, (dict, OrderedDict)) and 'apikey' in body_json:
-                    body_json['apikey'] = ''
-                endpoint['body'] = body_json
-            except json.JSONDecodeError:
-                logger.warning(f"Failed to parse JSON body in {filepath}")
+        # Extract body:json block with balanced brace matching
+        body_start = content.find('body:json')
+        if body_start != -1:
+            # Find the opening brace of the body:json block
+            brace_start = content.find('{', body_start)
+            if brace_start != -1:
+                # Count braces to find the matching closing brace
+                depth = 0
+                body_end = brace_start
+                for i, char in enumerate(content[brace_start:], start=brace_start):
+                    if char == '{':
+                        depth += 1
+                    elif char == '}':
+                        depth -= 1
+                        if depth == 0:
+                            body_end = i
+                            break
+
+                # Extract content between outer braces (the JSON object inside)
+                body_content = content[brace_start+1:body_end].strip()
+                try:
+                    # Use object_pairs_hook to preserve field order from .bru file
+                    body_json = json.loads(body_content, object_pairs_hook=OrderedDict)
+                    # Clear the hardcoded API key
+                    if isinstance(body_json, (dict, OrderedDict)) and 'apikey' in body_json:
+                        body_json['apikey'] = ''
+                    endpoint['body'] = body_json
+                except json.JSONDecodeError:
+                    logger.warning(f"Failed to parse JSON body in {filepath}")
 
         # Extract query params for GET requests
         params_match = re.search(r'params:query\s*\{([^}]+)\}', content)
