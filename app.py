@@ -412,6 +412,9 @@ def setup_environment(app):
     if os.getenv('NGROK_ALLOW') == 'TRUE':
         global _ngrok_tunnel
         from pyngrok import ngrok
+        flask_port = int(os.getenv('FLASK_PORT', 5000))  # Get Flask port from environment
+        ngrok_domain = os.getenv('NGROK_DOMAIN')  # Get custom ngrok domain if specified
+        
 
         # Register cleanup handlers for graceful shutdown
         atexit.register(cleanup_ngrok)
