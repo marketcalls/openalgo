@@ -352,7 +352,7 @@ export default function Analyzer() {
 
       {/* Request Details Dialog */}
       <Dialog open={showDetailsDialog} onOpenChange={setShowDetailsDialog}>
-        <DialogContent className="max-w-[95vw] w-full">
+        <DialogContent className="max-w-[98vw] w-[98vw] p-4">
           <DialogHeader>
             <DialogTitle>Request Details</DialogTitle>
           </DialogHeader>
@@ -370,16 +370,16 @@ export default function Analyzer() {
             const height = Math.min(Math.max(maxLines * 20 + 24, 150), 600)
 
             return (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[70vh] overflow-y-auto">
-                <div className="min-w-0">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 max-h-[75vh] overflow-y-auto">
+                <div className="min-w-0 overflow-hidden">
                   <h4 className="font-semibold mb-2">Request Data</h4>
-                  <div className="rounded-lg border bg-card/50" style={{ height }}>
+                  <div className="rounded-lg border bg-card/50 overflow-auto" style={{ height }}>
                     <JsonEditor value={requestJson} readOnly={true} lineWrapping={false} />
                   </div>
                 </div>
-                <div className="min-w-0">
+                <div className="min-w-0 overflow-hidden">
                   <h4 className="font-semibold mb-2">Response Data</h4>
-                  <div className="rounded-lg border bg-card/50" style={{ height }}>
+                  <div className="rounded-lg border bg-card/50 overflow-auto" style={{ height }}>
                     <JsonEditor value={responseJson} readOnly={true} lineWrapping={false} />
                   </div>
                 </div>
