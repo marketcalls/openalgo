@@ -413,7 +413,7 @@ export default function PythonStrategyIndex() {
 
               <CardContent className="space-y-4 flex-1 flex flex-col">
                 {/* Schedule Info - always show with consistent height */}
-                <div className={`text-sm p-2 rounded min-h-[52px] ${strategy.is_scheduled ? 'bg-blue-50 dark:bg-blue-950' : 'bg-muted/50'}`}>
+                <div className={`text-sm p-2 rounded min-h-[52px] ${strategy.is_scheduled ? 'bg-blue-500/10 border border-blue-500/20' : 'bg-muted/50'}`}>
                   {strategy.is_scheduled ? (
                     <>
                       <div className="flex items-center gap-2">
