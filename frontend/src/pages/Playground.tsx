@@ -255,8 +255,10 @@ export default function Playground() {
   )
 
   const selectEndpoint = (endpoint: Endpoint) => {
-    // Check if tab already exists
-    const existingTab = openTabs.find((t) => t.endpoint.path === endpoint.path)
+    // Check if tab already exists (match by both path AND name for endpoints sharing same path)
+    const existingTab = openTabs.find(
+      (t) => t.endpoint.path === endpoint.path && t.endpoint.name === endpoint.name
+    )
 
     if (existingTab) {
       setActiveTabId(existingTab.id)
@@ -266,7 +268,7 @@ export default function Playground() {
     } else {
       // Create new tab
       const newTab: OpenTab = {
-        id: `${endpoint.path}-${Date.now()}`,
+        id: `${endpoint.name}-${Date.now()}`,
         endpoint,
         requestBody: getDefaultBody(endpoint),
         modified: false,
