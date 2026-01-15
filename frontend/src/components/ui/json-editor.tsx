@@ -18,19 +18,16 @@ interface JsonEditorProps {
 // Custom theme matching the existing tokenizer colors
 // Keys: sky-400, Strings: emerald-400, Numbers: orange-400, Booleans: purple-400, Null: red-400
 const createJsonTheme = (isDark: boolean): Extension => {
-  const editorBg = isDark ? '#09090b' : '#ffffff'
-  const gutterBg = isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.02)'
-
   return createTheme({
     theme: isDark ? 'dark' : 'light',
     settings: {
-      background: editorBg,
+      background: 'transparent',
       foreground: isDark ? '#e5e5e5' : '#171717',
       caret: isDark ? '#38bdf8' : '#0284c7',
       selection: isDark ? 'rgba(56, 189, 248, 0.2)' : 'rgba(2, 132, 199, 0.2)',
       selectionMatch: isDark ? 'rgba(56, 189, 248, 0.1)' : 'rgba(2, 132, 199, 0.1)',
-      lineHighlight: isDark ? 'rgba(255, 255, 255, 0.03)' : 'rgba(0, 0, 0, 0.03)',
-      gutterBackground: gutterBg,
+      lineHighlight: 'transparent',
+      gutterBackground: 'transparent',
       gutterForeground: isDark ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.3)',
       gutterBorder: 'transparent',
     },
@@ -52,32 +49,32 @@ const createJsonTheme = (isDark: boolean): Extension => {
   })
 }
 
-// Editor base styling - dynamic for theme-aware border
+// Editor base styling - uses CSS variables for theme consistency
 const createBaseTheme = (isDark: boolean): Extension => {
   const borderColor = isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'
-  const gutterBg = isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.02)'
-  const editorBg = isDark ? '#09090b' : '#ffffff'
+  // Match response panel's bg-card/50 styling
+  const gutterBg = isDark ? 'rgba(255, 255, 255, 0.025)' : 'rgba(0, 0, 0, 0.02)'
 
   return EditorView.theme({
     '&': {
       fontSize: '12px',
       fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
       height: '100%',
-      backgroundColor: editorBg,
+      backgroundColor: 'transparent',
     },
     '&.cm-editor': {
       height: '100%',
-      backgroundColor: editorBg,
+      backgroundColor: 'transparent',
     },
     '.cm-scroller': {
       overflow: 'auto',
       height: '100%',
-      backgroundColor: editorBg,
+      backgroundColor: 'transparent',
     },
     '.cm-content': {
       padding: '12px 0',
       lineHeight: '20px',
-      backgroundColor: editorBg,
+      backgroundColor: 'transparent',
     },
     '.cm-line': {
       padding: '0 12px',
@@ -129,13 +126,8 @@ export function JsonEditor({
     ]
   }, [isDark])
 
-  const editorBg = isDark ? '#09090b' : '#ffffff'
-
   return (
-    <div
-      className={`h-full w-full ${className}`}
-      style={{ backgroundColor: editorBg }}
-    >
+    <div className={`h-full w-full ${className}`}>
       <CodeMirror
         value={value}
         onChange={onChange}

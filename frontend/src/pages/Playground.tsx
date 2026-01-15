@@ -833,13 +833,15 @@ export default function Playground() {
                       </div>
                     </div>
 
-                    <TabsContent value="body" className="flex-1 m-0 overflow-hidden flex flex-col">
-                      <JsonEditor
-                        value={requestBody}
-                        onChange={updateCurrentTabBody}
-                        placeholder='{"apikey": ""}'
-                        className="flex-1 min-h-0"
-                      />
+                    <TabsContent value="body" className="flex-1 m-0 overflow-hidden">
+                      <div className="h-full flex bg-background">
+                        <JsonEditor
+                          value={requestBody}
+                          onChange={updateCurrentTabBody}
+                          placeholder='{"apikey": ""}'
+                          className="flex-1 min-h-0"
+                        />
+                      </div>
                     </TabsContent>
 
                     <TabsContent
