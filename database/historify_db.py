@@ -380,10 +380,10 @@ def upsert_market_data(df: pd.DataFrame, symbol: str, exchange: str, interval: s
 # Storage intervals - only these are physically stored
 STORAGE_INTERVALS = {'1m', 'D'}
 
-# Computed intervals - these are aggregated from 1m data on-the-fly
+# Standard computed intervals - these are aggregated from 1m data on-the-fly
 COMPUTED_INTERVALS = {'5m', '15m', '30m', '1h'}
 
-# Interval to minutes mapping for aggregation
+# Interval to minutes mapping for standard intervals
 INTERVAL_MINUTES = {
     '1m': 1,
     '5m': 5,
@@ -391,6 +391,92 @@ INTERVAL_MINUTES = {
     '30m': 30,
     '1h': 60,
 }
+
+
+def parse_interval(interval: str) -> Optional[Dict[str, Any]]:
+    """
+    Parse an interval string into its components.
+
+    Supports formats:
+    - Minutes: '1m', '5m', '25m', '45m', etc.
+    - Hours: '1h', '2h', '3h', '4h', etc.
+    - Days: 'D', '1D', '2D', '3D', etc.
+    - Weeks: 'W', '1W', '2W', etc.
+
+    Args:
+        interval: Interval string (e.g., '25m', '2h', '3D')
+
+    Returns:
+        Dictionary with 'minutes' (for intraday) or 'days' (for daily+),
+        'type' ('intraday' or 'daily'), and 'value' (numeric value).
+        Returns None if parsing fails.
+    """
+    import re
+
+    if not interval:
+        return None
+
+    interval = interval.strip().upper()
+
+    # Handle single letter 'D' as '1D'
+    if interval == 'D':
+        return {'type': 'daily', 'days': 1, 'value': 1, 'unit': 'D'}
+
+    # Handle single letter 'W' as '1W'
+    if interval == 'W':
+        return {'type': 'daily', 'days': 7, 'value': 1, 'unit': 'W'}
+
+    # Parse format: number + unit (e.g., '25m', '2h', '3D')
+    match = re.match(r'^(\d+)([MHDW])$', interval)
+    if not match:
+        return None
+
+    value = int(match.group(1))
+    unit = match.group(2)
+
+    if value <= 0:
+        return None
+
+    if unit == 'M':
+        # Minutes
+        return {'type': 'intraday', 'minutes': value, 'value': value, 'unit': 'M'}
+    elif unit == 'H':
+        # Hours - convert to minutes
+        return {'type': 'intraday', 'minutes': value * 60, 'value': value, 'unit': 'H'}
+    elif unit == 'D':
+        # Days
+        return {'type': 'daily', 'days': value, 'value': value, 'unit': 'D'}
+    elif unit == 'W':
+        # Weeks - convert to days
+        return {'type': 'daily', 'days': value * 7, 'value': value, 'unit': 'W'}
+
+    return None
+
+
+def is_custom_interval(interval: str) -> bool:
+    """
+    Check if an interval is a custom interval that needs computation.
+
+    Custom intervals are any intervals that:
+    1. Are not storage intervals (1m, D)
+    2. Can be computed from 1m data (any minute/hour interval)
+
+    Args:
+        interval: Interval string
+
+    Returns:
+        True if custom interval that can be computed, False otherwise
+    """
+    if interval in STORAGE_INTERVALS:
+        return False
+
+    parsed = parse_interval(interval)
+    if not parsed:
+        return False
+
+    # Only intraday custom intervals can be computed from 1m data
+    # Daily+ intervals need D data (which we currently don't aggregate)
+    return parsed['type'] == 'intraday'
 
 
 def get_ohlcv(
@@ -402,12 +488,17 @@ def get_ohlcv(
 ) -> pd.DataFrame:
     """
     Retrieve OHLCV data for a symbol.
-    For computed intervals (5m, 15m, 30m, 1h), aggregates 1m data on-the-fly.
+    For computed intervals (standard or custom like 25m, 2h), aggregates 1m data on-the-fly.
+
+    Supports:
+    - Storage intervals: 1m, D (retrieved directly)
+    - Standard computed: 5m, 15m, 30m, 1h (aggregated from 1m)
+    - Custom intervals: 25m, 45m, 2h, 3h, etc. (aggregated from 1m)
 
     Args:
         symbol: Trading symbol
         exchange: Exchange code
-        interval: Time interval
+        interval: Time interval (e.g., '1m', '25m', '2h', 'D')
         start_timestamp: Start epoch timestamp (optional)
         end_timestamp: End epoch timestamp (optional)
 
@@ -415,8 +506,8 @@ def get_ohlcv(
         DataFrame with columns: timestamp, open, high, low, close, volume, oi
     """
     try:
-        # Check if this is a computed interval
-        if interval in COMPUTED_INTERVALS:
+        # Check if this is a computed interval (standard or custom)
+        if interval in COMPUTED_INTERVALS or is_custom_interval(interval):
             return _get_aggregated_ohlcv(
                 symbol=symbol,
                 exchange=exchange,
@@ -510,10 +601,12 @@ def _get_aggregated_ohlcv(
     Example: For NSE (opens 9:15), hourly candles are 9:15-10:15, 10:15-11:15, etc.
     For MCX (opens 9:00), hourly candles are 9:00-10:00, 10:00-11:00, etc.
 
+    Supports custom intervals like 25m, 45m, 2h, 3h, etc.
+
     Args:
         symbol: Trading symbol
         exchange: Exchange code (determines candle alignment)
-        target_interval: Target interval (5m, 15m, 30m, 1h)
+        target_interval: Target interval (5m, 15m, 30m, 1h, or custom like 25m, 2h)
         start_timestamp: Start epoch timestamp (optional)
         end_timestamp: End epoch timestamp (optional)
 
@@ -521,7 +614,16 @@ def _get_aggregated_ohlcv(
         DataFrame with aggregated OHLCV data
     """
     try:
-        minutes = INTERVAL_MINUTES.get(target_interval, 5)
+        # Try standard intervals first, then parse custom
+        minutes = INTERVAL_MINUTES.get(target_interval)
+        if minutes is None:
+            parsed = parse_interval(target_interval)
+            if parsed and parsed['type'] == 'intraday':
+                minutes = parsed['minutes']
+            else:
+                logger.error(f"Cannot aggregate to interval: {target_interval}")
+                return pd.DataFrame()
+
         interval_seconds = minutes * 60
 
         # Get market open time for this exchange (in seconds from midnight)
@@ -1720,13 +1822,15 @@ def export_to_zip(
     """
     Export market data to ZIP archive containing CSVs.
 
-    Supports multi-timeframe export where computed intervals (5m, 15m, 30m, 1h)
+    Supports multi-timeframe export where computed intervals (standard or custom)
     are aggregated from 1m data on-the-fly.
+
+    Custom intervals supported: 25m, 45m, 2h, 3h, etc.
 
     Args:
         output_path: Path to save the ZIP file
         symbols: List of dicts with 'symbol' and 'exchange' keys (optional)
-        intervals: List of intervals to export (e.g., ['1m', '5m', '15m', 'D'])
+        intervals: List of intervals to export (e.g., ['1m', '5m', '25m', '2h', 'D'])
         start_timestamp: Start epoch timestamp (optional)
         end_timestamp: End epoch timestamp (optional)
         split_by: 'symbol' to create one CSV per symbol/interval, 'none' for combined
@@ -1773,8 +1877,8 @@ def export_to_zip(
                     market_open_seconds = _get_market_open_seconds(exch)
 
                     for interval in intervals_to_export:
-                        # Determine if this is a computed interval
-                        is_computed = interval in COMPUTED_INTERVALS
+                        # Determine if this is a computed interval (standard or custom)
+                        is_computed = interval in COMPUTED_INTERVALS or is_custom_interval(interval)
 
                         if is_computed:
                             # Check if 1m data exists before attempting aggregation
@@ -1798,7 +1902,16 @@ def export_to_zip(
 
                             # Aggregate from 1m data using the same logic as _get_aggregated_ohlcv
                             # Filter to only include data after market open to avoid negative timestamp issues
-                            minutes = INTERVAL_MINUTES.get(interval, 5)
+                            # Support both standard and custom intervals
+                            minutes = INTERVAL_MINUTES.get(interval)
+                            if minutes is None:
+                                parsed = parse_interval(interval)
+                                if parsed and parsed['type'] == 'intraday':
+                                    minutes = parsed['minutes']
+                                else:
+                                    logger.warning(f"Cannot parse interval {interval}, skipping")
+                                    skipped_intervals.append(f"{sym}:{exch}:{interval}")
+                                    continue
                             interval_seconds = minutes * 60
 
                             query = f"""

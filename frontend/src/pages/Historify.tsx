@@ -281,6 +281,10 @@ export default function Historify() {
   const [catalogSelectedSymbols, setCatalogSelectedSymbols] = useState<Set<string>>(new Set())
   const [isExporting, setIsExporting] = useState(false)
 
+  // Custom export interval state
+  const [customExportValue, setCustomExportValue] = useState('25')
+  const [customExportUnit, setCustomExportUnit] = useState<'m' | 'h'>('m')
+
   // Watchlist selection state (for downloading specific symbols)
   const [watchlistSelectedSymbols, setWatchlistSelectedSymbols] = useState<Set<string>>(new Set())
 
@@ -2033,7 +2037,7 @@ NIFTY24DEC25000CE,NFO"
             <div>
               <Label className="mb-2 block">Select Timeframes to Export</Label>
               <p className="text-xs text-muted-foreground mb-3">
-                Each timeframe will be exported as a separate file. Computed timeframes (5m, 15m, 30m, 1h) are aggregated from 1m data.
+                Each timeframe will be exported as a separate file. Computed timeframes are aggregated from 1m data.
               </p>
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                 {['1m', '5m', '15m', '30m', '1h', 'D'].map((int) => {
@@ -2075,6 +2079,66 @@ NIFTY24DEC25000CE,NFO"
                     </div>
                   )
                 })}
+              </div>
+
+              {/* Custom Interval Input */}
+              <div className="mt-3 pt-3 border-t">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground">Custom:</span>
+                  <Input
+                    type="number"
+                    min="1"
+                    max="999"
+                    value={customExportValue}
+                    onChange={(e) => setCustomExportValue(e.target.value)}
+                    className="h-8 w-16 text-center"
+                    placeholder="25"
+                  />
+                  <Select value={customExportUnit} onValueChange={(v) => setCustomExportUnit(v as 'm' | 'h')}>
+                    <SelectTrigger className="w-16 h-8">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="m">min</SelectItem>
+                      <SelectItem value="h">hr</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8"
+                    onClick={() => {
+                      const customInterval = `${customExportValue}${customExportUnit}`
+                      if (parseInt(customExportValue) > 0) {
+                        setExportIntervals((prev) => new Set([...prev, customInterval]))
+                      }
+                    }}
+                  >
+                    <Plus className="h-4 w-4 mr-1" />
+                    Add
+                  </Button>
+                </div>
+                {/* Show added custom intervals */}
+                {Array.from(exportIntervals).filter(int => !['1m', '5m', '15m', '30m', '1h', 'D'].includes(int)).length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {Array.from(exportIntervals).filter(int => !['1m', '5m', '15m', '30m', '1h', 'D'].includes(int)).map(int => (
+                      <Badge
+                        key={int}
+                        variant="secondary"
+                        className="cursor-pointer hover:bg-destructive hover:text-destructive-foreground"
+                        onClick={() => {
+                          setExportIntervals((prev) => {
+                            const next = new Set(prev)
+                            next.delete(int)
+                            return next
+                          })
+                        }}
+                      >
+                        {int} <X className="h-3 w-3 ml-1" />
+                      </Badge>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 

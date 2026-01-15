@@ -132,6 +132,11 @@ export default function HistorifyCharts() {
   const [symbolSearchOpen, setSymbolSearchOpen] = useState(false)
   const [symbolSearch, setSymbolSearch] = useState('')
 
+  // Custom interval state
+  const [isCustomInterval, setIsCustomInterval] = useState(false)
+  const [customIntervalValue, setCustomIntervalValue] = useState('25')
+  const [customIntervalUnit, setCustomIntervalUnit] = useState<'m' | 'h'>('m')
+
   // Date range
   const [startDate, setStartDate] = useState(() => {
     const d = new Date()
@@ -162,6 +167,23 @@ export default function HistorifyCharts() {
       ...intervals.months,
     ]
   }, [intervals])
+
+  // Effective interval (either selected standard interval or custom)
+  const effectiveInterval = useMemo(() => {
+    if (isCustomInterval) {
+      return `${customIntervalValue}${customIntervalUnit}`
+    }
+    return selectedInterval
+  }, [isCustomInterval, customIntervalValue, customIntervalUnit, selectedInterval])
+
+  // Check if current interval is intraday (for chart display)
+  const isIntradayInterval = useMemo(() => {
+    const intradayPatterns = ['1s', '5s', '10s', '15s', '30s', '1m', '2m', '3m', '5m', '10m', '15m', '30m', '1h', '2h', '4h']
+    if (intradayPatterns.includes(effectiveInterval)) return true
+    // Custom intervals ending with 'm' or 'h' are intraday
+    if (isCustomInterval) return true
+    return false
+  }, [effectiveInterval, isCustomInterval])
 
   // Unique symbols from catalog
   const uniqueSymbols = useMemo(() => {
@@ -201,11 +223,11 @@ export default function HistorifyCharts() {
 
   // Load chart data when selection changes
   useEffect(() => {
-    if (selectedSymbol && selectedExchange && selectedInterval) {
+    if (selectedSymbol && selectedExchange && effectiveInterval) {
       loadChartData()
       updateDataInfo()
     }
-  }, [selectedSymbol, selectedExchange, selectedInterval])
+  }, [selectedSymbol, selectedExchange, effectiveInterval])
 
   // Initialize/update chart
   useEffect(() => {
@@ -225,8 +247,8 @@ export default function HistorifyCharts() {
       const containerWidth = container.offsetWidth || 800
       const containerHeight = container.offsetHeight || 600
 
-      // Check if interval is intraday (needs time display) or daily+ (needs date display)
-      const isIntraday = ['1s', '5s', '10s', '15s', '30s', '1m', '2m', '3m', '5m', '10m', '15m', '30m', '1h', '2h', '4h'].includes(selectedInterval)
+      // Use the computed isIntradayInterval for chart formatting
+      const isIntraday = isIntradayInterval
 
       // Helper to format time/date in IST based on interval
       const formatTimeIST = (time: number) => {
@@ -402,7 +424,7 @@ export default function HistorifyCharts() {
         chartRef.current = null
       }
     }
-  }, [isDarkMode, chartData, isFullscreen])
+  }, [isDarkMode, chartData, isFullscreen, isIntradayInterval])
 
   const loadCatalog = async () => {
     try {
@@ -436,7 +458,7 @@ export default function HistorifyCharts() {
       const params = new URLSearchParams({
         symbol: selectedSymbol,
         exchange: selectedExchange,
-        interval: selectedInterval,
+        interval: effectiveInterval,
         start_date: startDate,
         end_date: endDate,
       })
@@ -447,7 +469,7 @@ export default function HistorifyCharts() {
       if (data.status === 'success') {
         setChartData(data.data || [])
         if (data.count === 0) {
-          toast.info('No data available for this range')
+          toast.info('No data available for this range. Make sure 1m data is downloaded for custom intervals.')
         }
       } else {
         toast.error(data.message || 'Failed to load chart data')
@@ -458,7 +480,7 @@ export default function HistorifyCharts() {
     } finally {
       setIsLoading(false)
     }
-  }, [selectedSymbol, selectedExchange, selectedInterval, startDate, endDate])
+  }, [selectedSymbol, selectedExchange, effectiveInterval, startDate, endDate])
 
   const updateDataInfo = useCallback(() => {
     const info = catalog.find(
@@ -563,7 +585,17 @@ export default function HistorifyCharts() {
           </Popover>
 
           {/* Interval Selector */}
-          <Select value={selectedInterval} onValueChange={setSelectedInterval}>
+          <Select
+            value={isCustomInterval ? 'custom' : selectedInterval}
+            onValueChange={(val) => {
+              if (val === 'custom') {
+                setIsCustomInterval(true)
+              } else {
+                setIsCustomInterval(false)
+                setSelectedInterval(val)
+              }
+            }}
+          >
             <SelectTrigger className="w-24">
               <SelectValue />
             </SelectTrigger>
@@ -573,8 +605,33 @@ export default function HistorifyCharts() {
                   {int}
                 </SelectItem>
               ))}
+              <SelectItem value="custom">Custom</SelectItem>
             </SelectContent>
           </Select>
+
+          {/* Custom Interval Input */}
+          {isCustomInterval && (
+            <div className="flex items-center gap-1">
+              <Input
+                type="number"
+                min="1"
+                max="999"
+                value={customIntervalValue}
+                onChange={(e) => setCustomIntervalValue(e.target.value)}
+                className="h-9 w-16 text-center"
+                placeholder="25"
+              />
+              <Select value={customIntervalUnit} onValueChange={(v) => setCustomIntervalUnit(v as 'm' | 'h')}>
+                <SelectTrigger className="w-16 h-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="m">min</SelectItem>
+                  <SelectItem value="h">hr</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           {/* Date Range */}
           <div className="flex items-center gap-2">
