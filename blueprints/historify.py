@@ -772,9 +772,10 @@ def download_sample(format_type):
     import pandas as pd
 
     try:
-        # Create sample data
+        # Create sample data with Date and Time columns (trader-friendly format)
         sample_data = {
-            'timestamp': [1704067200, 1704153600, 1704240000, 1704326400, 1704412800],
+            'date': ['2024-01-01', '2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05'],
+            'time': ['09:15:00', '09:15:00', '09:15:00', '09:15:00', '09:15:00'],
             'open': [100.0, 102.5, 101.0, 103.0, 104.5],
             'high': [103.0, 104.0, 103.5, 105.0, 106.0],
             'low': [99.5, 101.0, 100.5, 102.5, 103.5],
@@ -795,7 +796,7 @@ def download_sample(format_type):
             )
         elif format_type == 'parquet':
             output = io.BytesIO()
-            df.to_parquet(output, index=False, compression='zstd')
+            df.to_parquet(output, index=False, engine='pyarrow', compression='zstd')
             output.seek(0)
             return Response(
                 output.getvalue(),
