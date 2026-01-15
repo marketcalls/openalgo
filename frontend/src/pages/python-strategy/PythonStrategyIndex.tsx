@@ -39,6 +39,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { MasterContractStatus, PythonStrategy } from '@/types/python-strategy'
 import { SCHEDULE_DAYS, STATUS_COLORS, STATUS_LABELS } from '@/types/python-strategy'
 
@@ -467,62 +468,101 @@ export default function PythonStrategyIndex() {
                 {/* Action Buttons */}
                 <div className="flex gap-2 pt-2">
                   {strategy.status === 'running' ? (
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      className="flex-1"
-                      onClick={() => handleStop(strategy)}
-                      disabled={actionLoading === strategy.id}
-                    >
-                      <Square className="h-4 w-4 mr-2" />
-                      Stop
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="flex-1"
+                          onClick={() => handleStop(strategy)}
+                          disabled={actionLoading === strategy.id}
+                        >
+                          <Square className="h-4 w-4 mr-2" />
+                          Stop
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Stop running strategy</TooltipContent>
+                    </Tooltip>
                   ) : (
-                    <Button
-                      variant="default"
-                      size="sm"
-                      className="flex-1 bg-green-600 hover:bg-green-700"
-                      onClick={() => handleStart(strategy)}
-                      disabled={actionLoading === strategy.id}
-                    >
-                      <Play className="h-4 w-4 mr-2" />
-                      Start
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="default"
+                          size="sm"
+                          className="flex-1 bg-green-600 hover:bg-green-700"
+                          onClick={() => handleStart(strategy)}
+                          disabled={actionLoading === strategy.id}
+                        >
+                          <Play className="h-4 w-4 mr-2" />
+                          Start
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Start strategy</TooltipContent>
+                    </Tooltip>
                   )}
 
                   {strategy.is_scheduled ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleUnschedule(strategy)}
-                      disabled={actionLoading === strategy.id || strategy.status === 'running'}
-                    >
-                      <CalendarOff className="h-4 w-4" />
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="border-blue-500 bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-950 dark:text-blue-400 dark:hover:bg-blue-900"
+                          onClick={() => handleUnschedule(strategy)}
+                          disabled={actionLoading === strategy.id || strategy.status === 'running'}
+                        >
+                          <Calendar className="h-4 w-4 mr-1" />
+                          <span className="text-xs">On</span>
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        Scheduled: {strategy.schedule_start_time}
+                        {strategy.schedule_stop_time && ` - ${strategy.schedule_stop_time}`}
+                        <br />
+                        Click to remove
+                      </TooltipContent>
+                    </Tooltip>
                   ) : (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      asChild
-                      disabled={strategy.status === 'running'}
-                    >
-                      <Link to={`/python/${strategy.id}/schedule`}>
-                        <Calendar className="h-4 w-4" />
-                      </Link>
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="text-muted-foreground hover:text-foreground"
+                          asChild
+                          disabled={strategy.status === 'running'}
+                        >
+                          <Link to={`/python/${strategy.id}/schedule`}>
+                            <CalendarOff className="h-4 w-4 mr-1" />
+                            <span className="text-xs">Off</span>
+                          </Link>
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Set schedule</TooltipContent>
+                    </Tooltip>
                   )}
 
-                  <Button variant="outline" size="sm" asChild>
-                    <Link to={`/python/${strategy.id}/logs`}>
-                      <FileText className="h-4 w-4" />
-                    </Link>
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button variant="outline" size="sm" asChild>
+                        <Link to={`/python/${strategy.id}/logs`}>
+                          <FileText className="h-4 w-4" />
+                        </Link>
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>View logs</TooltipContent>
+                  </Tooltip>
 
-                  <Button variant="outline" size="sm" asChild>
-                    <Link to={`/python/${strategy.id}/edit`}>
-                      <FileCode className="h-4 w-4" />
-                    </Link>
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button variant="outline" size="sm" asChild>
+                        <Link to={`/python/${strategy.id}/edit`}>
+                          <FileCode className="h-4 w-4" />
+                        </Link>
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Edit code</TooltipContent>
+                  </Tooltip>
                 </div>
               </CardContent>
             </Card>

@@ -82,17 +82,34 @@ def save_configs():
     except Exception as e:
         logger.error(f"Failed to save configs: {e}")
 
-def verify_strategy_ownership(strategy_id, user_id):
-    """Verify that a user owns a strategy. Returns (success, error_response)"""
+def verify_strategy_ownership(strategy_id, user_id, return_config=False):
+    """
+    Verify that a user owns a strategy.
+
+    Args:
+        strategy_id: The strategy ID to verify
+        user_id: The user ID to check ownership against
+        return_config: If True, returns the config dict on success for atomic access
+
+    Returns:
+        If return_config=False: (success, error_response)
+        If return_config=True: (success, error_response_or_config)
+    """
+    # Basic validation - reject obviously malicious inputs (path traversal attempts)
+    if not strategy_id or '..' in strategy_id or '/' in strategy_id or '\\' in strategy_id:
+        return False, (jsonify({'status': 'error', 'message': 'Invalid strategy ID'}), 400)
+
     if strategy_id not in STRATEGY_CONFIGS:
-        return False, (jsonify({'success': False, 'message': 'Strategy not found'}), 404)
+        return False, (jsonify({'status': 'error', 'message': 'Strategy not found'}), 404)
 
     config = STRATEGY_CONFIGS[strategy_id]
     # Check ownership - allow access if user_id matches or if strategy has no owner (legacy)
     strategy_owner = config.get('user_id')
     if strategy_owner and strategy_owner != user_id:
-        return False, (jsonify({'success': False, 'message': 'Unauthorized access to strategy'}), 403)
+        return False, (jsonify({'status': 'error', 'message': 'Unauthorized access to strategy'}), 403)
 
+    if return_config:
+        return True, config
     return True, None
 
 def ensure_directories():
@@ -475,13 +492,9 @@ def stop_strategy_process(strategy_id):
                 # Fallback: use PID directly
                 terminate_process_cross_platform(pid)
             
-            # Close log file handle
-            if 'log_handle' in strategy_info and strategy_info['log_handle']:
-                try:
-                    strategy_info['log_handle'].close()
-                except:
-                    pass
-            
+            # Close log file handle safely
+            close_log_handle_safely(strategy_info)
+
             # Remove from running strategies
             del RUNNING_STRATEGIES[strategy_id]
             
@@ -538,15 +551,31 @@ def check_process_status(pid):
         pass
     return False
 
+def close_log_handle_safely(strategy_info):
+    """Safely close a log file handle, handling all edge cases"""
+    if not strategy_info:
+        return
+    log_handle = strategy_info.get('log_handle')
+    if log_handle:
+        try:
+            if not log_handle.closed:
+                log_handle.flush()
+                log_handle.close()
+        except Exception as e:
+            logger.debug(f"Error closing log handle: {e}")
+        finally:
+            strategy_info['log_handle'] = None
+
+
 def cleanup_dead_processes():
     """Clean up strategies with dead processes"""
     with PROCESS_LOCK:  # Thread-safe operation
         dead_strategies = []
-        
+
         for strategy_id, info in list(RUNNING_STRATEGIES.items()):
             process = info['process']
             is_dead = False
-            
+
             # Check if process has terminated based on its type
             if isinstance(process, subprocess.Popen):
                 # For subprocess.Popen objects
@@ -567,22 +596,18 @@ def cleanup_dead_processes():
                         is_dead = True
                 except:
                     is_dead = True
-            
+
             if is_dead:
                 dead_strategies.append(strategy_id)
-                # Close log file handle
-                if 'log_handle' in info and info['log_handle']:
-                    try:
-                        info['log_handle'].close()
-                    except:
-                        pass
-        
+                # Close log file handle safely
+                close_log_handle_safely(info)
+
         for strategy_id in dead_strategies:
             del RUNNING_STRATEGIES[strategy_id]
             if strategy_id in STRATEGY_CONFIGS:
                 STRATEGY_CONFIGS[strategy_id]['is_running'] = False
                 STRATEGY_CONFIGS[strategy_id]['pid'] = None
-        
+
         if dead_strategies:
             save_configs()
             logger.info(f"Cleaned up {len(dead_strategies)} dead processes")
@@ -802,13 +827,43 @@ def new_strategy():
             return redirect(request.url)
 
         if file and file.filename.endswith('.py'):
-            # Generate unique ID with IST timestamp
-            ist_now = get_ist_time()
-            strategy_id = Path(file.filename).stem + '_' + ist_now.strftime('%Y%m%d%H%M%S')
+            # Sanitize filename first to prevent path traversal and injection
+            safe_filename = secure_filename(file.filename)
+            if not safe_filename or not safe_filename.endswith('.py'):
+                if is_ajax:
+                    return jsonify({'status': 'error', 'message': 'Invalid filename'}), 400
+                flash('Invalid filename', 'error')
+                return redirect(request.url)
 
-            # Save file
-            filename = secure_filename(file.filename)
+            # Generate unique ID with IST timestamp from sanitized filename
+            ist_now = get_ist_time()
+            safe_stem = Path(safe_filename).stem
+            # Further sanitize: only allow alphanumeric, underscore, and hyphen
+            safe_stem = ''.join(c for c in safe_stem if c.isalnum() or c in '_-')
+            if not safe_stem:
+                safe_stem = 'strategy'
+            strategy_id = f"{safe_stem}_{ist_now.strftime('%Y%m%d%H%M%S')}"
+
+            # Save file with sanitized path
             file_path = STRATEGIES_DIR / f"{strategy_id}.py"
+
+            # Verify the resolved path is within STRATEGIES_DIR (defense in depth)
+            try:
+                resolved_path = file_path.resolve()
+                strategies_dir_resolved = STRATEGIES_DIR.resolve()
+                if not str(resolved_path).startswith(str(strategies_dir_resolved)):
+                    logger.warning(f"Path traversal attempt in file upload: {file.filename}")
+                    if is_ajax:
+                        return jsonify({'status': 'error', 'message': 'Invalid file path'}), 400
+                    flash('Invalid file path', 'error')
+                    return redirect(request.url)
+            except Exception as e:
+                logger.error(f"Error validating file path: {e}")
+                if is_ajax:
+                    return jsonify({'status': 'error', 'message': 'Invalid file path'}), 400
+                flash('Invalid file path', 'error')
+                return redirect(request.url)
+
             STRATEGIES_DIR.mkdir(parents=True, exist_ok=True)
             file.save(str(file_path))
 
@@ -819,8 +874,10 @@ def new_strategy():
                 except:
                     pass
 
-            # Get form data
-            strategy_name = request.form.get('strategy_name', Path(file.filename).stem)
+            # Get form data - sanitize strategy name
+            raw_strategy_name = request.form.get('strategy_name', safe_stem)
+            # Allow more characters in display name but strip dangerous ones
+            strategy_name = raw_strategy_name.strip()[:100]  # Limit length
 
             # Save configuration (no params needed)
             STRATEGY_CONFIGS[strategy_id] = {
@@ -890,17 +947,17 @@ def schedule_strategy_route(strategy_id):
     """Schedule a strategy"""
     user_id = session.get('user')
     if not user_id:
-        return jsonify({'success': False, 'message': 'Session expired'}), 401
+        return jsonify({'status': 'error', 'message': 'Session expired'}), 401
 
-    # Verify ownership
-    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
+    # Verify ownership and get config atomically
+    is_owner, result = verify_strategy_ownership(strategy_id, user_id, return_config=True)
     if not is_owner:
-        return error_response
+        return result
 
-    config = STRATEGY_CONFIGS[strategy_id]
+    config = result
     if config.get('is_running', False):
         return jsonify({
-            'success': False,
+            'status': 'error',
             'message': 'Cannot modify schedule while strategy is running. Please stop the strategy first.',
             'error_code': 'STRATEGY_RUNNING'
         }), 400
@@ -911,16 +968,16 @@ def schedule_strategy_route(strategy_id):
     days = data.get('days', ['mon', 'tue', 'wed', 'thu', 'fri'])
 
     if not start_time:
-        return jsonify({'success': False, 'message': 'Start time is required'})
+        return jsonify({'status': 'error', 'message': 'Start time is required'}), 400
 
     try:
         schedule_strategy(strategy_id, start_time, stop_time, days)
         schedule_info = f"Scheduled at {start_time} IST"
         if stop_time:
             schedule_info += f" - {stop_time} IST"
-        return jsonify({'success': True, 'message': schedule_info})
+        return jsonify({'status': 'success', 'message': schedule_info})
     except Exception as e:
-        return jsonify({'success': False, 'message': str(e)})
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @python_strategy_bp.route('/unschedule/<strategy_id>', methods=['POST'])
 @check_session_validity
@@ -928,26 +985,26 @@ def unschedule_strategy_route(strategy_id):
     """Remove scheduling for a strategy"""
     user_id = session.get('user')
     if not user_id:
-        return jsonify({'success': False, 'message': 'Session expired'}), 401
+        return jsonify({'status': 'error', 'message': 'Session expired'}), 401
 
-    # Verify ownership
-    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
+    # Verify ownership and get config atomically
+    is_owner, result = verify_strategy_ownership(strategy_id, user_id, return_config=True)
     if not is_owner:
-        return error_response
+        return result
 
-    config = STRATEGY_CONFIGS[strategy_id]
+    config = result
     if config.get('is_running', False):
         return jsonify({
-            'success': False,
+            'status': 'error',
             'message': 'Cannot modify schedule while strategy is running. Please stop the strategy first.',
             'error_code': 'STRATEGY_RUNNING'
         }), 400
 
     try:
         unschedule_strategy(strategy_id)
-        return jsonify({'success': True, 'message': 'Schedule removed successfully'})
+        return jsonify({'status': 'success', 'message': 'Schedule removed successfully'})
     except Exception as e:
-        return jsonify({'success': False, 'message': str(e)})
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @python_strategy_bp.route('/delete/<strategy_id>', methods=['POST'])
 @check_session_validity
@@ -1040,30 +1097,30 @@ def clear_logs(strategy_id):
     """Clear all log files for a strategy"""
     user_id = session.get('user')
     if not user_id:
-        return jsonify({'success': False, 'message': 'Session expired'}), 401
+        return jsonify({'status': 'error', 'message': 'Session expired'}), 401
 
     # Verify ownership
     is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
     if not is_owner:
         return error_response
-    
+
     try:
         cleared_count = 0
         total_size = 0
-        
+
         # Find all log files for this strategy
         log_files = list(LOGS_DIR.glob(f"{strategy_id}_*.log"))
-        
+
         if not log_files:
-            return jsonify({'success': False, 'message': 'No log files found to clear'})
-        
+            return jsonify({'status': 'error', 'message': 'No log files found to clear'}), 404
+
         # Calculate total size before clearing
         for log_file in log_files:
             try:
                 total_size += log_file.stat().st_size
             except:
                 pass
-        
+
         # Clear each log file
         for log_file in log_files:
             try:
@@ -1071,7 +1128,7 @@ def clear_logs(strategy_id):
                 if strategy_id in RUNNING_STRATEGIES:
                     running_info = RUNNING_STRATEGIES[strategy_id]
                     active_log_file = running_info.get('log_file')
-                    
+
                     if active_log_file and Path(active_log_file).name == log_file.name:
                         # For running strategies, truncate the active log file
                         with open(log_file, 'w', encoding='utf-8') as f:
@@ -1085,27 +1142,27 @@ def clear_logs(strategy_id):
                     # Strategy not running, safe to delete all log files
                     log_file.unlink()
                     logger.info(f"Deleted log file: {log_file.name}")
-                
+
                 cleared_count += 1
-                
+
             except Exception as e:
                 logger.error(f"Error clearing log file {log_file.name}: {e}")
-        
+
         if cleared_count > 0:
             size_mb = total_size / (1024 * 1024)
             logger.info(f"Cleared {cleared_count} log files for strategy {strategy_id} ({size_mb:.2f} MB)")
             return jsonify({
-                'success': True,
+                'status': 'success',
                 'message': f'Cleared {cleared_count} log files ({size_mb:.2f} MB)',
                 'cleared_count': cleared_count,
                 'total_size_mb': round(size_mb, 2)
             })
         else:
-            return jsonify({'success': False, 'message': 'No log files were cleared'})
-            
+            return jsonify({'status': 'error', 'message': 'No log files were cleared'}), 500
+
     except Exception as e:
         logger.error(f"Error clearing logs for strategy {strategy_id}: {e}")
-        return jsonify({'success': False, 'message': f'Error clearing logs: {str(e)}'}), 500
+        return jsonify({'status': 'error', 'message': f'Error clearing logs: {str(e)}'}), 500
 
 @python_strategy_bp.route('/clear-error/<strategy_id>', methods=['POST'])
 @check_session_validity
@@ -1113,34 +1170,34 @@ def clear_error_state(strategy_id):
     """Clear error state for a strategy"""
     user_id = session.get('user')
     if not user_id:
-        return jsonify({'success': False, 'message': 'Session expired'}), 401
+        return jsonify({'status': 'error', 'message': 'Session expired'}), 401
 
-    # Verify ownership
-    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
+    # Verify ownership and get config atomically
+    is_owner, result = verify_strategy_ownership(strategy_id, user_id, return_config=True)
     if not is_owner:
-        return error_response
+        return result
 
-    config = STRATEGY_CONFIGS[strategy_id]
+    config = result
 
     if config.get('is_running'):
-        return jsonify({'success': False, 'message': 'Cannot clear error state while strategy is running'}), 400
+        return jsonify({'status': 'error', 'message': 'Cannot clear error state while strategy is running'}), 400
 
     if not config.get('is_error'):
-        return jsonify({'success': False, 'message': 'Strategy is not in error state'}), 400
-    
+        return jsonify({'status': 'error', 'message': 'Strategy is not in error state'}), 400
+
     try:
         # Clear error state
         config.pop('is_error', None)
         config.pop('error_message', None)
         config.pop('error_time', None)
         save_configs()
-        
+
         logger.info(f"Cleared error state for strategy {strategy_id}")
-        return jsonify({'success': True, 'message': 'Error state cleared successfully'})
-        
+        return jsonify({'status': 'success', 'message': 'Error state cleared successfully'})
+
     except Exception as e:
         logger.error(f"Failed to clear error state for {strategy_id}: {e}")
-        return jsonify({'success': False, 'message': f'Failed to clear error state: {str(e)}'}), 500
+        return jsonify({'status': 'error', 'message': f'Failed to clear error state: {str(e)}'}), 500
 
 @python_strategy_bp.route('/status')
 @check_session_validity
@@ -1288,21 +1345,25 @@ def api_get_strategy_content(strategy_id):
 @check_session_validity
 def api_get_log_files(strategy_id):
     """API: Get list of log files for a strategy"""
+    # Basic validation - reject path traversal attempts
+    if not strategy_id or '..' in strategy_id or '/' in strategy_id or '\\' in strategy_id:
+        return jsonify({'status': 'error', 'message': 'Invalid strategy ID'}), 400
+
     if strategy_id not in STRATEGY_CONFIGS:
         return jsonify({'status': 'error', 'message': 'Strategy not found'}), 404
 
-    log_dir = LOGS_DIR / strategy_id
-    if not log_dir.exists():
-        return jsonify({'logs': []})
-
+    # Logs are stored flat in LOGS_DIR with pattern: {strategy_id}_*.log
     logs = []
-    for log_file in sorted(log_dir.glob('*.log'), key=lambda x: x.stat().st_mtime, reverse=True):
-        stats = log_file.stat()
-        logs.append({
-            'name': log_file.name,
-            'size_kb': stats.st_size / 1024,
-            'last_modified': datetime.fromtimestamp(stats.st_mtime, tz=IST).isoformat()
-        })
+    try:
+        for log_file in sorted(LOGS_DIR.glob(f"{strategy_id}_*.log"), key=lambda x: x.stat().st_mtime, reverse=True):
+            stats = log_file.stat()
+            logs.append({
+                'name': log_file.name,
+                'size_kb': stats.st_size / 1024,
+                'last_modified': datetime.fromtimestamp(stats.st_mtime, tz=IST).isoformat()
+            })
+    except Exception as e:
+        logger.error(f"Error listing log files for {strategy_id}: {e}")
 
     return jsonify({'logs': logs})
 
@@ -1310,12 +1371,34 @@ def api_get_log_files(strategy_id):
 @check_session_validity
 def api_get_log_content(strategy_id, log_name):
     """API: Get log file content"""
+    # Basic validation - reject path traversal attempts
+    if not strategy_id or '..' in strategy_id or '/' in strategy_id or '\\' in strategy_id:
+        return jsonify({'status': 'error', 'message': 'Invalid strategy ID'}), 400
+
     if strategy_id not in STRATEGY_CONFIGS:
         return jsonify({'status': 'error', 'message': 'Strategy not found'}), 404
 
-    # Sanitize log_name to prevent path traversal
-    safe_log_name = secure_filename(log_name)
-    log_path = LOGS_DIR / strategy_id / safe_log_name
+    # Validate log_name - reject path traversal attempts
+    if not log_name or '..' in log_name or '/' in log_name or '\\' in log_name:
+        return jsonify({'status': 'error', 'message': 'Invalid log file name'}), 400
+
+    # Verify the log file belongs to this strategy (must start with strategy_id)
+    if not log_name.startswith(f"{strategy_id}_"):
+        return jsonify({'status': 'error', 'message': 'Log file does not belong to this strategy'}), 403
+
+    # Logs are stored flat in LOGS_DIR (not in subdirectories)
+    log_path = LOGS_DIR / log_name
+
+    # Ensure the resolved path is still within LOGS_DIR (defense in depth)
+    try:
+        resolved_path = log_path.resolve()
+        logs_dir_resolved = LOGS_DIR.resolve()
+        if not str(resolved_path).startswith(str(logs_dir_resolved)):
+            logger.warning(f"Path traversal attempt detected: {log_name}")
+            return jsonify({'status': 'error', 'message': 'Invalid log file path'}), 403
+    except Exception as e:
+        logger.error(f"Error resolving log path: {e}")
+        return jsonify({'status': 'error', 'message': 'Invalid log file path'}), 400
 
     if not log_path.exists():
         return jsonify({'status': 'error', 'message': 'Log file not found'}), 404
@@ -1325,7 +1408,7 @@ def api_get_log_content(strategy_id, log_name):
         stats = log_path.stat()
         line_count = content.count('\n') + 1 if content else 0
         return jsonify({
-            'name': safe_log_name,
+            'name': log_name,
             'content': content,
             'lines': line_count,
             'size_kb': stats.st_size / 1024,
@@ -1437,28 +1520,28 @@ def save_strategy(strategy_id):
     """Save edited strategy file"""
     user_id = session.get('user')
     if not user_id:
-        return jsonify({'success': False, 'message': 'Session expired'}), 401
+        return jsonify({'status': 'error', 'message': 'Session expired'}), 401
 
-    # Verify ownership
-    is_owner, error_response = verify_strategy_ownership(strategy_id, user_id)
+    # Verify ownership and get config atomically
+    is_owner, result = verify_strategy_ownership(strategy_id, user_id, return_config=True)
     if not is_owner:
-        return error_response
+        return result
 
-    config = STRATEGY_CONFIGS[strategy_id]
+    config = result
 
     # Check if strategy is running
     if config.get('is_running', False):
-        return jsonify({'success': False, 'message': 'Cannot edit running strategy. Please stop it first.'}), 400
-    
+        return jsonify({'status': 'error', 'message': 'Cannot edit running strategy. Please stop it first.'}), 400
+
     file_path = Path(config['file_path'])
-    
+
     # Get new content
     data = request.get_json()
     if not data or 'content' not in data:
-        return jsonify({'success': False, 'message': 'No content provided'}), 400
-    
+        return jsonify({'status': 'error', 'message': 'No content provided'}), 400
+
     new_content = data['content']
-    
+
     try:
         # Create backup
         backup_path = file_path.with_suffix('.bak')
@@ -1467,25 +1550,25 @@ def save_strategy(strategy_id):
                 backup_content = f.read()
             with open(backup_path, 'w', encoding='utf-8') as f:
                 f.write(backup_content)
-        
+
         # Save new content
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
-        
+
         # Update config
         config['last_modified'] = get_ist_time().isoformat()
         save_configs()
-        
+
         logger.info(f"Strategy {strategy_id} saved successfully")
         return jsonify({
-            'success': True, 
+            'status': 'success',
             'message': 'Strategy saved successfully',
             'timestamp': format_ist_time(config['last_modified'])
         })
-        
+
     except Exception as e:
         logger.error(f"Failed to save strategy {strategy_id}: {e}")
-        return jsonify({'success': False, 'message': f'Failed to save: {str(e)}'}), 500
+        return jsonify({'status': 'error', 'message': f'Failed to save: {str(e)}'}), 500
 
 # Cleanup on shutdown
 def cleanup_on_exit():
