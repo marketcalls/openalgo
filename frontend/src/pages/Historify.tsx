@@ -1,7 +1,6 @@
 import {
   BarChart3,
   CheckCircle,
-  Clock,
   Database,
   DownloadCloud,
   FileDown,
@@ -9,12 +8,14 @@ import {
   LineChart,
   ListPlus,
   Loader2,
+  Moon,
   Pause,
   Play,
   Plus,
   RefreshCw,
   Settings,
   Square,
+  Sun,
   Target,
   Trash2,
   TrendingUp,
@@ -72,6 +73,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Switch } from '@/components/ui/switch'
 import { useSocket } from '@/hooks/useSocket'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
 
 // Types
@@ -194,7 +196,8 @@ function getDateFromPreset(months: number): string {
 }
 
 export default function Historify() {
-  const { appMode, toggleAppMode } = useThemeStore()
+  const { appMode, toggleAppMode, mode, toggleMode, isTogglingMode } = useThemeStore()
+  const { user } = useAuthStore()
 
   // Core state
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([])
@@ -1037,12 +1040,60 @@ export default function Historify() {
             </div>
           </div>
 
-          {/* Mode Toggle */}
+          {/* Right Controls */}
           <div className="flex items-center gap-2">
-            <Badge variant={appMode === 'live' ? 'default' : 'secondary'} className="cursor-pointer" onClick={handleModeToggle}>
-              {appMode === 'live' ? <Zap className="h-3 w-3 mr-1" /> : <Clock className="h-3 w-3 mr-1" />}
-              {appMode === 'live' ? 'Live' : 'Analyze'}
+            {/* Broker Badge */}
+            {user?.broker && (
+              <Badge variant="outline" className="text-xs font-medium">
+                {user.broker.toUpperCase()}
+              </Badge>
+            )}
+
+            {/* Mode Badge */}
+            <Badge
+              variant={appMode === 'live' ? 'default' : 'secondary'}
+              className={cn(
+                'text-xs cursor-pointer',
+                appMode === 'analyzer' && 'bg-purple-500 hover:bg-purple-600 text-white'
+              )}
+              onClick={handleModeToggle}
+            >
+              {appMode === 'live' ? <Zap className="h-3 w-3 mr-1" /> : <BarChart3 className="h-3 w-3 mr-1" />}
+              <span className="hidden sm:inline">{appMode === 'live' ? 'Live Mode' : 'Analyze Mode'}</span>
+              <span className="sm:hidden">{appMode === 'live' ? 'Live' : 'Analyze'}</span>
             </Badge>
+
+            {/* Mode Toggle Button */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={handleModeToggle}
+              disabled={isTogglingMode}
+              title={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
+            >
+              {isTogglingMode ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : appMode === 'live' ? (
+                <Zap className="h-4 w-4" />
+              ) : (
+                <BarChart3 className="h-4 w-4" />
+              )}
+            </Button>
+
+            {/* Theme Toggle */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={toggleMode}
+              disabled={appMode !== 'live'}
+              title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+            >
+              {mode === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </Button>
+
+            {/* Charts Link */}
             <Link to="/historify/charts">
               <Button variant="outline" size="sm">
                 <LineChart className="h-4 w-4 mr-1" />
@@ -1383,23 +1434,26 @@ export default function Historify() {
                       <div>
                         <Label className="text-sm text-muted-foreground mb-2 block">Quick Date Range</Label>
                         <div className="flex flex-wrap gap-2">
-                          {DATE_PRESETS.map((preset) => (
-                            <Button
-                              key={preset.label}
-                              variant="outline"
-                              size="sm"
-                              className={cn(
-                                "h-8",
-                                startDate === getDateFromPreset(preset.months) && "bg-primary text-primary-foreground"
-                              )}
-                              onClick={() => {
-                                setStartDate(getDateFromPreset(preset.months))
-                                setEndDate(new Date().toISOString().split('T')[0])
-                              }}
-                            >
-                              {preset.label}
-                            </Button>
-                          ))}
+                          {DATE_PRESETS.map((preset) => {
+                            const isSelected = startDate === getDateFromPreset(preset.months)
+                            return (
+                              <Button
+                                key={preset.label}
+                                variant={isSelected ? "default" : "outline"}
+                                size="sm"
+                                className={cn(
+                                  "h-8 min-w-[3rem]",
+                                  isSelected && "ring-2 ring-primary ring-offset-2 ring-offset-background"
+                                )}
+                                onClick={() => {
+                                  setStartDate(getDateFromPreset(preset.months))
+                                  setEndDate(new Date().toISOString().split('T')[0])
+                                }}
+                              >
+                                {preset.label}
+                              </Button>
+                            )
+                          })}
                         </div>
                       </div>
 
