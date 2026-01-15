@@ -2,6 +2,7 @@ import {
   Activity,
   AlertTriangle,
   BarChart3,
+  Calendar,
   CheckCircle,
   Download,
   Eye,
@@ -172,34 +173,54 @@ export default function Analyzer() {
       </div>
 
       {/* Date Filter */}
-      <form onSubmit={handleFilter} className="flex flex-wrap gap-4 items-end mb-6">
-        <div className="space-y-2">
-          <Label htmlFor="start_date">Start Date</Label>
-          <Input
-            id="start_date"
-            type="date"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="end_date">End Date</Label>
-          <Input
-            id="end_date"
-            type="date"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-          />
-        </div>
-        <Button type="submit">
-          <Filter className="h-4 w-4 mr-2" />
-          Filter
-        </Button>
-        <Button type="button" variant="secondary" onClick={handleExport}>
-          <Download className="h-4 w-4 mr-2" />
-          Export to CSV
-        </Button>
-      </form>
+      <Card className="mb-6">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Filter className="h-4 w-4" />
+            Filters
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleFilter} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+            <div className="space-y-2">
+              <Label htmlFor="start_date" className="text-sm font-medium">Start Date</Label>
+              <div className="relative">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  id="start_date"
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="pl-10"
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="end_date" className="text-sm font-medium">End Date</Label>
+              <div className="relative">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  id="end_date"
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="pl-10"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2 pt-6">
+              <Button type="submit">
+                <Filter className="h-4 w-4 mr-2" />
+                Filter
+              </Button>
+              <Button type="button" variant="secondary" onClick={handleExport}>
+                <Download className="h-4 w-4 mr-2" />
+                Export CSV
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
