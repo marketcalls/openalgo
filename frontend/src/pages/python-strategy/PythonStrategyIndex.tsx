@@ -359,9 +359,9 @@ export default function PythonStrategyIndex() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 items-start">
           {strategies.map((strategy) => (
-            <Card key={strategy.id} className="relative overflow-hidden">
+            <Card key={strategy.id} className="relative overflow-hidden flex flex-col">
               {/* Status bar */}
               <div
                 className={`absolute top-0 left-0 right-0 h-1 ${STATUS_COLORS[strategy.status]}`}
@@ -411,22 +411,29 @@ export default function PythonStrategyIndex() {
                 </div>
               </CardHeader>
 
-              <CardContent className="space-y-4">
-                {/* Schedule Info */}
-                {strategy.is_scheduled && (
-                  <div className="text-sm p-2 bg-blue-50 dark:bg-blue-950 rounded">
-                    <div className="flex items-center gap-2">
-                      <Calendar className="h-4 w-4 text-blue-500" />
-                      <span>
-                        {strategy.schedule_start_time}
-                        {strategy.schedule_stop_time && ` - ${strategy.schedule_stop_time}`}
-                      </span>
+              <CardContent className="space-y-4 flex-1 flex flex-col">
+                {/* Schedule Info - always show with consistent height */}
+                <div className={`text-sm p-2 rounded min-h-[52px] ${strategy.is_scheduled ? 'bg-blue-50 dark:bg-blue-950' : 'bg-muted/50'}`}>
+                  {strategy.is_scheduled ? (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <Calendar className="h-4 w-4 text-blue-500" />
+                        <span>
+                          {strategy.schedule_start_time}
+                          {strategy.schedule_stop_time && ` - ${strategy.schedule_stop_time}`}
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {formatScheduleDays(strategy.schedule_days)}
+                      </p>
+                    </>
+                  ) : (
+                    <div className="flex items-center gap-2 text-muted-foreground h-full">
+                      <CalendarOff className="h-4 w-4" />
+                      <span>No schedule configured</span>
                     </div>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      {formatScheduleDays(strategy.schedule_days)}
-                    </p>
-                  </div>
-                )}
+                  )}
+                </div>
 
                 {/* Error Message */}
                 {strategy.status === 'error' && strategy.error_message && (
@@ -447,7 +454,7 @@ export default function PythonStrategyIndex() {
                 )}
 
                 {/* Timestamps */}
-                <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground mt-auto">
                   <div>
                     <span className="block">Last Started</span>
                     <span>{formatTime(strategy.last_started)}</span>
@@ -459,7 +466,7 @@ export default function PythonStrategyIndex() {
                 </div>
 
                 {/* Action Buttons */}
-                <div className="flex gap-2 pt-2">
+                <div className="flex gap-2 pt-2 mt-auto">
                   {strategy.status === 'running' ? (
                     <Tooltip>
                       <TooltipTrigger asChild>
