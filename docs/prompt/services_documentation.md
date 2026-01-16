@@ -2565,22 +2565,29 @@ print(response)
   "timezone": "Asia/Kolkata",
   "data": [
     {
-      "date": "2025-01-26",
-      "day": "Sunday",
-      "description": "Republic Day",
-      "exchanges": ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS"]
+      "date": "2025-02-26",
+      "description": "Maha Shivaratri",
+      "holiday_type": "TRADING_HOLIDAY",
+      "closed_exchanges": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD"],
+      "open_exchanges": [
+        {"exchange": "MCX", "start_time": 1740549000000, "end_time": 1740602700000}
+      ]
     },
     {
       "date": "2025-03-14",
-      "day": "Friday",
       "description": "Holi",
-      "exchanges": ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS"]
+      "holiday_type": "TRADING_HOLIDAY",
+      "closed_exchanges": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD"],
+      "open_exchanges": [
+        {"exchange": "MCX", "start_time": 1741964400000, "end_time": 1742018100000}
+      ]
     },
     {
       "date": "2025-08-15",
-      "day": "Friday",
       "description": "Independence Day",
-      "exchanges": ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS"]
+      "holiday_type": "TRADING_HOLIDAY",
+      "closed_exchanges": ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX"],
+      "open_exchanges": []
     }
   ]
 }
@@ -2593,7 +2600,12 @@ Tuple containing:
 - `response` (dict): Holiday data with year and timezone
 - `status_code` (int): HTTP status code
 
-**Note:** Year must be between 2020 and 2050.
+**Note:**
+- Year must be between 2020 and 2050
+- `holiday_type` can be: `TRADING_HOLIDAY`, `SETTLEMENT_HOLIDAY`, or `SPECIAL_SESSION`
+- `closed_exchanges` lists exchanges that are fully closed
+- `open_exchanges` lists exchanges with special trading sessions (e.g., MCX evening session, Muhurat trading)
+- Times in `open_exchanges` are epoch milliseconds
 
 ---
 
@@ -2626,33 +2638,15 @@ print(response)
 ```json
 {
   "status": "success",
-  "data": {
-    "date": "2025-01-15",
-    "day": "Wednesday",
-    "is_holiday": false,
-    "exchanges": {
-      "NSE": {
-        "pre_open": "09:00:00",
-        "market_open": "09:15:00",
-        "market_close": "15:30:00",
-        "post_close": "16:00:00"
-      },
-      "BSE": {
-        "pre_open": "09:00:00",
-        "market_open": "09:15:00",
-        "market_close": "15:30:00",
-        "post_close": "16:00:00"
-      },
-      "NFO": {
-        "market_open": "09:15:00",
-        "market_close": "15:30:00"
-      },
-      "MCX": {
-        "market_open": "09:00:00",
-        "market_close": "23:30:00"
-      }
-    }
-  }
+  "data": [
+    {"exchange": "NSE", "start_time": 1736926500000, "end_time": 1736949000000},
+    {"exchange": "BSE", "start_time": 1736926500000, "end_time": 1736949000000},
+    {"exchange": "NFO", "start_time": 1736926500000, "end_time": 1736949000000},
+    {"exchange": "BFO", "start_time": 1736926500000, "end_time": 1736949000000},
+    {"exchange": "CDS", "start_time": 1736925600000, "end_time": 1736954400000},
+    {"exchange": "BCD", "start_time": 1736925600000, "end_time": 1736954400000},
+    {"exchange": "MCX", "start_time": 1736925600000, "end_time": 1736979300000}
+  ]
 }
 ```
 
@@ -2663,7 +2657,11 @@ Tuple containing:
 - `response` (dict): Market timing data
 - `status_code` (int): HTTP status code
 
-**Note:** Date must be between 2020-01-01 and 2050-12-31.
+**Note:**
+- Date must be between 2020-01-01 and 2050-12-31
+- Times are returned as epoch milliseconds
+- Returns empty array for weekends and full holidays
+- For special sessions (e.g., Muhurat trading), returns only the special session timings
 
 ---
 
