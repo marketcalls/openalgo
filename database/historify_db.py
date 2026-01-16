@@ -187,7 +187,7 @@ def init_database():
             ON download_jobs (status)
         """)
 
-        logger.info("Historify database initialized successfully")
+        logger.debug("Historify database initialized successfully")
 
 
 # =============================================================================

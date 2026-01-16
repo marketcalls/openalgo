@@ -67,7 +67,7 @@ def load_configs():
         try:
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                 STRATEGY_CONFIGS = json.load(f)
-            logger.info(f"Loaded {len(STRATEGY_CONFIGS)} strategy configurations")
+            logger.debug(f"Loaded {len(STRATEGY_CONFIGS)} strategy configurations")
         except Exception as e:
             logger.error(f"Failed to load configs: {e}")
             STRATEGY_CONFIGS = {}

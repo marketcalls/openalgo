@@ -10,7 +10,7 @@ import {
   Shield,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { fetchCSRFToken } from '@/api/client'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -31,6 +31,7 @@ interface PasswordRequirements {
 }
 
 export default function ResetPassword() {
+  const [searchParams] = useSearchParams()
   const [step, setStep] = useState<Step>('email')
   const [email, setEmail] = useState('')
   const [totpCode, setTotpCode] = useState('')
@@ -51,6 +52,33 @@ export default function ResetPassword() {
   })
   const [passwordStrength, setPasswordStrength] = useState(0)
   const [passwordsMatch, setPasswordsMatch] = useState<boolean | null>(null)
+
+  // Check URL params for email link verification
+  useEffect(() => {
+    const urlToken = searchParams.get('token')
+    const urlEmail = searchParams.get('email')
+    const verified = searchParams.get('verified')
+    const urlError = searchParams.get('error')
+
+    // Handle errors from email link validation
+    if (urlError) {
+      const errorMessages: Record<string, string> = {
+        invalid_link: 'Invalid reset link. Please request a new one.',
+        expired_link: 'This reset link has expired. Please request a new one.',
+        session_expired: 'Your session has expired. Please start the reset process again.',
+        processing_error: 'An error occurred. Please try again.',
+      }
+      setError(errorMessages[urlError] || 'An error occurred.')
+      return
+    }
+
+    // If coming from email link with valid token, skip to password step
+    if (urlToken && urlEmail && verified === 'true') {
+      setToken(urlToken)
+      setEmail(urlEmail)
+      setStep('password')
+    }
+  }, [searchParams])
 
   // Check password requirements
   useEffect(() => {
