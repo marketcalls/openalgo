@@ -1,14 +1,6 @@
-import {
-  Download,
-  Loader2,
-  Radio,
-  RefreshCw,
-  TrendingDown,
-  TrendingUp,
-} from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { io, type Socket } from 'socket.io-client'
-import { tradingApi, type QuotesData } from '@/api/trading'
+import { Download, Loader2, Radio, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { tradingApi } from '@/api/trading'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -21,8 +13,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { useMarketData } from '@/hooks/useMarketData'
-import { useMarketStatus } from '@/hooks/useMarketStatus'
+import { useLivePrice, calculateLiveStats } from '@/hooks/useLivePrice'
+import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { cn, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -47,179 +39,30 @@ export default function Holdings() {
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // Map of "EXCHANGE:SYMBOL" -> QuotesData for fallback when market closed
-  const [multiQuotes, setMultiQuotes] = useState<Map<string, QuotesData>>(new Map())
 
-  // Market status hook - check if markets are open
-  const { isMarketOpen, isAnyMarketOpen } = useMarketStatus()
-  const anyMarketOpen = isAnyMarketOpen()
-
-  // Extract unique symbols for WebSocket subscription
-  const holdingSymbols = useMemo(
-    () =>
-      holdings.map((h) => ({
-        symbol: h.symbol,
-        exchange: h.exchange,
-      })),
-    [holdings]
-  )
-
-  // WebSocket market data hook - only enable when market is open
-  const { data: marketData, isConnected: wsConnected } = useMarketData({
-    symbols: holdingSymbols,
-    mode: 'LTP',
-    enabled: holdings.length > 0 && anyMarketOpen,
+  // Centralized real-time price hook with WebSocket + MultiQuotes fallback
+  const { data: enhancedHoldings, isLive } = useLivePrice(holdings, {
+    enabled: holdings.length > 0,
+    useMultiQuotesFallback: true,
+    staleThreshold: 5000,
+    multiQuotesRefreshInterval: 30000,
   })
 
-  // Effective live status - connected AND market is open
-  const isLive = wsConnected && anyMarketOpen
-
-  // Enhance holdings with real-time LTP and calculated average price
-  // Priority: WebSocket (market open) → MultiQuotes (market closed) → REST API data
-  const enhancedHoldings = useMemo(() => {
-    return holdings.map((holding) => {
-      const key = `${holding.exchange}:${holding.symbol}`
-      const wsData = marketData.get(key)
-      const qty = holding.quantity || 0
-      const originalPnl = holding.pnl || 0
-
-      // Check if market is open for this exchange
-      const exchangeMarketOpen = isMarketOpen(holding.exchange)
-
-      // Check if WebSocket LTP is fresh (< 5 seconds old) AND market is open
-      const hasWsData =
-        exchangeMarketOpen &&
-        wsData?.data?.ltp &&
-        wsData.lastUpdate &&
-        Date.now() - wsData.lastUpdate < 5000
-
-      // Check if we have multiquotes data (fallback when WebSocket not available)
-      const multiQuoteData = multiQuotes.get(key)
-      const hasMultiQuoteData = !hasWsData && multiQuoteData?.ltp
-
-      // Determine the best available LTP source
-      let currentLtp: number | undefined
-      if (hasWsData && wsData?.data?.ltp) {
-        currentLtp = wsData.data.ltp
-      } else if (hasMultiQuoteData) {
-        currentLtp = multiQuoteData.ltp
-      } else {
-        currentLtp = holding.ltp
-      }
-
-      // Calculate average price from REST data if not provided
-      // AvgPrice = LTP - (PnL / Qty)
-      let avgPrice = holding.average_price
-      if (!avgPrice && currentLtp && qty !== 0) {
-        avgPrice = currentLtp - originalPnl / qty
-      }
-
-      // If we have a current LTP (from WebSocket or MultiQuotes), recalculate PnL
-      if ((hasWsData || hasMultiQuoteData) && currentLtp && qty !== 0) {
-        // Calculate avgPrice from original REST data if needed
-        if (!avgPrice && holding.ltp) {
-          avgPrice = holding.ltp - originalPnl / qty
-        }
-
-        if (avgPrice) {
-          const newPnl = (currentLtp - avgPrice) * qty
-          const investment = Math.abs(avgPrice * qty)
-          const newPnlPercent = investment > 0 ? (newPnl / investment) * 100 : 0
-
-          return {
-            ...holding,
-            ltp: currentLtp,
-            average_price: avgPrice,
-            pnl: newPnl,
-            pnlpercent: newPnlPercent,
-          }
-        }
-      }
-
-      // No live data available - use REST API values with calculated avgPrice
-      return {
-        ...holding,
-        ltp: currentLtp,
-        average_price: avgPrice,
-        // Keep original pnl and pnlpercent from REST API
-      }
-    })
-  }, [holdings, marketData, isMarketOpen, multiQuotes])
-
   // Calculate enhanced stats based on real-time data
-  // Only recalculate if market is open and we have WebSocket data
   const enhancedStats = useMemo(() => {
     if (!stats) return stats
 
-    // Check if any holding has fresh WebSocket data with market open
-    const hasAnyWsData = enhancedHoldings.some((h) => {
-      const key = `${h.exchange}:${h.symbol}`
-      const wsData = marketData.get(key)
-      const exchangeOpen = isMarketOpen(h.exchange)
-      return (
-        exchangeOpen &&
-        wsData?.data?.ltp &&
-        wsData.lastUpdate &&
-        Date.now() - wsData.lastUpdate < 5000
-      )
-    })
+    // Check if any holding has live data
+    const hasAnyLiveData = enhancedHoldings.some(
+      (h) => (h as Holding & { _dataSource?: string })._dataSource !== 'rest'
+    )
 
-    // If no WebSocket data or all markets closed, return original REST stats
-    if (!hasAnyWsData) return stats
+    // If no live data, return original REST stats
+    if (!hasAnyLiveData) return stats
 
     // Recalculate stats with real-time data
-    let totalPnl = 0
-    let totalInvestment = 0
-    let totalHoldingValue = 0
-
-    enhancedHoldings.forEach((h) => {
-      totalPnl += h.pnl || 0
-      const avgPrice = h.average_price || 0
-      const qty = h.quantity || 0
-      const ltp = h.ltp || avgPrice
-      totalInvestment += avgPrice * qty
-      totalHoldingValue += ltp * qty
-    })
-
-    const totalPnlPercent = totalInvestment > 0 ? (totalPnl / totalInvestment) * 100 : 0
-
-    return {
-      ...stats,
-      totalholdingvalue: totalHoldingValue,
-      totalinvvalue: totalInvestment,
-      totalprofitandloss: totalPnl,
-      totalpnlpercentage: totalPnlPercent,
-    }
-  }, [stats, enhancedHoldings, marketData, isMarketOpen])
-
-  // Fetch multiquotes for LTP when market is closed
-  const fetchMultiQuotes = useCallback(
-    async (holdingsList: Holding[]) => {
-      if (!apiKey || holdingsList.length === 0) return
-
-      try {
-        const symbols = holdingsList.map((h) => ({
-          symbol: h.symbol,
-          exchange: h.exchange,
-        }))
-        const response = await tradingApi.getMultiQuotes(apiKey, symbols)
-        if (response.status === 'success' && response.results) {
-          // Convert results array to Map for easy lookup
-          const quotesMap = new Map<string, QuotesData>()
-          response.results.forEach((result) => {
-            const key = `${result.exchange}:${result.symbol}`
-            if (result.data) {
-              quotesMap.set(key, result.data)
-            }
-          })
-          setMultiQuotes(quotesMap)
-        }
-      } catch {
-        // Silently fail - multiquotes is a fallback
-      }
-    },
-    [apiKey]
-  )
+    return calculateLiveStats(enhancedHoldings, stats)
+  }, [stats, enhancedHoldings])
 
   const fetchHoldings = useCallback(
     async (showRefresh = false) => {
@@ -233,15 +76,9 @@ export default function Holdings() {
       try {
         const response = await tradingApi.getHoldings(apiKey)
         if (response.status === 'success' && response.data) {
-          const holdingsList = response.data.holdings || []
-          setHoldings(holdingsList)
+          setHoldings(response.data.holdings || [])
           setStats(response.data.statistics)
           setError(null)
-
-          // Always fetch multiquotes as fallback for LTP data
-          if (holdingsList.length > 0) {
-            fetchMultiQuotes(holdingsList)
-          }
         } else {
           setError(response.message || 'Failed to fetch holdings')
         }
@@ -252,9 +89,10 @@ export default function Holdings() {
         setIsRefreshing(false)
       }
     },
-    [apiKey, fetchMultiQuotes]
+    [apiKey]
   )
 
+  // Initial fetch and polling
   useEffect(() => {
     fetchHoldings()
     // Reduce polling interval when live (WebSocket connected AND market open)
@@ -271,33 +109,11 @@ export default function Holdings() {
     return () => unsubscribe()
   }, [fetchHoldings])
 
-  // Listen to Socket.IO events for order placement to trigger holdings refresh
-  const socketRef = useRef<Socket | null>(null)
-  useEffect(() => {
-    const protocol = window.location.protocol
-    const host = window.location.hostname
-    const port = window.location.port
-
-    socketRef.current = io(`${protocol}//${host}:${port}`, {
-      transports: ['websocket', 'polling'],
-    })
-
-    const socket = socketRef.current
-
-    // Refresh holdings when orders are placed/executed (may affect CNC holdings)
-    socket.on('order_event', () => {
-      setTimeout(() => fetchHoldings(), 500)
-    })
-
-    // Refresh holdings on analyzer updates (sandbox mode)
-    socket.on('analyzer_update', () => {
-      setTimeout(() => fetchHoldings(), 500)
-    })
-
-    return () => {
-      socket.disconnect()
-    }
-  }, [fetchHoldings])
+  // Centralized Socket.IO event listener for order events
+  useOrderEventRefresh(fetchHoldings, {
+    events: ['order_event', 'analyzer_update'],
+    delay: 500,
+  })
 
   const exportToCSV = () => {
     const headers = [

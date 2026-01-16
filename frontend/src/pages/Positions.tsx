@@ -11,8 +11,7 @@ import {
   TrendingUp,
   X,
 } from 'lucide-react'
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { io, type Socket } from 'socket.io-client'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { tradingApi } from '@/api/trading'
 import {
@@ -48,8 +47,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { useMarketData } from '@/hooks/useMarketData'
-import { useMarketStatus } from '@/hooks/useMarketStatus'
+import { useLivePrice } from '@/hooks/useLivePrice'
+import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { cn, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -146,72 +145,13 @@ export default function Positions() {
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
   const [settingsOpen, setSettingsOpen] = useState(false)
 
-  // Market status hook - check if markets are open
-  const { isMarketOpen, isAnyMarketOpen } = useMarketStatus()
-  const anyMarketOpen = isAnyMarketOpen()
-
-  // Extract unique symbols for WebSocket subscription
-  const positionSymbols = useMemo(
-    () =>
-      positions.map((p) => ({
-        symbol: p.symbol,
-        exchange: p.exchange,
-      })),
-    [positions]
-  )
-
-  // WebSocket market data hook - only enable when market is open
-  const { data: marketData, isConnected: wsConnected } = useMarketData({
-    symbols: positionSymbols,
-    mode: 'LTP',
-    enabled: positions.length > 0 && anyMarketOpen,
+  // Centralized real-time price hook with WebSocket + MultiQuotes fallback
+  const { data: enhancedPositions, isLive } = useLivePrice(positions, {
+    enabled: positions.length > 0,
+    useMultiQuotesFallback: true,
+    staleThreshold: 5000,
+    multiQuotesRefreshInterval: 30000,
   })
-
-  // Effective live status - connected AND market is open
-  const isLive = wsConnected && anyMarketOpen
-
-  // Enhance positions with real-time LTP from WebSocket (fallback to REST data)
-  // For closed positions (qty=0), preserve the realized PnL from REST API
-  // For open positions (qty!=0), only recalculate when market is open and WebSocket data is available
-  const enhancedPositions = useMemo(() => {
-    return positions.map((pos) => {
-      const key = `${pos.exchange}:${pos.symbol}`
-      const wsData = marketData.get(key)
-      const qty = pos.quantity || 0
-      const avgPrice = pos.average_price || 0
-
-      // Check if market is open for this exchange
-      const exchangeMarketOpen = isMarketOpen(pos.exchange)
-
-      // Check if WebSocket LTP is fresh (< 5 seconds old) AND market is open
-      const hasWsData =
-        exchangeMarketOpen &&
-        wsData?.data?.ltp &&
-        wsData.lastUpdate &&
-        Date.now() - wsData.lastUpdate < 5000
-
-      // For closed positions (qty=0), preserve the realized PnL from REST API
-      if (qty === 0) {
-        const ltp = hasWsData ? wsData.data.ltp : pos.ltp
-        return { ...pos, ltp: ltp ?? pos.ltp }
-      }
-
-      // Open position - only recalculate PnL when market is open and WebSocket data is available
-      if (hasWsData && wsData?.data?.ltp) {
-        const currentLtp = wsData.data.ltp
-        const pnl = (currentLtp - avgPrice) * qty
-        const investment = Math.abs(avgPrice * qty)
-        const pnlpercent = investment > 0 ? (pnl / investment) * 100 : 0
-        return { ...pos, ltp: currentLtp, pnl, pnlpercent }
-      }
-
-      // Market closed or no WebSocket data - preserve REST API values
-      const pnl = pos.pnl || 0
-      const investment = Math.abs(avgPrice * qty)
-      const pnlpercent = pos.pnlpercent ?? (investment > 0 ? (pnl / investment) * 100 : 0)
-      return { ...pos, pnlpercent }
-    })
-  }, [positions, marketData, isMarketOpen])
 
   // Load preferences from localStorage
   useEffect(() => {
@@ -268,6 +208,7 @@ export default function Positions() {
     [apiKey]
   )
 
+  // Initial fetch and polling
   useEffect(() => {
     fetchPositions()
     // Reduce polling interval when live (WebSocket connected AND market open)
@@ -284,39 +225,11 @@ export default function Positions() {
     return () => unsubscribe()
   }, [fetchPositions])
 
-  // Listen to Socket.IO events for order placement/execution to trigger position refresh
-  const socketRef = useRef<Socket | null>(null)
-  useEffect(() => {
-    const protocol = window.location.protocol
-    const host = window.location.hostname
-    const port = window.location.port
-
-    socketRef.current = io(`${protocol}//${host}:${port}`, {
-      transports: ['websocket', 'polling'],
-    })
-
-    const socket = socketRef.current
-
-    // Refresh positions when orders are placed/executed
-    socket.on('order_event', () => {
-      // Delay slightly to allow order to be processed
-      setTimeout(() => fetchPositions(), 500)
-    })
-
-    // Refresh positions on analyzer updates (sandbox mode)
-    socket.on('analyzer_update', () => {
-      setTimeout(() => fetchPositions(), 500)
-    })
-
-    // Refresh positions when a position is closed
-    socket.on('close_position_event', () => {
-      setTimeout(() => fetchPositions(), 500)
-    })
-
-    return () => {
-      socket.disconnect()
-    }
-  }, [fetchPositions])
+  // Centralized Socket.IO event listener for order events
+  useOrderEventRefresh(fetchPositions, {
+    events: ['order_event', 'analyzer_update', 'close_position_event'],
+    delay: 500,
+  })
 
   // Get group key for a position
   const getGroupKey = useCallback(
