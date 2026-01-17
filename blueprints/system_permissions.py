@@ -20,10 +20,11 @@ system_permissions_bp = Blueprint('system_permissions_bp', __name__, url_prefix=
 # Format: (relative_path, expected_unix_mode, description, is_sensitive)
 PERMISSION_CHECKS = [
     ('db', 0o755, 'Database directory', False),
-    ('db/openalgo.db', 0o644, 'Main database file', False),
-    ('db/latency.db', 0o644, 'Latency database file', False),
-    ('db/logs.db', 0o644, 'Logs database file', False),
-    ('db/sandbox.db', 0o644, 'Sandbox database file', False),
+    ('db/openalgo.db', 0o644, 'Main database file (SQLite)', False),
+    ('db/latency.db', 0o644, 'Latency database file (SQLite)', False),
+    ('db/logs.db', 0o644, 'Logs database file (SQLite)', False),
+    ('db/sandbox.db', 0o644, 'Sandbox database file (SQLite)', False),
+    ('db/historify.duckdb', 0o644, 'Historical data database (DuckDB)', False),
     ('.env', 0o600, 'Environment configuration (sensitive)', True),
     ('log', 0o755, 'Log directory', False),
     ('log/strategies', 0o755, 'Strategy logs directory', False),
