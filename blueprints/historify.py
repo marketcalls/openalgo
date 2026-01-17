@@ -405,15 +405,15 @@ def bulk_export():
         split_by = data.get('split_by', 'symbol')  # For ZIP: 'symbol' or 'none'
         compression = data.get('compression', 'zstd')  # For Parquet
 
-        # Validate intervals parameter
-        VALID_INTERVALS = {'1m', '5m', '15m', '30m', '1h', 'D', 'W', 'M'}
+        # Validate intervals parameter using parse_interval for dynamic validation
+        from database.historify_db import parse_interval
         if intervals is not None:
             if not isinstance(intervals, list):
                 return jsonify({'status': 'error', 'message': 'intervals must be an array'}), 400
             if len(intervals) == 0:
                 return jsonify({'status': 'error', 'message': 'At least one interval must be specified'}), 400
             intervals = list(set(intervals))  # Remove duplicates
-            invalid = [i for i in intervals if i not in VALID_INTERVALS]
+            invalid = [i for i in intervals if parse_interval(i) is None]
             if invalid:
                 return jsonify({'status': 'error', 'message': f'Invalid intervals: {invalid}'}), 400
 
@@ -433,13 +433,13 @@ def bulk_export():
         else:
             base_name = f"historify_export_{timestamp_str}"
 
-        # Computed intervals that require aggregation from 1m data
-        COMPUTED_INTERVALS = {'5m', '15m', '30m', '1h'}
+        # Check if any interval requires aggregation from 1m data (custom intervals)
+        from database.historify_db import is_custom_interval
 
         # Force ZIP format if:
         # 1. Multiple intervals selected, OR
-        # 2. Any computed interval is selected (since only ZIP supports aggregation)
-        has_computed = intervals and any(i in COMPUTED_INTERVALS for i in intervals)
+        # 2. Any computed/custom interval is selected (since only ZIP supports aggregation)
+        has_computed = intervals and any(is_custom_interval(i) for i in intervals)
         if (intervals and len(intervals) > 1) or has_computed:
             format_type = 'zip'
 
