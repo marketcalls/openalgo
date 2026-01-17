@@ -96,7 +96,8 @@ export const webClient = axios.create({
 // Add CSRF token to web client requests
 webClient.interceptors.request.use(
   async (config) => {
-    if (config.method === 'post' || config.method === 'put' || config.method === 'delete') {
+    const method = config.method?.toLowerCase()
+    if (method === 'post' || method === 'put' || method === 'delete') {
       try {
         const csrfToken = await fetchCSRFToken()
         if (!csrfToken) {

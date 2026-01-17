@@ -1,4 +1,4 @@
-import { ArrowLeft, FileCode, Info, Upload } from 'lucide-react'
+import { ArrowLeft, Clock, FileCode, Info, Upload } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -6,9 +6,11 @@ import { pythonStrategyApi } from '@/api/python-strategy'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { SCHEDULE_DAYS } from '@/types/python-strategy'
 
 const EXAMPLE_STRATEGY = `"""
 Example OpenAlgo Strategy
@@ -57,6 +59,17 @@ export default function NewPythonStrategy() {
   const [showExample, setShowExample] = useState(false)
   const [errors, setErrors] = useState<Record<string, string>>({})
 
+  // Schedule fields with defaults (Mon-Fri, 9:00 AM - 4:00 PM IST)
+  const [startTime, setStartTime] = useState('09:00')
+  const [stopTime, setStopTime] = useState('16:00')
+  const [selectedDays, setSelectedDays] = useState<string[]>(['mon', 'tue', 'wed', 'thu', 'fri'])
+
+  const handleDayToggle = (day: string) => {
+    setSelectedDays((prev) =>
+      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
+    )
+  }
+
   const validateForm = () => {
     const newErrors: Record<string, string> = {}
 
@@ -72,6 +85,17 @@ export default function NewPythonStrategy() {
       newErrors.file = 'Please select a Python file'
     } else if (!file.name.endsWith('.py')) {
       newErrors.file = 'File must be a Python file (.py)'
+    }
+
+    // Schedule validation
+    if (!startTime) {
+      newErrors.startTime = 'Start time is required'
+    }
+    if (!stopTime) {
+      newErrors.stopTime = 'Stop time is required'
+    }
+    if (selectedDays.length === 0) {
+      newErrors.days = 'Select at least one day'
     }
 
     setErrors(newErrors)
@@ -111,11 +135,16 @@ export default function NewPythonStrategy() {
 
     try {
       setLoading(true)
-      const response = await pythonStrategyApi.uploadStrategy(name, file!)
+      // Upload strategy with schedule (schedule is mandatory)
+      const response = await pythonStrategyApi.uploadStrategy(name, file!, {
+        start_time: startTime,
+        stop_time: stopTime,
+        days: selectedDays,
+      })
 
       if (response.status === 'success') {
-        toast.success('Strategy uploaded successfully')
-        navigate(`/python/${response.data?.strategy_id}/edit`)
+        toast.success('Strategy uploaded with schedule')
+        navigate('/python')
       } else {
         toast.error(response.message || 'Failed to upload strategy')
       }
@@ -218,6 +247,72 @@ export default function NewPythonStrategy() {
                 )}
               </div>
               {errors.file && <p className="text-sm text-red-500">{errors.file}</p>}
+            </div>
+
+            {/* Schedule Section */}
+            <div className="space-y-4 border-t pt-6">
+              <div className="flex items-center gap-2">
+                <Clock className="h-5 w-5 text-muted-foreground" />
+                <h3 className="font-medium">Schedule</h3>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Configure when this strategy should run. All times are in IST.
+              </p>
+
+              {/* Time Inputs */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="startTime">Start Time (IST)</Label>
+                  <Input
+                    id="startTime"
+                    type="time"
+                    value={startTime}
+                    onChange={(e) => setStartTime(e.target.value)}
+                    className={errors.startTime ? 'border-red-500' : ''}
+                  />
+                  {errors.startTime && <p className="text-sm text-red-500">{errors.startTime}</p>}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="stopTime">Stop Time (IST)</Label>
+                  <Input
+                    id="stopTime"
+                    type="time"
+                    value={stopTime}
+                    onChange={(e) => setStopTime(e.target.value)}
+                    className={errors.stopTime ? 'border-red-500' : ''}
+                  />
+                  {errors.stopTime && <p className="text-sm text-red-500">{errors.stopTime}</p>}
+                </div>
+              </div>
+
+              {/* Day Selection */}
+              <div className="space-y-2">
+                <Label>Schedule Days</Label>
+                <div className="flex flex-wrap gap-2">
+                  {SCHEDULE_DAYS.map((day) => (
+                    <div
+                      key={day.value}
+                      className={`flex items-center gap-2 px-3 py-2 border rounded-lg cursor-pointer transition-colors ${
+                        selectedDays.includes(day.value)
+                          ? 'bg-primary text-primary-foreground border-primary'
+                          : 'hover:bg-muted'
+                      }`}
+                      onClick={() => handleDayToggle(day.value)}
+                    >
+                      <Checkbox
+                        checked={selectedDays.includes(day.value)}
+                        onCheckedChange={() => handleDayToggle(day.value)}
+                        className="pointer-events-none"
+                      />
+                      <span className="text-sm">{day.label}</span>
+                    </div>
+                  ))}
+                </div>
+                {errors.days && <p className="text-sm text-red-500">{errors.days}</p>}
+                <p className="text-xs text-muted-foreground">
+                  Select the days when this strategy should run. Weekends can be enabled for special trading sessions.
+                </p>
+              </div>
             </div>
 
             {/* Submit */}

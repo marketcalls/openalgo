@@ -1,13 +1,13 @@
 import {
   AlertTriangle,
   Calendar,
-  CalendarOff,
   Clock,
   Download,
   FileCode,
   FileText,
   HelpCircle,
   MoreVertical,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
@@ -87,9 +87,12 @@ export default function PythonStrategyIndex() {
       } else {
         toast.error(response.message || 'Failed to start strategy')
       }
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Failed to start strategy:', error)
-      toast.error('Failed to start strategy')
+      // Extract error message from Axios response
+      const axiosError = error as { response?: { data?: { message?: string } } }
+      const errorMessage = axiosError.response?.data?.message || 'Failed to start strategy'
+      toast.error(errorMessage)
     } finally {
       setActionLoading(null)
     }
@@ -126,24 +129,6 @@ export default function PythonStrategyIndex() {
     } catch (error) {
       console.error('Failed to clear error:', error)
       toast.error('Failed to clear error')
-    } finally {
-      setActionLoading(null)
-    }
-  }
-
-  const handleUnschedule = async (strategy: PythonStrategy) => {
-    try {
-      setActionLoading(strategy.id)
-      const response = await pythonStrategyApi.unscheduleStrategy(strategy.id)
-      if (response.status === 'success') {
-        toast.success('Schedule removed')
-        fetchData()
-      } else {
-        toast.error(response.message || 'Failed to remove schedule')
-      }
-    } catch (error) {
-      console.error('Failed to unschedule:', error)
-      toast.error('Failed to remove schedule')
     } finally {
       setActionLoading(null)
     }
@@ -376,12 +361,19 @@ export default function PythonStrategyIndex() {
                     </CardDescription>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge
-                      variant={strategy.status === 'running' ? 'default' : 'secondary'}
-                      className={strategy.status === 'running' ? 'bg-green-500' : ''}
-                    >
-                      {STATUS_LABELS[strategy.status]}
-                    </Badge>
+                    <Tooltip>
+                      <TooltipTrigger>
+                        <Badge
+                          variant={strategy.status === 'running' ? 'default' : 'secondary'}
+                          className={STATUS_COLORS[strategy.status] || ''}
+                        >
+                          {STATUS_LABELS[strategy.status] || strategy.status}
+                        </Badge>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        {strategy.status_message || STATUS_LABELS[strategy.status]}
+                      </TooltipContent>
+                    </Tooltip>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button variant="ghost" size="icon">
@@ -412,27 +404,19 @@ export default function PythonStrategyIndex() {
               </CardHeader>
 
               <CardContent className="space-y-4 flex-1 flex flex-col">
-                {/* Schedule Info - always show with consistent height */}
-                <div className={`text-sm p-2 rounded min-h-[52px] ${strategy.is_scheduled ? 'bg-blue-500/10 border border-blue-500/20' : 'bg-muted/50'}`}>
-                  {strategy.is_scheduled ? (
-                    <>
-                      <div className="flex items-center gap-2">
-                        <Calendar className="h-4 w-4 text-blue-500" />
-                        <span>
-                          {strategy.schedule_start_time}
-                          {strategy.schedule_stop_time && ` - ${strategy.schedule_stop_time}`}
-                        </span>
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {formatScheduleDays(strategy.schedule_days)}
-                      </p>
-                    </>
-                  ) : (
-                    <div className="flex items-center gap-2 text-muted-foreground h-full">
-                      <CalendarOff className="h-4 w-4" />
-                      <span>No schedule configured</span>
-                    </div>
-                  )}
+                {/* Schedule Info - always show */}
+                <div className="text-sm p-2 rounded min-h-[52px] bg-blue-500/10 border border-blue-500/20">
+                  <div className="flex items-center gap-2">
+                    <Calendar className="h-4 w-4 text-blue-500" />
+                    <span>
+                      {strategy.schedule_start_time || '09:00'}
+                      {' - '}
+                      {strategy.schedule_stop_time || '16:00'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {formatScheduleDays(strategy.schedule_days?.length ? strategy.schedule_days : ['mon', 'tue', 'wed', 'thu', 'fri'])}
+                  </p>
                 </div>
 
                 {/* Error Message */}
@@ -501,46 +485,27 @@ export default function PythonStrategyIndex() {
                     </Tooltip>
                   )}
 
-                  {strategy.is_scheduled ? (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="border-blue-500 bg-blue-50 text-blue-600 hover:bg-blue-100 dark:bg-blue-950 dark:text-blue-400 dark:hover:bg-blue-900"
-                          onClick={() => handleUnschedule(strategy)}
-                          disabled={actionLoading === strategy.id || strategy.status === 'running'}
-                        >
-                          <Calendar className="h-4 w-4 mr-1" />
-                          <span className="text-xs">On</span>
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        Scheduled: {strategy.schedule_start_time}
-                        {strategy.schedule_stop_time && ` - ${strategy.schedule_stop_time}`}
-                        <br />
-                        Click to remove
-                      </TooltipContent>
-                    </Tooltip>
-                  ) : (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="text-muted-foreground hover:text-foreground"
-                          asChild
-                          disabled={strategy.status === 'running'}
-                        >
-                          <Link to={`/python/${strategy.id}/schedule`}>
-                            <CalendarOff className="h-4 w-4 mr-1" />
-                            <span className="text-xs">Off</span>
-                          </Link>
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>Set schedule</TooltipContent>
-                    </Tooltip>
-                  )}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="border-blue-500 text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-950"
+                        asChild
+                        disabled={strategy.status === 'running'}
+                      >
+                        <Link to={`/python/${strategy.id}/schedule`}>
+                          <Pencil className="h-4 w-4 mr-1" />
+                          <span className="text-xs">Schedule</span>
+                        </Link>
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {strategy.schedule_start_time && strategy.schedule_stop_time
+                        ? `${strategy.schedule_start_time} - ${strategy.schedule_stop_time}`
+                        : 'Edit schedule'}
+                    </TooltipContent>
+                  </Tooltip>
 
                   <Tooltip>
                     <TooltipTrigger asChild>

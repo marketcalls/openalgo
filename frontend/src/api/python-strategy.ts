@@ -40,15 +40,24 @@ export const pythonStrategyApi = {
   },
 
   /**
-   * Upload a new strategy
+   * Upload a new strategy with mandatory schedule
    */
   uploadStrategy: async (
     name: string,
-    file: File
+    file: File,
+    schedule: {
+      start_time: string
+      stop_time: string
+      days: string[]
+    }
   ): Promise<ApiResponse<{ strategy_id: string }>> => {
     const formData = new FormData()
     formData.append('strategy_name', name)
     formData.append('strategy_file', file)
+    // Add schedule fields
+    formData.append('schedule_start', schedule.start_time)
+    formData.append('schedule_stop', schedule.stop_time)
+    formData.append('schedule_days', JSON.stringify(schedule.days))
 
     const response = await webClient.post<ApiResponse<{ strategy_id: string }>>(
       '/python/new',

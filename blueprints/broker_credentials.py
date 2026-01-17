@@ -101,6 +101,15 @@ def get_credentials():
         valid_brokers = get_env_value('VALID_BROKERS')
         ngrok_allow = get_env_value('NGROK_ALLOW')
         host_server = get_env_value('HOST_SERVER')
+        websocket_url = get_env_value('WEBSOCKET_URL')
+
+        # Get port configuration
+        flask_host = get_env_value('FLASK_HOST_IP') or '127.0.0.1'
+        flask_port = get_env_value('FLASK_PORT') or '5000'
+        websocket_host = get_env_value('WEBSOCKET_HOST') or '127.0.0.1'
+        websocket_port = get_env_value('WEBSOCKET_PORT') or '8765'
+        zmq_host = get_env_value('ZMQ_HOST') or '127.0.0.1'
+        zmq_port = get_env_value('ZMQ_PORT') or '5555'
 
         # Get current broker from redirect URL
         current_broker = get_broker_from_redirect_url(redirect_url)
@@ -123,7 +132,14 @@ def get_credentials():
                 'current_broker': current_broker,
                 'valid_brokers': brokers_list,
                 'ngrok_allow': ngrok_allow.upper() == 'TRUE',
-                'host_server': host_server
+                'host_server': host_server,
+                'websocket_url': websocket_url,
+                # Server status info
+                'server_status': {
+                    'flask': {'host': flask_host, 'port': flask_port},
+                    'websocket': {'host': websocket_host, 'port': websocket_port},
+                    'zmq': {'host': zmq_host, 'port': zmq_port}
+                }
             }
         })
     except Exception as e:
@@ -145,6 +161,7 @@ def update_credentials():
             redirect_url = data.get('redirect_url', '').strip()
             ngrok_allow = data.get('ngrok_allow', '')
             host_server = data.get('host_server', '').strip()
+            websocket_url = data.get('websocket_url', '').strip()
             has_ngrok_key = 'ngrok_allow' in data
         else:
             # Form data
@@ -155,6 +172,7 @@ def update_credentials():
             redirect_url = request.form.get('redirect_url', '').strip()
             ngrok_allow = request.form.get('ngrok_allow', '').strip()
             host_server = request.form.get('host_server', '').strip()
+            websocket_url = request.form.get('websocket_url', '').strip()
             has_ngrok_key = 'ngrok_allow' in request.form
 
         # Validate redirect URL format
@@ -244,6 +262,16 @@ def update_credentials():
                 }), 400
             content = update_env_value(content, 'HOST_SERVER', host_server)
             updated_fields.append('HOST_SERVER')
+
+        if websocket_url:
+            # Validate websocket_url format
+            if not re.match(r'^wss?://.+', websocket_url):
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Invalid WEBSOCKET_URL format. Must start with ws:// or wss://'
+                }), 400
+            content = update_env_value(content, 'WEBSOCKET_URL', websocket_url)
+            updated_fields.append('WEBSOCKET_URL')
 
         if not updated_fields:
             return jsonify({

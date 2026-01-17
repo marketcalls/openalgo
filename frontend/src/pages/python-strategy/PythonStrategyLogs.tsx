@@ -193,7 +193,8 @@ export default function PythonStrategyLogs() {
             variant="destructive"
             size="sm"
             onClick={() => setClearDialogOpen(true)}
-            disabled={logFiles.length === 0}
+            disabled={logFiles.length === 0 || strategy.status === 'running'}
+            title={strategy.status === 'running' ? 'Stop strategy first to clear logs' : undefined}
           >
             <Trash2 className="h-4 w-4 mr-2" />
             Clear All

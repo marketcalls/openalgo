@@ -4,12 +4,14 @@ export interface PythonStrategy {
   id: string
   name: string
   file_name: string
-  status: 'stopped' | 'running' | 'error' | 'scheduled'
+  status: 'stopped' | 'running' | 'error' | 'scheduled' | 'paused' | 'manually_stopped' | 'outside_schedule'
+  status_message?: string
   process_id: number | null
   last_started: string | null
   last_stopped: string | null
   error_message: string | null
   is_scheduled: boolean
+  manually_stopped?: boolean
   schedule_start_time: string | null
   schedule_stop_time: string | null
   schedule_days: string[]
@@ -48,7 +50,7 @@ export interface EnvironmentVariables {
 
 export interface ScheduleConfig {
   start_time: string
-  stop_time: string | null
+  stop_time: string
   days: string[]
 }
 
@@ -73,6 +75,9 @@ export const STATUS_COLORS: Record<string, string> = {
   stopped: 'bg-gray-500',
   error: 'bg-red-500',
   scheduled: 'bg-blue-500',
+  paused: 'bg-yellow-500',
+  manually_stopped: 'bg-orange-500',
+  outside_schedule: 'bg-slate-400',
 }
 
 export const STATUS_LABELS: Record<string, string> = {
@@ -80,4 +85,7 @@ export const STATUS_LABELS: Record<string, string> = {
   stopped: 'Stopped',
   error: 'Error',
   scheduled: 'Scheduled',
+  paused: 'Paused',
+  manually_stopped: 'Manual Stop',
+  outside_schedule: 'Outside Schedule',
 }

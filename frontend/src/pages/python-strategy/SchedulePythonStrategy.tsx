@@ -29,12 +29,10 @@ export default function SchedulePythonStrategy() {
         setLoading(true)
         const data = await pythonStrategyApi.getStrategy(strategyId)
         setStrategy(data)
-        // Pre-fill with existing schedule if available
-        if (data.is_scheduled) {
-          if (data.schedule_start_time) setStartTime(data.schedule_start_time)
-          if (data.schedule_stop_time) setStopTime(data.schedule_stop_time)
-          if (data.schedule_days?.length) setSelectedDays(data.schedule_days)
-        }
+        // Pre-fill with existing schedule (schedule is always enabled)
+        if (data.schedule_start_time) setStartTime(data.schedule_start_time)
+        if (data.schedule_stop_time) setStopTime(data.schedule_stop_time)
+        if (data.schedule_days?.length) setSelectedDays(data.schedule_days)
       } catch (error) {
         console.error('Failed to fetch strategy:', error)
         toast.error('Failed to load strategy')
@@ -65,12 +63,16 @@ export default function SchedulePythonStrategy() {
       toast.error('Start time is required')
       return
     }
+    if (!stopTime) {
+      toast.error('Stop time is required')
+      return
+    }
 
     try {
       setSaving(true)
       const response = await pythonStrategyApi.scheduleStrategy(strategyId, {
         start_time: startTime,
-        stop_time: stopTime || null,
+        stop_time: stopTime,
         days: selectedDays,
       })
 
@@ -134,7 +136,7 @@ export default function SchedulePythonStrategy() {
 
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Schedule Strategy</h1>
+        <h1 className="text-2xl font-bold tracking-tight">Edit Schedule</h1>
         <p className="text-muted-foreground">{strategy.name}</p>
       </div>
 
@@ -176,8 +178,8 @@ export default function SchedulePythonStrategy() {
                   type="time"
                   value={stopTime}
                   onChange={(e) => setStopTime(e.target.value)}
+                  required
                 />
-                <p className="text-xs text-muted-foreground">Optional - leave empty to run until manually stopped</p>
               </div>
             </div>
 

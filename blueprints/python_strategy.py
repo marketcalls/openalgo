@@ -23,7 +23,7 @@ import json
 import pytz
 import platform
 import threading
-from database.market_calendar_db import is_market_holiday
+from database.market_calendar_db import is_market_holiday, is_market_open, get_market_hours_status
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -59,6 +59,27 @@ def init_scheduler():
         SCHEDULER = BackgroundScheduler(daemon=True, timezone=IST)
         SCHEDULER.start()
         logger.debug(f"Scheduler initialized with IST timezone on {OS_TYPE}")
+
+        # Add daily trading day check job - runs at 00:01 IST every day
+        # This stops scheduled strategies on weekends/holidays
+        SCHEDULER.add_job(
+            func=daily_trading_day_check,
+            trigger=CronTrigger(hour=0, minute=1, timezone=IST),
+            id='daily_trading_day_check',
+            replace_existing=True
+        )
+        logger.info("Daily trading day check scheduled at 00:01 IST")
+
+        # Add market hours enforcer - runs every minute during trading hours
+        # This stops scheduled strategies when market closes
+        SCHEDULER.add_job(
+            func=market_hours_enforcer,
+            trigger='interval',
+            minutes=1,
+            id='market_hours_enforcer',
+            replace_existing=True
+        )
+        logger.info("Market hours enforcer scheduled (runs every minute)")
 
 def load_configs():
     """Load strategy configurations from file"""
@@ -506,8 +527,16 @@ def stop_strategy_process(strategy_id):
             save_configs()
             
             logger.info(f"Stopped strategy {strategy_id} at {ist_now.strftime('%H:%M:%S IST')}")
+
+            # Cleanup old log files based on configured limits
+            # Run outside the lock to avoid blocking
+            try:
+                cleanup_strategy_logs(strategy_id)
+            except Exception as cleanup_err:
+                logger.warning(f"Log cleanup failed for {strategy_id}: {cleanup_err}")
+
             return True, f"Strategy stopped at {ist_now.strftime('%H:%M:%S IST')}"
-            
+
         except Exception as e:
             logger.error(f"Failed to stop strategy {strategy_id}: {e}")
             return False, f"Failed to stop strategy: {str(e)}"
@@ -572,6 +601,7 @@ def cleanup_dead_processes():
     with PROCESS_LOCK:  # Thread-safe operation
         dead_strategies = []
 
+        # Check RUNNING_STRATEGIES (in-memory)
         for strategy_id, info in list(RUNNING_STRATEGIES.items()):
             process = info['process']
             is_dead = False
@@ -608,6 +638,29 @@ def cleanup_dead_processes():
                 STRATEGY_CONFIGS[strategy_id]['is_running'] = False
                 STRATEGY_CONFIGS[strategy_id]['pid'] = None
 
+        # Also check STRATEGY_CONFIGS for stale is_running flags
+        # (e.g., after app restart, RUNNING_STRATEGIES is empty but config has is_running=True)
+        configs_to_fix = []
+        for strategy_id, config in STRATEGY_CONFIGS.items():
+            if config.get('is_running') and strategy_id not in RUNNING_STRATEGIES:
+                # Config says running but not in memory - check if PID is alive
+                pid = config.get('pid')
+                if pid:
+                    if not psutil.pid_exists(pid):
+                        configs_to_fix.append(strategy_id)
+                        logger.info(f"Cleaning up stale is_running flag for {strategy_id} (PID {pid} not found)")
+                else:
+                    # No PID stored, definitely not running
+                    configs_to_fix.append(strategy_id)
+                    logger.info(f"Cleaning up stale is_running flag for {strategy_id} (no PID)")
+
+        for strategy_id in configs_to_fix:
+            STRATEGY_CONFIGS[strategy_id]['is_running'] = False
+            STRATEGY_CONFIGS[strategy_id]['pid'] = None
+
+        if configs_to_fix:
+            save_configs()
+
         if dead_strategies:
             save_configs()
             logger.info(f"Cleaned up {len(dead_strategies)} dead processes")
@@ -637,44 +690,142 @@ def is_trading_day() -> bool:
 
 def is_within_market_hours() -> bool:
     """
-    Check if current time is within market trading hours (09:15 - 15:30 IST).
+    Check if current time is within market trading hours.
+    Uses the market calendar database for accurate exchange-specific timings.
 
     Returns:
         True if within market hours, False otherwise
     """
     try:
-        now = datetime.now(IST)
-        current_time = now.time()
-
-        # Market hours: 09:15 - 15:30 IST
-        market_open = time(9, 15)
-        market_close = time(15, 30)
-
-        if current_time < market_open or current_time > market_close:
-            logger.info(f"Current time ({current_time}) is outside market hours (09:15 - 15:30 IST)")
-            return False
-
-        return True
+        # Use the market calendar function which checks all exchanges
+        return is_market_open()
     except Exception as e:
         logger.error(f"Error checking market hours: {e}")
         return False
 
 
+def get_market_status() -> dict:
+    """
+    Get detailed market status with reason for being closed.
+
+    Returns:
+        dict with:
+        - is_open: bool
+        - reason: str (None if open, else 'weekend', 'holiday', 'before_market', 'after_market')
+        - message: str (human readable message)
+        - next_open: str (when market opens next, if closed)
+    """
+    try:
+        now = datetime.now(IST)
+        today = now.date()
+
+        # Check weekend first
+        if today.weekday() >= 5:  # Saturday = 5, Sunday = 6
+            day_name = 'Saturday' if today.weekday() == 5 else 'Sunday'
+            return {
+                'is_open': False,
+                'reason': 'weekend',
+                'message': f'Market closed - {day_name}',
+                'day': day_name
+            }
+
+        # Check holiday
+        if is_market_holiday(today):
+            return {
+                'is_open': False,
+                'reason': 'holiday',
+                'message': 'Market closed - Holiday'
+            }
+
+        # Check market hours using market calendar
+        status = get_market_hours_status()
+
+        if status.get('any_market_open'):
+            return {
+                'is_open': True,
+                'reason': None,
+                'message': 'Market is open'
+            }
+
+        # Market is closed - determine if before or after hours
+        current_ms = status.get('current_time_ms', 0)
+        earliest_open = status.get('earliest_open_ms', 33300000)  # Default 09:15
+        latest_close = status.get('latest_close_ms', 55800000)    # Default 15:30
+
+        if current_ms < earliest_open:
+            return {
+                'is_open': False,
+                'reason': 'before_market',
+                'message': 'Market closed - Before market hours'
+            }
+        else:
+            return {
+                'is_open': False,
+                'reason': 'after_market',
+                'message': 'Market closed - After market hours'
+            }
+
+    except Exception as e:
+        logger.error(f"Error getting market status: {e}")
+        return {
+            'is_open': False,
+            'reason': 'error',
+            'message': f'Error checking market status: {str(e)}'
+        }
+
+
 def scheduled_start_strategy(strategy_id: str):
     """
     Wrapper function for scheduled strategy start.
-    Enforces holiday and market hours check before starting.
+    Respects user's schedule_days - if today is in schedule, it runs.
+    Only blocks on non-trading days if the day is NOT explicitly scheduled.
+    Respects manual stop - won't auto-start until user manually starts again.
     """
-    # STRONGLY ENFORCE: Check if today is a trading day
-    if not is_trading_day():
-        logger.warning(f"Strategy {strategy_id} scheduled start BLOCKED - not a trading day")
+    config = STRATEGY_CONFIGS.get(strategy_id, {})
+    now = datetime.now(IST)
+    day_names = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+    today_day = day_names[now.weekday()]
+
+    # Check if strategy was manually stopped - respect user's decision permanently
+    # User must manually start the strategy to resume auto-scheduling
+    if config.get('manually_stopped'):
+        logger.info(f"Strategy {strategy_id} was manually stopped - skipping scheduled auto-start (start manually to resume)")
         return
 
-    # STRONGLY ENFORCE: Check if within market hours (optional - comment out if strategies should start before market)
-    # Note: We only check trading day, not market hours for start,
-    # since strategies might need to start before market opens for pre-market setup
+    # Check if today is explicitly in the user's schedule_days
+    # If yes, trust the user's decision and skip trading day checks
+    schedule_days = config.get('schedule_days', [])
+    today_in_schedule = today_day in [d.lower() for d in schedule_days]
 
-    logger.info(f"Trading day confirmed - proceeding to start strategy {strategy_id}")
+    if today_in_schedule:
+        logger.info(f"Strategy {strategy_id} is explicitly scheduled for {today_day.capitalize()} - skipping trading day check")
+    else:
+        # Today is NOT in schedule_days - this shouldn't happen normally
+        # (scheduler only triggers on scheduled days), but check anyway
+        logger.warning(f"Strategy {strategy_id} scheduled start called but {today_day.capitalize()} not in schedule_days")
+        return
+
+    # Check for market holidays (weekdays only) - weekends are handled by schedule_days
+    if is_trading_day_enforcement_enabled() and now.weekday() < 5:
+        # It's a weekday - check if it's a market holiday
+        if not is_trading_day():
+            reason = 'holiday'
+            message = 'Market closed - Holiday'
+            logger.warning(f"Strategy {strategy_id} scheduled start BLOCKED - {message}")
+
+            # Store the blocked reason
+            if strategy_id in STRATEGY_CONFIGS:
+                STRATEGY_CONFIGS[strategy_id]['paused_reason'] = reason
+                STRATEGY_CONFIGS[strategy_id]['paused_message'] = message
+                save_configs()
+            return
+
+    # Clear any previous paused reason
+    if strategy_id in STRATEGY_CONFIGS:
+        STRATEGY_CONFIGS[strategy_id].pop('paused_reason', None)
+        STRATEGY_CONFIGS[strategy_id].pop('paused_message', None)
+
+    logger.info(f"All checks passed - proceeding to start strategy {strategy_id}")
     start_strategy_process(strategy_id)
 
 
@@ -688,10 +839,321 @@ def scheduled_stop_strategy(strategy_id: str):
     stop_strategy_process(strategy_id)
 
 
+def is_trading_day_enforcement_enabled() -> bool:
+    """
+    Trading day enforcement is always enabled.
+    We only block on weekends/holidays, not specific market hours.
+    The scheduler handles start/stop times for each strategy.
+    """
+    return True
+
+
+def daily_trading_day_check():
+    """
+    Daily check that runs at 00:01 IST to stop scheduled strategies on non-trading days.
+    This ensures strategies started on Friday don't keep running through the weekend.
+    """
+    try:
+        if not is_trading_day_enforcement_enabled():
+            logger.debug("Market hours enforcement is disabled - skipping daily check")
+            return
+
+        market_status = get_market_status()
+
+        if market_status['is_open']:
+            logger.debug("Daily check: Market is open - no cleanup needed")
+            return
+
+        reason = market_status['reason']
+        message = market_status['message']
+
+        logger.info(f"Daily check: {message} - checking for running scheduled strategies")
+
+        # Get today's day name to check if strategies are scheduled for today
+        now = datetime.now(IST)
+        day_names = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+        today_day = day_names[now.weekday()]
+
+        stopped_count = 0
+        for strategy_id, config in list(STRATEGY_CONFIGS.items()):
+            # Only stop strategies that are:
+            # 1. Currently running (check config AND verify process is alive)
+            # 2. Scheduled (not manually started)
+            if not config.get('is_scheduled'):
+                continue
+
+            # Skip if strategy is explicitly scheduled for today (e.g., special Saturday session)
+            schedule_days = config.get('schedule_days', [])
+            if today_day in [d.lower() for d in schedule_days]:
+                logger.debug(f"Strategy {strategy_id} scheduled for {today_day} - not stopping")
+                continue
+
+            # Check if strategy is running - either in memory dict or by PID
+            is_running = strategy_id in RUNNING_STRATEGIES
+            if not is_running and config.get('is_running'):
+                # Config says running but not in memory - check if process is alive
+                pid = config.get('pid')
+                if pid and check_process_status(pid):
+                    is_running = True
+
+            if is_running:
+                logger.info(f"Stopping scheduled strategy {strategy_id} - {message}")
+                stop_strategy_process(strategy_id)
+
+                # Store the pause reason in config
+                STRATEGY_CONFIGS[strategy_id]['paused_reason'] = reason
+                STRATEGY_CONFIGS[strategy_id]['paused_message'] = message
+                stopped_count += 1
+
+        if stopped_count > 0:
+            save_configs()
+            logger.info(f"Daily cleanup: Stopped {stopped_count} scheduled strategies ({message})")
+        else:
+            logger.debug("Daily cleanup: No scheduled strategies were running")
+
+    except Exception as e:
+        logger.error(f"Error in daily trading day check: {e}")
+
+
+def is_within_schedule_time(strategy_id: str) -> bool:
+    """
+    Check if current time is within the strategy's scheduled time range.
+
+    Args:
+        strategy_id: The strategy ID to check
+
+    Returns:
+        True if current time is between schedule_start and schedule_stop
+    """
+    try:
+        config = STRATEGY_CONFIGS.get(strategy_id, {})
+        schedule_start = config.get('schedule_start')
+        schedule_stop = config.get('schedule_stop')
+
+        if not schedule_start:
+            return False
+
+        now = datetime.now(IST)
+        current_time = now.time()
+
+        # Parse start time
+        start_hour, start_min = map(int, schedule_start.split(':'))
+        start_time = time(start_hour, start_min)
+
+        # Parse stop time (if provided)
+        if schedule_stop:
+            stop_hour, stop_min = map(int, schedule_stop.split(':'))
+            stop_time = time(stop_hour, stop_min)
+        else:
+            stop_time = time(23, 59)  # Default to end of day
+
+        # Check if current time is within range
+        return start_time <= current_time <= stop_time
+
+    except Exception as e:
+        logger.error(f"Error checking schedule time for {strategy_id}: {e}")
+        return False
+
+
+def market_hours_enforcer():
+    """
+    Periodic check that runs every minute to enforce TRADING DAYS only.
+
+    NOTE: We only enforce trading days (weekends/holidays), NOT specific market hours.
+    Reasons:
+    1. Different exchanges have different hours (NSE: 9:15-15:30, MCX: 9:00-23:55)
+    2. We don't know which exchange a strategy trades on
+    3. The scheduler's start/stop times handle hour-based execution
+
+    This enforcer only stops strategies on non-trading days (weekends/holidays).
+    """
+    try:
+        if not is_trading_day_enforcement_enabled():
+            return
+
+        today_is_trading_day = is_trading_day()
+
+        # If it's a trading day, clear paused reasons and START strategies that were blocked
+        if today_is_trading_day:
+            started_count = 0
+            cleared_any = False
+
+            for strategy_id, config in list(STRATEGY_CONFIGS.items()):
+                paused_reason = config.get('paused_reason')
+
+                # If strategy was paused due to weekend/holiday, try to start it
+                # (only start if the scheduler's time range would be active)
+                if paused_reason in ('weekend', 'holiday') and config.get('is_scheduled'):
+                    # Only start if not already running
+                    is_running = strategy_id in RUNNING_STRATEGIES
+                    if not is_running and config.get('pid'):
+                        is_running = check_process_status(config.get('pid'))
+
+                    if not is_running:
+                        # Check if current time is within scheduler's time range
+                        if is_within_schedule_time(strategy_id):
+                            logger.info(f"Trading day enforcer: Starting paused strategy {strategy_id} (was: {paused_reason})")
+                            success, message = start_strategy_process(strategy_id)
+                            if success:
+                                started_count += 1
+                            else:
+                                logger.warning(f"Failed to start {strategy_id}: {message}")
+
+                # Clear paused reasons (it's a trading day now)
+                if 'paused_reason' in config:
+                    del config['paused_reason']
+                    cleared_any = True
+                if 'paused_message' in config:
+                    del config['paused_message']
+                    cleared_any = True
+
+            if cleared_any or started_count > 0:
+                save_configs()
+                if started_count > 0:
+                    logger.info(f"Trading day enforcer: Started {started_count} paused strategies")
+            return
+
+        # Not a standard trading day - but check if strategy is scheduled for today
+        now = datetime.now(IST)
+        day_names = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+        today_day = day_names[now.weekday()]
+
+        if now.weekday() >= 5:
+            reason = 'weekend'
+            day_name = 'Saturday' if now.weekday() == 5 else 'Sunday'
+            message = f'Market closed - {day_name}'
+        else:
+            reason = 'holiday'
+            message = 'Market closed - Holiday'
+
+        stopped_count = 0
+        for strategy_id, config in list(STRATEGY_CONFIGS.items()):
+            # Only stop strategies that are:
+            # 1. Currently running (check config AND verify process is alive)
+            # 2. Scheduled (not manually started)
+            if not config.get('is_scheduled'):
+                continue
+
+            # Skip if strategy is explicitly scheduled for today (e.g., special Saturday session)
+            schedule_days = config.get('schedule_days', [])
+            if today_day in [d.lower() for d in schedule_days]:
+                logger.debug(f"Strategy {strategy_id} scheduled for {today_day} - not stopping")
+                continue
+
+            # Check if strategy is running - either in memory dict or by PID
+            is_running = strategy_id in RUNNING_STRATEGIES
+            if not is_running and config.get('is_running'):
+                # Config says running but not in memory - check if process is alive
+                pid = config.get('pid')
+                if pid and check_process_status(pid):
+                    is_running = True
+
+            if is_running:
+                logger.info(f"Trading day enforcer: Stopping {strategy_id} - {message}")
+                stop_strategy_process(strategy_id)
+
+                # Store the pause reason in config
+                STRATEGY_CONFIGS[strategy_id]['paused_reason'] = reason
+                STRATEGY_CONFIGS[strategy_id]['paused_message'] = message
+                stopped_count += 1
+
+        if stopped_count > 0:
+            save_configs()
+            logger.info(f"Trading day enforcer: Stopped {stopped_count} strategies ({message})")
+
+    except Exception as e:
+        logger.error(f"Error in trading day enforcer: {e}")
+
+
+def cleanup_strategy_logs(strategy_id: str):
+    """
+    Cleanup log files for a strategy based on configured limits.
+    Enforces: max files, max total size, and retention days.
+    Only cleans up logs for stopped strategies.
+    """
+    # Don't cleanup logs for running strategies
+    if strategy_id in RUNNING_STRATEGIES:
+        return
+
+    try:
+        # Get limits from environment
+        max_files = int(os.getenv('STRATEGY_LOG_MAX_FILES', '10'))
+        max_size_mb = float(os.getenv('STRATEGY_LOG_MAX_SIZE_MB', '50'))
+        retention_days = int(os.getenv('STRATEGY_LOG_RETENTION_DAYS', '7'))
+
+        # Find all log files for this strategy, sorted by modification time (oldest first)
+        log_files = sorted(
+            LOGS_DIR.glob(f"{strategy_id}_*.log"),
+            key=lambda f: f.stat().st_mtime
+        )
+
+        if not log_files:
+            return
+
+        now = datetime.now(IST)
+        deleted_count = 0
+
+        # 1. Delete logs older than retention days
+        for log_file in log_files[:]:  # Copy list to allow modification
+            try:
+                file_age_days = (now - datetime.fromtimestamp(log_file.stat().st_mtime, tz=IST)).days
+                if file_age_days > retention_days:
+                    log_file.unlink()
+                    log_files.remove(log_file)
+                    deleted_count += 1
+                    logger.debug(f"Deleted old log file {log_file.name} ({file_age_days} days old)")
+            except Exception as e:
+                logger.error(f"Error deleting old log {log_file.name}: {e}")
+
+        # 2. Delete oldest files if exceeding max file count
+        while len(log_files) > max_files:
+            try:
+                oldest = log_files.pop(0)
+                oldest.unlink()
+                deleted_count += 1
+                logger.debug(f"Deleted log file {oldest.name} (exceeds max files: {max_files})")
+            except Exception as e:
+                logger.error(f"Error deleting log {oldest.name}: {e}")
+                break
+
+        # 3. Delete oldest files if exceeding max total size
+        total_size_mb = sum(f.stat().st_size for f in log_files) / (1024 * 1024)
+        while total_size_mb > max_size_mb and log_files:
+            try:
+                oldest = log_files.pop(0)
+                file_size_mb = oldest.stat().st_size / (1024 * 1024)
+                oldest.unlink()
+                total_size_mb -= file_size_mb
+                deleted_count += 1
+                logger.debug(f"Deleted log file {oldest.name} (exceeds max size: {max_size_mb}MB)")
+            except Exception as e:
+                logger.error(f"Error deleting log {oldest.name}: {e}")
+                break
+
+        if deleted_count > 0:
+            logger.info(f"Cleaned up {deleted_count} log files for strategy {strategy_id}")
+
+    except Exception as e:
+        logger.error(f"Error cleaning up logs for strategy {strategy_id}: {e}")
+
+
 def schedule_strategy(strategy_id, start_time, stop_time=None, days=None):
-    """Schedule a strategy to run at specific times (IST)"""
+    """
+    Schedule a strategy to run at specific times (IST).
+    Allows any day of the week to support special exchange sessions (e.g., Muhurat trading).
+    """
     if not days:
         days = ['mon', 'tue', 'wed', 'thu', 'fri']  # Default to weekdays
+
+    # Validate days are valid day names
+    valid_days = {'mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'}
+    days_lower = [d.lower() for d in days]
+    invalid_days = set(days_lower) - valid_days
+    if invalid_days:
+        raise ValueError(f"Invalid schedule days: {invalid_days}. Valid days: mon, tue, wed, thu, fri, sat, sun")
+
+    # Normalize days to lowercase
+    days = days_lower
 
     # Create job ID
     start_job_id = f"start_{strategy_id}"
@@ -879,17 +1341,44 @@ def new_strategy():
             # Allow more characters in display name but strip dangerous ones
             strategy_name = raw_strategy_name.strip()[:100]  # Limit length
 
-            # Save configuration (no params needed)
+            # Get mandatory schedule fields with defaults
+            schedule_start = request.form.get('schedule_start', '09:00')
+            schedule_stop = request.form.get('schedule_stop', '16:00')
+            schedule_days_json = request.form.get('schedule_days', '["mon","tue","wed","thu","fri"]')
+
+            # Parse schedule days from JSON
+            try:
+                schedule_days = json.loads(schedule_days_json)
+                if not isinstance(schedule_days, list):
+                    schedule_days = ['mon', 'tue', 'wed', 'thu', 'fri']
+            except (json.JSONDecodeError, TypeError):
+                schedule_days = ['mon', 'tue', 'wed', 'thu', 'fri']
+
+            # Validate schedule fields
+            if not schedule_start:
+                schedule_start = '09:00'
+            if not schedule_stop:
+                schedule_stop = '16:00'
+            if not schedule_days:
+                schedule_days = ['mon', 'tue', 'wed', 'thu', 'fri']
+
+            # Save configuration with schedule (schedule is mandatory and always enabled)
             STRATEGY_CONFIGS[strategy_id] = {
                 'name': strategy_name,
                 'file_path': str(file_path),
                 'file_name': f"{strategy_id}.py",
                 'is_running': False,
-                'is_scheduled': False,
+                'is_scheduled': True,  # Always enabled by default
                 'created_at': ist_now.isoformat(),
-                'user_id': user_id
+                'user_id': user_id,
+                'schedule_start': schedule_start,
+                'schedule_stop': schedule_stop,
+                'schedule_days': schedule_days
             }
             save_configs()
+
+            # Setup scheduler jobs for the new strategy
+            setup_strategy_schedule(strategy_id, STRATEGY_CONFIGS[strategy_id])
 
             if is_ajax:
                 return jsonify({
@@ -910,7 +1399,7 @@ def new_strategy():
 @python_strategy_bp.route('/start/<strategy_id>', methods=['POST'])
 @check_session_validity
 def start_strategy(strategy_id):
-    """Start a strategy"""
+    """Start a strategy - requires scheduler to be enabled to prevent API abuse"""
     user_id = session.get('user')
     if not user_id:
         return jsonify({'status': 'error', 'message': 'Session expired'}), 401
@@ -920,6 +1409,47 @@ def start_strategy(strategy_id):
     if not is_owner:
         return error_response
 
+    # Check if scheduler is enabled - auto-enable with defaults for old strategies
+    config = STRATEGY_CONFIGS.get(strategy_id, {})
+    if not config.get('is_scheduled'):
+        # Auto-enable scheduler with defaults for old strategies (Mon-Fri, 09:00-16:00 IST)
+        logger.info(f"Auto-enabling scheduler for legacy strategy {strategy_id} with default schedule")
+        config['is_scheduled'] = True
+        config['schedule_start'] = config.get('schedule_start', '09:00')
+        config['schedule_stop'] = config.get('schedule_stop', '16:00')
+        config['schedule_days'] = config.get('schedule_days', ['mon', 'tue', 'wed', 'thu', 'fri'])
+        STRATEGY_CONFIGS[strategy_id] = config
+        save_configs()
+        # Setup scheduler jobs for this strategy
+        setup_strategy_schedule(strategy_id, config)
+
+    # Check if today is in the scheduled days
+    schedule_days = config.get('schedule_days', [])
+    now = datetime.now(IST)
+    day_names = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+    today_day = day_names[now.weekday()]
+
+    if schedule_days and today_day not in [d.lower() for d in schedule_days]:
+        return jsonify({
+            'status': 'error',
+            'message': f'Cannot start strategy on {today_day.capitalize()}. Strategy is scheduled for: {", ".join(schedule_days)}'
+        }), 400
+
+    # Check if today is a market holiday (but allow weekends if scheduled)
+    if not is_trading_day() and now.weekday() < 5:
+        # It's a weekday but marked as holiday
+        return jsonify({
+            'status': 'error',
+            'message': 'Cannot start strategy on a market holiday.'
+        }), 400
+
+    # Clear manual stop flag since user is explicitly starting
+    # This resumes scheduled auto-start
+    if strategy_id in STRATEGY_CONFIGS and STRATEGY_CONFIGS[strategy_id].get('manually_stopped'):
+        STRATEGY_CONFIGS[strategy_id].pop('manually_stopped', None)
+        save_configs()
+        logger.info(f"Cleared manual stop flag for strategy {strategy_id} - scheduled auto-start resumed")
+
     # Ensure initialization is done when starting strategies
     initialize_with_app_context()
     success, message = start_strategy_process(strategy_id)
@@ -928,7 +1458,7 @@ def start_strategy(strategy_id):
 @python_strategy_bp.route('/stop/<strategy_id>', methods=['POST'])
 @check_session_validity
 def stop_strategy(strategy_id):
-    """Stop a strategy"""
+    """Stop a strategy manually - sets flag to prevent auto-start today"""
     user_id = session.get('user')
     if not user_id:
         return jsonify({'status': 'error', 'message': 'Session expired'}), 401
@@ -939,6 +1469,14 @@ def stop_strategy(strategy_id):
         return error_response
 
     success, message = stop_strategy_process(strategy_id)
+
+    # Set manual stop flag to prevent scheduler from auto-starting
+    # User must manually start to resume scheduled auto-start
+    if success and strategy_id in STRATEGY_CONFIGS:
+        STRATEGY_CONFIGS[strategy_id]['manually_stopped'] = True
+        save_configs()
+        logger.info(f"Strategy {strategy_id} manually stopped - will not auto-start until manually started")
+
     return jsonify({'status': 'success' if success else 'error', 'message': message})
 
 @python_strategy_bp.route('/schedule/<strategy_id>', methods=['POST'])
@@ -982,29 +1520,12 @@ def schedule_strategy_route(strategy_id):
 @python_strategy_bp.route('/unschedule/<strategy_id>', methods=['POST'])
 @check_session_validity
 def unschedule_strategy_route(strategy_id):
-    """Remove scheduling for a strategy"""
-    user_id = session.get('user')
-    if not user_id:
-        return jsonify({'status': 'error', 'message': 'Session expired'}), 401
-
-    # Verify ownership and get config atomically
-    is_owner, result = verify_strategy_ownership(strategy_id, user_id, return_config=True)
-    if not is_owner:
-        return result
-
-    config = result
-    if config.get('is_running', False):
-        return jsonify({
-            'status': 'error',
-            'message': 'Cannot modify schedule while strategy is running. Please stop the strategy first.',
-            'error_code': 'STRATEGY_RUNNING'
-        }), 400
-
-    try:
-        unschedule_strategy(strategy_id)
-        return jsonify({'status': 'success', 'message': 'Schedule removed successfully'})
-    except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+    """Remove scheduling for a strategy - DISABLED: scheduler is mandatory"""
+    # Scheduler is mandatory and cannot be disabled
+    return jsonify({
+        'status': 'error',
+        'message': 'Scheduler is mandatory and cannot be disabled. You can only modify the schedule times and days.'
+    }), 400
 
 @python_strategy_bp.route('/delete/<strategy_id>', methods=['POST'])
 @check_session_validity
@@ -1105,6 +1626,14 @@ def clear_logs(strategy_id):
         return error_response
 
     try:
+        # Refuse to clear logs for running strategies to prevent file corruption
+        # Truncating a log file while a process has it open causes null bytes
+        if strategy_id in RUNNING_STRATEGIES:
+            return jsonify({
+                'status': 'error',
+                'message': 'Cannot clear logs while strategy is running. Please stop the strategy first.'
+            }), 400
+
         cleared_count = 0
         total_size = 0
 
@@ -1121,27 +1650,11 @@ def clear_logs(strategy_id):
             except:
                 pass
 
-        # Clear each log file
+        # Strategy not running, safe to delete all log files
         for log_file in log_files:
             try:
-                # Check if strategy is currently running and this is the active log file
-                if strategy_id in RUNNING_STRATEGIES:
-                    running_info = RUNNING_STRATEGIES[strategy_id]
-                    active_log_file = running_info.get('log_file')
-
-                    if active_log_file and Path(active_log_file).name == log_file.name:
-                        # For running strategies, truncate the active log file
-                        with open(log_file, 'w', encoding='utf-8') as f:
-                            f.write(f"=== Log cleared at {get_ist_time().strftime('%Y-%m-%d %H:%M:%S IST')} ===\n")
-                        logger.info(f"Truncated active log file for running strategy {strategy_id}")
-                    else:
-                        # For inactive log files, delete them
-                        log_file.unlink()
-                        logger.info(f"Deleted inactive log file: {log_file.name}")
-                else:
-                    # Strategy not running, safe to delete all log files
-                    log_file.unlink()
-                    logger.info(f"Deleted log file: {log_file.name}")
+                log_file.unlink()
+                logger.info(f"Deleted log file: {log_file.name}")
 
                 cleared_count += 1
 
@@ -1248,6 +1761,45 @@ def check_contracts():
 # JSON API Endpoints for React Frontend
 # =============================================================================
 
+def get_schedule_status(config):
+    """
+    Determine detailed schedule status for a strategy.
+    Returns: (status, status_message)
+    """
+    now = datetime.now(IST)
+    day_names = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+    today_day = day_names[now.weekday()]
+    current_time = now.strftime('%H:%M')
+
+    schedule_days = config.get('schedule_days', [])
+    schedule_start = config.get('schedule_start', '09:00')
+    schedule_stop = config.get('schedule_stop', '16:00')
+    schedule_days_lower = [d.lower() for d in schedule_days]
+
+    # Check if manually stopped
+    if config.get('manually_stopped'):
+        return 'manually_stopped', 'Manually stopped - start to resume auto-schedule'
+
+    # Check if today is in schedule days
+    if schedule_days and today_day not in schedule_days_lower:
+        return 'outside_schedule', f'Not scheduled for {today_day.capitalize()}'
+
+    # Check for market holiday (only on weekdays, and only if paused_reason is 'holiday')
+    # Don't show paused for weekends if the day is explicitly scheduled
+    paused_reason = config.get('paused_reason')
+    if paused_reason == 'holiday':
+        return 'paused', config.get('paused_message', 'Market Holiday')
+
+    # Check if current time is outside schedule hours
+    if schedule_start and schedule_stop:
+        if current_time < schedule_start:
+            return 'outside_schedule', f'Before schedule start ({schedule_start} IST)'
+        elif current_time > schedule_stop:
+            return 'outside_schedule', f'After schedule stop ({schedule_stop} IST)'
+
+    return 'scheduled', f'Scheduled {schedule_start} - {schedule_stop} IST'
+
+
 @python_strategy_bp.route('/api/strategies')
 @check_session_validity
 def api_get_strategies():
@@ -1256,19 +1808,33 @@ def api_get_strategies():
     strategies = []
 
     for strategy_id, config in STRATEGY_CONFIGS.items():
+        # Determine status with detailed schedule info
+        if config.get('is_running'):
+            status = 'running'
+            status_message = 'Running'
+        elif config.get('error_message'):
+            status = 'error'
+            status_message = config.get('error_message')
+        else:
+            status, status_message = get_schedule_status(config)
+
         strategies.append({
             'id': strategy_id,
             'name': config.get('name', ''),
             'file_name': config.get('file_name', ''),
-            'status': 'running' if config.get('is_running') else ('error' if config.get('error_message') else 'stopped'),
+            'status': status,
+            'status_message': status_message,
             'is_running': config.get('is_running', False),
             'is_scheduled': config.get('is_scheduled', False),
-            'schedule_start_time': config.get('schedule_start_time'),
-            'schedule_stop_time': config.get('schedule_stop_time'),
+            'manually_stopped': config.get('manually_stopped', False),
+            'schedule_start_time': config.get('schedule_start'),
+            'schedule_stop_time': config.get('schedule_stop'),
             'schedule_days': config.get('schedule_days', []),
             'last_started': config.get('last_started'),
             'last_stopped': config.get('last_stopped'),
             'error_message': config.get('error_message'),
+            'paused_reason': config.get('paused_reason'),
+            'paused_message': config.get('paused_message'),
             'process_id': config.get('process_id'),
             'created_at': config.get('created_at'),
         })
@@ -1283,20 +1849,35 @@ def api_get_strategy(strategy_id):
         return jsonify({'status': 'error', 'message': 'Strategy not found'}), 404
 
     config = STRATEGY_CONFIGS[strategy_id]
+
+    # Determine status with detailed schedule info
+    if config.get('is_running'):
+        status = 'running'
+        status_message = 'Running'
+    elif config.get('error_message'):
+        status = 'error'
+        status_message = config.get('error_message')
+    else:
+        status, status_message = get_schedule_status(config)
+
     return jsonify({
         'strategy': {
             'id': strategy_id,
+            'status_message': status_message,
+            'manually_stopped': config.get('manually_stopped', False),
             'name': config.get('name', ''),
             'file_name': config.get('file_name', ''),
-            'status': 'running' if config.get('is_running') else ('error' if config.get('error_message') else 'stopped'),
+            'status': status,
             'is_running': config.get('is_running', False),
             'is_scheduled': config.get('is_scheduled', False),
-            'schedule_start_time': config.get('schedule_start_time'),
-            'schedule_stop_time': config.get('schedule_stop_time'),
+            'schedule_start_time': config.get('schedule_start'),
+            'schedule_stop_time': config.get('schedule_stop'),
             'schedule_days': config.get('schedule_days', []),
             'last_started': config.get('last_started'),
             'last_stopped': config.get('last_stopped'),
             'error_message': config.get('error_message'),
+            'paused_reason': config.get('paused_reason'),
+            'paused_message': config.get('paused_message'),
             'process_id': config.get('process_id'),
             'created_at': config.get('created_at'),
         }
@@ -1776,6 +2357,10 @@ def initialize_with_app_context():
                         logger.info(f"Restored schedule for strategy {strategy_id} at {start_time} IST")
                     except Exception as e:
                         logger.error(f"Failed to restore schedule for {strategy_id}: {e}")
+
+        # Run immediate trading day check on startup
+        # This stops any scheduled strategies if app starts on a weekend/holiday
+        daily_trading_day_check()
 
         logger.info(f"Python Strategy System fully initialized on {OS_TYPE}")
     except Exception as e:

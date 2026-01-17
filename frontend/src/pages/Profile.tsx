@@ -119,6 +119,12 @@ interface BrokerCredentials {
   valid_brokers: string[]
   ngrok_allow: boolean
   host_server: string
+  websocket_url: string
+  server_status?: {
+    flask: { host: string; port: string }
+    websocket: { host: string; port: string }
+    zmq: { host: string; port: string }
+  }
 }
 
 interface PermissionCheck {
@@ -192,6 +198,7 @@ export default function ProfilePage() {
   const [selectedBroker, setSelectedBroker] = useState('')
   const [ngrokEnabled, setNgrokEnabled] = useState(false)
   const [hostServer, setHostServer] = useState('')
+  const [websocketUrl, setWebsocketUrl] = useState('')
   const [isSavingBroker, setIsSavingBroker] = useState(false)
   const [isSavingNgrok, setIsSavingNgrok] = useState(false)
   const [showRestartDialog, setShowRestartDialog] = useState(false)
@@ -248,6 +255,7 @@ export default function ProfilePage() {
         setSelectedBroker(response.data.data.current_broker)
         setNgrokEnabled(response.data.data.ngrok_allow)
         setHostServer(response.data.data.host_server)
+        setWebsocketUrl(response.data.data.websocket_url || '')
       }
     } catch (error) {
       console.error('Error fetching broker credentials:', error)
@@ -374,18 +382,26 @@ export default function ProfilePage() {
 
   const hasNgrokChanges = Boolean(
     ngrokEnabled !== brokerCredentials?.ngrok_allow ||
-      (hostServer && hostServer !== brokerCredentials?.host_server)
+      (hostServer && hostServer !== brokerCredentials?.host_server) ||
+      (websocketUrl && websocketUrl !== brokerCredentials?.websocket_url)
   )
 
   const handleNgrokSave = async () => {
     setIsSavingNgrok(true)
     try {
       // Send as JSON for more reliable handling
-      const payload: { ngrok_allow: string; host_server?: string } = {
+      const payload: {
+        ngrok_allow: string
+        host_server?: string
+        websocket_url?: string
+      } = {
         ngrok_allow: ngrokEnabled ? 'TRUE' : 'FALSE',
       }
       if (hostServer) {
         payload.host_server = hostServer
+      }
+      if (websocketUrl) {
+        payload.websocket_url = websocketUrl
       }
 
       const response = await webClient.post<{
@@ -403,16 +419,17 @@ export default function ProfilePage() {
             ...brokerCredentials,
             ngrok_allow: ngrokEnabled,
             host_server: hostServer || brokerCredentials.host_server,
+            websocket_url: websocketUrl || brokerCredentials.websocket_url,
           })
         }
         // Show restart dialog
         setShowRestartDialog(true)
       } else {
-        toast.error(response.data.message || 'Failed to save ngrok settings')
+        toast.error(response.data.message || 'Failed to save settings')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to save ngrok settings')
+      toast.error(err.response?.data?.message || 'Failed to save settings')
     } finally {
       setIsSavingNgrok(false)
     }
@@ -1004,10 +1021,45 @@ export default function ProfilePage() {
             </CardContent>
           </Card>
 
+          {/* Server Status Card */}
+          {brokerCredentials?.server_status && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Server Status</CardTitle>
+                <CardDescription>Running services and their configured ports</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="flex flex-col items-center p-3 bg-muted rounded-lg">
+                    <Badge variant="default" className="mb-2 bg-green-600">Running</Badge>
+                    <span className="text-sm font-medium">Flask App</span>
+                    <span className="text-xs text-muted-foreground">
+                      {brokerCredentials.server_status.flask.host}:{brokerCredentials.server_status.flask.port}
+                    </span>
+                  </div>
+                  <div className="flex flex-col items-center p-3 bg-muted rounded-lg">
+                    <Badge variant="default" className="mb-2 bg-green-600">Running</Badge>
+                    <span className="text-sm font-medium">WebSocket</span>
+                    <span className="text-xs text-muted-foreground">
+                      {brokerCredentials.server_status.websocket.host}:{brokerCredentials.server_status.websocket.port}
+                    </span>
+                  </div>
+                  <div className="flex flex-col items-center p-3 bg-muted rounded-lg">
+                    <Badge variant="default" className="mb-2 bg-green-600">Running</Badge>
+                    <span className="text-sm font-medium">ZeroMQ</span>
+                    <span className="text-xs text-muted-foreground">
+                      {brokerCredentials.server_status.zmq.host}:{brokerCredentials.server_status.zmq.port}
+                    </span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Ngrok Configuration - Separate Card */}
           <Card>
             <CardHeader>
-              <CardTitle>Ngrok Configuration</CardTitle>
+              <CardTitle>Server Configuration</CardTitle>
               <CardDescription>
                 Configure ngrok for receiving webhook alerts from external services like TradingView,
                 Chartink, GoCharting, etc.
@@ -1041,6 +1093,23 @@ export default function ProfilePage() {
                 {hostServer !== brokerCredentials?.host_server && hostServer && (
                   <Badge variant="outline" className="text-yellow-600">
                     Changed from: {brokerCredentials?.host_server}
+                  </Badge>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <Label>WebSocket URL</Label>
+                <Input
+                  value={websocketUrl}
+                  onChange={(e) => setWebsocketUrl(e.target.value)}
+                  placeholder="ws://127.0.0.1:8765"
+                />
+                <p className="text-xs text-muted-foreground">
+                  WebSocket server URL for real-time market data streaming.
+                </p>
+                {websocketUrl !== brokerCredentials?.websocket_url && websocketUrl && (
+                  <Badge variant="outline" className="text-yellow-600">
+                    Changed from: {brokerCredentials?.websocket_url}
                   </Badge>
                 )}
               </div>
