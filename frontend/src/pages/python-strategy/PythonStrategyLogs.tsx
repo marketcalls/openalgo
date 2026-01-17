@@ -56,17 +56,25 @@ export default function PythonStrategyLogs() {
     }
   }
 
-  const fetchLogContent = async (logName: string) => {
+  const fetchLogContent = async (logName: string, showLoading = true) => {
     if (!strategyId) return
     try {
-      setLoadingContent(true)
+      // Only show loading state for initial load, not auto-refresh
+      if (showLoading) {
+        setLoadingContent(true)
+      }
       const content = await pythonStrategyApi.getLogContent(strategyId, logName)
       setLogContent(content)
     } catch (error) {
       console.error('Failed to fetch log content:', error)
-      toast.error('Failed to load log content')
+      // Only show toast for manual fetch, not auto-refresh
+      if (showLoading) {
+        toast.error('Failed to load log content')
+      }
     } finally {
-      setLoadingContent(false)
+      if (showLoading) {
+        setLoadingContent(false)
+      }
     }
   }
 
@@ -86,7 +94,8 @@ export default function PythonStrategyLogs() {
   useEffect(() => {
     if (strategy?.status === 'running' && selectedLog && autoRefresh) {
       const interval = setInterval(() => {
-        fetchLogContent(selectedLog)
+        // Pass false to avoid showing loading spinner during auto-refresh
+        fetchLogContent(selectedLog, false)
       }, 3000)
       return () => clearInterval(interval)
     }
@@ -96,7 +105,10 @@ export default function PythonStrategyLogs() {
   const handleClearLogs = async () => {
     if (!strategyId) return
     try {
+      // Disable auto-refresh to prevent race conditions during clear
+      setAutoRefresh(false)
       setClearing(true)
+
       const response = await pythonStrategyApi.clearLogs(strategyId)
       if (response.status === 'success') {
         toast.success('Logs cleared')
@@ -112,6 +124,8 @@ export default function PythonStrategyLogs() {
     } finally {
       setClearing(false)
       setClearDialogOpen(false)
+      // Re-enable auto-refresh after operation completes
+      setAutoRefresh(true)
     }
   }
 
@@ -264,7 +278,11 @@ export default function PythonStrategyLogs() {
                 <RefreshCw className="h-6 w-6 animate-spin" />
               </div>
             ) : logContent ? (
-              <LogViewer value={logContent.content} height="500px" />
+              <LogViewer
+                value={logContent.content}
+                height="500px"
+                followTail={strategy?.status === 'running' && autoRefresh}
+              />
             ) : (
               <div className="flex items-center justify-center h-[500px] text-muted-foreground">
                 No content available

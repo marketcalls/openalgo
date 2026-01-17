@@ -1,16 +1,17 @@
-import CodeMirror from '@uiw/react-codemirror'
+import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { StreamLanguage } from '@codemirror/language'
 import { EditorView } from '@codemirror/view'
 import type { Extension } from '@codemirror/state'
 import { tags as t } from '@lezer/highlight'
 import { createTheme } from '@uiw/codemirror-themes'
 import { useThemeStore } from '@/stores/themeStore'
-import { useMemo } from 'react'
+import { useMemo, useRef, useEffect, useCallback } from 'react'
 
 interface LogViewerProps {
   value: string
   className?: string
   height?: string
+  followTail?: boolean // Auto-scroll to bottom on new content
 }
 
 // Simple log highlighting mode
@@ -130,10 +131,16 @@ export function LogViewer({
   value,
   className = '',
   height = '500px',
+  followTail = false,
 }: LogViewerProps) {
   const { mode, appMode } = useThemeStore()
   // Dark mode when: explicit dark theme OR analyzer mode (always dark purple theme)
   const isDark = mode === 'dark' || appMode === 'analyzer'
+
+  const editorRef = useRef<ReactCodeMirrorRef>(null)
+  const scrollPositionRef = useRef<number>(0)
+  const isUserScrolledRef = useRef<boolean>(false)
+  const prevValueRef = useRef<string>(value)
 
   const extensions = useMemo(() => {
     return [
@@ -145,9 +152,60 @@ export function LogViewer({
     ]
   }, [isDark])
 
+  // Track user scroll position
+  const handleScroll = useCallback(() => {
+    const view = editorRef.current?.view
+    if (view) {
+      const scrollDOM = view.scrollDOM
+      scrollPositionRef.current = scrollDOM.scrollTop
+
+      // Check if user is near bottom (within 50px)
+      const isAtBottom = scrollDOM.scrollHeight - scrollDOM.scrollTop - scrollDOM.clientHeight < 50
+      isUserScrolledRef.current = !isAtBottom
+    }
+  }, [])
+
+  // Restore scroll position or scroll to bottom after content update
+  useEffect(() => {
+    const view = editorRef.current?.view
+    if (!view) return
+
+    const scrollDOM = view.scrollDOM
+
+    // Add scroll listener
+    scrollDOM.addEventListener('scroll', handleScroll)
+
+    return () => {
+      scrollDOM.removeEventListener('scroll', handleScroll)
+    }
+  }, [handleScroll])
+
+  // Handle content changes - restore scroll or follow tail
+  useEffect(() => {
+    if (value === prevValueRef.current) return
+    prevValueRef.current = value
+
+    // Use requestAnimationFrame to ensure DOM is updated
+    requestAnimationFrame(() => {
+      const view = editorRef.current?.view
+      if (!view) return
+
+      const scrollDOM = view.scrollDOM
+
+      if (followTail && !isUserScrolledRef.current) {
+        // Auto-scroll to bottom for live logs if user hasn't scrolled up
+        scrollDOM.scrollTop = scrollDOM.scrollHeight
+      } else if (isUserScrolledRef.current) {
+        // Preserve scroll position if user has scrolled
+        scrollDOM.scrollTop = scrollPositionRef.current
+      }
+    })
+  }, [value, followTail])
+
   return (
     <div className={`rounded-lg overflow-hidden ${className}`}>
       <CodeMirror
+        ref={editorRef}
         value={value}
         extensions={extensions}
         readOnly={true}

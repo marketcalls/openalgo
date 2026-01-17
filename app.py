@@ -73,35 +73,9 @@ from database.historify_db import init_database as ensure_historify_tables_exist
 from utils.plugin_loader import load_broker_auth_functions
 
 import os
-import atexit
-import signal
 
 # Initialize logger
 logger = get_logger(__name__)
-
-# Global variable to track ngrok state
-_ngrok_tunnel = None
-
-def cleanup_ngrok():
-    """Cleanup ngrok tunnel on shutdown"""
-    global _ngrok_tunnel
-    if _ngrok_tunnel:
-        try:
-            from pyngrok import ngrok
-            logger.info("Shutting down ngrok tunnel...")
-            ngrok.disconnect(_ngrok_tunnel)
-            ngrok.kill()  # Kill the ngrok process
-            _ngrok_tunnel = None
-            logger.info("ngrok tunnel closed successfully")
-        except Exception as e:
-            logger.warning(f"Error during ngrok cleanup: {e}")
-
-def signal_handler(signum, frame):
-    """Handle shutdown signals"""
-    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
-    cleanup_ngrok()
-    # Re-raise to allow normal shutdown
-    raise SystemExit(0)
 
 def create_app():
     # Initialize Flask application
@@ -396,6 +370,20 @@ def create_app():
     def inject_version():
         return dict(version=get_version())
 
+    @app.route('/api/config/host')
+    def get_host_config():
+        """Return the HOST_SERVER configuration for frontend webhook URL generation"""
+        from flask import jsonify
+        host_server = os.getenv('HOST_SERVER', 'http://127.0.0.1:5000')
+
+        # Determine if webhook URL is externally accessible
+        is_localhost = any(local in host_server.lower() for local in ['localhost', '127.0.0.1', '0.0.0.0'])
+
+        return jsonify({
+            'host_server': host_server,
+            'is_localhost': is_localhost
+        })
+
     return app
 
 def setup_environment(app):
@@ -446,71 +434,11 @@ def setup_environment(app):
         db_init_time = (time.time() - db_init_start) * 1000
         logger.debug(f"All databases initialized in parallel ({db_init_time:.0f}ms)")
 
-    # Conditionally setup ngrok in development environment
+    # Setup ngrok cleanup handlers if ngrok is enabled
+    # Note: The actual tunnel creation happens in the __main__ block below
     if os.getenv('NGROK_ALLOW') == 'TRUE':
-        global _ngrok_tunnel
-        from pyngrok import ngrok
-
-        # Register cleanup handlers for graceful shutdown
-        atexit.register(cleanup_ngrok)
-
-        # Register signal handlers (Windows uses SIGINT, SIGTERM; Unix also has SIGHUP)
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-
-        import time
-
-        # Kill any existing ngrok process first (more robust cleanup)
-        try:
-            ngrok.kill()
-            logger.debug("Killed existing ngrok process")
-            time.sleep(1)  # Wait for process to fully terminate
-        except Exception:
-            pass  # No existing process to kill
-
-        # Try to connect, handling "tunnel already exists" error
-        max_retries = 3
-        public_url = None
-
-        for attempt in range(max_retries):
-            try:
-                # First check if tunnel already exists and reuse it
-                existing_tunnels = ngrok.get_tunnels()
-                for tunnel in existing_tunnels:
-                    if tunnel.name == 'flask':
-                        public_url = tunnel.public_url
-                        logger.debug(f"Reusing existing ngrok tunnel: {public_url}")
-                        break
-
-                if public_url:
-                    break
-
-                # Create new tunnel if none exists
-                public_url = ngrok.connect(name='flask').public_url
-                logger.debug(f"Created new ngrok tunnel: {public_url}")
-                break
-
-            except Exception as e:
-                error_msg = str(e)
-                if 'already exists' in error_msg:
-                    logger.warning(f"Tunnel conflict detected (attempt {attempt + 1}/{max_retries}), cleaning up...")
-                    try:
-                        # Force kill and wait
-                        ngrok.kill()
-                        time.sleep(2)  # Longer wait after conflict
-                    except Exception:
-                        pass
-                else:
-                    logger.error(f"ngrok error: {e}")
-                    if attempt == max_retries - 1:
-                        raise
-                    time.sleep(1)
-
-        if public_url:
-            _ngrok_tunnel = public_url  # Store for cleanup
-            logger.info(f"ngrok URL: {public_url}")
-        else:
-            logger.error("Failed to establish ngrok tunnel after all retries")
+        from utils.ngrok_manager import setup_ngrok_handlers
+        setup_ngrok_handlers()
 
 app = create_app()
 
@@ -609,29 +537,10 @@ if __name__ == '__main__':
     debug = os.getenv('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')  # Default to False if not set
 
     # Start ngrok tunnel if enabled
-    ngrok_tunnel = None
     ngrok_url = None
     if os.getenv('NGROK_ALLOW', 'FALSE').upper() == 'TRUE':
-        try:
-            from pyngrok import ngrok, conf
-            from urllib.parse import urlparse
-
-            # Extract domain from HOST_SERVER if provided
-            host_server_env = os.getenv('HOST_SERVER', '')
-            if host_server_env:
-                parsed = urlparse(host_server_env)
-                domain = parsed.netloc or parsed.path
-                # Start ngrok with the custom domain
-                ngrok_tunnel = ngrok.connect(port, domain=domain)
-            else:
-                # Start ngrok without custom domain
-                ngrok_tunnel = ngrok.connect(port)
-
-            ngrok_url = ngrok_tunnel.public_url
-            print(f"Ngrok tunnel established: {ngrok_url}")
-        except Exception as e:
-            print(f"Failed to start ngrok tunnel: {e}")
-            ngrok_url = None
+        from utils.ngrok_manager import start_ngrok_tunnel
+        ngrok_url = start_ngrok_tunnel(port)
 
     # Clean startup banner
     import socket

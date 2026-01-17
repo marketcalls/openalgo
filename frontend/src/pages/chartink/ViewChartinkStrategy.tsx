@@ -48,6 +48,7 @@ export default function ViewChartinkStrategy() {
   const [deleting, setDeleting] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [copiedField, setCopiedField] = useState<string | null>(null)
+  const [hostConfig, setHostConfig] = useState<{ host_server: string; is_localhost: boolean } | null>(null)
 
   const fetchStrategy = async () => {
     if (!strategyId) return
@@ -64,6 +65,25 @@ export default function ViewChartinkStrategy() {
       setLoading(false)
     }
   }
+
+  // Fetch host configuration on mount
+  useEffect(() => {
+    const fetchHostConfig = async () => {
+      try {
+        const response = await fetch('/api/config/host', { credentials: 'include' })
+        const data = await response.json()
+        setHostConfig(data)
+      } catch (error) {
+        console.error('Failed to fetch host config:', error)
+        // Fallback to window.location.origin if config fetch fails
+        setHostConfig({
+          host_server: window.location.origin,
+          is_localhost: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+        })
+      }
+    }
+    fetchHostConfig()
+  }, [])
 
   useEffect(() => {
     fetchStrategy()
@@ -150,7 +170,9 @@ export default function ViewChartinkStrategy() {
     return null
   }
 
-  const webhookUrl = chartinkApi.getWebhookUrl(strategy.webhook_id)
+  // Get webhook URL using host config
+  const baseUrl = hostConfig?.host_server || window.location.origin
+  const webhookUrl = `${baseUrl}/chartink/webhook/${strategy.webhook_id}`
 
   return (
     <div className="container mx-auto py-6 space-y-6">

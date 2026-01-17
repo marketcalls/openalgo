@@ -27,7 +27,8 @@
       "Bash(node --version)",
       "Bash(npm --version)",
       "Bash(uv run:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(curl:*)"
     ]
   }
 }

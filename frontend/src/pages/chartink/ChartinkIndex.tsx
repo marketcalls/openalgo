@@ -26,6 +26,7 @@ export default function ChartinkIndex() {
   const [strategies, setStrategies] = useState<ChartinkStrategy[]>([])
   const [loading, setLoading] = useState(true)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [hostConfig, setHostConfig] = useState<{ host_server: string; is_localhost: boolean } | null>(null)
 
   const fetchStrategies = async () => {
     try {
@@ -40,13 +41,38 @@ export default function ChartinkIndex() {
     }
   }
 
+  // Fetch host configuration on mount
+  useEffect(() => {
+    const fetchHostConfig = async () => {
+      try {
+        const response = await fetch('/api/config/host', { credentials: 'include' })
+        const data = await response.json()
+        setHostConfig(data)
+      } catch (error) {
+        console.error('Failed to fetch host config:', error)
+        // Fallback to window.location.origin if config fetch fails
+        setHostConfig({
+          host_server: window.location.origin,
+          is_localhost: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+        })
+      }
+    }
+    fetchHostConfig()
+  }, [])
+
   useEffect(() => {
     fetchStrategies()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Get webhook URL using host config
+  const getWebhookUrl = (webhookId: string): string => {
+    const baseUrl = hostConfig?.host_server || window.location.origin
+    return `${baseUrl}/chartink/webhook/${webhookId}`
+  }
+
   const copyWebhookUrl = async (webhookId: string) => {
-    const url = chartinkApi.getWebhookUrl(webhookId)
+    const url = getWebhookUrl(webhookId)
     try {
       await navigator.clipboard.writeText(url)
       setCopiedId(webhookId)
@@ -93,8 +119,8 @@ export default function ChartinkIndex() {
         </div>
       </div>
 
-      {/* Localhost Warning */}
-      {(window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && (
+      {/* Localhost Warning - only show if HOST_SERVER is not configured to external URL */}
+      {hostConfig?.is_localhost && (
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle>Webhook URL not accessible!</AlertTitle>
@@ -102,6 +128,7 @@ export default function ChartinkIndex() {
             Chartink cannot send alerts to localhost. Use <strong>ngrok</strong>,{' '}
             <strong>Cloudflare Tunnel</strong>, <strong>VS Code Dev Tunnel</strong>, or a{' '}
             <strong>custom domain</strong> to expose your OpenAlgo instance to the internet.
+            Update <code>HOST_SERVER</code> in your <code>.env</code> file with your external URL.
           </AlertDescription>
         </Alert>
       )}

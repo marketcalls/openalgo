@@ -53,11 +53,33 @@ export default function GoCharting() {
   // JSON output
   const [generatedJson, setGeneratedJson] = useState<string>('')
 
+  // Host config state for webhook URL
+  const [hostConfig, setHostConfig] = useState<{ host_server: string; is_localhost: boolean } | null>(null)
+
   // Refs
   const inputWrapperRef = useRef<HTMLDivElement>(null)
 
-  // Get webhook URL
-  const webhookUrl = `${window.location.origin}/api/v1/placeorder`
+  // Fetch host configuration on mount
+  useEffect(() => {
+    const fetchHostConfig = async () => {
+      try {
+        const response = await fetch('/api/config/host', { credentials: 'include' })
+        const data = await response.json()
+        setHostConfig(data)
+      } catch (error) {
+        console.error('Failed to fetch host config:', error)
+        // Fallback to window.location.origin if config fetch fails
+        setHostConfig({
+          host_server: window.location.origin,
+          is_localhost: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+        })
+      }
+    }
+    fetchHostConfig()
+  }, [])
+
+  // Get webhook URL from host config or fallback to window.location.origin
+  const webhookUrl = hostConfig ? `${hostConfig.host_server}/api/v1/placeorder` : `${window.location.origin}/api/v1/placeorder`
 
   // Debounced search
   const performSearch = useCallback(
@@ -163,15 +185,15 @@ export default function GoCharting() {
         </p>
       </div>
 
-      {/* Localhost Warning */}
-      {(window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && (
+      {/* Localhost Warning - only show if HOST_SERVER is not configured to external URL */}
+      {hostConfig?.is_localhost && (
         <Alert variant="destructive" className="mb-8">
           <AlertTriangle className="h-5 w-5" />
           <AlertDescription className="ml-2">
             <strong>Webhook URL not accessible!</strong> GoCharting cannot send alerts to localhost.
             Use <strong>ngrok</strong>, <strong>Cloudflare Tunnel</strong>,{' '}
             <strong>VS Code Dev Tunnel</strong>, or a <strong>custom domain</strong> to expose your
-            OpenAlgo instance to the internet.
+            OpenAlgo instance to the internet. Update <code>HOST_SERVER</code> in your <code>.env</code> file with your external URL.
           </AlertDescription>
         </Alert>
       )}
@@ -188,7 +210,7 @@ export default function GoCharting() {
             <CardContent>
               <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
                 <code className="flex-1 text-sm font-mono truncate" title={webhookUrl}>
-                  .../api/v1/placeorder
+                  {webhookUrl}
                 </code>
                 <Button
                   variant="secondary"
