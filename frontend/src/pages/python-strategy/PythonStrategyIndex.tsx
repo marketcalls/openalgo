@@ -52,9 +52,9 @@ export default function PythonStrategyIndex() {
   const [strategyToDelete, setStrategyToDelete] = useState<PythonStrategy | null>(null)
   const [currentTime, setCurrentTime] = useState(new Date())
 
-  const fetchData = async () => {
+  const fetchData = async (silent = false) => {
     try {
-      setLoading(true)
+      if (!silent) setLoading(true)
       const [strategiesData, statusData] = await Promise.all([
         pythonStrategyApi.getStrategies(),
         pythonStrategyApi.getMasterContractStatus(),
@@ -63,9 +63,9 @@ export default function PythonStrategyIndex() {
       setMasterStatus(statusData)
     } catch (error) {
       console.error('Failed to fetch data:', error)
-      toast.error('Failed to load strategies')
+      if (!silent) toast.error('Failed to load strategies')
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }
 
@@ -73,7 +73,36 @@ export default function PythonStrategyIndex() {
     fetchData()
     // Update current time every second
     const timer = setInterval(() => setCurrentTime(new Date()), 1000)
-    return () => clearInterval(timer)
+
+    // Subscribe to SSE for real-time status updates
+    const eventSource = new EventSource('/python/api/events')
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        if (data.type === 'connected') {
+          console.log('SSE connected for strategy status updates')
+          return
+        }
+
+        // Refresh data silently when we receive a status update
+        if (data.strategy_id && data.status) {
+          console.log(`Strategy ${data.strategy_id} status: ${data.status}`)
+          fetchData(true) // Silent refresh
+        }
+      } catch (e) {
+        // Ignore parse errors (heartbeat messages)
+      }
+    }
+
+    eventSource.onerror = () => {
+      console.log('SSE connection error, will auto-reconnect')
+    }
+
+    return () => {
+      clearInterval(timer)
+      eventSource.close()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -82,7 +111,8 @@ export default function PythonStrategyIndex() {
       setActionLoading(strategy.id)
       const response = await pythonStrategyApi.startStrategy(strategy.id)
       if (response.status === 'success') {
-        toast.success(`Strategy ${strategy.name} started`)
+        // Use response message which differs for immediate start vs armed for schedule
+        toast.success(response.message || `Strategy ${strategy.name} started`)
         fetchData()
       } else {
         toast.error(response.message || 'Failed to start strategy')
@@ -103,7 +133,8 @@ export default function PythonStrategyIndex() {
       setActionLoading(strategy.id)
       const response = await pythonStrategyApi.stopStrategy(strategy.id)
       if (response.status === 'success') {
-        toast.success(`Strategy ${strategy.name} stopped`)
+        // Use response message which differs for running vs scheduled strategies
+        toast.success(response.message || `Strategy ${strategy.name} stopped`)
         fetchData()
       } else {
         toast.error(response.message || 'Failed to stop strategy')
@@ -252,7 +283,7 @@ export default function PythonStrategyIndex() {
             <HelpCircle className="h-4 w-4 mr-2" />
             Guide
           </Button>
-          <Button variant="outline" size="sm" onClick={fetchData}>
+          <Button variant="outline" size="sm" onClick={() => fetchData()}>
             <RefreshCw className="h-4 w-4 mr-2" />
             Refresh
           </Button>
@@ -451,21 +482,23 @@ export default function PythonStrategyIndex() {
 
                 {/* Action Buttons */}
                 <div className="flex gap-2 pt-2 mt-auto">
-                  {strategy.status === 'running' ? (
+                  {strategy.status === 'running' || strategy.status === 'scheduled' ? (
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <Button
-                          variant="destructive"
+                          variant={strategy.status === 'running' ? 'destructive' : 'outline'}
                           size="sm"
-                          className="flex-1"
+                          className={`flex-1 ${strategy.status === 'scheduled' ? 'border-orange-500 text-orange-600 hover:bg-orange-50 dark:text-orange-400 dark:hover:bg-orange-950' : ''}`}
                           onClick={() => handleStop(strategy)}
                           disabled={actionLoading === strategy.id}
                         >
                           <Square className="h-4 w-4 mr-2" />
-                          Stop
+                          {strategy.status === 'running' ? 'Stop' : 'Cancel'}
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent>Stop running strategy</TooltipContent>
+                      <TooltipContent>
+                        {strategy.status === 'running' ? 'Stop running strategy' : 'Cancel scheduled auto-start'}
+                      </TooltipContent>
                     </Tooltip>
                   ) : (
                     <Tooltip>

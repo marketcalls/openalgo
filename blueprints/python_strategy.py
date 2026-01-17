@@ -6,7 +6,8 @@ Supports: Windows, Linux, macOS
 Note: Each strategy runs in a separate process for complete isolation
 """
 
-from flask import Blueprint, render_template, request, jsonify, flash, redirect, url_for, session
+from flask import Blueprint, render_template, request, jsonify, flash, redirect, url_for, session, Response
+import queue
 from utils.session import check_session_validity
 import os
 import subprocess
@@ -32,14 +33,40 @@ logger = logging.getLogger(__name__)
 # Create blueprint with /python route
 python_strategy_bp = Blueprint('python_strategy_bp', __name__, url_prefix='/python')
 
+# Timezone configuration - Indian Standard Time
+IST = pytz.timezone('Asia/Kolkata')
+
 # Global storage with thread locks for safety
 RUNNING_STRATEGIES = {}  # {strategy_id: {'process': subprocess.Popen, 'started_at': datetime}}
 STRATEGY_CONFIGS = {}    # {strategy_id: config_dict}
 SCHEDULER = None
 PROCESS_LOCK = threading.Lock()  # Thread lock for process operations
 
-# Timezone configuration - Indian Standard Time
-IST = pytz.timezone('Asia/Kolkata')
+# SSE (Server-Sent Events) for real-time status updates
+SSE_SUBSCRIBERS = []  # List of Queue objects for SSE clients
+SSE_LOCK = threading.Lock()
+
+def broadcast_status_update(strategy_id: str, status: str, message: str = None):
+    """Broadcast strategy status update to all SSE subscribers"""
+    event_data = {
+        'strategy_id': strategy_id,
+        'status': status,
+        'message': message,
+        'timestamp': datetime.now(IST).isoformat()
+    }
+    event = f"data: {json.dumps(event_data)}\n\n"
+
+    with SSE_LOCK:
+        # Remove dead subscribers and send to active ones
+        active_subscribers = []
+        for q in SSE_SUBSCRIBERS:
+            try:
+                q.put_nowait(event)
+                active_subscribers.append(q)
+            except:
+                pass  # Queue full or dead, skip
+        SSE_SUBSCRIBERS.clear()
+        SSE_SUBSCRIBERS.extend(active_subscribers)
 
 # File paths - use Path for cross-platform compatibility
 STRATEGIES_DIR = Path('strategies') / 'scripts'
@@ -430,7 +457,10 @@ def start_strategy_process(strategy_id):
             STRATEGY_CONFIGS[strategy_id].pop('error_message', None)
             STRATEGY_CONFIGS[strategy_id].pop('error_time', None)
             save_configs()
-            
+
+            # Broadcast status update via SSE
+            broadcast_status_update(strategy_id, 'running', f'Started at {ist_now.strftime("%H:%M:%S IST")}')
+
             logger.info(f"Started strategy {strategy_id} with PID {process.pid} at {ist_now.strftime('%H:%M:%S IST')} on {OS_TYPE}")
             return True, f"Strategy started with PID {process.pid} at {ist_now.strftime('%H:%M:%S IST')}"
             
@@ -525,7 +555,12 @@ def stop_strategy_process(strategy_id):
             STRATEGY_CONFIGS[strategy_id]['last_stopped'] = ist_now.isoformat()
             STRATEGY_CONFIGS[strategy_id]['pid'] = None
             save_configs()
-            
+
+            # Broadcast status update via SSE
+            # Get current status based on config
+            status, status_message = get_schedule_status(STRATEGY_CONFIGS[strategy_id])
+            broadcast_status_update(strategy_id, status, status_message)
+
             logger.info(f"Stopped strategy {strategy_id} at {ist_now.strftime('%H:%M:%S IST')}")
 
             # Cleanup old log files based on configured limits
@@ -1378,7 +1413,12 @@ def new_strategy():
             save_configs()
 
             # Setup scheduler jobs for the new strategy
-            setup_strategy_schedule(strategy_id, STRATEGY_CONFIGS[strategy_id])
+            schedule_strategy(
+                strategy_id,
+                start_time=schedule_start,
+                stop_time=schedule_stop,
+                days=schedule_days
+            )
 
             if is_ajax:
                 return jsonify({
@@ -1421,27 +1461,12 @@ def start_strategy(strategy_id):
         STRATEGY_CONFIGS[strategy_id] = config
         save_configs()
         # Setup scheduler jobs for this strategy
-        setup_strategy_schedule(strategy_id, config)
-
-    # Check if today is in the scheduled days
-    schedule_days = config.get('schedule_days', [])
-    now = datetime.now(IST)
-    day_names = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
-    today_day = day_names[now.weekday()]
-
-    if schedule_days and today_day not in [d.lower() for d in schedule_days]:
-        return jsonify({
-            'status': 'error',
-            'message': f'Cannot start strategy on {today_day.capitalize()}. Strategy is scheduled for: {", ".join(schedule_days)}'
-        }), 400
-
-    # Check if today is a market holiday (but allow weekends if scheduled)
-    if not is_trading_day() and now.weekday() < 5:
-        # It's a weekday but marked as holiday
-        return jsonify({
-            'status': 'error',
-            'message': 'Cannot start strategy on a market holiday.'
-        }), 400
+        schedule_strategy(
+            strategy_id,
+            start_time=config.get('schedule_start'),
+            stop_time=config.get('schedule_stop'),
+            days=config.get('schedule_days')
+        )
 
     # Clear manual stop flag since user is explicitly starting
     # This resumes scheduled auto-start
@@ -1450,7 +1475,63 @@ def start_strategy(strategy_id):
         save_configs()
         logger.info(f"Cleared manual stop flag for strategy {strategy_id} - scheduled auto-start resumed")
 
-    # Ensure initialization is done when starting strategies
+    # Check schedule constraints
+    schedule_days = config.get('schedule_days', [])
+    now = datetime.now(IST)
+    day_names = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+    today_day = day_names[now.weekday()]
+
+    schedule_start = config.get('schedule_start')
+    schedule_stop = config.get('schedule_stop')
+
+    # Determine if we're within schedule
+    is_scheduled_day = today_day in [d.lower() for d in schedule_days] if schedule_days else True
+    is_within_hours = True
+
+    if schedule_start and schedule_stop:
+        try:
+            start_hour, start_min = map(int, schedule_start.split(':'))
+            stop_hour, stop_min = map(int, schedule_stop.split(':'))
+            start_time = now.replace(hour=start_hour, minute=start_min, second=0, microsecond=0)
+            stop_time = now.replace(hour=stop_hour, minute=stop_min, second=0, microsecond=0)
+            is_within_hours = start_time <= now <= stop_time
+        except (ValueError, AttributeError) as e:
+            logger.warning(f"Could not parse schedule times for {strategy_id}: {e}")
+
+    # Check if today is a market holiday (but allow weekends if scheduled)
+    is_holiday = not is_trading_day() and now.weekday() < 5
+
+    # If outside schedule (wrong day, wrong time, or holiday), just arm it for scheduled start
+    if not is_scheduled_day or not is_within_hours or is_holiday:
+        # Determine the reason and next start time
+        if is_holiday:
+            reason = "Market holiday"
+            next_start = f"next trading day at {schedule_start} IST"
+        elif not is_scheduled_day:
+            reason = f"Today ({today_day.capitalize()}) is not in schedule"
+            # Find next scheduled day
+            next_days = [d for d in schedule_days]
+            next_start = f"next scheduled day ({', '.join(next_days)}) at {schedule_start} IST"
+        else:
+            reason = f"Outside schedule hours ({schedule_start} - {schedule_stop} IST)"
+            if now < start_time:
+                next_start = f"today at {schedule_start} IST"
+            else:
+                next_start = f"next scheduled day at {schedule_start} IST"
+
+        logger.info(f"Strategy {strategy_id} armed for scheduled start. Reason: {reason}. Next start: {next_start}")
+
+        return jsonify({
+            'status': 'success',
+            'message': f'Strategy armed for scheduled start. {reason}. Will start {next_start}.',
+            'data': {
+                'armed': True,
+                'reason': reason,
+                'next_start': next_start
+            }
+        })
+
+    # Within schedule - start immediately
     initialize_with_app_context()
     success, message = start_strategy_process(strategy_id)
     return jsonify({'status': 'success' if success else 'error', 'message': message})
@@ -1458,7 +1539,7 @@ def start_strategy(strategy_id):
 @python_strategy_bp.route('/stop/<strategy_id>', methods=['POST'])
 @check_session_validity
 def stop_strategy(strategy_id):
-    """Stop a strategy manually - sets flag to prevent auto-start today"""
+    """Stop a strategy manually or cancel a scheduled auto-start"""
     user_id = session.get('user')
     if not user_id:
         return jsonify({'status': 'error', 'message': 'Session expired'}), 401
@@ -1468,16 +1549,26 @@ def stop_strategy(strategy_id):
     if not is_owner:
         return error_response
 
-    success, message = stop_strategy_process(strategy_id)
+    config = STRATEGY_CONFIGS.get(strategy_id, {})
+    is_running = config.get('is_running', False)
 
-    # Set manual stop flag to prevent scheduler from auto-starting
-    # User must manually start to resume scheduled auto-start
-    if success and strategy_id in STRATEGY_CONFIGS:
-        STRATEGY_CONFIGS[strategy_id]['manually_stopped'] = True
-        save_configs()
-        logger.info(f"Strategy {strategy_id} manually stopped - will not auto-start until manually started")
-
-    return jsonify({'status': 'success' if success else 'error', 'message': message})
+    if is_running:
+        # Strategy is actually running - stop the process
+        success, message = stop_strategy_process(strategy_id)
+        if success and strategy_id in STRATEGY_CONFIGS:
+            STRATEGY_CONFIGS[strategy_id]['manually_stopped'] = True
+            save_configs()
+            logger.info(f"Strategy {strategy_id} manually stopped - will not auto-start until manually started")
+        return jsonify({'status': 'success' if success else 'error', 'message': message})
+    else:
+        # Strategy is not running - just cancel the scheduled auto-start
+        if strategy_id in STRATEGY_CONFIGS:
+            STRATEGY_CONFIGS[strategy_id]['manually_stopped'] = True
+            save_configs()
+            logger.info(f"Strategy {strategy_id} schedule cancelled - will not auto-start until manually started")
+            return jsonify({'status': 'success', 'message': 'Scheduled auto-start cancelled'})
+        else:
+            return jsonify({'status': 'error', 'message': 'Strategy not found'}), 404
 
 @python_strategy_bp.route('/schedule/<strategy_id>', methods=['POST'])
 @check_session_validity
@@ -1765,6 +1856,11 @@ def get_schedule_status(config):
     """
     Determine detailed schedule status for a strategy.
     Returns: (status, status_message)
+
+    Status meanings:
+    - manually_stopped: User clicked stop, won't auto-start until manual start
+    - scheduled: Strategy is armed and will auto-start at scheduled time
+    - paused: Market holiday, strategy won't run today
     """
     now = datetime.now(IST)
     day_names = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
@@ -1776,28 +1872,34 @@ def get_schedule_status(config):
     schedule_stop = config.get('schedule_stop', '16:00')
     schedule_days_lower = [d.lower() for d in schedule_days]
 
-    # Check if manually stopped
+    # Check if manually stopped - this is the only state that prevents auto-start
     if config.get('manually_stopped'):
-        return 'manually_stopped', 'Manually stopped - start to resume auto-schedule'
+        return 'manually_stopped', 'Manually stopped - click Start to resume'
 
-    # Check if today is in schedule days
-    if schedule_days and today_day not in schedule_days_lower:
-        return 'outside_schedule', f'Not scheduled for {today_day.capitalize()}'
-
-    # Check for market holiday (only on weekdays, and only if paused_reason is 'holiday')
-    # Don't show paused for weekends if the day is explicitly scheduled
+    # Check for market holiday (only on weekdays)
     paused_reason = config.get('paused_reason')
     if paused_reason == 'holiday':
         return 'paused', config.get('paused_message', 'Market Holiday')
 
-    # Check if current time is outside schedule hours
+    # Strategy is armed (not manually stopped) - show "Scheduled" with context
+    # Check if today is in schedule days
+    if schedule_days and today_day not in schedule_days_lower:
+        # Find next scheduled day
+        next_days = ', '.join([d.capitalize() for d in schedule_days[:3]])
+        if len(schedule_days) > 3:
+            next_days += '...'
+        return 'scheduled', f'Next: {next_days} at {schedule_start} IST'
+
+    # Today is a scheduled day - check time
     if schedule_start and schedule_stop:
         if current_time < schedule_start:
-            return 'outside_schedule', f'Before schedule start ({schedule_start} IST)'
+            return 'scheduled', f'Starts today at {schedule_start} IST'
         elif current_time > schedule_stop:
-            return 'outside_schedule', f'After schedule stop ({schedule_stop} IST)'
+            # After today's window, will start next scheduled day
+            return 'scheduled', f'Next scheduled day at {schedule_start} IST'
 
-    return 'scheduled', f'Scheduled {schedule_start} - {schedule_stop} IST'
+    # Within schedule window
+    return 'scheduled', f'Active window: {schedule_start} - {schedule_stop} IST'
 
 
 @python_strategy_bp.route('/api/strategies')
@@ -1840,6 +1942,46 @@ def api_get_strategies():
         })
 
     return jsonify({'strategies': strategies})
+
+@python_strategy_bp.route('/api/events')
+def api_strategy_events():
+    """SSE endpoint for real-time strategy status updates"""
+    def event_stream():
+        # Create a queue for this subscriber
+        q = queue.Queue(maxsize=100)
+
+        with SSE_LOCK:
+            SSE_SUBSCRIBERS.append(q)
+
+        try:
+            # Send initial connection message
+            yield "data: {\"type\": \"connected\"}\n\n"
+
+            while True:
+                try:
+                    # Wait for events with timeout to detect disconnection
+                    event = q.get(timeout=30)
+                    yield event
+                except queue.Empty:
+                    # Send heartbeat to keep connection alive
+                    yield ": heartbeat\n\n"
+        except GeneratorExit:
+            pass
+        finally:
+            # Remove subscriber on disconnect
+            with SSE_LOCK:
+                if q in SSE_SUBSCRIBERS:
+                    SSE_SUBSCRIBERS.remove(q)
+
+    return Response(
+        event_stream(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'  # Disable nginx buffering
+        }
+    )
 
 @python_strategy_bp.route('/api/strategy/<strategy_id>')
 @check_session_validity

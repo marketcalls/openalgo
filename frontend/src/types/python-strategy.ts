@@ -4,7 +4,7 @@ export interface PythonStrategy {
   id: string
   name: string
   file_name: string
-  status: 'stopped' | 'running' | 'error' | 'scheduled' | 'paused' | 'manually_stopped' | 'outside_schedule'
+  status: 'stopped' | 'running' | 'error' | 'scheduled' | 'paused' | 'manually_stopped'
   status_message?: string
   process_id: number | null
   last_started: string | null
@@ -77,7 +77,6 @@ export const STATUS_COLORS: Record<string, string> = {
   scheduled: 'bg-blue-500',
   paused: 'bg-yellow-500',
   manually_stopped: 'bg-orange-500',
-  outside_schedule: 'bg-slate-400',
 }
 
 export const STATUS_LABELS: Record<string, string> = {
@@ -87,5 +86,4 @@ export const STATUS_LABELS: Record<string, string> = {
   scheduled: 'Scheduled',
   paused: 'Paused',
   manually_stopped: 'Manual Stop',
-  outside_schedule: 'Outside Schedule',
 }

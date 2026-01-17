@@ -3,15 +3,18 @@ import {
   ArrowLeft,
   BookOpen,
   Calendar,
+  Circle,
   Clock,
   Code,
   Copy,
   FileCode,
   HardDrive,
+  Pencil,
   Play,
   ScrollText,
   Server,
   Shield,
+  Square,
   Terminal,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -207,10 +210,19 @@ export default function PythonStrategyGuide() {
             <div className="flex gap-4">
               <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">4</Badge>
               <div>
-                <p className="font-medium">Upload and run</p>
+                <p className="font-medium">Upload with schedule</p>
                 <p className="text-sm text-muted-foreground">
-                  Upload your strategy file on the <Link to="/python" className="text-primary hover:underline">Python Strategies</Link> page
-                  and click Start
+                  Upload your strategy file on the <Link to="/python" className="text-primary hover:underline">Python Strategies</Link> page.
+                  Configure the mandatory schedule (default: Mon-Fri, 9:00 AM - 4:00 PM IST).
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-4">
+              <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">5</Badge>
+              <div>
+                <p className="font-medium">Start your strategy</p>
+                <p className="text-sm text-muted-foreground">
+                  Click the <Play className="h-3 w-3 inline" /> Start button to run immediately, or let the scheduler auto-start it at the configured time.
                 </p>
               </div>
             </div>
@@ -287,21 +299,148 @@ export default function PythonStrategyGuide() {
                   How does scheduling work?
                 </span>
               </AccordionTrigger>
-              <AccordionContent className="text-muted-foreground space-y-2">
-                <p>You can schedule strategies to automatically start and stop at specific times:</p>
-                <ul className="list-disc list-inside space-y-1 ml-2">
-                  <li><strong>Start Time:</strong> When the strategy should begin (e.g., 9:15 AM)</li>
-                  <li><strong>Stop Time:</strong> When to stop (e.g., 3:30 PM) - optional</li>
-                  <li><strong>Days:</strong> Which days to run (Mon-Fri typical)</li>
-                </ul>
+              <AccordionContent className="text-muted-foreground space-y-3">
+                <p>
+                  <strong>Scheduling is mandatory</strong> for all strategies. Every strategy must have a defined schedule
+                  that controls when it automatically starts and stops.
+                </p>
+
+                <div className="bg-muted p-3 rounded-lg space-y-2">
+                  <p className="font-medium">Default Schedule (when uploading):</p>
+                  <ul className="list-disc list-inside space-y-1 ml-2 text-sm">
+                    <li><strong>Start Time:</strong> 9:00 AM IST</li>
+                    <li><strong>Stop Time:</strong> 4:00 PM IST</li>
+                    <li><strong>Days:</strong> Monday to Friday</li>
+                  </ul>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="font-medium">Schedule Configuration:</p>
+                  <ul className="list-disc list-inside space-y-1 ml-2">
+                    <li><strong>Start Time:</strong> When the strategy auto-starts (required)</li>
+                    <li><strong>Stop Time:</strong> When to auto-stop (required)</li>
+                    <li><strong>Days:</strong> Which days to run - can include weekends for special sessions</li>
+                  </ul>
+                </div>
+
+                <div className="bg-primary/10 border border-primary/20 p-3 rounded-lg">
+                  <p className="font-medium text-primary flex items-center gap-2">
+                    <Pencil className="h-4 w-4" />
+                    Editing Schedule
+                  </p>
+                  <p className="text-sm mt-1">
+                    Click the <Pencil className="h-3 w-3 inline" /> <strong>Edit Schedule</strong> button on your strategy card to modify the schedule times and days.
+                  </p>
+                </div>
+
                 <Alert className="mt-2">
                   <AlertTriangle className="h-4 w-4" />
                   <AlertTitle>Holiday Protection</AlertTitle>
                   <AlertDescription>
-                    Scheduled strategies will NOT start on market holidays or weekends,
-                    even if scheduled. This prevents unnecessary resource usage.
+                    Scheduled strategies will NOT auto-start on market holidays, even if scheduled.
+                    Weekend trading is allowed if you explicitly add Sat/Sun to the schedule days (for special sessions like Budget Day or Muhurat Trading).
                   </AlertDescription>
                 </Alert>
+              </AccordionContent>
+            </AccordionItem>
+
+            <AccordionItem value="status-indicators">
+              <AccordionTrigger>
+                <span className="flex items-center gap-2">
+                  <Circle className="h-4 w-4" />
+                  What do the status indicators mean?
+                </span>
+              </AccordionTrigger>
+              <AccordionContent className="text-muted-foreground space-y-3">
+                <p>Each strategy displays a status badge showing its current state:</p>
+
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3 p-2 bg-muted rounded">
+                    <Badge className="bg-green-500 text-white">Running</Badge>
+                    <span className="text-sm">Strategy is actively running and executing trades</span>
+                  </div>
+                  <div className="flex items-center gap-3 p-2 bg-muted rounded">
+                    <Badge className="bg-blue-500 text-white">Scheduled</Badge>
+                    <div className="text-sm">
+                      <p>Strategy is armed and will auto-start at scheduled time</p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Shows context: "Starts today at 9:00 IST" or "Next: Mon, Tue at 9:00 IST"
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 p-2 bg-muted rounded">
+                    <Badge className="bg-orange-500 text-white">Manual Stop</Badge>
+                    <span className="text-sm">Strategy was manually stopped - won't auto-start until you click Start</span>
+                  </div>
+                  <div className="flex items-center gap-3 p-2 bg-muted rounded">
+                    <Badge className="bg-yellow-500 text-white">Paused</Badge>
+                    <span className="text-sm">Strategy is paused due to market holiday</span>
+                  </div>
+                  <div className="flex items-center gap-3 p-2 bg-muted rounded">
+                    <Badge className="bg-red-500 text-white">Error</Badge>
+                    <span className="text-sm">Strategy encountered an error and crashed</span>
+                  </div>
+                </div>
+
+                <p className="text-sm">
+                  <strong>Tip:</strong> Hover over the status badge to see a detailed message like "Starts today at 09:00 IST" or "Next scheduled day at 09:15 IST".
+                </p>
+              </AccordionContent>
+            </AccordionItem>
+
+            <AccordionItem value="manual-stop">
+              <AccordionTrigger>
+                <span className="flex items-center gap-2">
+                  <Square className="h-4 w-4" />
+                  How does Start and Stop work?
+                </span>
+              </AccordionTrigger>
+              <AccordionContent className="text-muted-foreground space-y-3">
+                <div className="bg-green-500/10 border border-green-500/20 p-3 rounded-lg">
+                  <p className="font-medium text-green-600 flex items-center gap-2">
+                    <Play className="h-4 w-4" />
+                    Start Button
+                  </p>
+                  <ul className="list-disc list-inside space-y-1 ml-2 mt-2 text-sm">
+                    <li><strong>Within schedule:</strong> Strategy starts running immediately</li>
+                    <li><strong>Outside schedule:</strong> Strategy is "armed" - status changes to "Scheduled"</li>
+                    <li>Button changes to <strong>Cancel</strong> after arming</li>
+                  </ul>
+                </div>
+
+                <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-lg">
+                  <p className="font-medium text-red-600 flex items-center gap-2">
+                    <Square className="h-4 w-4" />
+                    Stop Button (when running)
+                  </p>
+                  <ul className="list-disc list-inside space-y-1 ml-2 mt-2 text-sm">
+                    <li>Stops the running strategy process</li>
+                    <li>Sets "manually stopped" flag - won't auto-start</li>
+                    <li>Status shows "Manual Stop"</li>
+                  </ul>
+                </div>
+
+                <div className="bg-orange-500/10 border border-orange-500/20 p-3 rounded-lg">
+                  <p className="font-medium text-orange-600 flex items-center gap-2">
+                    <Square className="h-4 w-4" />
+                    Cancel Button (when scheduled)
+                  </p>
+                  <ul className="list-disc list-inside space-y-1 ml-2 mt-2 text-sm">
+                    <li>Cancels the scheduled auto-start</li>
+                    <li>Sets "manually stopped" flag</li>
+                    <li>Status changes from "Scheduled" to "Manual Stop"</li>
+                    <li>Click Start again to re-arm</li>
+                  </ul>
+                </div>
+
+                <div className="bg-muted p-3 rounded-lg">
+                  <p className="font-medium">Use Cases</p>
+                  <ul className="list-disc list-inside space-y-1 ml-2 mt-2 text-sm">
+                    <li><strong>Evening setup:</strong> Click Start at night, strategy runs at 9:00 AM next day</li>
+                    <li><strong>Vacation mode:</strong> Click Stop, strategy stays off until you return</li>
+                    <li><strong>Testing:</strong> Edit schedule to test now, then revert schedule after</li>
+                  </ul>
+                </div>
               </AccordionContent>
             </AccordionItem>
 
@@ -408,27 +547,45 @@ export default function PythonStrategyGuide() {
                   What happens on weekends and after market hours?
                 </span>
               </AccordionTrigger>
-              <AccordionContent className="text-muted-foreground space-y-2">
+              <AccordionContent className="text-muted-foreground space-y-3">
                 <p>
-                  OpenAlgo is aware of market timings and handles non-trading periods:
+                  OpenAlgo is aware of market timings and handles non-trading periods intelligently:
                 </p>
                 <div className="bg-muted p-3 rounded-lg mt-2 space-y-2 text-sm">
                   <div className="flex items-center gap-2">
-                    <Badge variant="outline" className="text-red-500 border-red-500">Weekends</Badge>
-                    <span>Scheduled strategies will NOT auto-start on Sat/Sun</span>
+                    <Badge variant="outline" className="text-red-500 border-red-500">Weekends (Default)</Badge>
+                    <span>Strategies skip Sat/Sun unless explicitly added to schedule_days</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="text-green-500 border-green-500">Weekend (Scheduled)</Badge>
+                    <span>If Sat/Sun is in your schedule days, strategy CAN auto-start</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <Badge variant="outline" className="text-yellow-500 border-yellow-500">Holidays</Badge>
-                    <span>Scheduled strategies skip market holidays automatically</span>
+                    <span>Scheduled strategies always skip market holidays</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <Badge variant="outline" className="text-blue-500 border-blue-500">After Hours</Badge>
-                    <span>Running strategies continue until stop time or manual stop</span>
+                    <span>Running strategies continue until scheduled stop time</span>
                   </div>
                 </div>
-                <p className="text-sm mt-2">
+
+                <div className="bg-primary/10 border border-primary/20 p-3 rounded-lg">
+                  <p className="font-medium text-primary">Weekend Scheduling for Special Sessions</p>
+                  <p className="text-sm mt-1">
+                    For Budget Day, Muhurat Trading, or other special sessions on weekends:
+                  </p>
+                  <ol className="list-decimal list-inside space-y-1 ml-2 mt-2 text-sm">
+                    <li>Edit your strategy schedule</li>
+                    <li>Add "Sat" or "Sun" to the schedule days</li>
+                    <li>The strategy will auto-start on that day at the scheduled time</li>
+                    <li>Remember to remove the weekend day after the special session!</li>
+                  </ol>
+                </div>
+
+                <p className="text-sm">
                   <strong>Note:</strong> If your strategy is already running when market closes,
-                  it will continue running. Use the scheduled stop time or manually stop it.
+                  it will continue running until the scheduled stop time or until you manually stop it.
                 </p>
               </AccordionContent>
             </AccordionItem>
@@ -496,18 +653,68 @@ export default function PythonStrategyGuide() {
                   What happens if I restart OpenAlgo?
                 </span>
               </AccordionTrigger>
-              <AccordionContent className="text-muted-foreground space-y-2">
-                <p>OpenAlgo handles restarts gracefully:</p>
+              <AccordionContent className="text-muted-foreground space-y-3">
+                <p>OpenAlgo handles restarts gracefully with automatic cleanup:</p>
                 <ul className="list-disc list-inside space-y-1 ml-2">
-                  <li>Strategy configurations are saved to disk</li>
-                  <li>Running strategies are detected and restored if still alive</li>
-                  <li>Schedules are automatically re-created</li>
-                  <li>If a strategy crashed, it will show an error state</li>
+                  <li>Strategy configurations are saved to disk and persist</li>
+                  <li>Schedules are automatically re-created for all strategies</li>
+                  <li>Stale "running" flags are cleaned up on startup</li>
+                  <li>Strategies will auto-start at their scheduled times</li>
                 </ul>
-                <p className="text-sm">
-                  Note: Strategies that were running will attempt to restart automatically
-                  after master contracts are downloaded.
+
+                <div className="bg-muted p-3 rounded-lg space-y-2">
+                  <p className="font-medium">Automatic Status Cleanup</p>
+                  <ul className="list-disc list-inside space-y-1 ml-2 text-sm">
+                    <li>If OpenAlgo restarts while a strategy was running, the status is reset to "stopped"</li>
+                    <li>This prevents stale "Running" indicators for dead processes</li>
+                    <li>The strategy will resume at the next scheduled start time</li>
+                  </ul>
+                </div>
+
+                <div className="bg-yellow-500/10 border border-yellow-500/20 p-3 rounded-lg">
+                  <p className="font-medium text-yellow-600 flex items-center gap-2">
+                    <AlertTriangle className="h-4 w-4" />
+                    Manual Stop Persists
+                  </p>
+                  <p className="text-sm mt-1">
+                    If you manually stopped a strategy before the restart, it will remain stopped.
+                    The "manually stopped" flag persists and the strategy won't auto-start until you click Start.
+                  </p>
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+
+            <AccordionItem value="realtime-updates">
+              <AccordionTrigger>
+                <span className="flex items-center gap-2">
+                  <Server className="h-4 w-4" />
+                  How do real-time status updates work?
+                </span>
+              </AccordionTrigger>
+              <AccordionContent className="text-muted-foreground space-y-3">
+                <p>
+                  The strategy dashboard uses <strong>Server-Sent Events (SSE)</strong> for real-time updates.
+                  You don't need to refresh the page to see status changes.
                 </p>
+
+                <div className="bg-muted p-3 rounded-lg space-y-2">
+                  <p className="font-medium">Automatic Updates</p>
+                  <ul className="list-disc list-inside space-y-1 ml-2 text-sm">
+                    <li>When scheduler starts a strategy → Status changes to "Running" automatically</li>
+                    <li>When scheduler stops a strategy → Status changes to "Scheduled" automatically</li>
+                    <li>When you click Start/Stop → UI updates immediately</li>
+                    <li>No page refresh needed - updates happen in real-time</li>
+                  </ul>
+                </div>
+
+                <div className="bg-primary/10 border border-primary/20 p-3 rounded-lg">
+                  <p className="font-medium text-primary">Connection Status</p>
+                  <p className="text-sm mt-1">
+                    The browser maintains a persistent connection to receive updates.
+                    If disconnected, it will automatically reconnect. You can also use the
+                    <strong> Refresh</strong> button to manually refresh the data.
+                  </p>
+                </div>
               </AccordionContent>
             </AccordionItem>
 
