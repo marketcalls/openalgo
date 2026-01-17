@@ -281,7 +281,7 @@ export default function PythonStrategyLogs() {
               <LogViewer
                 value={logContent.content}
                 height="500px"
-                reverseOrder={true}
+                followTail={strategy?.status === 'running' && autoRefresh}
               />
             ) : (
               <div className="flex items-center justify-center h-[500px] text-muted-foreground">
