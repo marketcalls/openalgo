@@ -504,8 +504,9 @@ class OrderManager:
 
             # Calculate new values without modifying order yet
             new_qty = int(new_data['quantity']) if 'quantity' in new_data else order.quantity
-            new_price = Decimal(str(new_data['price'])) if new_data.get('price') else order.price
-            new_trigger_price = Decimal(str(new_data['trigger_price'])) if new_data.get('trigger_price') else order.trigger_price
+            # Use explicit None check to properly handle 0 values (not truthy check)
+            new_price = Decimal(str(new_data['price'])) if new_data.get('price') is not None else order.price
+            new_trigger_price = Decimal(str(new_data['trigger_price'])) if new_data.get('trigger_price') is not None else order.trigger_price
             new_values = (new_qty, new_price, new_trigger_price)
 
             # Validate quantity if being modified
@@ -589,6 +590,7 @@ class OrderManager:
                             logger.info(f"Reverted order {orderid} margin_blocked to original ₹{original_margin}")
                             margin_warning = f"Order modified but margin update failed. Margin reverted to ₹{original_margin}. Please verify funds."
                         except Exception as revert_error:
+                            db_session.rollback()  # Clean up failed session state
                             logger.error(f"Failed to revert margin_blocked for order {orderid}: {revert_error}")
                             margin_warning = f"Order modified but margin update failed. Manual reconciliation may be needed."
                     else:
@@ -609,6 +611,7 @@ class OrderManager:
                             logger.info(f"Reverted order {orderid} margin_blocked to original ₹{original_margin}")
                             margin_warning = f"Order modified but margin release failed. Margin kept at ₹{original_margin}. Please verify funds."
                         except Exception as revert_error:
+                            db_session.rollback()  # Clean up failed session state
                             logger.error(f"Failed to revert margin_blocked for order {orderid}: {revert_error}")
                             margin_warning = f"Order modified but margin release failed. Manual reconciliation may be needed."
                     else:
