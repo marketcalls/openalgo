@@ -51,6 +51,8 @@ from blueprints.playground import playground_bp  # Import the API playground blu
 from blueprints.admin import admin_bp  # Import the admin blueprint
 from blueprints.react_app import react_bp, is_react_frontend_available, serve_react_app  # Import React frontend blueprint
 from blueprints.historify import historify_bp  # Import the historify blueprint
+from blueprints.broker_credentials import broker_credentials_bp  # Import the broker credentials blueprint
+from blueprints.system_permissions import system_permissions_bp  # Import the system permissions blueprint
 from services.telegram_bot_service import telegram_bot_service
 from database.telegram_db import get_bot_config
 
@@ -205,6 +207,8 @@ def create_app():
     app.register_blueprint(logging_bp)  # Register Logging blueprint
     app.register_blueprint(admin_bp)  # Register Admin blueprint
     app.register_blueprint(historify_bp)  # Register Historify blueprint
+    app.register_blueprint(broker_credentials_bp)  # Register Broker credentials blueprint
+    app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
 
 
     # Exempt webhook endpoints from CSRF protection after app initialization
@@ -434,11 +438,11 @@ def setup_environment(app):
         db_init_time = (time.time() - db_init_start) * 1000
         logger.debug(f"All databases initialized in parallel ({db_init_time:.0f}ms)")
 
-    # Setup ngrok cleanup handlers if ngrok is enabled
-    # Note: The actual tunnel creation happens in the __main__ block below
-    if os.getenv('NGROK_ALLOW') == 'TRUE':
-        from utils.ngrok_manager import setup_ngrok_handlers
-        setup_ngrok_handlers()
+    # Setup ngrok cleanup handlers (always register, regardless of ngrok being enabled)
+    # This ensures proper cleanup on shutdown even if ngrok is enabled/disabled via UI
+    # The actual tunnel creation happens in the __main__ block below
+    from utils.ngrok_manager import setup_ngrok_handlers
+    setup_ngrok_handlers()
 
 app = create_app()
 
