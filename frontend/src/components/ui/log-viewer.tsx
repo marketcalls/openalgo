@@ -12,6 +12,7 @@ interface LogViewerProps {
   className?: string
   height?: string
   followTail?: boolean // Auto-scroll to bottom on new content
+  reverseOrder?: boolean // Show latest logs at top (reverse chronological)
 }
 
 // Simple log highlighting mode
@@ -132,6 +133,7 @@ export function LogViewer({
   className = '',
   height = '500px',
   followTail = false,
+  reverseOrder = false,
 }: LogViewerProps) {
   const { mode, appMode } = useThemeStore()
   // Dark mode when: explicit dark theme OR analyzer mode (always dark purple theme)
@@ -141,6 +143,13 @@ export function LogViewer({
   const scrollPositionRef = useRef<number>(0)
   const isUserScrolledRef = useRef<boolean>(false)
   const prevValueRef = useRef<string>(value)
+
+  // Reverse log content if reverseOrder is true (latest logs at top)
+  const displayValue = useMemo(() => {
+    if (!reverseOrder || !value) return value
+    const lines = value.split('\n')
+    return lines.reverse().join('\n')
+  }, [value, reverseOrder])
 
   const extensions = useMemo(() => {
     return [
@@ -182,8 +191,8 @@ export function LogViewer({
 
   // Handle content changes - restore scroll or follow tail
   useEffect(() => {
-    if (value === prevValueRef.current) return
-    prevValueRef.current = value
+    if (displayValue === prevValueRef.current) return
+    prevValueRef.current = displayValue
 
     // Use requestAnimationFrame to ensure DOM is updated
     requestAnimationFrame(() => {
@@ -192,7 +201,12 @@ export function LogViewer({
 
       const scrollDOM = view.scrollDOM
 
-      if (followTail && !isUserScrolledRef.current) {
+      if (reverseOrder) {
+        // In reverse mode, keep at top (latest logs are already at top)
+        if (!isUserScrolledRef.current) {
+          scrollDOM.scrollTop = 0
+        }
+      } else if (followTail && !isUserScrolledRef.current) {
         // Auto-scroll to bottom for live logs if user hasn't scrolled up
         scrollDOM.scrollTop = scrollDOM.scrollHeight
       } else if (isUserScrolledRef.current) {
@@ -200,13 +214,13 @@ export function LogViewer({
         scrollDOM.scrollTop = scrollPositionRef.current
       }
     })
-  }, [value, followTail])
+  }, [displayValue, followTail, reverseOrder])
 
   return (
     <div className={`rounded-lg overflow-hidden ${className}`}>
       <CodeMirror
         ref={editorRef}
-        value={value}
+        value={displayValue}
         extensions={extensions}
         readOnly={true}
         height={height}
