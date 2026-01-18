@@ -28,7 +28,9 @@
       "Bash(npm --version)",
       "Bash(uv run:*)",
       "Bash(python3:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "WebSearch",
+      "WebFetch(domain:ui.shadcn.com)"
     ]
   }
 }
