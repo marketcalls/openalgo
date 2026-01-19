@@ -426,6 +426,7 @@ function FlowEditorContent() {
               type: 'insertable',
               animated: true,
             }}
+            connectionLineStyle={{ stroke: 'hsl(var(--primary))', strokeWidth: 2 }}
           >
             <Background gap={16} size={1} />
             <Controls />

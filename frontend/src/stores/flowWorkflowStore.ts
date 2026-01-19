@@ -146,6 +146,8 @@ export const useFlowWorkflowStore = create<WorkflowState>((set, get) => ({
         {
           ...connection,
           id: `edge-${Date.now()}`,
+          type: 'insertable',
+          animated: true,
         },
         get().edges
       ),

@@ -454,13 +454,35 @@
 }
 
 .react-flow__edge-path {
-  stroke: hsl(var(--muted-foreground)) !important;
+  stroke: #888888;
   stroke-width: 2px;
 }
 
 .react-flow__edge.selected .react-flow__edge-path,
 .react-flow__edge:hover .react-flow__edge-path {
-  stroke: hsl(var(--foreground)) !important;
+  stroke: #ffffff;
+}
+
+/* Ensure edge paths are visible */
+.react-flow__edge path {
+  stroke: #888888;
+  stroke-width: 2px;
+}
+
+/* Edge animation for animated edges */
+@keyframes dashdraw {
+  from {
+    stroke-dashoffset: 10;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Connection line style */
+.react-flow__connection-line {
+  stroke: hsl(var(--primary));
+  stroke-width: 2px;
 }
 
 .react-flow__controls {

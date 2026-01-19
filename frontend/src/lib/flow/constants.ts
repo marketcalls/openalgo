@@ -111,6 +111,31 @@ export const BSE_INDEX_SYMBOLS = [
   { value: 'SENSEX50', label: 'SENSEX 50', lotSize: 25 },
 ] as const
 
+// Combined index symbols with exchange info (for options trading)
+export const INDEX_SYMBOLS = [
+  // NSE Indices
+  { value: 'NIFTY', label: 'NIFTY', exchange: 'NFO', lotSize: 75 },
+  { value: 'BANKNIFTY', label: 'BANKNIFTY', exchange: 'NFO', lotSize: 30 },
+  { value: 'FINNIFTY', label: 'FINNIFTY', exchange: 'NFO', lotSize: 40 },
+  { value: 'MIDCPNIFTY', label: 'MIDCPNIFTY', exchange: 'NFO', lotSize: 75 },
+  { value: 'NIFTYNXT50', label: 'NIFTYNXT50', exchange: 'NFO', lotSize: 25 },
+  // BSE Indices
+  { value: 'SENSEX', label: 'SENSEX', exchange: 'BFO', lotSize: 20 },
+  { value: 'BANKEX', label: 'BANKEX', exchange: 'BFO', lotSize: 30 },
+  { value: 'SENSEX50', label: 'SENSEX50', exchange: 'BFO', lotSize: 25 },
+] as const
+
+// =============================================================================
+// EXPIRY TYPES
+// =============================================================================
+
+export const EXPIRY_TYPES = [
+  { value: 'current_week', label: 'Current Week', description: 'Nearest weekly expiry' },
+  { value: 'next_week', label: 'Next Week', description: 'Second weekly expiry' },
+  { value: 'current_month', label: 'Current Month', description: 'Last expiry of current month' },
+  { value: 'next_month', label: 'Next Month', description: 'Last expiry of next month' },
+] as const
+
 // =============================================================================
 // SCHEDULE CONSTANTS
 // =============================================================================

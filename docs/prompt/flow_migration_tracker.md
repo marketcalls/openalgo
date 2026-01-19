@@ -306,7 +306,6 @@
 ## Phase 7: Testing ⬜
 
 ### Backend Tests
-
 | # | Test | Status |
 |---|------|--------|
 | 1 | Create workflow via API | ⬜ |
@@ -392,8 +391,6 @@
 | 1 | `upgrade/migrate_all.py` | Added migrate_flow.py to MIGRATIONS |
 | 3 | `frontend/package.json` | Added @xyflow/react dependency |
 | 3 | `frontend/src/index.css` | Added Flow CSS variables and ReactFlow styles |
-| 4 | `frontend/src/App.tsx` | Added /flow and /flow/editor/:id routes |
-| 4 | `blueprints/react_app.py` | Added Flow routes for React SPA serving |
 
 ---
 

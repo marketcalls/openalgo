@@ -3,7 +3,6 @@
 
 import { useState, useCallback } from 'react'
 import {
-  BaseEdge,
   EdgeLabelRenderer,
   getSmoothStepPath,
   useReactFlow,
@@ -67,7 +66,6 @@ export function InsertableEdge({
   targetPosition,
   sourceHandleId,
   targetHandleId,
-  style = {},
   markerEnd,
   selected,
   animated,
@@ -145,16 +143,18 @@ export function InsertableEdge({
 
   return (
     <>
-      <BaseEdge
-        path={edgePath}
-        markerEnd={markerEnd}
+      {/* Render path directly instead of BaseEdge for better control */}
+      <path
+        d={edgePath}
+        fill="none"
+        strokeWidth={isHovered || selected ? 3 : 2}
+        stroke={isHovered || selected ? '#3b82f6' : '#888888'}
+        strokeDasharray={animated ? '5 5' : undefined}
         style={{
-          ...style,
-          strokeWidth: isHovered || selected ? 2 : 1.5,
-          stroke: isHovered || selected ? 'hsl(var(--primary))' : 'hsl(var(--muted-foreground))',
-          strokeDasharray: animated ? '5 5' : undefined,
           animation: animated ? 'dashdraw 0.5s linear infinite' : undefined,
         }}
+        className="react-flow__edge-path"
+        markerEnd={markerEnd}
       />
       <EdgeLabelRenderer>
         <div

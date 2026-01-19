@@ -62,12 +62,15 @@ class FlowOpenAlgoClient:
         product_type: str = "MIS",
         price: float = 0,
         trigger_price: float = 0,
-        disclosed_quantity: int = 0
+        disclosed_quantity: int = 0,
+        strategy: str = "flow_workflow"
     ) -> Dict[str, Any]:
         """Place a regular order"""
         from services.place_order_service import place_order
 
         order_data = {
+            'apikey': self.api_key,
+            'strategy': strategy,
             'symbol': symbol,
             'exchange': exchange,
             'action': action.upper(),
@@ -92,12 +95,15 @@ class FlowOpenAlgoClient:
         price_type: str = "MARKET",
         product_type: str = "MIS",
         price: float = 0,
-        trigger_price: float = 0
+        trigger_price: float = 0,
+        strategy: str = "flow_workflow"
     ) -> Dict[str, Any]:
         """Place a smart order with position management"""
         from services.place_smart_order_service import place_smart_order
 
         order_data = {
+            'apikey': self.api_key,
+            'strategy': strategy,
             'symbol': symbol,
             'exchange': exchange,
             'action': action.upper(),
@@ -123,12 +129,15 @@ class FlowOpenAlgoClient:
         product_type: str = "MIS",
         price: float = 0,
         trigger_price: float = 0,
-        disclosed_quantity: int = 0
+        disclosed_quantity: int = 0,
+        strategy: str = "flow_workflow"
     ) -> Dict[str, Any]:
         """Modify an existing order"""
         from services.modify_order_service import modify_order
 
         order_data = {
+            'apikey': self.api_key,
+            'strategy': strategy,
             'orderid': order_id,
             'symbol': symbol,
             'exchange': exchange,
@@ -144,11 +153,15 @@ class FlowOpenAlgoClient:
         success, response, status_code = modify_order(order_data, api_key=self.api_key)
         return self._handle_response(success, response, status_code)
 
-    def cancel_order(self, order_id: str) -> Dict[str, Any]:
+    def cancel_order(self, order_id: str, strategy: str = "flow_workflow") -> Dict[str, Any]:
         """Cancel an order"""
         from services.cancel_order_service import cancel_order
 
-        order_data = {'orderid': order_id}
+        order_data = {
+            'apikey': self.api_key,
+            'strategy': strategy,
+            'orderid': order_id
+        }
         success, response, status_code = cancel_order(order_data, api_key=self.api_key)
         return self._handle_response(success, response, status_code)
 
@@ -163,12 +176,15 @@ class FlowOpenAlgoClient:
         self,
         symbol: str,
         exchange: str,
-        product_type: str = "MIS"
+        product_type: str = "MIS",
+        strategy: str = "flow_workflow"
     ) -> Dict[str, Any]:
         """Close a position"""
         from services.close_position_service import close_position
 
         order_data = {
+            'apikey': self.api_key,
+            'strategy': strategy,
             'symbol': symbol,
             'exchange': exchange,
             'product_type': product_type
@@ -194,12 +210,15 @@ class FlowOpenAlgoClient:
         price_type: str = "MARKET",
         product_type: str = "MIS",
         price: float = 0,
-        trigger_price: float = 0
+        trigger_price: float = 0,
+        strategy: str = "flow_workflow"
     ) -> Dict[str, Any]:
         """Place a split order"""
         from services.split_order_service import split_order
 
         order_data = {
+            'apikey': self.api_key,
+            'strategy': strategy,
             'symbol': symbol,
             'exchange': exchange,
             'action': action.upper(),
