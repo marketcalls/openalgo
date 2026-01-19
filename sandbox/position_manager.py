@@ -1194,6 +1194,11 @@ def cleanup_expired_contracts():
                         position.accumulated_realized_pnl = total_realized_pnl
                         position.margin_blocked = Decimal('0')
 
+                        # Set updated_at to expiry date so it doesn't appear in current session
+                        # (session filter excludes positions updated before session expiry)
+                        from datetime import datetime
+                        position.updated_at = datetime.combine(expiry_date, datetime.min.time())
+
                         db_session.commit()
 
                         logger.info(f"Expired contract {symbol} cleaned up for user {user_id}")
