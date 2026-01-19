@@ -232,8 +232,9 @@ class PositionManager:
         """
         Settle an expired position.
 
-        - Uses last available LTP for settlement (frozen at last traded price)
-        - If no LTP available, falls back to average price
+        Settlement prices:
+        - Options: Expire at 0 (most expire worthless - conservative approach)
+        - Futures: Use last stored LTP, or average price as fallback
         - Releases margin and updates realized P&L
 
         Args:
@@ -246,16 +247,22 @@ class PositionManager:
         avg_price = Decimal(str(position.average_price))
         margin_blocked = Decimal(str(position.margin_blocked or 0))
 
-        # Use last available LTP for settlement
-        # This freezes the P&L at the last traded price before expiry
-        # Falls back to average price if LTP is not available
-        if position.ltp and Decimal(str(position.ltp)) > 0:
-            settlement_price = Decimal(str(position.ltp))
-            logger.info(f"Expired contract {symbol} settling at last LTP: {settlement_price}")
+        # Determine settlement price based on instrument type
+        is_option = symbol.endswith('CE') or symbol.endswith('PE')
+
+        if is_option:
+            # Options expire worthless (at 0)
+            # This is conservative - user loses full premium for longs
+            settlement_price = Decimal('0')
+            logger.info(f"Option {symbol} expired - settling at 0 (worthless)")
         else:
-            # Fallback to average price if no LTP available
-            settlement_price = avg_price
-            logger.info(f"Expired contract {symbol} settling at avg price (no LTP): {settlement_price}")
+            # Futures: use last LTP if available, otherwise average price
+            if position.ltp and Decimal(str(position.ltp)) > 0:
+                settlement_price = Decimal(str(position.ltp))
+                logger.info(f"Future {symbol} expired - settling at last LTP: {settlement_price}")
+            else:
+                settlement_price = avg_price
+                logger.info(f"Future {symbol} expired - settling at avg price: {settlement_price}")
 
         # Calculate realized P&L for this closure
         if quantity > 0:
@@ -1058,14 +1065,163 @@ def process_all_users_settlement():
         logger.error(f"Error in T+1 settlement process: {e}")
 
 
+def cleanup_expired_contracts():
+    """
+    Clean up expired F&O contracts from sandbox positions.
+    Runs on startup when analyzer mode is enabled.
+
+    This handles cases where:
+    - App was stopped for several days
+    - User hasn't logged in for a while
+    - Contracts expired while app was not running
+
+    Expired contracts are settled with:
+    - Margin released back to available balance
+    - P&L calculated and added to realized P&L
+    - Position quantity set to 0
+    """
+    from datetime import date
+    from decimal import Decimal
+    from sandbox.fund_manager import FundManager
+
+    try:
+        today = date.today()
+
+        # Find all open positions in F&O exchanges
+        fo_exchanges = ['NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NCDEX']
+
+        expired_positions = []
+
+        # Query all open positions in F&O exchanges
+        all_fo_positions = SandboxPositions.query.filter(
+            SandboxPositions.exchange.in_(fo_exchanges),
+            SandboxPositions.quantity != 0
+        ).all()
+
+        if not all_fo_positions:
+            logger.debug("No open F&O positions to check for expiry")
+            return
+
+        logger.info(f"Checking {len(all_fo_positions)} F&O positions for expired contracts")
+
+        # Check each position for expiry
+        for position in all_fo_positions:
+            expiry_date = get_contract_expiry(position.symbol, position.exchange)
+
+            if expiry_date and today > expiry_date:
+                expired_positions.append(position)
+                logger.info(
+                    f"Found expired contract: {position.symbol} "
+                    f"(expiry: {expiry_date}, user: {position.user_id})"
+                )
+
+        if not expired_positions:
+            logger.debug("No expired F&O contracts found")
+            return
+
+        logger.info(f"Found {len(expired_positions)} expired contracts to clean up")
+
+        # Group by user for efficient processing
+        user_positions = {}
+        for pos in expired_positions:
+            if pos.user_id not in user_positions:
+                user_positions[pos.user_id] = []
+            user_positions[pos.user_id].append(pos)
+
+        # Process each user's expired positions
+        for user_id, positions in user_positions.items():
+            try:
+                fund_manager = FundManager(user_id)
+
+                for position in positions:
+                    try:
+                        symbol = position.symbol
+                        quantity = position.quantity
+                        avg_price = Decimal(str(position.average_price))
+                        margin_blocked = Decimal(str(position.margin_blocked or 0))
+
+                        # Determine settlement price based on instrument type
+                        # Options: Expire at 0 (most expire worthless - conservative approach)
+                        # Futures: Use last stored LTP, or average price as fallback
+                        is_option = symbol.endswith('CE') or symbol.endswith('PE')
+
+                        if is_option:
+                            # Options expire worthless (at 0)
+                            # This is conservative - user loses full premium for longs
+                            settlement_price = Decimal('0')
+                            logger.info(f"Option {symbol} expired - settling at 0 (worthless)")
+                        else:
+                            # Futures: use last LTP if available, otherwise average price
+                            if position.ltp and Decimal(str(position.ltp)) > 0:
+                                settlement_price = Decimal(str(position.ltp))
+                            else:
+                                settlement_price = avg_price
+                            logger.info(f"Future {symbol} expired - settling at {settlement_price}")
+
+                        # Calculate realized P&L
+                        if quantity > 0:
+                            close_pnl = (settlement_price - avg_price) * Decimal(str(quantity))
+                        else:
+                            close_pnl = (avg_price - settlement_price) * Decimal(str(abs(quantity)))
+
+                        accumulated_realized = Decimal(str(position.accumulated_realized_pnl or 0))
+                        total_realized_pnl = accumulated_realized + close_pnl
+
+                        logger.info(
+                            f"Settling expired {symbol}: qty={quantity}, "
+                            f"settlement_price={settlement_price}, close_pnl={close_pnl}, "
+                            f"margin_to_release={margin_blocked}"
+                        )
+
+                        # Release margin and update funds
+                        fund_manager.release_margin(
+                            amount=margin_blocked,
+                            realized_pnl=close_pnl,
+                            description=f"Expired contract cleanup: {symbol}"
+                        )
+
+                        # Update position to closed state
+                        position.quantity = 0
+                        position.ltp = settlement_price
+                        position.pnl = total_realized_pnl
+                        position.accumulated_realized_pnl = total_realized_pnl
+                        position.margin_blocked = Decimal('0')
+
+                        db_session.commit()
+
+                        logger.info(f"Expired contract {symbol} cleaned up for user {user_id}")
+
+                    except Exception as e:
+                        db_session.rollback()
+                        logger.error(f"Error cleaning up expired position {position.symbol}: {e}")
+                        continue
+
+            except Exception as e:
+                logger.error(f"Error processing expired contracts for user {user_id}: {e}")
+                continue
+
+        logger.info(f"Expired contract cleanup completed: {len(expired_positions)} contracts processed")
+
+    except Exception as e:
+        logger.error(f"Error in expired contract cleanup: {e}")
+
+
 def catchup_missed_settlements():
     """
     Catch-up settlement for positions that should have been settled while app was stopped.
     Runs on startup when analyzer mode is enabled.
 
-    Checks for CNC positions older than 1 day and settles them to holdings.
+    This function handles:
+    1. Expired F&O contracts - settles them and releases margin
+    2. CNC positions older than 1 day - settles them to holdings
     """
     try:
+        # First, clean up expired F&O contracts
+        # This is important to do first so users don't see stale contracts
+        logger.info("Running expired contract cleanup...")
+        cleanup_expired_contracts()
+
+        # Then handle CNC T+1 settlement
         ist = pytz.timezone('Asia/Kolkata')
         today = datetime.now(ist).date()
         cutoff_time = datetime.combine(today, datetime.min.time())
