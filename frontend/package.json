@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@codemirror/lang-json": "^6.0.2",
+    "@xyflow/react": "^12.3.6",
     "@codemirror/lang-python": "^6.2.1",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-avatar": "^1.1.11",
