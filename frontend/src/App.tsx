@@ -68,6 +68,10 @@ const NewChartinkStrategy = lazy(() => import('@/pages/chartink/NewChartinkStrat
 const ViewChartinkStrategy = lazy(() => import('@/pages/chartink/ViewChartinkStrategy'))
 const ConfigureChartinkSymbols = lazy(() => import('@/pages/chartink/ConfigureChartinkSymbols'))
 
+// Flow pages
+const FlowIndex = lazy(() => import('@/pages/flow/FlowIndex'))
+const FlowEditor = lazy(() => import('@/pages/flow/FlowEditor'))
+
 // Admin pages
 const AdminIndex = lazy(() => import('@/pages/admin/AdminIndex'))
 const FreezeQty = lazy(() => import('@/pages/admin/FreezeQty'))
@@ -151,6 +155,8 @@ function App() {
                   path="/chartink/:strategyId/configure"
                   element={<ConfigureChartinkSymbols />}
                 />
+                {/* Flow Workflows */}
+                <Route path="/flow" element={<FlowIndex />} />
                 {/* Phase 7: Admin */}
                 <Route path="/admin" element={<AdminIndex />} />
                 <Route path="/admin/freeze" element={<FreezeQty />} />
@@ -179,6 +185,8 @@ function App() {
                 <Route path="/historify" element={<Historify />} />
                 <Route path="/historify/charts" element={<HistorifyCharts />} />
                 <Route path="/historify/charts/:symbol" element={<HistorifyCharts />} />
+                {/* Flow Editor (full-width for canvas) */}
+                <Route path="/flow/editor/:id" element={<FlowEditor />} />
               </Route>
 
               {/* 404 Not Found */}

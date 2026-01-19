@@ -51,6 +51,7 @@ from blueprints.playground import playground_bp  # Import the API playground blu
 from blueprints.admin import admin_bp  # Import the admin blueprint
 from blueprints.react_app import react_bp, is_react_frontend_available, serve_react_app  # Import React frontend blueprint
 from blueprints.historify import historify_bp  # Import the historify blueprint
+from blueprints.flow import flow_bp  # Import the flow blueprint
 from services.telegram_bot_service import telegram_bot_service
 from database.telegram_db import get_bot_config
 
@@ -69,6 +70,7 @@ from database.strategy_db import init_db as ensure_strategy_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.action_center_db import init_db as ensure_action_center_tables_exists
 from database.historify_db import init_database as ensure_historify_tables_exists
+from database.flow_db import init_db as ensure_flow_tables_exists
 
 from utils.plugin_loader import load_broker_auth_functions
 
@@ -231,6 +233,7 @@ def create_app():
     app.register_blueprint(logging_bp)  # Register Logging blueprint
     app.register_blueprint(admin_bp)  # Register Admin blueprint
     app.register_blueprint(historify_bp)  # Register Historify blueprint
+    app.register_blueprint(flow_bp)  # Register Flow blueprint
 
 
     # Exempt webhook endpoints from CSRF protection after app initialization
@@ -238,7 +241,8 @@ def create_app():
         # Exempt webhook endpoints from CSRF protection
         csrf.exempt(app.view_functions['chartink_bp.webhook'])
         csrf.exempt(app.view_functions['strategy_bp.webhook'])
-        
+        csrf.exempt(app.view_functions['flow.trigger_webhook'])
+
         # Exempt broker callback endpoints from CSRF protection (OAuth callbacks from external providers)
         csrf.exempt(app.view_functions['brlogin.broker_callback'])
 
@@ -428,6 +432,7 @@ def setup_environment(app):
             ('Market Calendar DB', ensure_market_calendar_tables_exists),
             ('Qty Freeze DB', ensure_qty_freeze_tables_exists),
             ('Historify DB', ensure_historify_tables_exists),
+            ('Flow DB', ensure_flow_tables_exists),
         ]
 
         db_init_start = time.time()
@@ -445,6 +450,14 @@ def setup_environment(app):
 
         db_init_time = (time.time() - db_init_start) * 1000
         logger.debug(f"All databases initialized in parallel ({db_init_time:.0f}ms)")
+
+        # Initialize Flow scheduler
+        try:
+            from services.flow_scheduler_service import init_flow_scheduler
+            init_flow_scheduler()
+            logger.debug("Flow scheduler initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Flow scheduler: {e}")
 
     # Conditionally setup ngrok in development environment
     if os.getenv('NGROK_ALLOW') == 'TRUE':
