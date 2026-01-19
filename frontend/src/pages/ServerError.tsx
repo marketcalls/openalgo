@@ -59,10 +59,10 @@ export default function ServerError() {
         </p>
 
         {/* API Key Warning */}
-        <Alert className="mb-8 text-left border-yellow-500 bg-yellow-50 dark:bg-yellow-950">
-          <AlertTriangle className="h-5 w-5 text-yellow-600" />
-          <AlertTitle className="text-yellow-800 dark:text-yellow-200">Common Cause</AlertTitle>
-          <AlertDescription className="text-yellow-700 dark:text-yellow-300">
+        <Alert variant="warning" className="mb-8 text-left">
+          <AlertTriangle className="h-5 w-5" />
+          <AlertTitle>Common Cause</AlertTitle>
+          <AlertDescription>
             Please check if your <strong>API Key</strong> or <strong>API Secret</strong> is valid.
             <br />
             If you updated the <strong>.env</strong> file while logged in,{' '}

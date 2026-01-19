@@ -357,6 +357,22 @@
   --sidebar-ring: oklch(0.7 0.2 280);
 }
 
+/* Analyzer mode overrides for warning alerts - use amber tones that work with purple theme */
+.analyzer [data-slot="alert"].border-amber-500,
+.analyzer [data-slot="alert"].border-amber-600 {
+  --tw-border-opacity: 1;
+  border-color: oklch(0.7 0.15 70);
+  background-color: oklch(0.25 0.04 70);
+}
+.analyzer [data-slot="alert"].text-amber-900,
+.analyzer [data-slot="alert"].text-amber-200 {
+  color: oklch(0.85 0.1 70);
+}
+.analyzer [data-slot="alert"] .text-amber-600,
+.analyzer [data-slot="alert"] .text-amber-500 {
+  color: oklch(0.75 0.15 70);
+}
+
 /* Safe area utilities for mobile devices with notches/home indicators */
 .safe-area-bottom {
   padding-bottom: env(safe-area-inset-bottom, 0px);

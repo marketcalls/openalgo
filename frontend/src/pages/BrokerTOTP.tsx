@@ -426,11 +426,9 @@ export default function BrokerTOTP() {
           <CardContent>
             {/* Warning Alert if present */}
             {config.warning && (
-              <Alert className="mb-4 border-yellow-500 bg-yellow-50 dark:bg-yellow-950">
-                <AlertTriangle className="h-4 w-4 text-yellow-600" />
-                <AlertDescription className="text-yellow-800 dark:text-yellow-200">
-                  {config.warning}
-                </AlertDescription>
+              <Alert variant="warning" className="mb-4">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>{config.warning}</AlertDescription>
               </Alert>
             )}
 
