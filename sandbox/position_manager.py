@@ -298,12 +298,20 @@ class PositionManager:
             description=f"Expired contract settlement: {symbol}"
         )
 
+        # Get expiry date for hiding the position
+        expiry_date = get_contract_expiry(symbol, position.exchange)
+
         # Update position to closed state
         position.quantity = 0
         position.ltp = settlement_price
         position.pnl = total_realized_pnl
         position.accumulated_realized_pnl = total_realized_pnl
         position.margin_blocked = Decimal('0')
+
+        # Set updated_at to expiry date so it doesn't appear in current session
+        # (stale expired contracts should be hidden, not shown)
+        if expiry_date:
+            position.updated_at = datetime.combine(expiry_date, datetime.min.time())
 
         db_session.commit()
 
