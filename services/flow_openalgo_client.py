@@ -35,14 +35,23 @@ class FlowOpenAlgoClient:
             status_code: HTTP status code
 
         Returns:
-            Dictionary with 'status' and 'data' or 'error' keys
+            Dictionary with 'status' and relevant data
         """
         if success:
-            return {
+            # Return the response directly - it already has the right format
+            # Ensure status is set and orderid is at top level if present
+            result = {
                 'status': 'success',
-                'data': response.get('data', response),
                 'orderid': response.get('orderid')
             }
+            # Add any additional data fields (excluding status to avoid nesting)
+            if 'data' in response:
+                result['data'] = response['data']
+            # Copy other useful fields like 'message', 'results', etc.
+            for key in ['message', 'results', 'mode']:
+                if key in response:
+                    result[key] = response[key]
+            return result
         else:
             return {
                 'status': 'error',
@@ -75,8 +84,8 @@ class FlowOpenAlgoClient:
             'exchange': exchange,
             'action': action.upper(),
             'quantity': quantity,
-            'price_type': price_type,
-            'product_type': product_type,
+            'pricetype': price_type,  # Schema expects 'pricetype' (no underscore)
+            'product': product_type,  # Schema expects 'product' not 'product_type'
             'price': price,
             'trigger_price': trigger_price,
             'disclosed_quantity': disclosed_quantity
@@ -109,8 +118,8 @@ class FlowOpenAlgoClient:
             'action': action.upper(),
             'quantity': quantity,
             'position_size': position_size,
-            'price_type': price_type,
-            'product_type': product_type,
+            'pricetype': price_type,  # Schema expects 'pricetype' (no underscore)
+            'product': product_type,  # Schema expects 'product' not 'product_type'
             'price': price,
             'trigger_price': trigger_price
         }
@@ -143,8 +152,8 @@ class FlowOpenAlgoClient:
             'exchange': exchange,
             'action': action.upper(),
             'quantity': quantity,
-            'price_type': price_type,
-            'product_type': product_type,
+            'pricetype': price_type,  # Schema expects 'pricetype' (no underscore)
+            'product': product_type,  # Schema expects 'product' not 'product_type'
             'price': price,
             'trigger_price': trigger_price,
             'disclosed_quantity': disclosed_quantity
@@ -187,7 +196,7 @@ class FlowOpenAlgoClient:
             'strategy': strategy,
             'symbol': symbol,
             'exchange': exchange,
-            'product_type': product_type
+            'product': product_type  # Service expects 'product' not 'product_type'
         }
 
         success, response, status_code = close_position(order_data, api_key=self.api_key)
@@ -224,8 +233,8 @@ class FlowOpenAlgoClient:
             'action': action.upper(),
             'quantity': quantity,
             'splitsize': split_size,
-            'price_type': price_type,
-            'product_type': product_type,
+            'pricetype': price_type,  # Schema expects 'pricetype' (no underscore)
+            'product': product_type,  # Schema expects 'product' not 'product_type'
             'price': price,
             'trigger_price': trigger_price
         }
@@ -319,7 +328,9 @@ class FlowOpenAlgoClient:
 
         for pos in positions:
             if pos.get('symbol') == symbol and pos.get('exchange') == exchange:
-                if product_type and pos.get('product_type') != product_type:
+                # Check both 'product' and 'product_type' for compatibility
+                pos_product = pos.get('product') or pos.get('product_type')
+                if product_type and pos_product != product_type:
                     continue
                 return {'status': 'success', 'data': pos}
 
@@ -393,8 +404,8 @@ class FlowOpenAlgoClient:
             'expiry': expiry,
             'option_type': option_type,
             'strike_price': strike_price,
-            'price_type': price_type,
-            'product_type': product_type,
+            'pricetype': price_type,  # Service expects 'pricetype' (no underscore) for options
+            'product': product_type,  # Service expects 'product' not 'product_type'
             'price': price
         }
 
@@ -433,7 +444,8 @@ class FlowOpenAlgoClient:
         quantity: int,
         price: float = 0,
         product_type: str = "MIS",
-        action: str = "BUY"
+        action: str = "BUY",
+        price_type: str = "MARKET"
     ) -> Dict[str, Any]:
         """Get margin required for an order"""
         from services.margin_service import get_margin
@@ -441,9 +453,10 @@ class FlowOpenAlgoClient:
         order_data = {
             'symbol': symbol,
             'exchange': exchange,
-            'quantity': quantity,
-            'price': price,
-            'product_type': product_type,
+            'quantity': str(quantity),  # Schema expects string
+            'price': str(price),  # Schema expects string
+            'product': product_type,  # Schema expects 'product' not 'product_type'
+            'pricetype': price_type,  # Schema expects 'pricetype' (no underscore)
             'action': action.upper()
         }
 
