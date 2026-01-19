@@ -1,5 +1,0 @@
-<<<<<<<< HEAD:frontend/dist/assets/label-BcS_AqCQ.js
-import{j as o}from"./vendor-react-RhKMXzW9.js";import{g as a}from"./vendor-radix-Cue1hf3Z.js";import{c as r}from"./index-C9Wavwzw.js";function d({className:e,...t}){return o.jsx(a,{"data-slot":"label",className:r("flex items-center gap-2 text-sm leading-none font-medium select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",e),...t})}export{d as L};
-========
-import{j as o}from"./vendor-react-CGzGqrTW.js";import{j as a}from"./vendor-radix-DhJbiBt_.js";import{c as r}from"./index-BV_PwbZW.js";function d({className:e,...t}){return o.jsx(a,{"data-slot":"label",className:r("flex items-center gap-2 text-sm leading-none font-medium select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",e),...t})}export{d as L};
->>>>>>>> reactflow:frontend/dist/assets/label-CeP6Tnf2.js
