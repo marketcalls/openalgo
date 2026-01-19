@@ -169,31 +169,29 @@ class PositionManager:
     def _check_and_close_expired_positions(self, positions):
         """
         Check for expired F&O contracts and auto-close them.
+        Also filters out expired contracts with qty=0 from display.
 
         For expired contracts:
         - Options expire worthless (value = 0) if not ITM
         - Uses last available P&L for settlement
         - Releases blocked margin back to available balance
         - Marks position as closed (quantity = 0)
+        - Filters out expired contracts with qty=0 from display
 
         Args:
             positions: List of SandboxPositions objects to check
 
         Returns:
-            list: Positions that are still valid (not expired)
+            list: Positions that are still valid (not expired or active non-expired)
         """
         from datetime import date
 
         today = date.today()
         valid_positions = []
         expired_count = 0
+        filtered_count = 0
 
         for position in positions:
-            # Skip already closed positions
-            if position.quantity == 0:
-                valid_positions.append(position)
-                continue
-
             # Get contract expiry date
             expiry_date = get_contract_expiry(position.symbol, position.exchange)
 
@@ -202,10 +200,23 @@ class PositionManager:
                 valid_positions.append(position)
                 continue
 
-            # Check if contract has expired (day after expiry)
-            # We don't close on expiry day itself - traders want to see P&L that day
-            # Auto-close happens on the next day after expiry
-            if today > expiry_date:
+            # Check if contract has expired
+            is_expired = today > expiry_date
+
+            # For already closed positions (qty=0)
+            if position.quantity == 0:
+                if is_expired:
+                    # Filter out expired contracts with qty=0 - don't show stale data
+                    filtered_count += 1
+                    logger.debug(f"Filtering out expired closed position: {position.symbol}")
+                    continue
+                else:
+                    # Non-expired closed position - keep showing (today's closed trades)
+                    valid_positions.append(position)
+                    continue
+
+            # For open positions (qty != 0)
+            if is_expired:
                 # Contract has expired - auto-close it
                 logger.info(
                     f"Expired contract detected: {position.symbol} "
@@ -215,6 +226,7 @@ class PositionManager:
                 try:
                     self._settle_expired_position(position)
                     expired_count += 1
+                    # Don't add to valid_positions - it's now closed and expired
                 except Exception as e:
                     logger.error(f"Error settling expired position {position.symbol}: {e}")
                     # Keep the position in list if settlement fails
@@ -225,6 +237,8 @@ class PositionManager:
 
         if expired_count > 0:
             logger.info(f"Auto-closed {expired_count} expired contract(s) for user {self.user_id}")
+        if filtered_count > 0:
+            logger.debug(f"Filtered out {filtered_count} expired closed position(s) for user {self.user_id}")
 
         return valid_positions
 
