@@ -65,9 +65,7 @@ export default function NewPythonStrategy() {
   const [selectedDays, setSelectedDays] = useState<string[]>(['mon', 'tue', 'wed', 'thu', 'fri'])
 
   const handleDayToggle = (day: string) => {
-    setSelectedDays((prev) =>
-      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
-    )
+    setSelectedDays((prev) => (prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]))
   }
 
   const validateForm = () => {
@@ -310,7 +308,8 @@ export default function NewPythonStrategy() {
                 </div>
                 {errors.days && <p className="text-sm text-red-500">{errors.days}</p>}
                 <p className="text-xs text-muted-foreground">
-                  Select the days when this strategy should run. Weekends can be enabled for special trading sessions.
+                  Select the days when this strategy should run. Weekends can be enabled for special
+                  trading sessions.
                 </p>
               </div>
             </div>

@@ -1,8 +1,8 @@
 // api/flow.ts
 // Flow Workflow API module
 
+import type { Edge, Node } from '@xyflow/react'
 import { webClient } from './client'
-import type { Node, Edge } from '@xyflow/react'
 
 // =============================================================================
 // Types
@@ -144,9 +144,7 @@ export async function activateWorkflow(id: number): Promise<{
 /**
  * Deactivate a workflow
  */
-export async function deactivateWorkflow(
-  id: number
-): Promise<{ status: string; message: string }> {
+export async function deactivateWorkflow(id: number): Promise<{ status: string; message: string }> {
   const response = await webClient.post(`${FLOW_API_BASE}/workflows/${id}/deactivate`)
   return response.data
 }
@@ -167,13 +165,8 @@ export async function executeWorkflow(id: number): Promise<{
 /**
  * Get workflow execution history
  */
-export async function getWorkflowExecutions(
-  id: number,
-  limit = 20
-): Promise<WorkflowExecution[]> {
-  const response = await webClient.get(
-    `${FLOW_API_BASE}/workflows/${id}/executions?limit=${limit}`
-  )
+export async function getWorkflowExecutions(id: number, limit = 20): Promise<WorkflowExecution[]> {
+  const response = await webClient.get(`${FLOW_API_BASE}/workflows/${id}/executions?limit=${limit}`)
   return response.data
 }
 
@@ -188,7 +181,9 @@ export async function getWebhookInfo(id: number): Promise<WebhookInfo> {
 /**
  * Enable webhook for a workflow
  */
-export async function enableWebhook(id: number): Promise<WebhookInfo & { status: string; message: string }> {
+export async function enableWebhook(
+  id: number
+): Promise<WebhookInfo & { status: string; message: string }> {
   const response = await webClient.post(`${FLOW_API_BASE}/workflows/${id}/webhook/enable`)
   return response.data
 }

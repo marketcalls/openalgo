@@ -81,14 +81,14 @@ export default function PythonStrategyLogs() {
   useEffect(() => {
     fetchData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fetchData])
 
   useEffect(() => {
     if (selectedLog) {
       fetchLogContent(selectedLog)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedLog])
+  }, [selectedLog, fetchLogContent])
 
   // Auto-refresh if strategy is running and auto-refresh is enabled
   useEffect(() => {
@@ -100,7 +100,12 @@ export default function PythonStrategyLogs() {
       return () => clearInterval(interval)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [strategy?.status, selectedLog, autoRefresh])
+  }, [
+    strategy?.status,
+    selectedLog,
+    autoRefresh, // Pass false to avoid showing loading spinner during auto-refresh
+    fetchLogContent,
+  ])
 
   const handleClearLogs = async () => {
     if (!strategyId) return

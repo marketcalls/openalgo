@@ -36,13 +36,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -50,6 +43,13 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useAuthStore } from '@/stores/authStore'
 import { type ThemeColor, type ThemeMode, useThemeStore } from '@/stores/themeStore'
@@ -215,7 +215,7 @@ export default function ProfilePage() {
     fetchProfileData()
     fetchBrokerCredentials()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fetchBrokerCredentials, fetchProfileData])
 
   const fetchProfileData = async () => {
     try {
@@ -284,7 +284,11 @@ export default function ProfilePage() {
     try {
       const response = await webClient.post<{
         status: string
-        data: { fixed: Array<{ path: string; action: string }>; failed: Array<{ path: string; error: string }>; message: string }
+        data: {
+          fixed: Array<{ path: string; action: string }>
+          failed: Array<{ path: string; error: string }>
+          message: string
+        }
       }>('/api/system/permissions/fix')
 
       if (response.data.status === 'success') {
@@ -344,14 +348,23 @@ export default function ProfilePage() {
           setBrokerCredentials({
             ...brokerCredentials,
             current_broker: selectedBroker || brokerCredentials.current_broker,
-            redirect_url: selectedBroker !== brokerCredentials.current_broker
-              ? getRedirectUrl(selectedBroker)
-              : brokerCredentials.redirect_url,
+            redirect_url:
+              selectedBroker !== brokerCredentials.current_broker
+                ? getRedirectUrl(selectedBroker)
+                : brokerCredentials.redirect_url,
             // Update masked values to show something was changed
-            broker_api_key: brokerApiKey ? `${brokerApiKey.slice(0, 6)}${'*'.repeat(Math.max(0, brokerApiKey.length - 6))}` : brokerCredentials.broker_api_key,
-            broker_api_key_raw_length: brokerApiKey ? brokerApiKey.length : brokerCredentials.broker_api_key_raw_length,
-            broker_api_secret: brokerApiSecret ? `${brokerApiSecret.slice(0, 4)}${'*'.repeat(Math.max(0, brokerApiSecret.length - 4))}` : brokerCredentials.broker_api_secret,
-            broker_api_secret_raw_length: brokerApiSecret ? brokerApiSecret.length : brokerCredentials.broker_api_secret_raw_length,
+            broker_api_key: brokerApiKey
+              ? `${brokerApiKey.slice(0, 6)}${'*'.repeat(Math.max(0, brokerApiKey.length - 6))}`
+              : brokerCredentials.broker_api_key,
+            broker_api_key_raw_length: brokerApiKey
+              ? brokerApiKey.length
+              : brokerCredentials.broker_api_key_raw_length,
+            broker_api_secret: brokerApiSecret
+              ? `${brokerApiSecret.slice(0, 4)}${'*'.repeat(Math.max(0, brokerApiSecret.length - 4))}`
+              : brokerCredentials.broker_api_secret,
+            broker_api_secret_raw_length: brokerApiSecret
+              ? brokerApiSecret.length
+              : brokerCredentials.broker_api_secret_raw_length,
           })
         }
         // Clear form fields
@@ -653,13 +666,16 @@ export default function ProfilePage() {
       </div>
 
       {/* Tabs */}
-      <Tabs value={activeTab} onValueChange={(value) => {
-        setActiveTab(value)
-        // Fetch permissions when tab is selected
-        if (value === 'permissions' && !permissionsData) {
-          fetchPermissions()
-        }
-      }}>
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => {
+          setActiveTab(value)
+          // Fetch permissions when tab is selected
+          if (value === 'permissions' && !permissionsData) {
+            fetchPermissions()
+          }
+        }}
+      >
         <TabsList className="grid w-full grid-cols-6">
           <TabsTrigger value="account" className="gap-1">
             <Lock className="h-4 w-4" />
@@ -1031,24 +1047,33 @@ export default function ProfilePage() {
               <CardContent>
                 <div className="grid grid-cols-3 gap-4">
                   <div className="flex flex-col items-center p-3 bg-muted rounded-lg">
-                    <Badge variant="default" className="mb-2 bg-green-600">Running</Badge>
+                    <Badge variant="default" className="mb-2 bg-green-600">
+                      Running
+                    </Badge>
                     <span className="text-sm font-medium">Flask App</span>
                     <span className="text-xs text-muted-foreground">
-                      {brokerCredentials.server_status.flask.host}:{brokerCredentials.server_status.flask.port}
+                      {brokerCredentials.server_status.flask.host}:
+                      {brokerCredentials.server_status.flask.port}
                     </span>
                   </div>
                   <div className="flex flex-col items-center p-3 bg-muted rounded-lg">
-                    <Badge variant="default" className="mb-2 bg-green-600">Running</Badge>
+                    <Badge variant="default" className="mb-2 bg-green-600">
+                      Running
+                    </Badge>
                     <span className="text-sm font-medium">WebSocket</span>
                     <span className="text-xs text-muted-foreground">
-                      {brokerCredentials.server_status.websocket.host}:{brokerCredentials.server_status.websocket.port}
+                      {brokerCredentials.server_status.websocket.host}:
+                      {brokerCredentials.server_status.websocket.port}
                     </span>
                   </div>
                   <div className="flex flex-col items-center p-3 bg-muted rounded-lg">
-                    <Badge variant="default" className="mb-2 bg-green-600">Running</Badge>
+                    <Badge variant="default" className="mb-2 bg-green-600">
+                      Running
+                    </Badge>
                     <span className="text-sm font-medium">ZeroMQ</span>
                     <span className="text-xs text-muted-foreground">
-                      {brokerCredentials.server_status.zmq.host}:{brokerCredentials.server_status.zmq.port}
+                      {brokerCredentials.server_status.zmq.host}:
+                      {brokerCredentials.server_status.zmq.port}
                     </span>
                   </div>
                 </div>
@@ -1061,8 +1086,8 @@ export default function ProfilePage() {
             <CardHeader>
               <CardTitle>Server Configuration</CardTitle>
               <CardDescription>
-                Configure ngrok for receiving webhook alerts from external services like TradingView,
-                Chartink, GoCharting, etc.
+                Configure ngrok for receiving webhook alerts from external services like
+                TradingView, Chartink, GoCharting, etc.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -1141,8 +1166,8 @@ export default function ProfilePage() {
             <FolderCheck className="h-4 w-4" />
             <AlertTitle>File Permissions Monitor</AlertTitle>
             <AlertDescription>
-              Check file and directory permissions for OpenAlgo components. Incorrect permissions may cause
-              the application to malfunction.
+              Check file and directory permissions for OpenAlgo components. Incorrect permissions
+              may cause the application to malfunction.
             </AlertDescription>
           </Alert>
 
@@ -1257,7 +1282,9 @@ export default function ProfilePage() {
                             </Badge>
                           )}
                           {check.is_directory && (
-                            <Badge variant="outline" className="text-xs">Directory</Badge>
+                            <Badge variant="outline" className="text-xs">
+                              Directory
+                            </Badge>
                           )}
                         </div>
                         <p className="text-sm text-muted-foreground mt-0.5">{check.description}</p>
@@ -1265,12 +1292,26 @@ export default function ProfilePage() {
                         {/* Permission Details */}
                         <div className="flex items-center gap-4 mt-2 text-xs">
                           <span className="text-muted-foreground">
-                            Expected: <code className="bg-muted px-1 rounded">{check.expected_mode}</code>
-                            <span className="ml-1 text-muted-foreground/70">({check.expected_rwx})</span>
+                            Expected:{' '}
+                            <code className="bg-muted px-1 rounded">{check.expected_mode}</code>
+                            <span className="ml-1 text-muted-foreground/70">
+                              ({check.expected_rwx})
+                            </span>
                           </span>
                           {check.exists && check.actual_mode && (
-                            <span className={check.is_correct ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
-                              Actual: <code className={`px-1 rounded ${check.is_correct ? 'bg-green-100 dark:bg-green-900' : 'bg-red-100 dark:bg-red-900'}`}>{check.actual_mode}</code>
+                            <span
+                              className={
+                                check.is_correct
+                                  ? 'text-green-600 dark:text-green-400'
+                                  : 'text-red-600 dark:text-red-400'
+                              }
+                            >
+                              Actual:{' '}
+                              <code
+                                className={`px-1 rounded ${check.is_correct ? 'bg-green-100 dark:bg-green-900' : 'bg-red-100 dark:bg-red-900'}`}
+                              >
+                                {check.actual_mode}
+                              </code>
                               <span className="ml-1 opacity-70">({check.actual_rwx})</span>
                             </span>
                           )}
@@ -1287,11 +1328,16 @@ export default function ProfilePage() {
                                 Fix: Create the directory or file
                               </p>
                             )}
-                            {!permissionsData.is_windows && check.exists && check.actual_mode !== check.expected_mode && (
-                              <p className="text-red-600 dark:text-red-400 text-xs mt-1">
-                                Fix: <code className="bg-red-200 dark:bg-red-800 px-1 rounded">chmod {check.expected_mode} {check.path}</code>
-                              </p>
-                            )}
+                            {!permissionsData.is_windows &&
+                              check.exists &&
+                              check.actual_mode !== check.expected_mode && (
+                                <p className="text-red-600 dark:text-red-400 text-xs mt-1">
+                                  Fix:{' '}
+                                  <code className="bg-red-200 dark:bg-red-800 px-1 rounded">
+                                    chmod {check.expected_mode} {check.path}
+                                  </code>
+                                </p>
+                              )}
                           </div>
                         )}
 
@@ -1321,20 +1367,38 @@ export default function ProfilePage() {
                 <p className="font-medium text-foreground">Permission Format (Unix/Linux/macOS)</p>
                 <p>Permissions are shown as a 3-digit number (e.g., 755) where:</p>
                 <ul className="list-disc list-inside mt-1 space-y-1 ml-2">
-                  <li><code className="bg-muted px-1 rounded">7</code> = Read + Write + Execute (rwx)</li>
-                  <li><code className="bg-muted px-1 rounded">5</code> = Read + Execute (r-x)</li>
-                  <li><code className="bg-muted px-1 rounded">6</code> = Read + Write (rw-)</li>
-                  <li><code className="bg-muted px-1 rounded">4</code> = Read only (r--)</li>
-                  <li><code className="bg-muted px-1 rounded">0</code> = No permission (---)</li>
+                  <li>
+                    <code className="bg-muted px-1 rounded">7</code> = Read + Write + Execute (rwx)
+                  </li>
+                  <li>
+                    <code className="bg-muted px-1 rounded">5</code> = Read + Execute (r-x)
+                  </li>
+                  <li>
+                    <code className="bg-muted px-1 rounded">6</code> = Read + Write (rw-)
+                  </li>
+                  <li>
+                    <code className="bg-muted px-1 rounded">4</code> = Read only (r--)
+                  </li>
+                  <li>
+                    <code className="bg-muted px-1 rounded">0</code> = No permission (---)
+                  </li>
                 </ul>
               </div>
               <div>
                 <p className="font-medium text-foreground">Sensitive Files</p>
-                <p>Files marked as sensitive (like <code className="bg-muted px-1 rounded">.env</code> and <code className="bg-muted px-1 rounded">keys/</code>) should have restricted permissions (600 or 700) to prevent unauthorized access.</p>
+                <p>
+                  Files marked as sensitive (like{' '}
+                  <code className="bg-muted px-1 rounded">.env</code> and{' '}
+                  <code className="bg-muted px-1 rounded">keys/</code>) should have restricted
+                  permissions (600 or 700) to prevent unauthorized access.
+                </p>
               </div>
               <div>
                 <p className="font-medium text-foreground">Windows</p>
-                <p>On Windows, the system checks if files/directories are readable and writable instead of Unix-style permissions.</p>
+                <p>
+                  On Windows, the system checks if files/directories are readable and writable
+                  instead of Unix-style permissions.
+                </p>
               </div>
             </CardContent>
           </Card>
@@ -1764,10 +1828,12 @@ export default function ProfilePage() {
             </AlertDialogTitle>
             <AlertDialogDescription className="space-y-3">
               <p>
-                Your configuration has been saved to the <code className="bg-muted px-1 rounded">.env</code> file.
+                Your configuration has been saved to the{' '}
+                <code className="bg-muted px-1 rounded">.env</code> file.
               </p>
               <p>
-                To apply these changes, please restart the OpenAlgo application using your usual method (terminal, service manager, or container orchestrator).
+                To apply these changes, please restart the OpenAlgo application using your usual
+                method (terminal, service manager, or container orchestrator).
               </p>
             </AlertDialogDescription>
           </AlertDialogHeader>

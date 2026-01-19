@@ -56,7 +56,7 @@ export default function TelegramUsers() {
   useEffect(() => {
     fetchUsers()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fetchUsers])
 
   useEffect(() => {
     if (searchQuery) {

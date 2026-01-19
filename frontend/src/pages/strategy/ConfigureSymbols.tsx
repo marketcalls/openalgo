@@ -88,7 +88,7 @@ export default function ConfigureSymbols() {
   useEffect(() => {
     fetchStrategy()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fetchStrategy])
 
   // Debounced symbol search
   const searchSymbols = useCallback(

@@ -73,7 +73,7 @@ export default function FreezeQtyPage() {
   useEffect(() => {
     fetchFreezeData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fetchFreezeData])
 
   useEffect(() => {
     if (searchQuery) {

@@ -173,8 +173,16 @@ export const CONDITION_OPERATORS = [
 export const PRICE_ALERT_CONDITIONS = [
   { value: 'above', label: 'Price Above', description: 'Trigger when price goes above' },
   { value: 'below', label: 'Price Below', description: 'Trigger when price goes below' },
-  { value: 'crosses_above', label: 'Crosses Above', description: 'Trigger when price crosses above' },
-  { value: 'crosses_below', label: 'Crosses Below', description: 'Trigger when price crosses below' },
+  {
+    value: 'crosses_above',
+    label: 'Crosses Above',
+    description: 'Trigger when price crosses above',
+  },
+  {
+    value: 'crosses_below',
+    label: 'Crosses Below',
+    description: 'Trigger when price crosses below',
+  },
 ] as const
 
 export const POSITION_CONDITIONS = [

@@ -37,7 +37,7 @@ export default function MarketTimingsPage() {
   useEffect(() => {
     fetchTimings()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fetchTimings])
 
   const fetchTimings = async () => {
     try {

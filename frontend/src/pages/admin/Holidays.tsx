@@ -79,7 +79,7 @@ export default function HolidaysPage() {
   useEffect(() => {
     fetchHolidays(currentYear)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentYear])
+  }, [currentYear, fetchHolidays])
 
   const fetchHolidays = async (year: number) => {
     setIsLoading(true)

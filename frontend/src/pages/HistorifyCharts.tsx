@@ -1,4 +1,13 @@
 import {
+  CandlestickSeries,
+  ColorType,
+  CrosshairMode,
+  createChart,
+  HistogramSeries,
+  type IChartApi,
+  type ISeriesApi,
+} from 'lightweight-charts'
+import {
   ArrowLeft,
   BarChart3,
   BookOpen,
@@ -30,6 +39,13 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
@@ -39,26 +55,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { profileMenuItems } from '@/config/navigation'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
-import {
-  CandlestickSeries,
-  ColorType,
-  CrosshairMode,
-  createChart,
-  HistogramSeries,
-  type IChartApi,
-  type ISeriesApi,
-} from 'lightweight-charts'
 
 interface CatalogItem {
   symbol: string
@@ -125,7 +125,9 @@ export default function HistorifyCharts() {
   // Custom interval state
   const [isCustomInterval, setIsCustomInterval] = useState(false)
   const [customIntervalValue, setCustomIntervalValue] = useState('25')
-  const [customIntervalUnit, setCustomIntervalUnit] = useState<'m' | 'h' | 'W' | 'M' | 'Q' | 'Y'>('m')
+  const [customIntervalUnit, setCustomIntervalUnit] = useState<'m' | 'h' | 'W' | 'M' | 'Q' | 'Y'>(
+    'm'
+  )
 
   // Date range
   const [startDate, setStartDate] = useState(() => {
@@ -147,9 +149,21 @@ export default function HistorifyCharts() {
 
   // Standard chart timeframes (not broker-specific)
   const CHART_TIMEFRAMES = [
-    '1m', '2m', '3m', '5m', '10m', '15m', '30m',
-    '1h', '2h', '4h',
-    'D', 'W', 'M', 'Q', 'Y'
+    '1m',
+    '2m',
+    '3m',
+    '5m',
+    '10m',
+    '15m',
+    '30m',
+    '1h',
+    '2h',
+    '4h',
+    'D',
+    'W',
+    'M',
+    'Q',
+    'Y',
   ]
 
   // Effective interval (either selected standard interval or custom)
@@ -158,7 +172,7 @@ export default function HistorifyCharts() {
       // For W, MO, Q, Y with value 1, just use the unit (e.g., 'W', 'M')
       // For values > 1, use value + unit (e.g., '2W', '3MO')
       if (['W', 'M', 'Q', 'Y'].includes(customIntervalUnit)) {
-        const val = parseInt(customIntervalValue) || 1
+        const val = parseInt(customIntervalValue, 10) || 1
         return val === 1 ? customIntervalUnit : `${val}${customIntervalUnit}`
       }
       return `${customIntervalValue}${customIntervalUnit}`
@@ -168,7 +182,23 @@ export default function HistorifyCharts() {
 
   // Check if current interval is intraday (for chart display)
   const isIntradayInterval = useMemo(() => {
-    const intradayPatterns = ['1s', '5s', '10s', '15s', '30s', '1m', '2m', '3m', '5m', '10m', '15m', '30m', '1h', '2h', '4h']
+    const intradayPatterns = [
+      '1s',
+      '5s',
+      '10s',
+      '15s',
+      '30s',
+      '1m',
+      '2m',
+      '3m',
+      '5m',
+      '10m',
+      '15m',
+      '30m',
+      '1h',
+      '2h',
+      '4h',
+    ]
     if (intradayPatterns.includes(effectiveInterval)) return true
     // Custom intervals with 'm' or 'h' are intraday
     if (isCustomInterval && ['m', 'h'].includes(customIntervalUnit)) return true
@@ -182,7 +212,11 @@ export default function HistorifyCharts() {
     catalog.forEach((item) => {
       const key = `${item.symbol}:${item.exchange}`
       if (!symbolMap.has(key)) {
-        symbolMap.set(key, { symbol: item.symbol, exchange: item.exchange, intervals: [item.interval] })
+        symbolMap.set(key, {
+          symbol: item.symbol,
+          exchange: item.exchange,
+          intervals: [item.interval],
+        })
       } else {
         symbolMap.get(key)!.intervals.push(item.interval)
       }
@@ -202,7 +236,7 @@ export default function HistorifyCharts() {
   // Load catalog on mount
   useEffect(() => {
     loadCatalog()
-  }, [])
+  }, [loadCatalog])
 
   // Update URL when selection changes
   useEffect(() => {
@@ -217,7 +251,7 @@ export default function HistorifyCharts() {
       loadChartData()
       updateDataInfo()
     }
-  }, [selectedSymbol, selectedExchange, effectiveInterval])
+  }, [selectedSymbol, selectedExchange, effectiveInterval, loadChartData, updateDataInfo])
 
   // Initialize/update chart
   useEffect(() => {
@@ -242,8 +276,8 @@ export default function HistorifyCharts() {
 
       // Check if this is a daily-aggregated interval (W, MO, Q, Y)
       // These intervals return timestamps that already represent IST dates
-      const isDailyAggregated = isCustomInterval &&
-        ['W', 'M', 'Q', 'Y'].includes(customIntervalUnit)
+      const isDailyAggregated =
+        isCustomInterval && ['W', 'M', 'Q', 'Y'].includes(customIntervalUnit)
 
       // Helper to format time/date in IST based on interval
       const formatTimeIST = (time: number) => {
@@ -310,7 +344,20 @@ export default function HistorifyCharts() {
               // For daily and above: TradingView-style tick marks
               // tickMarkType: 0=Year, 1=Month, 2=DayOfMonth, 3=Time, 4=TimeWithSeconds
               const day = istDate.getUTCDate()
-              const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+              const monthNames = [
+                'Jan',
+                'Feb',
+                'Mar',
+                'Apr',
+                'May',
+                'Jun',
+                'Jul',
+                'Aug',
+                'Sep',
+                'Oct',
+                'Nov',
+                'Dec',
+              ]
               const month = istDate.getUTCMonth()
               const year = istDate.getUTCFullYear()
 
@@ -422,7 +469,7 @@ export default function HistorifyCharts() {
         chartRef.current = null
       }
     }
-  }, [isDarkMode, chartData, isFullscreen, isIntradayInterval, isCustomInterval, customIntervalUnit])
+  }, [isDarkMode, chartData, isIntradayInterval, isCustomInterval, customIntervalUnit])
 
   const loadCatalog = async () => {
     try {
@@ -455,7 +502,9 @@ export default function HistorifyCharts() {
       if (data.status === 'success') {
         setChartData(data.data || [])
         if (data.count === 0) {
-          toast.info('No data available for this range. Make sure 1m data is downloaded for custom intervals.')
+          toast.info(
+            'No data available for this range. Make sure 1m data is downloaded for custom intervals.'
+          )
         }
       } else {
         toast.error(data.message || 'Failed to load chart data')
@@ -607,7 +656,10 @@ export default function HistorifyCharts() {
                 className="h-9 w-14 text-center"
                 placeholder="1"
               />
-              <Select value={customIntervalUnit} onValueChange={(v) => setCustomIntervalUnit(v as 'm' | 'h' | 'W' | 'M' | 'Q' | 'Y')}>
+              <Select
+                value={customIntervalUnit}
+                onValueChange={(v) => setCustomIntervalUnit(v as 'm' | 'h' | 'W' | 'M' | 'Q' | 'Y')}
+              >
                 <SelectTrigger className="w-20 h-9">
                   <SelectValue />
                 </SelectTrigger>
@@ -666,7 +718,11 @@ export default function HistorifyCharts() {
             )}
             onClick={handleModeToggle}
           >
-            {appMode === 'live' ? <Zap className="h-3 w-3 mr-1" /> : <BarChart3 className="h-3 w-3 mr-1" />}
+            {appMode === 'live' ? (
+              <Zap className="h-3 w-3 mr-1" />
+            ) : (
+              <BarChart3 className="h-3 w-3 mr-1" />
+            )}
             {appMode === 'live' ? 'Live' : 'Analyze'}
           </Badge>
 

@@ -161,13 +161,9 @@ export const useThemeStore = create<ThemeStore>()(
                 get().setAppMode(backendMode)
               }
             }
-            // If backend returns error status but response.ok, keep current appMode
           }
-          // If request fails (401, etc.) - user is logged out, keep current appMode
-          // This preserves the theme across logout for visual continuity
         } catch (error) {
           console.error('Failed to sync app mode:', error)
-          // On error, keep current appMode - preserves theme across logout
         }
       },
     }),
@@ -176,20 +172,15 @@ export const useThemeStore = create<ThemeStore>()(
       partialize: (state) => ({
         mode: state.mode,
         color: state.color,
-        appMode: state.appMode, // Persist appMode for visual continuity across logout
+        // Don't persist appMode - always sync from backend
       }),
       onRehydrateStorage: () => (state) => {
         // Apply theme on rehydration
         if (state && typeof document !== 'undefined') {
           document.documentElement.classList.remove('analyzer', 'sandbox', 'dark')
 
-          // Apply persisted appMode for visual continuity
-          if (state.appMode === 'analyzer') {
-            document.documentElement.classList.add('analyzer')
-          } else {
-            // Live mode - apply light/dark preference
-            document.documentElement.classList.toggle('dark', state.mode === 'dark')
-          }
+          // Default to live mode on rehydration, will sync from backend
+          document.documentElement.classList.toggle('dark', state.mode === 'dark')
           document.documentElement.setAttribute('data-theme', state.color)
         }
       },

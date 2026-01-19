@@ -1,16 +1,15 @@
 // components/flow/edges/InsertableEdge.tsx
 // Custom edge with a "+" button to insert nodes between connected nodes
 
-import { useState, useCallback } from 'react'
 import {
+  BaseEdge,
   EdgeLabelRenderer,
+  type EdgeProps,
   getSmoothStepPath,
   useReactFlow,
-  type EdgeProps,
 } from '@xyflow/react'
 import { Plus } from 'lucide-react'
-import { cn } from '@/lib/utils'
-import { DEFAULT_NODE_DATA } from '@/lib/flow/constants'
+import { useCallback, useState } from 'react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,6 +19,8 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { DEFAULT_NODE_DATA } from '@/lib/flow/constants'
+import { cn } from '@/lib/utils'
 
 // Node categories for the dropdown menu
 const NODE_MENU = {
@@ -66,6 +67,7 @@ export function InsertableEdge({
   targetPosition,
   sourceHandleId,
   targetHandleId,
+  style = {},
   markerEnd,
   selected,
   animated,
@@ -143,18 +145,14 @@ export function InsertableEdge({
 
   return (
     <>
-      {/* Render path directly instead of BaseEdge for better control */}
-      <path
-        d={edgePath}
-        fill="none"
-        strokeWidth={isHovered || selected ? 3 : 2}
-        stroke={isHovered || selected ? '#3b82f6' : '#888888'}
-        strokeDasharray={animated ? '5 5' : undefined}
+      <BaseEdge
+        path={edgePath}
+        markerEnd={markerEnd}
         style={{
+          ...style,
+          strokeDasharray: animated ? '5 5' : undefined,
           animation: animated ? 'dashdraw 0.5s linear infinite' : undefined,
         }}
-        className="react-flow__edge-path"
-        markerEnd={markerEnd}
       />
       <EdgeLabelRenderer>
         <div
@@ -168,10 +166,11 @@ export function InsertableEdge({
           <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
             <DropdownMenuTrigger asChild>
               <button
+                type="button"
                 className={cn(
                   'flex h-5 w-5 items-center justify-center rounded-full border bg-background shadow-sm transition-all',
                   'hover:scale-110 hover:border-primary hover:bg-primary hover:text-primary-foreground',
-                  (isHovered || menuOpen) ? 'opacity-100 scale-100' : 'opacity-0 scale-75',
+                  isHovered || menuOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-75',
                   selected && 'opacity-100 scale-100'
                 )}
               >
@@ -186,10 +185,7 @@ export function InsertableEdge({
                   </DropdownMenuSubTrigger>
                   <DropdownMenuSubContent>
                     {nodes.map((node) => (
-                      <DropdownMenuItem
-                        key={node.type}
-                        onClick={() => insertNode(node.type)}
-                      >
+                      <DropdownMenuItem key={node.type} onClick={() => insertNode(node.type)}>
                         {node.label}
                       </DropdownMenuItem>
                     ))}

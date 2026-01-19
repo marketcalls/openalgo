@@ -132,7 +132,7 @@ export default function SecurityDashboard() {
     const interval = setInterval(fetchStats, 30000)
     return () => clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fetchDashboardData, fetchStats])
 
   const fetchDashboardData = async () => {
     try {

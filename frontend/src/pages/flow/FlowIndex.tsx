@@ -1,44 +1,52 @@
 // pages/flow/FlowIndex.tsx
 // Flow workflow list page
 
-import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from 'react-router-dom'
-import { toast } from 'sonner'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Plus,
-  Loader2,
-  Play,
-  Pause,
-  Trash2,
-  MoreVertical,
-  Clock,
-  CheckCircle2,
-  XCircle,
   AlertCircle,
-  Upload,
-  Webhook,
+  BarChart3,
+  CheckCircle2,
+  Clock,
   Copy,
-  RefreshCw,
   Eye,
   EyeOff,
+  Home,
+  Loader2,
+  LogOut,
+  Moon,
+  MoreVertical,
+  Pause,
+  Play,
+  Plus,
+  RefreshCw,
+  Sun,
+  Trash2,
+  Upload,
+  Webhook,
+  XCircle,
+  Zap,
 } from 'lucide-react'
+import { useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
+import { toast } from 'sonner'
+import { authApi } from '@/api/auth'
 import {
-  listWorkflows,
-  createWorkflow,
-  deleteWorkflow,
   activateWorkflow,
+  createWorkflow,
   deactivateWorkflow,
-  getWebhookInfo,
-  enableWebhook,
+  deleteWorkflow,
   disableWebhook,
+  enableWebhook,
+  flowQueryKeys,
+  getWebhookInfo,
+  importWorkflow,
+  listWorkflows,
   regenerateWebhook,
   updateWebhookAuthType,
-  importWorkflow,
-  flowQueryKeys,
-  type WorkflowListItem,
   type WorkflowExportData,
+  type WorkflowListItem,
 } from '@/api/flow'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -58,9 +66,12 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
+import { profileMenuItems } from '@/config/navigation'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/authStore'
+import { useThemeStore } from '@/stores/themeStore'
 
 function StatusIcon({ status }: { status: string | null }) {
   switch (status) {
@@ -252,9 +263,7 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
             </DropdownMenu>
           </div>
           {workflow.description && (
-            <CardDescription className="line-clamp-2">
-              {workflow.description}
-            </CardDescription>
+            <CardDescription className="line-clamp-2">{workflow.description}</CardDescription>
           )}
         </CardHeader>
         <CardContent>
@@ -282,9 +291,7 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
               <Webhook className="h-5 w-5" />
               Webhook Settings
             </DialogTitle>
-            <DialogDescription>
-              Configure webhook for "{workflow.name}"
-            </DialogDescription>
+            <DialogDescription>Configure webhook for "{workflow.name}"</DialogDescription>
           </DialogHeader>
 
           {webhookQuery.isLoading ? (
@@ -384,7 +391,9 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
                   <Button
                     variant="outline"
                     size="icon"
-                    onClick={() => copyToClipboard(webhookQuery.data.webhook_url_with_symbol, 'URL')}
+                    onClick={() =>
+                      copyToClipboard(webhookQuery.data.webhook_url_with_symbol, 'URL')
+                    }
                   >
                     <Copy className="h-4 w-4" />
                   </Button>
@@ -430,28 +439,38 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
               </div>
 
               {/* URL with Secret (for URL auth type) */}
-              {webhookQuery.data.webhook_auth_type === 'url' && webhookQuery.data.webhook_url_with_secret && (
-                <div className="space-y-2">
-                  <Label>Webhook URL (with secret)</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      readOnly
-                      value={showSecret ? webhookQuery.data.webhook_url_with_secret : webhookQuery.data.webhook_url + '?secret=........'}
-                      className="font-mono text-sm"
-                    />
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => copyToClipboard(webhookQuery.data.webhook_url_with_secret!, 'URL with secret')}
-                    >
-                      <Copy className="h-4 w-4" />
-                    </Button>
+              {webhookQuery.data.webhook_auth_type === 'url' &&
+                webhookQuery.data.webhook_url_with_secret && (
+                  <div className="space-y-2">
+                    <Label>Webhook URL (with secret)</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        readOnly
+                        value={
+                          showSecret
+                            ? webhookQuery.data.webhook_url_with_secret
+                            : `${webhookQuery.data.webhook_url}?secret=........`
+                        }
+                        className="font-mono text-sm"
+                      />
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={() =>
+                          copyToClipboard(
+                            webhookQuery.data.webhook_url_with_secret!,
+                            'URL with secret'
+                          )
+                        }
+                      >
+                        <Copy className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Use this URL for Chartink and other services with fixed payloads
+                    </p>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    Use this URL for Chartink and other services with fixed payloads
-                  </p>
-                </div>
-              )}
+                )}
 
               {/* Example Usage */}
               <div className="space-y-2">
@@ -459,9 +478,11 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
                 <div className="rounded-lg bg-muted p-4">
                   {webhookQuery.data.webhook_auth_type === 'url' ? (
                     <>
-                      <p className="text-xs text-muted-foreground mb-2">For Chartink (secret in URL):</p>
+                      <p className="text-xs text-muted-foreground mb-2">
+                        For Chartink (secret in URL):
+                      </p>
                       <pre className="text-xs font-mono overflow-x-auto">
-{`POST ${webhookQuery.data.webhook_url}?secret=${showSecret ? webhookQuery.data.webhook_secret : '........'}
+                        {`POST ${webhookQuery.data.webhook_url}?secret=${showSecret ? webhookQuery.data.webhook_secret : '........'}
 
 Chartink payload (sent as-is):
 {
@@ -475,9 +496,11 @@ Chartink payload (sent as-is):
                     </>
                   ) : (
                     <>
-                      <p className="text-xs text-muted-foreground mb-2">For TradingView (secret in payload):</p>
+                      <p className="text-xs text-muted-foreground mb-2">
+                        For TradingView (secret in payload):
+                      </p>
                       <pre className="text-xs font-mono overflow-x-auto">
-{`POST ${webhookQuery.data.webhook_url}
+                        {`POST ${webhookQuery.data.webhook_url}
 
 {
   "secret": "${showSecret ? webhookQuery.data.webhook_secret : '................'}",
@@ -523,6 +546,31 @@ export default function FlowIndex() {
   const [newWorkflowName, setNewWorkflowName] = useState('')
   const [importJson, setImportJson] = useState('')
   const [importError, setImportError] = useState<string | null>(null)
+
+  // Theme and auth stores
+  const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
+  const { user, logout } = useAuthStore()
+
+  const handleLogout = async () => {
+    try {
+      await authApi.logout()
+      logout()
+      navigate('/login')
+      toast.success('Logged out successfully')
+    } catch {
+      logout()
+      navigate('/login')
+    }
+  }
+
+  const handleModeToggle = async () => {
+    try {
+      await toggleAppMode()
+      toast.success(`Switched to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to toggle mode')
+    }
+  }
 
   const { data: workflows, isLoading } = useQuery({
     queryKey: flowQueryKeys.workflows(),
@@ -595,62 +643,175 @@ export default function FlowIndex() {
 
   if (isLoading) {
     return (
-      <div className="flex h-[calc(100vh-3.5rem)] items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      <div className="h-full flex flex-col bg-background text-foreground">
+        {/* Top Header Bar */}
+        <div className="h-12 border-b border-border flex items-center px-2 bg-card/50">
+          <div className="flex items-center gap-2 px-2">
+            <img src="/images/android-chrome-192x192.png" alt="OpenAlgo" className="w-6 h-6" />
+            <span className="font-semibold text-sm">openalgo</span>
+          </div>
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8">
-      <div className="mb-8 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Flow Workflows</h1>
-          <p className="text-muted-foreground">
-            Create and manage your trading automations
-          </p>
+    <div className="h-full flex flex-col bg-background text-foreground">
+      {/* Top Header Bar */}
+      <div className="h-12 border-b border-border flex items-center px-2 bg-card/50">
+        {/* Left: Logo */}
+        <div className="flex items-center gap-2 px-2">
+          <img src="/images/android-chrome-192x192.png" alt="OpenAlgo" className="w-6 h-6" />
+          <span className="font-semibold text-sm">openalgo</span>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setIsImportOpen(true)}>
-            <Upload className="mr-2 h-4 w-4" />
-            Import
+
+        {/* Center: Title */}
+        <div className="flex-1 flex items-center justify-center">
+          <span className="text-sm font-medium text-muted-foreground">Flow Workflows</span>
+        </div>
+
+        {/* Right: Actions */}
+        <div className="flex items-center gap-2 px-2">
+          {/* Mode Badge */}
+          <Badge
+            variant={appMode === 'live' ? 'default' : 'secondary'}
+            className={cn(
+              'text-xs',
+              appMode === 'analyzer' && 'bg-purple-500 hover:bg-purple-600 text-white'
+            )}
+          >
+            <span className="hidden sm:inline">
+              {appMode === 'live' ? 'Live Mode' : 'Analyze Mode'}
+            </span>
+            <span className="sm:hidden">{appMode === 'live' ? 'Live' : 'Analyze'}</span>
+          </Badge>
+
+          {/* Mode Toggle */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={handleModeToggle}
+            disabled={isTogglingMode}
+            title={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
+          >
+            {isTogglingMode ? (
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            ) : appMode === 'live' ? (
+              <Zap className="h-4 w-4" />
+            ) : (
+              <BarChart3 className="h-4 w-4" />
+            )}
           </Button>
-          <Button onClick={() => setIsCreateOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            New Workflow
+
+          {/* Theme Toggle */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={toggleMode}
+            disabled={appMode !== 'live'}
+            title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+          >
+            {mode === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
+
+          <Button variant="ghost" size="sm" className="h-7 text-xs" asChild>
+            <Link to="/dashboard">
+              <Home className="h-3.5 w-3.5 mr-1.5" />
+              Dashboard
+            </Link>
+          </Button>
+
+          {/* Profile Dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 rounded-full bg-primary text-primary-foreground"
+              >
+                <span className="text-sm font-medium">
+                  {user?.username?.[0]?.toUpperCase() || 'O'}
+                </span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              {profileMenuItems.map((item) => (
+                <DropdownMenuItem
+                  key={item.href}
+                  onSelect={() => navigate(item.href)}
+                  className="cursor-pointer"
+                >
+                  <item.icon className="h-4 w-4 mr-2" />
+                  {item.label}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={handleLogout}
+                className="cursor-pointer text-destructive focus:text-destructive"
+              >
+                <LogOut className="h-4 w-4 mr-2" />
+                Log out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
-      {workflows && workflows.length > 0 ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {workflows.map((workflow) => (
-            <WorkflowCard key={workflow.id} workflow={workflow} />
-          ))}
-        </div>
-      ) : (
-        <Card className="flex flex-col items-center justify-center py-16">
-          <div className="mb-4 rounded-full bg-muted p-4">
-            <Plus className="h-8 w-8 text-muted-foreground" />
+      {/* Main Content */}
+      <div className="flex-1 overflow-auto">
+        <div className="mx-auto max-w-6xl px-6 py-8">
+          <div className="mb-8 flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold">Flow Workflows</h1>
+              <p className="text-muted-foreground">Create and manage your trading automations</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={() => setIsImportOpen(true)}>
+                <Upload className="mr-2 h-4 w-4" />
+                Import
+              </Button>
+              <Button onClick={() => setIsCreateOpen(true)}>
+                <Plus className="mr-2 h-4 w-4" />
+                New Workflow
+              </Button>
+            </div>
           </div>
-          <h3 className="mb-2 text-lg font-medium">No workflows yet</h3>
-          <p className="mb-6 text-center text-sm text-muted-foreground">
-            Create your first workflow to automate your trading
-          </p>
-          <Button onClick={() => setIsCreateOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
-            Create Workflow
-          </Button>
-        </Card>
-      )}
+
+          {workflows && workflows.length > 0 ? (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {workflows.map((workflow) => (
+                <WorkflowCard key={workflow.id} workflow={workflow} />
+              ))}
+            </div>
+          ) : (
+            <Card className="flex flex-col items-center justify-center py-16">
+              <div className="mb-4 rounded-full bg-muted p-4">
+                <Plus className="h-8 w-8 text-muted-foreground" />
+              </div>
+              <h3 className="mb-2 text-lg font-medium">No workflows yet</h3>
+              <p className="mb-6 text-center text-sm text-muted-foreground">
+                Create your first workflow to automate your trading
+              </p>
+              <Button onClick={() => setIsCreateOpen(true)}>
+                <Plus className="mr-2 h-4 w-4" />
+                Create Workflow
+              </Button>
+            </Card>
+          )}
+        </div>
+      </div>
 
       <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Create New Workflow</DialogTitle>
-            <DialogDescription>
-              Give your workflow a name to get started
-            </DialogDescription>
+            <DialogDescription>Give your workflow a name to get started</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
@@ -673,22 +834,23 @@ export default function FlowIndex() {
               onClick={handleCreate}
               disabled={!newWorkflowName.trim() || createMutation.isPending}
             >
-              {createMutation.isPending && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
+              {createMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Create
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isImportOpen} onOpenChange={(open) => {
-        setIsImportOpen(open)
-        if (!open) {
-          setImportJson('')
-          setImportError(null)
-        }
-      }}>
+      <Dialog
+        open={isImportOpen}
+        onOpenChange={(open) => {
+          setIsImportOpen(open)
+          if (!open) {
+            setImportJson('')
+            setImportError(null)
+          }
+        }}
+      >
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Import Workflow</DialogTitle>
@@ -712,9 +874,7 @@ export default function FlowIndex() {
                 <span className="w-full border-t" />
               </div>
               <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-background px-2 text-muted-foreground">
-                  or paste JSON
-                </span>
+                <span className="bg-background px-2 text-muted-foreground">or paste JSON</span>
               </div>
             </div>
             <div className="space-y-2">
@@ -729,9 +889,7 @@ export default function FlowIndex() {
                 }}
                 className="h-40 font-mono text-sm"
               />
-              {importError && (
-                <p className="text-sm text-destructive">{importError}</p>
-              )}
+              {importError && <p className="text-sm text-destructive">{importError}</p>}
             </div>
           </div>
           <DialogFooter>
@@ -742,9 +900,7 @@ export default function FlowIndex() {
               onClick={handleImport}
               disabled={!importJson.trim() || importMutation.isPending}
             >
-              {importMutation.isPending && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
+              {importMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Import
             </Button>
           </DialogFooter>

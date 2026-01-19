@@ -64,7 +64,7 @@ export default function EditPythonStrategy() {
   useEffect(() => {
     fetchData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fetchData])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -87,7 +87,7 @@ export default function EditPythonStrategy() {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasChanges, isRunning, isFullscreen])
+  }, [hasChanges, isRunning, isFullscreen, handleSave])
 
   const handleSave = async () => {
     if (!strategyId || !hasChanges || isRunning) return

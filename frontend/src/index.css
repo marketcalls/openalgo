@@ -161,6 +161,15 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  /* Node Colors for Flow Editor */
+  --color-node-trigger: hsl(var(--node-trigger));
+  --color-node-action: hsl(var(--node-action));
+  --color-node-condition: hsl(var(--node-condition));
+  --color-node-data: hsl(var(--node-data));
+  --color-node-utility: hsl(var(--node-utility));
+  /* Trading Colors */
+  --color-buy: hsl(var(--buy));
+  --color-sell: hsl(var(--sell));
 }
 
 :root {
@@ -196,6 +205,9 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  /* Trading colors (light mode) */
+  --buy: 142 76% 36%;
+  --sell: 0 84% 60%;
 }
 
 .dark {
@@ -230,6 +242,9 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  /* Trading colors (dark mode) */
+  --buy: 142 69% 58%;
+  --sell: 0 91% 71%;
 }
 
 @layer base {
@@ -357,22 +372,6 @@
   --sidebar-ring: oklch(0.7 0.2 280);
 }
 
-/* Analyzer mode overrides for warning alerts - use amber tones that work with purple theme */
-.analyzer [data-slot="alert"].border-amber-500,
-.analyzer [data-slot="alert"].border-amber-600 {
-  --tw-border-opacity: 1;
-  border-color: oklch(0.7 0.15 70);
-  background-color: oklch(0.25 0.04 70);
-}
-.analyzer [data-slot="alert"].text-amber-900,
-.analyzer [data-slot="alert"].text-amber-200 {
-  color: oklch(0.85 0.1 70);
-}
-.analyzer [data-slot="alert"] .text-amber-600,
-.analyzer [data-slot="alert"] .text-amber-500 {
-  color: oklch(0.75 0.15 70);
-}
-
 /* Safe area utilities for mobile devices with notches/home indicators */
 .safe-area-bottom {
   padding-bottom: env(safe-area-inset-bottom, 0px);
@@ -469,20 +468,36 @@
   transform: scale(1.2);
 }
 
+/* Edge paths - theme-aware visibility */
 .react-flow__edge-path {
-  stroke: #888888;
+  stroke: hsl(var(--muted-foreground));
   stroke-width: 2px;
 }
 
 .react-flow__edge.selected .react-flow__edge-path,
 .react-flow__edge:hover .react-flow__edge-path {
-  stroke: #ffffff;
+  stroke: hsl(var(--primary));
+  stroke-width: 3px;
 }
 
-/* Ensure edge paths are visible */
-.react-flow__edge path {
-  stroke: #888888;
-  stroke-width: 2px;
+/* Light mode specific - darker edges for visibility */
+:root .react-flow__edge-path {
+  stroke: oklch(0.5 0 0);
+}
+
+/* Dark mode edges */
+.dark .react-flow__edge-path {
+  stroke: oklch(0.65 0 0);
+}
+
+/* Analyzer mode edges - purple tint */
+.analyzer .react-flow__edge-path {
+  stroke: oklch(0.6 0.05 280);
+}
+
+/* Sandbox mode edges - amber tint */
+.sandbox .react-flow__edge-path {
+  stroke: oklch(0.55 0.05 70);
 }
 
 /* Edge animation for animated edges */
@@ -543,21 +558,52 @@
 /* Custom Workflow Node Styles */
 .workflow-node {
   border-radius: 0.5rem;
-  border: 1px solid hsl(var(--border));
+  border: 1px solid oklch(0.7 0 0 / 0.4);
   background-color: hsl(var(--card));
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
   transition: all 150ms ease;
 }
 
 .workflow-node:hover {
-  border-color: hsl(var(--muted-foreground) / 0.5);
+  border-color: oklch(0.6 0 0 / 0.6);
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
 }
 
 .workflow-node.selected {
-  border-color: hsl(var(--foreground));
+  border-color: hsl(var(--primary));
+  box-shadow: 0 0 0 2px hsl(var(--primary) / 0.2);
+}
+
+/* Dark mode node borders */
+.dark .workflow-node {
+  border-color: oklch(0.4 0 0 / 0.5);
+}
+
+.dark .workflow-node:hover {
+  border-color: oklch(0.5 0 0 / 0.7);
+}
+
+/* Analyzer mode node borders */
+.analyzer .workflow-node {
+  border-color: oklch(0.45 0.04 280 / 0.5);
+}
+
+.analyzer .workflow-node:hover {
+  border-color: oklch(0.55 0.05 280 / 0.7);
+}
+
+/* Sandbox mode node borders */
+.sandbox .workflow-node {
+  border-color: oklch(0.7 0.04 70 / 0.5);
+}
+
+.sandbox .workflow-node:hover {
+  border-color: oklch(0.6 0.05 70 / 0.7);
 }
 
 /* Node type indicators */
-.node-trigger {
+.node-trigger,
+.node-start {
   border-left-width: 2px;
   border-left-color: hsl(var(--node-trigger));
 }
@@ -592,7 +638,8 @@
   border-radius: 0.375rem;
 }
 
-.node-trigger .node-icon {
+.node-trigger .node-icon,
+.node-start .node-icon {
   background-color: hsl(var(--node-trigger) / 0.1);
   color: hsl(var(--node-trigger));
 }
@@ -648,4 +695,56 @@
   50% {
     opacity: 0.5;
   }
+}
+
+/* Monospace data display for nodes */
+.mono-data {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  letter-spacing: -0.025em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Buy/Sell badges for nodes */
+.badge-buy {
+  background-color: hsl(var(--buy) / 0.15);
+  color: hsl(142 76% 46%);
+  border: 1px solid hsl(var(--buy) / 0.3);
+  border-radius: 0.375rem;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.badge-sell {
+  background-color: hsl(var(--sell) / 0.15);
+  color: hsl(0 84% 70%);
+  border: 1px solid hsl(var(--sell) / 0.3);
+  border-radius: 0.375rem;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+/* Status dots for nodes */
+.status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+}
+
+.status-dot.active {
+  background-color: hsl(var(--buy));
+}
+
+.status-dot.inactive {
+  background-color: hsl(var(--muted-foreground) / 0.5);
+}
+
+.status-dot.running {
+  background-color: hsl(var(--node-trigger));
+  animation: flow-pulse 2s ease-in-out infinite;
+}
+
+.status-dot.error {
+  background-color: hsl(var(--sell));
 }

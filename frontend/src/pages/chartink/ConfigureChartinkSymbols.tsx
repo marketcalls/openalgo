@@ -90,7 +90,7 @@ export default function ConfigureChartinkSymbols() {
   useEffect(() => {
     fetchStrategy()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fetchStrategy])
 
   // Debounced symbol search
   const searchSymbols = useCallback(

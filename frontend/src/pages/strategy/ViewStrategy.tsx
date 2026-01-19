@@ -54,7 +54,10 @@ export default function ViewStrategy() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [copiedField, setCopiedField] = useState<string | null>(null)
   const [showCredentials, setShowCredentials] = useState(false)
-  const [hostConfig, setHostConfig] = useState<{ host_server: string; is_localhost: boolean } | null>(null)
+  const [hostConfig, setHostConfig] = useState<{
+    host_server: string
+    is_localhost: boolean
+  } | null>(null)
 
   const fetchStrategy = async () => {
     if (!strategyId) return
@@ -84,7 +87,8 @@ export default function ViewStrategy() {
         // Fallback to window.location.origin if config fetch fails
         setHostConfig({
           host_server: window.location.origin,
-          is_localhost: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+          is_localhost:
+            window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1',
         })
       }
     }
@@ -94,7 +98,7 @@ export default function ViewStrategy() {
   useEffect(() => {
     fetchStrategy()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fetchStrategy])
 
   const copyToClipboard = async (text: string, field: string) => {
     try {

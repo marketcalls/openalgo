@@ -498,7 +498,13 @@ def import_workflow():
 
     if workflow:
         return jsonify({
-            'status': 'success',
-            'workflow_id': workflow.id
+            'id': workflow.id,
+            'name': workflow.name,
+            'description': workflow.description,
+            'nodes': workflow.nodes,
+            'edges': workflow.edges,
+            'is_active': workflow.is_active,
+            'created_at': workflow.created_at.isoformat() if workflow.created_at else None,
+            'updated_at': workflow.updated_at.isoformat() if workflow.updated_at else None
         }), 201
     return jsonify({'error': 'Failed to import workflow'}), 500

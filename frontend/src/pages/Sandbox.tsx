@@ -87,7 +87,7 @@ export default function Sandbox() {
   useEffect(() => {
     fetchConfigs()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fetchConfigs])
 
   const fetchConfigs = async () => {
     try {

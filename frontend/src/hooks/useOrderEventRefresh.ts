@@ -53,11 +53,7 @@ export function useOrderEventRefresh(
   refreshFn: () => void,
   options: UseOrderEventRefreshOptions = {}
 ): void {
-  const {
-    events = ['order_event', 'analyzer_update'],
-    delay = 500,
-    enabled = true,
-  } = options
+  const { events = ['order_event', 'analyzer_update'], delay = 500, enabled = true } = options
 
   const socketRef = useRef<Socket | null>(null)
   const refreshFnRef = useRef(refreshFn)

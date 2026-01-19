@@ -2,43 +2,43 @@
 // Left sidebar with draggable node items organized by category
 
 import {
-  Clock,
-  ShoppingCart,
-  Zap,
-  TrendingUp,
-  XCircle,
-  Square,
-  Briefcase,
-  Wallet,
-  Send,
+  BarChart3,
   Bell,
-  Timer,
+  Briefcase,
+  Calculator,
+  Calendar,
+  CalendarX,
+  ClipboardList,
+  Clock,
+  FileSearch,
+  FileText,
+  Globe,
+  Grid3X3,
+  Group,
   Hourglass,
   Layers,
-  Package,
-  Split,
-  Pencil,
-  FileSearch,
-  BarChart3,
   Layers3,
-  Calendar,
-  Variable,
-  FileText,
-  Group,
-  Webhook,
-  Globe,
-  Tag,
-  Target,
-  ClipboardList,
-  Receipt,
-  Calculator,
-  Grid3X3,
-  CalendarX,
+  Package,
+  Pencil,
   Radio,
   RadioTower,
-  WifiOff,
+  Receipt,
+  Send,
   Shield,
+  ShoppingCart,
   Sigma,
+  Split,
+  Square,
+  Tag,
+  Target,
+  Timer,
+  TrendingUp,
+  Variable,
+  Wallet,
+  Webhook,
+  WifiOff,
+  XCircle,
+  Zap,
 } from 'lucide-react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -64,12 +64,7 @@ function NodeItem({ type, label, description, icon, color, onDragStart }: NodeIt
       )}
     >
       <div className="flex items-center gap-2.5">
-        <div
-          className={cn(
-            'flex h-7 w-7 items-center justify-center rounded-md',
-            color
-          )}
-        >
+        <div className={cn('flex h-7 w-7 items-center justify-center rounded-md', color)}>
           {icon}
         </div>
         <div className="min-w-0 flex-1">
@@ -91,22 +86,22 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
       type: 'start',
       label: 'Schedule',
       description: 'Start on schedule',
-      icon: <Clock className="h-3.5 w-3.5 text-orange-500" />,
-      color: 'bg-orange-500/10',
+      icon: <Clock className="h-3.5 w-3.5 text-node-trigger" />,
+      color: 'bg-node-trigger/10',
     },
     {
       type: 'priceAlert',
       label: 'Price Alert',
       description: 'Trigger on price',
-      icon: <Bell className="h-3.5 w-3.5 text-orange-500" />,
-      color: 'bg-orange-500/10',
+      icon: <Bell className="h-3.5 w-3.5 text-node-trigger" />,
+      color: 'bg-node-trigger/10',
     },
     {
       type: 'webhookTrigger',
       label: 'Webhook',
       description: 'External trigger',
-      icon: <Webhook className="h-3.5 w-3.5 text-orange-500" />,
-      color: 'bg-orange-500/10',
+      icon: <Webhook className="h-3.5 w-3.5 text-node-trigger" />,
+      color: 'bg-node-trigger/10',
     },
   ]
 
@@ -115,71 +110,71 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
       type: 'placeOrder',
       label: 'Place Order',
       description: 'Basic order',
-      icon: <ShoppingCart className="h-3.5 w-3.5 text-blue-500" />,
-      color: 'bg-blue-500/10',
+      icon: <ShoppingCart className="h-3.5 w-3.5 text-node-action" />,
+      color: 'bg-node-action/10',
     },
     {
       type: 'smartOrder',
       label: 'Smart Order',
       description: 'Position-aware',
-      icon: <Zap className="h-3.5 w-3.5 text-blue-500" />,
-      color: 'bg-blue-500/10',
+      icon: <Zap className="h-3.5 w-3.5 text-node-action" />,
+      color: 'bg-node-action/10',
     },
     {
       type: 'optionsOrder',
       label: 'Options Order',
       description: 'ATM/ITM/OTM',
-      icon: <TrendingUp className="h-3.5 w-3.5 text-blue-500" />,
-      color: 'bg-blue-500/10',
+      icon: <TrendingUp className="h-3.5 w-3.5 text-node-action" />,
+      color: 'bg-node-action/10',
     },
     {
       type: 'optionsMultiOrder',
       label: 'Multi-Leg',
       description: 'Options strategies',
-      icon: <Layers className="h-3.5 w-3.5 text-blue-500" />,
-      color: 'bg-blue-500/10',
+      icon: <Layers className="h-3.5 w-3.5 text-node-action" />,
+      color: 'bg-node-action/10',
     },
     {
       type: 'basketOrder',
       label: 'Basket Order',
       description: 'Multiple orders',
-      icon: <Package className="h-3.5 w-3.5 text-blue-500" />,
-      color: 'bg-blue-500/10',
+      icon: <Package className="h-3.5 w-3.5 text-node-action" />,
+      color: 'bg-node-action/10',
     },
     {
       type: 'splitOrder',
       label: 'Split Order',
       description: 'Large order split',
-      icon: <Split className="h-3.5 w-3.5 text-blue-500" />,
-      color: 'bg-blue-500/10',
+      icon: <Split className="h-3.5 w-3.5 text-node-action" />,
+      color: 'bg-node-action/10',
     },
     {
       type: 'modifyOrder',
       label: 'Modify Order',
       description: 'Edit order',
-      icon: <Pencil className="h-3.5 w-3.5 text-blue-500" />,
-      color: 'bg-blue-500/10',
+      icon: <Pencil className="h-3.5 w-3.5 text-node-action" />,
+      color: 'bg-node-action/10',
     },
     {
       type: 'cancelOrder',
       label: 'Cancel Order',
       description: 'Cancel by ID',
-      icon: <XCircle className="h-3.5 w-3.5 text-red-500" />,
-      color: 'bg-red-500/10',
+      icon: <XCircle className="h-3.5 w-3.5 text-sell" />,
+      color: 'bg-sell/10',
     },
     {
       type: 'cancelAllOrders',
       label: 'Cancel All',
       description: 'Cancel orders',
-      icon: <XCircle className="h-3.5 w-3.5 text-red-500" />,
-      color: 'bg-red-500/10',
+      icon: <XCircle className="h-3.5 w-3.5 text-sell" />,
+      color: 'bg-sell/10',
     },
     {
       type: 'closePositions',
       label: 'Close Positions',
       description: 'Square off all',
-      icon: <Square className="h-3.5 w-3.5 text-red-500" />,
-      color: 'bg-red-500/10',
+      icon: <Square className="h-3.5 w-3.5 text-sell" />,
+      color: 'bg-sell/10',
     },
   ]
 
@@ -188,57 +183,57 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
       type: 'timeCondition',
       label: 'Time Condition',
       description: 'Entry/Exit time',
-      icon: <Clock className="h-3.5 w-3.5 text-purple-500" />,
-      color: 'bg-purple-500/10',
+      icon: <Clock className="h-3.5 w-3.5 text-node-condition" />,
+      color: 'bg-node-condition/10',
     },
     {
       type: 'positionCheck',
       label: 'Position Check',
       description: 'Check position',
-      icon: <Briefcase className="h-3.5 w-3.5 text-purple-500" />,
-      color: 'bg-purple-500/10',
+      icon: <Briefcase className="h-3.5 w-3.5 text-node-condition" />,
+      color: 'bg-node-condition/10',
     },
     {
       type: 'fundCheck',
       label: 'Fund Check',
       description: 'Check funds',
-      icon: <Wallet className="h-3.5 w-3.5 text-purple-500" />,
-      color: 'bg-purple-500/10',
+      icon: <Wallet className="h-3.5 w-3.5 text-node-condition" />,
+      color: 'bg-node-condition/10',
     },
     {
       type: 'priceCondition',
       label: 'Price Check',
       description: 'Check price',
-      icon: <TrendingUp className="h-3.5 w-3.5 text-purple-500" />,
-      color: 'bg-purple-500/10',
+      icon: <TrendingUp className="h-3.5 w-3.5 text-node-condition" />,
+      color: 'bg-node-condition/10',
     },
     {
       type: 'timeWindow',
       label: 'Time Window',
       description: 'Market hours',
-      icon: <Clock className="h-3.5 w-3.5 text-purple-500" />,
-      color: 'bg-purple-500/10',
+      icon: <Clock className="h-3.5 w-3.5 text-node-condition" />,
+      color: 'bg-node-condition/10',
     },
     {
       type: 'andGate',
       label: 'AND Gate',
       description: 'All must be true',
-      icon: <span className="text-[9px] font-bold text-purple-500">AND</span>,
-      color: 'bg-purple-500/10',
+      icon: <span className="text-[9px] font-bold text-node-condition">AND</span>,
+      color: 'bg-node-condition/10',
     },
     {
       type: 'orGate',
       label: 'OR Gate',
       description: 'Any can be true',
-      icon: <span className="text-[9px] font-bold text-purple-500">OR</span>,
-      color: 'bg-purple-500/10',
+      icon: <span className="text-[9px] font-bold text-node-condition">OR</span>,
+      color: 'bg-node-condition/10',
     },
     {
       type: 'notGate',
       label: 'NOT Gate',
       description: 'Invert condition',
-      icon: <span className="text-[9px] font-bold text-purple-500">NOT</span>,
-      color: 'bg-purple-500/10',
+      icon: <span className="text-[9px] font-bold text-node-condition">NOT</span>,
+      color: 'bg-node-condition/10',
     },
   ]
 
@@ -390,8 +385,8 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
       type: 'unsubscribe',
       label: 'Unsubscribe',
       description: 'Stop streaming',
-      icon: <WifiOff className="h-3.5 w-3.5 text-red-500" />,
-      color: 'bg-red-500/10',
+      icon: <WifiOff className="h-3.5 w-3.5 text-sell" />,
+      color: 'bg-sell/10',
     },
   ]
 
@@ -472,9 +467,7 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
     <div className="flex h-full flex-col border-r border-border bg-card">
       <div className="border-b border-border p-3">
         <h2 className="text-sm font-semibold">Nodes</h2>
-        <p className="text-[10px] text-muted-foreground">
-          Drag nodes to the canvas
-        </p>
+        <p className="text-[10px] text-muted-foreground">Drag nodes to the canvas</p>
       </div>
       <Tabs defaultValue="triggers" className="flex-1 flex flex-col">
         <div className="border-b border-border px-1 py-1.5">
@@ -503,66 +496,42 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
           <TabsContent value="triggers" className="m-0 p-2">
             <div className="space-y-1.5">
               {triggers.map((node) => (
-                <NodeItem
-                  key={node.type}
-                  {...node}
-                  onDragStart={onDragStart}
-                />
+                <NodeItem key={node.type} {...node} onDragStart={onDragStart} />
               ))}
             </div>
           </TabsContent>
           <TabsContent value="actions" className="m-0 p-2">
             <div className="space-y-1.5">
               {actions.map((node) => (
-                <NodeItem
-                  key={node.type}
-                  {...node}
-                  onDragStart={onDragStart}
-                />
+                <NodeItem key={node.type} {...node} onDragStart={onDragStart} />
               ))}
             </div>
           </TabsContent>
           <TabsContent value="data" className="m-0 p-2">
             <div className="space-y-1.5">
               {data.map((node) => (
-                <NodeItem
-                  key={node.type}
-                  {...node}
-                  onDragStart={onDragStart}
-                />
+                <NodeItem key={node.type} {...node} onDragStart={onDragStart} />
               ))}
             </div>
           </TabsContent>
           <TabsContent value="stream" className="m-0 p-2">
             <div className="space-y-1.5">
               {streaming.map((node) => (
-                <NodeItem
-                  key={node.type}
-                  {...node}
-                  onDragStart={onDragStart}
-                />
+                <NodeItem key={node.type} {...node} onDragStart={onDragStart} />
               ))}
             </div>
           </TabsContent>
           <TabsContent value="conditions" className="m-0 p-2">
             <div className="space-y-1.5">
               {conditions.map((node) => (
-                <NodeItem
-                  key={node.type}
-                  {...node}
-                  onDragStart={onDragStart}
-                />
+                <NodeItem key={node.type} {...node} onDragStart={onDragStart} />
               ))}
             </div>
           </TabsContent>
           <TabsContent value="utilities" className="m-0 p-2">
             <div className="space-y-1.5">
               {utilities.map((node) => (
-                <NodeItem
-                  key={node.type}
-                  {...node}
-                  onDragStart={onDragStart}
-                />
+                <NodeItem key={node.type} {...node} onDragStart={onDragStart} />
               ))}
             </div>
           </TabsContent>

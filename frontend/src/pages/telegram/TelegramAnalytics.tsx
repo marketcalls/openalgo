@@ -26,7 +26,7 @@ export default function TelegramAnalytics() {
   useEffect(() => {
     fetchAnalytics()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fetchAnalytics])
 
   const fetchAnalytics = async () => {
     try {

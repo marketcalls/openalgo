@@ -26,7 +26,10 @@ export default function ChartinkIndex() {
   const [strategies, setStrategies] = useState<ChartinkStrategy[]>([])
   const [loading, setLoading] = useState(true)
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const [hostConfig, setHostConfig] = useState<{ host_server: string; is_localhost: boolean } | null>(null)
+  const [hostConfig, setHostConfig] = useState<{
+    host_server: string
+    is_localhost: boolean
+  } | null>(null)
 
   const fetchStrategies = async () => {
     try {
@@ -53,7 +56,8 @@ export default function ChartinkIndex() {
         // Fallback to window.location.origin if config fetch fails
         setHostConfig({
           host_server: window.location.origin,
-          is_localhost: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+          is_localhost:
+            window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1',
         })
       }
     }
@@ -63,7 +67,7 @@ export default function ChartinkIndex() {
   useEffect(() => {
     fetchStrategies()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fetchStrategies])
 
   // Get webhook URL using host config
   const getWebhookUrl = (webhookId: string): string => {
@@ -127,8 +131,8 @@ export default function ChartinkIndex() {
           <AlertDescription>
             Chartink cannot send alerts to localhost. Use <strong>ngrok</strong>,{' '}
             <strong>Cloudflare Tunnel</strong>, <strong>VS Code Dev Tunnel</strong>, or a{' '}
-            <strong>custom domain</strong> to expose your OpenAlgo instance to the internet.
-            Update <code>HOST_SERVER</code> in your <code>.env</code> file with your external URL.
+            <strong>custom domain</strong> to expose your OpenAlgo instance to the internet. Update{' '}
+            <code>HOST_SERVER</code> in your <code>.env</code> file with your external URL.
           </AlertDescription>
         </Alert>
       )}

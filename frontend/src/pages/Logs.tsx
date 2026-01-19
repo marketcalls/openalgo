@@ -411,15 +411,25 @@ export default function LogsPage() {
                         const requestLines = requestJson.split('\n').length
                         const responseLines = responseJson.split('\n').length
                         // Allow up to 70vh height, minimum 120px
-                        const maxHeight = typeof window !== 'undefined' ? window.innerHeight * 0.7 : 600
-                        const requestHeight = Math.min(Math.max(requestLines * 20 + 24, 120), maxHeight)
-                        const responseHeight = Math.min(Math.max(responseLines * 20 + 24, 120), maxHeight)
+                        const maxHeight =
+                          typeof window !== 'undefined' ? window.innerHeight * 0.7 : 600
+                        const requestHeight = Math.min(
+                          Math.max(requestLines * 20 + 24, 120),
+                          maxHeight
+                        )
+                        const responseHeight = Math.min(
+                          Math.max(responseLines * 20 + 24, 120),
+                          maxHeight
+                        )
 
                         return (
                           <>
                             <div className="bg-muted rounded-lg p-4">
                               <h4 className="text-sm font-medium mb-2">Request Data</h4>
-                              <div className="rounded-lg border bg-card/50" style={{ height: requestHeight }}>
+                              <div
+                                className="rounded-lg border bg-card/50"
+                                style={{ height: requestHeight }}
+                              >
                                 <JsonEditor
                                   value={requestJson}
                                   readOnly={true}
@@ -429,7 +439,10 @@ export default function LogsPage() {
                             </div>
                             <div className="bg-muted rounded-lg p-4">
                               <h4 className="text-sm font-medium mb-2">Response Data</h4>
-                              <div className="rounded-lg border bg-card/50" style={{ height: responseHeight }}>
+                              <div
+                                className="rounded-lg border bg-card/50"
+                                style={{ height: responseHeight }}
+                              >
                                 <JsonEditor
                                   value={responseJson}
                                   readOnly={true}

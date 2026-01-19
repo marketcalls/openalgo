@@ -5,6 +5,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { JsonEditor } from '@/components/ui/json-editor'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -13,7 +14,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { JsonEditor } from '@/components/ui/json-editor'
 
 interface SearchResult {
   symbol: string
@@ -54,7 +54,10 @@ export default function GoCharting() {
   const [generatedJson, setGeneratedJson] = useState<string>('')
 
   // Host config state for webhook URL
-  const [hostConfig, setHostConfig] = useState<{ host_server: string; is_localhost: boolean } | null>(null)
+  const [hostConfig, setHostConfig] = useState<{
+    host_server: string
+    is_localhost: boolean
+  } | null>(null)
 
   // Refs
   const inputWrapperRef = useRef<HTMLDivElement>(null)
@@ -71,7 +74,8 @@ export default function GoCharting() {
         // Fallback to window.location.origin if config fetch fails
         setHostConfig({
           host_server: window.location.origin,
-          is_localhost: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+          is_localhost:
+            window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1',
         })
       }
     }
@@ -79,7 +83,9 @@ export default function GoCharting() {
   }, [])
 
   // Get webhook URL from host config or fallback to window.location.origin
-  const webhookUrl = hostConfig ? `${hostConfig.host_server}/api/v1/placeorder` : `${window.location.origin}/api/v1/placeorder`
+  const webhookUrl = hostConfig
+    ? `${hostConfig.host_server}/api/v1/placeorder`
+    : `${window.location.origin}/api/v1/placeorder`
 
   // Debounced search
   const performSearch = useCallback(
@@ -164,7 +170,7 @@ export default function GoCharting() {
   useEffect(() => {
     generateJson(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [generateJson])
 
   const copyToClipboard = async (text: string, label: string) => {
     try {
@@ -193,7 +199,8 @@ export default function GoCharting() {
             <strong>Webhook URL not accessible!</strong> GoCharting cannot send alerts to localhost.
             Use <strong>ngrok</strong>, <strong>Cloudflare Tunnel</strong>,{' '}
             <strong>VS Code Dev Tunnel</strong>, or a <strong>custom domain</strong> to expose your
-            OpenAlgo instance to the internet. Update <code>HOST_SERVER</code> in your <code>.env</code> file with your external URL.
+            OpenAlgo instance to the internet. Update <code>HOST_SERVER</code> in your{' '}
+            <code>.env</code> file with your external URL.
           </AlertDescription>
         </Alert>
       )}

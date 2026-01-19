@@ -31,7 +31,7 @@ export default function TelegramConfig() {
   useEffect(() => {
     fetchConfig()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fetchConfig])
 
   const fetchConfig = async () => {
     try {

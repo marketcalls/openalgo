@@ -19,16 +19,16 @@ import {
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
 } from '@/components/ui/accordion'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
 const sampleStrategy = `"""
 Sample EMA Crossover Strategy using OpenAlgo SDK
@@ -173,7 +173,9 @@ export default function PythonStrategyGuide() {
         <CardContent className="space-y-4">
           <div className="grid gap-4">
             <div className="flex gap-4">
-              <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">1</Badge>
+              <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">
+                1
+              </Badge>
               <div>
                 <p className="font-medium">Install OpenAlgo SDK</p>
                 <div className="mt-1 flex items-center gap-2">
@@ -189,17 +191,24 @@ export default function PythonStrategyGuide() {
               </div>
             </div>
             <div className="flex gap-4">
-              <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">2</Badge>
+              <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">
+                2
+              </Badge>
               <div>
                 <p className="font-medium">Get your API Key</p>
                 <p className="text-sm text-muted-foreground">
-                  Go to <Link to="/apikey" className="text-primary hover:underline">API Key</Link> page
-                  and copy your OpenAlgo API key
+                  Go to{' '}
+                  <Link to="/apikey" className="text-primary hover:underline">
+                    API Key
+                  </Link>{' '}
+                  page and copy your OpenAlgo API key
                 </p>
               </div>
             </div>
             <div className="flex gap-4">
-              <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">3</Badge>
+              <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">
+                3
+              </Badge>
               <div>
                 <p className="font-medium">Write your strategy</p>
                 <p className="text-sm text-muted-foreground">
@@ -208,21 +217,29 @@ export default function PythonStrategyGuide() {
               </div>
             </div>
             <div className="flex gap-4">
-              <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">4</Badge>
+              <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">
+                4
+              </Badge>
               <div>
                 <p className="font-medium">Upload with schedule</p>
                 <p className="text-sm text-muted-foreground">
-                  Upload your strategy file on the <Link to="/python" className="text-primary hover:underline">Python Strategies</Link> page.
-                  Configure the mandatory schedule (default: Mon-Fri, 9:00 AM - 4:00 PM IST).
+                  Upload your strategy file on the{' '}
+                  <Link to="/python" className="text-primary hover:underline">
+                    Python Strategies
+                  </Link>{' '}
+                  page. Configure the mandatory schedule (default: Mon-Fri, 9:00 AM - 4:00 PM IST).
                 </p>
               </div>
             </div>
             <div className="flex gap-4">
-              <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">5</Badge>
+              <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">
+                5
+              </Badge>
               <div>
                 <p className="font-medium">Start your strategy</p>
                 <p className="text-sm text-muted-foreground">
-                  Click the <Play className="h-3 w-3 inline" /> Start button to run immediately, or let the scheduler auto-start it at the configured time.
+                  Click the <Play className="h-3 w-3 inline" /> Start button to run immediately, or
+                  let the scheduler auto-start it at the configured time.
                 </p>
               </div>
             </div>
@@ -282,9 +299,13 @@ export default function PythonStrategyGuide() {
                 </p>
                 <p>To view logs:</p>
                 <ol className="list-decimal list-inside space-y-1 ml-2">
-                  <li>Click the <strong>Logs</strong> button on your strategy card</li>
+                  <li>
+                    Click the <strong>Logs</strong> button on your strategy card
+                  </li>
                   <li>Select a log file from the list (newest first)</li>
-                  <li>Enable <strong>Auto-refresh</strong> to see live updates while running</li>
+                  <li>
+                    Enable <strong>Auto-refresh</strong> to see live updates while running
+                  </li>
                 </ol>
                 <p className="text-sm">
                   Log files are stored in: <code>log/strategies/</code>
@@ -301,25 +322,38 @@ export default function PythonStrategyGuide() {
               </AccordionTrigger>
               <AccordionContent className="text-muted-foreground space-y-3">
                 <p>
-                  <strong>Scheduling is mandatory</strong> for all strategies. Every strategy must have a defined schedule
-                  that controls when it automatically starts and stops.
+                  <strong>Scheduling is mandatory</strong> for all strategies. Every strategy must
+                  have a defined schedule that controls when it automatically starts and stops.
                 </p>
 
                 <div className="bg-muted p-3 rounded-lg space-y-2">
                   <p className="font-medium">Default Schedule (when uploading):</p>
                   <ul className="list-disc list-inside space-y-1 ml-2 text-sm">
-                    <li><strong>Start Time:</strong> 9:00 AM IST</li>
-                    <li><strong>Stop Time:</strong> 4:00 PM IST</li>
-                    <li><strong>Days:</strong> Monday to Friday</li>
+                    <li>
+                      <strong>Start Time:</strong> 9:00 AM IST
+                    </li>
+                    <li>
+                      <strong>Stop Time:</strong> 4:00 PM IST
+                    </li>
+                    <li>
+                      <strong>Days:</strong> Monday to Friday
+                    </li>
                   </ul>
                 </div>
 
                 <div className="space-y-2">
                   <p className="font-medium">Schedule Configuration:</p>
                   <ul className="list-disc list-inside space-y-1 ml-2">
-                    <li><strong>Start Time:</strong> When the strategy auto-starts (required)</li>
-                    <li><strong>Stop Time:</strong> When to auto-stop (required)</li>
-                    <li><strong>Days:</strong> Which days to run - can include weekends for special sessions</li>
+                    <li>
+                      <strong>Start Time:</strong> When the strategy auto-starts (required)
+                    </li>
+                    <li>
+                      <strong>Stop Time:</strong> When to auto-stop (required)
+                    </li>
+                    <li>
+                      <strong>Days:</strong> Which days to run - can include weekends for special
+                      sessions
+                    </li>
                   </ul>
                 </div>
 
@@ -329,7 +363,8 @@ export default function PythonStrategyGuide() {
                     Editing Schedule
                   </p>
                   <p className="text-sm mt-1">
-                    Click the <Pencil className="h-3 w-3 inline" /> <strong>Edit Schedule</strong> button on your strategy card to modify the schedule times and days.
+                    Click the <Pencil className="h-3 w-3 inline" /> <strong>Edit Schedule</strong>{' '}
+                    button on your strategy card to modify the schedule times and days.
                   </p>
                 </div>
 
@@ -338,7 +373,8 @@ export default function PythonStrategyGuide() {
                   <AlertTitle>Holiday Protection</AlertTitle>
                   <AlertDescription>
                     Scheduled strategies will NOT auto-start on market holidays, even if scheduled.
-                    Weekend trading is allowed if you explicitly add Sat/Sun to the schedule days (for special sessions like Budget Day or Muhurat Trading).
+                    Weekend trading is allowed if you explicitly add Sat/Sun to the schedule days
+                    (for special sessions like Budget Day or Muhurat Trading).
                   </AlertDescription>
                 </Alert>
               </AccordionContent>
@@ -357,7 +393,9 @@ export default function PythonStrategyGuide() {
                 <div className="space-y-2">
                   <div className="flex items-center gap-3 p-2 bg-muted rounded">
                     <Badge className="bg-green-500 text-white">Running</Badge>
-                    <span className="text-sm">Strategy is actively running and executing trades</span>
+                    <span className="text-sm">
+                      Strategy is actively running and executing trades
+                    </span>
                   </div>
                   <div className="flex items-center gap-3 p-2 bg-muted rounded">
                     <Badge className="bg-blue-500 text-white">Scheduled</Badge>
@@ -370,7 +408,9 @@ export default function PythonStrategyGuide() {
                   </div>
                   <div className="flex items-center gap-3 p-2 bg-muted rounded">
                     <Badge className="bg-orange-500 text-white">Manual Stop</Badge>
-                    <span className="text-sm">Strategy was manually stopped - won't auto-start until you click Start</span>
+                    <span className="text-sm">
+                      Strategy was manually stopped - won't auto-start until you click Start
+                    </span>
                   </div>
                   <div className="flex items-center gap-3 p-2 bg-muted rounded">
                     <Badge className="bg-yellow-500 text-white">Paused</Badge>
@@ -383,7 +423,8 @@ export default function PythonStrategyGuide() {
                 </div>
 
                 <p className="text-sm">
-                  <strong>Tip:</strong> Hover over the status badge to see a detailed message like "Starts today at 09:00 IST" or "Next scheduled day at 09:15 IST".
+                  <strong>Tip:</strong> Hover over the status badge to see a detailed message like
+                  "Starts today at 09:00 IST" or "Next scheduled day at 09:15 IST".
                 </p>
               </AccordionContent>
             </AccordionItem>
@@ -402,9 +443,16 @@ export default function PythonStrategyGuide() {
                     Start Button
                   </p>
                   <ul className="list-disc list-inside space-y-1 ml-2 mt-2 text-sm">
-                    <li><strong>Within schedule:</strong> Strategy starts running immediately</li>
-                    <li><strong>Outside schedule:</strong> Strategy is "armed" - status changes to "Scheduled"</li>
-                    <li>Button changes to <strong>Cancel</strong> after arming</li>
+                    <li>
+                      <strong>Within schedule:</strong> Strategy starts running immediately
+                    </li>
+                    <li>
+                      <strong>Outside schedule:</strong> Strategy is "armed" - status changes to
+                      "Scheduled"
+                    </li>
+                    <li>
+                      Button changes to <strong>Cancel</strong> after arming
+                    </li>
                   </ul>
                 </div>
 
@@ -436,9 +484,18 @@ export default function PythonStrategyGuide() {
                 <div className="bg-muted p-3 rounded-lg">
                   <p className="font-medium">Use Cases</p>
                   <ul className="list-disc list-inside space-y-1 ml-2 mt-2 text-sm">
-                    <li><strong>Evening setup:</strong> Click Start at night, strategy runs at 9:00 AM next day</li>
-                    <li><strong>Vacation mode:</strong> Click Stop, strategy stays off until you return</li>
-                    <li><strong>Testing:</strong> Edit schedule to test now, then revert schedule after</li>
+                    <li>
+                      <strong>Evening setup:</strong> Click Start at night, strategy runs at 9:00 AM
+                      next day
+                    </li>
+                    <li>
+                      <strong>Vacation mode:</strong> Click Stop, strategy stays off until you
+                      return
+                    </li>
+                    <li>
+                      <strong>Testing:</strong> Edit schedule to test now, then revert schedule
+                      after
+                    </li>
                   </ul>
                 </div>
               </AccordionContent>
@@ -452,25 +509,40 @@ export default function PythonStrategyGuide() {
                 </span>
               </AccordionTrigger>
               <AccordionContent className="text-muted-foreground space-y-3">
-                <p>
-                  Exchanges occasionally conduct special trading sessions on holidays/weekends:
-                </p>
+                <p>Exchanges occasionally conduct special trading sessions on holidays/weekends:</p>
                 <ul className="list-disc list-inside space-y-1 ml-2">
-                  <li><strong>Budget Day:</strong> Live trading on Union Budget day (e.g., Feb 1, 2026 - Sunday)</li>
-                  <li><strong>Muhurat Trading:</strong> Diwali day special session (usually 1 hour evening)</li>
-                  <li><strong>Special Saturday:</strong> Occasional Saturday trading sessions</li>
+                  <li>
+                    <strong>Budget Day:</strong> Live trading on Union Budget day (e.g., Feb 1, 2026
+                    - Sunday)
+                  </li>
+                  <li>
+                    <strong>Muhurat Trading:</strong> Diwali day special session (usually 1 hour
+                    evening)
+                  </li>
+                  <li>
+                    <strong>Special Saturday:</strong> Occasional Saturday trading sessions
+                  </li>
                 </ul>
 
                 <div className="bg-primary/10 border border-primary/20 p-4 rounded-lg mt-3">
-                  <p className="font-semibold text-primary mb-3">Step-by-Step: Trading on Special Sessions</p>
+                  <p className="font-semibold text-primary mb-3">
+                    Step-by-Step: Trading on Special Sessions
+                  </p>
 
                   <div className="space-y-4 text-sm">
                     <div className="flex gap-3">
-                      <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">1</Badge>
+                      <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">
+                        1
+                      </Badge>
                       <div>
-                        <p className="font-medium">Update Holiday Calendar (Optional but Recommended)</p>
+                        <p className="font-medium">
+                          Update Holiday Calendar (Optional but Recommended)
+                        </p>
                         <p className="text-muted-foreground">
-                          Go to <Link to="/admin/holidays" className="text-primary hover:underline">Admin → Holidays</Link>
+                          Go to{' '}
+                          <Link to="/admin/holidays" className="text-primary hover:underline">
+                            Admin → Holidays
+                          </Link>
                         </p>
                         <ul className="list-disc list-inside ml-2 mt-1 text-muted-foreground">
                           <li>Find the special session date (e.g., Feb 1, 2026)</li>
@@ -481,11 +553,16 @@ export default function PythonStrategyGuide() {
                     </div>
 
                     <div className="flex gap-3">
-                      <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">2</Badge>
+                      <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">
+                        2
+                      </Badge>
                       <div>
                         <p className="font-medium">Update Market Timings (If Different Hours)</p>
                         <p className="text-muted-foreground">
-                          Go to <Link to="/admin/market-timings" className="text-primary hover:underline">Admin → Market Timings</Link>
+                          Go to{' '}
+                          <Link to="/admin/market-timings" className="text-primary hover:underline">
+                            Admin → Market Timings
+                          </Link>
                         </p>
                         <ul className="list-disc list-inside ml-2 mt-1 text-muted-foreground">
                           <li>Muhurat: Usually 6:00 PM - 7:00 PM (not regular hours)</li>
@@ -496,12 +573,14 @@ export default function PythonStrategyGuide() {
                     </div>
 
                     <div className="flex gap-3">
-                      <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">3</Badge>
+                      <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">
+                        3
+                      </Badge>
                       <div>
-                        <p className="font-medium">Update Your Strategy Schedule (If Using Scheduler)</p>
-                        <p className="text-muted-foreground">
-                          Go to your strategy → Schedule
+                        <p className="font-medium">
+                          Update Your Strategy Schedule (If Using Scheduler)
                         </p>
+                        <p className="text-muted-foreground">Go to your strategy → Schedule</p>
                         <ul className="list-disc list-inside ml-2 mt-1 text-muted-foreground">
                           <li>Add the special day (e.g., add "Sun" for Sunday Budget Day)</li>
                           <li>Update start/stop time to match special session hours</li>
@@ -511,16 +590,18 @@ export default function PythonStrategyGuide() {
                     </div>
 
                     <div className="flex gap-3">
-                      <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">4</Badge>
+                      <Badge className="h-6 w-6 rounded-full flex items-center justify-center shrink-0">
+                        4
+                      </Badge>
                       <div>
                         <p className="font-medium">OR Simply Start Manually</p>
-                        <p className="text-muted-foreground">
-                          The easiest approach:
-                        </p>
+                        <p className="text-muted-foreground">The easiest approach:</p>
                         <ul className="list-disc list-inside ml-2 mt-1 text-muted-foreground">
                           <li>Login to OpenAlgo before the special session</li>
                           <li>Wait for master contracts to download</li>
-                          <li>Click <Play className="h-3 w-3 inline" /> Start on your strategy</li>
+                          <li>
+                            Click <Play className="h-3 w-3 inline" /> Start on your strategy
+                          </li>
                           <li>Click Stop when session ends</li>
                         </ul>
                       </div>
@@ -553,25 +634,35 @@ export default function PythonStrategyGuide() {
                 </p>
                 <div className="bg-muted p-3 rounded-lg mt-2 space-y-2 text-sm">
                   <div className="flex items-center gap-2">
-                    <Badge variant="outline" className="text-red-500 border-red-500">Weekends (Default)</Badge>
+                    <Badge variant="outline" className="text-red-500 border-red-500">
+                      Weekends (Default)
+                    </Badge>
                     <span>Strategies skip Sat/Sun unless explicitly added to schedule_days</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge variant="outline" className="text-green-500 border-green-500">Weekend (Scheduled)</Badge>
+                    <Badge variant="outline" className="text-green-500 border-green-500">
+                      Weekend (Scheduled)
+                    </Badge>
                     <span>If Sat/Sun is in your schedule days, strategy CAN auto-start</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge variant="outline" className="text-yellow-500 border-yellow-500">Holidays</Badge>
+                    <Badge variant="outline" className="text-yellow-500 border-yellow-500">
+                      Holidays
+                    </Badge>
                     <span>Scheduled strategies always skip market holidays</span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Badge variant="outline" className="text-blue-500 border-blue-500">After Hours</Badge>
+                    <Badge variant="outline" className="text-blue-500 border-blue-500">
+                      After Hours
+                    </Badge>
                     <span>Running strategies continue until scheduled stop time</span>
                   </div>
                 </div>
 
                 <div className="bg-primary/10 border border-primary/20 p-3 rounded-lg">
-                  <p className="font-medium text-primary">Weekend Scheduling for Special Sessions</p>
+                  <p className="font-medium text-primary">
+                    Weekend Scheduling for Special Sessions
+                  </p>
                   <p className="text-sm mt-1">
                     For Budget Day, Muhurat Trading, or other special sessions on weekends:
                   </p>
@@ -584,8 +675,8 @@ export default function PythonStrategyGuide() {
                 </div>
 
                 <p className="text-sm">
-                  <strong>Note:</strong> If your strategy is already running when market closes,
-                  it will continue running until the scheduled stop time or until you manually stop it.
+                  <strong>Note:</strong> If your strategy is already running when market closes, it
+                  will continue running until the scheduled stop time or until you manually stop it.
                 </p>
               </AccordionContent>
             </AccordionItem>
@@ -599,8 +690,8 @@ export default function PythonStrategyGuide() {
               </AccordionTrigger>
               <AccordionContent className="text-muted-foreground space-y-2">
                 <p>
-                  Master contracts contain the symbol mappings required by your broker.
-                  Strategies cannot start until master contracts are downloaded.
+                  Master contracts contain the symbol mappings required by your broker. Strategies
+                  cannot start until master contracts are downloaded.
                 </p>
                 <p>Master contracts are automatically downloaded when you:</p>
                 <ol className="list-decimal list-inside space-y-1 ml-2">
@@ -622,8 +713,8 @@ export default function PythonStrategyGuide() {
               </AccordionTrigger>
               <AccordionContent className="text-muted-foreground space-y-2">
                 <p>
-                  Yes, to prevent buggy strategies from crashing OpenAlgo, the following
-                  limits are enforced (Linux/Mac only):
+                  Yes, to prevent buggy strategies from crashing OpenAlgo, the following limits are
+                  enforced (Linux/Mac only):
                 </p>
                 <div className="grid grid-cols-2 gap-2 mt-2 text-sm">
                   <div className="bg-muted p-2 rounded">
@@ -665,7 +756,10 @@ export default function PythonStrategyGuide() {
                 <div className="bg-muted p-3 rounded-lg space-y-2">
                   <p className="font-medium">Automatic Status Cleanup</p>
                   <ul className="list-disc list-inside space-y-1 ml-2 text-sm">
-                    <li>If OpenAlgo restarts while a strategy was running, the status is reset to "stopped"</li>
+                    <li>
+                      If OpenAlgo restarts while a strategy was running, the status is reset to
+                      "stopped"
+                    </li>
                     <li>This prevents stale "Running" indicators for dead processes</li>
                     <li>The strategy will resume at the next scheduled start time</li>
                   </ul>
@@ -678,7 +772,8 @@ export default function PythonStrategyGuide() {
                   </p>
                   <p className="text-sm mt-1">
                     If you manually stopped a strategy before the restart, it will remain stopped.
-                    The "manually stopped" flag persists and the strategy won't auto-start until you click Start.
+                    The "manually stopped" flag persists and the strategy won't auto-start until you
+                    click Start.
                   </p>
                 </div>
               </AccordionContent>
@@ -693,15 +788,19 @@ export default function PythonStrategyGuide() {
               </AccordionTrigger>
               <AccordionContent className="text-muted-foreground space-y-3">
                 <p>
-                  The strategy dashboard uses <strong>Server-Sent Events (SSE)</strong> for real-time updates.
-                  You don't need to refresh the page to see status changes.
+                  The strategy dashboard uses <strong>Server-Sent Events (SSE)</strong> for
+                  real-time updates. You don't need to refresh the page to see status changes.
                 </p>
 
                 <div className="bg-muted p-3 rounded-lg space-y-2">
                   <p className="font-medium">Automatic Updates</p>
                   <ul className="list-disc list-inside space-y-1 ml-2 text-sm">
-                    <li>When scheduler starts a strategy → Status changes to "Running" automatically</li>
-                    <li>When scheduler stops a strategy → Status changes to "Scheduled" automatically</li>
+                    <li>
+                      When scheduler starts a strategy → Status changes to "Running" automatically
+                    </li>
+                    <li>
+                      When scheduler stops a strategy → Status changes to "Scheduled" automatically
+                    </li>
                     <li>When you click Start/Stop → UI updates immediately</li>
                     <li>No page refresh needed - updates happen in real-time</li>
                   </ul>
@@ -710,8 +809,8 @@ export default function PythonStrategyGuide() {
                 <div className="bg-primary/10 border border-primary/20 p-3 rounded-lg">
                   <p className="font-medium text-primary">Connection Status</p>
                   <p className="text-sm mt-1">
-                    The browser maintains a persistent connection to receive updates.
-                    If disconnected, it will automatically reconnect. You can also use the
+                    The browser maintains a persistent connection to receive updates. If
+                    disconnected, it will automatically reconnect. You can also use the
                     <strong> Refresh</strong> button to manually refresh the data.
                   </p>
                 </div>
@@ -765,10 +864,10 @@ export default function PythonStrategyGuide() {
 
                 <div className="bg-primary/10 border border-primary/20 p-4 rounded-lg space-y-4">
                   <div>
-                    <p className="font-semibold text-primary mb-2">Method 1: Using UV (Recommended)</p>
-                    <p className="text-sm mb-2">
-                      If you installed OpenAlgo using the UV method:
+                    <p className="font-semibold text-primary mb-2">
+                      Method 1: Using UV (Recommended)
                     </p>
+                    <p className="text-sm mb-2">If you installed OpenAlgo using the UV method:</p>
                     <ol className="list-decimal list-inside space-y-2 ml-2 text-sm">
                       <li>
                         Open <code className="bg-muted px-1 rounded">openalgo/pyproject.toml</code>
@@ -776,7 +875,7 @@ export default function PythonStrategyGuide() {
                       <li>
                         Add your library to the <code>dependencies</code> section:
                         <pre className="bg-muted p-2 rounded mt-1 text-xs overflow-x-auto">
-{`[project]
+                          {`[project]
 dependencies = [
     "openalgo",
     "TA-Lib",        # Add your library here
@@ -785,25 +884,29 @@ dependencies = [
                         </pre>
                       </li>
                       <li>
-                        Run <code className="bg-muted px-1 rounded">uv sync</code> in the openalgo directory
+                        Run <code className="bg-muted px-1 rounded">uv sync</code> in the openalgo
+                        directory
                       </li>
                       <li>Restart OpenAlgo</li>
                     </ol>
                   </div>
 
                   <div className="border-t border-primary/20 pt-4">
-                    <p className="font-semibold text-primary mb-2">Method 2: Using Regular Python venv</p>
+                    <p className="font-semibold text-primary mb-2">
+                      Method 2: Using Regular Python venv
+                    </p>
                     <p className="text-sm mb-2">
                       If you installed OpenAlgo using a regular Python virtual environment:
                     </p>
                     <ol className="list-decimal list-inside space-y-2 ml-2 text-sm">
                       <li>
-                        Open <code className="bg-muted px-1 rounded">openalgo/requirements.txt</code>
+                        Open{' '}
+                        <code className="bg-muted px-1 rounded">openalgo/requirements.txt</code>
                       </li>
                       <li>
                         Add your library:
                         <pre className="bg-muted p-2 rounded mt-1 text-xs overflow-x-auto">
-{`openalgo
+                          {`openalgo
 TA-Lib
 pandas-ta`}
                         </pre>
@@ -811,7 +914,7 @@ pandas-ta`}
                       <li>
                         Activate your virtual environment and install:
                         <pre className="bg-muted p-2 rounded mt-1 text-xs overflow-x-auto">
-{`# Activate venv first
+                          {`# Activate venv first
 pip install -r requirements.txt`}
                         </pre>
                       </li>
@@ -824,11 +927,18 @@ pip install -r requirements.txt`}
                   <AlertTriangle className="h-4 w-4" />
                   <AlertTitle>TA-Lib Installation Note</AlertTitle>
                   <AlertDescription>
-                    TA-Lib requires the underlying C library to be installed first.
-                    On Mac: <code>brew install ta-lib</code><br />
-                    On Ubuntu: <code>sudo apt-get install libta-lib-dev</code><br />
+                    TA-Lib requires the underlying C library to be installed first. On Mac:{' '}
+                    <code>brew install ta-lib</code>
+                    <br />
+                    On Ubuntu: <code>sudo apt-get install libta-lib-dev</code>
+                    <br />
                     On Windows: Download from{' '}
-                    <a href="https://www.lfd.uci.edu/~gohlke/pythonlibs/#ta-lib" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                    <a
+                      href="https://www.lfd.uci.edu/~gohlke/pythonlibs/#ta-lib"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary hover:underline"
+                    >
                       unofficial binaries
                     </a>
                   </AlertDescription>
@@ -851,11 +961,15 @@ pip install -r requirements.txt`}
           <div className="grid gap-3 text-sm">
             <div className="bg-muted p-3 rounded-lg">
               <p className="font-medium mb-1">Initialize Client</p>
-              <code className="text-xs">client = api(api_key="YOUR_KEY", host="http://127.0.0.1:5000")</code>
+              <code className="text-xs">
+                client = api(api_key="YOUR_KEY", host="http://127.0.0.1:5000")
+              </code>
             </div>
             <div className="bg-muted p-3 rounded-lg">
               <p className="font-medium mb-1">Place Order</p>
-              <code className="text-xs">client.placeorder(symbol, exchange, action, quantity, price_type, product_type)</code>
+              <code className="text-xs">
+                client.placeorder(symbol, exchange, action, quantity, price_type, product_type)
+              </code>
             </div>
             <div className="bg-muted p-3 rounded-lg">
               <p className="font-medium mb-1">Get Quotes</p>

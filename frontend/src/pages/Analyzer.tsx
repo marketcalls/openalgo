@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { JsonEditor } from '@/components/ui/json-editor'
 import { Label } from '@/components/ui/label'
 import {
   Table,
@@ -23,7 +24,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { JsonEditor } from '@/components/ui/json-editor'
 
 interface ApiRequest {
   timestamp: string
@@ -81,7 +81,7 @@ export default function Analyzer() {
   useEffect(() => {
     fetchData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fetchData])
 
   const fetchData = async (start?: string, end?: string) => {
     setIsLoading(true)
@@ -182,7 +182,9 @@ export default function Analyzer() {
         <CardContent>
           <form onSubmit={handleFilter} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
             <div className="space-y-2">
-              <Label htmlFor="start_date" className="text-sm font-medium">Start Date</Label>
+              <Label htmlFor="start_date" className="text-sm font-medium">
+                Start Date
+              </Label>
               <Input
                 id="start_date"
                 type="date"
@@ -192,7 +194,9 @@ export default function Analyzer() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="end_date" className="text-sm font-medium">End Date</Label>
+              <Label htmlFor="end_date" className="text-sm font-medium">
+                End Date
+              </Label>
               <Input
                 id="end_date"
                 type="date"
@@ -370,36 +374,41 @@ export default function Analyzer() {
           <DialogHeader>
             <DialogTitle>Request Details</DialogTitle>
           </DialogHeader>
-          {selectedRequest && (() => {
-            const requestJson = JSON.stringify(cleanRequestData(selectedRequest.request_data), null, 2)
-            const responseJson = JSON.stringify(
-              selectedRequest.response_data || selectedRequest.analysis,
-              null,
-              2
-            )
-            const requestLines = requestJson.split('\n').length
-            const responseLines = responseJson.split('\n').length
-            const maxLines = Math.max(requestLines, responseLines)
-            // Allow up to 70vh height
-            const height = Math.min(Math.max(maxLines * 20 + 24, 200), window.innerHeight * 0.7)
+          {selectedRequest &&
+            (() => {
+              const requestJson = JSON.stringify(
+                cleanRequestData(selectedRequest.request_data),
+                null,
+                2
+              )
+              const responseJson = JSON.stringify(
+                selectedRequest.response_data || selectedRequest.analysis,
+                null,
+                2
+              )
+              const requestLines = requestJson.split('\n').length
+              const responseLines = responseJson.split('\n').length
+              const maxLines = Math.max(requestLines, responseLines)
+              // Allow up to 70vh height
+              const height = Math.min(Math.max(maxLines * 20 + 24, 200), window.innerHeight * 0.7)
 
-            return (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 max-h-[85vh] overflow-y-auto">
-                <div className="min-w-0 overflow-hidden">
-                  <h4 className="font-semibold mb-2">Request Data</h4>
-                  <div className="rounded-lg border bg-card/50 overflow-auto" style={{ height }}>
-                    <JsonEditor value={requestJson} readOnly={true} lineWrapping={false} />
+              return (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 max-h-[85vh] overflow-y-auto">
+                  <div className="min-w-0 overflow-hidden">
+                    <h4 className="font-semibold mb-2">Request Data</h4>
+                    <div className="rounded-lg border bg-card/50 overflow-auto" style={{ height }}>
+                      <JsonEditor value={requestJson} readOnly={true} lineWrapping={false} />
+                    </div>
+                  </div>
+                  <div className="min-w-0 overflow-hidden">
+                    <h4 className="font-semibold mb-2">Response Data</h4>
+                    <div className="rounded-lg border bg-card/50 overflow-auto" style={{ height }}>
+                      <JsonEditor value={responseJson} readOnly={true} lineWrapping={false} />
+                    </div>
                   </div>
                 </div>
-                <div className="min-w-0 overflow-hidden">
-                  <h4 className="font-semibold mb-2">Response Data</h4>
-                  <div className="rounded-lg border bg-card/50 overflow-auto" style={{ height }}>
-                    <JsonEditor value={responseJson} readOnly={true} lineWrapping={false} />
-                  </div>
-                </div>
-              </div>
-            )
-          })()}
+              )
+            })()}
         </DialogContent>
       </Dialog>
     </div>

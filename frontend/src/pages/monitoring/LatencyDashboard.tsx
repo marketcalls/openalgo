@@ -79,7 +79,7 @@ export default function LatencyDashboard() {
     const interval = setInterval(fetchData, 30000)
     return () => clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fetchData])
 
   const fetchData = async () => {
     try {

@@ -155,8 +155,7 @@ function App() {
                   path="/chartink/:strategyId/configure"
                   element={<ConfigureChartinkSymbols />}
                 />
-                {/* Flow Workflows */}
-                <Route path="/flow" element={<FlowIndex />} />
+                {/* Flow Workflows - moved to full-width layout */}
                 {/* Phase 7: Admin */}
                 <Route path="/admin" element={<AdminIndex />} />
                 <Route path="/admin/freeze" element={<FreezeQty />} />
@@ -185,7 +184,8 @@ function App() {
                 <Route path="/historify" element={<Historify />} />
                 <Route path="/historify/charts" element={<HistorifyCharts />} />
                 <Route path="/historify/charts/:symbol" element={<HistorifyCharts />} />
-                {/* Flow Editor (full-width for canvas) */}
+                {/* Flow Workflows */}
+                <Route path="/flow" element={<FlowIndex />} />
                 <Route path="/flow/editor/:id" element={<FlowEditor />} />
               </Route>
 

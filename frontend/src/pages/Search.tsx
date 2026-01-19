@@ -57,7 +57,7 @@ export default function Search() {
   useEffect(() => {
     fetchResults()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [fetchResults])
 
   const fetchResults = async () => {
     setIsLoading(true)

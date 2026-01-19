@@ -1,57 +1,74 @@
 // pages/flow/FlowEditor.tsx
 // Flow visual workflow editor page
 
-import { useCallback, useRef, useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { toast } from 'sonner'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ReactFlow,
-  ReactFlowProvider,
   Background,
   Controls,
-  MiniMap,
-  Panel,
-  useReactFlow,
-  type Node,
   type Edge,
+  MiniMap,
+  type Node,
+  Panel,
+  ReactFlow,
+  ReactFlowProvider,
+  useReactFlow,
 } from '@xyflow/react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { toast } from 'sonner'
 import '@xyflow/react/dist/style.css'
 import {
   ArrowLeft,
-  Save,
-  Play,
-  Pause,
-  Loader2,
-  MoreVertical,
-  Terminal,
+  BarChart3,
   Download,
+  Home,
+  Loader2,
+  LogOut,
+  Moon,
+  MoreVertical,
+  Pause,
+  Play,
+  Save,
+  Sun,
+  Terminal,
+  Trash2,
+  Zap,
 } from 'lucide-react'
+import { authApi } from '@/api/auth'
 import {
-  getWorkflow,
-  updateWorkflow,
   activateWorkflow,
   deactivateWorkflow,
   executeWorkflow,
   exportWorkflow,
   flowQueryKeys,
+  getWorkflow,
+  updateWorkflow,
 } from '@/api/flow'
-import { useFlowWorkflowStore } from '@/stores/flowWorkflowStore'
-import { DEFAULT_NODE_DATA } from '@/lib/flow/constants'
+import { edgeTypes } from '@/components/flow/edges'
+// Import Flow components
+import { nodeTypes } from '@/components/flow/nodes'
+import {
+  ConfigPanel,
+  ExecutionLogPanel,
+  type LogEntry,
+  NodePalette,
+} from '@/components/flow/panels'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
+import { profileMenuItems } from '@/config/navigation'
+import { DEFAULT_NODE_DATA } from '@/lib/flow/constants'
 import { cn } from '@/lib/utils'
-
-// Import Flow components
-import { nodeTypes } from '@/components/flow/nodes'
-import { edgeTypes } from '@/components/flow/edges'
-import { NodePalette, ConfigPanel, ExecutionLogPanel, type LogEntry } from '@/components/flow/panels'
+import { useAuthStore } from '@/stores/authStore'
+import { useFlowWorkflowStore } from '@/stores/flowWorkflowStore'
+import { useThemeStore } from '@/stores/themeStore'
 
 let nodeId = 0
 const getNodeId = () => `node_${nodeId++}`
@@ -62,6 +79,10 @@ function FlowEditorContent() {
   const queryClient = useQueryClient()
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const { screenToFlowPosition } = useReactFlow()
+
+  // Theme and auth stores
+  const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
+  const { user, logout } = useAuthStore()
 
   const {
     name,
@@ -85,7 +106,30 @@ function FlowEditorContent() {
   const [isActive, setIsActive] = useState(false)
   const [showLogPanel, setShowLogPanel] = useState(false)
   const [executionLogs, setExecutionLogs] = useState<LogEntry[]>([])
-  const [executionStatus, setExecutionStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle')
+  const [executionStatus, setExecutionStatus] = useState<'idle' | 'running' | 'success' | 'error'>(
+    'idle'
+  )
+
+  const handleLogout = async () => {
+    try {
+      await authApi.logout()
+      logout()
+      navigate('/login')
+      toast.success('Logged out successfully')
+    } catch {
+      logout()
+      navigate('/login')
+    }
+  }
+
+  const handleModeToggle = async () => {
+    try {
+      await toggleAppMode()
+      toast.success(`Switched to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Failed to toggle mode')
+    }
+  }
 
   const { isLoading, data: workflow } = useQuery({
     queryKey: flowQueryKeys.workflow(Number(id)),
@@ -114,7 +158,7 @@ function FlowEditorContent() {
         0,
         ...workflow.nodes.map((n) => {
           const match = n.id.match(/node_(\d+)/)
-          return match ? parseInt(match[1]) : 0
+          return match ? parseInt(match[1], 10) : 0
         })
       )
       nodeId = maxId + 1
@@ -305,29 +349,138 @@ function FlowEditorContent() {
 
   if (isLoading) {
     return (
-      <div className="flex h-screen items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      <div className="h-full flex flex-col bg-background text-foreground">
+        {/* Top Header Bar */}
+        <div className="h-12 border-b border-border flex items-center px-2 bg-card/50">
+          <div className="flex items-center gap-2 px-2">
+            <img src="/images/android-chrome-192x192.png" alt="OpenAlgo" className="w-6 h-6" />
+            <span className="font-semibold text-sm">openalgo</span>
+          </div>
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="flex h-screen flex-col">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between border-b border-border bg-card px-4 py-2">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => navigate('/flow')}>
+    <div className="flex h-screen flex-col bg-background text-foreground">
+      {/* Top Header Bar */}
+      <div className="h-12 border-b border-border flex items-center px-2 bg-card/50">
+        {/* Left: Logo and Back */}
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => navigate('/flow')}>
             <ArrowLeft className="h-4 w-4" />
           </Button>
+          <div className="flex items-center gap-2 px-2">
+            <img src="/images/android-chrome-192x192.png" alt="OpenAlgo" className="w-6 h-6" />
+            <span className="font-semibold text-sm">openalgo</span>
+          </div>
+        </div>
+
+        {/* Center: Workflow Name */}
+        <div className="flex-1 flex items-center justify-center gap-2">
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="h-8 w-64 border-transparent bg-transparent px-2 font-medium hover:border-border focus:border-border"
+            className="h-7 w-64 border-transparent bg-transparent px-2 font-medium text-center hover:border-border focus:border-border"
           />
-          {isModified && (
-            <span className="text-xs text-muted-foreground">Unsaved</span>
-          )}
+          {isModified && <span className="text-xs text-muted-foreground">Unsaved</span>}
         </div>
+
+        {/* Right: Actions */}
+        <div className="flex items-center gap-2 px-2">
+          {/* Mode Badge */}
+          <Badge
+            variant={appMode === 'live' ? 'default' : 'secondary'}
+            className={cn(
+              'text-xs',
+              appMode === 'analyzer' && 'bg-purple-500 hover:bg-purple-600 text-white'
+            )}
+          >
+            <span className="hidden sm:inline">
+              {appMode === 'live' ? 'Live Mode' : 'Analyze Mode'}
+            </span>
+            <span className="sm:hidden">{appMode === 'live' ? 'Live' : 'Analyze'}</span>
+          </Badge>
+
+          {/* Mode Toggle */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={handleModeToggle}
+            disabled={isTogglingMode}
+            title={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
+          >
+            {isTogglingMode ? (
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            ) : appMode === 'live' ? (
+              <Zap className="h-4 w-4" />
+            ) : (
+              <BarChart3 className="h-4 w-4" />
+            )}
+          </Button>
+
+          {/* Theme Toggle */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={toggleMode}
+            disabled={appMode !== 'live'}
+            title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+          >
+            {mode === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </Button>
+
+          <Button variant="ghost" size="sm" className="h-7 text-xs" asChild>
+            <Link to="/dashboard">
+              <Home className="h-3.5 w-3.5 mr-1.5" />
+              Dashboard
+            </Link>
+          </Button>
+
+          {/* Profile Dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 rounded-full bg-primary text-primary-foreground"
+              >
+                <span className="text-sm font-medium">
+                  {user?.username?.[0]?.toUpperCase() || 'O'}
+                </span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              {profileMenuItems.map((item) => (
+                <DropdownMenuItem
+                  key={item.href}
+                  onSelect={() => navigate(item.href)}
+                  className="cursor-pointer"
+                >
+                  <item.icon className="h-4 w-4 mr-2" />
+                  {item.label}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={handleLogout}
+                className="cursor-pointer text-destructive focus:text-destructive"
+              >
+                <LogOut className="h-4 w-4 mr-2" />
+                Log out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+
+      {/* Secondary Toolbar - Workflow Controls */}
+      <div className="flex items-center justify-between border-b border-border bg-card px-4 py-2">
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
@@ -370,6 +523,8 @@ function FlowEditorContent() {
               Activate
             </Button>
           )}
+        </div>
+        <div className="flex items-center gap-2">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon">
@@ -430,11 +585,7 @@ function FlowEditorContent() {
           >
             <Background gap={16} size={1} />
             <Controls />
-            <MiniMap
-              nodeStrokeWidth={3}
-              pannable
-              zoomable
-            />
+            <MiniMap nodeStrokeWidth={3} pannable zoomable />
             <Panel position="bottom-center" className="mb-4">
               <div
                 className={cn(
@@ -442,10 +593,41 @@ function FlowEditorContent() {
                   isActive && 'border-green-500/30 bg-green-500/5'
                 )}
               >
-                <div className={cn('h-2 w-2 rounded-full', isActive ? 'bg-green-500' : 'bg-muted-foreground')} />
+                <div
+                  className={cn(
+                    'h-2 w-2 rounded-full',
+                    isActive ? 'bg-green-500' : 'bg-muted-foreground'
+                  )}
+                />
                 <span className="text-muted-foreground">
                   {isActive ? 'Workflow active' : 'Workflow inactive'}
                 </span>
+              </div>
+            </Panel>
+            {/* OpenAlgo Logo Watermark */}
+            <Panel position="bottom-right" className="mb-4 mr-4">
+              <div className="flex flex-col items-center gap-2">
+                <div className="rounded-lg border border-border bg-card/80 p-3 backdrop-blur-sm">
+                  <img
+                    src="/images/android-chrome-192x192.png"
+                    alt="OpenAlgo"
+                    className="h-12 w-12 opacity-80"
+                  />
+                  <div className="mt-1 text-center text-[10px] text-muted-foreground font-semibold tracking-wider uppercase">
+                    OpenAlgo
+                  </div>
+                </div>
+                {selectedNodeId && (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={deleteSelected}
+                    className="w-full"
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Delete Node
+                  </Button>
+                )}
               </div>
             </Panel>
           </ReactFlow>
