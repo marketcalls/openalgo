@@ -68,8 +68,12 @@ def send_test_email(recipient_email, sender_name="OpenAlgo Admin"):
                     <!-- Header -->
                     <tr>
                         <td style="padding: 40px 40px 30px 40px; text-align: center;">
-                            <div style="width: 56px; height: 56px; background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); border-radius: 14px; margin: 0 auto 24px auto; display: flex; align-items: center; justify-content: center;">
-                                <span style="font-size: 28px; line-height: 56px;">&#10003;</span>
+                            <div style="width: 56px; height: 56px; background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); border-radius: 14px; margin: 0 auto 24px auto;">
+                                <table role="presentation" width="100%" height="100%">
+                                    <tr>
+                                        <td align="center" valign="middle" style="font-size: 28px; color: #1a1a1a;">&#10003;</td>
+                                    </tr>
+                                </table>
                             </div>
                             <h1 style="margin: 0; font-size: 24px; font-weight: 600; color: #fafafa; letter-spacing: -0.5px;">Connection Verified</h1>
                             <p style="margin: 12px 0 0 0; font-size: 15px; color: #a1a1aa;">Your SMTP configuration is working</p>
