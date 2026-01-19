@@ -85,11 +85,10 @@ authClient.interceptors.request.use(
 )
 
 // Web client for session-based routes (non-API endpoints) with CSRF support
+// Note: Don't set default Content-Type here - let axios set it automatically based on data type
+// (multipart/form-data for FormData, application/json for objects, etc.)
 export const webClient = axios.create({
   baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
   withCredentials: true,
 })
 
