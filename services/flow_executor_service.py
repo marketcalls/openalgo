@@ -1,0 +1,929 @@
+# services/flow_executor_service.py
+"""
+Flow Workflow Executor Service
+Executes workflow nodes using internal OpenAlgo services (synchronous Flask version)
+"""
+
+from datetime import datetime, time
+from typing import Optional, Dict, Any, List, Tuple
+import logging
+import re
+import json
+import time as time_module
+import threading
+
+from database.flow_db import (
+    get_workflow, create_execution, update_execution_status,
+    add_execution_log, get_execution
+)
+from services.flow_openalgo_client import get_flow_client, FlowOpenAlgoClient
+
+logger = logging.getLogger(__name__)
+
+# Execution limits
+MAX_NODE_DEPTH = 100
+MAX_NODE_VISITS = 500
+
+# Execution locks to prevent concurrent execution
+_workflow_locks: Dict[int, threading.Lock] = {}
+_locks_mutex = threading.Lock()
+
+
+def get_workflow_lock(workflow_id: int) -> threading.Lock:
+    """Get or create a lock for a workflow"""
+    with _locks_mutex:
+        if workflow_id not in _workflow_locks:
+            _workflow_locks[workflow_id] = threading.Lock()
+        return _workflow_locks[workflow_id]
+
+
+def parse_time_string(time_str: str, default_hour: int = 9, default_minute: int = 15) -> Tuple[int, int, int]:
+    """Parse a time string in HH:MM or HH:MM:SS format"""
+    if not time_str or not isinstance(time_str, str):
+        return (default_hour, default_minute, 0)
+
+    try:
+        parts = time_str.strip().split(":")
+        if not parts:
+            return (default_hour, default_minute, 0)
+
+        hour = int(parts[0]) if parts[0].isdigit() else default_hour
+        minute = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else default_minute
+        second = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+
+        hour = max(0, min(23, hour))
+        minute = max(0, min(59, minute))
+        second = max(0, min(59, second))
+
+        return (hour, minute, second)
+    except (ValueError, AttributeError, IndexError):
+        return (default_hour, default_minute, 0)
+
+
+class WorkflowContext:
+    """Context for storing variables during workflow execution"""
+
+    def __init__(self):
+        self.variables: Dict[str, Any] = {}
+        self.condition_results: Dict[str, bool] = {}
+
+    def set_variable(self, name: str, value: Any):
+        """Store a variable"""
+        self.variables[name] = value
+
+    def get_variable(self, name: str, default: Any = None) -> Any:
+        """Get a variable value"""
+        return self.variables.get(name, default)
+
+    def set_condition_result(self, node_id: str, result: bool):
+        """Store a condition result for a node"""
+        self.condition_results[node_id] = result
+
+    def get_condition_result(self, node_id: str) -> Optional[bool]:
+        """Get the condition result for a node"""
+        return self.condition_results.get(node_id)
+
+    def _get_builtin_variable(self, name: str) -> Optional[str]:
+        """Get built-in system variables"""
+        now = datetime.now()
+        builtins = {
+            "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "date": now.strftime("%Y-%m-%d"),
+            "time": now.strftime("%H:%M:%S"),
+            "year": now.strftime("%Y"),
+            "month": now.strftime("%m"),
+            "day": now.strftime("%d"),
+            "hour": now.strftime("%H"),
+            "minute": now.strftime("%M"),
+            "second": now.strftime("%S"),
+            "weekday": now.strftime("%A"),
+            "iso_timestamp": now.isoformat(),
+        }
+        return builtins.get(name)
+
+    def interpolate(self, text: str) -> str:
+        """Replace {{variable}} patterns with actual values"""
+        if not isinstance(text, str):
+            return text
+
+        def replacer(match):
+            var_path = match.group(1).strip()
+
+            # Check built-in variables first
+            builtin_value = self._get_builtin_variable(var_path)
+            if builtin_value is not None:
+                return builtin_value
+
+            # Then check user variables
+            parts = var_path.split(".")
+            value = self.variables
+
+            for part in parts:
+                if isinstance(value, dict):
+                    value = value.get(part)
+                else:
+                    return match.group(0)
+
+                if value is None:
+                    return match.group(0)
+
+            return str(value) if value is not None else match.group(0)
+
+        return re.sub(r"\{\{([^}]+)\}\}", replacer, text)
+
+
+class NodeExecutor:
+    """Executes individual workflow nodes"""
+
+    def __init__(self, client: FlowOpenAlgoClient, context: WorkflowContext, logs: list):
+        self.client = client
+        self.context = context
+        self.logs = logs
+
+    def log(self, message: str, level: str = "info"):
+        """Add log entry"""
+        self.logs.append({
+            "time": datetime.utcnow().isoformat(),
+            "message": message,
+            "level": level
+        })
+        if level == "error":
+            logger.error(message)
+        else:
+            logger.info(message)
+
+    def store_output(self, node_data: dict, result: Any):
+        """Store result in output variable if configured"""
+        output_var = node_data.get("outputVariable")
+        if output_var and output_var.strip():
+            self.context.set_variable(output_var.strip(), result)
+            self.log(f"Stored result in variable: {output_var}")
+
+    def get_str(self, node_data: dict, key: str, default: str = "") -> str:
+        """Get interpolated string value from node data"""
+        value = node_data.get(key, default)
+        return self.context.interpolate(str(value)) if value else default
+
+    def get_int(self, node_data: dict, key: str, default: int = 0) -> int:
+        """Get interpolated integer value from node data"""
+        value = node_data.get(key, default)
+        if isinstance(value, str):
+            interpolated = self.context.interpolate(value)
+            try:
+                return int(float(interpolated))
+            except (ValueError, TypeError):
+                return default
+        return int(value) if value else default
+
+    def get_float(self, node_data: dict, key: str, default: float = 0.0) -> float:
+        """Get interpolated float value from node data"""
+        value = node_data.get(key, default)
+        if isinstance(value, str):
+            interpolated = self.context.interpolate(value)
+            try:
+                return float(interpolated)
+            except (ValueError, TypeError):
+                return default
+        return float(value) if value else default
+
+    # === Order Nodes ===
+
+    def execute_place_order(self, node_data: dict) -> dict:
+        """Execute Place Order node"""
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        action = self.get_str(node_data, "action", "BUY")
+        quantity = self.get_int(node_data, "quantity", 1)
+        price_type = self.get_str(node_data, "priceType", "MARKET")
+        product = self.get_str(node_data, "product", "MIS")
+        price = self.get_float(node_data, "price", 0)
+        trigger_price = self.get_float(node_data, "triggerPrice", 0)
+
+        self.log(f"Placing order: {symbol} {action} qty={quantity}")
+        result = self.client.place_order(
+            symbol=symbol, exchange=exchange, action=action, quantity=quantity,
+            price_type=price_type, product_type=product, price=price, trigger_price=trigger_price
+        )
+        self.log(f"Order result: {result}", "info" if result.get("status") == "success" else "error")
+        self.store_output(node_data, result)
+        return result
+
+    def execute_smart_order(self, node_data: dict) -> dict:
+        """Execute Smart Order node"""
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        action = self.get_str(node_data, "action", "BUY")
+        quantity = self.get_int(node_data, "quantity", 1)
+        position_size = self.get_int(node_data, "positionSize", 0)
+        price_type = self.get_str(node_data, "priceType", "MARKET")
+        product = self.get_str(node_data, "product", "MIS")
+
+        self.log(f"Placing smart order: {symbol} {action}")
+        result = self.client.place_smart_order(
+            symbol=symbol, exchange=exchange, action=action, quantity=quantity,
+            position_size=position_size, price_type=price_type, product_type=product
+        )
+        self.log(f"Smart order result: {result}", "info" if result.get("status") == "success" else "error")
+        self.store_output(node_data, result)
+        return result
+
+    def execute_cancel_order(self, node_data: dict) -> dict:
+        """Execute Cancel Order node"""
+        order_id = self.context.interpolate(str(node_data.get("orderId", "")))
+        self.log(f"Cancelling order: {order_id}")
+        result = self.client.cancel_order(order_id=order_id)
+        self.log(f"Cancel result: {result}", "info" if result.get("status") == "success" else "error")
+        return result
+
+    def execute_cancel_all_orders(self, node_data: dict) -> dict:
+        """Execute Cancel All Orders node"""
+        self.log("Cancelling all orders")
+        result = self.client.cancel_all_orders()
+        self.log(f"Cancel all result: {result}", "info" if result.get("status") == "success" else "error")
+        return result
+
+    def execute_close_positions(self, node_data: dict) -> dict:
+        """Execute Close Position node"""
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        product = self.get_str(node_data, "product", "MIS")
+        self.log(f"Closing position: {symbol}")
+        result = self.client.close_position(symbol=symbol, exchange=exchange, product_type=product)
+        self.log(f"Close position result: {result}", "info" if result.get("status") == "success" else "error")
+        return result
+
+    def execute_basket_order(self, node_data: dict) -> dict:
+        """Execute Basket Order node"""
+        orders_raw = node_data.get("orders", "")
+        product = self.get_str(node_data, "product", "MIS")
+        price_type = self.get_str(node_data, "priceType", "MARKET")
+
+        orders = []
+        if isinstance(orders_raw, str):
+            for line in orders_raw.strip().split('\n'):
+                line = line.strip()
+                if not line:
+                    continue
+                parts = [p.strip() for p in line.split(',')]
+                if len(parts) >= 4:
+                    try:
+                        order = {
+                            "symbol": self.context.interpolate(parts[0]),
+                            "exchange": self.context.interpolate(parts[1]),
+                            "action": self.context.interpolate(parts[2]).upper(),
+                            "quantity": int(self.context.interpolate(parts[3])),
+                            "pricetype": price_type,
+                            "product": product
+                        }
+                        orders.append(order)
+                    except (ValueError, IndexError):
+                        pass
+        elif isinstance(orders_raw, list):
+            orders = orders_raw
+
+        if not orders:
+            return {"status": "error", "message": "No valid orders"}
+
+        self.log(f"Placing basket order with {len(orders)} orders")
+        result = self.client.basket_order(orders=orders)
+        self.log(f"Basket order result: {result}", "info" if result.get("status") == "success" else "error")
+        self.store_output(node_data, result)
+        return result
+
+    def execute_split_order(self, node_data: dict) -> dict:
+        """Execute Split Order node"""
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        action = self.get_str(node_data, "action", "BUY")
+        quantity = self.get_int(node_data, "quantity", 1)
+        split_size = self.get_int(node_data, "splitSize", 10)
+        price_type = self.get_str(node_data, "priceType", "MARKET")
+        product = self.get_str(node_data, "product", "MIS")
+
+        self.log(f"Placing split order: {symbol} qty={quantity} split={split_size}")
+        result = self.client.split_order(
+            symbol=symbol, exchange=exchange, action=action, quantity=quantity,
+            split_size=split_size, price_type=price_type, product_type=product
+        )
+        self.log(f"Split order result: {result}", "info" if result.get("status") == "success" else "error")
+        self.store_output(node_data, result)
+        return result
+
+    # === Data Nodes ===
+
+    def execute_get_quote(self, node_data: dict) -> dict:
+        """Execute Get Quote node"""
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        self.log(f"Getting quote for: {symbol}")
+        result = self.client.get_quotes(symbol=symbol, exchange=exchange)
+        self.log(f"Quote result: {result}")
+        self.store_output(node_data, result)
+        return result
+
+    def execute_get_depth(self, node_data: dict) -> dict:
+        """Execute Get Depth node"""
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        self.log(f"Getting depth for: {symbol}")
+        result = self.client.get_depth(symbol=symbol, exchange=exchange)
+        self.store_output(node_data, result)
+        return result
+
+    def execute_open_position(self, node_data: dict) -> dict:
+        """Execute Open Position node"""
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        product = self.get_str(node_data, "product", "MIS")
+        self.log(f"Getting open position for: {symbol}")
+        result = self.client.get_open_position(symbol=symbol, exchange=exchange, product_type=product)
+        self.store_output(node_data, result)
+        return result
+
+    def execute_history(self, node_data: dict) -> dict:
+        """Execute History node"""
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        interval = self.get_str(node_data, "interval", "5m")
+        start_date = self.get_str(node_data, "startDate", "")
+        end_date = self.get_str(node_data, "endDate", "")
+        self.log(f"Getting history for: {symbol}")
+        result = self.client.get_history(
+            symbol=symbol, exchange=exchange, interval=interval,
+            start_date=start_date, end_date=end_date
+        )
+        self.store_output(node_data, result)
+        return result
+
+    def execute_order_book(self, node_data: dict) -> dict:
+        """Execute OrderBook node"""
+        self.log("Fetching order book")
+        result = self.client.orderbook()
+        self.store_output(node_data, result)
+        return result
+
+    def execute_trade_book(self, node_data: dict) -> dict:
+        """Execute TradeBook node"""
+        self.log("Fetching trade book")
+        result = self.client.tradebook()
+        self.store_output(node_data, result)
+        return result
+
+    def execute_position_book(self, node_data: dict) -> dict:
+        """Execute PositionBook node"""
+        self.log("Fetching position book")
+        result = self.client.positionbook()
+        self.store_output(node_data, result)
+        return result
+
+    def execute_holdings(self, node_data: dict) -> dict:
+        """Execute Holdings node"""
+        self.log("Fetching holdings")
+        result = self.client.holdings()
+        self.store_output(node_data, result)
+        return result
+
+    def execute_funds(self, node_data: dict) -> dict:
+        """Execute Funds node"""
+        self.log("Fetching funds")
+        result = self.client.funds()
+        self.store_output(node_data, result)
+        return result
+
+    # === Utility Nodes ===
+
+    def execute_delay(self, node_data: dict) -> dict:
+        """Execute Delay node"""
+        delay_value = node_data.get("delayValue")
+        delay_unit = node_data.get("delayUnit", "seconds")
+
+        if delay_value is not None:
+            delay_value = int(delay_value)
+            if delay_unit == "minutes":
+                delay_seconds = delay_value * 60
+            elif delay_unit == "hours":
+                delay_seconds = delay_value * 3600
+            else:
+                delay_seconds = delay_value
+        else:
+            delay_ms = int(node_data.get("delayMs", 1000))
+            delay_seconds = delay_ms / 1000
+
+        self.log(f"Waiting for {delay_seconds} seconds")
+        time_module.sleep(delay_seconds)
+        return {"status": "success", "message": f"Waited {delay_seconds}s"}
+
+    def execute_wait_until(self, node_data: dict) -> dict:
+        """Execute Wait Until node"""
+        target_time_str = node_data.get("targetTime", "09:30")
+        target_hour, target_minute, target_second = parse_time_string(target_time_str, 9, 30)
+        target_time = time(target_hour, target_minute, target_second)
+
+        now = datetime.now().time()
+        now_seconds = now.hour * 3600 + now.minute * 60 + now.second
+        target_seconds = target_time.hour * 3600 + target_time.minute * 60 + target_time.second
+
+        if now_seconds >= target_seconds:
+            self.log(f"Target time {target_time_str} already passed")
+            return {"status": "success", "waited": False}
+
+        wait_seconds = target_seconds - now_seconds
+        self.log(f"Waiting until {target_time_str} (~{wait_seconds}s)")
+        time_module.sleep(wait_seconds)
+        return {"status": "success", "waited": True}
+
+    def execute_log(self, node_data: dict) -> dict:
+        """Execute Log node"""
+        message = self.context.interpolate(node_data.get("message", ""))
+        log_level = node_data.get("level", "info")
+        self.log(f"[LOG] {message}", log_level)
+        return {"status": "success", "message": message}
+
+    def execute_variable(self, node_data: dict) -> dict:
+        """Execute Variable node"""
+        var_name = node_data.get("variableName") or node_data.get("name", "")
+        operation = node_data.get("operation", "set")
+        var_value = node_data.get("value", "")
+
+        if isinstance(var_value, str):
+            var_value = self.context.interpolate(var_value)
+
+        if operation == "set":
+            if isinstance(var_value, str):
+                if var_value.startswith("{") or var_value.startswith("["):
+                    try:
+                        var_value = json.loads(var_value)
+                    except json.JSONDecodeError:
+                        pass
+            self.context.set_variable(var_name, var_value)
+            self.log(f"Set variable {var_name} = {var_value}")
+        elif operation == "add":
+            current = float(self.context.get_variable(var_name, 0) or 0)
+            result = current + float(var_value or 0)
+            self.context.set_variable(var_name, result)
+            var_value = result
+        elif operation == "increment":
+            current = float(self.context.get_variable(var_name, 0) or 0)
+            result = current + 1
+            self.context.set_variable(var_name, result)
+            var_value = result
+        elif operation == "decrement":
+            current = float(self.context.get_variable(var_name, 0) or 0)
+            result = current - 1
+            self.context.set_variable(var_name, result)
+            var_value = result
+
+        return {"status": "success", "variable": var_name, "value": var_value}
+
+    def execute_telegram_alert(self, node_data: dict) -> dict:
+        """Execute Telegram Alert node"""
+        message = self.context.interpolate(node_data.get("message", ""))
+        self.log(f"Sending Telegram alert: {message}")
+        result = self.client.telegram(message=message)
+        self.log(f"Telegram result: {result}", "info" if result.get("status") == "success" else "error")
+        return result
+
+    def execute_http_request(self, node_data: dict) -> dict:
+        """Execute HTTP Request node"""
+        import requests
+
+        method = self.get_str(node_data, "method", "GET").upper()
+        url = self.get_str(node_data, "url", "")
+        headers_raw = node_data.get("headers", {})
+        body = node_data.get("body", "")
+        timeout = self.get_int(node_data, "timeout", 30)
+
+        if not url:
+            return {"status": "error", "message": "No URL specified"}
+
+        headers = {}
+        if isinstance(headers_raw, dict):
+            for key, value in headers_raw.items():
+                headers[key] = self.context.interpolate(str(value))
+
+        url = self.context.interpolate(url)
+        if isinstance(body, str) and body:
+            body = self.context.interpolate(body)
+
+        self.log(f"HTTP {method} {url}")
+
+        try:
+            if method == "GET":
+                response = requests.get(url, headers=headers, timeout=timeout)
+            elif method == "POST":
+                try:
+                    body_json = json.loads(body) if body else {}
+                    response = requests.post(url, json=body_json, headers=headers, timeout=timeout)
+                except json.JSONDecodeError:
+                    response = requests.post(url, data=body, headers=headers, timeout=timeout)
+            elif method == "PUT":
+                try:
+                    body_json = json.loads(body) if body else {}
+                    response = requests.put(url, json=body_json, headers=headers, timeout=timeout)
+                except json.JSONDecodeError:
+                    response = requests.put(url, data=body, headers=headers, timeout=timeout)
+            elif method == "DELETE":
+                response = requests.delete(url, headers=headers, timeout=timeout)
+            else:
+                return {"status": "error", "message": f"Unsupported method: {method}"}
+
+            try:
+                response_data = response.json()
+            except:
+                response_data = response.text
+
+            result = {
+                "status": "success" if response.ok else "error",
+                "statusCode": response.status_code,
+                "data": response_data,
+            }
+            self.store_output(node_data, result)
+            return result
+
+        except requests.exceptions.RequestException as e:
+            return {"status": "error", "message": str(e)}
+
+    # === Condition Nodes ===
+
+    def _evaluate_condition(self, value: float, operator: str, threshold: float) -> bool:
+        """Evaluate a condition"""
+        operators = {
+            "gt": value > threshold,
+            "gte": value >= threshold,
+            "lt": value < threshold,
+            "lte": value <= threshold,
+            "eq": value == threshold,
+            "neq": value != threshold,
+        }
+        return operators.get(operator, False)
+
+    def execute_position_check(self, node_data: dict) -> dict:
+        """Execute Position Check node"""
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        product = self.get_str(node_data, "product", "MIS")
+        operator = self.get_str(node_data, "operator", "gt")
+        threshold = self.get_int(node_data, "threshold", 0)
+
+        self.log(f"Checking position for: {symbol}")
+        result = self.client.get_open_position(symbol=symbol, exchange=exchange, product_type=product)
+        data = result.get("data") or {}
+        quantity = int(data.get("quantity", 0) if data else 0)
+        condition_met = self._evaluate_condition(quantity, operator, threshold)
+        self.log(f"Position check: qty={quantity} {operator} {threshold} = {condition_met}")
+        return {"status": "success", "condition": condition_met, "quantity": quantity}
+
+    def execute_fund_check(self, node_data: dict) -> dict:
+        """Execute Fund Check node"""
+        operator = self.get_str(node_data, "operator", "gt")
+        threshold = self.get_float(node_data, "threshold", 0)
+
+        self.log("Checking funds")
+        result = self.client.funds()
+        data = result.get("data", {})
+        available = float(data.get("availablecash", 0) if data else 0)
+        condition_met = self._evaluate_condition(available, operator, threshold)
+        self.log(f"Fund check: available={available} {operator} {threshold} = {condition_met}")
+        return {"status": "success", "condition": condition_met, "available": available}
+
+    def execute_price_condition(self, node_data: dict) -> dict:
+        """Execute Price Condition node"""
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        operator = self.get_str(node_data, "operator", "gt")
+        threshold = self.get_float(node_data, "threshold", 0)
+
+        self.log(f"Checking price for: {symbol}")
+        result = self.client.get_quotes(symbol=symbol, exchange=exchange)
+        data = result.get("data", {})
+        ltp = float(data.get("ltp", 0) if data else 0)
+        condition_met = self._evaluate_condition(ltp, operator, threshold)
+        self.log(f"Price check: ltp={ltp} {operator} {threshold} = {condition_met}")
+        return {"status": "success", "condition": condition_met, "ltp": ltp}
+
+    def execute_time_window(self, node_data: dict) -> dict:
+        """Execute Time Window node"""
+        start_time_str = node_data.get("startTime", "09:15")
+        end_time_str = node_data.get("endTime", "15:30")
+
+        now = datetime.now().time()
+        start_h, start_m, _ = parse_time_string(start_time_str, 9, 15)
+        end_h, end_m, _ = parse_time_string(end_time_str, 15, 30)
+        start_time = time(start_h, start_m)
+        end_time = time(end_h, end_m)
+
+        condition_met = start_time <= now <= end_time
+        self.log(f"Time window: {start_time_str}-{end_time_str}, in_window={condition_met}")
+        return {"status": "success", "condition": condition_met}
+
+    def execute_time_condition(self, node_data: dict) -> dict:
+        """Execute Time Condition node"""
+        target_time_str = node_data.get("targetTime", "09:30")
+        operator = node_data.get("operator", ">=")
+
+        now = datetime.now().time()
+        target_hour, target_minute, _ = parse_time_string(target_time_str, 9, 30)
+        target_time = time(target_hour, target_minute)
+
+        now_seconds = now.hour * 3600 + now.minute * 60 + now.second
+        target_seconds = target_time.hour * 3600 + target_time.minute * 60 + target_time.second
+
+        if operator == ">=":
+            condition_met = now_seconds >= target_seconds
+        elif operator == "<=":
+            condition_met = now_seconds <= target_seconds
+        elif operator == ">":
+            condition_met = now_seconds > target_seconds
+        elif operator == "<":
+            condition_met = now_seconds < target_seconds
+        elif operator == "==":
+            condition_met = now.hour == target_time.hour and now.minute == target_time.minute
+        else:
+            condition_met = False
+
+        self.log(f"Time condition: {now.strftime('%H:%M')} {operator} {target_time_str} = {condition_met}")
+        return {"status": "success", "condition": condition_met}
+
+    def execute_price_alert(self, node_data: dict) -> dict:
+        """Execute Price Alert trigger node"""
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        condition_type = self.get_str(node_data, "condition", "greater_than")
+        price = self.get_float(node_data, "price", 0)
+        price_lower = self.get_float(node_data, "priceLower", 0)
+        price_upper = self.get_float(node_data, "priceUpper", 0)
+
+        if not symbol:
+            return {"status": "error", "condition": False}
+
+        result = self.client.get_quotes(symbol=symbol, exchange=exchange)
+        if result.get("status") != "success":
+            return {"status": "error", "condition": False}
+
+        data = result.get("data", {})
+        ltp = float(data.get("ltp", 0) if data else 0)
+
+        condition_met = False
+        if condition_type == "greater_than":
+            condition_met = ltp > price
+        elif condition_type == "less_than":
+            condition_met = ltp < price
+        elif condition_type == "crossing":
+            tolerance = price * 0.001
+            condition_met = abs(ltp - price) <= tolerance
+        elif condition_type in ["entering_channel", "inside_channel"]:
+            condition_met = price_lower <= ltp <= price_upper
+        elif condition_type in ["exiting_channel", "outside_channel"]:
+            condition_met = ltp < price_lower or ltp > price_upper
+
+        self.log(f"Price alert: {symbol} LTP={ltp} {condition_type} {price} = {condition_met}")
+        self.store_output(node_data, {"ltp": ltp, "condition_met": condition_met})
+        return {"status": "success", "condition": condition_met, "ltp": ltp}
+
+    # === Logic Gates ===
+
+    def execute_and_gate(self, node_data: dict, input_results: List[bool]) -> dict:
+        """Execute AND Gate"""
+        if not input_results:
+            return {"status": "success", "condition": False}
+        condition_met = all(input_results)
+        self.log(f"AND Gate: {input_results} -> {condition_met}")
+        return {"status": "success", "condition": condition_met}
+
+    def execute_or_gate(self, node_data: dict, input_results: List[bool]) -> dict:
+        """Execute OR Gate"""
+        if not input_results:
+            return {"status": "success", "condition": False}
+        condition_met = any(input_results)
+        self.log(f"OR Gate: {input_results} -> {condition_met}")
+        return {"status": "success", "condition": condition_met}
+
+    def execute_not_gate(self, node_data: dict, input_results: List[bool]) -> dict:
+        """Execute NOT Gate"""
+        input_value = input_results[0] if input_results else False
+        condition_met = not input_value
+        self.log(f"NOT Gate: {input_value} -> {condition_met}")
+        return {"status": "success", "condition": condition_met}
+
+
+def execute_node_chain(
+    node_id: str,
+    nodes: list,
+    edge_map: Dict[str, List[dict]],
+    incoming_edge_map: Dict[str, List[dict]],
+    executor: NodeExecutor,
+    context: WorkflowContext,
+    visited_count: Dict[str, int],
+    depth: int = 0
+):
+    """Execute a chain of nodes"""
+    if depth > MAX_NODE_DEPTH:
+        raise Exception(f"Maximum node depth ({MAX_NODE_DEPTH}) exceeded")
+
+    total_visits = sum(visited_count.values())
+    if total_visits >= MAX_NODE_VISITS:
+        raise Exception(f"Maximum node visits ({MAX_NODE_VISITS}) exceeded")
+
+    visited_count[node_id] = visited_count.get(node_id, 0) + 1
+
+    node = next((n for n in nodes if n["id"] == node_id), None)
+    if not node:
+        return
+
+    node_type = node.get("type")
+    node_data = node.get("data", {})
+    result = None
+
+    # Execute node based on type
+    if node_type == "start":
+        executor.log("Workflow started")
+    elif node_type == "placeOrder":
+        result = executor.execute_place_order(node_data)
+    elif node_type == "smartOrder":
+        result = executor.execute_smart_order(node_data)
+    elif node_type == "cancelOrder":
+        result = executor.execute_cancel_order(node_data)
+    elif node_type == "cancelAllOrders":
+        result = executor.execute_cancel_all_orders(node_data)
+    elif node_type == "closePositions":
+        result = executor.execute_close_positions(node_data)
+    elif node_type == "basketOrder":
+        result = executor.execute_basket_order(node_data)
+    elif node_type == "splitOrder":
+        result = executor.execute_split_order(node_data)
+    elif node_type == "getQuote":
+        result = executor.execute_get_quote(node_data)
+    elif node_type == "getDepth":
+        result = executor.execute_get_depth(node_data)
+    elif node_type == "openPosition":
+        result = executor.execute_open_position(node_data)
+    elif node_type == "history":
+        result = executor.execute_history(node_data)
+    elif node_type == "orderBook":
+        result = executor.execute_order_book(node_data)
+    elif node_type == "tradeBook":
+        result = executor.execute_trade_book(node_data)
+    elif node_type == "positionBook":
+        result = executor.execute_position_book(node_data)
+    elif node_type == "holdings":
+        result = executor.execute_holdings(node_data)
+    elif node_type == "funds":
+        result = executor.execute_funds(node_data)
+    elif node_type == "delay":
+        result = executor.execute_delay(node_data)
+    elif node_type == "waitUntil":
+        result = executor.execute_wait_until(node_data)
+    elif node_type == "log":
+        result = executor.execute_log(node_data)
+    elif node_type == "variable":
+        result = executor.execute_variable(node_data)
+    elif node_type == "telegramAlert":
+        result = executor.execute_telegram_alert(node_data)
+    elif node_type == "httpRequest":
+        result = executor.execute_http_request(node_data)
+    elif node_type == "positionCheck":
+        result = executor.execute_position_check(node_data)
+    elif node_type == "fundCheck":
+        result = executor.execute_fund_check(node_data)
+    elif node_type == "priceCondition":
+        result = executor.execute_price_condition(node_data)
+    elif node_type == "timeWindow":
+        result = executor.execute_time_window(node_data)
+    elif node_type == "timeCondition":
+        result = executor.execute_time_condition(node_data)
+    elif node_type == "priceAlert":
+        result = executor.execute_price_alert(node_data)
+    elif node_type == "webhookTrigger":
+        executor.log("Webhook trigger activated")
+    elif node_type == "andGate":
+        incoming_edges = incoming_edge_map.get(node_id, [])
+        input_results = []
+        for edge in incoming_edges:
+            source_result = context.get_condition_result(edge.get("source"))
+            if source_result is not None:
+                input_results.append(source_result)
+        result = executor.execute_and_gate(node_data, input_results)
+    elif node_type == "orGate":
+        incoming_edges = incoming_edge_map.get(node_id, [])
+        input_results = []
+        for edge in incoming_edges:
+            source_result = context.get_condition_result(edge.get("source"))
+            if source_result is not None:
+                input_results.append(source_result)
+        result = executor.execute_or_gate(node_data, input_results)
+    elif node_type == "notGate":
+        incoming_edges = incoming_edge_map.get(node_id, [])
+        input_results = []
+        for edge in incoming_edges:
+            source_result = context.get_condition_result(edge.get("source"))
+            if source_result is not None:
+                input_results.append(source_result)
+        result = executor.execute_not_gate(node_data, input_results)
+    else:
+        executor.log(f"Unknown node type: {node_type}", "warning")
+
+    # Determine which edges to follow
+    edges_to_follow = edge_map.get(node_id, [])
+
+    # For condition nodes, filter edges based on Yes/No
+    if result and "condition" in result:
+        condition_met = result.get("condition", False)
+        context.set_condition_result(node_id, condition_met)
+        filtered_edges = []
+        for edge in edges_to_follow:
+            source_handle = edge.get("sourceHandle", "")
+            if condition_met and source_handle == "yes":
+                filtered_edges.append(edge)
+            elif not condition_met and source_handle == "no":
+                filtered_edges.append(edge)
+            elif source_handle not in ["yes", "no"]:
+                filtered_edges.append(edge)
+        edges_to_follow = filtered_edges
+
+    # Execute connected nodes
+    for edge in edges_to_follow:
+        target_id = edge.get("target")
+        if target_id:
+            execute_node_chain(
+                target_id, nodes, edge_map, incoming_edge_map, executor, context,
+                visited_count, depth + 1
+            )
+
+
+def execute_workflow(workflow_id: int, webhook_data: Optional[Dict[str, Any]] = None, api_key: str = None) -> dict:
+    """Execute a workflow synchronously"""
+    lock = get_workflow_lock(workflow_id)
+
+    if lock.locked():
+        logger.warning(f"Workflow {workflow_id} is already running")
+        return {"status": "error", "message": "Workflow is already running", "already_running": True}
+
+    with lock:
+        workflow = get_workflow(workflow_id)
+        if not workflow:
+            return {"status": "error", "message": "Workflow not found"}
+
+        execution = create_execution(workflow_id, status="running")
+        if not execution:
+            return {"status": "error", "message": "Failed to create execution record"}
+
+        logs = []
+        context = WorkflowContext()
+
+        if webhook_data:
+            context.set_variable("webhook", webhook_data)
+
+        try:
+            if not api_key:
+                raise Exception("API key required for workflow execution")
+
+            client = get_flow_client(api_key)
+            executor = NodeExecutor(client, context, logs)
+            executor.log(f"Starting workflow: {workflow.name}")
+
+            nodes = workflow.nodes or []
+            edges = workflow.edges or []
+
+            # Find trigger node
+            trigger_types = ["start", "webhookTrigger", "priceAlert"]
+            start_node = next((n for n in nodes if n.get("type") in trigger_types), None)
+            if not start_node:
+                raise Exception("No trigger node found")
+
+            # Build edge maps
+            edge_map: Dict[str, List[dict]] = {}
+            incoming_edge_map: Dict[str, List[dict]] = {}
+            for edge in edges:
+                source = edge["source"]
+                target = edge["target"]
+                if source not in edge_map:
+                    edge_map[source] = []
+                edge_map[source].append(edge)
+                if target not in incoming_edge_map:
+                    incoming_edge_map[target] = []
+                incoming_edge_map[target].append(edge)
+
+            visited_count: Dict[str, int] = {}
+
+            execute_node_chain(
+                start_node["id"], nodes, edge_map, incoming_edge_map, executor, context,
+                visited_count, depth=0
+            )
+
+            update_execution_status(execution.id, "completed")
+            return {
+                "status": "success",
+                "message": "Workflow executed successfully",
+                "execution_id": execution.id,
+                "logs": logs
+            }
+
+        except Exception as e:
+            logger.error(f"Workflow execution failed: {e}")
+            logs.append({
+                "time": datetime.utcnow().isoformat(),
+                "message": f"Error: {str(e)}",
+                "level": "error"
+            })
+            update_execution_status(execution.id, "failed", error=str(e))
+            return {"status": "error", "message": str(e), "execution_id": execution.id, "logs": logs}

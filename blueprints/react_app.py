@@ -399,6 +399,22 @@ def react_historify():
 
 
 # ============================================================
+# Flow Routes - Visual Workflow Automation
+# ============================================================
+
+# Flow Dashboard (Workflow List)
+@react_bp.route('/flow', strict_slashes=False)
+def react_flow_index():
+    return serve_react_app()
+
+
+# Flow Editor (Visual Workflow Builder)
+@react_bp.route('/flow/editor/<int:workflow_id>', strict_slashes=False)
+def react_flow_editor(workflow_id):
+    return serve_react_app()
+
+
+# ============================================================
 # Static Assets - Always served for React app
 # ============================================================
 
