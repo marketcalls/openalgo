@@ -308,12 +308,18 @@ class PositionManager:
         position.accumulated_realized_pnl = total_realized_pnl
         position.margin_blocked = Decimal('0')
 
-        # Set updated_at to expiry date so it doesn't appear in current session
-        # (stale expired contracts should be hidden, not shown)
-        if expiry_date:
-            position.updated_at = datetime.combine(expiry_date, datetime.min.time())
-
         db_session.commit()
+
+        # Set updated_at to expiry date AFTER commit to bypass onupdate trigger
+        # This hides expired contracts from current session
+        if expiry_date:
+            from sqlalchemy import text
+            hide_date = datetime.combine(expiry_date, datetime.min.time())
+            db_session.execute(
+                text("UPDATE sandbox_positions SET updated_at = :hide_date WHERE id = :pos_id"),
+                {"hide_date": hide_date, "pos_id": position.id}
+            )
+            db_session.commit()
 
         logger.info(f"Expired position {symbol} settled successfully for user {position.user_id}")
 
@@ -1202,11 +1208,16 @@ def cleanup_expired_contracts():
                         position.accumulated_realized_pnl = total_realized_pnl
                         position.margin_blocked = Decimal('0')
 
-                        # Set updated_at to expiry date so it doesn't appear in current session
-                        # (session filter excludes positions updated before session expiry)
-                        from datetime import datetime
-                        position.updated_at = datetime.combine(expiry_date, datetime.min.time())
+                        db_session.commit()
 
+                        # Set updated_at to expiry date AFTER commit to bypass onupdate trigger
+                        # This hides expired contracts from current session
+                        from sqlalchemy import text
+                        hide_date = datetime.combine(expiry_date, datetime.min.time())
+                        db_session.execute(
+                            text("UPDATE sandbox_positions SET updated_at = :hide_date WHERE id = :pos_id"),
+                            {"hide_date": hide_date, "pos_id": position.id}
+                        )
                         db_session.commit()
 
                         logger.info(f"Expired contract {symbol} cleaned up for user {user_id}")
