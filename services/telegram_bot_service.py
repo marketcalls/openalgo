@@ -947,12 +947,16 @@ class TelegramBotService:
             else:
                 status = "🔴 Client Error"
 
+            # Get display name (prefer telegram_username, fallback to openalgo_username)
+            display_name = telegram_user.get('telegram_username') or telegram_user.get('openalgo_username') or 'N/A'
+            host_url = telegram_user.get('host_url') or 'N/A'
+
             await update.message.reply_text(
                 f"*Account Status*\n"
                 f"━━━━━━━━━━━━━━━\n"
-                f"User: {telegram_user.get('username', 'N/A')}\n"
+                f"User: {display_name}\n"
                 f"Status: {status}\n"
-                f"Host: {telegram_user.get('host_url', 'N/A')}\n"
+                f"Host: {host_url}\n"
                 f"Linked: {telegram_user.get('created_at', 'N/A')}",
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -1679,34 +1683,253 @@ class TelegramBotService:
 
         log_command(user.id, 'menu', update.effective_chat.id)
 
+    def _format_orderbook(self, response: dict) -> str:
+        """Format orderbook response into message"""
+        if not response or response.get('status') != 'success':
+            return "❌ Failed to fetch orderbook"
+
+        orders = response.get('data', {}).get('orders', [])
+        if not orders:
+            return "📊 *ORDERBOOK*\n━━━━━━━━━━━━━━━\n\nNo open orders"
+
+        message = "📊 *ORDERBOOK*\n━━━━━━━━━━━━━━━\n\n"
+        for order in orders[:10]:
+            status = order.get('order_status', 'unknown')
+            status_emoji = "✅" if status == 'complete' else "🟡" if status == 'open' else "❌" if status == 'rejected' else "⏸️"
+            action_emoji = "📈" if order.get('action') == 'BUY' else "📉"
+            try:
+                price = float(order.get('price', 0))
+                price_str = "Market" if price == 0 else f"₹{price}"
+            except:
+                price_str = f"₹{order.get('price', 0)}"
+            try:
+                quantity = int(order.get('quantity', 0))
+            except:
+                quantity = order.get('quantity', 0)
+            message += f"{status_emoji} *{order.get('symbol', 'N/A')}* ({order.get('exchange', 'N/A')})\n"
+            message += f"{action_emoji} {order.get('action', 'N/A')} {quantity} @ {price_str}\n"
+            message += f"└ Status: {status.title()}\n\n"
+        if len(orders) > 10:
+            message += f"_... and {len(orders) - 10} more orders_"
+        return message
+
+    def _format_tradebook(self, response: dict) -> str:
+        """Format tradebook response into message"""
+        if not response or response.get('status') != 'success':
+            return "❌ Failed to fetch tradebook"
+
+        trades = response.get('data', [])
+        if not trades:
+            return "📈 *TRADEBOOK*\n━━━━━━━━━━━━━━━\n\nNo trades executed today"
+
+        message = "📈 *TRADEBOOK*\n━━━━━━━━━━━━━━━\n\n"
+        for trade in trades[:10]:
+            action_emoji = "📈" if trade.get('action') == 'BUY' else "📉"
+            try:
+                quantity = int(trade.get('quantity', 0))
+            except:
+                quantity = trade.get('quantity', 0)
+            try:
+                avg_price = float(trade.get('average_price', 0))
+                avg_price_str = f"₹{avg_price:,.2f}"
+            except:
+                avg_price_str = f"₹{trade.get('average_price', 0)}"
+            message += f"{action_emoji} *{trade.get('symbol', 'N/A')}* ({trade.get('exchange', 'N/A')})\n"
+            message += f"├ {trade.get('action', 'N/A')} {quantity} @ {avg_price_str}\n"
+            message += f"└ Time: {trade.get('timestamp', 'N/A')}\n\n"
+        if len(trades) > 10:
+            message += f"_... and {len(trades) - 10} more trades_"
+        return message
+
+    def _format_positions(self, response: dict) -> str:
+        """Format positions response into message"""
+        if not response or response.get('status') != 'success':
+            return "❌ Failed to fetch positions"
+
+        positions = response.get('data', [])
+        active_positions = [pos for pos in positions if pos.get('quantity', 0) != 0]
+        if not active_positions:
+            return "💼 *POSITIONS*\n━━━━━━━━━━━━━━━\n\nNo active positions"
+
+        message = "💼 *POSITIONS*\n━━━━━━━━━━━━━━━\n\n"
+        for pos in active_positions[:10]:
+            try:
+                quantity = int(pos.get('quantity', 0))
+            except:
+                quantity = 0
+            position_emoji = "🟢" if quantity > 0 else "🔴"
+            position_type = "LONG 📈" if quantity > 0 else "SHORT 📉"
+            message += f"{position_emoji} *{pos.get('symbol', 'N/A')}* ({pos.get('exchange', 'N/A')})\n"
+            message += f"├ {position_type}\n"
+            message += f"└ Qty: {abs(quantity)}\n\n"
+        if len(active_positions) > 10:
+            message += f"_... and {len(active_positions) - 10} more positions_"
+        return message
+
+    def _format_holdings(self, response: dict) -> str:
+        """Format holdings response into message"""
+        if not response or response.get('status') != 'success':
+            return "❌ Failed to fetch holdings"
+
+        holdings = response.get('data', {}).get('holdings', [])
+        if not holdings:
+            return "🏦 *HOLDINGS*\n━━━━━━━━━━━━━━━\n\nNo holdings found"
+
+        message = "🏦 *HOLDINGS*\n━━━━━━━━━━━━━━━\n\n"
+        for holding in holdings[:10]:
+            try:
+                pnl = float(holding.get('pnl', 0))
+                pnl_percent = float(holding.get('pnlpercent', 0))
+            except:
+                pnl, pnl_percent = 0.0, 0.0
+            pnl_emoji = "🟢" if pnl > 0 else "🔴" if pnl < 0 else "⚪"
+            message += f"{pnl_emoji} *{holding.get('symbol', 'N/A')}*\n"
+            message += f"└ P&L: ₹{pnl:,.2f} ({pnl_percent:+.2f}%)\n\n"
+        if len(holdings) > 10:
+            message += f"_... and {len(holdings) - 10} more holdings_"
+        return message
+
+    def _format_funds(self, response: dict) -> str:
+        """Format funds response into message"""
+        if not response or response.get('status') != 'success':
+            return "❌ Failed to fetch funds"
+
+        funds = response.get('data', {})
+        try:
+            available = float(funds.get('availablecash', 0))
+            collateral = float(funds.get('collateral', 0))
+            utilized = float(funds.get('utiliseddebits', 0))
+        except:
+            available, collateral, utilized = 0.0, 0.0, 0.0
+
+        return (
+            "💰 *FUNDS*\n━━━━━━━━━━━━━━━\n\n"
+            f"💵 Available: ₹{available:,.2f}\n"
+            f"🔒 Collateral: ₹{collateral:,.2f}\n"
+            f"📊 Utilized: ₹{utilized:,.2f}\n"
+            f"💼 Total: ₹{(available + collateral):,.2f}"
+        )
+
+    def _format_pnl(self, response: dict) -> str:
+        """Format P&L response into message (uses positionbook data)"""
+        if not response or response.get('status') != 'success':
+            return "❌ Failed to fetch P&L"
+
+        positions = response.get('data', [])
+        total_pnl = 0.0
+        for pos in positions:
+            try:
+                pnl = float(pos.get('pnl', 0))
+                total_pnl += pnl
+            except:
+                pass
+
+        pnl_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
+        return (
+            "💹 *PROFIT & LOSS*\n━━━━━━━━━━━━━━━\n\n"
+            f"{pnl_emoji} *Day P&L*\n"
+            f"└ ₹{total_pnl:,.2f}"
+        )
+
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle inline button callbacks"""
         query = update.callback_query
         await query.answer()
 
-        # Map callback data to commands
-        command_map = {
-            'orderbook': self.cmd_orderbook,
-            'tradebook': self.cmd_tradebook,
-            'positions': self.cmd_positions,
-            'holdings': self.cmd_holdings,
-            'funds': self.cmd_funds,
-            'pnl': self.cmd_pnl,
-            'menu': self.cmd_menu
-        }
+        user = query.from_user
+        chat_id = query.message.chat.id
+        callback_data = query.data
 
-        handler = command_map.get(query.data)
-        if handler:
-            # Create a fake update with message for the handler
-            fake_update = Update(
-                update_id=update.update_id,
-                message=query.message,
-                callback_query=query
+        # Handle menu refresh separately - edit the existing message
+        if callback_data == 'menu':
+            keyboard = [
+                [
+                    InlineKeyboardButton("📊 Orderbook", callback_data='orderbook'),
+                    InlineKeyboardButton("📈 Tradebook", callback_data='tradebook'),
+                ],
+                [
+                    InlineKeyboardButton("💼 Positions", callback_data='positions'),
+                    InlineKeyboardButton("🏦 Holdings", callback_data='holdings'),
+                ],
+                [
+                    InlineKeyboardButton("💰 Funds", callback_data='funds'),
+                    InlineKeyboardButton("💹 P&L", callback_data='pnl'),
+                ],
+                [
+                    InlineKeyboardButton("🔄 Refresh", callback_data='menu'),
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            try:
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%H:%M:%S")
+                await query.edit_message_text(
+                    f"📱 *OpenAlgo Trading Menu*\n"
+                    f"Select an option below:\n"
+                    f"_Updated: {timestamp}_",
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception as e:
+                # If edit fails (message not modified), just acknowledge
+                logger.debug(f"Menu refresh: {e}")
+            return
+
+        # Get user data for other commands
+        telegram_user = get_telegram_user(user.id)
+        if not telegram_user:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="❌ Please link your account first using /link"
             )
-            fake_update.effective_user = query.from_user
-            fake_update.effective_chat = query.message.chat
+            return
 
-            await handler(fake_update, context)
+        client = self._get_sdk_client(user.id)
+        if not client:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="❌ Failed to connect to OpenAlgo"
+            )
+            return
+
+        # Map callback data to API calls and formatters
+        try:
+            loop = asyncio.get_event_loop()
+
+            if callback_data == 'orderbook':
+                response = await loop.run_in_executor(None, client.orderbook)
+                message = self._format_orderbook(response)
+            elif callback_data == 'tradebook':
+                response = await loop.run_in_executor(None, client.tradebook)
+                message = self._format_tradebook(response)
+            elif callback_data == 'positions':
+                response = await loop.run_in_executor(None, client.positionbook)
+                message = self._format_positions(response)
+            elif callback_data == 'holdings':
+                response = await loop.run_in_executor(None, client.holdings)
+                message = self._format_holdings(response)
+            elif callback_data == 'funds':
+                response = await loop.run_in_executor(None, client.funds)
+                message = self._format_funds(response)
+            elif callback_data == 'pnl':
+                response = await loop.run_in_executor(None, client.positionbook)
+                message = self._format_pnl(response)
+            else:
+                message = "❌ Unknown command"
+
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=message,
+                parse_mode=ParseMode.MARKDOWN
+            )
+            log_command(user.id, callback_data, chat_id)
+
+        except Exception as e:
+            logger.error(f"Error in button callback for {callback_data}: {e}")
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="❌ Failed to fetch data. Please try again."
+            )
 
     async def send_notification(self, telegram_id: int, message: str) -> bool:
         """Send a notification to a specific Telegram user."""
