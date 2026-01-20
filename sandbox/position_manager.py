@@ -391,8 +391,16 @@ class PositionManager:
 
                 if needs_pnl_reset:
                     logger.info(f"Catch-up reset: Resetting today_realized_pnl for {position.symbol} from {position.today_realized_pnl} to 0")
-                    position.today_realized_pnl = Decimal('0.00')
+                    # Use raw SQL to avoid triggering onupdate=func.now() which would change updated_at
+                    # If we used ORM commit(), updated_at would be set to NOW and old positions would
+                    # pass the session filter, causing yesterday's closed positions to show today
+                    from sqlalchemy import text
+                    db_session.execute(
+                        text("UPDATE sandbox_positions SET today_realized_pnl = 0 WHERE id = :pos_id"),
+                        {"pos_id": position.id}
+                    )
                     db_session.commit()
+                    position.today_realized_pnl = Decimal('0.00')  # Update in-memory object too
 
                 # If position was updated after last session expiry, include it
                 # This includes positions that went to zero during current session (closed positions)
