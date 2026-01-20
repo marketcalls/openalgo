@@ -111,6 +111,9 @@ export function useWebSocketTester(_apiKey?: string): UseWebSocketTesterReturn {
               setAverageLatency(Math.round(avg))
               pingIdRef.current = null
               addMessage('system', { message: `Pong received (${latency}ms)` })
+            } else {
+              // Show pong for manual ping messages (without _pingId)
+              addMessage('received', data, event.data)
             }
             break
 

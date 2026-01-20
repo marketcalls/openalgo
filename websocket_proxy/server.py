@@ -607,7 +607,9 @@ class WebSocketProxy:
             client_id: ID of the client
             data: Ping data containing optional timestamp
         """
+        logger.debug(f"Handling ping from client {client_id}: {data}")
         client_timestamp = data.get("timestamp")
+        ping_id = data.get("_pingId")
         server_timestamp = int(time.time() * 1000)  # Current time in milliseconds
 
         response = {
@@ -620,6 +622,11 @@ class WebSocketProxy:
         if client_timestamp is not None:
             response["client_timestamp"] = client_timestamp
 
+        # Echo back _pingId for frontend latency calculation
+        if ping_id is not None:
+            response["_pingId"] = ping_id
+
+        logger.debug(f"Sending pong to client {client_id}: {response}")
         await self.send_message(client_id, response)
 
     async def subscribe_client(self, client_id, data):
