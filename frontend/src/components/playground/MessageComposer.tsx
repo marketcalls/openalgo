@@ -4,7 +4,9 @@ import { JsonEditor } from '@/components/ui/json-editor'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
@@ -12,48 +14,50 @@ import { Send, FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { MessageTemplate } from '@/types/websocket'
 
-// Message templates for common WebSocket actions
-const MESSAGE_TEMPLATES: MessageTemplate[] = [
+// Extended template type with category
+interface CategorizedTemplate extends MessageTemplate {
+  category: 'auth' | 'subscribe' | 'depth' | 'unsubscribe' | 'broker'
+}
+
+// Message templates organized by category
+const MESSAGE_TEMPLATES: CategorizedTemplate[] = [
+  // Authentication
   {
     key: 'authenticate',
     label: 'Authenticate',
     description: 'Authenticate with API key',
     template: { action: 'authenticate', api_key: '{{API_KEY}}' },
+    category: 'auth',
   },
+  // Subscriptions
   {
     key: 'subscribe_ltp',
     label: 'Subscribe LTP',
-    description: 'Subscribe to Last Traded Price (Mode 1)',
+    description: 'Last Traded Price (Mode 1)',
     template: {
       action: 'subscribe',
-      symbols: [{ symbol: 'RELIANCE', exchange: 'NSE' }],
+      symbol: 'RELIANCE',
+      exchange: 'NSE',
       mode: 1,
     },
+    category: 'subscribe',
   },
   {
     key: 'subscribe_quote',
     label: 'Subscribe Quote',
-    description: 'Subscribe to Quote data (Mode 2)',
+    description: 'Full Quote data (Mode 2)',
     template: {
       action: 'subscribe',
-      symbols: [{ symbol: 'RELIANCE', exchange: 'NSE' }],
+      symbol: 'RELIANCE',
+      exchange: 'NSE',
       mode: 2,
     },
-  },
-  {
-    key: 'subscribe_depth',
-    label: 'Subscribe Depth',
-    description: 'Subscribe to Market Depth (Mode 3)',
-    template: {
-      action: 'subscribe',
-      symbols: [{ symbol: 'RELIANCE', exchange: 'NSE' }],
-      mode: 3,
-    },
+    category: 'subscribe',
   },
   {
     key: 'subscribe_multiple',
     label: 'Subscribe Multiple',
-    description: 'Subscribe to multiple symbols',
+    description: 'Multiple symbols at once',
     template: {
       action: 'subscribe',
       symbols: [
@@ -63,36 +67,125 @@ const MESSAGE_TEMPLATES: MessageTemplate[] = [
       ],
       mode: 1,
     },
+    category: 'subscribe',
   },
+  // Depth Subscriptions (Mode 3)
+  {
+    key: 'subscribe_depth_5',
+    label: 'Depth 5 Levels',
+    description: 'Market Depth - 5 bid/ask levels',
+    template: {
+      action: 'subscribe',
+      symbol: 'RELIANCE',
+      exchange: 'NSE',
+      mode: 3,
+      depth: 5,
+    },
+    category: 'depth',
+  },
+  {
+    key: 'subscribe_depth_20',
+    label: 'Depth 20 Levels',
+    description: 'Market Depth - 20 bid/ask levels',
+    template: {
+      action: 'subscribe',
+      symbol: 'RELIANCE',
+      exchange: 'NSE',
+      mode: 3,
+      depth: 20,
+    },
+    category: 'depth',
+  },
+  {
+    key: 'subscribe_depth_30',
+    label: 'Depth 30 Levels',
+    description: 'Market Depth - 30 levels (broker dependent)',
+    template: {
+      action: 'subscribe',
+      symbol: 'RELIANCE',
+      exchange: 'NSE',
+      mode: 3,
+      depth: 30,
+    },
+    category: 'depth',
+  },
+  {
+    key: 'subscribe_depth_50',
+    label: 'Depth 50 Levels',
+    description: 'Full Depth - 50 levels (broker dependent)',
+    template: {
+      action: 'subscribe',
+      symbol: 'RELIANCE',
+      exchange: 'NSE',
+      mode: 3,
+      depth: 50,
+    },
+    category: 'depth',
+  },
+  // Unsubscribe
   {
     key: 'unsubscribe',
     label: 'Unsubscribe',
     description: 'Unsubscribe from symbol',
     template: {
       action: 'unsubscribe',
-      symbols: [{ symbol: 'RELIANCE', exchange: 'NSE' }],
+      symbol: 'RELIANCE',
+      exchange: 'NSE',
       mode: 1,
     },
+    category: 'unsubscribe',
   },
   {
     key: 'unsubscribe_all',
     label: 'Unsubscribe All',
     description: 'Unsubscribe from all symbols',
     template: { action: 'unsubscribe_all' },
+    category: 'unsubscribe',
   },
+  // Broker Info
   {
     key: 'get_broker_info',
     label: 'Get Broker Info',
-    description: 'Get current broker information',
+    description: 'Current broker information',
     template: { action: 'get_broker_info' },
+    category: 'broker',
   },
   {
     key: 'get_supported_brokers',
     label: 'Get Supported Brokers',
     description: 'List all supported brokers',
     template: { action: 'get_supported_brokers' },
+    category: 'broker',
+  },
+  {
+    key: 'ping',
+    label: 'Ping',
+    description: 'Test connection latency',
+    template: { action: 'ping', timestamp: '{{TIMESTAMP}}' },
+    category: 'broker',
   },
 ]
+
+// Category labels for display
+const CATEGORY_LABELS: Record<CategorizedTemplate['category'], string> = {
+  auth: 'Authentication',
+  subscribe: 'Subscriptions',
+  depth: 'Market Depth',
+  unsubscribe: 'Unsubscribe',
+  broker: 'Broker Info',
+}
+
+// Get templates grouped by category
+const getTemplatesByCategory = () => {
+  const grouped: Record<string, CategorizedTemplate[]> = {}
+  for (const template of MESSAGE_TEMPLATES) {
+    if (!grouped[template.category]) {
+      grouped[template.category] = []
+    }
+    grouped[template.category].push(template)
+  }
+  return grouped
+}
 
 interface MessageComposerProps {
   value: string
@@ -123,6 +216,11 @@ export function MessageComposer({
       // Replace {{API_KEY}} placeholder with actual API key
       if (apiKey && templateStr.includes('{{API_KEY}}')) {
         templateStr = templateStr.replace('{{API_KEY}}', apiKey)
+      }
+
+      // Replace {{TIMESTAMP}} placeholder with current timestamp
+      if (templateStr.includes('{{TIMESTAMP}}')) {
+        templateStr = templateStr.replace('"{{TIMESTAMP}}"', String(Date.now()))
       }
 
       onChange(templateStr)
@@ -177,10 +275,17 @@ export function MessageComposer({
             <SelectValue placeholder="Select a template..." />
           </SelectTrigger>
           <SelectContent>
-            {MESSAGE_TEMPLATES.map((template) => (
-              <SelectItem key={template.key} value={template.key}>
-                {template.label} - {template.description}
-              </SelectItem>
+            {Object.entries(getTemplatesByCategory()).map(([category, templates]) => (
+              <SelectGroup key={category}>
+                <SelectLabel className="text-xs font-semibold text-muted-foreground">
+                  {CATEGORY_LABELS[category as CategorizedTemplate['category']]}
+                </SelectLabel>
+                {templates.map((template) => (
+                  <SelectItem key={template.key} value={template.key}>
+                    {template.label} - {template.description}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
             ))}
           </SelectContent>
         </Select>

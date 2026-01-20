@@ -1,0 +1,32 @@
+meta {
+  name: Get Broker Info
+  type: websocket
+  seq: 11
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Get information about the authenticated broker
+}
+
+message:json {
+  {
+    "action": "get_broker_info"
+  }
+}
+
+docs {
+  Get information about the currently authenticated broker.
+  Must be authenticated first.
+
+  Server responds with:
+  {
+    "type": "broker_info",
+    "status": "success",
+    "broker": "angel",
+    "user_id": "ABC123",
+    "supported_modes": [1, 2, 3],
+    "supported_depth_levels": [5, 20],
+    "max_symbols": 1000
+  }
+}

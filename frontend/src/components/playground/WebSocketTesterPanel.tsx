@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useWebSocketTester } from '@/hooks/useWebSocketTester'
 import { ConnectionPanel } from './ConnectionPanel'
 import { MessageComposer } from './MessageComposer'
@@ -7,10 +7,18 @@ import { toast } from 'sonner'
 
 interface WebSocketTesterPanelProps {
   apiKey?: string
+  initialMessage?: string
 }
 
-export function WebSocketTesterPanel({ apiKey }: WebSocketTesterPanelProps) {
+export function WebSocketTesterPanel({ apiKey, initialMessage }: WebSocketTesterPanelProps) {
   const [messageBody, setMessageBody] = useState('')
+
+  // Update message body when initialMessage changes
+  useEffect(() => {
+    if (initialMessage) {
+      setMessageBody(initialMessage)
+    }
+  }, [initialMessage])
 
   const {
     isConnected,

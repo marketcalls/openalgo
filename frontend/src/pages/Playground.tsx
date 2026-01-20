@@ -49,9 +49,10 @@ import { WebSocketTesterPanel } from "@/components/playground/WebSocketTesterPan
 interface Endpoint {
   name: string;
   path: string;
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "WS";
   body?: Record<string, unknown>;
   params?: Record<string, unknown>;
+  description?: string;
 }
 
 interface EndpointsByCategory {
@@ -137,7 +138,12 @@ function getTokenClassName(type: SyntaxToken["type"]): string {
   }
 }
 
-function isValidApiUrl(url: string): { valid: boolean; error?: string } {
+function isValidApiUrl(url: string, method?: string): { valid: boolean; error?: string } {
+  // Allow WebSocket URLs for WS method
+  if (method === "WS" && (url.startsWith("ws://") || url.startsWith("wss://"))) {
+    return { valid: true };
+  }
+
   if (url.startsWith("/api/") || url.startsWith("/playground/")) {
     return { valid: true };
   }
@@ -188,7 +194,7 @@ export default function Playground() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [endpoints, setEndpoints] = useState<EndpointsByCategory>({});
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(
-    new Set(),
+    new Set(['data', 'utilities', 'websocket']),
   );
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -197,7 +203,7 @@ export default function Playground() {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
 
   // Request state
-  const [method, setMethod] = useState<"GET" | "POST">("POST");
+  const [method, setMethod] = useState<"GET" | "POST" | "WS">("POST");
   const [url, setUrl] = useState("");
   const [requestBody, setRequestBody] = useState("");
 
@@ -216,6 +222,7 @@ export default function Playground() {
 
   // Playground mode - REST API or WebSocket
   const [playgroundMode, setPlaygroundMode] = useState<"rest" | "websocket">("rest");
+  const [wsInitialMessage, setWsInitialMessage] = useState<string>("");
 
   useEffect(() => {
     loadApiKey();
@@ -270,6 +277,16 @@ export default function Playground() {
   );
 
   const selectEndpoint = (endpoint: Endpoint) => {
+    // Handle WebSocket endpoints - switch to WebSocket mode
+    if (endpoint.method === "WS") {
+      const body = endpoint.body ? JSON.stringify(endpoint.body, null, 2) : "";
+      // Replace apikey placeholder with actual API key
+      const bodyWithApiKey = apiKey ? body.replace(/"apikey":\s*""/, `"apikey": "${apiKey}"`) : body;
+      setWsInitialMessage(bodyWithApiKey);
+      setPlaygroundMode("websocket");
+      return;
+    }
+
     // Check if tab already exists (match by both path AND name for endpoints sharing same path)
     const existingTab = openTabs.find(
       (t) =>
@@ -383,7 +400,8 @@ export default function Playground() {
       return;
     }
 
-    const validation = isValidApiUrl(url);
+
+    const validation = isValidApiUrl(url, method);
     if (!validation.valid) {
       toast.error(validation.error);
       return;
@@ -630,7 +648,9 @@ export default function Playground() {
                   "text-[9px] px-1 py-0 h-4 border-0 font-semibold",
                   tab.endpoint.method === "GET"
                     ? "bg-sky-500/20 text-sky-400"
-                    : "bg-emerald-500/20 text-emerald-400",
+                    : tab.endpoint.method === "WS"
+                      ? "bg-purple-500/20 text-purple-400"
+                      : "bg-emerald-500/20 text-emerald-400",
                 )}
               >
                 {tab.endpoint.method}
@@ -801,7 +821,7 @@ export default function Playground() {
       <div className="flex-1 flex overflow-hidden">
         {playgroundMode === "websocket" ? (
           /* WebSocket Mode */
-          <WebSocketTesterPanel apiKey={apiKey} />
+          <WebSocketTesterPanel apiKey={apiKey} initialMessage={wsInitialMessage} />
         ) : (
           <>
         {/* Sidebar */}
@@ -864,7 +884,9 @@ export default function Playground() {
                               "text-[9px] px-1 py-0 h-4 border-0 font-semibold shrink-0",
                               endpoint.method === "GET"
                                 ? "bg-sky-500/20 text-sky-400"
-                                : "bg-emerald-500/20 text-emerald-400",
+                                : endpoint.method === "WS"
+                                  ? "bg-purple-500/20 text-purple-400"
+                                  : "bg-emerald-500/20 text-emerald-400",
                             )}
                           >
                             {endpoint.method}
@@ -928,16 +950,24 @@ export default function Playground() {
                     "text-xs px-2 py-0.5 border-0 font-semibold",
                     method === "GET"
                       ? "bg-sky-500/20 text-sky-400"
-                      : "bg-emerald-500/20 text-emerald-400",
+                      : method === "WS"
+                        ? "bg-purple-500/20 text-purple-400"
+                        : "bg-emerald-500/20 text-emerald-400",
                   )}
                 >
                   {method}
                 </Badge>
                 <div className="flex-1 flex items-center gap-1 px-3 py-1.5 rounded bg-secondary/50 font-mono text-sm">
-                  <span className="text-muted-foreground">
-                    http://127.0.0.1:5000
-                  </span>
-                  <span className="text-foreground">{url}</span>
+                  {method === "WS" ? (
+                    <span className="text-foreground">{url}</span>
+                  ) : (
+                    <>
+                      <span className="text-muted-foreground">
+                        http://127.0.0.1:5000
+                      </span>
+                      <span className="text-foreground">{url}</span>
+                    </>
+                  )}
                 </div>
                 <Button
                   size="sm"
