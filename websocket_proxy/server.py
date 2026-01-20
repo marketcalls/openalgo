@@ -381,6 +381,8 @@ class WebSocketProxy:
                 await self.get_broker_info(client_id)
             elif action == "get_supported_brokers":
                 await self.get_supported_brokers(client_id)
+            elif action == "ping":
+                await self.handle_ping(client_id, data)
             else:
                 logger.warning(f"Client {client_id} requested invalid action: {action}")
                 await self.send_error(client_id, "INVALID_ACTION", f"Invalid action: {action}")
@@ -460,13 +462,14 @@ class WebSocketProxy:
     async def authenticate_client(self, client_id, data):
         """
         Authenticate a client using their API key and determine their broker
-        
+
         Args:
             client_id: ID of the client
             data: Authentication data containing API key
         """
-        api_key = data.get("api_key")
-        
+        # Accept both 'api_key' and 'apikey' formats for compatibility
+        api_key = data.get("api_key") or data.get("apikey")
+
         if not api_key:
             await self.send_error(client_id, "AUTHENTICATION_ERROR", "API key is required")
             return
@@ -544,14 +547,14 @@ class WebSocketProxy:
     async def get_supported_brokers(self, client_id):
         """
         Get list of supported brokers from environment configuration
-        
+
         Args:
             client_id: ID of the client
         """
         try:
             valid_brokers = os.getenv('VALID_BROKERS', '').split(',')
             supported_brokers = [broker.strip() for broker in valid_brokers if broker.strip()]
-            
+
             await self.send_message(client_id, {
                 "type": "supported_brokers",
                 "status": "success",
@@ -561,9 +564,11 @@ class WebSocketProxy:
         except Exception as e:
             logger.error(f"Error getting supported brokers: {e}")
             await self.send_error(client_id, "BROKER_LIST_ERROR", str(e))
+
+    async def get_broker_info(self, client_id):
         """
         Get broker information for an authenticated client
-        
+
         Args:
             client_id: ID of the client
         """
@@ -571,21 +576,21 @@ class WebSocketProxy:
         if client_id not in self.user_mapping:
             await self.send_error(client_id, "NOT_AUTHENTICATED", "You must authenticate first")
             return
-        
+
         user_id = self.user_mapping[client_id]
         broker_name = self.user_broker_mapping.get(user_id)
-        
+
         if not broker_name:
             await self.send_error(client_id, "BROKER_ERROR", "Broker information not available")
             return
-        
+
         # Get adapter status
         adapter_status = "disconnected"
         if user_id in self.broker_adapters:
             adapter = self.broker_adapters[user_id]
             # Assuming the adapter has a status method or property
             adapter_status = getattr(adapter, 'status', 'connected')
-        
+
         await self.send_message(client_id, {
             "type": "broker_info",
             "status": "success",
@@ -593,7 +598,30 @@ class WebSocketProxy:
             "adapter_status": adapter_status,
             "user_id": user_id
         })
-    
+
+    async def handle_ping(self, client_id, data):
+        """
+        Handle ping request from client
+
+        Args:
+            client_id: ID of the client
+            data: Ping data containing optional timestamp
+        """
+        client_timestamp = data.get("timestamp")
+        server_timestamp = int(time.time() * 1000)  # Current time in milliseconds
+
+        response = {
+            "type": "pong",
+            "status": "success",
+            "server_timestamp": server_timestamp
+        }
+
+        # Include client timestamp in response if provided (for latency calculation)
+        if client_timestamp is not None:
+            response["client_timestamp"] = client_timestamp
+
+        await self.send_message(client_id, response)
+
     async def subscribe_client(self, client_id, data):
         """
         Subscribe a client to market data using their configured broker

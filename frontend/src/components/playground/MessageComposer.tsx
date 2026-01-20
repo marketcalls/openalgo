@@ -124,14 +124,38 @@ const MESSAGE_TEMPLATES: CategorizedTemplate[] = [
   },
   // Unsubscribe
   {
-    key: 'unsubscribe',
-    label: 'Unsubscribe',
-    description: 'Unsubscribe from symbol',
+    key: 'unsubscribe_ltp',
+    label: 'Unsubscribe LTP',
+    description: 'Unsubscribe from LTP (Mode 1)',
     template: {
       action: 'unsubscribe',
       symbol: 'RELIANCE',
       exchange: 'NSE',
       mode: 1,
+    },
+    category: 'unsubscribe',
+  },
+  {
+    key: 'unsubscribe_quote',
+    label: 'Unsubscribe Quote',
+    description: 'Unsubscribe from Quote (Mode 2)',
+    template: {
+      action: 'unsubscribe',
+      symbol: 'RELIANCE',
+      exchange: 'NSE',
+      mode: 2,
+    },
+    category: 'unsubscribe',
+  },
+  {
+    key: 'unsubscribe_depth',
+    label: 'Unsubscribe Depth',
+    description: 'Unsubscribe from Depth (Mode 3)',
+    template: {
+      action: 'unsubscribe',
+      symbol: 'RELIANCE',
+      exchange: 'NSE',
+      mode: 3,
     },
     category: 'unsubscribe',
   },
