@@ -363,13 +363,31 @@ class PositionManager:
 
                 if needs_pnl_reset:
                     logger.info(f"Catch-up reset: Resetting today_realized_pnl for {position.symbol} from {position.today_realized_pnl} to 0")
-                    position.today_realized_pnl = Decimal('0.00')
+                    # Use raw SQL to avoid triggering onupdate=func.now() which would change updated_at
+                    # If we used ORM commit(), updated_at would be set to NOW and old positions would
+                    # pass the session filter, causing yesterday's closed positions to show today
+                    from sqlalchemy import text
+                    db_session.execute(
+                        text("UPDATE sandbox_positions SET today_realized_pnl = 0 WHERE id = :pos_id"),
+                        {"pos_id": position.id}
+                    )
                     db_session.commit()
+                    position.today_realized_pnl = Decimal('0.00')  # Update in-memory object too
 
                 # If position was updated after last session expiry, include it
                 # This includes positions that went to zero during current session (closed positions)
                 if position.updated_at >= last_session_expiry:
-                    positions.append(position)
+                    # Additional check for closed positions (qty=0):
+                    # Verify they were CREATED today, not just updated today
+                    # This handles corrupted updated_at from old code that triggered onupdate
+                    if position.quantity == 0:
+                        # Only include closed positions if created today
+                        if position.created_at and position.created_at >= last_session_expiry:
+                            positions.append(position)
+                        # else: skip - it's yesterday's closed position with corrupted updated_at
+                    else:
+                        # Open position (qty != 0) - include it
+                        positions.append(position)
                 # If position was updated before last session expiry, only include NRML with non-zero quantity
                 elif position.product == 'NRML' and position.quantity != 0:
                     positions.append(position)
