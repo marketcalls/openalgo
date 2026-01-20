@@ -442,7 +442,7 @@ export default function Positions() {
       sanitizeCSV(p.average_price),
       sanitizeCSV(p.ltp),
       sanitizeCSV(p.pnl),
-      sanitizeCSV(p.pnlpercent),
+      sanitizeCSV(calculatePnlPercent(p)),
     ])
 
     const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
@@ -915,11 +915,11 @@ export default function Positions() {
                               <TableCell
                                 className={cn(
                                   'w-[100px] text-right',
-                                  isProfit(position.pnlpercent) ? 'text-green-600' : 'text-red-600'
+                                  isProfit(calculatePnlPercent(position)) ? 'text-green-600' : 'text-red-600'
                                 )}
                               >
-                                {position.pnlpercent >= 0 ? '+' : ''}
-                                {position.pnlpercent?.toFixed(2) ?? '0.00'}%
+                                {calculatePnlPercent(position) >= 0 ? '+' : ''}
+                                {calculatePnlPercent(position).toFixed(2)}%
                               </TableCell>
                               <TableCell className="w-[60px] text-right">
                                 <Button
