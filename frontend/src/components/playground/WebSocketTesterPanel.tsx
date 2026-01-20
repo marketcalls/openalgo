@@ -39,7 +39,7 @@ export function WebSocketTesterPanel({ apiKey }: WebSocketTesterPanelProps) {
   }
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full w-full">
       {/* Left Panel - Connection and Composer */}
       <div className="w-[450px] flex flex-col gap-3 p-3 border-r border-border">
         {/* Connection Panel */}
@@ -77,7 +77,7 @@ export function WebSocketTesterPanel({ apiKey }: WebSocketTesterPanelProps) {
       </div>
 
       {/* Right Panel - Message Log */}
-      <div className="flex-1 p-3">
+      <div className="flex-1 min-w-0">
         <MessageLog messages={messages} onClear={clearMessages} onExport={exportMessages} />
       </div>
     </div>

@@ -53,6 +53,8 @@ export function useWebSocketTester(_apiKey?: string): UseWebSocketTesterReturn {
   const pingIdRef = useRef<string | null>(null)
   const pingStartTimeRef = useRef<number>(0)
   const latencySamplesRef = useRef<LatencySample[]>([])
+  const isReconnectingRef = useRef(false)
+  const userInitiatedCloseRef = useRef(false)
 
   const getCsrfToken = useCallback(async () => fetchCSRFToken(), [])
 
@@ -131,10 +133,11 @@ export function useWebSocketTester(_apiKey?: string): UseWebSocketTesterReturn {
 
   // Connect to WebSocket
   const connect = useCallback(async () => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
+    if (socketRef.current?.readyState === WebSocket.OPEN || isReconnectingRef.current) {
       return
     }
 
+    isReconnectingRef.current = true
     setIsConnecting(true)
     setError(null)
 
@@ -189,6 +192,7 @@ export function useWebSocketTester(_apiKey?: string): UseWebSocketTesterReturn {
         setIsConnected(false)
         setIsConnecting(false)
         setIsAuthenticated(false)
+        isReconnectingRef.current = false
 
         if (!event.wasClean) {
           addMessage('system', { message: `Connection closed unexpectedly: ${event.code}` })
@@ -196,12 +200,14 @@ export function useWebSocketTester(_apiKey?: string): UseWebSocketTesterReturn {
           addMessage('system', { message: `Connection closed: ${event.code}` })
         }
 
-        if (autoReconnect) {
+        // Only reconnect if NOT user-initiated AND autoReconnect is enabled
+        if (autoReconnect && !userInitiatedCloseRef.current) {
           reconnectTimeoutRef.current = setTimeout(() => {
-            if (isConnected || isConnecting) return
+            userInitiatedCloseRef.current = false // Reset for next attempt
             connect()
           }, 3000)
         }
+        userInitiatedCloseRef.current = false
       }
 
       socket.onerror = () => {
@@ -218,10 +224,12 @@ export function useWebSocketTester(_apiKey?: string): UseWebSocketTesterReturn {
       setIsConnecting(false)
       addMessage('error', { message: `Connection failed: ${err}` })
     }
-  }, [getCsrfToken, handleMessage, autoReconnect, isConnected, isConnecting, addMessage])
+  }, [getCsrfToken, handleMessage, autoReconnect, addMessage])
 
   // Disconnect from WebSocket
   const disconnect = useCallback(() => {
+    userInitiatedCloseRef.current = true
+
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current)
       reconnectTimeoutRef.current = null

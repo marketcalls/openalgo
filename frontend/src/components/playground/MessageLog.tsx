@@ -205,7 +205,7 @@ export function MessageLog({ messages, onClear, onExport }: MessageLogProps) {
   }
 
   return (
-    <div className="flex flex-col h-full bg-card/50 rounded-lg border border-border overflow-hidden">
+    <div className="flex flex-col h-full w-full bg-card/50 rounded-lg border border-border overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border bg-card/30">
         <div className="flex items-center gap-2">

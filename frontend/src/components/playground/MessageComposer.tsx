@@ -1,6 +1,13 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { JsonEditor } from '@/components/ui/json-editor'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Send, FileText } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { MessageTemplate } from '@/types/websocket'
@@ -139,11 +146,12 @@ export function MessageComposer({
     (e: KeyboardEvent) => {
       // Ctrl+Enter or Cmd+Enter to send
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        if (disabled) return
         e.preventDefault()
         handleSend()
       }
     },
-    [handleSend]
+    [handleSend, disabled]
   )
 
   useEffect(() => {
@@ -156,28 +164,26 @@ export function MessageComposer({
       {/* Template selector */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-card/30">
         <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-        <select
+        <Select
           value={selectedTemplate || ''}
-          onChange={(e) => {
-            const value = e.target.value
+          onValueChange={(value) => {
             if (value) {
               applyTemplate(value)
             }
           }}
-          className={cn(
-            'flex-1 h-7 px-2 text-xs rounded bg-secondary/50 border-0',
-            'text-foreground focus:ring-1 focus:ring-ring',
-            'disabled:opacity-50 disabled:cursor-not-allowed'
-          )}
           disabled={disabled}
         >
-          <option value="">Select a template...</option>
-          {MESSAGE_TEMPLATES.map((template) => (
-            <option key={template.key} value={template.key}>
-              {template.label} - {template.description}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="flex-1 h-8 text-xs">
+            <SelectValue placeholder="Select a template..." />
+          </SelectTrigger>
+          <SelectContent>
+            {MESSAGE_TEMPLATES.map((template) => (
+              <SelectItem key={template.key} value={template.key}>
+                {template.label} - {template.description}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {selectedTemplate && (
           <Button
             variant="ghost"
