@@ -23,6 +23,7 @@ import {
   BookOpen,
   Download,
   Home,
+  Keyboard,
   Loader2,
   LogOut,
   Moon,
@@ -257,11 +258,16 @@ function FlowEditorContent() {
       if (event.key === 'Escape') {
         selectNode(null)
       }
+
+      // ? - Open keyboard shortcuts
+      if (event.key === '?' || (event.shiftKey && event.key === '/')) {
+        navigate('/flow/shortcuts')
+      }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedNodeId, deleteSelected, selectNode, isModified, saveMutation])
+  }, [selectedNodeId, deleteSelected, selectNode, isModified, saveMutation, navigate])
 
   const handleDragStart = useCallback((event: React.DragEvent, nodeType: string) => {
     event.dataTransfer.setData('application/reactflow', nodeType)
@@ -571,6 +577,12 @@ function FlowEditorContent() {
               <DropdownMenuItem onClick={handleExport}>
                 <Download className="mr-2 h-4 w-4" />
                 Export Workflow
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link to="/flow/shortcuts">
+                  <Keyboard className="mr-2 h-4 w-4" />
+                  Keyboard Shortcuts
+                </Link>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

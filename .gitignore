@@ -55,13 +55,12 @@ node_modules/
 
 # Build output
 dist/
-!frontend/dist/
 build/
 .next/
 out/
 
 # Frontend specific
-# frontend/dist/ is INCLUDED - pre-built for community use
+# frontend/dist/ is ignored - build locally with: cd frontend && npm run build
 frontend/.cache/
 *.local
 

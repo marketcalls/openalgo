@@ -542,79 +542,72 @@
 
 /* Custom Workflow Node Styles */
 .workflow-node {
-  border-radius: 0.5rem;
-  border: 1px solid hsl(var(--border));
-  background-color: hsl(var(--card));
-  transition: all 150ms ease;
+  @apply rounded-lg border border-border bg-card transition-all duration-150;
 }
 
 .workflow-node:hover {
-  border-color: hsl(var(--muted-foreground) / 0.5);
+  @apply border-muted-foreground/50;
 }
 
 .workflow-node.selected {
-  border-color: hsl(var(--foreground));
+  @apply border-foreground;
 }
 
 /* Node type indicators */
 .node-trigger {
-  border-left-width: 2px;
+  @apply border-l-2;
+  border-left-color: hsl(var(--node-trigger));
+}
+
+.node-start {
+  @apply border-l-2;
   border-left-color: hsl(var(--node-trigger));
 }
 
 .node-action {
-  border-left-width: 2px;
+  @apply border-l-2;
   border-left-color: hsl(var(--node-action));
 }
 
 .node-condition {
-  border-left-width: 2px;
+  @apply border-l-2;
   border-left-color: hsl(var(--node-condition));
 }
 
 .node-data {
-  border-left-width: 2px;
-  border-left-color: hsl(var(--node-data));
+  @apply border-l-2;
+  border-left-color: hsl(var(--primary));
 }
 
 .node-utility {
-  border-left-width: 2px;
-  border-left-color: hsl(var(--node-utility));
+  @apply border-l-2;
+  border-left-color: hsl(var(--muted-foreground));
 }
 
 /* Node icon styles */
 .node-icon {
-  display: flex;
-  height: 2rem;
-  width: 2rem;
-  align-items: center;
-  justify-content: center;
-  border-radius: 0.375rem;
+  @apply flex h-8 w-8 items-center justify-center rounded-md;
 }
 
-.node-trigger .node-icon {
-  background-color: hsl(var(--node-trigger) / 0.1);
-  color: hsl(var(--node-trigger));
+.node-trigger .node-icon,
+.node-start .node-icon {
+  @apply bg-[hsl(var(--node-trigger))]/10 text-[hsl(var(--node-trigger))];
 }
 
 .node-action .node-icon {
-  background-color: hsl(var(--node-action) / 0.1);
-  color: hsl(var(--node-action));
+  @apply bg-[hsl(var(--node-action))]/10 text-[hsl(var(--node-action))];
 }
 
 .node-condition .node-icon {
-  background-color: hsl(var(--node-condition) / 0.1);
-  color: hsl(var(--node-condition));
+  @apply bg-[hsl(var(--node-condition))]/10 text-[hsl(var(--node-condition))];
 }
 
 .node-data .node-icon {
-  background-color: hsl(var(--node-data) / 0.1);
-  color: hsl(var(--node-data));
+  @apply bg-primary/20 text-primary;
 }
 
 .node-utility .node-icon {
-  background-color: hsl(var(--node-utility) / 0.1);
-  color: hsl(var(--node-utility));
+  @apply bg-muted text-muted-foreground;
 }
 
 /* Flow status indicators */
@@ -648,4 +641,24 @@
   50% {
     opacity: 0.5;
   }
+}
+
+/* Monospace data display */
+.mono-data {
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  @apply tracking-tight tabular-nums;
+}
+
+/* Buy/Sell badges */
+.badge-buy {
+  @apply bg-[hsl(142_76%_36%/0.15)] text-[hsl(142_76%_46%)] border border-[hsl(142_76%_36%/0.3)] rounded-md px-2 py-0.5 text-xs font-medium;
+}
+
+.badge-sell {
+  @apply bg-[hsl(0_84%_60%/0.15)] text-[hsl(0_84%_70%)] border border-[hsl(0_84%_60%/0.3)] rounded-md px-2 py-0.5 text-xs font-medium;
+}
+
+/* Surface background for node data rows */
+.bg-surface-2 {
+  @apply bg-muted/50;
 }
