@@ -259,10 +259,14 @@ export async function exportWorkflow(id: number): Promise<WorkflowExportData> {
 
 /**
  * Import workflow from JSON
+ * Backend returns { status, workflow_id } so we transform it to { id, name }
  */
-export async function importWorkflow(data: WorkflowExportData): Promise<Workflow> {
+export async function importWorkflow(data: WorkflowExportData): Promise<{ id: number; name: string }> {
   const response = await webClient.post(`${FLOW_API_BASE}/workflows/import`, data)
-  return response.data
+  return {
+    id: response.data.workflow_id,
+    name: data.name || 'Imported Workflow'
+  }
 }
 
 // =============================================================================
