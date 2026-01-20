@@ -71,6 +71,7 @@ const ConfigureChartinkSymbols = lazy(() => import('@/pages/chartink/ConfigureCh
 // Flow pages
 const FlowIndex = lazy(() => import('@/pages/flow/FlowIndex'))
 const FlowEditor = lazy(() => import('@/pages/flow/FlowEditor'))
+const FlowKeyboardShortcuts = lazy(() => import('@/pages/flow/FlowKeyboardShortcuts'))
 
 // Admin pages
 const AdminIndex = lazy(() => import('@/pages/admin/AdminIndex'))
@@ -157,6 +158,7 @@ function App() {
                 />
                 {/* Flow Workflows */}
                 <Route path="/flow" element={<FlowIndex />} />
+                <Route path="/flow/shortcuts" element={<FlowKeyboardShortcuts />} />
                 {/* Phase 7: Admin */}
                 <Route path="/admin" element={<AdminIndex />} />
                 <Route path="/admin/freeze" element={<FreezeQty />} />

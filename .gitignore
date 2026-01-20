@@ -61,7 +61,7 @@ build/
 out/
 
 # Frontend specific
-# frontend/dist/ is INCLUDED - pre-built for community use
+# frontend/dist/ is INCLUDED - pre-built for community used
 frontend/.cache/
 *.local
 

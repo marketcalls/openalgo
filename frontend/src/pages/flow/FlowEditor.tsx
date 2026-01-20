@@ -2,7 +2,7 @@
 // Flow visual workflow editor page
 
 import { useCallback, useRef, useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
@@ -19,14 +19,23 @@ import {
 import '@xyflow/react/dist/style.css'
 import {
   ArrowLeft,
-  Save,
-  Play,
-  Pause,
-  Loader2,
-  MoreVertical,
-  Terminal,
+  BarChart3,
+  BookOpen,
   Download,
+  Home,
+  Keyboard,
+  Loader2,
+  LogOut,
+  Moon,
+  MoreVertical,
+  Pause,
+  Play,
+  Save,
+  Sun,
+  Terminal,
+  Zap,
 } from 'lucide-react'
+import { authApi } from '@/api/auth'
 import {
   getWorkflow,
   updateWorkflow,
@@ -38,15 +47,20 @@ import {
 } from '@/api/flow'
 import { useFlowWorkflowStore } from '@/stores/flowWorkflowStore'
 import { DEFAULT_NODE_DATA } from '@/lib/flow/constants'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { profileMenuItems } from '@/config/navigation'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/authStore'
+import { useThemeStore } from '@/stores/themeStore'
 
 // Import Flow components
 import { nodeTypes } from '@/components/flow/nodes'
@@ -87,6 +101,24 @@ function FlowEditorContent() {
   const [executionLogs, setExecutionLogs] = useState<LogEntry[]>([])
   const [executionStatus, setExecutionStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle')
 
+  // Theme and auth stores
+  const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
+  const { user, logout } = useAuthStore()
+
+  const handleLogout = async () => {
+    try {
+      await authApi.logout()
+      logout()
+      navigate('/login')
+    } catch (error) {
+      toast.error('Logout failed')
+    }
+  }
+
+  const handleModeToggle = async () => {
+    await toggleAppMode()
+  }
+
   const { isLoading, data: workflow } = useQuery({
     queryKey: flowQueryKeys.workflow(Number(id)),
     queryFn: () => getWorkflow(Number(id)),
@@ -95,8 +127,12 @@ function FlowEditorContent() {
 
   useEffect(() => {
     if (workflow) {
+      // Ensure nodes and edges are arrays
+      const workflowNodes = workflow.nodes || []
+      const workflowEdges = workflow.edges || []
+
       // Convert all edges to insertable type
-      const convertedEdges = workflow.edges.map((edge: Edge) => ({
+      const convertedEdges = workflowEdges.map((edge: Edge) => ({
         ...edge,
         type: 'insertable',
         animated: true,
@@ -105,14 +141,14 @@ function FlowEditorContent() {
         id: workflow.id,
         name: workflow.name,
         description: workflow.description || '',
-        nodes: workflow.nodes as Node[],
+        nodes: workflowNodes as Node[],
         edges: convertedEdges,
       })
       setIsActive(workflow.is_active)
       // Set node ID counter
       const maxId = Math.max(
         0,
-        ...workflow.nodes.map((n) => {
+        ...workflowNodes.map((n) => {
           const match = n.id.match(/node_(\d+)/)
           return match ? parseInt(match[1]) : 0
         })
@@ -222,11 +258,16 @@ function FlowEditorContent() {
       if (event.key === 'Escape') {
         selectNode(null)
       }
+
+      // ? - Open keyboard shortcuts
+      if (event.key === '?' || (event.shiftKey && event.key === '/')) {
+        navigate('/flow/shortcuts')
+      }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedNodeId, deleteSelected, selectNode, isModified, saveMutation])
+  }, [selectedNodeId, deleteSelected, selectNode, isModified, saveMutation, navigate])
 
   const handleDragStart = useCallback((event: React.DragEvent, nodeType: string) => {
     event.dataTransfer.setData('application/reactflow', nodeType)
@@ -303,17 +344,163 @@ function FlowEditorContent() {
     }
   }, [id])
 
+  // Handle invalid ID - redirect to flow list
+  if (!id || id === 'undefined' || isNaN(Number(id))) {
+    return (
+      <div className="flex h-screen flex-col bg-background text-foreground">
+        <div className="h-12 border-b border-border flex items-center px-2 bg-card/50">
+          <div className="flex items-center gap-2 px-2">
+            <img src="/images/android-chrome-192x192.png" alt="OpenAlgo" className="w-6 h-6" />
+            <span className="font-semibold text-sm">openalgo</span>
+          </div>
+          <div className="flex-1" />
+        </div>
+        <div className="flex-1 flex flex-col items-center justify-center gap-4">
+          <p className="text-muted-foreground">Invalid workflow ID</p>
+          <Button onClick={() => navigate('/flow')}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back to Workflows
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   if (isLoading) {
     return (
-      <div className="flex h-screen items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      <div className="flex h-screen flex-col bg-background text-foreground">
+        {/* Top Header Bar */}
+        <div className="h-12 border-b border-border flex items-center px-2 bg-card/50">
+          <div className="flex items-center gap-2 px-2">
+            <img src="/images/android-chrome-192x192.png" alt="OpenAlgo" className="w-6 h-6" />
+            <span className="font-semibold text-sm">openalgo</span>
+          </div>
+          <div className="flex-1" />
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="flex h-screen flex-col">
-      {/* Toolbar */}
+    <div className="flex h-screen flex-col bg-background text-foreground">
+      {/* Top Header Bar */}
+      <div className="h-12 border-b border-border flex items-center px-2 bg-card/50">
+        {/* Left: Logo */}
+        <div className="flex items-center gap-2 px-2">
+          <img src="/images/android-chrome-192x192.png" alt="OpenAlgo" className="w-6 h-6" />
+          <span className="font-semibold text-sm">openalgo</span>
+        </div>
+
+        {/* Center: Workflow Name */}
+        <div className="flex-1 flex items-center justify-center">
+          <span className="text-sm font-medium text-muted-foreground">Flow Editor</span>
+        </div>
+
+        {/* Right: Actions */}
+        <div className="flex items-center gap-2 px-2">
+          {/* Mode Badge */}
+          <Badge
+            variant={appMode === 'live' ? 'default' : 'secondary'}
+            className={cn(
+              'text-xs',
+              appMode === 'analyzer' && 'bg-purple-500 hover:bg-purple-600 text-white'
+            )}
+          >
+            <span className="hidden sm:inline">
+              {appMode === 'live' ? 'Live Mode' : 'Analyze Mode'}
+            </span>
+            <span className="sm:hidden">{appMode === 'live' ? 'Live' : 'Analyze'}</span>
+          </Badge>
+
+          {/* Mode Toggle */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={handleModeToggle}
+            disabled={isTogglingMode}
+            title={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
+          >
+            {isTogglingMode ? (
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            ) : appMode === 'live' ? (
+              <Zap className="h-4 w-4" />
+            ) : (
+              <BarChart3 className="h-4 w-4" />
+            )}
+          </Button>
+
+          {/* Theme Toggle */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={toggleMode}
+            disabled={appMode !== 'live'}
+            title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+          >
+            {mode === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </Button>
+
+          <Button variant="ghost" size="sm" className="h-7 text-xs" asChild>
+            <Link to="/dashboard">
+              <Home className="h-3.5 w-3.5 mr-1.5" />
+              Dashboard
+            </Link>
+          </Button>
+
+          {/* Profile Dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 rounded-full bg-primary text-primary-foreground"
+              >
+                <span className="text-sm font-medium">
+                  {user?.username?.[0]?.toUpperCase() || 'O'}
+                </span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              {profileMenuItems.map((item) => (
+                <DropdownMenuItem
+                  key={item.href}
+                  onSelect={() => navigate(item.href)}
+                  className="cursor-pointer"
+                >
+                  <item.icon className="h-4 w-4 mr-2" />
+                  {item.label}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuItem asChild>
+                <a
+                  href="https://docs.openalgo.in"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2"
+                >
+                  <BookOpen className="h-4 w-4" />
+                  Docs
+                </a>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={handleLogout}
+                className="text-destructive focus:text-destructive"
+              >
+                <LogOut className="h-4 w-4 mr-2" />
+                Logout
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+
+      {/* Workflow Toolbar */}
       <div className="flex items-center justify-between border-b border-border bg-card px-4 py-2">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => navigate('/flow')}>
@@ -390,6 +577,12 @@ function FlowEditorContent() {
               <DropdownMenuItem onClick={handleExport}>
                 <Download className="mr-2 h-4 w-4" />
                 Export Workflow
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link to="/flow/shortcuts">
+                  <Keyboard className="mr-2 h-4 w-4" />
+                  Keyboard Shortcuts
+                </Link>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
