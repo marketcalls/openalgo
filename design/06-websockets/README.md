@@ -507,14 +507,46 @@ export function useMarketData(symbols: string[], mode: 'ltp' | 'quote' | 'depth'
 }
 ```
 
+## websocket_proxy/ Directory Structure
+
+```
+websocket_proxy/
+├── server.py              # WebSocketProxy class - main server
+├── base_adapter.py        # BaseBrokerWebSocketAdapter ABC
+├── broker_factory.py      # Creates broker-specific adapters
+├── connection_manager.py  # Connection pool management
+└── app_integration.py     # Flask app integration
+```
+
+### App Integration (app_integration.py)
+
+The WebSocket server runs as a **daemon thread** inside the main Flask application:
+
+```python
+# Called from app.py on startup
+start_websocket_proxy(app)
+
+# Lifecycle:
+# 1. Check if should start (skip in Flask debug parent process)
+# 2. Start WebSocket server in daemon thread
+# 3. Register cleanup handlers for SIGINT/SIGTERM
+# 4. WebSocket runs on port 8765 alongside Flask on port 5000
+```
+
+**Key Points:**
+- No separate service needed - WebSocket runs inside main process
+- Single worker (`-w 1`) required for Gunicorn
+- Thread automatically cleans up on application shutdown
+- ZeroMQ context shared for message routing
+
 ## Key Files Reference
 
 | File | Purpose |
 |------|---------|
-| `websocket_proxy/server.py` | Main WebSocket proxy server |
+| `websocket_proxy/server.py` | Main WebSocket proxy server (port 8765) |
 | `websocket_proxy/base_adapter.py` | Base class for broker adapters |
 | `websocket_proxy/broker_factory.py` | Creates broker-specific adapters |
 | `websocket_proxy/connection_manager.py` | Connection pool management |
-| `websocket_proxy/app_integration.py` | Flask app integration |
+| `websocket_proxy/app_integration.py` | Flask app integration (thread management) |
 | `broker/*/streaming/*_adapter.py` | Broker-specific implementations |
 | `frontend/src/hooks/useMarketData.ts` | React WebSocket hook |
