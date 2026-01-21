@@ -153,7 +153,7 @@ F&O overnight? → Use NRML
 - Validate before going live
 
 ```
-Analyzer Mode ON  → Orders go to virtual account
+Analyzer Mode ON  → Orders go to sandbox account
 Analyzer Mode OFF → Orders go to real broker
 ```
 
@@ -284,7 +284,7 @@ Qty    Price    |    Price    Qty
 | Limit Order | Execute only at specified price |
 | CNC | Delivery trading (hold overnight) |
 | MIS | Intraday trading (close same day) |
-| Analyzer | Paper trading mode |
+| Analyzer | Sandbox testing mode |
 | Action Center | Order approval queue |
 | Smart Order | Position-aware order |
 | Flow | Visual strategy builder |

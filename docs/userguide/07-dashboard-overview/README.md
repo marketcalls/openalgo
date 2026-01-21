@@ -176,17 +176,17 @@ Click the refresh icon (🔄) to force update all data.
 
 ## Analyzer Mode Indicator
 
-When Analyzer (paper trading) mode is ON:
+When Analyzer (sandbox testing) mode is ON:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  ⚠️ ANALYZER MODE ACTIVE - Trading with virtual money          │
-│  Virtual Balance: ₹1,00,00,000                                  │
+│  ⚠️ ANALYZER MODE ACTIVE - Sandbox testing mode                 │
+│  Sandbox Balance: ₹1,00,00,000                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 This reminds you that:
-- Orders go to virtual account
+- Orders go to sandbox account
 - No real money at risk
 - Good for testing strategies
 

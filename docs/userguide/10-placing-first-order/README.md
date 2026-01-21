@@ -2,7 +2,7 @@
 
 ## Introduction
 
-This is the exciting part - placing your first order through OpenAlgo! We'll start with the Analyzer (paper trading) mode to practice safely, then show you how to go live.
+This is the exciting part - placing your first order through OpenAlgo! We'll start with the Analyzer (sandbox testing) mode to practice safely, then show you how to go live.
 
 ## Before You Begin
 

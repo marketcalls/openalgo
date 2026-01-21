@@ -170,7 +170,7 @@ Ready to begin? Here's your path:
 | Cost | Free (Open Source) |
 | Brokers | 24+ Indian brokers |
 | Signal Sources | TradingView, Amibroker, Python, AI, etc. |
-| Paper Trading | Yes (₹1 Crore virtual) |
+| Sandbox Testing | Yes (₹1 Crore sandbox capital) |
 | Data Privacy | 100% - runs on your machine |
 | Skill Required | Basic trading knowledge |
 

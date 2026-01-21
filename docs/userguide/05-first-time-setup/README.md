@@ -277,7 +277,7 @@ Before proceeding, confirm:
 Congratulations! OpenAlgo is now set up. Your next steps:
 
 1. **Learn the Interface**: [Understanding the Interface](../08-understanding-interface/README.md)
-2. **Practice First**: [Analyzer Mode](../15-analyzer-mode/README.md) - Trade with virtual money
+2. **Practice First**: [Analyzer Mode](../15-analyzer-mode/README.md) - Walkforward test with sandbox capital
 3. **Place Your First Order**: [Placing Your First Order](../10-placing-first-order/README.md)
 
 ---
