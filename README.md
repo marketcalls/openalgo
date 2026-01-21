@@ -231,14 +231,26 @@ Receive your strategy alerts directly to **Telegram** for all platforms.
 - **SQLite** - 4 separate databases (main, logs, latency, sandbox)
 - **DuckDB** - Historical market data (Historify)
 
+## Official SDKs
+
+OpenAlgo provides officially supported client libraries for application development and system-level integrations:
+
+| Language / Platform | Repository |
+|---------------------|------------|
+| Python | [openalgo-python-library](https://github.com/marketcalls/openalgo-python-library) |
+| Node.js | [openalgo-node](https://github.com/marketcalls/openalgo-node) |
+| Java | [openalgo-java](https://github.com/marketcalls/openalgo-java) |
+| Rust | [openalgo-rust](https://github.com/marketcalls/openalgo-rust) |
+| .NET / C# | [openalgo.NET](https://github.com/marketcalls/openalgo.NET) |
+| Go | [openalgo-go](https://github.com/marketcalls/openalgo-go) |
+
 ## OpenAlgo FOSS Ecosystem
 
 OpenAlgo is part of a larger open-source trading ecosystem:
 
 - **OpenAlgo Core**: This repository (Python Flask + React)
 - **Historify**: Stock market data management platform
-- **Python Library**: Native Python SDK
-- **Node.js Library**: JavaScript/TypeScript SDK
+- **Official SDKs**: Python, Node.js, Java, Rust, .NET, Go (see above)
 - **Excel Add-in**: Direct Excel integration
 - **MCP Server**: AI agents integration
 - **Chrome Plugin**: Browser-based tools
