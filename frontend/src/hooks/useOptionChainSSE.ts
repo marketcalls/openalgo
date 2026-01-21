@@ -88,13 +88,19 @@ export function useOptionChainSSE(
         }))
       }
     } catch (error) {
-      if (error instanceof Error && error.name !== 'AbortError') {
-        setState((prev) => ({
-          ...prev,
-          isLoading: false,
-          error: error.message || 'Connection error',
-          isConnected: false,
-        }))
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          if (abortControllerRef.current === null) {
+            setState((prev) => ({ ...prev, isLoading: false }))
+          }
+        } else {
+          setState((prev) => ({
+            ...prev,
+            isLoading: false,
+            error: error.message || 'Connection error',
+            isConnected: false,
+          }))
+        }
       }
     }
   }, [apiKey, underlying, exchange, expiryDate, strikeCount])

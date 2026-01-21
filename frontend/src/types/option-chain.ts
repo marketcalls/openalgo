@@ -21,6 +21,8 @@ export interface OptionData {
   ltp: number
   bid: number
   ask: number
+  bid_qty: number
+  ask_qty: number
   open: number
   high: number
   low: number
