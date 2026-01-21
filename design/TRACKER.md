@@ -10,7 +10,7 @@
 | 04 | Cache Architecture | ✅ Complete | 2026-01-21 |
 | 05 | Security Architecture | ✅ Complete | 2026-01-21 |
 | 06 | WebSockets Architecture | ✅ Complete | 2026-01-21 |
-| 07 | Sandbox Architecture | ⏳ Pending | - |
+| 07 | Sandbox Architecture | ✅ Complete | 2026-01-21 |
 | 08 | Historify Architecture | ⏳ Pending | - |
 | 09 | REST API Documentation | ⏳ Pending | - |
 | 10 | Flow Architecture | ⏳ Pending | - |
@@ -34,6 +34,9 @@
 | 28 | Environment Configuration | ⏳ Pending | - |
 | 29 | Ngrok Configuration | ⏳ Pending | - |
 | 30 | Upgrade Procedure | ⏳ Pending | - |
+| 31 | Utils Functionalities | ⏳ Pending | - |
+| 32 | Master Contract Download | ⏳ Pending | - |
+| 33 | Broker Folder Explanations | ⏳ Pending | - |
 
 ## Status Legend
 - ✅ Complete
