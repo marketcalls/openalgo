@@ -9,7 +9,7 @@
 | 03 | Login & Broker Login Flow | ✅ Complete | 2026-01-21 |
 | 04 | Cache Architecture | ✅ Complete | 2026-01-21 |
 | 05 | Security Architecture | ✅ Complete | 2026-01-21 |
-| 06 | WebSockets Architecture | ⏳ Pending | - |
+| 06 | WebSockets Architecture | ✅ Complete | 2026-01-21 |
 | 07 | Sandbox Architecture | ⏳ Pending | - |
 | 08 | Historify Architecture | ⏳ Pending | - |
 | 09 | REST API Documentation | ⏳ Pending | - |
@@ -32,6 +32,8 @@
 | 26 | Traffic Logs | ⏳ Pending | - |
 | 27 | Service Layer | ⏳ Pending | - |
 | 28 | Environment Configuration | ⏳ Pending | - |
+| 29 | Ngrok Configuration | ⏳ Pending | - |
+| 30 | Upgrade Procedure | ⏳ Pending | - |
 
 ## Status Legend
 - ✅ Complete
