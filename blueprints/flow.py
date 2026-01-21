@@ -237,8 +237,8 @@ def activate_workflow(workflow_id):
                 api_key=api_key
             )
 
-        # Update workflow as active
-        db_activate(workflow_id)
+        # Update workflow as active and store API key for webhook execution
+        db_activate(workflow_id, api_key=api_key)
 
         return jsonify({
             'status': 'success',
@@ -534,15 +534,19 @@ def _execute_webhook(token, webhook_data=None, url_secret=None):
             if not hmac.compare_digest(provided_secret, workflow.webhook_secret):
                 return jsonify({'error': 'Invalid webhook secret'}), 401
 
-    # Get API key
-    api_key = get_current_api_key()
+    # Get API key - prioritize stored API key from workflow
+    api_key = workflow.api_key  # Use API key stored when workflow was activated
     if not api_key:
-        api_key = os.getenv('OPENALGO_API_KEY')
+        api_key = get_current_api_key()  # Fallback to session (if called from UI)
+    if not api_key:
+        api_key = os.getenv('OPENALGO_API_KEY')  # Fallback to environment variable
 
     if not api_key:
-        return jsonify({'error': 'No API key configured for workflow execution'}), 500
+        logger.error(f"Webhook: No API key for workflow {workflow.id}")
+        return jsonify({'error': 'No API key configured for workflow execution. Please re-activate the workflow.'}), 500
 
     try:
+        logger.info(f"Webhook triggered for workflow {workflow.id}: {workflow.name}")
         result = execute_workflow(workflow.id, webhook_data=data, api_key=api_key)
         return jsonify({
             'status': result.get('status', 'success'),

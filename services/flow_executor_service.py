@@ -1306,6 +1306,7 @@ def execute_workflow(workflow_id: int, webhook_data: Optional[Dict[str, Any]] = 
 
         if webhook_data:
             context.set_variable("webhook", webhook_data)
+            logger.info(f"Webhook data injected: {webhook_data}")
 
         try:
             if not api_key:
@@ -1313,6 +1314,7 @@ def execute_workflow(workflow_id: int, webhook_data: Optional[Dict[str, Any]] = 
 
             client = get_flow_client(api_key)
             executor = NodeExecutor(client, context, logs)
+            logger.info(f"Starting workflow: {workflow.name}")
             executor.log(f"Starting workflow: {workflow.name}")
 
             nodes = workflow.nodes or []
