@@ -125,7 +125,7 @@ Analyzer Mode is OpenAlgo's sandbox testing environment. It simulates trading wi
 
 ### Can I backtest strategies?
 
-OpenAlgo is primarily for live/paper trading. For backtesting:
+OpenAlgo is primarily for live trading and walkforward testing strategies. For backtesting:
 - Use TradingView's strategy tester
 - Use Amibroker's backtesting
 - Use Python backtesting libraries

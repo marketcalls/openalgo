@@ -921,7 +921,7 @@ Installation complete! Now:
 
 1. **First-Time Setup**: Configure your credentials
 2. **Connect Broker**: Link your trading account
-3. **Test with Analyzer**: Practice with virtual money
+3. **Test with Analyzer**: Practice with sandbox capital
 
 ---
 
