@@ -45,6 +45,11 @@ function loadPreferences(): OptionChainPreferences {
       ? parsed.visibleColumns.filter(key => validColumnKeys.has(key))
       : DEFAULT_PREFERENCES.visibleColumns
 
+    // Ensure strike column is always visible (mandatory)
+    if (!visibleColumns.includes('strike')) {
+      visibleColumns.push('strike')
+    }
+
     const columnOrder = Array.isArray(parsed.columnOrder)
       ? parsed.columnOrder.filter(key => validColumnKeys.has(key))
       : DEFAULT_PREFERENCES.columnOrder

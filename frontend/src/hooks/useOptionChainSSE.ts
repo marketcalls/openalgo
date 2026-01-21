@@ -42,6 +42,11 @@ export function useOptionChainSSE(
     setState((prev) => ({ ...prev, isLoading: true }))
 
     try {
+      // Abort any existing request before starting a new one
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+      }
+
       const controller = new AbortController()
       abortControllerRef.current = controller
 
