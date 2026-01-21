@@ -30,7 +30,8 @@
       "Bash(python3:*)",
       "Bash(curl:*)",
       "WebSearch",
-      "WebFetch(domain:ui.shadcn.com)"
+      "WebFetch(domain:ui.shadcn.com)",
+      "Bash(tree:*)"
     ]
   }
 }
