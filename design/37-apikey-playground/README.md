@@ -275,11 +275,9 @@ response = requests.post(
 response = requests.post(
     f"{BASE_URL}/quotes",
     json={
+        "apikey": API_KEY,
         "symbol": "SBIN",
         "exchange": "NSE"
-    },
-    headers={
-        "Authorization": f"Bearer {API_KEY}"
     }
 )
 ```

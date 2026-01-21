@@ -285,8 +285,11 @@ Critical variables to configure:
 
 All `/api/v1/` endpoints require API key:
 ```python
-# In headers:
-Authorization: Bearer YOUR_API_KEY
+# In request body (recommended):
+{"apikey": "YOUR_API_KEY", "symbol": "SBIN", ...}
+
+# Or in headers:
+X-API-KEY: YOUR_API_KEY
 ```
 
 API keys are generated at `/apikey` and hashed with pepper before storage.

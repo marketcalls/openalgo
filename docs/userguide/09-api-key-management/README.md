@@ -99,11 +99,23 @@ Include your API key in the JSON body:
 
 ### In HTTP Headers
 
-For API calls, include in Authorization header:
+For API calls, include in X-API-KEY header:
 
 ```
-Authorization: Bearer a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
+X-API-KEY: a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
 ```
+
+Or include in request body (recommended):
+
+```json
+{
+    "apikey": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6",
+    "symbol": "SBIN",
+    "exchange": "NSE"
+}
+```
+
+**Note:** Bearer token authentication is NOT supported.
 
 ### In Python Scripts
 

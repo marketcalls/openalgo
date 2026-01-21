@@ -31,7 +31,10 @@
       "Bash(curl:*)",
       "WebSearch",
       "WebFetch(domain:ui.shadcn.com)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Bash(xargs basename:*)",
+      "Bash(ls:*)",
+      "Bash(uv pip:*)"
     ]
   }
 }

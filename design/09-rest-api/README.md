@@ -107,18 +107,20 @@ OpenAlgo provides a comprehensive REST API built with Flask-RESTX at `/api/v1/`.
 All API endpoints require API key authentication:
 
 ```python
-# Method 1: In request body
+# Method 1: In request body (recommended)
 {
     "apikey": "your_64_char_api_key",
     "symbol": "SBIN",
     "exchange": "NSE"
 }
 
-# Method 2: Authorization header
+# Method 2: X-API-KEY header (supported on some endpoints)
 headers = {
-    "Authorization": "Bearer your_64_char_api_key"
+    "X-API-KEY": "your_64_char_api_key"
 }
 ```
+
+**Note:** Bearer token authentication is NOT supported. Always use either the `apikey` field in the request body or the `X-API-KEY` header.
 
 ## Request/Response Format
 
