@@ -65,6 +65,7 @@ class FlowWorkflow(Base):
     webhook_secret = Column(String(64), nullable=True, default=generate_webhook_secret)
     webhook_enabled = Column(Boolean, default=False)
     webhook_auth_type = Column(String(20), default="payload")  # "payload" or "url"
+    api_key = Column(String(255), nullable=True)  # Stored when workflow is activated, used for webhook execution
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -92,6 +93,31 @@ def init_db():
     """Initialize the database"""
     from database.db_init_helper import init_db_with_logging
     init_db_with_logging(Base, engine, "Flow DB", logger)
+
+    # Migrate: Add api_key column if it doesn't exist (for existing databases)
+    _migrate_add_api_key_column()
+
+
+def _migrate_add_api_key_column():
+    """Add api_key column to flow_workflows table if it doesn't exist"""
+    try:
+        from sqlalchemy import inspect, text
+        inspector = inspect(engine)
+
+        # Check if table exists
+        if 'flow_workflows' not in inspector.get_table_names():
+            return
+
+        # Check if column exists
+        columns = [col['name'] for col in inspector.get_columns('flow_workflows')]
+        if 'api_key' not in columns:
+            with engine.connect() as conn:
+                conn.execute(text('ALTER TABLE flow_workflows ADD COLUMN api_key VARCHAR(255)'))
+                conn.commit()
+                logger.info("Migration: Added 'api_key' column to flow_workflows table")
+    except Exception as e:
+        # Log but don't fail - column might already exist or other DB issue
+        logger.debug(f"Migration check for api_key column: {e}")
 
 
 # --- Workflow CRUD Operations ---
@@ -172,7 +198,7 @@ def update_workflow(workflow_id, **kwargs):
 
         # Update allowed fields
         allowed_fields = ['name', 'description', 'nodes', 'edges', 'is_active',
-                         'schedule_job_id', 'webhook_enabled', 'webhook_auth_type']
+                         'schedule_job_id', 'webhook_enabled', 'webhook_auth_type', 'api_key']
         for field in allowed_fields:
             if field in kwargs:
                 setattr(workflow, field, kwargs[field])
@@ -218,9 +244,12 @@ def delete_workflow(workflow_id):
         return False
 
 
-def activate_workflow(workflow_id):
-    """Activate a workflow"""
-    return update_workflow(workflow_id, is_active=True)
+def activate_workflow(workflow_id, api_key=None):
+    """Activate a workflow and optionally store the API key for webhook execution"""
+    kwargs = {'is_active': True}
+    if api_key:
+        kwargs['api_key'] = api_key
+    return update_workflow(workflow_id, **kwargs)
 
 
 def deactivate_workflow(workflow_id):
@@ -285,6 +314,34 @@ def set_webhook_auth_type(workflow_id, auth_type):
         logger.error(f"Invalid webhook auth type: {auth_type}")
         return None
     return update_workflow(workflow_id, webhook_auth_type=auth_type)
+
+
+def ensure_webhook_credentials(workflow_id):
+    """Ensure webhook token and secret exist for a workflow"""
+    try:
+        workflow = get_workflow(workflow_id)
+        if not workflow:
+            return False
+
+        needs_update = False
+        if not workflow.webhook_token:
+            workflow.webhook_token = generate_webhook_token()
+            needs_update = True
+        if not workflow.webhook_secret:
+            workflow.webhook_secret = generate_webhook_secret()
+            needs_update = True
+
+        if needs_update:
+            db_session.commit()
+            # Clear cache to force refresh
+            _workflow_cache.clear()
+            logger.info(f"Generated webhook credentials for workflow {workflow_id}")
+
+        return True
+    except Exception as e:
+        logger.error(f"Error ensuring webhook credentials for workflow {workflow_id}: {str(e)}")
+        db_session.rollback()
+        return False
 
 
 def set_schedule_job_id(workflow_id, job_id):
