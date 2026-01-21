@@ -287,6 +287,34 @@ def set_webhook_auth_type(workflow_id, auth_type):
     return update_workflow(workflow_id, webhook_auth_type=auth_type)
 
 
+def ensure_webhook_credentials(workflow_id):
+    """Ensure webhook token and secret exist for a workflow"""
+    try:
+        workflow = get_workflow(workflow_id)
+        if not workflow:
+            return False
+
+        needs_update = False
+        if not workflow.webhook_token:
+            workflow.webhook_token = generate_webhook_token()
+            needs_update = True
+        if not workflow.webhook_secret:
+            workflow.webhook_secret = generate_webhook_secret()
+            needs_update = True
+
+        if needs_update:
+            db_session.commit()
+            # Clear cache to force refresh
+            _workflow_cache.clear()
+            logger.info(f"Generated webhook credentials for workflow {workflow_id}")
+
+        return True
+    except Exception as e:
+        logger.error(f"Error ensuring webhook credentials for workflow {workflow_id}: {str(e)}")
+        db_session.rollback()
+        return False
+
+
 def set_schedule_job_id(workflow_id, job_id):
     """Set schedule job ID for a workflow"""
     try:

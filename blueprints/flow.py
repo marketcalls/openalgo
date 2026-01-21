@@ -336,16 +336,77 @@ def get_workflow_executions(workflow_id):
 
 # === Webhook Routes ===
 
+def get_webhook_base_url():
+    """Get the base URL for webhooks based on server configuration"""
+    import os
+    # Use HOST_SERVER from .env or default to localhost
+    host = os.getenv('HOST_SERVER', 'http://127.0.0.1:5000')
+    # Ensure no trailing slash
+    return host.rstrip('/')
+
+
+@flow_bp.route('/api/workflows/<int:workflow_id>/webhook', methods=['GET'])
+@check_session_validity
+def get_webhook_info(workflow_id):
+    """Get webhook configuration for a workflow"""
+    from database.flow_db import get_workflow, ensure_webhook_credentials
+
+    workflow = get_workflow(workflow_id)
+    if not workflow:
+        return jsonify({'error': 'Workflow not found'}), 404
+
+    # Ensure webhook token and secret exist
+    ensure_webhook_credentials(workflow_id)
+
+    # Refresh workflow to get updated credentials
+    workflow = get_workflow(workflow_id)
+
+    # Build webhook URLs
+    base_url = get_webhook_base_url()
+    webhook_url = f"{base_url}/flow/webhook/{workflow.webhook_token}"
+    auth_type = workflow.webhook_auth_type or 'payload'
+
+    return jsonify({
+        'webhook_token': workflow.webhook_token,
+        'webhook_secret': workflow.webhook_secret,
+        'webhook_enabled': workflow.webhook_enabled,
+        'webhook_auth_type': auth_type,
+        'webhook_url': webhook_url,
+        'webhook_url_with_symbol': f"{webhook_url}/{{symbol}}",
+        'webhook_url_with_secret': f"{webhook_url}?secret={workflow.webhook_secret}" if auth_type == 'url' else None
+    })
+
+
 @flow_bp.route('/api/workflows/<int:workflow_id>/webhook/enable', methods=['POST'])
 @check_session_validity
 def enable_webhook(workflow_id):
     """Enable webhook for a workflow"""
-    from database.flow_db import enable_webhook
+    from database.flow_db import enable_webhook, get_workflow, ensure_webhook_credentials
+
+    # Ensure credentials exist before enabling
+    ensure_webhook_credentials(workflow_id)
 
     result = enable_webhook(workflow_id)
-    if result:
-        return jsonify({'status': 'success', 'message': 'Webhook enabled'})
-    return jsonify({'error': 'Failed to enable webhook'}), 500
+    if not result:
+        return jsonify({'error': 'Failed to enable webhook'}), 500
+
+    # Get updated workflow and return full webhook info
+    workflow = get_workflow(workflow_id)
+    base_url = get_webhook_base_url()
+    webhook_url = f"{base_url}/flow/webhook/{workflow.webhook_token}"
+    auth_type = workflow.webhook_auth_type or 'payload'
+
+    return jsonify({
+        'status': 'success',
+        'message': 'Webhook enabled',
+        'webhook_token': workflow.webhook_token,
+        'webhook_secret': workflow.webhook_secret,
+        'webhook_enabled': True,
+        'webhook_auth_type': auth_type,
+        'webhook_url': webhook_url,
+        'webhook_url_with_symbol': f"{webhook_url}/{{symbol}}",
+        'webhook_url_with_secret': f"{webhook_url}?secret={workflow.webhook_secret}" if auth_type == 'url' else None
+    })
 
 
 @flow_bp.route('/api/workflows/<int:workflow_id>/webhook/disable', methods=['POST'])
@@ -363,39 +424,82 @@ def disable_webhook(workflow_id):
 @flow_bp.route('/api/workflows/<int:workflow_id>/webhook/regenerate', methods=['POST'])
 @check_session_validity
 def regenerate_webhook(workflow_id):
-    """Regenerate webhook token"""
-    from database.flow_db import regenerate_webhook_token
+    """Regenerate webhook token and secret"""
+    from database.flow_db import regenerate_webhook_token, regenerate_webhook_secret, get_workflow
 
     new_token = regenerate_webhook_token(workflow_id)
-    if new_token:
-        return jsonify({'status': 'success', 'webhook_token': new_token})
-    return jsonify({'error': 'Failed to regenerate token'}), 500
+    new_secret = regenerate_webhook_secret(workflow_id)
+
+    if not new_token:
+        return jsonify({'error': 'Failed to regenerate token'}), 500
+
+    # Get updated workflow and return full webhook info
+    workflow = get_workflow(workflow_id)
+    base_url = get_webhook_base_url()
+    webhook_url = f"{base_url}/flow/webhook/{workflow.webhook_token}"
+
+    return jsonify({
+        'status': 'success',
+        'message': 'Webhook token and secret regenerated',
+        'webhook_token': workflow.webhook_token,
+        'webhook_secret': workflow.webhook_secret,
+        'webhook_url': webhook_url,
+        'webhook_url_with_symbol': f"{webhook_url}/{{symbol}}"
+    })
+
+
+@flow_bp.route('/api/workflows/<int:workflow_id>/webhook/regenerate-secret', methods=['POST'])
+@check_session_validity
+def regenerate_webhook_secret_route(workflow_id):
+    """Regenerate webhook secret only"""
+    from database.flow_db import regenerate_webhook_secret, get_workflow
+
+    new_secret = regenerate_webhook_secret(workflow_id)
+    if not new_secret:
+        return jsonify({'error': 'Failed to regenerate secret'}), 500
+
+    return jsonify({
+        'status': 'success',
+        'message': 'Webhook secret regenerated',
+        'webhook_secret': new_secret
+    })
 
 
 @flow_bp.route('/api/workflows/<int:workflow_id>/webhook/auth-type', methods=['POST'])
 @check_session_validity
 def set_webhook_auth(workflow_id):
     """Set webhook auth type"""
-    from database.flow_db import set_webhook_auth_type
+    from database.flow_db import set_webhook_auth_type, get_workflow
 
     data = request.get_json()
     auth_type = data.get('auth_type', 'payload')
 
     result = set_webhook_auth_type(workflow_id, auth_type)
-    if result:
-        return jsonify({'status': 'success', 'auth_type': auth_type})
-    return jsonify({'error': 'Invalid auth type'}), 400
+    if not result:
+        return jsonify({'error': 'Invalid auth type'}), 400
+
+    # Get updated workflow and return full webhook info
+    workflow = get_workflow(workflow_id)
+    base_url = get_webhook_base_url()
+    webhook_url = f"{base_url}/flow/webhook/{workflow.webhook_token}"
+
+    return jsonify({
+        'status': 'success',
+        'message': f"Webhook auth type set to '{auth_type}'",
+        'webhook_auth_type': auth_type,
+        'webhook_url': webhook_url,
+        'webhook_url_with_secret': f"{webhook_url}?secret={workflow.webhook_secret}" if auth_type == 'url' else None
+    })
 
 
-# === Webhook Trigger Route (CSRF Exempt) ===
+# === Webhook Trigger Routes (CSRF Exempt) ===
 
-@flow_bp.route('/webhook/<token>', methods=['POST'])
-def trigger_webhook(token):
-    """Trigger a workflow via webhook (CSRF exempt)"""
+def _execute_webhook(token, webhook_data=None, url_secret=None):
+    """Internal function to execute webhook"""
     from database.flow_db import get_workflow_by_webhook_token
     from services.flow_executor_service import execute_workflow
     import hmac
-    import hashlib
+    import os
 
     workflow = get_workflow_by_webhook_token(token)
     if not workflow:
@@ -407,37 +511,75 @@ def trigger_webhook(token):
     if not workflow.is_active:
         return jsonify({'error': 'Workflow is not active'}), 403
 
-    # Validate secret if auth_type is payload
-    if workflow.webhook_auth_type == 'payload':
-        data = request.get_json() or {}
-        provided_secret = data.get('secret') or ''
-        stored_secret = workflow.webhook_secret or ''
-        # Use constant-time comparison to prevent timing attacks
-        if not hmac.compare_digest(provided_secret, stored_secret):
-            return jsonify({'error': 'Invalid webhook secret'}), 403
-        webhook_data = {k: v for k, v in data.items() if k != 'secret'}
-    else:
-        # For URL auth, secret was already validated via token
-        webhook_data = request.get_json() or {}
+    data = webhook_data or {}
+    auth_type = workflow.webhook_auth_type or 'payload'
 
-    # Get API key from the workflow's associated user
-    # For now, we need to store API key association with workflows
-    # This is a simplified approach - in production you'd want proper user association
+    # Validate webhook secret based on auth type
+    if workflow.webhook_secret:
+        if auth_type == 'url':
+            # Secret expected in URL query parameter
+            if not url_secret:
+                return jsonify({
+                    'error': "Missing webhook secret in URL. Use ?secret=your_secret"
+                }), 401
+            if not hmac.compare_digest(url_secret, workflow.webhook_secret):
+                return jsonify({'error': 'Invalid webhook secret'}), 401
+        else:
+            # Secret expected in payload (default)
+            provided_secret = data.pop('secret', '') or ''
+            if not provided_secret:
+                return jsonify({
+                    'error': "Missing webhook secret in payload. Add 'secret' field to JSON body"
+                }), 401
+            if not hmac.compare_digest(provided_secret, workflow.webhook_secret):
+                return jsonify({'error': 'Invalid webhook secret'}), 401
+
+    # Get API key
     api_key = get_current_api_key()
     if not api_key:
-        # Try to get from settings or environment
-        import os
         api_key = os.getenv('OPENALGO_API_KEY')
 
     if not api_key:
         return jsonify({'error': 'No API key configured for workflow execution'}), 500
 
     try:
-        result = execute_workflow(workflow.id, webhook_data=webhook_data, api_key=api_key)
-        return jsonify(result)
+        result = execute_workflow(workflow.id, webhook_data=data, api_key=api_key)
+        return jsonify({
+            'status': result.get('status', 'success'),
+            'message': f"Workflow '{workflow.name}' triggered",
+            'execution_id': result.get('execution_id'),
+            'workflow_id': workflow.id
+        })
     except Exception as e:
         logger.error(f"Webhook execution failed for workflow {workflow.id}: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+@flow_bp.route('/webhook/<token>', methods=['POST'])
+def trigger_webhook(token):
+    """
+    Trigger a workflow via webhook (CSRF exempt)
+
+    Authentication can be done via:
+    1. URL query parameter: ?secret=your_secret (for Chartink, etc.)
+    2. Payload field: {"secret": "your_secret", ...} (for TradingView, etc.)
+    """
+    url_secret = request.args.get('secret')
+    payload = request.get_json() or {}
+    return _execute_webhook(token, webhook_data=payload, url_secret=url_secret)
+
+
+@flow_bp.route('/webhook/<token>/<symbol>', methods=['POST'])
+def trigger_webhook_with_symbol(token, symbol):
+    """
+    Trigger a workflow via webhook with symbol in URL path (CSRF exempt)
+
+    The symbol is automatically injected into the webhook data.
+    """
+    url_secret = request.args.get('secret')
+    payload = request.get_json() or {}
+    payload['symbol'] = symbol
+    return _execute_webhook(token, webhook_data=payload, url_secret=url_secret)
 
 
 # === Monitor Status Route ===

@@ -680,6 +680,431 @@ class NodeExecutor:
         self.store_output(node_data, {"ltp": ltp, "condition_met": condition_met})
         return {"status": "success", "condition": condition_met, "ltp": ltp}
 
+    # === Streaming Nodes (WebSocket with REST API fallback) ===
+
+    def _get_websocket_data(self, symbol: str, exchange: str, mode: str, timeout: float = 5.0) -> Optional[dict]:
+        """
+        Get market data via WebSocket subscription.
+
+        Args:
+            symbol: Symbol to subscribe to
+            exchange: Exchange code
+            mode: Subscription mode ("LTP", "Quote", or "Depth")
+            timeout: Maximum time to wait for data in seconds
+
+        Returns:
+            Market data dict or None if failed
+        """
+        try:
+            from database.auth_db import verify_api_key, get_broker_name
+            from services.websocket_service import (
+                get_websocket_connection, subscribe_to_symbols,
+                unsubscribe_from_symbols, get_market_data
+            )
+
+            # Get username from API key
+            username = verify_api_key(self.client.api_key)
+            if not username:
+                self.log("WebSocket: Invalid API key", "warning")
+                return None
+
+            # Get broker name
+            broker = get_broker_name(self.client.api_key) or "unknown"
+
+            # Try to get WebSocket connection
+            success, ws_client, error = get_websocket_connection(username)
+            if not success:
+                self.log(f"WebSocket connection failed: {error}", "warning")
+                return None
+
+            # Subscribe to symbol
+            symbols = [{"symbol": symbol, "exchange": exchange}]
+            sub_success, sub_result, _ = subscribe_to_symbols(username, broker, symbols, mode)
+
+            if not sub_success:
+                self.log(f"WebSocket subscribe failed: {sub_result.get('message')}", "warning")
+                return None
+
+            # Wait for data with polling
+            start_time = time_module.time()
+            data = None
+
+            while time_module.time() - start_time < timeout:
+                # Get cached market data
+                data_success, data_result, _ = get_market_data(username, symbol, exchange)
+
+                if data_success and data_result.get('data'):
+                    market_data = data_result.get('data', {})
+                    if market_data and market_data.get('data'):
+                        data = market_data
+                        break
+
+                time_module.sleep(0.2)  # Poll every 200ms
+
+            return data
+
+        except Exception as e:
+            self.log(f"WebSocket error: {str(e)}", "warning")
+            return None
+
+    def execute_subscribe_ltp(self, node_data: dict) -> dict:
+        """Execute Subscribe LTP node - get real-time LTP via WebSocket
+
+        Connects to OpenAlgo WebSocket server and subscribes to LTP updates.
+        Falls back to REST API if WebSocket fails or times out.
+        """
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        output_var = node_data.get("outputVariable", "ltp")
+
+        if not symbol:
+            self.log("Subscribe LTP: No symbol specified", "error")
+            return {"status": "error", "message": "No symbol specified"}
+
+        self.log(f"Subscribing to LTP stream: {symbol} ({exchange})")
+
+        # Try WebSocket first
+        ws_data = self._get_websocket_data(symbol, exchange, "LTP", timeout=5.0)
+
+        if ws_data:
+            data = ws_data.get("data", {})
+            ltp = data.get("ltp", 0) if data else 0
+
+            streaming_result = {
+                "status": "success",
+                "type": "ltp",
+                "symbol": symbol,
+                "exchange": exchange,
+                "ltp": ltp,
+                "source": "websocket"
+            }
+            self.log(f"LTP for {symbol}: {ltp} (via WebSocket)")
+
+            # Store in context variable
+            self.context.set_variable(output_var, ltp)
+            self.store_output(node_data, streaming_result)
+            return streaming_result
+
+        # Fallback to REST API
+        self.log(f"WebSocket timeout/failed, falling back to REST API for {symbol}")
+
+        try:
+            result = self.client.get_quotes(symbol=symbol, exchange=exchange)
+
+            if result.get("status") == "success":
+                data = result.get("data", {})
+                ltp = data.get("ltp", 0) if data else 0
+
+                streaming_result = {
+                    "status": "success",
+                    "type": "ltp",
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "ltp": ltp,
+                    "source": "rest_api"
+                }
+                self.log(f"LTP for {symbol}: {ltp} (via REST API)")
+
+                # Store in context variable
+                self.context.set_variable(output_var, ltp)
+                self.store_output(node_data, streaming_result)
+                return streaming_result
+            else:
+                error_msg = result.get("error", "Failed to get LTP")
+                self.log(f"Subscribe LTP error: {error_msg}", "error")
+                return {
+                    "status": "error",
+                    "type": "ltp",
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "error": error_msg
+                }
+
+        except Exception as e:
+            self.log(f"Subscribe LTP exception: {str(e)}", "error")
+            return {
+                "status": "error",
+                "type": "ltp",
+                "symbol": symbol,
+                "exchange": exchange,
+                "error": str(e)
+            }
+
+    def execute_subscribe_quote(self, node_data: dict) -> dict:
+        """Execute Subscribe Quote node - get real-time quote via WebSocket
+
+        Connects to OpenAlgo WebSocket and subscribes to quote updates (OHLC + volume).
+        Falls back to REST API if WebSocket fails or times out.
+        """
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        output_var = node_data.get("outputVariable", "quote")
+
+        if not symbol:
+            self.log("Subscribe Quote: No symbol specified", "error")
+            return {"status": "error", "message": "No symbol specified"}
+
+        self.log(f"Subscribing to Quote stream: {symbol} ({exchange})")
+
+        # Try WebSocket first
+        ws_data = self._get_websocket_data(symbol, exchange, "Quote", timeout=5.0)
+
+        if ws_data:
+            data = ws_data.get("data", {})
+
+            quote_data = {
+                "ltp": data.get("ltp", 0),
+                "open": data.get("open", 0),
+                "high": data.get("high", 0),
+                "low": data.get("low", 0),
+                "close": data.get("close", data.get("prev_close", 0)),
+                "volume": data.get("volume", 0),
+                "prev_close": data.get("prev_close", 0)
+            } if data else {}
+
+            streaming_result = {
+                "status": "success",
+                "type": "quote",
+                "symbol": symbol,
+                "exchange": exchange,
+                "data": quote_data,
+                "source": "websocket"
+            }
+            self.log(f"Quote for {symbol}: LTP={quote_data.get('ltp')} (via WebSocket)")
+
+            # Store in context variable
+            self.context.set_variable(output_var, quote_data)
+            self.store_output(node_data, streaming_result)
+            return streaming_result
+
+        # Fallback to REST API
+        self.log(f"WebSocket timeout/failed, falling back to REST API for {symbol}")
+
+        try:
+            result = self.client.get_quotes(symbol=symbol, exchange=exchange)
+
+            if result.get("status") == "success":
+                data = result.get("data", {})
+
+                quote_data = {
+                    "ltp": data.get("ltp", 0),
+                    "open": data.get("open", 0),
+                    "high": data.get("high", 0),
+                    "low": data.get("low", 0),
+                    "close": data.get("close", data.get("prev_close", 0)),
+                    "volume": data.get("volume", 0),
+                    "prev_close": data.get("prev_close", 0)
+                } if data else {}
+
+                streaming_result = {
+                    "status": "success",
+                    "type": "quote",
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "data": quote_data,
+                    "source": "rest_api"
+                }
+                self.log(f"Quote for {symbol}: LTP={quote_data.get('ltp')} (via REST API)")
+
+                # Store in context variable
+                self.context.set_variable(output_var, quote_data)
+                self.store_output(node_data, streaming_result)
+                return streaming_result
+            else:
+                error_msg = result.get("error", "Failed to get quote")
+                self.log(f"Subscribe Quote error: {error_msg}", "error")
+                return {
+                    "status": "error",
+                    "type": "quote",
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "error": error_msg
+                }
+
+        except Exception as e:
+            self.log(f"Subscribe Quote exception: {str(e)}", "error")
+            return {
+                "status": "error",
+                "type": "quote",
+                "symbol": symbol,
+                "exchange": exchange,
+                "error": str(e)
+            }
+
+    def execute_subscribe_depth(self, node_data: dict) -> dict:
+        """Execute Subscribe Depth node - get market depth via WebSocket
+
+        Connects to OpenAlgo WebSocket and subscribes to depth updates (order book).
+        Falls back to REST API if WebSocket fails or times out.
+        """
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        output_var = node_data.get("outputVariable", "depth")
+
+        if not symbol:
+            self.log("Subscribe Depth: No symbol specified", "error")
+            return {"status": "error", "message": "No symbol specified"}
+
+        self.log(f"Subscribing to Depth stream: {symbol} ({exchange})")
+
+        # Try WebSocket first
+        ws_data = self._get_websocket_data(symbol, exchange, "Depth", timeout=5.0)
+
+        if ws_data:
+            data = ws_data.get("data", {})
+
+            depth_data = {
+                "bids": data.get("bids", []),
+                "asks": data.get("asks", []),
+                "totalbuyqty": data.get("totalbuyqty", 0),
+                "totalsellqty": data.get("totalsellqty", 0),
+                "ltp": data.get("ltp", 0)
+            } if data else {"bids": [], "asks": []}
+
+            streaming_result = {
+                "status": "success",
+                "type": "depth",
+                "symbol": symbol,
+                "exchange": exchange,
+                "data": depth_data,
+                "source": "websocket"
+            }
+            self.log(f"Depth for {symbol}: {len(depth_data.get('bids', []))} bids, {len(depth_data.get('asks', []))} asks (via WebSocket)")
+
+            # Store in context variable
+            self.context.set_variable(output_var, depth_data)
+            self.store_output(node_data, streaming_result)
+            return streaming_result
+
+        # Fallback to REST API
+        self.log(f"WebSocket timeout/failed, falling back to REST API for {symbol}")
+
+        try:
+            result = self.client.get_depth(symbol=symbol, exchange=exchange)
+
+            if result.get("status") == "success":
+                data = result.get("data", {})
+
+                depth_data = {
+                    "bids": data.get("bids", []),
+                    "asks": data.get("asks", []),
+                    "totalbuyqty": data.get("totalbuyqty", 0),
+                    "totalsellqty": data.get("totalsellqty", 0),
+                    "ltp": data.get("ltp", 0)
+                } if data else {"bids": [], "asks": []}
+
+                streaming_result = {
+                    "status": "success",
+                    "type": "depth",
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "data": depth_data,
+                    "source": "rest_api"
+                }
+                self.log(f"Depth for {symbol}: {len(depth_data.get('bids', []))} bids, {len(depth_data.get('asks', []))} asks (via REST API)")
+
+                # Store in context variable
+                self.context.set_variable(output_var, depth_data)
+                self.store_output(node_data, streaming_result)
+                return streaming_result
+            else:
+                error_msg = result.get("error", "Failed to get depth")
+                self.log(f"Subscribe Depth error: {error_msg}", "error")
+                return {
+                    "status": "error",
+                    "type": "depth",
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "error": error_msg
+                }
+
+        except Exception as e:
+            self.log(f"Subscribe Depth exception: {str(e)}", "error")
+            return {
+                "status": "error",
+                "type": "depth",
+                "symbol": symbol,
+                "exchange": exchange,
+                "error": str(e)
+            }
+
+    def execute_unsubscribe(self, node_data: dict) -> dict:
+        """Execute Unsubscribe node - unsubscribe from WebSocket streams
+
+        Unsubscribes from specified stream type (ltp/quote/depth/all).
+        """
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        stream_type = self.get_str(node_data, "streamType", "all")
+
+        self.log(f"Unsubscribing from {stream_type} stream: {symbol or 'all'} ({exchange})")
+
+        try:
+            from database.auth_db import verify_api_key, get_broker_name
+            from services.websocket_service import (
+                get_websocket_connection, unsubscribe_from_symbols, unsubscribe_all
+            )
+
+            # Get username from API key
+            username = verify_api_key(self.client.api_key)
+            if not username:
+                self.log("Unsubscribe: Invalid API key", "warning")
+                return {
+                    "status": "success",
+                    "type": "unsubscribe",
+                    "message": "No active WebSocket connection"
+                }
+
+            # Get broker name
+            broker = get_broker_name(self.client.api_key) or "unknown"
+
+            # Check WebSocket connection
+            success, ws_client, error = get_websocket_connection(username)
+            if not success:
+                return {
+                    "status": "success",
+                    "type": "unsubscribe",
+                    "message": "No active WebSocket connection"
+                }
+
+            # Map stream_type to mode
+            mode_map = {
+                "ltp": "LTP",
+                "quote": "Quote",
+                "depth": "Depth"
+            }
+
+            if stream_type.lower() == "all" or not symbol:
+                # Unsubscribe from all
+                unsub_success, unsub_result, _ = unsubscribe_all(username, broker)
+                self.log(f"Unsubscribed from all streams")
+            else:
+                # Unsubscribe from specific symbol/mode
+                mode = mode_map.get(stream_type.lower(), "Quote")
+                symbols = [{"symbol": symbol, "exchange": exchange}]
+                unsub_success, unsub_result, _ = unsubscribe_from_symbols(username, broker, symbols, mode)
+                self.log(f"Unsubscribed from {stream_type} for {symbol}")
+
+            return {
+                "status": "success",
+                "type": "unsubscribe",
+                "symbol": symbol,
+                "exchange": exchange,
+                "stream_type": stream_type,
+                "message": f"Unsubscribed from {stream_type} stream"
+            }
+
+        except Exception as e:
+            self.log(f"Unsubscribe error: {str(e)}", "warning")
+            return {
+                "status": "success",
+                "type": "unsubscribe",
+                "symbol": symbol,
+                "exchange": exchange,
+                "stream_type": stream_type,
+                "message": "Unsubscribe completed (with warnings)"
+            }
+
     # === Logic Gates ===
 
     def execute_and_gate(self, node_data: dict, input_results: List[bool]) -> dict:
@@ -795,6 +1220,15 @@ def execute_node_chain(
         result = executor.execute_price_alert(node_data)
     elif node_type == "webhookTrigger":
         executor.log("Webhook trigger activated")
+    # Streaming Nodes
+    elif node_type == "subscribeLtp":
+        result = executor.execute_subscribe_ltp(node_data)
+    elif node_type == "subscribeQuote":
+        result = executor.execute_subscribe_quote(node_data)
+    elif node_type == "subscribeDepth":
+        result = executor.execute_subscribe_depth(node_data)
+    elif node_type == "unsubscribe":
+        result = executor.execute_unsubscribe(node_data)
     elif node_type == "andGate":
         incoming_edges = incoming_edge_map.get(node_id, [])
         input_results = []

@@ -220,6 +220,7 @@ def create_app():
         csrf.exempt(app.view_functions['chartink_bp.webhook'])
         csrf.exempt(app.view_functions['strategy_bp.webhook'])
         csrf.exempt(app.view_functions['flow.trigger_webhook'])
+        csrf.exempt(app.view_functions['flow.trigger_webhook_with_symbol'])
 
         # Exempt broker callback endpoints from CSRF protection (OAuth callbacks from external providers)
         csrf.exempt(app.view_functions['brlogin.broker_callback'])
