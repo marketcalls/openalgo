@@ -684,7 +684,10 @@ class NodeExecutor:
 
     def _get_websocket_data(self, symbol: str, exchange: str, mode: str, timeout: float = 5.0) -> Optional[dict]:
         """
-        Get market data via WebSocket subscription.
+        Get market data via WebSocket subscription using callback approach.
+
+        Uses a callback to capture data with the correct mode, bypassing the
+        shared cache which may contain data from other modes (e.g., LTP overwriting Depth).
 
         Args:
             symbol: Symbol to subscribe to
@@ -695,11 +698,12 @@ class NodeExecutor:
         Returns:
             Market data dict or None if failed
         """
+        import threading
+
         try:
             from database.auth_db import verify_api_key, get_broker_name
             from services.websocket_service import (
-                get_websocket_connection, subscribe_to_symbols,
-                unsubscribe_from_symbols, get_market_data
+                get_websocket_connection, subscribe_to_symbols
             )
 
             # Get username from API key
@@ -717,31 +721,65 @@ class NodeExecutor:
                 self.log(f"WebSocket connection failed: {error}", "warning")
                 return None
 
-            # Subscribe to symbol
-            symbols = [{"symbol": symbol, "exchange": exchange}]
-            sub_success, sub_result, _ = subscribe_to_symbols(username, broker, symbols, mode)
+            # Map mode string to numeric for comparison
+            mode_to_num = {"LTP": 1, "Quote": 2, "Depth": 3}
+            expected_mode_num = mode_to_num.get(mode, 2)
 
-            if not sub_success:
-                self.log(f"WebSocket subscribe failed: {sub_result.get('message')}", "warning")
-                return None
+            # Thread-safe container for captured data
+            captured_data = {"data": None}
+            data_event = threading.Event()
 
-            # Wait for data with polling
-            start_time = time_module.time()
-            data = None
+            def on_market_data(data):
+                """Callback to capture data with matching mode and symbol"""
+                if captured_data["data"] is not None:
+                    return  # Already captured
 
-            while time_module.time() - start_time < timeout:
-                # Get cached market data
-                data_success, data_result, _ = get_market_data(username, symbol, exchange)
+                data_symbol = data.get('symbol', '')
+                data_exchange = data.get('exchange', '')
+                data_mode = data.get('mode')
 
-                if data_success and data_result.get('data'):
-                    market_data = data_result.get('data', {})
-                    if market_data and market_data.get('data'):
-                        data = market_data
-                        break
+                # Check if this is the data we're looking for
+                if data_symbol == symbol and data_exchange == exchange and data_mode == expected_mode_num:
+                    # For Depth mode, verify we have actual depth data (not just empty init message)
+                    if mode == "Depth":
+                        nested = data.get('data', {}) if isinstance(data.get('data'), dict) else {}
+                        # Check multiple possible structures:
+                        # 1. Standard: bids/asks arrays
+                        # 2. Fyers: depth.buy/depth.sell arrays
+                        bids = data.get('bids') or nested.get('bids') or []
+                        asks = data.get('asks') or nested.get('asks') or []
+                        # Fyers format: depth: {buy: [], sell: []}
+                        depth_obj = data.get('depth', {}) or nested.get('depth', {})
+                        if isinstance(depth_obj, dict):
+                            bids = bids or depth_obj.get('buy', [])
+                            asks = asks or depth_obj.get('sell', [])
+                        if not bids and not asks:
+                            return  # Skip empty depth messages, wait for actual data
 
-                time_module.sleep(0.2)  # Poll every 200ms
+                    captured_data["data"] = data
+                    data_event.set()
 
-            return data
+            # Register callback before subscribing
+            ws_client.register_callback('market_data', on_market_data)
+
+            try:
+                # Subscribe to symbol
+                symbols = [{"symbol": symbol, "exchange": exchange}]
+                sub_success, sub_result, _ = subscribe_to_symbols(username, broker, symbols, mode)
+
+                if not sub_success:
+                    self.log(f"WebSocket subscribe failed: {sub_result.get('message')}", "warning")
+                    return None
+
+                # Wait for data with the correct mode (using event instead of polling)
+                if data_event.wait(timeout=timeout):
+                    return captured_data["data"]
+                else:
+                    return None  # Timeout
+
+            finally:
+                # Always unregister callback
+                ws_client.unregister_callback('market_data', on_market_data)
 
         except Exception as e:
             self.log(f"WebSocket error: {str(e)}", "warning")
@@ -767,8 +805,9 @@ class NodeExecutor:
         ws_data = self._get_websocket_data(symbol, exchange, "LTP", timeout=5.0)
 
         if ws_data:
-            data = ws_data.get("data", {})
-            ltp = data.get("ltp", 0) if data else 0
+            # LTP may be nested under 'data' or at top level
+            nested_data = ws_data.get("data", {}) if isinstance(ws_data.get("data"), dict) else {}
+            ltp = nested_data.get("ltp") if nested_data.get("ltp") is not None else ws_data.get("ltp", 0)
 
             streaming_result = {
                 "status": "success",
@@ -850,17 +889,19 @@ class NodeExecutor:
         ws_data = self._get_websocket_data(symbol, exchange, "Quote", timeout=5.0)
 
         if ws_data:
-            data = ws_data.get("data", {})
+            # Quote data may be nested under 'data' or at top level
+            nested_data = ws_data.get("data", {}) if isinstance(ws_data.get("data"), dict) else {}
 
+            # Extract from nested level first, fallback to top level
             quote_data = {
-                "ltp": data.get("ltp", 0),
-                "open": data.get("open", 0),
-                "high": data.get("high", 0),
-                "low": data.get("low", 0),
-                "close": data.get("close", data.get("prev_close", 0)),
-                "volume": data.get("volume", 0),
-                "prev_close": data.get("prev_close", 0)
-            } if data else {}
+                "ltp": nested_data.get("ltp") if nested_data.get("ltp") is not None else ws_data.get("ltp", 0),
+                "open": nested_data.get("open") or ws_data.get("open", 0),
+                "high": nested_data.get("high") or ws_data.get("high", 0),
+                "low": nested_data.get("low") or ws_data.get("low", 0),
+                "close": nested_data.get("close") or nested_data.get("prev_close") or ws_data.get("close", ws_data.get("prev_close", 0)),
+                "volume": nested_data.get("volume") or ws_data.get("volume", 0),
+                "prev_close": nested_data.get("prev_close") or ws_data.get("prev_close", 0)
+            }
 
             streaming_result = {
                 "status": "success",
@@ -947,19 +988,38 @@ class NodeExecutor:
 
         self.log(f"Subscribing to Depth stream: {symbol} ({exchange})")
 
-        # Try WebSocket first
-        ws_data = self._get_websocket_data(symbol, exchange, "Depth", timeout=5.0)
+        # Try WebSocket first (shorter timeout for depth as it may not stream outside market hours)
+        ws_data = self._get_websocket_data(symbol, exchange, "Depth", timeout=3.0)
 
         if ws_data:
-            data = ws_data.get("data", {})
+            # Depth data may be nested under 'data' or at top level
+            # Handle multiple nesting levels: ws_data -> data -> (actual depth fields)
+            nested_data = ws_data.get("data", {}) if isinstance(ws_data.get("data"), dict) else {}
 
+            # Check for Fyers format: depth: {buy: [], sell: []}
+            depth_obj = ws_data.get("depth", {}) or nested_data.get("depth", {})
+            if isinstance(depth_obj, dict) and (depth_obj.get("buy") or depth_obj.get("sell")):
+                # Fyers format - convert to standard bids/asks
+                bids = depth_obj.get("buy", [])
+                asks = depth_obj.get("sell", [])
+                # Convert Fyers format (price/quantity) if needed
+                if bids and isinstance(bids[0], dict) and "price" in bids[0]:
+                    bids = [{"price": b.get("price", 0), "quantity": b.get("quantity", b.get("volume", 0))} for b in bids]
+                if asks and isinstance(asks[0], dict) and "price" in asks[0]:
+                    asks = [{"price": a.get("price", 0), "quantity": a.get("quantity", a.get("volume", 0))} for a in asks]
+            else:
+                # Standard format
+                bids = nested_data.get("bids") or ws_data.get("bids", [])
+                asks = nested_data.get("asks") or ws_data.get("asks", [])
+
+            # Extract depth fields
             depth_data = {
-                "bids": data.get("bids", []),
-                "asks": data.get("asks", []),
-                "totalbuyqty": data.get("totalbuyqty", 0),
-                "totalsellqty": data.get("totalsellqty", 0),
-                "ltp": data.get("ltp", 0)
-            } if data else {"bids": [], "asks": []}
+                "bids": bids,
+                "asks": asks,
+                "totalbuyqty": nested_data.get("totalbuyqty") or ws_data.get("totalbuyqty", 0),
+                "totalsellqty": nested_data.get("totalsellqty") or ws_data.get("totalsellqty", 0),
+                "ltp": nested_data.get("ltp") if nested_data.get("ltp") is not None else ws_data.get("ltp", 0)
+            }
 
             streaming_result = {
                 "status": "success",
@@ -969,7 +1029,12 @@ class NodeExecutor:
                 "data": depth_data,
                 "source": "websocket"
             }
-            self.log(f"Depth for {symbol}: {len(depth_data.get('bids', []))} bids, {len(depth_data.get('asks', []))} asks (via WebSocket)")
+            # Log depth summary with top bid/ask prices
+            bids_list = depth_data.get('bids', [])
+            asks_list = depth_data.get('asks', [])
+            top_bid = bids_list[0].get('price', 0) if bids_list else 0
+            top_ask = asks_list[0].get('price', 0) if asks_list else 0
+            self.log(f"Depth for {symbol}: Bid={top_bid}, Ask={top_ask} ({len(bids_list)} bids, {len(asks_list)} asks) via WebSocket")
 
             # Store in context variable
             self.context.set_variable(output_var, depth_data)
@@ -1001,7 +1066,12 @@ class NodeExecutor:
                     "data": depth_data,
                     "source": "rest_api"
                 }
-                self.log(f"Depth for {symbol}: {len(depth_data.get('bids', []))} bids, {len(depth_data.get('asks', []))} asks (via REST API)")
+                # Log depth summary with top bid/ask prices
+                bids_list = depth_data.get('bids', [])
+                asks_list = depth_data.get('asks', [])
+                top_bid = bids_list[0].get('price', 0) if bids_list else 0
+                top_ask = asks_list[0].get('price', 0) if asks_list else 0
+                self.log(f"Depth for {symbol}: Bid={top_bid}, Ask={top_ask} ({len(bids_list)} bids, {len(asks_list)} asks) via REST API")
 
                 # Store in context variable
                 self.context.set_variable(output_var, depth_data)
