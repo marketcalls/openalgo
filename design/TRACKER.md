@@ -11,7 +11,7 @@
 | 05 | Security Architecture | ✅ Complete | 2026-01-21 |
 | 06 | WebSockets Architecture | ✅ Complete | 2026-01-21 |
 | 07 | Sandbox Architecture | ✅ Complete | 2026-01-21 |
-| 08 | Historify Architecture | ⏳ Pending | - |
+| 08 | Historify Architecture | ✅ Complete | 2026-01-21 |
 | 09 | REST API Documentation | ⏳ Pending | - |
 | 10 | Flow Architecture | ⏳ Pending | - |
 | 11 | Docker Configuration | ⏳ Pending | - |
@@ -37,6 +37,13 @@
 | 31 | Utils Functionalities | ⏳ Pending | - |
 | 32 | Master Contract Download | ⏳ Pending | - |
 | 33 | Broker Folder Explanations | ⏳ Pending | - |
+| 34 | App Startup | ✅ Complete | 2026-01-21 |
+| 35 | Development & Testing Guide | ✅ Complete | 2026-01-21 |
+| 36 | Rate Limiting Guide | ✅ Complete | 2026-01-21 |
+| 37 | API Key & Playground | ✅ Complete | 2026-01-21 |
+| 38 | Python Strategies Hosting | ✅ Complete | 2026-01-21 |
+| 39 | Strategy Module | ✅ Complete | 2026-01-21 |
+| 40 | Logout & Session Expiry | ✅ Complete | 2026-01-21 |
 
 ## Status Legend
 - ✅ Complete
