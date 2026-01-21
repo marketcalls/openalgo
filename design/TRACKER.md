@@ -46,6 +46,14 @@
 | 40 | Logout & Session Expiry | ✅ Complete | 2026-01-21 |
 | 41 | MCP Architecture | ✅ Complete | 2026-01-21 |
 | 42 | Action Center | ✅ Complete | 2026-01-21 |
+| 43 | Telegram Bot Configuration | ✅ Complete | 2026-01-21 |
+| 44 | PnL Tracker | ✅ Complete | 2026-01-21 |
+| 46 | Search | ✅ Complete | 2026-01-21 |
+| 47 | SMTP Configuration | ✅ Complete | 2026-01-21 |
+| 48 | Password Reset | ✅ Complete | 2026-01-21 |
+| 49 | Themes | ✅ Complete | 2026-01-21 |
+| 50 | TOTP Configuration | ✅ Complete | 2026-01-21 |
+| 51 | Broker & System Config | ✅ Complete | 2026-01-21 |
 
 ## Status Legend
 - ✅ Complete
