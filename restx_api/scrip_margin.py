@@ -1,4 +1,4 @@
-from flask_restx import Namespace, Resource
+from flask_restx import Namespace, Resource, fields
 from flask import request, jsonify, make_response
 from marshmallow import ValidationError
 from limiter import limiter
@@ -18,8 +18,21 @@ logger = get_logger(__name__)
 # Initialize schema
 scrip_margin_schema = ScripMarginSchema()
 
+# Define Swagger model for request body
+scrip_margin_model = api.model('ScripMargin', {
+    'apikey': fields.String(required=True, description='API Key for authentication'),
+    'symbol': fields.String(required=True, description='Trading symbol (e.g., RELIANCE, SBIN)', example='RELIANCE'),
+    'exchange': fields.String(required=True, description='Exchange (NSE, BSE, NFO, BFO, CDS, MCX)', example='NSE'),
+    'product': fields.String(required=True, description='Product type (MIS, NRML, CNC)', example='MIS'),
+    'quantity': fields.Integer(required=False, default=1, description='Quantity (default: 1)', example=1),
+    'action': fields.String(required=False, default='BUY', description='Action (BUY/SELL, default: BUY)', example='BUY'),
+    'pricetype': fields.String(required=False, default='MARKET', description='Price type (MARKET, LIMIT, SL, SL-M, default: MARKET)', example='MARKET'),
+    'price': fields.String(required=False, default='0', description='Price (default: 0 for market orders)', example='0')
+})
+
 @api.route('/', strict_slashes=False)
 class ScripMargin(Resource):
+    @api.expect(scrip_margin_model)
     @limiter.limit(API_RATE_LIMIT)
     def post(self):
         """Calculate margin and leverage for a single symbol
