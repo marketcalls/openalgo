@@ -173,20 +173,106 @@ cp .sample.env .env
 uv run app.py
 ```
 
-## Docker Installation (Alternative)
+## Docker Local Development
 
-If you prefer Docker:
+For local development using Docker:
+
+### Prerequisites
+
+- Docker Engine
+- Docker Compose
+- Git
+
+### Essential .env Changes for Docker
+
+Update your `.env` file with these settings:
+
+```ini
+# Change from 127.0.0.1 to 0.0.0.0 for Docker
+FLASK_HOST_IP='0.0.0.0'
+FLASK_PORT='5000'
+
+# WebSocket configuration
+WEBSOCKET_HOST='0.0.0.0'
+WEBSOCKET_PORT='8765'
+WEBSOCKET_URL='ws://localhost:8765'
+
+# ZeroMQ configuration
+ZMQ_HOST='0.0.0.0'
+ZMQ_PORT='5555'
+```
+
+**Why 0.0.0.0?**
+- `127.0.0.1` only allows connections from within the container
+- `0.0.0.0` allows connections from outside the container (host machine)
+
+### Quick Start
 
 ```bash
 # Clone repository
 git clone https://github.com/marketcalls/openalgo.git
 cd openalgo
 
-# Build and run
-docker-compose up -d
+# Create environment file
+cp .sample.env .env
+# Edit .env with the Docker settings above
+
+# Build and start
+docker-compose up --build
 ```
 
 Access at `http://localhost:5000`
+
+### Common Commands
+
+```bash
+# Start development server
+docker-compose up
+
+# Start in detached mode
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop containers
+docker-compose down
+
+# Rebuild after dependency changes
+docker-compose up --build
+
+# Enter container shell
+docker-compose exec web bash
+```
+
+### Development Features
+
+- Hot reload enabled (code changes reflect immediately)
+- Debug mode active
+- Console logging
+- Volume mounting for live code updates
+
+### Troubleshooting Docker
+
+**Port Already In Use:**
+```bash
+sudo lsof -i :5000
+docker-compose down
+docker-compose up
+```
+
+**Database Issues:**
+```bash
+chmod -R 777 db/
+```
+
+**Rebuild Without Cache:**
+```bash
+docker-compose build --no-cache
+docker-compose up
+```
+
+**Note**: This configuration is for development. For production, use the Docker Production Deployment section below or the Ubuntu Server installation
 
 ## Verifying Installation
 
@@ -270,48 +356,512 @@ Run this twice - once for APP_KEY, once for API_KEY_PEPPER.
 uv run app.py
 ```
 
-### Production Mode (Linux with Gunicorn)
+Access at `http://127.0.0.1:5000`
+
+## Production Deployment (Ubuntu Server)
+
+For production use, deploy OpenAlgo on an Ubuntu server using the automated `install.sh` script. This is the **recommended approach** for live trading.
+
+**Important**: The install script configures everything automatically:
+- Nginx reverse proxy with SSL/TLS
+- Let's Encrypt certificates (auto-renewal)
+- Security headers (HSTS, X-Frame-Options, etc.)
+- Firewall (UFW)
+- Systemd service management
+
+### Prerequisites
+
+#### System Requirements
+
+- Ubuntu Server (22.04 LTS or later recommended)
+- Minimum 0.5GB RAM
+- Clean installation recommended
+
+#### Domain and DNS Setup (Required)
+
+1. **Cloudflare Account Setup**
+   - Create a Cloudflare account if you don't have one
+   - Add your domain to Cloudflare
+   - Update your domain's nameservers to Cloudflare's nameservers
+
+2. **DNS Configuration**
+   - Add an A record pointing to your server's IP address:
+   ```
+   Type: A
+   Name: yourdomain.com
+   Content: YOUR_SERVER_IP
+   Proxy status: Proxied
+   ```
+   - Add a CNAME record for www (optional):
+   ```
+   Type: CNAME
+   Name: www
+   Content: yourdomain.com
+   Proxy status: Proxied
+   ```
+
+3. **SSL/TLS Configuration in Cloudflare**
+   - Go to SSL/TLS section
+   - Set encryption mode to "Full (strict)"
+
+#### Broker Setup (Required)
+
+Prepare your broker credentials:
+- API Key
+- API Secret
+- Redirection URL based on your domain and broker:
+
+```
+# Example: domain is yourdomain.com, broker is zerodha
+https://yourdomain.com/zerodha/callback
+
+# Example: domain is sub.yourdomain.com, broker is angel
+https://sub.yourdomain.com/angel/callback
+```
+
+### Installation Steps
+
+#### 1. Connect to Your Server
 
 ```bash
-uv run gunicorn --worker-class eventlet -w 1 -b 0.0.0.0:5000 app:app
+ssh user@your_server_ip
 ```
 
-### Running in Background (Linux)
+#### 2. Download Installation Script
 
 ```bash
-# Using screen
-screen -S openalgo
-uv run app.py
-# Press Ctrl+A, then D to detach
+mkdir -p ~/openalgo-install
+cd ~/openalgo-install
 
-# To reattach
-screen -r openalgo
+wget https://raw.githubusercontent.com/marketcalls/openalgo/main/install/install.sh
+
+chmod +x install.sh
 ```
 
-### Auto-Start on Boot (Linux with systemd)
+#### 3. Run Installation Script
 
-Create `/etc/systemd/system/openalgo.service`:
-
-```ini
-[Unit]
-Description=OpenAlgo Trading Platform
-After=network.target
-
-[Service]
-User=your-username
-WorkingDirectory=/path/to/openalgo
-ExecStart=/path/to/openalgo/.venv/bin/python app.py
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable and start:
 ```bash
-sudo systemctl enable openalgo
-sudo systemctl start openalgo
+sudo ./install.sh
 ```
+
+The script will prompt you for:
+- Your domain name (supports both root domains and subdomains)
+- Broker selection
+- Broker API credentials
+
+### Multi-Domain Deployment
+
+The installation script supports deploying multiple instances on the same server:
+
+```bash
+# First deployment
+sudo ./install.sh
+# Enter domain: trading1.yourdomain.com
+# Enter broker: fyers
+
+# Second deployment
+sudo ./install.sh
+# Enter domain: trading2.yourdomain.com
+# Enter broker: zerodha
+```
+
+Each deployment gets:
+- Unique service name (e.g., openalgo-yourdomain-broker)
+- Separate configuration files and directories
+- Individual log files
+- Independent SSL certificates
+- Isolated Python virtual environments
+
+### Verify Installation
+
+1. **Check Service Status**
+   ```bash
+   sudo systemctl status openalgo-yourdomain-broker
+   ```
+
+2. **Verify Nginx Configuration**
+   ```bash
+   sudo nginx -t
+   ls -l /etc/nginx/sites-enabled/
+   ```
+
+3. **Access Web Interface**
+   ```
+   https://yourdomain.com
+   ```
+
+4. **Check Installation Logs**
+   ```bash
+   cat install/logs/install_YYYYMMDD_HHMMSS.log
+   ```
+
+### Managing Production Deployments
+
+#### Service Management
+
+```bash
+# List all OpenAlgo services
+systemctl list-units "openalgo-*"
+
+# Restart specific deployment
+sudo systemctl restart openalgo-yourdomain-broker
+
+# View real-time logs
+sudo journalctl -f -u openalgo-yourdomain-broker
+
+# View last 100 lines of logs
+sudo journalctl -n 100 -u openalgo-yourdomain-broker
+```
+
+#### Nginx Management
+
+```bash
+# View Nginx config
+sudo nano /etc/nginx/sites-available/yourdomain.com
+
+# Test Nginx configuration
+sudo nginx -t
+
+# Reload Nginx after config changes
+sudo systemctl reload nginx
+```
+
+### Troubleshooting Production
+
+#### SSL Certificate Issues
+
+```bash
+# Check Certbot logs
+sudo journalctl -u certbot
+
+# Manually run certificate installation
+sudo certbot --nginx -d yourdomain.com
+```
+
+#### Application Not Starting
+
+```bash
+# View service logs
+sudo journalctl -u openalgo-yourdomain-broker
+
+# Restart service
+sudo systemctl restart openalgo-yourdomain-broker
+```
+
+#### Nginx Issues
+
+```bash
+# Check Nginx error logs
+sudo tail -f /var/log/nginx/error.log
+
+# Check access logs
+sudo tail -f /var/log/nginx/yourdomain.com.access.log
+```
+
+### Security (Auto-Configured)
+
+The `install.sh` script automatically configures:
+
+| Security Feature | Status |
+|-----------------|--------|
+| SSL/TLS (Let's Encrypt) | Auto-configured |
+| Security Headers (HSTS, X-Frame-Options) | Auto-configured |
+| Firewall (UFW - ports 22, 80, 443 only) | Auto-configured |
+| Strong SSL ciphers (TLS 1.2/1.3) | Auto-configured |
+| Random encryption keys | Auto-generated |
+| File permissions | Auto-configured |
+
+**Your tasks after installation**:
+1. Set a strong login password
+2. Enable Two-Factor Authentication
+3. Keep your API key private
+
+### Webhook Tunneling (Optional)
+
+If you need to receive webhooks from TradingView, GoCharting, or ChartInk but don't have a domain, you can use tunneling services **for webhooks only**:
+
+| Service | Command | Documentation |
+|---------|---------|---------------|
+| **ngrok** | `ngrok http 5000` | [ngrok.com](https://ngrok.com) |
+| **devtunnel** (Microsoft) | `devtunnel host -p 5000` | [devtunnels.ms](https://aka.ms/devtunnels) |
+| **Cloudflare Tunnel** | `cloudflared tunnel --url http://localhost:5000` | [cloudflare.com](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/) |
+
+**Important**: Tunneling is **only for webhooks**. Always run OpenAlgo on your own server with proper domain setup for production use. Don't run the entire application through a tunnel.
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│              Production Deployment Model                        │
+│                                                                 │
+│  Your Ubuntu Server (install.sh)                               │
+│  ┌──────────────────────────────────────────────────────────┐ │
+│  │  Nginx (HTTPS) → Gunicorn → OpenAlgo                     │ │
+│  │  • Dashboard access: https://yourdomain.com              │ │
+│  │  • API access: https://yourdomain.com/api/v1/*           │ │
+│  │  • WebSocket: wss://yourdomain.com/ws                    │ │
+│  └──────────────────────────────────────────────────────────┘ │
+│                           ▲                                    │
+│                           │ Webhooks                           │
+│               ┌───────────┴───────────┐                       │
+│               │  TradingView          │                       │
+│               │  GoCharting           │                       │
+│               │  ChartInk             │                       │
+│               │  Flow                 │                       │
+│               └───────────────────────┘                       │
+└────────────────────────────────────────────────────────────────┘
+```
+
+## Docker Deployment (Alternative)
+
+OpenAlgo can also be deployed using Docker with custom domain and SSL. This is useful if you prefer containerized deployments.
+
+### Quick Start
+
+```bash
+wget https://raw.githubusercontent.com/marketcalls/openalgo/refs/heads/main/install/install-docker.sh
+chmod +x install-docker.sh
+./install-docker.sh
+```
+
+### Prerequisites
+
+- Ubuntu 20.04+ or Debian 11+
+- Root access or sudo privileges
+- Domain name pointed to your server IP
+- Minimum 1GB RAM (2GB recommended)
+
+### Installation Steps
+
+**Option 1: Non-Root User (Recommended)**
+
+```bash
+# Create a non-root user if running as root
+adduser openalgo
+usermod -aG sudo openalgo
+su - openalgo
+
+# Download and run
+wget https://raw.githubusercontent.com/marketcalls/openalgo/refs/heads/main/install/install-docker.sh
+chmod +x install-docker.sh
+./install-docker.sh
+```
+
+**Option 2: As Root User**
+
+```bash
+wget https://raw.githubusercontent.com/marketcalls/openalgo/refs/heads/main/install/install-docker.sh
+chmod +x install-docker.sh
+./install-docker.sh
+```
+
+The script will prompt you for:
+- Domain name
+- Broker selection
+- API credentials
+- Email for SSL notifications
+
+### What the Script Does
+
+1. Updates system packages
+2. Installs Docker & Docker Compose
+3. Installs Nginx web server
+4. Installs Certbot for SSL
+5. Clones OpenAlgo to `/opt/openalgo`
+6. Configures environment variables
+7. Sets up firewall (UFW)
+8. Obtains SSL certificate
+9. Configures Nginx with SSL and WebSocket support
+10. Builds and starts Docker container
+
+### Management Commands
+
+```bash
+# View application status
+openalgo-status
+
+# View live logs
+openalgo-logs
+
+# Restart application
+openalgo-restart
+
+# Create backup
+openalgo-backup
+```
+
+### Docker Commands
+
+```bash
+cd /opt/openalgo
+
+# Restart container
+sudo docker compose restart
+
+# View logs
+sudo docker compose logs -f
+
+# Rebuild from scratch
+sudo docker compose down
+sudo docker compose build --no-cache
+sudo docker compose up -d
+```
+
+### File Locations
+
+| Item | Location |
+|------|----------|
+| Installation | `/opt/openalgo` |
+| Configuration | `/opt/openalgo/.env` |
+| Database | Docker volume `openalgo_db` |
+| Nginx Config | `/etc/nginx/sites-available/yourdomain.com` |
+| SSL Certificates | `/etc/letsencrypt/live/yourdomain.com/` |
+| Backups | `/opt/openalgo-backups/` |
+
+### Architecture
+
+```
+┌─────────────────┐
+│   Internet      │
+└────────┬────────┘
+         │ HTTPS (443)
+         │
+┌────────▼────────┐
+│   Nginx         │ ← SSL/TLS, Reverse Proxy
+└────────┬────────┘
+         │
+    ┌────┴────┐
+    │         │
+    ▼         ▼
+┌───────┐ ┌──────────┐
+│ Flask │ │WebSocket │ ← Docker Container
+│ :5000 │ │  :8765   │   (openalgo-web)
+└───────┘ └──────────┘
+    │
+    ▼
+┌──────────┐
+│ SQLite   │ ← Docker Volume
+│ Database │
+└──────────┘
+```
+
+### Updating Docker Deployment
+
+```bash
+cd /opt/openalgo
+
+# Create backup first
+openalgo-backup
+
+# Stop container
+sudo docker compose down
+
+# Pull latest code
+sudo git pull origin main
+
+# Rebuild and restart
+sudo docker compose build --no-cache
+sudo docker compose up -d
+
+# Verify
+openalgo-status
+```
+
+## Raspberry Pi Installation
+
+OpenAlgo can run on Raspberry Pi models 3, 4, or 5 (4GB+ RAM), preferably with Ubuntu 24.04+ server edition.
+
+### Hardware Requirements
+
+| Component | Requirement |
+|-----------|-------------|
+| Raspberry Pi Model | 3, 4, or 5 (minimum 4GB RAM) |
+| SD Card | 128GB recommended, 64GB minimum |
+| Operating System | Ubuntu 24.04+ Server edition |
+| Power Supply | Official RPi adapter recommended |
+
+### Initial System Preparation
+
+#### 1. Flash OS to SD Card
+
+Use [Raspberry Pi Imager](https://www.raspberrypi.com/software/) to prepare your SD card. Configure initial user, password, and Wi-Fi details.
+
+#### 2. First Boot & Access
+
+Connect via HDMI/keyboard or SSH:
+```bash
+ssh username@raspberry-pi-ip
+```
+
+#### 3. Setup Swap (Recommended: 2-4GB)
+
+```bash
+sudo fallocate -l 4G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+### Installation Options
+
+#### Option 1: Official Install Script
+
+Use the same `install.sh` script as Ubuntu Server:
+
+```bash
+mkdir -p ~/openalgo-install
+cd ~/openalgo-install
+wget https://raw.githubusercontent.com/marketcalls/openalgo/main/install/install.sh
+chmod +x install.sh
+sudo ./install.sh
+```
+
+#### Option 2: Docker-Based Setup
+
+**Install Docker:**
+```bash
+sudo apt-get update
+sudo apt-get install ca-certificates curl gnupg
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+```
+
+**Clone and Build:**
+```bash
+git clone https://github.com/marketcalls/openalgo
+cd openalgo
+cp .sample.env .env
+# Edit .env with your broker credentials
+docker build -t openalgo:latest .
+docker-compose up -d
+```
+
+### Securing Your Raspberry Pi
+
+**Install fail2ban:**
+```bash
+sudo apt-get install fail2ban
+sudo systemctl enable fail2ban
+sudo systemctl start fail2ban
+```
+
+**Configure Firewall:**
+```bash
+sudo apt-get install iptables
+sudo iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 80 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+sudo iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+sudo iptables -A INPUT -j DROP
+```
+
+### Cloudflare Integration (Recommended)
+
+For external access:
+1. Register at [Cloudflare](https://www.cloudflare.com/)
+2. Add your domain and point DNS to Cloudflare
+3. Enable proxy status for your domain
+4. Configure SSL/TLS to "Full (strict)"
+5. Enable WAF and rate limiting for security
 
 ## Updating OpenAlgo
 

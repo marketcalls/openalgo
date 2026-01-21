@@ -29,37 +29,65 @@ TradingView is a popular charting platform with powerful Pine Script strategy ca
 3. API key generated in OpenAlgo
 4. Broker connected and logged in
 
-## Making OpenAlgo Accessible
+## Making OpenAlgo Accessible for Webhooks
 
-### Option 1: Ngrok (Development/Testing)
+TradingView webhooks need to reach your OpenAlgo server from the internet.
 
-```bash
-# Install ngrok
-# Download from ngrok.com
+### Recommended: Production Server with Domain
 
-# Expose OpenAlgo
-ngrok http 5000
+Deploy OpenAlgo on an Ubuntu server using `install.sh` (see [Installation Guide](../04-installation/README.md)):
 
-# You'll get a URL like:
-# https://abc123.ngrok.io
+```
+Webhook URL: https://yourdomain.com/api/v1/placeorder
 ```
 
-### Option 2: Cloud Deployment (Production)
+This is the **recommended approach** for live trading because:
+- Your domain provides a permanent, stable URL
+- SSL/TLS is auto-configured with Let's Encrypt
+- Security headers are properly set
+- Full server uptime under your control
 
-Deploy OpenAlgo on:
-- AWS EC2 / Lightsail
-- Google Cloud VM
-- DigitalOcean Droplet
-- Azure VM
+### Alternative: Webhook Tunneling Services
 
-Use your server's public IP or domain.
+If you don't have a domain or are testing locally, use a tunnel service **for webhooks only**:
 
-### Option 3: Cloudflare Tunnel
+| Service | Command | URL Format |
+|---------|---------|------------|
+| **ngrok** | `ngrok http 5000` | `https://abc123.ngrok.io` |
+| **devtunnel** (Microsoft) | `devtunnel host -p 5000` | `https://xxxxx.devtunnels.ms` |
+| **Cloudflare Tunnel** | `cloudflared tunnel --url http://localhost:5000` | `https://xxxxx.trycloudflare.com` |
 
+**ngrok:**
+```bash
+# Install from ngrok.com
+ngrok http 5000
+# Copy the https URL provided
+```
+
+**devtunnel (Microsoft):**
+```bash
+# Install: https://aka.ms/devtunnels
+devtunnel user login
+devtunnel host -p 5000
+# Copy the https URL provided
+```
+
+**Cloudflare Tunnel:**
 ```bash
 # Install cloudflared
 cloudflared tunnel --url http://localhost:5000
+# Copy the https URL provided
 ```
+
+**Important**: Tunnel services are **only for webhooks**, not for running the full application. Always run OpenAlgo on your own server for production use.
+
+| Aspect | Domain (Recommended) | Tunnel Services |
+|--------|---------------------|-----------------|
+| URL stability | Permanent | Changes on restart |
+| SSL certificate | Let's Encrypt (your control) | Provider-managed |
+| Uptime | Your server uptime | Depends on tunnel service |
+| Rate limits | Your control | Provider's limits |
+| Security headers | Fully configured | Basic |
 
 ## Setting Up TradingView Alerts
 

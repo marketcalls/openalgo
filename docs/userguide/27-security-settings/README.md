@@ -182,9 +182,28 @@ Configure automatic logout:
 
 ## Network Security
 
-### HTTPS Configuration
+### Production Deployment Security
 
-Always use HTTPS in production:
+When deploying via `install.sh` on Ubuntu server, most network security is **automatically configured**:
+
+| Security Feature | Status |
+|-----------------|--------|
+| SSL/TLS (Let's Encrypt) | Auto-configured |
+| Security Headers (HSTS, X-Frame-Options) | Auto-configured |
+| Firewall (UFW - ports 22, 80, 443 only) | Auto-configured |
+| Strong SSL ciphers (TLS 1.2/1.3) | Auto-configured |
+
+The `install.sh` script handles:
+- SSL certificate installation and auto-renewal
+- Nginx security headers
+- UFW firewall configuration
+- File permissions
+
+See [Installation Guide](../04-installation/README.md) for detailed production setup.
+
+### HTTPS Configuration (Local Development)
+
+For local development without `install.sh`:
 
 ```
 # .env configuration
@@ -194,7 +213,7 @@ SSL_CERT_PATH=/path/to/cert.pem
 SSL_KEY_PATH=/path/to/key.pem
 ```
 
-### IP Whitelisting
+### IP Whitelisting (Optional)
 
 Restrict access to specific IPs:
 
@@ -208,19 +227,26 @@ Restrict access to specific IPs:
    ```
 4. Save changes
 
-### Firewall Rules
+### Firewall Rules (Auto-Configured)
 
-Recommended firewall configuration:
+The `install.sh` script configures these automatically:
 
+```bash
+# Configured by install.sh
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow ssh
+sudo ufw allow 'Nginx Full'
+sudo ufw --force enable
 ```
+
+For manual configuration:
+```bash
 # Allow HTTPS
 sudo ufw allow 443/tcp
 
 # Allow HTTP (redirect to HTTPS)
 sudo ufw allow 80/tcp
-
-# Allow WebSocket
-sudo ufw allow 8765/tcp
 
 # Deny all other incoming
 sudo ufw default deny incoming

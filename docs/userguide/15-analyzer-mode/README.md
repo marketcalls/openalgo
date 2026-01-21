@@ -311,15 +311,46 @@ When ready for live trading:
 
 **Warning**: After disabling, ALL orders go to your real broker!
 
+## Capabilities
+
+What Analyzer Mode **CAN** do:
+
+| Capability | Description |
+|------------|-------------|
+| Real market prices | Uses live market data for realistic pricing |
+| Full order flow | BUY, SELL, market orders, limit orders work |
+| Position tracking | Tracks open/closed positions accurately |
+| P&L calculation | Real-time profit/loss based on market prices |
+| Margin simulation | Realistic margin requirements enforced |
+| Auto square-off | Simulates exchange timings |
+| Multiple strategies | Test multiple strategies simultaneously |
+| Webhook testing | TradingView, ChartInk, Amibroker webhooks work |
+| API testing | Full API functionality in sandbox |
+| Smart orders | Position-aware orders work correctly |
+| Basket orders | Multi-symbol orders supported |
+
 ## Limitations
 
-| Aspect | Limitation |
-|--------|------------|
-| Market depth | Not simulated |
-| Slippage | Minimal (real may be higher) |
-| Partial fills | Not simulated |
-| Order rejection | Limited simulation |
-| Corporate actions | Not applied |
+What Analyzer Mode **CANNOT** do:
+
+| Limitation | Description |
+|------------|-------------|
+| Market depth | Order book depth not simulated |
+| Slippage | Minimal; real trading may have higher slippage |
+| Partial fills | All orders fill completely (no partial fills) |
+| Order rejection | Limited rejection scenarios simulated |
+| Corporate actions | Dividends, splits, bonuses not applied |
+| Auction prices | Opening/closing auction not simulated |
+| Circuit limits | Price circuit breakers not enforced |
+| Broker-specific rules | Broker margin/position limits not exact |
+| Real broker connectivity | No actual broker API calls made |
+
+### Key Differences from Live Trading
+
+1. **Execution**: Sandbox orders execute instantly at market price; real orders may take time and have slippage
+2. **Liquidity**: Sandbox assumes unlimited liquidity; real markets may not fill large orders
+3. **Timing**: Sandbox doesn't simulate network latency or broker delays
+4. **Rejection**: Real brokers may reject orders for various reasons not simulated
 
 ## Analyzer Mode Logs
 

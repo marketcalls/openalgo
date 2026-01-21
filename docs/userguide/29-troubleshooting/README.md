@@ -455,11 +455,13 @@ Gather this information:
 
 ### Support Channels
 
-| Channel | Use For |
-|---------|---------|
-| GitHub Issues | Bug reports, feature requests |
-| Documentation | How-to questions |
-| Community Forum | General questions |
+OpenAlgo is community-driven:
+
+| Channel | Use For | Link |
+|---------|---------|------|
+| GitHub Issues | Bug reports, feature requests | [github.com/marketcalls/openalgo/issues](https://github.com/marketcalls/openalgo/issues) |
+| Discord | Community support, questions | [openalgo.in/discord](http://openalgo.in/discord) |
+| Documentation | How-to guides | [docs.openalgo.in](https://docs.openalgo.in) |
 
 ### Useful Commands
 

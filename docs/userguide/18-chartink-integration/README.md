@@ -29,25 +29,50 @@ ChartInk is a powerful stock screening platform popular among Indian traders. It
 3. API key generated in OpenAlgo
 4. Broker connected and logged in
 
-## Making OpenAlgo Accessible
+## Making OpenAlgo Accessible for Webhooks
 
 ChartInk webhooks need to reach your OpenAlgo server from the internet.
 
-### Option 1: Ngrok (Development)
+### Recommended: Production Server with Domain
 
-```bash
-ngrok http 5000
-# Use the https URL provided
+Deploy OpenAlgo on an Ubuntu server using `install.sh` (see [Installation Guide](../04-installation/README.md)):
+
+```
+Webhook URL: https://yourdomain.com/api/v1/placeorder
 ```
 
-### Option 2: Cloud Deployment (Production)
+This is the **recommended approach** for live trading.
 
-Deploy OpenAlgo on a cloud server with public IP.
+### Alternative: Webhook Tunneling Services
 
-### Option 3: Home Server with Port Forwarding
+If you don't have a domain or are testing locally, use a tunnel service **for webhooks only**:
 
-- Configure router to forward port 5000
-- Use dynamic DNS if IP changes
+| Service | Command | URL Format |
+|---------|---------|------------|
+| **ngrok** | `ngrok http 5000` | `https://abc123.ngrok.io` |
+| **devtunnel** (Microsoft) | `devtunnel host -p 5000` | `https://xxxxx.devtunnels.ms` |
+| **Cloudflare Tunnel** | `cloudflared tunnel --url http://localhost:5000` | `https://xxxxx.trycloudflare.com` |
+
+**ngrok:**
+```bash
+ngrok http 5000
+# Copy the https URL provided
+```
+
+**devtunnel (Microsoft):**
+```bash
+devtunnel user login
+devtunnel host -p 5000
+# Copy the https URL provided
+```
+
+**Cloudflare Tunnel:**
+```bash
+cloudflared tunnel --url http://localhost:5000
+# Copy the https URL provided
+```
+
+**Important**: Tunnel services are **only for webhooks**, not for running the full application. Always run OpenAlgo on your own server for production use
 
 ## Creating a ChartInk Screener
 

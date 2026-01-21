@@ -41,24 +41,50 @@ GoCharting is a modern web-based charting platform designed specifically for Ind
 | Alert System | Webhook support for automation |
 | Mobile App | Trade from anywhere |
 
-## Making OpenAlgo Accessible
+## Making OpenAlgo Accessible for Webhooks
 
-### Option 1: Ngrok
+GoCharting webhooks need to reach your OpenAlgo server from the internet.
 
+### Recommended: Production Server with Domain
+
+Deploy OpenAlgo on an Ubuntu server using `install.sh` (see [Installation Guide](../04-installation/README.md)):
+
+```
+Webhook URL: https://yourdomain.com/api/v1/placeorder
+```
+
+This is the **recommended approach** for live trading.
+
+### Alternative: Webhook Tunneling Services
+
+If you don't have a domain or are testing locally, use a tunnel service **for webhooks only**:
+
+| Service | Command | URL Format |
+|---------|---------|------------|
+| **ngrok** | `ngrok http 5000` | `https://abc123.ngrok.io` |
+| **devtunnel** (Microsoft) | `devtunnel host -p 5000` | `https://xxxxx.devtunnels.ms` |
+| **Cloudflare Tunnel** | `cloudflared tunnel --url http://localhost:5000` | `https://xxxxx.trycloudflare.com` |
+
+**ngrok:**
 ```bash
 ngrok http 5000
-# Get URL like: https://abc123.ngrok.io
+# Copy the https URL provided
 ```
 
-### Option 2: Cloud Server
+**devtunnel (Microsoft):**
+```bash
+devtunnel user login
+devtunnel host -p 5000
+# Copy the https URL provided
+```
 
-Deploy on AWS, GCP, or DigitalOcean.
-
-### Option 3: Cloudflare Tunnel
-
+**Cloudflare Tunnel:**
 ```bash
 cloudflared tunnel --url http://localhost:5000
+# Copy the https URL provided
 ```
+
+**Important**: Tunnel services are **only for webhooks**, not for running the full application. Always run OpenAlgo on your own server for production use
 
 ## Creating Alerts in GoCharting
 

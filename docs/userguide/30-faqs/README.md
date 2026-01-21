@@ -237,13 +237,49 @@ Use recovery codes to regain access. Store them safely when setting up 2FA.
 
 Report security vulnerabilities to: security@openalgo.in (or via GitHub private advisory)
 
+## Static IP Questions
+
+### Do I need a static IP for algo trading?
+
+Some brokers require static IP registration for API access, especially when placing orders. Check your broker's API developer portal for requirements.
+
+### Can I deploy on cloud services without static IP registration?
+
+No. Even on cloud platforms (AWS, GCP, Azure), you need to register your static IP with your broker. However, VPS providers like DigitalOcean, Vultr, and OVH provide static IPs by default.
+
+### What if I travel or work from different locations?
+
+You can update your registered IP, but most brokers only allow changes once a week through their API developer portal. Daily switching isn't feasible.
+
+### Can I register more than one static IP?
+
+Yes, most brokers allow a primary and backup IP per app. However, changing IPs frequently goes against broker guidelines.
+
+### Do I need a static IP for streaming market data only?
+
+No. If your app only receives data and doesn't place or modify orders, static IP registration may not be required. Check your specific broker's requirements.
+
+### Can I use an IP from any country?
+
+Yes, as long as the country is not on the broker's restricted list. You can host from India, US, Europe, or other approved regions.
+
+### Can I use one static IP for multiple trading accounts?
+
+You can use the same IP across different brokers. But for multiple accounts with the same broker, each may require its own registered IP.
+
+### What if my strategy places many orders?
+
+If your strategy consistently places over 10 orders per second, you may need formal registration with your broker. Occasional spikes are typically okay.
+
 ## Support Questions
 
 ### Where can I get help?
 
-1. Documentation: https://docs.openalgo.in
-2. GitHub Issues: For bug reports
-3. Community discussions: For questions
+OpenAlgo is community-driven. Get help through:
+
+1. Documentation: [https://docs.openalgo.in](https://docs.openalgo.in)
+2. Discord Community: [http://openalgo.in/discord](http://openalgo.in/discord)
+3. GitHub Issues: [https://github.com/marketcalls/openalgo/issues](https://github.com/marketcalls/openalgo/issues)
 4. YouTube tutorials: For video guides
 
 ### How do I report a bug?

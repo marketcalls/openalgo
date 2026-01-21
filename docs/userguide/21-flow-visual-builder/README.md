@@ -235,6 +235,25 @@ Configuration:
 
 ## Webhook Configuration
 
+### Making Flow Webhooks Accessible
+
+Flow webhooks need to be accessible from the internet for external triggers (TradingView, ChartInk, etc.).
+
+**Recommended**: Deploy OpenAlgo on an Ubuntu server with your domain using `install.sh`:
+```
+https://yourdomain.com/api/v1/flow/{flow-id}/webhook
+```
+
+**Alternative**: Use tunneling services **for webhooks only**:
+
+| Service | Command |
+|---------|---------|
+| **ngrok** | `ngrok http 5000` |
+| **devtunnel** (Microsoft) | `devtunnel host -p 5000` |
+| **Cloudflare Tunnel** | `cloudflared tunnel --url http://localhost:5000` |
+
+See [Installation Guide](../04-installation/README.md) for detailed setup.
+
 ### Webhook URL Format
 
 ```
