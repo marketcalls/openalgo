@@ -303,17 +303,22 @@ class WebSocketProxy:
 
                     # OPTIMIZATION: Remove from subscription index
                     sub_key = (symbol, exchange, mode)
+                    should_unsubscribe_from_adapter = False
                     if sub_key in self.subscription_index:
                         self.subscription_index[sub_key].discard(client_id)
-                        # Clean up empty entries
+                        # Clean up empty entries and mark for adapter unsubscription
                         if not self.subscription_index[sub_key]:
                             del self.subscription_index[sub_key]
+                            # Only unsubscribe from adapter when last client unsubscribes
+                            should_unsubscribe_from_adapter = True
 
                     # Get the user's broker adapter
+                    # Only unsubscribe from adapter if this was the last client for this symbol
                     user_id = self.user_mapping.get(client_id)
-                    if user_id and user_id in self.broker_adapters:
+                    if should_unsubscribe_from_adapter and user_id and user_id in self.broker_adapters:
                         adapter = self.broker_adapters[user_id]
                         adapter.unsubscribe(symbol, exchange, mode)
+                        logger.debug(f"Last client unsubscribed from {symbol}:{exchange}, unsubscribing from adapter")
                 except json.JSONDecodeError as e:
                     logger.exception(f"Error parsing subscription: {sub_json}, Error: {e}")
                 except Exception as e:
@@ -802,26 +807,40 @@ class WebSocketProxy:
                     symbol = sub.get("symbol")
                     exchange = sub.get("exchange")
                     mode = sub.get("mode")
-                    
+
                     if symbol and exchange:
-                        response = adapter.unsubscribe(symbol, exchange, mode)
-                        
-                        if response.get("status") == "success":
-                            successful_unsubscriptions.append({
-                                "symbol": symbol,
-                                "exchange": exchange,
-                                "status": "success",
-                                "broker": broker_name
-                            })
-                        else:
-                            failed_unsubscriptions.append({
-                                "symbol": symbol,
-                                "exchange": exchange,
-                                "status": "error",
-                                "message": response.get("message", "Unsubscription failed"),
-                                "broker": broker_name
-                            })
-                
+                        # Remove from subscription index and check if we should unsubscribe from adapter
+                        sub_key = (symbol, exchange, mode)
+                        should_unsubscribe_from_adapter = False
+                        if sub_key in self.subscription_index:
+                            self.subscription_index[sub_key].discard(client_id)
+                            # Only unsubscribe from adapter when last client unsubscribes
+                            if not self.subscription_index[sub_key]:
+                                del self.subscription_index[sub_key]
+                                should_unsubscribe_from_adapter = True
+
+                        # Only call adapter.unsubscribe if this was the last client for this symbol
+                        if should_unsubscribe_from_adapter:
+                            response = adapter.unsubscribe(symbol, exchange, mode)
+                            logger.debug(f"Last client unsubscribed from {symbol}:{exchange}, unsubscribing from adapter")
+
+                            if response.get("status") != "success":
+                                failed_unsubscriptions.append({
+                                    "symbol": symbol,
+                                    "exchange": exchange,
+                                    "status": "error",
+                                    "message": response.get("message", "Unsubscription failed"),
+                                    "broker": broker_name
+                                })
+                                continue
+
+                        successful_unsubscriptions.append({
+                            "symbol": symbol,
+                            "exchange": exchange,
+                            "status": "success",
+                            "broker": broker_name
+                        })
+
                 # Clear all subscriptions for this client
                 self.subscriptions[client_id].clear()
         else:
@@ -830,52 +849,58 @@ class WebSocketProxy:
                 symbol = symbol_info.get("symbol")
                 exchange = symbol_info.get("exchange")
                 mode = symbol_info.get("mode", 2)  # Default to Quote mode
-                
+
                 if not symbol or not exchange:
                     continue  # Skip invalid symbols
-                
-                # Unsubscribe from market data
-                response = adapter.unsubscribe(symbol, exchange, mode)
-                
-                if response.get("status") == "success":
-                    # Try to remove subscription
-                    if client_id in self.subscriptions:
-                        subscription_info = {
+
+                # Remove from subscription index and check if we should unsubscribe from adapter
+                sub_key = (symbol, exchange, mode)
+                should_unsubscribe_from_adapter = False
+                if sub_key in self.subscription_index:
+                    self.subscription_index[sub_key].discard(client_id)
+                    # Only unsubscribe from adapter when last client unsubscribes
+                    if not self.subscription_index[sub_key]:
+                        del self.subscription_index[sub_key]
+                        should_unsubscribe_from_adapter = True
+
+                # Remove from client's subscription list
+                if client_id in self.subscriptions:
+                    # Remove any matching subscription (with or without broker info)
+                    subscriptions_to_remove = []
+                    for sub_json in self.subscriptions[client_id]:
+                        try:
+                            sub_data = json.loads(sub_json)
+                            if (sub_data.get("symbol") == symbol and
+                                sub_data.get("exchange") == exchange and
+                                sub_data.get("mode") == mode):
+                                subscriptions_to_remove.append(sub_json)
+                        except json.JSONDecodeError:
+                            continue
+
+                    for sub_json in subscriptions_to_remove:
+                        self.subscriptions[client_id].discard(sub_json)
+
+                # Only call adapter.unsubscribe if this was the last client for this symbol
+                if should_unsubscribe_from_adapter:
+                    response = adapter.unsubscribe(symbol, exchange, mode)
+                    logger.debug(f"Last client unsubscribed from {symbol}:{exchange}, unsubscribing from adapter")
+
+                    if response.get("status") != "success":
+                        failed_unsubscriptions.append({
                             "symbol": symbol,
                             "exchange": exchange,
-                            "mode": mode,
+                            "status": "error",
+                            "message": response.get("message", "Unsubscription failed"),
                             "broker": broker_name
-                        }
-                        subscription_key = json.dumps(subscription_info)
-                        # Remove any matching subscription (with or without broker info)
-                        subscriptions_to_remove = []
-                        for sub_key in self.subscriptions[client_id]:
-                            try:
-                                sub_data = json.loads(sub_key)
-                                if (sub_data.get("symbol") == symbol and 
-                                    sub_data.get("exchange") == exchange and 
-                                    sub_data.get("mode") == mode):
-                                    subscriptions_to_remove.append(sub_key)
-                            except json.JSONDecodeError:
-                                continue
-                        
-                        for sub_key in subscriptions_to_remove:
-                            self.subscriptions[client_id].discard(sub_key)
-                    
-                    successful_unsubscriptions.append({
-                        "symbol": symbol,
-                        "exchange": exchange,
-                        "status": "success",
-                        "broker": broker_name
-                    })
-                else:
-                    failed_unsubscriptions.append({
-                        "symbol": symbol,
-                        "exchange": exchange,
-                        "status": "error",
-                        "message": response.get("message", "Unsubscription failed"),
-                        "broker": broker_name
-                    })
+                        })
+                        continue
+
+                successful_unsubscriptions.append({
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "status": "success",
+                    "broker": broker_name
+                })
         
         # Send combined response
         status = "success"
