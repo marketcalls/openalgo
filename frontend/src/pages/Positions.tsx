@@ -102,17 +102,43 @@ function parseSymbol(symbol: string, exchange: string) {
   return { underlying: symbol, expiry: null, strike: null, optionType: null }
 }
 
-function calculatePnlPercent(position: Position): number | null {
+function calculatePnlPercent(position: Position): number {
   const avgPrice = Number(position.average_price) || 0
   const qty = Number(position.quantity) || 0
   const pnl = Number(position.pnl) || 0
+  const ltp = Number(position.ltp) || 0
 
-  // For closed positions (qty=0), we can't calculate % without original investment
-  if (qty === 0) return null
+  // Use API-provided pnlpercent if available
+  if (position.pnlpercent !== undefined && position.pnlpercent !== null) {
+    return Number(position.pnlpercent) || 0
+  }
 
   if (avgPrice === 0) return 0
-  const investment = Math.abs(avgPrice * qty)
-  return investment > 0 ? (pnl / investment) * 100 : 0
+
+  // For open positions with quantity, calculate based on investment
+  if (qty !== 0) {
+    const investment = Math.abs(avgPrice * qty)
+    return investment > 0 ? (pnl / investment) * 100 : 0
+  }
+
+  // For flat positions (qty=0), derive from P&L and price movement
+  // If we have P&L and price difference, calculate the implied percentage
+  if (ltp > 0 && pnl !== 0) {
+    const priceDiff = ltp - avgPrice
+    if (priceDiff !== 0) {
+      // Derive implied quantity from P&L and price difference
+      const impliedQty = Math.abs(pnl / priceDiff)
+      const investment = avgPrice * impliedQty
+      return investment > 0 ? (pnl / investment) * 100 : 0
+    }
+  }
+
+  // Fallback: price change percentage
+  if (ltp > 0) {
+    return ((ltp - avgPrice) / avgPrice) * 100
+  }
+
+  return 0
 }
 
 const EXCHANGE_COLORS: Record<string, string> = {
@@ -306,8 +332,8 @@ export default function Positions() {
           bVal = b.pnl || 0
           break
         case 7:
-          aVal = calculatePnlPercent(a) ?? -Infinity
-          bVal = calculatePnlPercent(b) ?? -Infinity
+          aVal = calculatePnlPercent(a)
+          bVal = calculatePnlPercent(b)
           break
         default:
           return 0
@@ -446,7 +472,7 @@ export default function Positions() {
       sanitizeCSV(p.average_price),
       sanitizeCSV(p.ltp),
       sanitizeCSV(p.pnl),
-      sanitizeCSV(calculatePnlPercent(p) ?? '-'),
+      sanitizeCSV(calculatePnlPercent(p)),
     ])
 
     const csv = [headers, ...rows].map((row) => row.join(',')).join('\n')
@@ -919,16 +945,13 @@ export default function Positions() {
                               <TableCell
                                 className={cn(
                                   'w-[100px] text-right',
-                                  calculatePnlPercent(position) === null
-                                    ? 'text-muted-foreground'
-                                    : isProfit(calculatePnlPercent(position) ?? 0)
-                                      ? 'text-green-600'
-                                      : 'text-red-600'
+                                  isProfit(calculatePnlPercent(position))
+                                    ? 'text-green-600'
+                                    : 'text-red-600'
                                 )}
                               >
-                                {calculatePnlPercent(position) === null
-                                  ? '-'
-                                  : `${(calculatePnlPercent(position) ?? 0) >= 0 ? '+' : ''}${(calculatePnlPercent(position) ?? 0).toFixed(2)}%`}
+                                {calculatePnlPercent(position) >= 0 ? '+' : ''}
+                                {calculatePnlPercent(position).toFixed(2)}%
                               </TableCell>
                               <TableCell className="w-[60px] text-right">
                                 <Button
