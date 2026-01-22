@@ -91,7 +91,7 @@ All in under 1 second!
 
 | Feature | Description |
 |---------|-------------|
-| **Analyzer Mode** | Paper trading with ₹1 Crore virtual capital |
+| **Analyzer Mode** | Sandbox trading with ₹1 Crore sandbox capital |
 | **Historify** | Download and store historical market data (DuckDB) |
 | **P&L Tracker** | Real-time profit/loss tracking with charts |
 | **Latency Monitor** | Track API and order execution latency |
@@ -184,13 +184,13 @@ All in under 1 second!
 ### Live Trading Mode
 Execute real trades with your connected broker. Orders are sent directly to the exchange through your broker's API.
 
-### Analyzer Mode (Paper Trading)
-Test strategies with ₹1 Crore virtual capital:
+### Analyzer Mode (Sandbox Trading)
+Test strategies with ₹1 Crore sandbox capital:
 - Realistic margin calculations
 - Position and holdings tracking
 - Auto square-off at exchange timings
 - Complete isolation from live trading
-- Perfect for learning and strategy validation
+- Perfect for strategy testing and validation
 
 ## Platform Integration
 
@@ -301,7 +301,7 @@ Ready to begin? Here's your path:
 | **Exchanges** | NSE, NFO, BSE, BFO, MCX, CDS, BCD, NCDEX |
 | **Signal Sources** | TradingView, Amibroker, ChartInk, Python, AI |
 | **Strategy Building** | Flow (Visual), Python Hosting, External Webhooks |
-| **Paper Trading** | Analyzer Mode with ₹1 Crore virtual capital |
+| **Sandbox Trading** | Analyzer Mode with ₹1 Crore sandbox capital |
 | **Historical Data** | Historify with DuckDB storage |
 | **Real-Time Data** | WebSocket streaming for quotes and orders |
 | **Notifications** | Telegram bot, WebSocket updates |
