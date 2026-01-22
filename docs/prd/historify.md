@@ -146,6 +146,14 @@ User Request → Validate → Broker History API → Transform → DuckDB → Re
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Related Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Data Model](./historify-data-model.md) | DuckDB schema and storage |
+| [Download Engine](./historify-download-engine.md) | Bulk download job management |
+| [API Reference](./historify-api-reference.md) | Complete API documentation |
+
 ## Success Metrics
 
 | Metric | Target |

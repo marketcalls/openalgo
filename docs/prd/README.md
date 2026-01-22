@@ -67,7 +67,30 @@ A unified API layer that:
 
 ## Detailed PRDs
 
-- [Historify PRD](./historify.md) - Historical data management
-- [Flow PRD](./flow.md) - Visual workflow automation
-- [Sandbox PRD](./sandbox.md) - Paper trading environment
+### Flow - Visual Workflow Automation
+- [Flow PRD](./flow.md) - Main product requirements
+- [Node Creation Guide](./flow-node-creation.md) - How to create new nodes
+- [Node Reference](./flow-node-reference.md) - Complete list of 50+ nodes
+- [UI Components](./flow-ui-components.md) - React components guide
+- [Execution Engine](./flow-execution.md) - Backend execution details
+
+### Sandbox - Paper Trading Environment
+- [Sandbox PRD](./sandbox.md) - Main product requirements
+- [Architecture](./sandbox-architecture.md) - System architecture
+- [Execution Engine](./sandbox-execution-engine.md) - Order matching engine
+- [Margin System](./sandbox-margin-system.md) - Margin calculation and funds
+
+### Python Strategies - Strategy Hosting
+- [Python Strategies PRD](./python-strategies.md) - Main product requirements
+- [Process Management](./python-strategies-process-management.md) - Subprocess handling
+- [Scheduling](./python-strategies-scheduling.md) - Market-aware scheduling
+- [API Reference](./python-strategies-api-reference.md) - Complete API documentation
+
+### Historify - Historical Data Management
+- [Historify PRD](./historify.md) - Main product requirements
+- [Data Model](./historify-data-model.md) - DuckDB schema
+- [Download Engine](./historify-download-engine.md) - Bulk download management
+- [API Reference](./historify-api-reference.md) - Complete API documentation
+
+### WebSocket Proxy
 - [WebSocket Proxy PRD](./websocket-proxy.md) - Real-time market data streaming

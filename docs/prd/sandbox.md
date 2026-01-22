@@ -203,6 +203,14 @@ sandbox.db (separate from main)
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Related Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Sandbox Architecture](./sandbox-architecture.md) | Detailed system architecture |
+| [Execution Engine](./sandbox-execution-engine.md) | Order matching engine details |
+| [Margin System](./sandbox-margin-system.md) | Margin calculation and fund management |
+
 ## Success Metrics
 
 | Metric | Target |

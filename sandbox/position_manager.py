@@ -1023,7 +1023,7 @@ class PositionManager:
                     position.pnl = float(position.realized_pnl)
                     db.session.commit()
 
-                    logger.info(f"Moved CNC position to holdings: {position.symbol} qty: {position.quantity}")
+                    logger.debug(f"Moved CNC position to holdings: {position.symbol} qty: {position.quantity}")
 
                 # NRML positions remain as-is (carry forward)
 
@@ -1082,7 +1082,7 @@ def process_all_users_settlement():
             return
 
         users = set(p.user_id for p in positions)
-        logger.info(f"Processing T+1 settlement for {len(users)} users at midnight")
+        logger.debug(f"Processing T+1 settlement for {len(users)} users at midnight")
 
         for user_id in users:
             try:
@@ -1090,7 +1090,7 @@ def process_all_users_settlement():
                 success, message = holdings_manager.process_t1_settlement()
 
                 if success:
-                    logger.info(f"Settlement completed for user {user_id}")
+                    logger.debug(f"Settlement completed for user {user_id}")
                 else:
                     logger.error(f"Settlement failed for user {user_id}: {message}")
 
@@ -1098,7 +1098,7 @@ def process_all_users_settlement():
                 logger.error(f"Error in settlement for user {user_id}: {e}")
                 continue
 
-        logger.info("T+1 settlement completed for all users")
+        logger.debug("T+1 settlement completed for all users")
 
     except Exception as e:
         logger.error(f"Error in T+1 settlement process: {e}")
@@ -1141,7 +1141,7 @@ def cleanup_expired_contracts():
             logger.debug("No open F&O positions to check for expiry")
             return
 
-        logger.info(f"Checking {len(all_fo_positions)} F&O positions for expired contracts")
+        logger.debug(f"Checking {len(all_fo_positions)} F&O positions for expired contracts")
 
         # Check each position for expiry
         for position in all_fo_positions:
@@ -1149,7 +1149,7 @@ def cleanup_expired_contracts():
 
             if expiry_date and today > expiry_date:
                 expired_positions.append(position)
-                logger.info(
+                logger.debug(
                     f"Found expired contract: {position.symbol} "
                     f"(expiry: {expiry_date}, user: {position.user_id})"
                 )
@@ -1158,7 +1158,7 @@ def cleanup_expired_contracts():
             logger.debug("No expired F&O contracts found")
             return
 
-        logger.info(f"Found {len(expired_positions)} expired contracts to clean up")
+        logger.debug(f"Found {len(expired_positions)} expired contracts to clean up")
 
         # Group by user for efficient processing
         user_positions = {}

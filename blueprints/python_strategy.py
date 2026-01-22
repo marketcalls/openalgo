@@ -95,7 +95,7 @@ def init_scheduler():
             id='daily_trading_day_check',
             replace_existing=True
         )
-        logger.info("Daily trading day check scheduled at 00:01 IST")
+        logger.debug("Daily trading day check scheduled at 00:01 IST")
 
         # Add market hours enforcer - runs every minute during trading hours
         # This stops scheduled strategies when market closes
@@ -106,7 +106,7 @@ def init_scheduler():
             id='market_hours_enforcer',
             replace_existing=True
         )
-        logger.info("Market hours enforcer scheduled (runs every minute)")
+        logger.debug("Market hours enforcer scheduled (runs every minute)")
 
 def load_configs():
     """Load strategy configurations from file"""

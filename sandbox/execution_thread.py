@@ -106,7 +106,7 @@ def start_execution_engine(engine_type: str = None):
         if engine_type is None:
             engine_type = os.getenv('SANDBOX_ENGINE_TYPE', 'websocket').lower()
 
-        logger.info(f"Starting execution engine with type: {engine_type}")
+        logger.debug(f"Starting execution engine with type: {engine_type}")
 
         try:
             if engine_type == 'websocket':

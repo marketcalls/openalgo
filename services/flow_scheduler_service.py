@@ -61,7 +61,7 @@ class FlowScheduler:
                 )
                 self._scheduler.start()
                 self._initialized = True
-                logger.info("Flow Scheduler initialized and started")
+                logger.debug("Flow Scheduler initialized and started")
             except Exception as e:
                 logger.error(f"Failed to initialize Flow Scheduler: {e}")
                 raise
