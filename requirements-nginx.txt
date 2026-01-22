@@ -140,7 +140,7 @@ wcwidth==0.2.13
 websocket-client==1.8.0
 websockets==15.0.1
 Werkzeug==3.1.5
-wheel==0.43.0
+wheel==0.46.2
 wrapt==1.16.0
 wsproto==1.2.0
 WTForms==3.1.2
