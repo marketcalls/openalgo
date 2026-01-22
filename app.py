@@ -303,7 +303,7 @@ def create_app():
         # Check if user is logged in and session is expired
         if session.get('logged_in') and not is_session_valid():
             logger.info(f"Session expired for user: {session.get('user')} - revoking tokens")
-            revoke_user_tokens()
+            revoke_user_tokens(revoke_db_tokens=False)
             session.clear()
             # Don't redirect here, let individual routes handle it
     
