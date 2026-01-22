@@ -553,23 +553,22 @@ class NodeExecutor:
         return result
 
     def execute_close_positions(self, node_data: dict) -> dict:
-        """Execute Close Position node"""
-        symbol = self.get_str(node_data, "symbol", "")
-        exchange = self.get_str(node_data, "exchange", "NSE")
-        product = self.get_str(node_data, "product", "MIS")
-        self.log(f"Closing position: {symbol}")
-        result = self.client.close_position(symbol=symbol, exchange=exchange, product_type=product)
-        self.log(f"Close position result: {result}", "info" if result.get("status") == "success" else "error")
+        """Execute Close All Positions node - squares off all open positions"""
+        self.log("Closing all positions")
+        result = self.client.close_all_positions()
+        self.log(f"Close all positions result: {result}", "info" if result.get("status") == "success" else "error")
         return result
 
     def execute_basket_order(self, node_data: dict) -> dict:
-        """Execute Basket Order node"""
+        """Execute Basket Order node - places multiple orders in batch"""
         orders_raw = node_data.get("orders", "")
         product = self.get_str(node_data, "product", "MIS")
         price_type = self.get_str(node_data, "priceType", "MARKET")
+        basket_name = self.get_str(node_data, "basketName", "flow_basket")
 
         orders = []
         if isinstance(orders_raw, str):
+            # Parse orders from CSV-like format: SYMBOL,EXCHANGE,ACTION,QTY per line
             for line in orders_raw.strip().split('\n'):
                 line = line.strip()
                 if not line:
@@ -586,16 +585,24 @@ class NodeExecutor:
                             "product": product
                         }
                         orders.append(order)
-                    except (ValueError, IndexError):
-                        pass
+                    except (ValueError, IndexError) as e:
+                        self.log(f"Skipping invalid order line '{line}': {e}", "warning")
+                else:
+                    self.log(f"Skipping invalid order line '{line}': expected SYMBOL,EXCHANGE,ACTION,QTY", "warning")
         elif isinstance(orders_raw, list):
+            # Already a list of order dicts
             orders = orders_raw
 
         if not orders:
-            return {"status": "error", "message": "No valid orders"}
+            error_result = {"status": "error", "message": "No valid orders to place"}
+            self.log("Basket order failed: No valid orders", "error")
+            return error_result
 
-        self.log(f"Placing basket order with {len(orders)} orders")
-        result = self.client.basket_order(orders=orders)
+        self.log(f"Placing basket order '{basket_name}' with {len(orders)} orders")
+        for i, order in enumerate(orders):
+            self.log(f"  Order {i+1}: {order['symbol']} {order['exchange']} {order['action']} qty={order['quantity']}")
+
+        result = self.client.basket_order(orders=orders, strategy=basket_name)
         self.log(f"Basket order result: {result}", "info" if result.get("status") == "success" else "error")
         self.store_output(node_data, result)
         return result
