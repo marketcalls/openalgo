@@ -701,4 +701,4 @@ if __name__ == '__main__':
     print(f"{B}{BL}{H * (W - 2)}{BR}{RESET}")
     print()
 
-    socketio.run(app, host=host_ip, port=port, debug=debug)
+    socketio.run(app, host=host_ip, port=port, debug=debug, allow_unsafe_werkzeug=True)

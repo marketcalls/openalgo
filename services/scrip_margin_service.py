@@ -1,12 +1,49 @@
 import copy
 from typing import Tuple, Dict, Any, Optional
 from database.auth_db import get_auth_token_broker
+from database.token_db import get_symbol_info
 from services.quotes_service import get_quotes
 from services.margin_service import calculate_margin
 from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
+
+# Constants for derivative exchanges
+DERIVATIVE_EXCHANGES = ['NFO', 'BFO', 'CDS', 'MCX', 'BCD', 'NCDEX']
+
+
+def resolve_quantity(symbol: str, exchange: str, user_quantity: Optional[int]) -> Tuple[int, Optional[int]]:
+    """
+    Resolve the quantity to use for margin calculation based on exchange and user input.
+
+    Args:
+        symbol: Trading symbol
+        exchange: Exchange (NSE, BSE, NFO, etc.)
+        user_quantity: User-provided quantity (None if not provided)
+
+    Returns:
+        Tuple of (resolved_quantity, lot_size)
+        - resolved_quantity: The quantity to use for calculation
+        - lot_size: The lot size from database (None if not defined or equals 1)
+    """
+    # Priority 1: User explicitly provided quantity - always honor it
+    if user_quantity is not None:
+        # Fetch lot size for metadata (for ALL exchanges)
+        symbol_info = get_symbol_info(symbol, exchange)
+        lot_size = symbol_info.lotsize if (symbol_info and symbol_info.lotsize and symbol_info.lotsize > 1) else None
+        return user_quantity, lot_size
+
+    # Priority 2: Auto-fetch lot size from database (for ALL exchanges)
+    symbol_info = get_symbol_info(symbol, exchange)
+    if symbol_info and symbol_info.lotsize and symbol_info.lotsize > 1:
+        # Use lot size as default quantity if defined and > 1
+        logger.debug(f"Auto-fetched lot size for {exchange}:{symbol}: {symbol_info.lotsize}")
+        return symbol_info.lotsize, symbol_info.lotsize
+
+    # Priority 3: Default to 1 if no lot size or lot size = 1
+    logger.debug(f"Using default quantity=1 for {exchange}:{symbol}")
+    return 1, None
 
 
 def calculate_scrip_margin_with_auth(
@@ -33,10 +70,15 @@ def calculate_scrip_margin_with_auth(
     symbol = scrip_data.get('symbol')
     exchange = scrip_data.get('exchange')
     product = scrip_data.get('product')
-    quantity = scrip_data.get('quantity', 1)
+    user_quantity = scrip_data.get('quantity')  # May be None
     action = scrip_data.get('action', 'BUY').upper()
     pricetype = scrip_data.get('pricetype', 'MARKET')
     price = scrip_data.get('price', '0')
+
+    # Resolve quantity using smart logic
+    quantity, lot_size = resolve_quantity(symbol, exchange, user_quantity)
+
+    logger.info(f"Calculating margin for {exchange}:{symbol} - Quantity: {quantity}, Lot Size: {lot_size}")
 
     # Step 1: Fetch LTP via get_quotes
     ltp = None
@@ -148,6 +190,7 @@ def calculate_scrip_margin_with_auth(
             'leverage': leverage,
             'margin_percent': margin_percent,
             'quantity': quantity,
+            'lot_size': lot_size,
             'total_margin_required': round(total_margin_required, 2),
             'margin_breakdown': {
                 'span_margin': margin_breakdown.get('span_margin', 0),

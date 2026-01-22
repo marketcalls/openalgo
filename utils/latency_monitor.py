@@ -261,6 +261,7 @@ def init_latency_monitoring(app):
         'symbol': 'SYMBOL',
         'expiry': 'EXPIRY',
         'margin': 'MARGIN',
+        'margin-scrip': 'SCRIP_MARGIN',
         'option_greeks': 'GREEKS',
         'multi_option_greeks': 'MULTI_GREEKS',
         'option_symbol': 'OPTION_SYMBOL',

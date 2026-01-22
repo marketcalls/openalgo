@@ -159,7 +159,7 @@ class ScripMarginSchema(Schema):
     symbol = fields.Str(required=True, validate=validate.Length(min=1, max=50))
     exchange = fields.Str(required=True, validate=validate.OneOf(["NSE", "BSE", "NFO", "BFO", "CDS", "MCX"]))
     product = fields.Str(required=True, validate=validate.OneOf(["MIS", "NRML", "CNC"]))
-    quantity = fields.Int(missing=1, validate=validate.Range(min=1))
+    quantity = fields.Int(missing=None, validate=validate.Range(min=1), allow_none=True)
     action = fields.Str(missing='BUY', validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
     pricetype = fields.Str(missing='MARKET', validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"]))
     price = fields.Str(missing='0')
