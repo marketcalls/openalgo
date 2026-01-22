@@ -369,6 +369,34 @@ class NodeExecutor:
             return ""
         return expiry_str.replace("-", "").upper()
 
+    def execute_modify_order(self, node_data: dict) -> dict:
+        """Execute Modify Order node"""
+        order_id = self.get_str(node_data, "orderId", "")
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        action = self.get_str(node_data, "action", "BUY")
+        quantity = self.get_int(node_data, "quantity", 1)
+        price_type = self.get_str(node_data, "priceType", "LIMIT")
+        product = self.get_str(node_data, "product", "MIS")
+        price = self.get_float(node_data, "price", 0)
+        trigger_price = self.get_float(node_data, "triggerPrice", 0)
+
+        self.log(f"Modifying order: {order_id} - {symbol} {action} qty={quantity} price={price} trigger={trigger_price}")
+        result = self.client.modify_order(
+            order_id=order_id,
+            symbol=symbol,
+            exchange=exchange,
+            action=action,
+            quantity=quantity,
+            price_type=price_type,
+            product_type=product,
+            price=price,
+            trigger_price=trigger_price
+        )
+        self.log(f"Modify order result: {result}", "info" if result.get("status") == "success" else "error")
+        self.store_output(node_data, result)
+        return result
+
     def execute_cancel_order(self, node_data: dict) -> dict:
         """Execute Cancel Order node"""
         order_id = self.context.interpolate(str(node_data.get("orderId", "")))
@@ -1380,6 +1408,8 @@ def execute_node_chain(
         result = executor.execute_smart_order(node_data)
     elif node_type == "optionsOrder":
         result = executor.execute_options_order(node_data)
+    elif node_type == "modifyOrder":
+        result = executor.execute_modify_order(node_data)
     elif node_type == "cancelOrder":
         result = executor.execute_cancel_order(node_data)
     elif node_type == "cancelAllOrders":
