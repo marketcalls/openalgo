@@ -14,7 +14,6 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useLivePrice, calculateLiveStats } from '@/hooks/useLivePrice'
-import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { cn, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -108,12 +107,6 @@ export default function Holdings() {
     })
     return () => unsubscribe()
   }, [fetchHoldings])
-
-  // Centralized Socket.IO event listener for order events
-  useOrderEventRefresh(fetchHoldings, {
-    events: ['order_event', 'analyzer_update'],
-    delay: 500,
-  })
 
   const exportToCSV = () => {
     const headers = [

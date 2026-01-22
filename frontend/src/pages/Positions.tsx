@@ -48,7 +48,6 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useLivePrice } from '@/hooks/useLivePrice'
-import { useOrderEventRefresh } from '@/hooks/useOrderEventRefresh'
 import { cn, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -254,12 +253,6 @@ export default function Positions() {
     })
     return () => unsubscribe()
   }, [fetchPositions])
-
-  // Centralized Socket.IO event listener for order events
-  useOrderEventRefresh(fetchPositions, {
-    events: ['order_event', 'analyzer_update', 'close_position_event'],
-    delay: 500,
-  })
 
   // Get group key for a position
   const getGroupKey = useCallback(

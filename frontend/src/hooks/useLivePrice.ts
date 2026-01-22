@@ -93,11 +93,11 @@ export function useLivePrice<T extends PriceableItem>(
     [items]
   )
 
-  // WebSocket market data - only enable when market is open
+  // WebSocket market data - connect when enabled (market check removed for testing)
   const { data: marketData, isConnected: wsConnected } = useMarketData({
     symbols,
     mode: 'LTP',
-    enabled: enabled && items.length > 0 && anyMarketOpen,
+    enabled: enabled && items.length > 0,
   })
 
   // Effective live status

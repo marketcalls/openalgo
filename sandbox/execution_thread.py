@@ -61,12 +61,29 @@ class ExecutionEngineThread(threading.Thread):
 
 
 def _is_websocket_proxy_healthy() -> bool:
-    """Check if WebSocket proxy is running and healthy"""
+    """Check if WebSocket proxy server is running and accepting connections"""
+    import socket
+    import os
+
     try:
-        from services.market_data_service import get_market_data_service, is_data_fresh
-        # Check if we have recent market data (within last 60 seconds)
-        return is_data_fresh(max_age_seconds=60)
-    except Exception:
+        # Get WebSocket proxy host and port from environment
+        ws_host = os.getenv('WEBSOCKET_HOST', '127.0.0.1')
+        ws_port = int(os.getenv('WEBSOCKET_PORT', '8765'))
+
+        # Try to connect to the WebSocket proxy server
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(2)  # 2 second timeout
+        result = sock.connect_ex((ws_host, ws_port))
+        sock.close()
+
+        if result == 0:
+            logger.debug(f"WebSocket proxy is healthy at {ws_host}:{ws_port}")
+            return True
+        else:
+            logger.debug(f"WebSocket proxy not reachable at {ws_host}:{ws_port}")
+            return False
+    except Exception as e:
+        logger.debug(f"WebSocket proxy health check failed: {e}")
         return False
 
 

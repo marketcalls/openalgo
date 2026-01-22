@@ -150,7 +150,8 @@ export default function ActionCenterPage() {
     const port = window.location.port
 
     socketRef.current = io(`${protocol}//${host}:${port}`, {
-      transports: ['websocket', 'polling'],
+      transports: ['polling'],
+      upgrade: false,
     })
 
     const socket = socketRef.current

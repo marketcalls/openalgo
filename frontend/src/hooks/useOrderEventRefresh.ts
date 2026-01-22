@@ -76,7 +76,8 @@ export function useOrderEventRefresh(
     const port = window.location.port
 
     socketRef.current = io(`${protocol}//${host}:${port}`, {
-      transports: ['websocket', 'polling'],
+      transports: ['polling'],
+      upgrade: false,
     })
 
     const socket = socketRef.current
@@ -130,7 +131,8 @@ export function useSocketConnection(enabled = true): {
     const port = window.location.port
 
     socketRef.current = io(`${protocol}//${host}:${port}`, {
-      transports: ['websocket', 'polling'],
+      transports: ['polling'],
+      upgrade: false,
     })
 
     return () => {
