@@ -292,6 +292,6 @@ Qty    Price    |    Price    Qty
 
 ---
 
-**Previous**: [01 - What is OpenAlgo](../01-what-is-openalgo/README.md)
+**Previous**: [02 - Why Build with OpenAlgo](../02-why-build-with-openalgo/README.md)
 
 **Next**: [03 - System Requirements](../03-system-requirements/README.md)

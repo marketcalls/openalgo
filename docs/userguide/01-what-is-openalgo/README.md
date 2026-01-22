@@ -277,11 +277,12 @@ Let's be clear about what OpenAlgo doesn't do:
 
 Ready to begin? Here's your path:
 
-1. **Next**: Learn [Key Concepts](../02-key-concepts/README.md)
-2. Check [System Requirements](../03-system-requirements/README.md)
-3. Follow [Installation Guide](../04-installation/README.md)
-4. Complete [First-Time Setup](../05-first-time-setup/README.md)
-5. Place your [First Order](../10-placing-first-order/README.md)!
+1. **Next**: Learn [Why Build with OpenAlgo](../02-why-build-with-openalgo/README.md)
+2. Understand [Key Concepts](../03-key-concepts/README.md)
+3. Check [System Requirements](../03-system-requirements/README.md)
+4. Follow [Installation Guide](../04-installation/README.md)
+5. Complete [First-Time Setup](../05-first-time-setup/README.md)
+6. Place your [First Order](../10-placing-first-order/README.md)!
 
 ## Quick Links
 
@@ -310,4 +311,4 @@ Ready to begin? Here's your path:
 
 ---
 
-**Next**: [02 - Key Concepts](../02-key-concepts/README.md) - Understand the terminology before diving in.
+**Next**: [02 - Why Build with OpenAlgo](../02-why-build-with-openalgo/README.md) - Understand the value proposition.
