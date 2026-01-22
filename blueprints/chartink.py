@@ -528,10 +528,10 @@ def search_symbols():
     """Search symbols endpoint"""
     query = request.args.get('q', '').strip()
     exchange = request.args.get('exchange')
-    
+
     if not query:
         return jsonify({'results': []})
-    
+
     results = enhanced_search_symbols(query, exchange)
     return jsonify({
         'results': [{
@@ -540,6 +540,167 @@ def search_symbols():
             'exchange': result.exchange
         } for result in results]
     })
+
+# =============================================================================
+# JSON API Endpoints for React Frontend
+# =============================================================================
+
+@chartink_bp.route('/api/strategies')
+@check_session_validity
+def api_get_strategies():
+    """API: Get all strategies for current user as JSON"""
+    user_id = session.get('user')
+    if not user_id:
+        return jsonify({'status': 'error', 'message': 'Session expired'}), 401
+
+    strategies = get_user_strategies(user_id)
+    return jsonify({
+        'strategies': [{
+            'id': s.id,
+            'name': s.name,
+            'webhook_id': s.webhook_id,
+            'is_active': s.is_active,
+            'is_intraday': s.is_intraday,
+            'start_time': s.start_time,
+            'end_time': s.end_time,
+            'squareoff_time': s.squareoff_time,
+            'created_at': s.created_at.isoformat() if s.created_at else None,
+            'updated_at': s.updated_at.isoformat() if s.updated_at else None
+        } for s in strategies]
+    })
+
+@chartink_bp.route('/api/strategy/<int:strategy_id>')
+@check_session_validity
+def api_get_strategy(strategy_id):
+    """API: Get single strategy with mappings as JSON"""
+    user_id = session.get('user')
+    if not user_id:
+        return jsonify({'status': 'error', 'message': 'Session expired'}), 401
+
+    strategy = get_strategy(strategy_id)
+    if not strategy:
+        return jsonify({'status': 'error', 'message': 'Strategy not found'}), 404
+
+    if strategy.user_id != user_id:
+        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 403
+
+    mappings = get_symbol_mappings(strategy_id)
+
+    return jsonify({
+        'strategy': {
+            'id': strategy.id,
+            'name': strategy.name,
+            'webhook_id': strategy.webhook_id,
+            'is_active': strategy.is_active,
+            'is_intraday': strategy.is_intraday,
+            'start_time': strategy.start_time,
+            'end_time': strategy.end_time,
+            'squareoff_time': strategy.squareoff_time,
+            'created_at': strategy.created_at.isoformat() if strategy.created_at else None,
+            'updated_at': strategy.updated_at.isoformat() if strategy.updated_at else None
+        },
+        'mappings': [{
+            'id': m.id,
+            'chartink_symbol': m.chartink_symbol,
+            'exchange': m.exchange,
+            'quantity': m.quantity,
+            'product_type': m.product_type,
+            'created_at': m.created_at.isoformat() if m.created_at else None
+        } for m in mappings]
+    })
+
+@chartink_bp.route('/api/strategy', methods=['POST'])
+@check_session_validity
+@limiter.limit(STRATEGY_RATE_LIMIT)
+def api_create_strategy():
+    """API: Create new strategy (JSON)"""
+    user_id = session.get('user')
+    if not user_id:
+        return jsonify({'status': 'error', 'message': 'Session expired'}), 401
+
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'status': 'error', 'message': 'No data provided'}), 400
+
+        name = data.get('name', '').strip()
+        strategy_type = data.get('strategy_type', 'intraday')
+        start_time = data.get('start_time')
+        end_time = data.get('end_time')
+        squareoff_time = data.get('squareoff_time')
+
+        # Validate strategy name
+        is_valid_name, name_result = validate_strategy_name(name)
+        if not is_valid_name:
+            return jsonify({'status': 'error', 'message': name_result}), 400
+        name = name_result
+
+        is_intraday = strategy_type == 'intraday'
+
+        if is_intraday:
+            if not all([start_time, end_time, squareoff_time]):
+                return jsonify({'status': 'error', 'message': 'All time fields are required for intraday strategy'}), 400
+
+            is_valid, error_msg = validate_strategy_times(start_time, end_time, squareoff_time)
+            if not is_valid:
+                return jsonify({'status': 'error', 'message': error_msg}), 400
+        else:
+            start_time = end_time = squareoff_time = None
+
+        webhook_id = str(uuid.uuid4())
+
+        strategy = create_strategy(
+            name=name,
+            webhook_id=webhook_id,
+            user_id=user_id,
+            is_intraday=is_intraday,
+            start_time=start_time,
+            end_time=end_time,
+            squareoff_time=squareoff_time
+        )
+
+        if strategy:
+            if is_intraday and squareoff_time:
+                schedule_squareoff(strategy.id)
+
+            return jsonify({
+                'status': 'success',
+                'data': {'strategy_id': strategy.id}
+            })
+        else:
+            return jsonify({'status': 'error', 'message': 'Failed to create strategy'}), 500
+
+    except Exception as e:
+        logger.error(f'Error creating strategy via API: {str(e)}')
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@chartink_bp.route('/api/strategy/<int:strategy_id>/toggle', methods=['POST'])
+@check_session_validity
+def api_toggle_strategy(strategy_id):
+    """API: Toggle strategy active status (JSON)"""
+    user_id = session.get('user')
+    if not user_id:
+        return jsonify({'status': 'error', 'message': 'Session expired'}), 401
+
+    strategy = get_strategy(strategy_id)
+    if not strategy:
+        return jsonify({'status': 'error', 'message': 'Strategy not found'}), 404
+
+    if strategy.user_id != user_id:
+        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 403
+
+    try:
+        updated_strategy = toggle_strategy(strategy_id)
+        if updated_strategy:
+            return jsonify({
+                'status': 'success',
+                'data': {'is_active': updated_strategy.is_active}
+            })
+        else:
+            return jsonify({'status': 'error', 'message': 'Failed to toggle strategy'}), 500
+    except Exception as e:
+        logger.error(f'Error toggling strategy via API: {str(e)}')
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @chartink_bp.route('/webhook/<webhook_id>', methods=['POST'])
 @limiter.limit(WEBHOOK_RATE_LIMIT)

@@ -17,6 +17,29 @@ body:json {
       "exchange": "NSE",
       "interval": "D",
       "start_date": "2025-01-01",
-      "end_date": "2025-11-20"
+      "end_date": "2025-11-20",
+      "source": "api"
   }
+}
+
+docs {
+  # History API - EOD (End of Day)
+
+  Fetch end-of-day historical data for a symbol.
+
+  ## Parameters
+
+  | Parameter | Type | Required | Description |
+  |-----------|------|----------|-------------|
+  | apikey | string | Yes | OpenAlgo API key |
+  | symbol | string | Yes | Trading symbol |
+  | exchange | string | Yes | Exchange (NSE, BSE, NFO, etc.) |
+  | interval | string | Yes | Timeframe: D (Daily), W (Weekly), M (Monthly), Q (Quarterly), Y (Yearly) |
+  | start_date | string | Yes | Start date (YYYY-MM-DD) |
+  | end_date | string | Yes | End date (YYYY-MM-DD) |
+  | source | string | No | "api" (default) or "db" (DuckDB/Historify) |
+
+  ## Note
+
+  Use lowercase 'm' for minutes (1m, 5m) and uppercase 'M' for Monthly.
 }

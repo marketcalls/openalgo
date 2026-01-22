@@ -137,38 +137,132 @@ def get_history_with_auth(
             'message': str(e)
         }, 500
 
-def get_history(
-    symbol: str, 
-    exchange: str, 
-    interval: str, 
-    start_date: str, 
-    end_date: str,
-    api_key: Optional[str] = None, 
-    auth_token: Optional[str] = None, 
-    feed_token: Optional[str] = None, 
-    broker: Optional[str] = None
+def get_history_from_db(
+    symbol: str,
+    exchange: str,
+    interval: str,
+    start_date: str,
+    end_date: str
 ) -> Tuple[bool, Dict[str, Any], int]:
     """
-    Get historical data for a symbol.
-    Supports both API-based authentication and direct internal calls.
-    
+    Get historical data from DuckDB/Historify database.
+
     Args:
         symbol: Trading symbol
         exchange: Exchange (e.g., NSE, BSE)
-        interval: Time interval (e.g., 1m, 5m, 15m, 1h, 1d)
+        interval: Time interval (e.g., 1m, 5m, 15m, 1h, D, W, M, Q, Y)
         start_date: Start date in YYYY-MM-DD format
         end_date: End date in YYYY-MM-DD format
-        api_key: OpenAlgo API key (for API-based calls)
-        auth_token: Direct broker authentication token (for internal calls)
-        feed_token: Direct broker feed token (for internal calls)
-        broker: Direct broker name (for internal calls)
-        
+
     Returns:
         Tuple containing:
         - Success status (bool)
         - Response data (dict)
         - HTTP status code (int)
     """
+    try:
+        from database.historify_db import get_ohlcv
+        from datetime import datetime, date
+
+        # Convert dates to timestamps (handle both string and date objects)
+        if isinstance(start_date, date):
+            start_dt = datetime.combine(start_date, datetime.min.time())
+        else:
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+
+        if isinstance(end_date, date):
+            end_dt = datetime.combine(end_date, datetime.min.time())
+        else:
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+
+        # Set end_date to end of day
+        end_dt = end_dt.replace(hour=23, minute=59, second=59)
+
+        start_timestamp = int(start_dt.timestamp())
+        end_timestamp = int(end_dt.timestamp())
+
+        # Get data from DuckDB
+        df = get_ohlcv(
+            symbol=symbol,
+            exchange=exchange,
+            interval=interval,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp
+        )
+
+        if df.empty:
+            return False, {
+                'status': 'error',
+                'message': f"No data found for {symbol}:{exchange} interval {interval} in local database. Download data first using Historify."
+            }, 404
+
+        # Ensure 'oi' column exists
+        if 'oi' not in df.columns:
+            df['oi'] = 0
+
+        # Reorder columns to match API response format
+        columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi']
+        df = df[columns]
+
+        return True, {
+            'status': 'success',
+            'data': df.to_dict(orient='records')
+        }, 200
+
+    except Exception as e:
+        logger.error(f"Error fetching history from DB: {e}")
+        traceback.print_exc()
+        return False, {
+            'status': 'error',
+            'message': str(e)
+        }, 500
+
+
+def get_history(
+    symbol: str,
+    exchange: str,
+    interval: str,
+    start_date: str,
+    end_date: str,
+    api_key: Optional[str] = None,
+    auth_token: Optional[str] = None,
+    feed_token: Optional[str] = None,
+    broker: Optional[str] = None,
+    source: str = 'api'
+) -> Tuple[bool, Dict[str, Any], int]:
+    """
+    Get historical data for a symbol.
+    Supports both API-based authentication and direct internal calls.
+
+    Args:
+        symbol: Trading symbol
+        exchange: Exchange (e.g., NSE, BSE)
+        interval: Time interval (e.g., 1m, 5m, 15m, 1h, D, W, M, Q, Y)
+        start_date: Start date in YYYY-MM-DD format
+        end_date: End date in YYYY-MM-DD format
+        api_key: OpenAlgo API key (for API-based calls)
+        auth_token: Direct broker authentication token (for internal calls)
+        feed_token: Direct broker feed token (for internal calls)
+        broker: Direct broker name (for internal calls)
+        source: Data source - 'api' (broker, default) or 'db' (DuckDB/Historify)
+
+    Returns:
+        Tuple containing:
+        - Success status (bool)
+        - Response data (dict)
+        - HTTP status code (int)
+    """
+    # Source: 'db' - Fetch from DuckDB/Historify database
+    if source == 'db':
+        return get_history_from_db(
+            symbol=symbol,
+            exchange=exchange,
+            interval=interval,
+            start_date=start_date,
+            end_date=end_date
+        )
+
+    # Source: 'api' (default) - Fetch from broker API
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
         AUTH_TOKEN, FEED_TOKEN, broker_name = get_auth_token_broker(api_key, include_feed_token=True)
@@ -178,29 +272,29 @@ def get_history(
                 'message': 'Invalid openalgo apikey'
             }, 403
         return get_history_with_auth(
-            AUTH_TOKEN, 
-            FEED_TOKEN, 
-            broker_name, 
-            symbol, 
-            exchange, 
-            interval, 
-            start_date, 
+            AUTH_TOKEN,
+            FEED_TOKEN,
+            broker_name,
+            symbol,
+            exchange,
+            interval,
+            start_date,
             end_date
         )
-    
+
     # Case 2: Direct internal call with auth_token and broker
     elif auth_token and broker:
         return get_history_with_auth(
-            auth_token, 
-            feed_token, 
-            broker, 
-            symbol, 
-            exchange, 
-            interval, 
-            start_date, 
+            auth_token,
+            feed_token,
+            broker,
+            symbol,
+            exchange,
+            interval,
+            start_date,
             end_date
         )
-    
+
     # Case 3: Invalid parameters
     else:
         return False, {

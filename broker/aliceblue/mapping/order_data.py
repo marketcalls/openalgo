@@ -359,9 +359,39 @@ def transform_holdings_data(holdings_data):
             pnl = round((ltp - price) * quantity, 2) if quantity else 0
             pnlpercent = round(((ltp - price) / price * 100), 2) if price else 0
 
+            # Determine exchange from ExchSeg1 (primary exchange segment)
+            exchange = holdings.get('ExchSeg1', holdings.get('Exchange', ''))
+
+            # Select symbol based on exchange - use the appropriate exchange-specific symbol field
+            # Nsetsym = NSE symbol, Bsetsym = BSE symbol, Mcxsxcmsym = MCX symbol,
+            # Csetsym = CSE symbol, Ysxtsym = YSX symbol
+            if exchange and exchange.upper() == 'NSE':
+                symbol = holdings.get('Nsetsym', '')
+            elif exchange and exchange.upper() == 'BSE':
+                symbol = holdings.get('Bsetsym', '')
+            elif exchange and exchange.upper() == 'MCX':
+                symbol = holdings.get('Mcxsxcmsym', '')
+            elif exchange and exchange.upper() == 'CSE':
+                symbol = holdings.get('Csetsym', '')
+            elif exchange and exchange.upper() == 'YSX':
+                symbol = holdings.get('Ysxtsym', '')
+            else:
+                # Fallback: try each symbol field until we find a non-empty one
+                symbol = (holdings.get('Nsetsym', '') or
+                          holdings.get('Bsetsym', '') or
+                          holdings.get('Mcxsxcmsym', '') or
+                          holdings.get('Csetsym', '') or
+                          holdings.get('Ysxtsym', '') or
+                          holdings.get('Symbol', ''))
+
+            # Skip holdings with empty symbol
+            if not symbol:
+                logger.warning(f"Skipping holdings with empty symbol: {holdings}")
+                continue
+
             transformed_position = {
-                "symbol": holdings.get('Bsetsym', holdings.get('Symbol', '')),
-                "exchange": holdings.get('ExchSeg1', holdings.get('Exchange', '')),
+                "symbol": symbol,
+                "exchange": exchange,
                 "quantity": quantity,
                 "product": holdings.get('Pcode', 'CNC'),
                 "pnl": pnl,  # Rounded to two decimals
@@ -371,7 +401,7 @@ def transform_holdings_data(holdings_data):
         except (KeyError, TypeError, ValueError) as e:
             logger.error(f"Error transforming holdings item: {e}, Item: {holdings}")
             continue
-            
+
     return transformed_data
 
 

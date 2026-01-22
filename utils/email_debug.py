@@ -40,9 +40,27 @@ def debug_smtp_connection():
         details.append(f"🔧 SMTP Server: {smtp_server}")
         details.append(f"🔧 SMTP Port: {smtp_port}")
         details.append(f"🔧 Username: {smtp_username}")
-        details.append(f"🔧 Password: {'*' * min(len(smtp_password), 16)}")
+        details.append(f"🔧 Password: {'*' * min(len(smtp_password), 16) if smtp_password else 'Not set'}")
         details.append(f"🔧 Use TLS: {use_tls}")
         details.append(f"🔧 HELO Hostname: {smtp_settings.get('smtp_helo_hostname') or 'default'}")
+
+        # Check for missing required settings
+        if not smtp_server or not smtp_username or not smtp_password:
+            missing = []
+            if not smtp_server:
+                missing.append('SMTP Server')
+            if not smtp_username:
+                missing.append('Username')
+            if not smtp_password:
+                missing.append('Password')
+            details.append(f"❌ Missing required settings: {', '.join(missing)}")
+            details.append("💡 Please save your SMTP settings first, then try again.")
+            details.append("💡 If settings don't persist after save, run: python upgrade/migrate_smtp_simple.py")
+            return {
+                'success': False,
+                'message': f"Missing required SMTP settings: {', '.join(missing)}",
+                'details': details
+            }
         
         # Create SSL context
         context = ssl.create_default_context()

@@ -177,8 +177,10 @@ def fno_search_symbols_db(
             base_query = base_query.filter(SymToken.strike <= strike_max)
 
         # Create conditions for each search term (if query provided)
+        primary_term = None
         if query:
             terms = [term.strip().upper() for term in query.split() if term.strip()]
+            primary_term = terms[0] if terms else None
             all_conditions = []
             for term in terms:
                 try:
@@ -203,13 +205,21 @@ def fno_search_symbols_db(
             if all_conditions:
                 base_query = base_query.filter(and_(*all_conditions))
 
-        # Execute query (fetch more for sorting, then limit)
+        # Apply database-level ordering and limit for performance
+        # Order by symbol for consistent results
+        base_query = base_query.order_by(SymToken.symbol)
+
+        # Apply limit at database level - critical for performance with large datasets
+        if limit:
+            base_query = base_query.limit(limit)
+
+        # Execute query with limit already applied
         results = base_query.all()
 
-        # Import freeze qty function
+        # Import freeze qty function (uses in-memory cache, fast)
         from database.qty_freeze_db import get_freeze_qty_for_option
 
-        # Convert to dictionaries
+        # Convert to dictionaries - now only processing limited results
         results_dicts = [{
             'symbol': r.symbol,
             'brsymbol': r.brsymbol,
@@ -225,26 +235,24 @@ def fno_search_symbols_db(
             'freeze_qty': get_freeze_qty_for_option(r.symbol, r.exchange)
         } for r in results]
 
-        # Smart sorting: prioritize exact underlying matches, then alphabetical
-        primary_term = None
-        if query:
-            terms = [t.strip().upper() for t in query.split() if t.strip()]
-            primary_term = terms[0] if terms else None
+        # Only apply Python-level sorting if there's a search query
+        # For filter-only queries (FNO chain discovery), DB ordering is sufficient
+        if primary_term:
+            def sort_key(r):
+                name = r['name'] or ''
+                symbol = r['symbol'] or ''
+                # Priority 1: Exact match on name/underlying
+                name_exact = 0 if name.upper() == primary_term else 1
+                # Priority 2: Name starts with search term
+                name_starts = 0 if name.upper().startswith(primary_term) else 1
+                # Priority 3: Symbol starts with search term
+                symbol_starts = 0 if symbol.upper().startswith(primary_term) else 1
+                # Priority 4: Alphabetical by symbol
+                return (name_exact, name_starts, symbol_starts, symbol)
 
-        def sort_key(r):
-            name = r['name'] or ''
-            symbol = r['symbol'] or ''
-            # Priority 1: Exact match on name/underlying
-            name_exact = 0 if (primary_term and name.upper() == primary_term) else 1
-            # Priority 2: Name starts with search term
-            name_starts = 0 if (primary_term and name.upper().startswith(primary_term)) else 1
-            # Priority 3: Symbol starts with search term
-            symbol_starts = 0 if (primary_term and symbol.upper().startswith(primary_term)) else 1
-            # Priority 4: Alphabetical by symbol
-            return (name_exact, name_starts, symbol_starts, symbol)
+            results_dicts.sort(key=sort_key)
 
-        results_dicts.sort(key=sort_key)
-        return results_dicts[:limit] if limit else results_dicts
+        return results_dicts
 
     except Exception as e:
         logger.error(f"Error in FNO search: {str(e)}")

@@ -296,7 +296,7 @@ class FundManager:
 
                 db_session.commit()
 
-                logger.info(f"Transferred ₹{amount} margin to holdings for user {self.user_id}. {description}")
+                logger.debug(f"Transferred ₹{amount} margin to holdings for user {self.user_id}. {description}")
                 return True, f"Margin transferred to holdings: ₹{amount}"
 
             except Exception as e:

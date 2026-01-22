@@ -53,11 +53,17 @@ class HistorySchema(Schema):
         "1m", "2m", "3m", "5m", "10m", "15m", "20m", "30m",
         # Hours intervals
         "1h", "2h", "3h", "4h",
-        # Daily, Weekly, Monthly intervals
-        "D", "W", "M"
+        # Daily, Weekly, Monthly, Quarterly, Yearly intervals
+        "D", "W", "M", "Q", "Y"
     ]))
     start_date = fields.Date(required=True, format='%Y-%m-%d')  # YYYY-MM-DD
     end_date = fields.Date(required=True, format='%Y-%m-%d')    # YYYY-MM-DD
+    # Optional: Data source - 'api' (broker, default) or 'db' (DuckDB/Historify)
+    source = fields.Str(
+        required=False,
+        load_default='api',
+        validate=validate.OneOf(['api', 'db'])
+    )
     # OI is now always included by default for F&O exchanges
 
 class DepthSchema(Schema):

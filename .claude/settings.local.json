@@ -10,7 +10,31 @@
       "Bash(python:*)",
       "Bash(npm run build:css:*)",
       "Bash(npm install)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Bash(npm run build)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(npm run check:*)",
+      "Bash(git push:*)",
+      "Bash(npx tsc:*)",
+      "Bash(git rm:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(node --version)",
+      "Bash(npm --version)",
+      "Bash(uv run:*)",
+      "Bash(python3:*)",
+      "Bash(curl:*)",
+      "WebSearch",
+      "WebFetch(domain:ui.shadcn.com)",
+      "Bash(tree:*)",
+      "Bash(xargs basename:*)",
+      "Bash(ls:*)",
+      "Bash(uv pip:*)"
     ]
   }
 }

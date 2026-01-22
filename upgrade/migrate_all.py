@@ -49,6 +49,10 @@ MIGRATIONS = [
 
     # Performance migrations
     ('migrate_indexes.py', 'Database Performance Indexes'),
+
+    # Feature migrations
+    ('migrate_historify.py', 'Historify DuckDB Setup'),
+    ('migrate_flow.py', 'Flow Workflow Automation'),
 ]
 
 def run_migration(script_name, description):

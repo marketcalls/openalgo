@@ -168,7 +168,7 @@ class HoldingsManager:
                             margin_amount,
                             f"T+1 settlement: {position.symbol} BUY → Holdings"
                         )
-                        logger.info(f"Added to holding: {position.symbol}, Qty: {holding.quantity}, Margin transferred: ₹{margin_amount}")
+                        logger.debug(f"Added to holding: {position.symbol}, Qty: {holding.quantity}, Margin transferred: ₹{margin_amount}")
 
                     else:
                         # Reducing holding (SELL)
@@ -180,7 +180,7 @@ class HoldingsManager:
                             sale_proceeds,
                             f"T+1 settlement: {position.symbol} SELL from Holdings"
                         )
-                        logger.info(f"Reduced holding: {position.symbol}, Qty: {holding.quantity}, Sale proceeds: ₹{sale_proceeds}")
+                        logger.debug(f"Reduced holding: {position.symbol}, Qty: {holding.quantity}, Sale proceeds: ₹{sale_proceeds}")
 
                     holding.ltp = position.ltp
                     holding.updated_at = datetime.now(ist)
@@ -188,7 +188,7 @@ class HoldingsManager:
                     # If holding quantity becomes 0 after update, delete the holding
                     if holding.quantity == 0:
                         db_session.delete(holding)
-                        logger.info(f"Deleted zero-quantity holding: {position.symbol}")
+                        logger.debug(f"Deleted zero-quantity holding: {position.symbol}")
 
                 else:
                     # Create new holding (BUY position becoming holding)
@@ -212,7 +212,7 @@ class HoldingsManager:
                         margin_amount,
                         f"T+1 settlement: {position.symbol} → Holdings"
                     )
-                    logger.info(f"Created new holding: {position.symbol}, Qty: {position.quantity}, Margin transferred: ₹{margin_amount}")
+                    logger.debug(f"Created new holding: {position.symbol}, Qty: {position.quantity}, Margin transferred: ₹{margin_amount}")
 
                 # Delete the position after settling
                 db_session.delete(position)
@@ -220,7 +220,7 @@ class HoldingsManager:
 
             db_session.commit()
 
-            logger.info(f"Settled {settled_count} CNC positions for user {self.user_id}")
+            logger.debug(f"Settled {settled_count} CNC positions for user {self.user_id}")
             return True, f"Settled {settled_count} positions"
 
         except Exception as e:
