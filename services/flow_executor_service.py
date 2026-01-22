@@ -227,6 +227,148 @@ class NodeExecutor:
         self.store_output(node_data, result)
         return result
 
+    def execute_options_order(self, node_data: dict) -> dict:
+        """Execute Options Order node"""
+        underlying = self.get_str(node_data, "underlying", "NIFTY")
+        expiry_type = self.get_str(node_data, "expiryType", "current_week")
+        quantity = self.get_int(node_data, "quantity", 1)
+        offset = self.get_str(node_data, "offset", "ATM")
+        option_type = self.get_str(node_data, "optionType", "CE")
+        action = self.get_str(node_data, "action", "BUY")
+        price_type = self.get_str(node_data, "priceType", "MARKET")
+        product = self.get_str(node_data, "product", "NRML")
+        split_size = self.get_int(node_data, "splitSize", 0)
+
+        self.log(f"Placing options order: {underlying} {option_type} {offset}")
+
+        # Get the underlying exchange for index
+        if underlying in ["SENSEX", "BANKEX", "SENSEX50"]:
+            underlying_exchange = "BSE_INDEX"
+            fo_exchange = "BFO"
+        else:
+            underlying_exchange = "NSE_INDEX"
+            fo_exchange = "NFO"
+
+        # Get lot size (updated Jan 2026)
+        lot_sizes = {
+            "NIFTY": 65, "BANKNIFTY": 30, "FINNIFTY": 65,
+            "MIDCPNIFTY": 120, "NIFTYNXT50": 25,
+            "SENSEX": 20, "BANKEX": 30, "SENSEX50": 25
+        }
+        lot_size = lot_sizes.get(underlying, 75)
+        total_quantity = quantity * lot_size
+
+        # Resolve expiry date from expiry type
+        expiry_date = self._resolve_expiry_date(underlying, fo_exchange, expiry_type)
+        if not expiry_date:
+            error_result = {"status": "error", "message": f"Could not resolve expiry for {expiry_type}"}
+            self.log(f"Options order failed: {error_result['message']}", "error")
+            return error_result
+
+        self.log(f"Resolved expiry: {expiry_type} -> {expiry_date}")
+
+        result = self.client.options_order(
+            underlying=underlying,
+            exchange=underlying_exchange,
+            action=action,
+            quantity=total_quantity,
+            expiry_date=expiry_date,
+            offset=offset,
+            option_type=option_type,
+            price_type=price_type,
+            product=product,
+            splitsize=split_size,
+        )
+        self.log(f"Options order result: {result}", "info" if result.get("status") == "success" else "error")
+        self.store_output(node_data, result)
+        return result
+
+    def _resolve_expiry_date(self, symbol: str, exchange: str, expiry_type: str) -> Optional[str]:
+        """Resolve expiry type to actual expiry date"""
+        try:
+            response = self.client.get_expiry(symbol=symbol, exchange=exchange, instrumenttype="options")
+            if response.get("status") != "success":
+                self.log(f"Failed to fetch expiry: {response}", "error")
+                return None
+
+            expiry_list = response.get("data", [])
+            if not expiry_list:
+                self.log(f"No expiry dates found for {symbol} on {exchange}", "error")
+                return None
+
+            # Parse and sort expiry dates
+            def parse_expiry(exp_str: str) -> Optional[datetime]:
+                """Parse expiry date string"""
+                if not exp_str or not isinstance(exp_str, str):
+                    return None
+                for fmt in ["%d-%b-%y", "%d%b%y", "%d-%B-%Y", "%d%B%Y"]:
+                    try:
+                        return datetime.strptime(exp_str.upper(), fmt)
+                    except ValueError:
+                        continue
+                return None
+
+            # Filter and sort expiries
+            valid_expiries = []
+            for exp_str in expiry_list:
+                parsed = parse_expiry(exp_str)
+                if parsed is not None:
+                    valid_expiries.append((exp_str, parsed))
+
+            if not valid_expiries:
+                self.log(f"No valid expiry dates found for {symbol}", "error")
+                return None
+
+            # Sort by parsed date
+            valid_expiries.sort(key=lambda x: x[1])
+            sorted_expiries = [exp[0] for exp in valid_expiries]
+            now = datetime.now()
+            current_month = now.month
+            current_year = now.year
+
+            # Calculate next month
+            if current_month == 12:
+                next_month, next_year = 1, current_year + 1
+            else:
+                next_month, next_year = current_month + 1, current_year
+
+            if expiry_type == "current_week":
+                if sorted_expiries:
+                    return self._format_expiry_for_api(sorted_expiries[0])
+                return None
+            elif expiry_type == "next_week":
+                if len(sorted_expiries) > 1:
+                    return self._format_expiry_for_api(sorted_expiries[1])
+                return None
+            elif expiry_type == "current_month":
+                result = None
+                for exp_str, exp_date in valid_expiries:
+                    if exp_date.month == current_month and exp_date.year == current_year:
+                        result = exp_str
+                if result:
+                    return self._format_expiry_for_api(result)
+                return None
+            elif expiry_type == "next_month":
+                result = None
+                for exp_str, exp_date in valid_expiries:
+                    if exp_date.month == next_month and exp_date.year == next_year:
+                        result = exp_str
+                if result:
+                    return self._format_expiry_for_api(result)
+                return None
+
+            self.log(f"Unknown expiry type: {expiry_type}", "error")
+            return None
+        except Exception as e:
+            self.log(f"Error resolving expiry: {e}", "error")
+            return None
+
+    def _format_expiry_for_api(self, expiry_str: str) -> str:
+        """Format expiry date for API (e.g., '10-JUL-25' -> '10JUL25')"""
+        if not expiry_str:
+            return ""
+        return expiry_str.replace("-", "").upper()
+
     def execute_cancel_order(self, node_data: dict) -> dict:
         """Execute Cancel Order node"""
         order_id = self.context.interpolate(str(node_data.get("orderId", "")))
@@ -1236,6 +1378,8 @@ def execute_node_chain(
         result = executor.execute_place_order(node_data)
     elif node_type == "smartOrder":
         result = executor.execute_smart_order(node_data)
+    elif node_type == "optionsOrder":
+        result = executor.execute_options_order(node_data)
     elif node_type == "cancelOrder":
         result = executor.execute_cancel_order(node_data)
     elif node_type == "cancelAllOrders":

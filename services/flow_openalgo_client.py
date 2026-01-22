@@ -382,31 +382,51 @@ class FlowOpenAlgoClient:
 
     def options_order(
         self,
-        symbol: str,
+        underlying: str,
         exchange: str,
         action: str,
         quantity: int,
-        expiry: str,
+        expiry_date: str,
+        offset: str,
         option_type: str,
-        strike_price: float,
         price_type: str = "MARKET",
-        product_type: str = "MIS",
-        price: float = 0
+        product: str = "NRML",
+        price: float = 0,
+        splitsize: int = 0,
+        strategy: str = "flow_workflow"
     ) -> Dict[str, Any]:
-        """Place an options order"""
+        """Place an options order with ATM/ITM/OTM offset resolution
+
+        Args:
+            underlying: Underlying symbol (e.g., NIFTY, BANKNIFTY)
+            exchange: Exchange for underlying (NSE_INDEX, BSE_INDEX)
+            action: BUY or SELL
+            quantity: Total quantity
+            expiry_date: Expiry date (e.g., 27JAN26)
+            offset: Strike offset (ATM, ITM1-ITM50, OTM1-OTM50)
+            option_type: CE or PE
+            price_type: MARKET, LIMIT, SL, SL-M
+            product: NRML, MIS
+            price: Price for limit orders
+            splitsize: Split large orders into smaller chunks (0 = no split)
+            strategy: Strategy name for tracking
+        """
         from services.place_options_order_service import place_options_order
 
         order_data = {
-            'symbol': symbol,
+            'apikey': self.api_key,
+            'strategy': strategy,
+            'underlying': underlying,
             'exchange': exchange,
             'action': action.upper(),
             'quantity': quantity,
-            'expiry': expiry,
-            'option_type': option_type,
-            'strike_price': strike_price,
-            'pricetype': price_type,  # Service expects 'pricetype' (no underscore) for options
-            'product': product_type,  # Service expects 'product' not 'product_type'
-            'price': price
+            'expiry_date': expiry_date,
+            'offset': offset,
+            'option_type': option_type.upper(),
+            'pricetype': price_type,
+            'product': product,
+            'price': price,
+            'splitsize': splitsize
         }
 
         success, response, status_code = place_options_order(order_data, api_key=self.api_key)

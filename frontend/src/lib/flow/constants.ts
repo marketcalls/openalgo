@@ -98,10 +98,10 @@ export const OPTION_STRATEGIES = [
 // =============================================================================
 
 export const NSE_INDEX_SYMBOLS = [
-  { value: 'NIFTY', label: 'NIFTY 50', lotSize: 75 },
+  { value: 'NIFTY', label: 'NIFTY 50', lotSize: 65 },
   { value: 'BANKNIFTY', label: 'Bank NIFTY', lotSize: 30 },
-  { value: 'FINNIFTY', label: 'Fin NIFTY', lotSize: 40 },
-  { value: 'MIDCPNIFTY', label: 'Midcap NIFTY', lotSize: 75 },
+  { value: 'FINNIFTY', label: 'Fin NIFTY', lotSize: 65 },
+  { value: 'MIDCPNIFTY', label: 'Midcap NIFTY', lotSize: 120 },
   { value: 'NIFTYNXT50', label: 'NIFTY Next 50', lotSize: 25 },
 ] as const
 
@@ -113,11 +113,11 @@ export const BSE_INDEX_SYMBOLS = [
 
 // Combined index symbols with exchange info (for options trading)
 export const INDEX_SYMBOLS = [
-  // NSE Indices
-  { value: 'NIFTY', label: 'NIFTY', exchange: 'NFO', lotSize: 75 },
+  // NSE Indices (lot sizes updated Jan 2026)
+  { value: 'NIFTY', label: 'NIFTY', exchange: 'NFO', lotSize: 65 },
   { value: 'BANKNIFTY', label: 'BANKNIFTY', exchange: 'NFO', lotSize: 30 },
-  { value: 'FINNIFTY', label: 'FINNIFTY', exchange: 'NFO', lotSize: 40 },
-  { value: 'MIDCPNIFTY', label: 'MIDCPNIFTY', exchange: 'NFO', lotSize: 75 },
+  { value: 'FINNIFTY', label: 'FINNIFTY', exchange: 'NFO', lotSize: 65 },
+  { value: 'MIDCPNIFTY', label: 'MIDCPNIFTY', exchange: 'NFO', lotSize: 120 },
   { value: 'NIFTYNXT50', label: 'NIFTYNXT50', exchange: 'NFO', lotSize: 25 },
   // BSE Indices
   { value: 'SENSEX', label: 'SENSEX', exchange: 'BFO', lotSize: 20 },
