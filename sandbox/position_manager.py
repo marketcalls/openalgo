@@ -400,7 +400,11 @@ class PositionManager:
                         {"pos_id": position.id}
                     )
                     db_session.commit()
-                    position.today_realized_pnl = Decimal('0.00')  # Update in-memory object too
+                    # Refresh from database instead of setting directly
+                    # Setting position.today_realized_pnl = X would mark the ORM object as "dirty"
+                    # which causes it to be committed later in _update_positions_mtm, triggering
+                    # onupdate=func.now() and bringing old closed positions back into view
+                    db_session.refresh(position)
 
                 # If position was updated after last session expiry, include it
                 # This includes positions that went to zero during current session (closed positions)
