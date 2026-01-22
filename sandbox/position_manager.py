@@ -407,11 +407,19 @@ class PositionManager:
                     db_session.refresh(position)
 
                 # If position was updated after last session expiry, include it
-                # This includes positions that went to zero during current session (closed positions)
                 if position.updated_at >= last_session_expiry:
-                    # Include all positions updated today (both open and closed)
-                    # Closed positions (qty=0) that were updated today means they were traded today
-                    positions.append(position)
+                    # For OPEN positions (qty != 0): always include
+                    if position.quantity != 0:
+                        positions.append(position)
+                    # For CLOSED positions (qty == 0): only include if actually traded today
+                    # Check: today_realized_pnl != 0 (has P&L from today's trades)
+                    # OR created_at >= last_session_expiry (new position created today)
+                    # This prevents old closed positions with corrupted updated_at from showing
+                    elif position.today_realized_pnl and position.today_realized_pnl != 0:
+                        positions.append(position)
+                    elif position.created_at and position.created_at >= last_session_expiry:
+                        positions.append(position)
+                    # Skip old closed positions with corrupted updated_at
                 # If position was updated before last session expiry, only include NRML with non-zero quantity
                 elif position.product == 'NRML' and position.quantity != 0:
                     positions.append(position)
