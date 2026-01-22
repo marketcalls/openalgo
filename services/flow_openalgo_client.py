@@ -432,11 +432,40 @@ class FlowOpenAlgoClient:
         success, response, status_code = place_options_order(order_data, api_key=self.api_key)
         return self._handle_response(success, response, status_code)
 
-    def options_multi_order(self, orders: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Place multiple options orders"""
-        from services.options_multiorder_service import place_options_multi_order
+    def options_multi_order(
+        self,
+        underlying: str,
+        exchange: str,
+        expiry_date: str,
+        legs: List[Dict[str, Any]],
+        strategy: str = "flow_workflow",
+        strike_int: int = None
+    ) -> Dict[str, Any]:
+        """
+        Place multiple option legs with common underlying.
+        BUY legs are executed first for margin efficiency.
 
-        success, response, status_code = place_options_multi_order(orders, api_key=self.api_key)
+        Args:
+            underlying: Underlying symbol (e.g., NIFTY, BANKNIFTY)
+            exchange: Exchange for underlying (NSE_INDEX, BSE_INDEX)
+            expiry_date: Expiry date (e.g., 27JAN26)
+            legs: List of leg dicts with offset, option_type, action, quantity, etc.
+            strategy: Strategy name for tracking
+            strike_int: Optional specific strike price (overrides offset)
+        """
+        from services.options_multiorder_service import place_options_multiorder
+
+        multiorder_data = {
+            'apikey': self.api_key,
+            'strategy': strategy,
+            'underlying': underlying,
+            'exchange': exchange,
+            'expiry_date': expiry_date,
+            'strike_int': strike_int,
+            'legs': legs
+        }
+
+        success, response, status_code = place_options_multiorder(multiorder_data, api_key=self.api_key)
         return self._handle_response(success, response, status_code)
 
     # --- Market Calendar ---

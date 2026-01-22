@@ -283,6 +283,146 @@ class NodeExecutor:
         self.store_output(node_data, result)
         return result
 
+    def execute_options_multi_order(self, node_data: dict) -> dict:
+        """Execute Options Multi-Order node (multi-leg strategy)"""
+        # Debug: log node_data keys to understand structure
+        self.log(f"Options multi-order node_data keys: {list(node_data.keys())}")
+
+        underlying = self.get_str(node_data, "underlying", "NIFTY")
+        expiry_type = self.get_str(node_data, "expiryType", "current_week")
+        # Frontend uses "strategy" field, not "strategyType"
+        strategy_type = self.get_str(node_data, "strategy", "") or self.get_str(node_data, "strategyType", "custom")
+        action = self.get_str(node_data, "action", "SELL")  # BUY or SELL for the strategy direction
+        quantity_lots = self.get_int(node_data, "quantity", 1)  # Number of lots per leg
+        product = self.get_str(node_data, "product", "MIS")
+        strangle_width = self.get_str(node_data, "strangleWidth", "OTM2")  # For strangle strategy
+
+        # Check for custom legs data
+        legs_data = node_data.get("legs", []) or node_data.get("orderLegs", [])
+
+        self.log(f"Strategy: {strategy_type}, Action: {action}, Quantity: {quantity_lots} lots, Product: {product}")
+
+        # Get the underlying exchange for index
+        if underlying in ["SENSEX", "BANKEX", "SENSEX50"]:
+            underlying_exchange = "BSE_INDEX"
+            fo_exchange = "BFO"
+        else:
+            underlying_exchange = "NSE_INDEX"
+            fo_exchange = "NFO"
+
+        # Get lot size for quantity calculation
+        lot_sizes = {
+            "NIFTY": 65, "BANKNIFTY": 30, "FINNIFTY": 65,
+            "MIDCPNIFTY": 120, "NIFTYNXT50": 25,
+            "SENSEX": 20, "BANKEX": 30, "SENSEX50": 25
+        }
+        lot_size = lot_sizes.get(underlying, 65)
+        total_quantity = quantity_lots * lot_size
+
+        # Resolve expiry date
+        expiry_date = self._resolve_expiry_date(underlying, fo_exchange, expiry_type)
+        if not expiry_date:
+            error_result = {"status": "error", "message": f"Could not resolve expiry for {expiry_type}"}
+            self.log(f"Options multi-order failed: {error_result['message']}", "error")
+            return error_result
+
+        self.log(f"Resolved expiry: {expiry_type} -> {expiry_date}")
+
+        # Generate legs based on strategy type if no custom legs provided
+        legs = []
+        if legs_data:
+            # Use custom legs from node data
+            for leg in legs_data:
+                leg_qty = self.get_int(leg, "quantity", 1)
+                leg_entry = {
+                    "offset": self.get_str(leg, "offset", "ATM"),
+                    "option_type": self.get_str(leg, "optionType", "CE"),
+                    "action": self.get_str(leg, "action", "BUY"),
+                    "quantity": leg_qty * lot_size,
+                    "pricetype": self.get_str(leg, "priceType", "MARKET"),
+                    "product": self.get_str(leg, "product", product),
+                    "price": self.get_float(leg, "price", 0),
+                    "splitsize": self.get_int(leg, "splitSize", 0),
+                }
+                legs.append(leg_entry)
+        else:
+            # Generate legs from predefined strategy type
+            legs = self._generate_strategy_legs(strategy_type, action, total_quantity, product, strangle_width)
+
+        if not legs:
+            error_result = {"status": "error", "message": f"No legs generated for strategy: {strategy_type}"}
+            self.log(f"Options multi-order failed: {error_result['message']}", "error")
+            return error_result
+
+        self.log(f"Placing options multi-order: {underlying} {strategy_type} with {len(legs)} legs")
+        for i, leg in enumerate(legs):
+            self.log(f"  Leg {i+1}: {leg['offset']} {leg['option_type']} {leg['action']} qty={leg['quantity']}")
+
+        result = self.client.options_multi_order(
+            underlying=underlying,
+            exchange=underlying_exchange,
+            expiry_date=expiry_date,
+            legs=legs,
+        )
+        self.log(f"Options multi-order result: {result}", "info" if result.get("status") == "success" else "error")
+        self.store_output(node_data, result)
+        return result
+
+    def _generate_strategy_legs(self, strategy_type: str, action: str, quantity: int, product: str, strangle_width: str = "OTM2") -> List[dict]:
+        """Generate legs for predefined option strategies"""
+        legs = []
+
+        # Common leg template
+        def make_leg(offset: str, option_type: str, leg_action: str) -> dict:
+            return {
+                "offset": offset,
+                "option_type": option_type,
+                "action": leg_action,
+                "quantity": quantity,
+                "pricetype": "MARKET",
+                "product": product,
+                "price": 0,
+                "splitsize": 0,
+            }
+
+        if strategy_type == "straddle":
+            # Straddle: ATM CE + ATM PE (same action for both)
+            legs.append(make_leg("ATM", "CE", action))
+            legs.append(make_leg("ATM", "PE", action))
+
+        elif strategy_type == "strangle":
+            # Strangle: OTM CE + OTM PE (same action for both)
+            # Use configurable width, default OTM2
+            legs.append(make_leg(strangle_width, "CE", action))
+            legs.append(make_leg(strangle_width, "PE", action))
+
+        elif strategy_type == "iron_condor":
+            # Iron Condor: 4 legs - sell near strikes, buy far strikes
+            # Sell OTM2 CE, Buy OTM4 CE, Sell OTM2 PE, Buy OTM4 PE
+            legs.append(make_leg("OTM2", "CE", "SELL"))
+            legs.append(make_leg("OTM4", "CE", "BUY"))
+            legs.append(make_leg("OTM2", "PE", "SELL"))
+            legs.append(make_leg("OTM4", "PE", "BUY"))
+
+        elif strategy_type == "bull_call_spread":
+            # Bull Call Spread: Buy lower strike CE, Sell higher strike CE
+            legs.append(make_leg("ATM", "CE", "BUY"))
+            legs.append(make_leg("OTM2", "CE", "SELL"))
+
+        elif strategy_type == "bear_put_spread":
+            # Bear Put Spread: Buy higher strike PE, Sell lower strike PE
+            legs.append(make_leg("ATM", "PE", "BUY"))
+            legs.append(make_leg("OTM2", "PE", "SELL"))
+
+        elif strategy_type == "custom":
+            # Custom strategy requires legs to be provided
+            self.log("Custom strategy selected but no legs provided", "warning")
+
+        else:
+            self.log(f"Unknown strategy type: {strategy_type}", "warning")
+
+        return legs
+
     def _resolve_expiry_date(self, symbol: str, exchange: str, expiry_type: str) -> Optional[str]:
         """Resolve expiry type to actual expiry date"""
         try:
@@ -1410,6 +1550,8 @@ def execute_node_chain(
         result = executor.execute_options_order(node_data)
     elif node_type == "modifyOrder":
         result = executor.execute_modify_order(node_data)
+    elif node_type == "optionsMultiOrder":
+        result = executor.execute_options_multi_order(node_data)
     elif node_type == "cancelOrder":
         result = executor.execute_cancel_order(node_data)
     elif node_type == "cancelAllOrders":
