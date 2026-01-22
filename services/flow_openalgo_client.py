@@ -163,15 +163,11 @@ class FlowOpenAlgoClient:
         return self._handle_response(success, response, status_code)
 
     def cancel_order(self, order_id: str, strategy: str = "flow_workflow") -> Dict[str, Any]:
-        """Cancel an order"""
+        """Cancel an order by order ID"""
         from services.cancel_order_service import cancel_order
 
-        order_data = {
-            'apikey': self.api_key,
-            'strategy': strategy,
-            'orderid': order_id
-        }
-        success, response, status_code = cancel_order(order_data, api_key=self.api_key)
+        # cancel_order service expects orderid as first param (string), not a dict
+        success, response, status_code = cancel_order(order_id, api_key=self.api_key)
         return self._handle_response(success, response, status_code)
 
     def cancel_all_orders(self) -> Dict[str, Any]:
@@ -179,6 +175,14 @@ class FlowOpenAlgoClient:
         from services.cancel_all_order_service import cancel_all_orders
 
         success, response, status_code = cancel_all_orders(api_key=self.api_key)
+        return self._handle_response(success, response, status_code)
+
+    def close_all_positions(self) -> Dict[str, Any]:
+        """Close all open positions (square off all)"""
+        from services.close_position_service import close_position
+
+        # close_position service closes ALL positions when called with just api_key
+        success, response, status_code = close_position(api_key=self.api_key)
         return self._handle_response(success, response, status_code)
 
     def close_position(
@@ -202,11 +206,22 @@ class FlowOpenAlgoClient:
         success, response, status_code = close_position(order_data, api_key=self.api_key)
         return self._handle_response(success, response, status_code)
 
-    def basket_order(self, orders: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Place basket of orders"""
-        from services.basket_order_service import basket_order
+    def basket_order(self, orders: List[Dict[str, Any]], strategy: str = "flow_workflow") -> Dict[str, Any]:
+        """
+        Place basket of orders.
 
-        success, response, status_code = basket_order(orders, api_key=self.api_key)
+        Args:
+            orders: List of order dicts with symbol, exchange, action, quantity, etc.
+            strategy: Strategy name for tracking
+        """
+        from services.basket_order_service import place_basket_order
+
+        basket_data = {
+            'strategy': strategy,
+            'orders': orders
+        }
+
+        success, response, status_code = place_basket_order(basket_data, api_key=self.api_key)
         return self._handle_response(success, response, status_code)
 
     def split_order(
