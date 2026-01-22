@@ -1,4 +1,4 @@
-from flask import Blueprint, request, redirect, url_for, render_template, session, jsonify, make_response
+from flask import Blueprint, request, redirect, url_for, session, jsonify, make_response
 from flask import current_app as app
 from limiter import limiter  # Import the limiter instance
 from utils.config import get_broker_api_key, get_broker_api_secret, get_login_rate_limit_min, get_login_rate_limit_hour
@@ -63,38 +63,41 @@ def broker_callback(broker,para=None):
     
     if broker == 'fivepaisa':
         if request.method == 'GET':
-            return render_template('5paisa.html')
-        
+            # Redirect to React TOTP page
+            return redirect('/broker/fivepaisa/totp')
+
         elif request.method == 'POST':
-            clientcode = request.form.get('clientid')
+            clientcode = request.form.get('userid') or request.form.get('clientid')
             broker_pin = request.form.get('pin')
             totp_code = request.form.get('totp')
 
             auth_token, error_message = auth_function(clientcode, broker_pin, totp_code)
-            forward_url = '5paisa.html'
+            forward_url = 'broker.html'
         
     elif broker == 'angel':
         if request.method == 'GET':
-            return render_template('angel.html')
-        
+            # Redirect to React TOTP page
+            return redirect('/broker/angel/totp')
+
         elif request.method == 'POST':
-            clientcode = request.form.get('clientid')
+            clientcode = request.form.get('userid') or request.form.get('clientid')
             broker_pin = request.form.get('pin')
             totp_code = request.form.get('totp')
             #to store user_id in the DB
             user_id = clientcode
             auth_token, feed_token, error_message = auth_function(clientcode, broker_pin, totp_code)
-            forward_url = 'angel.html'
+            forward_url = 'broker.html'
 
     elif broker == 'mstock':
         if request.method == 'GET':
-            return render_template('mstock.html')
+            # Redirect to React TOTP page
+            return redirect('/broker/mstock/totp')
 
         elif request.method == 'POST':
             # Check if user session is lost
             if 'user' not in session:
                 logger.error(f'mstock POST - Session lost! Cookies: {request.cookies}')
-                return render_template('mstock.html', error_message="Session expired. Please login again.")
+                return jsonify({"status": "error", "message": "Session expired. Please login again."}), 401
 
             # Import mstock TOTP authentication function
             from broker.mstock.api.auth_api import authenticate_with_totp
@@ -104,24 +107,25 @@ def broker_callback(broker,para=None):
             totp_code = request.form.get('totp')
 
             if not password:
-                return render_template('mstock.html', error_message="Password is required.")
+                return jsonify({"status": "error", "message": "Password is required."}), 400
             if not totp_code:
-                return render_template('mstock.html', error_message="TOTP code is required.")
+                return jsonify({"status": "error", "message": "TOTP code is required."}), 400
 
             # Single-step authentication with password + TOTP
             auth_token, feed_token, error_message = authenticate_with_totp(password, totp_code)
 
             if error_message:
-                return render_template('mstock.html', error_message=error_message)
+                return jsonify({"status": "error", "message": error_message}), 401
 
-            # Authentication successful, redirect to dashboard
-            logger.info("mStock TOTP authentication successful, redirecting to dashboard")
+            # Authentication successful
+            logger.info("mStock TOTP authentication successful")
             return handle_auth_success(auth_token, session['user'], broker, feed_token=feed_token, user_id=None)
     
     elif broker == 'aliceblue':
         if request.method == 'GET':
-            return render_template('aliceblue.html')
-        
+            # Redirect to React TOTP page
+            return redirect('/broker/aliceblue/totp')
+
         elif request.method == 'POST':
             logger.info('Aliceblue Login Flow initiated')
             userid = request.form.get('userid')
@@ -129,7 +133,7 @@ def broker_callback(broker,para=None):
             # Use the shared httpx client with connection pooling
             from utils.httpx_client import get_httpx_client
             client = get_httpx_client()
-            
+
             # AliceBlue API expects only userId in the encryption key request
             # Do not include API key in this initial request
             payload = {
@@ -145,23 +149,23 @@ def broker_callback(broker,para=None):
                 response.raise_for_status()
                 data_dict = response.json()
                 logger.debug(f'Aliceblue response data: {data_dict}')
-                
+
                 # Check if we successfully got the encryption key
                 if data_dict.get('stat') == 'Ok' and data_dict.get('encKey'):
                     enc_key = data_dict['encKey']
                     # Step 2: Authenticate with encryption key
                     auth_token, error_message = auth_function(userid, enc_key)
-                    
+
                     if auth_token:
                         return handle_auth_success(auth_token, session['user'], broker)
                     else:
-                        return handle_auth_failure(error_message, forward_url='aliceblue.html')
+                        return handle_auth_failure(error_message, forward_url='broker.html')
                 else:
                     # Failed to get encryption key
                     error_msg = data_dict.get('emsg', 'Failed to get encryption key')
-                    return handle_auth_failure(f"Failed to get encryption key: {error_msg}", forward_url='aliceblue.html')
+                    return handle_auth_failure(f"Failed to get encryption key: {error_msg}", forward_url='broker.html')
             except Exception as e:
-                return jsonify({"error": f"Authentication error: {str(e)}"}), 500     
+                return jsonify({"status": "error", "message": f"Authentication error: {str(e)}"}), 500     
                 
     elif broker=='fivepaisaxts':
         code = 'fivepaisaxts'
@@ -258,21 +262,22 @@ def broker_callback(broker,para=None):
 
     elif broker=='tradejini':
         if request.method == 'GET':
-            return render_template('tradejini.html')
-        
+            # Redirect to React TOTP page
+            return redirect('/broker/tradejini/totp')
+
         elif request.method == 'POST':
             password = request.form.get('password')
             twofa = request.form.get('twofa')
             twofatype = request.form.get('twofatype')
-            
+
             # Get auth token using individual token service
             auth_token, error_message = auth_function(password=password, twofa=twofa, twofa_type=twofatype)
-            
+
             if auth_token:
                 return handle_auth_success(auth_token, session['user'], broker)
             else:
-                return render_template('tradejini.html', error=error_message)
-        
+                return jsonify({"status": "error", "message": error_message}), 401
+
         forward_url = 'broker.html'
        
     elif broker=='icici':
@@ -383,12 +388,12 @@ def broker_callback(broker,para=None):
                         # The auth_token will be handled by the common success flow below
                     else:
                         logger.error(f"Dhan direct token validation failed: {validation_error}")
-                        return render_template('dhan.html', error_message=f"Token validation failed: {validation_error}")
+                        return jsonify({"status": "error", "message": f"Token validation failed: {validation_error}"}), 401
                 else:
-                    return render_template('dhan.html', error_message=error_message or "Invalid access token")
+                    return jsonify({"status": "error", "message": error_message or "Invalid access token"}), 401
             else:
-                # If no access token provided, show the form again
-                return render_template('dhan.html', error_message="Please provide either Client ID for OAuth or Access Token for direct login")
+                # If no access token provided, return error
+                return jsonify({"status": "error", "message": "Please provide either Client ID for OAuth or Access Token for direct login"}), 400
     elif broker=='indmoney':
         code = 'indmoney'
         logger.debug(f'IndMoney broker - The code is {code}')
@@ -416,33 +421,36 @@ def broker_callback(broker,para=None):
         auth_token, feed_token, user_id, error_message = auth_function(code)
         forward_url = 'broker.html'
 
-    elif broker == 'zebu':  
+    elif broker == 'zebu':
         if request.method == 'GET':
-            return render_template('zebu.html')
-        
+            # Redirect to React TOTP page
+            return redirect('/broker/zebu/totp')
+
         elif request.method == 'POST':
             userid = request.form.get('userid')
             password = request.form.get('password')
             totp_code = request.form.get('totp')
 
             auth_token, error_message = auth_function(userid, password, totp_code)
-            forward_url = 'zebu.html'
+            forward_url = 'broker.html'
 
-    elif broker == 'shoonya':  
+    elif broker == 'shoonya':
         if request.method == 'GET':
-            return render_template('shoonya.html')
-        
+            # Redirect to React TOTP page
+            return redirect('/broker/shoonya/totp')
+
         elif request.method == 'POST':
             userid = request.form.get('userid')
             password = request.form.get('password')
             totp_code = request.form.get('totp')
 
             auth_token, error_message = auth_function(userid, password, totp_code)
-            forward_url = 'shoonya.html'
+            forward_url = 'broker.html'
 
     elif broker == 'firstock':
         if request.method == 'GET':
-            return render_template('firstock.html')
+            # Redirect to React TOTP page
+            return redirect('/broker/firstock/totp')
 
         elif request.method == 'POST':
             userid = request.form.get('userid')
@@ -450,34 +458,37 @@ def broker_callback(broker,para=None):
             totp_code = request.form.get('totp')
 
             auth_token, error_message = auth_function(userid, password, totp_code)
-            forward_url = 'firstock.html'
+            forward_url = 'broker.html'
 
     elif broker == 'nubra':
         if request.method == 'GET':
-            return render_template('nubra.html')
+            # Redirect to React TOTP page
+            return redirect('/broker/nubra/totp')
 
         elif request.method == 'POST':
             totp_code = request.form.get('totp')
 
             if not totp_code:
-                return render_template('nubra.html', error_message="TOTP code is required.")
+                return jsonify({"status": "error", "message": "TOTP code is required."}), 400
 
             auth_token, feed_token, error_message = auth_function(totp_code)
-            forward_url = 'nubra.html'
+            forward_url = 'broker.html'
 
     elif broker == 'samco':
         if request.method == 'GET':
-            return render_template('samco.html')
+            # Redirect to React TOTP page
+            return redirect('/broker/samco/totp')
 
         elif request.method == 'POST':
             yob = request.form.get('yob')
 
             auth_token, error_message = auth_function(yob)
-            forward_url = 'samco.html'
+            forward_url = 'broker.html'
 
     elif broker == 'motilal':
         if request.method == 'GET':
-            return render_template('motilal.html')
+            # Redirect to React TOTP page
+            return redirect('/broker/motilal/totp')
 
         elif request.method == 'POST':
             userid = request.form.get('userid')
@@ -486,7 +497,7 @@ def broker_callback(broker,para=None):
             date_of_birth = request.form.get('dob')
 
             auth_token, feed_token, error_message = auth_function(userid, password, totp_code, date_of_birth)
-            forward_url = 'motilal.html'
+            forward_url = 'broker.html'
 
     elif broker == 'flattrade':
         code = request.args.get('code')
@@ -498,24 +509,25 @@ def broker_callback(broker,para=None):
     elif broker=='kotak':
         logger.debug(f"Kotak broker - The Broker is {broker}")
         if request.method == 'GET':
-            return render_template('kotak.html')
+            # Redirect to React TOTP page
+            return redirect('/broker/kotak/totp')
 
         elif request.method == 'POST':
             # New TOTP authentication flow
-            mobile_number = request.form.get('mobilenumber')
+            mobile_number = request.form.get('mobile') or request.form.get('mobilenumber')
             totp = request.form.get('totp')
             mpin = request.form.get('mpin')
 
             # Validate inputs
             if not mobile_number or not totp or not mpin:
                 error_message = "Please provide Mobile Number, TOTP, and MPIN"
-                return render_template('kotak.html', error_message=error_message)
+                return jsonify({"status": "error", "message": error_message}), 400
 
             logger.info(f"Kotak TOTP authentication initiated for mobile: {mobile_number[:5]}***")
 
             # Call the new authenticate_broker function
             auth_token, error_message = auth_function(mobile_number, totp, mpin)
-            forward_url = 'kotak.html'
+            forward_url = 'broker.html'
 
             if auth_token:
                 logger.info(f"Kotak authentication successful, auth_token received")
@@ -554,13 +566,13 @@ def broker_callback(broker,para=None):
         
     elif broker == 'definedge':
         if request.method == 'GET':
-            # Trigger OTP generation on page load
+            # Trigger OTP generation and redirect to React page
             api_token = get_broker_api_key()
             api_secret = get_broker_api_secret()
-            
+
             # Import the step1 function to trigger OTP
             from broker.definedge.api.auth_api import login_step1
-            
+
             try:
                 step1_response = login_step1(api_token, api_secret)
                 if step1_response and 'otp_token' in step1_response:
@@ -568,26 +580,27 @@ def broker_callback(broker,para=None):
                     session['definedge_otp_token'] = step1_response['otp_token']
                     otp_message = step1_response.get('message', 'OTP has been sent successfully')
                     logger.info(f"Definedge OTP triggered: {otp_message}")
-                    return render_template('definedgeotp.html', otp_message=otp_message, otp_sent=True)
+                    # Redirect to React TOTP page
+                    return redirect('/broker/definedge/totp')
                 else:
                     error_msg = "Failed to send OTP. Please check your API credentials."
                     logger.error(f"Definedge OTP generation failed: {step1_response}")
-                    return render_template('definedgeotp.html', error_message=error_msg, otp_sent=False)
+                    return jsonify({"status": "error", "message": error_msg}), 500
             except Exception as e:
                 error_msg = f"Error sending OTP: {str(e)}"
                 logger.error(f"Definedge OTP generation error: {e}")
-                return render_template('definedgeotp.html', error_message=error_msg, otp_sent=False)
+                return jsonify({"status": "error", "message": error_msg}), 500
 
         elif request.method == 'POST':
             action = request.form.get('action')
-            
+
             # Handle OTP resend request
             if action == 'resend':
                 api_token = get_broker_api_key()
                 api_secret = get_broker_api_secret()
-                
+
                 from broker.definedge.api.auth_api import login_step1
-                
+
                 try:
                     step1_response = login_step1(api_token, api_secret)
                     if step1_response and 'otp_token' in step1_response:
@@ -600,40 +613,38 @@ def broker_callback(broker,para=None):
                 except Exception as e:
                     logger.error(f"Definedge OTP resend error: {e}")
                     return jsonify({'status': 'error', 'message': str(e)})
-            
+
             # Handle OTP verification
             else:
                 otp_code = request.form.get('otp')
                 otp_token = session.get('definedge_otp_token')
-                
+
                 if not otp_token:
                     # Need to regenerate OTP token
-                    return render_template('definedgeotp.html', 
-                                         error_message="Session expired. Please refresh the page to get a new OTP.",
-                                         otp_sent=False)
-                
+                    return jsonify({"status": "error", "message": "Session expired. Please refresh the page to get a new OTP."}), 401
+
                 # Get api_secret for authentication
                 api_secret = get_broker_api_secret()
-                
+
                 # Use authenticate_broker for OTP verification
                 from broker.definedge.api.auth_api import authenticate_broker
-                
+
                 try:
                     # Call authenticate_broker with OTP token and code
                     auth_token, feed_token, user_id, error_message = authenticate_broker(otp_token, otp_code, api_secret)
-                    
+
                     if auth_token:
                         # Clear the OTP token from session
                         session.pop('definedge_otp_token', None)
-                        
+
                 except Exception as e:
                     logger.error(f"Definedge OTP verification error: {e}")
                     auth_token = None
                     feed_token = None
                     user_id = None
                     error_message = str(e)
-                
-                forward_url = 'definedgeotp.html'
+
+                forward_url = 'broker.html'
 
     else:
         code = request.args.get('code') or request.args.get('request_token')

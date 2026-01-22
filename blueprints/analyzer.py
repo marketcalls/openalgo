@@ -184,6 +184,60 @@ def analyzer():
         flash('Error loading analyzer dashboard', 'error')
         return redirect(url_for('core_bp.home'))
 
+@analyzer_bp.route('/api/data')
+@check_session_validity
+def api_get_data():
+    """API endpoint to get analyzer data (stats + requests) as JSON for React frontend"""
+    try:
+        # Get date parameters
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+
+        # Get stats with proper structure
+        stats = get_analyzer_stats()
+        if not isinstance(stats, dict):
+            stats = {
+                'total_requests': 0,
+                'sources': {},
+                'symbols': [],
+                'issues': {
+                    'total': 0,
+                    'by_type': {
+                        'rate_limit': 0,
+                        'invalid_symbol': 0,
+                        'missing_quantity': 0,
+                        'invalid_exchange': 0,
+                        'other': 0
+                    }
+                }
+            }
+
+        # Get filtered requests
+        requests_data = get_filtered_requests(start_date, end_date)
+
+        # Transform stats for React frontend
+        stats_transformed = {
+            'total_requests': stats.get('total_requests', 0),
+            'issues': stats.get('issues', {'total': 0}),
+            'symbols': list(stats.get('symbols', [])) if isinstance(stats.get('symbols'), (list, set)) else [],
+            'sources': list(stats.get('sources', {}).keys()) if isinstance(stats.get('sources'), dict) else []
+        }
+
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'stats': stats_transformed,
+                'requests': requests_data
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error getting analyzer data: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Error loading analyzer data: {str(e)}'
+        }), 500
+
+
 @analyzer_bp.route('/stats')
 @check_session_validity
 def get_stats():

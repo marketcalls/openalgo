@@ -29,118 +29,59 @@ telegram_bp = Blueprint('telegram_bp', __name__, url_prefix='/telegram')
 # No longer need run_async since we use the sync wrapper
 
 
-@telegram_bp.route('/')
-@check_session_validity
-def index():
-    """Main Telegram bot control panel"""
-    try:
-        # Get bot configuration
-        config = get_bot_config()
+# ============================================================================
+# Legacy Jinja Template Routes (Commented out - React handles these now)
+# ============================================================================
+# Note: The following routes have been migrated to React frontend.
+# They are kept commented for reference during the migration period.
+# React routes are defined in react_app.py
 
-        # Get bot status
-        bot_status = {
-            'is_running': telegram_bot_service.is_running,
-            'bot_username': config.get('bot_username'),
-            'is_configured': bool(config.get('bot_token'))
-        }
+# @telegram_bp.route('/')
+# @check_session_validity
+# def index():
+#     """Main Telegram bot control panel"""
+#     ... (migrated to React /telegram)
 
-        # Get user stats
-        users = get_all_telegram_users()
-        stats = get_command_stats(days=7)
+# @telegram_bp.route('/users')
+# ... (migrated to React /telegram/users)
 
-        # Get current user's telegram link status
-        username = session.get('user')
-        telegram_user = get_telegram_user_by_username(username) if username else None
-
-        return render_template('telegram/index.html',
-                             bot_status=bot_status,
-                             config=config,
-                             users=users,
-                             stats=stats,
-                             telegram_user=telegram_user)
-
-    except Exception as e:
-        logger.error(f"Error in telegram index: {str(e)}")
-        return "Error loading Telegram panel", 500
+# @telegram_bp.route('/analytics')
+# ... (migrated to React /telegram/analytics)
 
 
-@telegram_bp.route('/config', methods=['GET', 'POST'])
+# Config POST endpoint - kept for React API usage
+@telegram_bp.route('/config', methods=['POST'])
 @check_session_validity
 def configuration():
-    """Bot configuration page"""
-    if request.method == 'GET':
-        config = get_bot_config()
-        logger.debug(f"Config loaded for display: broadcast_enabled={config.get('broadcast_enabled')}, bot_token={'[REDACTED]' if config.get('bot_token') else 'absent'}")
-        return render_template('telegram/config.html', config=config)
+    """Update bot configuration (JSON API)"""
+    try:
+        data = request.json
 
-    elif request.method == 'POST':
-        try:
-            data = request.json
+        # Update configuration
+        config_update = {}
+        if 'token' in data:
+            config_update['bot_token'] = data['token']
+        if 'broadcast_enabled' in data:
+            config_update['broadcast_enabled'] = bool(data['broadcast_enabled'])
+        if 'rate_limit_per_minute' in data:
+            config_update['rate_limit_per_minute'] = int(data['rate_limit_per_minute'])
 
-            # Update configuration
-            config_update = {}
-            if 'token' in data:
-                config_update['bot_token'] = data['token']
-            if 'broadcast_enabled' in data:
-                config_update['broadcast_enabled'] = bool(data['broadcast_enabled'])
-            if 'rate_limit_per_minute' in data:
-                config_update['rate_limit_per_minute'] = int(data['rate_limit_per_minute'])
+        # Log config save without exposing token
+        safe_config = {k: '[REDACTED]' if k == 'bot_token' else v for k, v in config_update.items()}
+        logger.debug(f"Saving config: {safe_config}")
+        success = update_bot_config(config_update)
 
-            # Log config save without exposing token
-            safe_config = {k: '[REDACTED]' if k == 'bot_token' else v for k, v in config_update.items()}
-            logger.debug(f"Saving config: {safe_config}")
-            success = update_bot_config(config_update)
+        if success:
+            # Verify what was saved
+            saved_config = get_bot_config()
+            logger.debug(f"Config after save: broadcast_enabled={saved_config.get('broadcast_enabled')}, bot_token={'[REDACTED]' if saved_config.get('bot_token') else 'absent'}")
+            return jsonify({'status': 'success', 'message': 'Configuration updated'})
+        else:
+            return jsonify({'status': 'error', 'message': 'Failed to update configuration'}), 500
 
-            if success:
-                # Verify what was saved
-                saved_config = get_bot_config()
-                logger.debug(f"Config after save: broadcast_enabled={saved_config.get('broadcast_enabled')}, bot_token={'[REDACTED]' if saved_config.get('bot_token') else 'absent'}")
-                return jsonify({'status': 'success', 'message': 'Configuration updated'})
-            else:
-                return jsonify({'status': 'error', 'message': 'Failed to update configuration'}), 500
-
-        except Exception as e:
-            logger.error(f"Error updating config: {str(e)}")
-            return jsonify({'status': 'error', 'message': str(e)}), 500
-
-
-@telegram_bp.route('/users')
-@check_session_validity
-def users():
-    """Telegram users management page"""
-    users = get_all_telegram_users()
-    stats = get_command_stats(days=30)
-
-    return render_template('telegram/users.html',
-                         users=users,
-                         stats=stats)
-
-
-@telegram_bp.route('/analytics')
-@check_session_validity
-def analytics():
-    """Analytics and statistics page"""
-    # Get stats for different periods
-    stats_7d = get_command_stats(days=7)
-    stats_30d = get_command_stats(days=30)
-
-    # Get all users for additional analytics
-    users = get_all_telegram_users()
-
-    # Calculate additional metrics
-    active_users_count = len([u for u in users if u.get('notifications_enabled')])
-    total_users = len(users)
-
-    analytics_data = {
-        'stats_7d': stats_7d,
-        'stats_30d': stats_30d,
-        'total_users': total_users,
-        'active_users': active_users_count,
-        'users': users
-    }
-
-    return render_template('telegram/analytics.html',
-                         analytics=analytics_data)
+    except Exception as e:
+        logger.error(f"Error updating config: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 @telegram_bp.route('/bot/start', methods=['POST'])
@@ -423,4 +364,153 @@ def send_message():
 
     except Exception as e:
         logger.error(f"Error sending message: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ============================================================================
+# JSON API Endpoints for React Frontend
+# ============================================================================
+
+def _format_stats_for_react(stats_dict):
+    """Convert get_command_stats dict to React-friendly format"""
+    if not stats_dict:
+        return {
+            'stats': [],
+            'total_commands': 0,
+            'active_users': 0
+        }
+
+    commands_by_type = stats_dict.get('commands_by_type', {})
+    stats_array = [
+        {'command': cmd, 'count': count}
+        for cmd, count in commands_by_type.items()
+    ]
+    # Sort by count descending
+    stats_array.sort(key=lambda x: x['count'], reverse=True)
+
+    return {
+        'stats': stats_array,
+        'total_commands': stats_dict.get('total_commands', 0),
+        'active_users': stats_dict.get('active_users', 0)
+    }
+
+
+@telegram_bp.route('/api/index')
+@check_session_validity
+def api_index():
+    """Get telegram index data for React frontend"""
+    try:
+        config = get_bot_config()
+
+        bot_status = {
+            'is_running': telegram_bot_service.is_running,
+            'bot_username': config.get('bot_username'),
+            'is_configured': bool(config.get('bot_token')),
+            'is_active': config.get('is_active', False)
+        }
+
+        users = get_all_telegram_users()
+        raw_stats = get_command_stats(days=7)
+        formatted_stats = _format_stats_for_react(raw_stats)
+
+        username = session.get('user')
+        telegram_user = get_telegram_user_by_username(username) if username else None
+
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'bot_status': bot_status,
+                'config': {
+                    'bot_username': config.get('bot_username'),
+                    'broadcast_enabled': config.get('broadcast_enabled', True),
+                    'rate_limit_per_minute': config.get('rate_limit_per_minute', 10),
+                    'is_active': config.get('is_active', False)
+                },
+                'users': users,
+                'stats': formatted_stats['stats'],
+                'total_commands': formatted_stats['total_commands'],
+                'active_users_7d': formatted_stats['active_users'],
+                'telegram_user': telegram_user
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error in telegram api index: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@telegram_bp.route('/api/config')
+@check_session_validity
+def api_config():
+    """Get bot configuration for React frontend"""
+    try:
+        config = get_bot_config()
+
+        # Don't expose the full token, just indicate if it's set
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'has_token': bool(config.get('bot_token')),
+                'bot_username': config.get('bot_username'),
+                'broadcast_enabled': config.get('broadcast_enabled', True),
+                'rate_limit_per_minute': config.get('rate_limit_per_minute', 10),
+                'is_active': config.get('is_active', False)
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting config: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@telegram_bp.route('/api/users')
+@check_session_validity
+def api_users():
+    """Get all telegram users for React frontend"""
+    try:
+        users = get_all_telegram_users()
+        raw_stats = get_command_stats(days=30)
+        formatted_stats = _format_stats_for_react(raw_stats)
+
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'users': users,
+                'stats': formatted_stats['stats'],
+                'total_commands': formatted_stats['total_commands']
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting users: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@telegram_bp.route('/api/analytics')
+@check_session_validity
+def api_analytics():
+    """Get analytics data for React frontend"""
+    try:
+        raw_stats_7d = get_command_stats(days=7)
+        raw_stats_30d = get_command_stats(days=30)
+        formatted_stats_7d = _format_stats_for_react(raw_stats_7d)
+        formatted_stats_30d = _format_stats_for_react(raw_stats_30d)
+
+        users = get_all_telegram_users()
+        active_users_count = len([u for u in users if u.get('notifications_enabled')])
+        total_users = len(users)
+
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'stats_7d': formatted_stats_7d['stats'],
+                'stats_30d': formatted_stats_30d['stats'],
+                'total_users': total_users,
+                'active_users': active_users_count,
+                'users': users
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting analytics: {str(e)}")
         return jsonify({'status': 'error', 'message': str(e)}), 500

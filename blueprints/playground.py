@@ -24,10 +24,51 @@ def parse_bru_file(filepath):
             meta_content = meta_match.group(1)
             name_match = re.search(r'name:\s*(.+)', meta_content)
             seq_match = re.search(r'seq:\s*(\d+)', meta_content)
+            type_match = re.search(r'type:\s*(.+)', meta_content)
             if name_match:
                 endpoint['name'] = name_match.group(1).strip()
             if seq_match:
                 endpoint['seq'] = int(seq_match.group(1).strip())
+            if type_match:
+                endpoint['type'] = type_match.group(1).strip()
+
+        # Check if this is a WebSocket endpoint
+        if endpoint.get('type') == 'websocket':
+            # Extract websocket block
+            ws_match = re.search(r'websocket\s*\{([^}]+)\}', content)
+            if ws_match:
+                ws_content = ws_match.group(1)
+                url_match = re.search(r'url:\s*(.+)', ws_content)
+                desc_match = re.search(r'description:\s*(.+)', ws_content)
+                if url_match:
+                    endpoint['path'] = url_match.group(1).strip()
+                if desc_match:
+                    endpoint['description'] = desc_match.group(1).strip()
+                endpoint['method'] = 'WS'
+
+            # Extract message:json block for WebSocket
+            message_start = content.find('message:json')
+            if message_start != -1:
+                brace_start = content.find('{', message_start)
+                if brace_start != -1:
+                    depth = 0
+                    body_end = brace_start
+                    for i, char in enumerate(content[brace_start:], start=brace_start):
+                        if char == '{':
+                            depth += 1
+                        elif char == '}':
+                            depth -= 1
+                            if depth == 0:
+                                body_end = i
+                                break
+                    body_content = content[brace_start+1:body_end].strip()
+                    try:
+                        body_json = json.loads(body_content, object_pairs_hook=OrderedDict)
+                        endpoint['body'] = body_json
+                    except json.JSONDecodeError:
+                        logger.warning(f"Failed to parse JSON message in {filepath}")
+
+            return endpoint if 'name' in endpoint else None
 
         # Extract HTTP method and URL (post/get/put/delete block)
         method_match = re.search(r'(get|post|put|delete|patch)\s*\{([^}]+)\}', content, re.IGNORECASE)
@@ -59,19 +100,35 @@ def parse_bru_file(filepath):
                         if params:
                             endpoint['params'] = params
 
-        # Extract body:json block
-        body_match = re.search(r'body:json\s*\{([\s\S]*)\}(?:\s*$|\s*\n)', content)
-        if body_match:
-            body_content = body_match.group(1).strip()
-            try:
-                # Use object_pairs_hook to preserve field order from .bru file
-                body_json = json.loads(body_content, object_pairs_hook=OrderedDict)
-                # Clear the hardcoded API key
-                if isinstance(body_json, (dict, OrderedDict)) and 'apikey' in body_json:
-                    body_json['apikey'] = ''
-                endpoint['body'] = body_json
-            except json.JSONDecodeError:
-                logger.warning(f"Failed to parse JSON body in {filepath}")
+        # Extract body:json block with balanced brace matching
+        body_start = content.find('body:json')
+        if body_start != -1:
+            # Find the opening brace of the body:json block
+            brace_start = content.find('{', body_start)
+            if brace_start != -1:
+                # Count braces to find the matching closing brace
+                depth = 0
+                body_end = brace_start
+                for i, char in enumerate(content[brace_start:], start=brace_start):
+                    if char == '{':
+                        depth += 1
+                    elif char == '}':
+                        depth -= 1
+                        if depth == 0:
+                            body_end = i
+                            break
+
+                # Extract content between outer braces (the JSON object inside)
+                body_content = content[brace_start+1:body_end].strip()
+                try:
+                    # Use object_pairs_hook to preserve field order from .bru file
+                    body_json = json.loads(body_content, object_pairs_hook=OrderedDict)
+                    # Clear the hardcoded API key
+                    if isinstance(body_json, (dict, OrderedDict)) and 'apikey' in body_json:
+                        body_json['apikey'] = ''
+                    endpoint['body'] = body_json
+                except json.JSONDecodeError:
+                    logger.warning(f"Failed to parse JSON body in {filepath}")
 
         # Extract query params for GET requests
         params_match = re.search(r'params:query\s*\{([^}]+)\}', content)
@@ -122,7 +179,8 @@ def load_bruno_endpoints():
         'account': [],
         'orders': [],
         'data': [],
-        'utilities': []
+        'utilities': [],
+        'websocket': []
     }
 
     # Find all .bru files in collections directory
@@ -145,8 +203,13 @@ def load_bruno_endpoints():
 
     # Categorize endpoints
     for endpoint in parsed_endpoints:
-        category = categorize_endpoint(endpoint.get('path', ''))
-        # Clean up endpoint for frontend (remove seq)
+        # Check if it's a WebSocket endpoint
+        if endpoint.get('type') == 'websocket':
+            category = 'websocket'
+        else:
+            category = categorize_endpoint(endpoint.get('path', ''))
+
+        # Clean up endpoint for frontend (remove seq and type)
         clean_endpoint = {
             'name': endpoint.get('name', ''),
             'method': endpoint.get('method', 'POST'),
@@ -156,6 +219,8 @@ def load_bruno_endpoints():
             clean_endpoint['body'] = endpoint['body']
         if 'params' in endpoint:
             clean_endpoint['params'] = endpoint['params']
+        if 'description' in endpoint:
+            clean_endpoint['description'] = endpoint['description']
 
         endpoints[category].append(clean_endpoint)
 
@@ -235,7 +300,8 @@ def get_endpoints():
                     'account': [],
                     'orders': [],
                     'data': [],
-                    'utilities': []
+                    'utilities': [],
+                    'websocket': []
                 }),
                 status=200,
                 mimetype='application/json'

@@ -26,9 +26,13 @@ from database.sandbox_db import (
 from sandbox.fund_manager import FundManager
 from sandbox.holdings_manager import HoldingsManager
 from services.quotes_service import get_quotes, get_multiquotes
+from services.market_data_service import get_market_data_service
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Maximum age (seconds) for WebSocket data to be considered fresh
+WEBSOCKET_DATA_MAX_AGE = 5
 
 
 def parse_expiry_from_symbol(symbol, exchange):
@@ -166,17 +170,21 @@ class PositionManager:
         """
         Check for expired F&O contracts and auto-close them.
 
-        For expired contracts:
-        - Options expire worthless (value = 0) if not ITM
-        - Uses last available P&L for settlement
+        For expired contracts with qty > 0:
+        - Options expire worthless (value = 0)
+        - Futures settle at last LTP or average price
         - Releases blocked margin back to available balance
         - Marks position as closed (quantity = 0)
+
+        Note: Does NOT filter out today's closed positions (qty=0).
+        All positions passed to this function are shown (session filtering
+        already happened in get_open_positions).
 
         Args:
             positions: List of SandboxPositions objects to check
 
         Returns:
-            list: Positions that are still valid (not expired)
+            list: All positions (expired ones settled, others unchanged)
         """
         from datetime import date
 
@@ -185,11 +193,6 @@ class PositionManager:
         expired_count = 0
 
         for position in positions:
-            # Skip already closed positions
-            if position.quantity == 0:
-                valid_positions.append(position)
-                continue
-
             # Get contract expiry date
             expiry_date = get_contract_expiry(position.symbol, position.exchange)
 
@@ -198,10 +201,17 @@ class PositionManager:
                 valid_positions.append(position)
                 continue
 
-            # Check if contract has expired (day after expiry)
-            # We don't close on expiry day itself - traders want to see P&L that day
-            # Auto-close happens on the next day after expiry
-            if today > expiry_date:
+            # Check if contract has expired
+            is_expired = today > expiry_date
+
+            # For already closed positions (qty=0), just keep them
+            # These are today's closed trades - show them regardless of expiry
+            if position.quantity == 0:
+                valid_positions.append(position)
+                continue
+
+            # For open positions (qty != 0)
+            if is_expired:
                 # Contract has expired - auto-close it
                 logger.info(
                     f"Expired contract detected: {position.symbol} "
@@ -211,9 +221,10 @@ class PositionManager:
                 try:
                     self._settle_expired_position(position)
                     expired_count += 1
+                    # Add to valid_positions - it's now closed but still show it
+                    valid_positions.append(position)
                 except Exception as e:
                     logger.error(f"Error settling expired position {position.symbol}: {e}")
-                    # Keep the position in list if settlement fails
                     valid_positions.append(position)
             else:
                 # Contract is still valid
@@ -228,8 +239,9 @@ class PositionManager:
         """
         Settle an expired position.
 
-        - Uses last available LTP for settlement (frozen at last traded price)
-        - If no LTP available, falls back to average price
+        Settlement prices:
+        - Options: Expire at 0 (most expire worthless - conservative approach)
+        - Futures: Use last stored LTP, or average price as fallback
         - Releases margin and updates realized P&L
 
         Args:
@@ -242,16 +254,22 @@ class PositionManager:
         avg_price = Decimal(str(position.average_price))
         margin_blocked = Decimal(str(position.margin_blocked or 0))
 
-        # Use last available LTP for settlement
-        # This freezes the P&L at the last traded price before expiry
-        # Falls back to average price if LTP is not available
-        if position.ltp and Decimal(str(position.ltp)) > 0:
-            settlement_price = Decimal(str(position.ltp))
-            logger.info(f"Expired contract {symbol} settling at last LTP: {settlement_price}")
+        # Determine settlement price based on instrument type
+        is_option = symbol.endswith('CE') or symbol.endswith('PE')
+
+        if is_option:
+            # Options expire worthless (at 0)
+            # This is conservative - user loses full premium for longs
+            settlement_price = Decimal('0')
+            logger.info(f"Option {symbol} expired - settling at 0 (worthless)")
         else:
-            # Fallback to average price if no LTP available
-            settlement_price = avg_price
-            logger.info(f"Expired contract {symbol} settling at avg price (no LTP): {settlement_price}")
+            # Futures: use last LTP if available, otherwise average price
+            if position.ltp and Decimal(str(position.ltp)) > 0:
+                settlement_price = Decimal(str(position.ltp))
+                logger.info(f"Future {symbol} expired - settling at last LTP: {settlement_price}")
+            else:
+                settlement_price = avg_price
+                logger.info(f"Future {symbol} expired - settling at avg price: {settlement_price}")
 
         # Calculate realized P&L for this closure
         if quantity > 0:
@@ -280,6 +298,9 @@ class PositionManager:
             description=f"Expired contract settlement: {symbol}"
         )
 
+        # Get expiry date for hiding the position
+        expiry_date = get_contract_expiry(symbol, position.exchange)
+
         # Update position to closed state
         position.quantity = 0
         position.ltp = settlement_price
@@ -288,6 +309,17 @@ class PositionManager:
         position.margin_blocked = Decimal('0')
 
         db_session.commit()
+
+        # Set updated_at to expiry date AFTER commit to bypass onupdate trigger
+        # This hides expired contracts from current session
+        if expiry_date:
+            from sqlalchemy import text
+            hide_date = datetime.combine(expiry_date, datetime.min.time())
+            db_session.execute(
+                text("UPDATE sandbox_positions SET updated_at = :hide_date WHERE id = :pos_id"),
+                {"hide_date": hide_date, "pos_id": position.id}
+            )
+            db_session.commit()
 
         logger.info(f"Expired position {symbol} settled successfully for user {position.user_id}")
 
@@ -359,13 +391,32 @@ class PositionManager:
 
                 if needs_pnl_reset:
                     logger.info(f"Catch-up reset: Resetting today_realized_pnl for {position.symbol} from {position.today_realized_pnl} to 0")
-                    position.today_realized_pnl = Decimal('0.00')
+                    # Use raw SQL to avoid triggering onupdate=func.now() which would change updated_at
+                    # If we used ORM commit(), updated_at would be set to NOW and old positions would
+                    # pass the session filter, causing yesterday's closed positions to show today
+                    from sqlalchemy import text
+                    db_session.execute(
+                        text("UPDATE sandbox_positions SET today_realized_pnl = 0 WHERE id = :pos_id"),
+                        {"pos_id": position.id}
+                    )
                     db_session.commit()
+                    # Refresh from database instead of setting directly
+                    # Setting position.today_realized_pnl = X would mark the ORM object as "dirty"
+                    # which causes it to be committed later in _update_positions_mtm, triggering
+                    # onupdate=func.now() and bringing old closed positions back into view
+                    db_session.refresh(position)
 
                 # If position was updated after last session expiry, include it
-                # This includes positions that went to zero during current session (closed positions)
                 if position.updated_at >= last_session_expiry:
-                    positions.append(position)
+                    # For OPEN positions (qty != 0): always include
+                    if position.quantity != 0:
+                        positions.append(position)
+                    # For CLOSED positions (qty == 0): only include if actually traded today
+                    # Check: today_realized_pnl != 0 (has P&L from today's trades)
+                    # This prevents old closed positions with corrupted updated_at from showing
+                    elif position.today_realized_pnl and position.today_realized_pnl != 0:
+                        positions.append(position)
+                    # Skip old closed positions with corrupted updated_at
                 # If position was updated before last session expiry, only include NRML with non-zero quantity
                 elif position.product == 'NRML' and position.quantity != 0:
                     positions.append(position)
@@ -468,7 +519,10 @@ class PositionManager:
             return None
 
     def _update_positions_mtm(self, positions):
-        """Update MTM for all positions with live quotes"""
+        """
+        Update MTM for all positions with live quotes.
+        Uses WebSocket data first, falls back to multiquotes API if WebSocket data is stale.
+        """
         try:
             if not positions:
                 return
@@ -476,21 +530,37 @@ class PositionManager:
             # Get unique symbols
             symbols_to_fetch = set()
             for position in positions:
-                symbols_to_fetch.add((position.symbol, position.exchange))
+                if position.quantity != 0:  # Only fetch for open positions
+                    symbols_to_fetch.add((position.symbol, position.exchange))
+
+            if not symbols_to_fetch:
+                return
 
             symbols_list = list(symbols_to_fetch)
 
-            # Fetch quotes using multiquotes (single API call)
-            quote_cache = self._fetch_quotes_batch(symbols_list)
+            # Try WebSocket data first (from MarketDataService)
+            quote_cache = self._fetch_quotes_from_websocket(symbols_list)
+            ws_count = len(quote_cache)
 
-            # Fallback: For any symbols that failed in batch, try individual fetch
-            failed_symbols = [s for s in symbols_list if s not in quote_cache or quote_cache[s] is None]
-            if failed_symbols:
-                logger.debug(f"Fetching {len(failed_symbols)} symbols individually (multiquotes fallback)")
-                for symbol, exchange in failed_symbols:
-                    quote = self._fetch_quote(symbol, exchange)
-                    if quote:
-                        quote_cache[(symbol, exchange)] = quote
+            # Find symbols that need fallback to multiquotes
+            missing_symbols = [s for s in symbols_list if s not in quote_cache or quote_cache[s] is None]
+
+            if missing_symbols:
+                # Fallback to multiquotes for missing symbols
+                logger.debug(f"Positions MTM: {ws_count} from WebSocket, {len(missing_symbols)} need multiquotes fallback")
+                multiquotes_cache = self._fetch_quotes_batch(missing_symbols)
+                quote_cache.update(multiquotes_cache)
+
+                # Final fallback: individual fetch for any still missing
+                still_missing = [s for s in missing_symbols if s not in quote_cache or quote_cache[s] is None]
+                if still_missing:
+                    logger.debug(f"Fetching {len(still_missing)} symbols individually")
+                    for symbol, exchange in still_missing:
+                        quote = self._fetch_quote(symbol, exchange)
+                        if quote:
+                            quote_cache[(symbol, exchange)] = quote
+            else:
+                logger.debug(f"Positions MTM: All {ws_count} symbols from WebSocket (no API calls)")
 
             # Update MTM for each position
             for position in positions:
@@ -529,14 +599,24 @@ class PositionManager:
             logger.error(f"Error updating positions MTM: {e}")
 
     def _update_single_position_mtm(self, position):
-        """Update MTM for a single position"""
+        """
+        Update MTM for a single position.
+        Uses WebSocket data first, falls back to REST API if unavailable.
+        """
         try:
             # Skip MTM update for closed positions (quantity = 0)
             # They already have today's realized P&L stored from when position was closed
             if position.quantity == 0:
                 return
 
-            quote = self._fetch_quote(position.symbol, position.exchange)
+            # Try WebSocket first
+            ws_quotes = self._fetch_quotes_from_websocket([(position.symbol, position.exchange)])
+            quote = ws_quotes.get((position.symbol, position.exchange))
+
+            # Fallback to REST API if WebSocket data not available
+            if not quote:
+                quote = self._fetch_quote(position.symbol, position.exchange)
+
             if quote:
                 ltp = Decimal(str(quote.get('ltp', 0)))
                 if ltp > 0:
@@ -604,6 +684,46 @@ class PositionManager:
         except Exception as e:
             logger.error(f"Error calculating P&L percent: {e}")
             return Decimal('0.00')
+
+    def _fetch_quotes_from_websocket(self, symbols_list):
+        """
+        Fetch LTP from WebSocket (MarketDataService) for multiple symbols.
+        Returns dict mapping (symbol, exchange) to quote data.
+        Only returns data that is fresh (within WEBSOCKET_DATA_MAX_AGE seconds).
+        """
+        quote_cache = {}
+
+        if not symbols_list:
+            return quote_cache
+
+        try:
+            market_data_service = get_market_data_service()
+            current_time = time.time()
+
+            for symbol, exchange in symbols_list:
+                # Get all cached data from MarketDataService
+                data = market_data_service.get_all_data(symbol, exchange)
+
+                if data:
+                    # Check if data is fresh using last_update timestamp
+                    last_update = data.get('last_update', 0)
+                    age = current_time - last_update
+
+                    if age <= WEBSOCKET_DATA_MAX_AGE:
+                        # Get LTP from the ltp sub-dict
+                        ltp_data = data.get('ltp', {})
+                        ltp = ltp_data.get('value') if isinstance(ltp_data, dict) else None
+
+                        if ltp and ltp > 0:
+                            quote_cache[(symbol, exchange)] = {'ltp': ltp}
+                    else:
+                        logger.debug(f"WebSocket data stale for {symbol} (age: {age:.1f}s)")
+
+            return quote_cache
+
+        except Exception as e:
+            logger.debug(f"Error fetching from WebSocket: {e}")
+            return quote_cache
 
     def _fetch_quote(self, symbol, exchange):
         """Fetch real-time quote for a symbol using API key"""
@@ -904,7 +1024,7 @@ class PositionManager:
                     position.pnl = float(position.realized_pnl)
                     db.session.commit()
 
-                    logger.info(f"Moved CNC position to holdings: {position.symbol} qty: {position.quantity}")
+                    logger.debug(f"Moved CNC position to holdings: {position.symbol} qty: {position.quantity}")
 
                 # NRML positions remain as-is (carry forward)
 
@@ -963,7 +1083,7 @@ def process_all_users_settlement():
             return
 
         users = set(p.user_id for p in positions)
-        logger.info(f"Processing T+1 settlement for {len(users)} users at midnight")
+        logger.debug(f"Processing T+1 settlement for {len(users)} users at midnight")
 
         for user_id in users:
             try:
@@ -971,7 +1091,7 @@ def process_all_users_settlement():
                 success, message = holdings_manager.process_t1_settlement()
 
                 if success:
-                    logger.info(f"Settlement completed for user {user_id}")
+                    logger.debug(f"Settlement completed for user {user_id}")
                 else:
                     logger.error(f"Settlement failed for user {user_id}: {message}")
 
@@ -979,10 +1099,161 @@ def process_all_users_settlement():
                 logger.error(f"Error in settlement for user {user_id}: {e}")
                 continue
 
-        logger.info("T+1 settlement completed for all users")
+        logger.debug("T+1 settlement completed for all users")
 
     except Exception as e:
         logger.error(f"Error in T+1 settlement process: {e}")
+
+
+def cleanup_expired_contracts():
+    """
+    Clean up expired F&O contracts from sandbox positions.
+    Runs on startup when analyzer mode is enabled.
+
+    This handles cases where:
+    - App was stopped for several days
+    - User hasn't logged in for a while
+    - Contracts expired while app was not running
+
+    Expired contracts are settled with:
+    - Margin released back to available balance
+    - P&L calculated and added to realized P&L
+    - Position quantity set to 0
+    """
+    from datetime import date
+    from decimal import Decimal
+    from sandbox.fund_manager import FundManager
+
+    try:
+        today = date.today()
+
+        # Find all open positions in F&O exchanges
+        fo_exchanges = ['NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NCDEX']
+
+        expired_positions = []
+
+        # Query all open positions in F&O exchanges
+        all_fo_positions = SandboxPositions.query.filter(
+            SandboxPositions.exchange.in_(fo_exchanges),
+            SandboxPositions.quantity != 0
+        ).all()
+
+        if not all_fo_positions:
+            logger.debug("No open F&O positions to check for expiry")
+            return
+
+        logger.debug(f"Checking {len(all_fo_positions)} F&O positions for expired contracts")
+
+        # Check each position for expiry
+        for position in all_fo_positions:
+            expiry_date = get_contract_expiry(position.symbol, position.exchange)
+
+            if expiry_date and today > expiry_date:
+                expired_positions.append(position)
+                logger.debug(
+                    f"Found expired contract: {position.symbol} "
+                    f"(expiry: {expiry_date}, user: {position.user_id})"
+                )
+
+        if not expired_positions:
+            logger.debug("No expired F&O contracts found")
+            return
+
+        logger.debug(f"Found {len(expired_positions)} expired contracts to clean up")
+
+        # Group by user for efficient processing
+        user_positions = {}
+        for pos in expired_positions:
+            if pos.user_id not in user_positions:
+                user_positions[pos.user_id] = []
+            user_positions[pos.user_id].append(pos)
+
+        # Process each user's expired positions
+        for user_id, positions in user_positions.items():
+            try:
+                fund_manager = FundManager(user_id)
+
+                for position in positions:
+                    try:
+                        symbol = position.symbol
+                        quantity = position.quantity
+                        avg_price = Decimal(str(position.average_price))
+                        margin_blocked = Decimal(str(position.margin_blocked or 0))
+
+                        # Determine settlement price based on instrument type
+                        # Options: Expire at 0 (most expire worthless - conservative approach)
+                        # Futures: Use last stored LTP, or average price as fallback
+                        is_option = symbol.endswith('CE') or symbol.endswith('PE')
+
+                        if is_option:
+                            # Options expire worthless (at 0)
+                            # This is conservative - user loses full premium for longs
+                            settlement_price = Decimal('0')
+                            logger.info(f"Option {symbol} expired - settling at 0 (worthless)")
+                        else:
+                            # Futures: use last LTP if available, otherwise average price
+                            if position.ltp and Decimal(str(position.ltp)) > 0:
+                                settlement_price = Decimal(str(position.ltp))
+                            else:
+                                settlement_price = avg_price
+                            logger.info(f"Future {symbol} expired - settling at {settlement_price}")
+
+                        # Calculate realized P&L
+                        if quantity > 0:
+                            close_pnl = (settlement_price - avg_price) * Decimal(str(quantity))
+                        else:
+                            close_pnl = (avg_price - settlement_price) * Decimal(str(abs(quantity)))
+
+                        accumulated_realized = Decimal(str(position.accumulated_realized_pnl or 0))
+                        total_realized_pnl = accumulated_realized + close_pnl
+
+                        logger.info(
+                            f"Settling expired {symbol}: qty={quantity}, "
+                            f"settlement_price={settlement_price}, close_pnl={close_pnl}, "
+                            f"margin_to_release={margin_blocked}"
+                        )
+
+                        # Release margin and update funds
+                        fund_manager.release_margin(
+                            amount=margin_blocked,
+                            realized_pnl=close_pnl,
+                            description=f"Expired contract cleanup: {symbol}"
+                        )
+
+                        # Update position to closed state
+                        position.quantity = 0
+                        position.ltp = settlement_price
+                        position.pnl = total_realized_pnl
+                        position.accumulated_realized_pnl = total_realized_pnl
+                        position.margin_blocked = Decimal('0')
+
+                        db_session.commit()
+
+                        # Set updated_at to expiry date AFTER commit to bypass onupdate trigger
+                        # This hides expired contracts from current session
+                        from sqlalchemy import text
+                        hide_date = datetime.combine(expiry_date, datetime.min.time())
+                        db_session.execute(
+                            text("UPDATE sandbox_positions SET updated_at = :hide_date WHERE id = :pos_id"),
+                            {"hide_date": hide_date, "pos_id": position.id}
+                        )
+                        db_session.commit()
+
+                        logger.info(f"Expired contract {symbol} cleaned up for user {user_id}")
+
+                    except Exception as e:
+                        db_session.rollback()
+                        logger.error(f"Error cleaning up expired position {position.symbol}: {e}")
+                        continue
+
+            except Exception as e:
+                logger.error(f"Error processing expired contracts for user {user_id}: {e}")
+                continue
+
+        logger.info(f"Expired contract cleanup completed: {len(expired_positions)} contracts processed")
+
+    except Exception as e:
+        logger.error(f"Error in expired contract cleanup: {e}")
 
 
 def catchup_missed_settlements():
@@ -990,9 +1261,17 @@ def catchup_missed_settlements():
     Catch-up settlement for positions that should have been settled while app was stopped.
     Runs on startup when analyzer mode is enabled.
 
-    Checks for CNC positions older than 1 day and settles them to holdings.
+    This function handles:
+    1. Expired F&O contracts - settles them and releases margin
+    2. CNC positions older than 1 day - settles them to holdings
     """
     try:
+        # First, clean up expired F&O contracts
+        # This is important to do first so users don't see stale contracts
+        logger.info("Running expired contract cleanup...")
+        cleanup_expired_contracts()
+
+        # Then handle CNC T+1 settlement
         ist = pytz.timezone('Asia/Kolkata')
         today = datetime.now(ist).date()
         cutoff_time = datetime.combine(today, datetime.min.time())

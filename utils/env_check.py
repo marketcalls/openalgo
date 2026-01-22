@@ -98,7 +98,13 @@ def check_env_version_compatibility():
             print(f"\n✅ Your .env version ({env_version}) is newer than sample ({sample_version})")
             
         else:
-            print(f"\n\033[94m🔄\033[0m Configuration version check passed (\033[92m{env_version}\033[0m)")
+            # Only print success message in Flask child process (avoids duplicate message with debug reloader)
+            # In debug mode, werkzeug spawns parent (reloader) and child (app) process
+            # WERKZEUG_RUN_MAIN is 'true' only in the child process
+            flask_debug = os.getenv('FLASK_DEBUG', '').lower() in ('true', '1', 't')
+            is_reloader_parent = flask_debug and os.environ.get('WERKZEUG_RUN_MAIN') != 'true'
+            if not is_reloader_parent:
+                print(f"\n\033[94m🔄\033[0m Configuration version check passed (\033[92m{env_version}\033[0m)")
             
     except Exception as e:
         print(f"\nWarning: Could not parse version numbers: {e}")

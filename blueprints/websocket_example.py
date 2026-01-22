@@ -18,7 +18,11 @@ from services.websocket_service import (
 from services.market_data_service import (
     get_market_data_service,
     subscribe_to_market_updates,
-    unsubscribe_from_market_updates
+    unsubscribe_from_market_updates,
+    get_health_status,
+    is_trade_management_safe,
+    is_data_fresh,
+    SubscriberPriority
 )
 from utils.logging import get_logger
 
@@ -167,22 +171,136 @@ def api_get_websocket_config():
     username = get_username_from_session()
     if not username:
         return jsonify({'status': 'error', 'message': 'Session not found - please refresh page'}), 401
-    
+
     import os
     from flask import request
-    
+
     websocket_url = os.getenv('WEBSOCKET_URL', 'ws://localhost:8765')
-    
+
     # If the current request is HTTPS and the WebSocket URL is WS, upgrade to WSS
     if request.is_secure and websocket_url.startswith('ws://'):
         websocket_url = websocket_url.replace('ws://', 'wss://')
         logger.info(f"Upgraded WebSocket URL to secure: {websocket_url}")
-    
+
     return jsonify({
         'status': 'success',
         'websocket_url': websocket_url,
         'is_secure': request.is_secure,
         'original_url': os.getenv('WEBSOCKET_URL', 'ws://localhost:8765')
+    }), 200
+
+
+@websocket_bp.route('/api/websocket/health', methods=['GET'])
+def api_websocket_health():
+    """
+    Get comprehensive health status of the market data service.
+
+    This endpoint is critical for trade management features (stoploss, target monitoring)
+    to verify that data is reliable before making trading decisions.
+
+    Returns:
+        JSON with health status including:
+        - status: 'healthy' or 'unhealthy'
+        - connected: WebSocket connection status
+        - authenticated: Authentication status
+        - data_flow_healthy: Whether data is flowing
+        - last_data_age_seconds: Age of last received data
+        - cache_size: Number of symbols in cache
+        - total_subscribers: Total active subscribers
+        - critical_subscribers: Trade management subscribers
+        - trade_management_safe: Whether it's safe to execute trade management
+    """
+    username = get_username_from_session()
+    if not username:
+        return jsonify({
+            'status': 'error',
+            'message': 'Session not found - please refresh page',
+            'healthy': False
+        }), 200
+
+    # Get comprehensive health status
+    health = get_health_status()
+
+    # Check if trade management is safe
+    trade_safe, trade_reason = is_trade_management_safe()
+
+    return jsonify({
+        'status': health.status,
+        'healthy': health.status == 'healthy',
+        'connected': health.connected,
+        'authenticated': health.authenticated,
+        'data_flow_healthy': health.data_flow_healthy,
+        'last_data_age_seconds': health.last_data_age_seconds,
+        'cache_size': health.cache_size,
+        'total_subscribers': health.total_subscribers,
+        'critical_subscribers': health.critical_subscribers,
+        'total_updates_processed': health.total_updates_processed,
+        'validation_errors': health.validation_errors,
+        'stale_data_events': health.stale_data_events,
+        'reconnect_count': health.reconnect_count,
+        'uptime_seconds': health.uptime_seconds,
+        'trade_management_safe': trade_safe,
+        'trade_management_reason': trade_reason,
+        'message': health.message
+    }), 200
+
+
+@websocket_bp.route('/api/websocket/trade-safe', methods=['GET'])
+def api_trade_management_safe():
+    """
+    Quick check if trade management operations are safe to execute.
+
+    Use this before executing stoploss/target triggers to ensure
+    data is fresh and connection is healthy.
+
+    Returns:
+        JSON with:
+        - safe: boolean indicating if trade management is safe
+        - reason: explanation if not safe
+        - data_fresh: whether data is fresh
+    """
+    username = get_username_from_session()
+    if not username:
+        return jsonify({
+            'safe': False,
+            'reason': 'Session not found',
+            'data_fresh': False
+        }), 200
+
+    # Check if trade management is safe
+    is_safe, reason = is_trade_management_safe()
+
+    # Check if data is fresh (within 30 seconds)
+    data_fresh = is_data_fresh(max_age_seconds=30)
+
+    return jsonify({
+        'safe': is_safe,
+        'reason': reason,
+        'data_fresh': data_fresh
+    }), 200
+
+
+@websocket_bp.route('/api/websocket/metrics', methods=['GET'])
+def api_websocket_metrics():
+    """
+    Get performance metrics for the market data service.
+
+    Returns:
+        JSON with cache metrics including hit rate, total updates, etc.
+    """
+    username = get_username_from_session()
+    if not username:
+        return jsonify({
+            'status': 'error',
+            'message': 'Session not found - please refresh page'
+        }), 200
+
+    market_service = get_market_data_service()
+    metrics = market_service.get_cache_metrics()
+
+    return jsonify({
+        'status': 'success',
+        'metrics': metrics
     }), 200
 
 # Socket.IO events for real-time updates

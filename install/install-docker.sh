@@ -244,8 +244,8 @@ cd $INSTALL_PATH
 # Create required directories
 log "\n=== Creating Required Directories ===" "$BLUE"
 $SUDO mkdir -p log logs keys db strategies/scripts strategies/examples
-$SUDO chown -R 1000:1000 log logs strategies
-$SUDO chmod -R 755 strategies log
+$SUDO chown -R 1000:1000 log logs strategies db
+$SUDO chmod -R 755 strategies log db
 $SUDO chmod 700 keys
 check_status "Directory creation failed"
 

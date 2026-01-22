@@ -309,7 +309,26 @@ git remote add upstream https://github.com/marketcalls/openalgo.git
 git remote -v
 ```
 
-### 2. Create a Feature Branch
+### 2. Important: Exclude Frontend Build Assets
+
+The `/frontend/dist` folder contains pre-built frontend assets. **Do NOT include `/frontend/dist` changes in your PR.**
+
+**Why?**
+- Community users clone and run directly without Node.js
+- They rely on the committed `/frontend/dist` for a working app
+- Multiple contributors building locally creates merge conflicts
+- Maintainers rebuild `/frontend/dist` after merging to ensure a verified build
+
+**Setup (run once):**
+```bash
+git update-index --skip-worktree frontend/dist/*
+```
+
+This tells Git to ignore your local changes to `/frontend/dist` - nothing gets committed accidentally.
+
+> **Note:** PRs containing `/frontend/dist` changes will be asked to remove them.
+
+### 3. Create a Feature Branch
 
 ```bash
 # Update your main branch
@@ -325,7 +344,7 @@ git pull upstream main
 git checkout -b feature/your-feature-name
 ```
 
-### 3. Make Your Changes
+### 4. Make Your Changes
 
 Follow these guidelines while developing:
 
@@ -378,7 +397,7 @@ git commit -m "docs: update WebSocket setup instructions"
 git commit -m "refactor: optimize order processing pipeline"
 ```
 
-### 4. Test Your Changes
+### 5. Test Your Changes
 
 ```bash
 # Run the application in development mode
@@ -401,7 +420,7 @@ python app.py
 - [ ] API endpoints return correct responses
 - [ ] WebSocket connections work (if applicable)
 
-### 5. CSS Compilation (for UI changes)
+### 6. CSS Compilation (for UI changes)
 
 If you modified any HTML templates or Tailwind classes:
 
@@ -416,7 +435,7 @@ npm run build
 # Only edit src/css/styles.css
 ```
 
-### 6. Push to Your Fork
+### 7. Push to Your Fork
 
 ```bash
 # Add your changes
@@ -429,7 +448,7 @@ git commit -m "feat: add your feature description"
 git push origin feature/your-feature-name
 ```
 
-### 7. Create a Pull Request
+### 8. Create a Pull Request
 
 1. Go to your fork on GitHub
 2. Click **"Compare & pull request"**

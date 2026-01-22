@@ -8,7 +8,7 @@ import sys
 # Initialize logging EARLY to suppress verbose startup logs
 from utils.logging import get_logger, log_startup_banner, highlight_url  # Import centralized logging
 
-from flask import Flask, render_template, session
+from flask import Flask, session
 from flask_wtf.csrf import CSRFProtect  # Import CSRF protection
 from extensions import socketio  # Import SocketIO
 from limiter import limiter  # Import the Limiter instance
@@ -49,6 +49,11 @@ from blueprints.sandbox import sandbox_bp  # Import the sandbox blueprint
 from blueprints.logging import logging_bp  # Import the logging blueprint
 from blueprints.playground import playground_bp  # Import the API playground blueprint
 from blueprints.admin import admin_bp  # Import the admin blueprint
+from blueprints.react_app import react_bp, is_react_frontend_available, serve_react_app  # Import React frontend blueprint
+from blueprints.historify import historify_bp  # Import the historify blueprint
+from blueprints.flow import flow_bp  # Import the flow blueprint
+from blueprints.broker_credentials import broker_credentials_bp  # Import the broker credentials blueprint
+from blueprints.system_permissions import system_permissions_bp  # Import the system permissions blueprint
 from services.telegram_bot_service import telegram_bot_service
 from database.telegram_db import get_bot_config
 
@@ -66,39 +71,15 @@ from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.strategy_db import init_db as ensure_strategy_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.action_center_db import init_db as ensure_action_center_tables_exists
+from database.historify_db import init_database as ensure_historify_tables_exists
+from database.flow_db import init_db as ensure_flow_tables_exists
 
 from utils.plugin_loader import load_broker_auth_functions
 
 import os
-import atexit
-import signal
 
 # Initialize logger
 logger = get_logger(__name__)
-
-# Global variable to track ngrok state
-_ngrok_tunnel = None
-
-def cleanup_ngrok():
-    """Cleanup ngrok tunnel on shutdown"""
-    global _ngrok_tunnel
-    if _ngrok_tunnel:
-        try:
-            from pyngrok import ngrok
-            logger.info("Shutting down ngrok tunnel...")
-            ngrok.disconnect(_ngrok_tunnel)
-            ngrok.kill()  # Kill the ngrok process
-            _ngrok_tunnel = None
-            logger.info("ngrok tunnel closed successfully")
-        except Exception as e:
-            logger.warning(f"Error during ngrok cleanup: {e}")
-
-def signal_handler(signum, frame):
-    """Handle shutdown signals"""
-    logger.info(f"Received signal {signum}, initiating graceful shutdown...")
-    cleanup_ngrok()
-    # Re-raise to allow normal shutdown
-    raise SystemExit(0)
 
 def create_app():
     # Initialize Flask application
@@ -180,6 +161,14 @@ def create_app():
         app.config['WTF_CSRF_TIME_LIMIT'] = None  # No time limit if empty
 
     # Register RESTx API blueprint first
+    # Register React frontend blueprint FIRST for migrated routes
+    # Register React frontend routes
+    if is_react_frontend_available():
+        app.register_blueprint(react_bp)
+        logger.debug("React frontend enabled (frontend/dist found)")
+    else:
+        logger.warning("React frontend not available - run 'npm run build' in frontend/")
+
     app.register_blueprint(api_v1_bp)
     
     # Exempt API endpoints from CSRF protection (they use API key authentication)
@@ -219,6 +208,10 @@ def create_app():
     app.register_blueprint(playground_bp)  # Register API playground blueprint
     app.register_blueprint(logging_bp)  # Register Logging blueprint
     app.register_blueprint(admin_bp)  # Register Admin blueprint
+    app.register_blueprint(historify_bp)  # Register Historify blueprint
+    app.register_blueprint(flow_bp)  # Register Flow blueprint
+    app.register_blueprint(broker_credentials_bp)  # Register Broker credentials blueprint
+    app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
 
 
     # Exempt webhook endpoints from CSRF protection after app initialization
@@ -226,10 +219,15 @@ def create_app():
         # Exempt webhook endpoints from CSRF protection
         csrf.exempt(app.view_functions['chartink_bp.webhook'])
         csrf.exempt(app.view_functions['strategy_bp.webhook'])
-        
+        csrf.exempt(app.view_functions['flow.trigger_webhook'])
+        csrf.exempt(app.view_functions['flow.trigger_webhook_with_symbol'])
+
         # Exempt broker callback endpoints from CSRF protection (OAuth callbacks from external providers)
         csrf.exempt(app.view_functions['brlogin.broker_callback'])
-        
+
+        # Exempt logout endpoint from CSRF protection (safe - only destroys session)
+        csrf.exempt(app.view_functions['auth.logout'])
+
         # Initialize latency monitoring (after registering API blueprint)
         init_latency_monitoring(app)
 
@@ -295,9 +293,9 @@ def create_app():
         from utils.session import is_session_valid, revoke_user_tokens
         
         # Skip session check for static files, API endpoints, and public routes
-        if (request.path.startswith('/static/') or 
-            request.path.startswith('/api/') or 
-            request.path in ['/', '/auth/login', '/auth/reset-password', '/setup', '/download', '/faq'] or
+        if (request.path.startswith('/static/') or
+            request.path.startswith('/api/') or
+            request.path in ['/', '/auth/login', '/auth/reset-password', '/auth/csrf-token', '/auth/broker-config', '/setup', '/download', '/faq'] or
             request.path.startswith('/auth/broker/') or  # OAuth callbacks
             request.path.startswith('/_reload-ws')):  # WebSocket reload endpoint
             return
@@ -305,7 +303,7 @@ def create_app():
         # Check if user is logged in and session is expired
         if session.get('logged_in') and not is_session_valid():
             logger.info(f"Session expired for user: {session.get('user')} - revoking tokens")
-            revoke_user_tokens()
+            revoke_user_tokens(revoke_db_tokens=False)
             session.clear()
             # Don't redirect here, let individual routes handle it
     
@@ -344,20 +342,56 @@ def create_app():
         # Track 404 error for security monitoring
         Error404Tracker.track_404(client_ip, path)
 
-        return render_template('404.html'), 404
+        # Serve React app (React Router handles 404)
+        return serve_react_app()
 
     @app.errorhandler(500)
     def internal_server_error(e):
         """Custom handler for 500 Internal Server Error"""
-        # Log the error (optional)
+        from flask import redirect
+
+        # Log the error
         logger.error(f"Server Error: {e}")
 
-        # Provide a logout option
-        return render_template("500.html"), 500
-        
+        # Redirect to React error page
+        return redirect('/error')
+
+    @app.errorhandler(429)
+    def rate_limit_exceeded(e):
+        """Custom handler for 429 Too Many Requests"""
+        from flask import redirect, request
+
+        # Log rate limit hit
+        logger.warning(f"Rate limit exceeded for {request.remote_addr}: {request.path}")
+
+        # For API requests, return JSON response
+        if request.path.startswith('/api/'):
+            return {
+                'status': 'error',
+                'message': 'Rate limit exceeded. Please slow down your requests.',
+                'retry_after': 60
+            }, 429
+
+        # For web requests, redirect to React rate-limited page
+        return redirect('/rate-limited')
+
     @app.context_processor
     def inject_version():
         return dict(version=get_version())
+
+    @app.route('/api/config/host')
+    def get_host_config():
+        """Return the HOST_SERVER configuration for frontend webhook URL generation"""
+        from flask import jsonify
+        host_server = os.getenv('HOST_SERVER', 'http://127.0.0.1:5000')
+
+        # Determine if webhook URL is externally accessible
+        is_localhost = any(local in host_server.lower() for local in ['localhost', '127.0.0.1', '0.0.0.0'])
+
+        return jsonify({
+            'host_server': host_server,
+            'is_localhost': is_localhost
+        })
 
     return app
 
@@ -390,6 +424,8 @@ def setup_environment(app):
             ('Chart Prefs DB', ensure_chart_prefs_tables_exists),
             ('Market Calendar DB', ensure_market_calendar_tables_exists),
             ('Qty Freeze DB', ensure_qty_freeze_tables_exists),
+            ('Historify DB', ensure_historify_tables_exists),
+            ('Flow DB', ensure_flow_tables_exists),
         ]
 
         db_init_start = time.time()
@@ -408,71 +444,19 @@ def setup_environment(app):
         db_init_time = (time.time() - db_init_start) * 1000
         logger.debug(f"All databases initialized in parallel ({db_init_time:.0f}ms)")
 
-    # Conditionally setup ngrok in development environment
-    if os.getenv('NGROK_ALLOW') == 'TRUE':
-        global _ngrok_tunnel
-        from pyngrok import ngrok
-
-        # Register cleanup handlers for graceful shutdown
-        atexit.register(cleanup_ngrok)
-
-        # Register signal handlers (Windows uses SIGINT, SIGTERM; Unix also has SIGHUP)
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-
-        import time
-
-        # Kill any existing ngrok process first (more robust cleanup)
+        # Initialize Flow scheduler
         try:
-            ngrok.kill()
-            logger.debug("Killed existing ngrok process")
-            time.sleep(1)  # Wait for process to fully terminate
-        except Exception:
-            pass  # No existing process to kill
+            from services.flow_scheduler_service import init_flow_scheduler
+            init_flow_scheduler()
+            logger.debug("Flow scheduler initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Flow scheduler: {e}")
 
-        # Try to connect, handling "tunnel already exists" error
-        max_retries = 3
-        public_url = None
-
-        for attempt in range(max_retries):
-            try:
-                # First check if tunnel already exists and reuse it
-                existing_tunnels = ngrok.get_tunnels()
-                for tunnel in existing_tunnels:
-                    if tunnel.name == 'flask':
-                        public_url = tunnel.public_url
-                        logger.debug(f"Reusing existing ngrok tunnel: {public_url}")
-                        break
-
-                if public_url:
-                    break
-
-                # Create new tunnel if none exists
-                public_url = ngrok.connect(name='flask').public_url
-                logger.debug(f"Created new ngrok tunnel: {public_url}")
-                break
-
-            except Exception as e:
-                error_msg = str(e)
-                if 'already exists' in error_msg:
-                    logger.warning(f"Tunnel conflict detected (attempt {attempt + 1}/{max_retries}), cleaning up...")
-                    try:
-                        # Force kill and wait
-                        ngrok.kill()
-                        time.sleep(2)  # Longer wait after conflict
-                    except Exception:
-                        pass
-                else:
-                    logger.error(f"ngrok error: {e}")
-                    if attempt == max_retries - 1:
-                        raise
-                    time.sleep(1)
-
-        if public_url:
-            _ngrok_tunnel = public_url  # Store for cleanup
-            logger.info(f"ngrok URL: {public_url}")
-        else:
-            logger.error("Failed to establish ngrok tunnel after all retries")
+    # Setup ngrok cleanup handlers (always register, regardless of ngrok being enabled)
+    # This ensures proper cleanup on shutdown even if ngrok is enabled/disabled via UI
+    # The actual tunnel creation happens in the __main__ block below
+    from utils.ngrok_manager import setup_ngrok_handlers
+    setup_ngrok_handlers()
 
 app = create_app()
 
@@ -571,29 +555,18 @@ if __name__ == '__main__':
     debug = os.getenv('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')  # Default to False if not set
 
     # Start ngrok tunnel if enabled
-    ngrok_tunnel = None
+    # Only start in the Flask child process when debug mode is on (prevents duplicate sessions)
+    # In debug mode, werkzeug spawns a parent (reloader) and child (app) process
+    # WERKZEUG_RUN_MAIN is set to 'true' only in the child process
     ngrok_url = None
-    if os.getenv('NGROK_ALLOW', 'FALSE').upper() == 'TRUE':
-        try:
-            from pyngrok import ngrok, conf
-            from urllib.parse import urlparse
+    should_start_ngrok = True
+    if debug:
+        # In debug mode, only start ngrok in the child process
+        should_start_ngrok = os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
 
-            # Extract domain from HOST_SERVER if provided
-            host_server_env = os.getenv('HOST_SERVER', '')
-            if host_server_env:
-                parsed = urlparse(host_server_env)
-                domain = parsed.netloc or parsed.path
-                # Start ngrok with the custom domain
-                ngrok_tunnel = ngrok.connect(port, domain=domain)
-            else:
-                # Start ngrok without custom domain
-                ngrok_tunnel = ngrok.connect(port)
-
-            ngrok_url = ngrok_tunnel.public_url
-            print(f"Ngrok tunnel established: {ngrok_url}")
-        except Exception as e:
-            print(f"Failed to start ngrok tunnel: {e}")
-            ngrok_url = None
+    if should_start_ngrok and os.getenv('NGROK_ALLOW', 'FALSE').upper() == 'TRUE':
+        from utils.ngrok_manager import start_ngrok_tunnel
+        ngrok_url = start_ngrok_tunnel(port)
 
     # Clean startup banner
     import socket
@@ -619,86 +592,101 @@ if __name__ == '__main__':
     # Use ngrok URL if tunnel was established
     host_server = ngrok_url if ngrok_url else ''
 
-    # ANSI color codes
-    GREEN = "\033[92m"
-    CYAN = "\033[96m"
-    MAGENTA = "\033[95m"
-    WHITE = "\033[97m"
-    YELLOW = "\033[93m"
-    RESET = "\033[0m"
-    BOLD = "\033[1m"
-    DIM = "\033[2m"
+    # Only print banner in Flask child process (avoids duplicate with debug reloader)
+    # In debug mode, werkzeug spawns parent (reloader) and child (app) process
+    # WERKZEUG_RUN_MAIN is 'true' only in the child process
+    is_reloader_parent = debug and os.environ.get('WERKZEUG_RUN_MAIN') != 'true'
 
-    # Border color
-    B = CYAN
+    if not is_reloader_parent:
+        # ANSI color codes
+        GREEN = "\033[92m"
+        CYAN = "\033[96m"
+        MAGENTA = "\033[95m"
+        WHITE = "\033[97m"
+        YELLOW = "\033[93m"
+        RESET = "\033[0m"
+        BOLD = "\033[1m"
+        DIM = "\033[2m"
 
-    slogan = "Your Personal Algo Trading Platform"
+        # Border color
+        B = CYAN
 
-    MIN_WIDTH = 54
-    ansi_escape = re.compile(r"\x1B\[[0-9;]*m")
+        slogan = "Your Personal Algo Trading Platform"
 
-    def visible_len(text: str) -> int:
-        return len(ansi_escape.sub("", text))
+        MIN_WIDTH = 54
+        ansi_escape = re.compile(r"\x1B\[[0-9;]*m")
 
-    title = f" OpenAlgo v{version} "
+        def visible_len(text: str) -> int:
+            return len(ansi_escape.sub("", text))
 
-    content_samples = [
-        "",
-        slogan,
-        f"{WHITE}{BOLD}Endpoints{RESET}",
-        f"{WHITE}Web App{RESET}    {CYAN}{web_url}{RESET}",
-        f"{WHITE}WebSocket{RESET}  {MAGENTA}{ws_url}{RESET}",
-        f"{WHITE}Docs{RESET}       {YELLOW}{docs_url}{RESET}",
-        f"{WHITE}Status{RESET}     {GREEN}{BOLD}Ready{RESET}",
-    ]
-    # Add Host URL to samples if ngrok is enabled (for width calculation)
-    if host_server:
-        content_samples.insert(5, f"{WHITE}Host URL{RESET}   {GREEN}{host_server}{RESET}")
+        title = f" OpenAlgo v{version} "
 
-    inner_target = max(MIN_WIDTH - 4, max((visible_len(text) for text in content_samples), default=0))
-    W = max(inner_target + 4, len(title) + 5)
+        content_samples = [
+            "",
+            slogan,
+            f"{WHITE}{BOLD}Endpoints{RESET}",
+            f"{WHITE}Web App{RESET}    {CYAN}{web_url}{RESET}",
+            f"{WHITE}WebSocket{RESET}  {MAGENTA}{ws_url}{RESET}",
+            f"{WHITE}Docs{RESET}       {YELLOW}{docs_url}{RESET}",
+            f"{WHITE}Status{RESET}     {GREEN}{BOLD}Ready{RESET}",
+        ]
+        # Add Host URL to samples if ngrok is enabled (for width calculation)
+        if host_server:
+            content_samples.insert(5, f"{WHITE}Host URL{RESET}   {GREEN}{host_server}{RESET}")
 
-    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
-    try:
-        "╭╮╰╯│─".encode(encoding)
-        TL, TR, BL, BR = "╭", "╮", "╰", "╯"
-        H, V = "─", "│"
-    except Exception:
-        TL, TR, BL, BR = "+", "+", "+", "+"
-        H, V = "-", "|"
+        inner_target = max(MIN_WIDTH - 4, max((visible_len(text) for text in content_samples), default=0))
+        W = max(inner_target + 4, len(title) + 5)
 
-    # Helper to create a padded line
-    def mkline(text=""):
-        inner = W - 4  # subtract 2 borders + 2 spaces
-        text_len = visible_len(text)
-        padding = max(inner - text_len, 0)
-        return f"{B}{V}{RESET} {text}{' ' * padding} {B}{V}{RESET}"
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        try:
+            "╭╮╰╯│─".encode(encoding)
+            TL, TR, BL, BR = "╭", "╮", "╰", "╯"
+            H, V = "─", "│"
+        except Exception:
+            TL, TR, BL, BR = "+", "+", "+", "+"
+            H, V = "-", "|"
 
-    # Build banner
-    top_dashes = max(0, W - 5 - len(title))  # ensures non-negative padding around the title
+        # Helper to create a padded line
+        def mkline(text=""):
+            inner = W - 4  # subtract 2 borders + 2 spaces
+            text_len = visible_len(text)
+            padding = max(inner - text_len, 0)
+            return f"{B}{V}{RESET} {text}{' ' * padding} {B}{V}{RESET}"
 
-    print()
-    print(f"{B}{TL}{H * 3}{GREEN}{BOLD}{title}{RESET}{B}{H * top_dashes}{TR}{RESET}")
-    print(mkline())
+        # Build banner
+        top_dashes = max(0, W - 5 - len(title))  # ensures non-negative padding around the title
 
-    # Centered slogan
-    inner_w = W - 4
-    text_len = visible_len(slogan)
-    sl = max((inner_w - text_len) // 2, 0)
-    sr = max(inner_w - text_len - sl, 0)
-    print(f"{B}{V}{RESET} {' ' * sl}{DIM}{slogan}{RESET}{' ' * sr} {B}{V}{RESET}")
+        print()
+        print(f"{B}{TL}{H * 3}{GREEN}{BOLD}{title}{RESET}{B}{H * top_dashes}{TR}{RESET}")
+        print(mkline())
 
-    print(mkline())
-    print(mkline(f"{WHITE}{BOLD}Endpoints{RESET}"))
-    print(mkline(f"{WHITE}Web App{RESET}    {CYAN}{web_url}{RESET}"))
-    print(mkline(f"{WHITE}WebSocket{RESET}  {MAGENTA}{ws_url}{RESET}"))
-    if host_server:
-        print(mkline(f"{WHITE}Host URL{RESET}   {GREEN}{host_server}{RESET}"))
-    print(mkline(f"{WHITE}Docs{RESET}       {YELLOW}{docs_url}{RESET}"))
-    print(mkline())
-    print(mkline(f"{WHITE}Status{RESET}     {GREEN}{BOLD}Ready{RESET}"))
-    print(mkline())
-    print(f"{B}{BL}{H * (W - 2)}{BR}{RESET}")
-    print()
+        # Centered slogan
+        inner_w = W - 4
+        text_len = visible_len(slogan)
+        sl = max((inner_w - text_len) // 2, 0)
+        sr = max(inner_w - text_len - sl, 0)
+        print(f"{B}{V}{RESET} {' ' * sl}{DIM}{slogan}{RESET}{' ' * sr} {B}{V}{RESET}")
 
-    socketio.run(app, host=host_ip, port=port, debug=debug)
+        print(mkline())
+        print(mkline(f"{WHITE}{BOLD}Endpoints{RESET}"))
+        print(mkline(f"{WHITE}Web App{RESET}    {CYAN}{web_url}{RESET}"))
+        print(mkline(f"{WHITE}WebSocket{RESET}  {MAGENTA}{ws_url}{RESET}"))
+        if host_server:
+            print(mkline(f"{WHITE}Host URL{RESET}   {GREEN}{host_server}{RESET}"))
+        print(mkline(f"{WHITE}Docs{RESET}       {YELLOW}{docs_url}{RESET}"))
+        print(mkline())
+        print(mkline(f"{WHITE}Status{RESET}     {GREEN}{BOLD}Ready{RESET}"))
+        print(mkline())
+        print(f"{B}{BL}{H * (W - 2)}{BR}{RESET}")
+        print()
+
+    # Exclude strategies and logs directories from reloader to prevent crashes when editing strategy files
+    reloader_options = {
+        'exclude_patterns': [
+            '*/strategies/*',
+            '*/log/*',
+            '*.log',
+            '*.bak',
+        ]
+    }
+    socketio.run(app, host=host_ip, port=port, debug=debug, reloader_options=reloader_options)

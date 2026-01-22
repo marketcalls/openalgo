@@ -55,15 +55,44 @@ else:
     COMPONENT_COLORS = {}
 
 
+class WerkzeugErrorFilter(logging.Filter):
+    """Filter to suppress known Werkzeug development server errors that are not actionable."""
+
+    # Patterns of error messages to suppress
+    SUPPRESSED_PATTERNS = [
+        'write() before start_response',  # SSE/streaming response race condition
+        'greenlet.GreenletExit',  # Normal greenlet termination
+    ]
+
+    def filter(self, record):
+        try:
+            msg = str(record.msg)
+            # Check if this is a suppressed error pattern
+            for pattern in self.SUPPRESSED_PATTERNS:
+                if pattern in msg:
+                    return False
+
+            # Also check exc_info if present
+            if record.exc_info and record.exc_info[1]:
+                exc_str = str(record.exc_info[1])
+                for pattern in self.SUPPRESSED_PATTERNS:
+                    if pattern in exc_str:
+                        return False
+        except Exception:
+            pass
+
+        return True
+
+
 class SensitiveDataFilter(logging.Filter):
     """Filter to redact sensitive information from log messages."""
-    
+
     def filter(self, record):
         try:
             # Filter the main message
             for pattern, replacement in SENSITIVE_PATTERNS:
                 record.msg = re.sub(pattern, replacement, str(record.msg), flags=re.IGNORECASE)
-            
+
             # Filter args if present
             if hasattr(record, 'args') and record.args:
                 filtered_args = []
@@ -76,7 +105,7 @@ class SensitiveDataFilter(logging.Filter):
         except Exception:
             # If filtering fails, don't block the log message
             pass
-            
+
         return True
 
 
@@ -262,6 +291,14 @@ def setup_logging():
     logging.getLogger('requests').setLevel(logging.WARNING)
     logging.getLogger('httpx').setLevel(logging.WARNING)
     logging.getLogger('httpcore').setLevel(logging.WARNING)
+
+    # Add Werkzeug error filter to suppress known development server errors
+    werkzeug_error_filter = WerkzeugErrorFilter()
+    logging.getLogger('werkzeug').addFilter(werkzeug_error_filter)
+    logging.getLogger('werkzeug._internal').addFilter(werkzeug_error_filter)
+    # Flask uses _internal logger for werkzeug errors
+    internal_logger = logging.getLogger('_internal')
+    internal_logger.addFilter(werkzeug_error_filter)
     # Suppress hpack DEBUG logs - they have format string bugs and are not useful
     logging.getLogger('hpack.hpack').setLevel(logging.INFO)
     logging.getLogger('hpack').setLevel(logging.INFO)
