@@ -555,8 +555,16 @@ if __name__ == '__main__':
     debug = os.getenv('FLASK_DEBUG', 'False').lower() in ('true', '1', 't')  # Default to False if not set
 
     # Start ngrok tunnel if enabled
+    # Only start in the Flask child process when debug mode is on (prevents duplicate sessions)
+    # In debug mode, werkzeug spawns a parent (reloader) and child (app) process
+    # WERKZEUG_RUN_MAIN is set to 'true' only in the child process
     ngrok_url = None
-    if os.getenv('NGROK_ALLOW', 'FALSE').upper() == 'TRUE':
+    should_start_ngrok = True
+    if debug:
+        # In debug mode, only start ngrok in the child process
+        should_start_ngrok = os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
+
+    if should_start_ngrok and os.getenv('NGROK_ALLOW', 'FALSE').upper() == 'TRUE':
         from utils.ngrok_manager import start_ngrok_tunnel
         ngrok_url = start_ngrok_tunnel(port)
 
@@ -584,87 +592,93 @@ if __name__ == '__main__':
     # Use ngrok URL if tunnel was established
     host_server = ngrok_url if ngrok_url else ''
 
-    # ANSI color codes
-    GREEN = "\033[92m"
-    CYAN = "\033[96m"
-    MAGENTA = "\033[95m"
-    WHITE = "\033[97m"
-    YELLOW = "\033[93m"
-    RESET = "\033[0m"
-    BOLD = "\033[1m"
-    DIM = "\033[2m"
+    # Only print banner in Flask child process (avoids duplicate with debug reloader)
+    # In debug mode, werkzeug spawns parent (reloader) and child (app) process
+    # WERKZEUG_RUN_MAIN is 'true' only in the child process
+    is_reloader_parent = debug and os.environ.get('WERKZEUG_RUN_MAIN') != 'true'
 
-    # Border color
-    B = CYAN
+    if not is_reloader_parent:
+        # ANSI color codes
+        GREEN = "\033[92m"
+        CYAN = "\033[96m"
+        MAGENTA = "\033[95m"
+        WHITE = "\033[97m"
+        YELLOW = "\033[93m"
+        RESET = "\033[0m"
+        BOLD = "\033[1m"
+        DIM = "\033[2m"
 
-    slogan = "Your Personal Algo Trading Platform"
+        # Border color
+        B = CYAN
 
-    MIN_WIDTH = 54
-    ansi_escape = re.compile(r"\x1B\[[0-9;]*m")
+        slogan = "Your Personal Algo Trading Platform"
 
-    def visible_len(text: str) -> int:
-        return len(ansi_escape.sub("", text))
+        MIN_WIDTH = 54
+        ansi_escape = re.compile(r"\x1B\[[0-9;]*m")
 
-    title = f" OpenAlgo v{version} "
+        def visible_len(text: str) -> int:
+            return len(ansi_escape.sub("", text))
 
-    content_samples = [
-        "",
-        slogan,
-        f"{WHITE}{BOLD}Endpoints{RESET}",
-        f"{WHITE}Web App{RESET}    {CYAN}{web_url}{RESET}",
-        f"{WHITE}WebSocket{RESET}  {MAGENTA}{ws_url}{RESET}",
-        f"{WHITE}Docs{RESET}       {YELLOW}{docs_url}{RESET}",
-        f"{WHITE}Status{RESET}     {GREEN}{BOLD}Ready{RESET}",
-    ]
-    # Add Host URL to samples if ngrok is enabled (for width calculation)
-    if host_server:
-        content_samples.insert(5, f"{WHITE}Host URL{RESET}   {GREEN}{host_server}{RESET}")
+        title = f" OpenAlgo v{version} "
 
-    inner_target = max(MIN_WIDTH - 4, max((visible_len(text) for text in content_samples), default=0))
-    W = max(inner_target + 4, len(title) + 5)
+        content_samples = [
+            "",
+            slogan,
+            f"{WHITE}{BOLD}Endpoints{RESET}",
+            f"{WHITE}Web App{RESET}    {CYAN}{web_url}{RESET}",
+            f"{WHITE}WebSocket{RESET}  {MAGENTA}{ws_url}{RESET}",
+            f"{WHITE}Docs{RESET}       {YELLOW}{docs_url}{RESET}",
+            f"{WHITE}Status{RESET}     {GREEN}{BOLD}Ready{RESET}",
+        ]
+        # Add Host URL to samples if ngrok is enabled (for width calculation)
+        if host_server:
+            content_samples.insert(5, f"{WHITE}Host URL{RESET}   {GREEN}{host_server}{RESET}")
 
-    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
-    try:
-        "╭╮╰╯│─".encode(encoding)
-        TL, TR, BL, BR = "╭", "╮", "╰", "╯"
-        H, V = "─", "│"
-    except Exception:
-        TL, TR, BL, BR = "+", "+", "+", "+"
-        H, V = "-", "|"
+        inner_target = max(MIN_WIDTH - 4, max((visible_len(text) for text in content_samples), default=0))
+        W = max(inner_target + 4, len(title) + 5)
 
-    # Helper to create a padded line
-    def mkline(text=""):
-        inner = W - 4  # subtract 2 borders + 2 spaces
-        text_len = visible_len(text)
-        padding = max(inner - text_len, 0)
-        return f"{B}{V}{RESET} {text}{' ' * padding} {B}{V}{RESET}"
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        try:
+            "╭╮╰╯│─".encode(encoding)
+            TL, TR, BL, BR = "╭", "╮", "╰", "╯"
+            H, V = "─", "│"
+        except Exception:
+            TL, TR, BL, BR = "+", "+", "+", "+"
+            H, V = "-", "|"
 
-    # Build banner
-    top_dashes = max(0, W - 5 - len(title))  # ensures non-negative padding around the title
+        # Helper to create a padded line
+        def mkline(text=""):
+            inner = W - 4  # subtract 2 borders + 2 spaces
+            text_len = visible_len(text)
+            padding = max(inner - text_len, 0)
+            return f"{B}{V}{RESET} {text}{' ' * padding} {B}{V}{RESET}"
 
-    print()
-    print(f"{B}{TL}{H * 3}{GREEN}{BOLD}{title}{RESET}{B}{H * top_dashes}{TR}{RESET}")
-    print(mkline())
+        # Build banner
+        top_dashes = max(0, W - 5 - len(title))  # ensures non-negative padding around the title
 
-    # Centered slogan
-    inner_w = W - 4
-    text_len = visible_len(slogan)
-    sl = max((inner_w - text_len) // 2, 0)
-    sr = max(inner_w - text_len - sl, 0)
-    print(f"{B}{V}{RESET} {' ' * sl}{DIM}{slogan}{RESET}{' ' * sr} {B}{V}{RESET}")
+        print()
+        print(f"{B}{TL}{H * 3}{GREEN}{BOLD}{title}{RESET}{B}{H * top_dashes}{TR}{RESET}")
+        print(mkline())
 
-    print(mkline())
-    print(mkline(f"{WHITE}{BOLD}Endpoints{RESET}"))
-    print(mkline(f"{WHITE}Web App{RESET}    {CYAN}{web_url}{RESET}"))
-    print(mkline(f"{WHITE}WebSocket{RESET}  {MAGENTA}{ws_url}{RESET}"))
-    if host_server:
-        print(mkline(f"{WHITE}Host URL{RESET}   {GREEN}{host_server}{RESET}"))
-    print(mkline(f"{WHITE}Docs{RESET}       {YELLOW}{docs_url}{RESET}"))
-    print(mkline())
-    print(mkline(f"{WHITE}Status{RESET}     {GREEN}{BOLD}Ready{RESET}"))
-    print(mkline())
-    print(f"{B}{BL}{H * (W - 2)}{BR}{RESET}")
-    print()
+        # Centered slogan
+        inner_w = W - 4
+        text_len = visible_len(slogan)
+        sl = max((inner_w - text_len) // 2, 0)
+        sr = max(inner_w - text_len - sl, 0)
+        print(f"{B}{V}{RESET} {' ' * sl}{DIM}{slogan}{RESET}{' ' * sr} {B}{V}{RESET}")
+
+        print(mkline())
+        print(mkline(f"{WHITE}{BOLD}Endpoints{RESET}"))
+        print(mkline(f"{WHITE}Web App{RESET}    {CYAN}{web_url}{RESET}"))
+        print(mkline(f"{WHITE}WebSocket{RESET}  {MAGENTA}{ws_url}{RESET}"))
+        if host_server:
+            print(mkline(f"{WHITE}Host URL{RESET}   {GREEN}{host_server}{RESET}"))
+        print(mkline(f"{WHITE}Docs{RESET}       {YELLOW}{docs_url}{RESET}"))
+        print(mkline())
+        print(mkline(f"{WHITE}Status{RESET}     {GREEN}{BOLD}Ready{RESET}"))
+        print(mkline())
+        print(f"{B}{BL}{H * (W - 2)}{BR}{RESET}")
+        print()
 
     # Exclude strategies and logs directories from reloader to prevent crashes when editing strategy files
     reloader_options = {
