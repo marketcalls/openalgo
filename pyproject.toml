@@ -126,7 +126,7 @@ dependencies = [
   "rpds-py==0.29.0",
   "scipy==1.16.3",
   "setuptools==80.3.1",
-  "simple-websocket==1.0.0",
+  "simple-websocket==1.1.0",
   "simplejson==3.20.2",
   "six==1.17.0",
   "sniffio==1.3.1",
@@ -151,7 +151,7 @@ dependencies = [
   "wsproto==1.2.0",
   "WTForms==3.1.2",
   "zipp==3.19.2",
-  "zmq==0.0.0"
+  "zmq==0.0.0",
 ]
 
 [build-system]
