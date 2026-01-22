@@ -11,6 +11,7 @@ OpenAlgo is a production-ready algorithmic trading platform built with Flask (ba
 ### Core Architecture
 | Module | Description |
 |--------|-------------|
+| [00-Directory Structure](./00-directory-structure/) | Complete project directory map and navigation guide |
 | [01-Frontend](./01-frontend/) | React 19 SPA architecture, components, state management |
 | [02-Backend](./02-backend/) | Flask application structure, blueprints, services |
 | [18-Database](./18-database/) | Database schema, 5-DB architecture, optimization |
