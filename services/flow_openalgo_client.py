@@ -486,8 +486,10 @@ class FlowOpenAlgoClient:
     # --- Alerts ---
 
     def telegram(self, message: str) -> Dict[str, Any]:
-        """Send a Telegram alert"""
+        """Send a Telegram alert using existing telegram_alert_service"""
         from services.telegram_alert_service import telegram_alert_service
+        from database.telegram_db import get_telegram_user_by_username
+        from datetime import datetime
 
         try:
             # Get username from API key
@@ -499,22 +501,38 @@ class FlowOpenAlgoClient:
                     'error': 'Invalid API key'
                 }
 
-            # Send custom alert
-            result = telegram_alert_service.send_custom_alert(
-                username=username,
-                message=message
-            )
-
-            if result:
-                return {
-                    'status': 'success',
-                    'data': {'message': 'Alert sent successfully'}
-                }
-            else:
+            # Get telegram user by username
+            telegram_user = get_telegram_user_by_username(username)
+            if not telegram_user:
+                logger.info(f"No telegram user linked for username: {username}")
                 return {
                     'status': 'error',
-                    'error': 'Failed to send Telegram alert'
+                    'error': f'No Telegram account linked for user: {username}'
                 }
+
+            if not telegram_user.get('notifications_enabled'):
+                logger.info(f"Notifications disabled for telegram user: {username}")
+                return {
+                    'status': 'error',
+                    'error': 'Telegram notifications are disabled'
+                }
+
+            telegram_id = telegram_user['telegram_id']
+
+            # Format the message with timestamp
+            timestamp = datetime.now().strftime('%H:%M:%S')
+            formatted_message = f"📢 *Flow Alert*\n─────────────────────\n{message}\n\n⏰ Time: {timestamp}"
+
+            # Send alert using existing send_alert_sync method
+            from concurrent.futures import ThreadPoolExecutor
+            alert_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flow_telegram")
+            alert_executor.submit(telegram_alert_service.send_alert_sync, telegram_id, formatted_message)
+
+            return {
+                'status': 'success',
+                'data': {'message': 'Alert queued successfully'}
+            }
+
         except Exception as e:
             logger.error(f"Error sending Telegram alert: {e}")
             return {
