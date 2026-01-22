@@ -174,10 +174,12 @@ def dynamic_import(broker, module_name, function_names):
         logger.error(f"Error importing functions {function_names} from {module_name} for broker {broker}: {e}")
         return None
 
-@pnltracker_bp.route('/pnltracker')
+# Note: /pnltracker route is now handled by react_bp for React frontend
+# This route is kept for backwards compatibility but renamed
+@pnltracker_bp.route('/pnltracker/legacy')
 @check_session_validity
 def pnltracker():
-    """Render the PnL tracker page."""
+    """Render the PnL tracker page (legacy Jinja template)."""
     return render_template('pnltracker.html')
 
 @pnltracker_bp.route('/test_chart')

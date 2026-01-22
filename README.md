@@ -10,9 +10,7 @@
 
 </div>
 
-![OpenAlgo - Your Personal Algo Trading Platform](static/images/image.png)
-
-**OpenAlgo** is a production-ready, open-source algorithmic trading platform built with Flask and Python. It provides a unified API layer across 24+ Indian brokers, enabling seamless integration with popular platforms like TradingView, Amibroker, Excel, Python, and AI agents. Designed for traders and developers, OpenAlgo makes algo trading accessible, secure, and powerful.
+**OpenAlgo** is a production-ready, open-source algorithmic trading platform built with Flask and React. It provides a unified API layer across 24+ Indian brokers, enabling seamless integration with popular platforms like TradingView, Amibroker, Excel, Python, and AI agents. Designed for traders and developers, OpenAlgo makes algo trading accessible, secure, and powerful.
 
 ## Quick Links
 
@@ -20,7 +18,7 @@
 - **Installation Guide**: [Getting Started](https://docs.openalgo.in/installation-guidelines/getting-started)
 - **Upgrade Guide**: [Upgrade Instructions](https://docs.openalgo.in/installation-guidelines/getting-started/upgrade)
 - **Why OpenAlgo**: [Why Build with OpenAlgo](https://docs.openalgo.in/why-to-build-with-openalgo)
-- **Video Tutorial**: 
+- **Video Tutorial**:
 
 [![What is OpenAlgo](https://img.youtube.com/vi/kAS3jTb3OkI/0.jpg)](https://www.youtube.com/watch?v=kAS3jTb3OkI)
 
@@ -80,6 +78,14 @@ A single, standardized API across all brokers with 30+ endpoints:
 - ZeroMQ-based message bus for high-performance data distribution
 - Automatic reconnection and failover handling
 
+### Flow Visual Strategy Builder
+Build trading strategies visually without writing code:
+- **Node-based editor** powered by xyflow/React Flow
+- **Pre-built nodes**: Market data, conditions, order execution, notifications
+- **Real-time execution** with live market data
+- **Webhook triggers** for TradingView and external signals
+- **Visual debugging** with execution flow highlighting
+
 ### API Analyzer Mode
 Complete testing environment with ₹1 Crore virtual capital:
 - Test strategies with real market data without risking money
@@ -102,7 +108,7 @@ Order approval workflow for manual control:
 
 ### Python Strategy Manager
 Host and run Python strategies directly on OpenAlgo:
-- Built-in code editor with syntax highlighting
+- Built-in code editor powered by **CodeMirror** with Python syntax highlighting
 - Run multiple strategies in parallel with process isolation
 - Automated scheduling with IST-based start/stop times
 - Secure environment variable management with encryption
@@ -148,6 +154,8 @@ Real-time notifications and command execution:
 
 **Token Encryption**: Fernet symmetric encryption with PBKDF2 key derivation
 
+**Two-Factor Authentication**: TOTP support with authenticator apps
+
 **Rate Limiting**: Configurable limits for login, API, orders, webhooks
 
 **Manual IP Ban System**: Monitor and ban suspicious IPs via `/security` dashboard
@@ -158,12 +166,17 @@ Real-time notifications and command execution:
 
 **Privacy First**: Zero data collection policy - your data stays on your server
 
-### Modern UI with DaisyUI
-- 30+ beautiful themes to choose from (Light, Dark, and more)
-- Real-time updates via WebSocket (orders, trades, positions, logs)
+### Modern React Frontend
+- **React 19** with TypeScript for type-safe, maintainable code
+- **shadcn/ui** components with Tailwind CSS 4.0 for beautiful, accessible UI
+- **TanStack Query** for efficient server state management and caching
+- **Zustand** for lightweight client state management
+- **Real-time updates** via Socket.IO (orders, trades, positions, logs)
+- **CodeMirror** for Python and JSON editing with syntax highlighting and themes
+- **xyflow/React Flow** for visual Flow strategy builder
+- **TradingView Lightweight Charts** for P&L and market data visualization
+- Light and Dark themes with 8 accent colors
 - Mobile-friendly responsive design
-- Theme-aware syntax highlighting
-- Zero-config installation
 
 ## Supported Platforms
 
@@ -183,24 +196,61 @@ Connect your algo strategies and run from any platform:
 
 Receive your strategy alerts directly to **Telegram** for all platforms.
 
-## Architecture Highlights
+## Technology Stack
 
-- **Backend**: Flask 3.0 + SQLAlchemy 2.0
-- **Frontend**: Tailwind CSS 4.1 + DaisyUI 5.1
-- **Real-time**: Flask-SocketIO, WebSockets, ZeroMQ
-- **Security**: Argon2-CFFI, Cryptography (Fernet), Flask-WTF
-- **Databases**: SQLite (4 separate DBs: main, logs, latency, sandbox)
-- **Broker Pattern**: Standardized structure (auth, order, data, funds, streaming, mapping)
-- **Connection Pooling**: Optimized latency with efficient connection management
+### Backend
+- **Flask 3.0** - Python web framework
+- **SQLAlchemy 2.0** - Database ORM
+- **Flask-SocketIO** - Real-time WebSocket communication
+- **ZeroMQ** - High-performance message bus
+- **Argon2-CFFI** - Password hashing
+- **Cryptography** - Fernet encryption for tokens
+
+### Frontend
+- **React 19** - UI library
+- **TypeScript** - Type-safe JavaScript
+- **Vite 7** - Fast build tool
+- **Tailwind CSS 4** - Utility-first CSS framework
+- **shadcn/ui** - Component library built on Radix UI
+- **TanStack Query** - Server state management
+- **Zustand** - Client state management
+
+### Data Visualization & Editors
+- **TradingView Lightweight Charts** - Financial charts
+- **CodeMirror** - Code editor for strategies
+- **xyflow/React Flow** - Visual Flow builder
+- **Lucide React** - Icon library
+
+### Testing & Quality
+- **Vitest** - Unit testing
+- **Playwright** - E2E testing
+- **Biome** - Linting and formatting
+- **axe-core** - Accessibility testing
+
+### Databases
+- **SQLite** - 4 separate databases (main, logs, latency, sandbox)
+- **DuckDB** - Historical market data (Historify)
+
+## Official SDKs
+
+OpenAlgo provides officially supported client libraries for application development and system-level integrations:
+
+| Language / Platform | Repository |
+|---------------------|------------|
+| Python | [openalgo-python-library](https://github.com/marketcalls/openalgo-python-library) |
+| Node.js | [openalgo-node](https://github.com/marketcalls/openalgo-node) |
+| Java | [openalgo-java](https://github.com/marketcalls/openalgo-java) |
+| Rust | [openalgo-rust](https://github.com/marketcalls/openalgo-rust) |
+| .NET / C# | [openalgo.NET](https://github.com/marketcalls/openalgo.NET) |
+| Go | [openalgo-go](https://github.com/marketcalls/openalgo-go) |
 
 ## OpenAlgo FOSS Ecosystem
 
 OpenAlgo is part of a larger open-source trading ecosystem:
 
-- **OpenAlgo Core**: This repository (Python Flask)
+- **OpenAlgo Core**: This repository (Python Flask + React)
 - **Historify**: Stock market data management platform
-- **Python Library**: Native Python SDK
-- **Node.js Library**: JavaScript/TypeScript SDK
+- **Official SDKs**: Python, Node.js, Java, Rust, .NET, Go (see above)
 - **Excel Add-in**: Direct Excel integration
 - **MCP Server**: AI agents integration
 - **Chrome Plugin**: Browser-based tools
@@ -215,6 +265,7 @@ OpenAlgo is part of a larger open-source trading ecosystem:
 - **Disk**: 1GB
 - **CPU**: 1 vCPU
 - **Python**: 3.11, 3.12, 3.13, or 3.14
+- **Node.js**: 20+ (for frontend development)
 
 ### Quick Start with UV
 
@@ -251,6 +302,7 @@ Complete API reference and examples:
 - **Zero-Config Installation**: One-command setup with UV
 - **Single API, Multiple Brokers**: Switch brokers without code changes
 - **No Data Collection**: Complete privacy - your data stays on your server
+- **Visual Strategy Builder**: Create strategies with drag-and-drop Flow editor
 - **Host Python Strategies**: Run strategies directly without external servers
 - **Smart Order Execution**: Intelligent routing for complex strategies
 - **Order Splitting**: Automatically split large orders into smaller chunks
@@ -290,12 +342,56 @@ We welcome contributions! To contribute:
 
 OpenAlgo is released under the **AGPL V3.0 License**. See [LICENSE](LICENSE) for details.
 
-## Credits
+## Credits & Acknowledgments
 
-### Third-Party Libraries
+OpenAlgo is built upon the shoulders of giants. We extend our gratitude to all the open-source projects that make this platform possible.
 
-- **[DaisyUI](https://github.com/saadeghi/daisyui)** - MIT License - Modern UI component library for Tailwind CSS with 30+ themes
-- **[TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts)** - Apache 2.0 - Financial charting library for PnL visualization
+### Core Framework
+- **[Flask](https://flask.palletsprojects.com)** - BSD License - Python web microframework
+- **[React](https://react.dev)** - MIT License - UI library for building user interfaces
+- **[SQLAlchemy](https://www.sqlalchemy.org)** - MIT License - Python SQL toolkit and ORM
+
+### UI Components & Styling
+- **[shadcn/ui](https://ui.shadcn.com)** - MIT License - Beautifully designed components built with Radix UI and Tailwind CSS
+- **[Radix UI](https://www.radix-ui.com)** - MIT License - Unstyled, accessible UI components
+- **[Tailwind CSS](https://tailwindcss.com)** - MIT License - Utility-first CSS framework
+- **[Lucide](https://lucide.dev)** - ISC License - Beautiful & consistent icon library
+
+### Data Visualization
+- **[TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts)** - Apache 2.0 - Financial charting library for market data and P&L visualization
+- **[xyflow/React Flow](https://reactflow.dev)** - MIT License - Highly customizable library for building node-based visual strategy editors
+
+### Code Editors
+- **[CodeMirror](https://codemirror.net)** - MIT License - Versatile code editor for Python and JSON with syntax highlighting
+- **[@uiw/react-codemirror](https://uiwjs.github.io/react-codemirror)** - MIT License - CodeMirror React wrapper with themes
+
+### State Management & Data Fetching
+- **[TanStack Query](https://tanstack.com/query)** - MIT License - Powerful asynchronous state management
+- **[Zustand](https://zustand-demo.pmnd.rs)** - MIT License - Lightweight state management
+- **[Axios](https://axios-http.com)** - MIT License - Promise-based HTTP client
+
+### Real-Time Communication
+- **[Socket.IO](https://socket.io)** - MIT License - Real-time bidirectional event-based communication
+- **[ZeroMQ](https://zeromq.org)** - LGPL License - High-performance asynchronous messaging
+
+### Security
+- **[Argon2-CFFI](https://argon2-cffi.readthedocs.io)** - MIT License - Argon2 password hashing (PHC winner)
+- **[Cryptography](https://cryptography.io)** - BSD/Apache License - Cryptographic recipes and primitives
+
+### Build & Development Tools
+- **[Vite](https://vitejs.dev)** - MIT License - Fast frontend build tool
+- **[TypeScript](https://www.typescriptlang.org)** - Apache 2.0 - JavaScript with syntax for types
+- **[Biome](https://biomejs.dev)** - MIT License - Fast formatter and linter
+- **[Vitest](https://vitest.dev)** - MIT License - Blazing fast unit testing
+- **[Playwright](https://playwright.dev)** - Apache 2.0 - End-to-end testing framework
+
+### Additional Libraries
+- **[React Router](https://reactrouter.com)** - MIT License - Declarative routing for React
+- **[Sonner](https://sonner.emilkowal.ski)** - MIT License - Toast notifications
+- **[cmdk](https://cmdk.paco.me)** - MIT License - Command palette component
+- **[next-themes](https://github.com/pacocoursey/next-themes)** - MIT License - Theme switching
+- **[react-resizable-panels](https://github.com/bvaughn/react-resizable-panels)** - MIT License - Resizable panel layouts
+- **[html2canvas-pro](https://html2canvas.hertzen.com)** - MIT License - Screenshot generation
 
 ## Repo Activity
 

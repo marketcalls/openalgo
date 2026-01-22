@@ -21,10 +21,11 @@ secrets.*
 *.key
 *.pem
 
-# SQLite and runtime files
+# SQLite, DuckDB and runtime files
 *.sqlite
 *.sqlite3
 *.db
+*.duckdb
 *.log
 *.sock
 
@@ -42,5 +43,23 @@ docker-compose.yml
 .vscode/
 .idea/
 
+# Frontend development files (dist is INCLUDED - pre-built for community)
+frontend/node_modules/
+frontend/.vite/
+frontend/coverage/
+frontend/test-results/
+frontend/playwright-report/
+frontend/*.tsbuildinfo
+
+# Frontend test files (not needed in production)
+frontend/e2e/
+frontend/src/test/
+frontend/vitest.config.ts
+frontend/playwright.config.ts
+
+# Frontend docs (developer reference, not needed in production)
+frontend/docs/
+
 # Project docs (EXPLICITLY INCLUDED)
 !docs/
+!frontend/dist/

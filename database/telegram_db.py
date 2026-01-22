@@ -209,6 +209,7 @@ def get_telegram_user(telegram_id: int) -> Optional[Dict]:
                 'id': user.id,
                 'telegram_id': user.telegram_id,
                 'openalgo_username': user.openalgo_username,
+                'host_url': user.host_url,
                 'first_name': user.first_name,
                 'last_name': user.last_name,
                 'telegram_username': user.telegram_username,

@@ -131,7 +131,7 @@ def _schedule_square_off_jobs(scheduler):
 
         # Check if auto-reset is disabled
         if reset_day.lower() == 'never':
-            logger.info("  Auto-Reset: Disabled (reset_day = Never)")
+            logger.debug("  Auto-Reset: Disabled (reset_day = Never)")
         else:
             reset_hour, reset_minute = map(int, reset_time_str.split(':'))
 

@@ -138,9 +138,11 @@ def api_search():
             'brsymbol': r['brsymbol'],
             'name': r['name'],
             'exchange': r['exchange'],
+            'brexchange': r.get('brexchange', ''),
             'token': r['token'],
             'expiry': r['expiry'],
             'strike': r['strike'],
+            'lotsize': r.get('lotsize'),
             'instrumenttype': r['instrumenttype'],
             'freeze_qty': r.get('freeze_qty', 1)
         } for r in results_dicts]
@@ -155,9 +157,11 @@ def api_search():
             'brsymbol': result.brsymbol,
             'name': result.name,
             'exchange': result.exchange,
+            'brexchange': result.brexchange,
             'token': result.token,
             'expiry': result.expiry,
             'strike': result.strike,
+            'lotsize': result.lotsize,
             'instrumenttype': result.instrumenttype,
             'freeze_qty': get_freeze_qty_for_option(result.symbol, result.exchange)
         } for result in results]

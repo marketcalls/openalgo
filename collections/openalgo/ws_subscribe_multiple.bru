@@ -1,0 +1,35 @@
+meta {
+  name: Subscribe Multiple Symbols
+  type: websocket
+  seq: 8
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Subscribe to multiple symbols in a single request
+}
+
+message:json {
+  {
+    "action": "subscribe",
+    "symbols": [
+      {"symbol": "RELIANCE", "exchange": "NSE"},
+      {"symbol": "TCS", "exchange": "NSE"},
+      {"symbol": "INFY", "exchange": "NSE"},
+      {"symbol": "HDFCBANK", "exchange": "NSE"},
+      {"symbol": "NIFTY25JANFUT", "exchange": "NFO"}
+    ],
+    "mode": 2
+  }
+}
+
+docs {
+  Subscribe to multiple symbols with a single message.
+  All symbols will receive the same mode (LTP/Quote/Depth).
+
+  Maximum symbols per WebSocket connection: 1000 (configurable via MAX_SYMBOLS_PER_WEBSOCKET)
+  Maximum connections: 3 (configurable via MAX_WEBSOCKET_CONNECTIONS)
+  Total capacity: 3000 symbols
+
+  Supported exchanges: NSE, NFO, BSE, BFO, CDS, MCX
+}

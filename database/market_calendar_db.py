@@ -16,9 +16,13 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.pool import NullPool
 from cachetools import TTLCache
 import os
-from datetime import datetime, date
-from typing import List, Dict, Any, Optional
+import pytz
+from datetime import datetime, date, time
+from typing import List, Dict, Any, Optional, Tuple
 from utils.logging import get_logger
+
+# IST Timezone
+IST = pytz.timezone('Asia/Kolkata')
 
 logger = get_logger(__name__)
 
@@ -927,3 +931,163 @@ def get_market_timing(exchange: str) -> Optional[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error fetching market timing for {exchange}: {e}")
         return None
+
+
+def is_market_open(exchange: str = None) -> bool:
+    """
+    Check if market is currently open for an exchange.
+
+    Args:
+        exchange: Exchange code (NSE, BSE, NFO, BFO, MCX, BCD, CDS)
+                  If None, checks if ANY exchange is open
+
+    Returns:
+        True if market is open, False otherwise
+    """
+    try:
+        now = datetime.now(IST)
+        today = now.date()
+
+        # Check if it's a holiday/weekend
+        if is_market_holiday(today, exchange):
+            return False
+
+        # Get current time in milliseconds from midnight
+        current_ms = (now.hour * 3600 + now.minute * 60 + now.second) * 1000
+
+        if exchange:
+            # Check specific exchange
+            timing = get_market_timing(exchange)
+            if not timing:
+                return False
+            return timing['start_offset'] <= current_ms <= timing['end_offset']
+        else:
+            # Check if ANY exchange is open
+            for exch in SUPPORTED_EXCHANGES:
+                timing = get_market_timing(exch)
+                if timing and timing['start_offset'] <= current_ms <= timing['end_offset']:
+                    return True
+            return False
+
+    except Exception as e:
+        logger.error(f"Error checking if market is open: {e}")
+        return False
+
+
+def get_market_hours_status() -> Dict[str, Any]:
+    """
+    Get comprehensive market hours status for all exchanges.
+
+    Returns:
+        Dict with:
+        - is_trading_day: bool
+        - any_market_open: bool
+        - exchanges: dict of exchange -> {is_open, start_time, end_time, next_open, next_close}
+        - next_market_open: datetime (when any market opens next)
+        - next_market_close: datetime (when all markets close)
+    """
+    try:
+        now = datetime.now(IST)
+        today = now.date()
+        current_ms = (now.hour * 3600 + now.minute * 60 + now.second) * 1000
+
+        is_trading = not is_market_holiday(today)
+
+        exchanges_status = {}
+        any_open = False
+        earliest_open_ms = None
+        latest_close_ms = None
+
+        for exch in SUPPORTED_EXCHANGES:
+            timing = get_market_timing(exch)
+            if timing:
+                is_open = is_trading and timing['start_offset'] <= current_ms <= timing['end_offset']
+                if is_open:
+                    any_open = True
+
+                exchanges_status[exch] = {
+                    'is_open': is_open,
+                    'start_time': timing['start_time'],
+                    'end_time': timing['end_time'],
+                    'start_offset': timing['start_offset'],
+                    'end_offset': timing['end_offset']
+                }
+
+                # Track earliest open and latest close
+                if earliest_open_ms is None or timing['start_offset'] < earliest_open_ms:
+                    earliest_open_ms = timing['start_offset']
+                if latest_close_ms is None or timing['end_offset'] > latest_close_ms:
+                    latest_close_ms = timing['end_offset']
+
+        return {
+            'is_trading_day': is_trading,
+            'any_market_open': any_open,
+            'exchanges': exchanges_status,
+            'earliest_open_ms': earliest_open_ms,
+            'latest_close_ms': latest_close_ms,
+            'current_time_ms': current_ms,
+            'current_time': now.strftime('%H:%M:%S IST')
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting market hours status: {e}")
+        return {
+            'is_trading_day': False,
+            'any_market_open': False,
+            'exchanges': {},
+            'error': str(e)
+        }
+
+
+def get_next_market_event() -> Tuple[str, datetime]:
+    """
+    Get the next market event (open or close).
+
+    Returns:
+        Tuple of (event_type, event_time) where event_type is 'open' or 'close'
+    """
+    try:
+        now = datetime.now(IST)
+        today = now.date()
+        current_ms = (now.hour * 3600 + now.minute * 60 + now.second) * 1000
+
+        status = get_market_hours_status()
+
+        if status['any_market_open']:
+            # Market is open, find next close
+            # Latest close time across all exchanges
+            close_ms = status['latest_close_ms']
+            close_hours = close_ms // 3600000
+            close_mins = (close_ms % 3600000) // 60000
+            close_time = now.replace(hour=close_hours, minute=close_mins, second=0, microsecond=0)
+            return ('close', close_time)
+        else:
+            # Market is closed, find next open
+            if status['is_trading_day'] and current_ms < status['earliest_open_ms']:
+                # Today is trading day and market hasn't opened yet
+                open_ms = status['earliest_open_ms']
+                open_hours = open_ms // 3600000
+                open_mins = (open_ms % 3600000) // 60000
+                open_time = now.replace(hour=open_hours, minute=open_mins, second=0, microsecond=0)
+                return ('open', open_time)
+            else:
+                # Market closed for today or it's a holiday, find next trading day
+                from datetime import timedelta
+                check_date = today + timedelta(days=1)
+                for _ in range(7):  # Check up to 7 days ahead
+                    if not is_market_holiday(check_date):
+                        # Found next trading day
+                        open_ms = status['earliest_open_ms'] or 33300000  # Default 09:15
+                        open_hours = open_ms // 3600000
+                        open_mins = (open_ms % 3600000) // 60000
+                        open_time = datetime(check_date.year, check_date.month, check_date.day,
+                                            open_hours, open_mins, 0, tzinfo=IST)
+                        return ('open', open_time)
+                    check_date += timedelta(days=1)
+
+                # Fallback - shouldn't reach here
+                return ('open', None)
+
+    except Exception as e:
+        logger.error(f"Error getting next market event: {e}")
+        return ('unknown', None)

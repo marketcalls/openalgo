@@ -227,6 +227,67 @@ def clear_404_tracker():
         logs_session.rollback()
         return jsonify({'error': str(e)}), 500
 
+@security_bp.route('/api/data', methods=['GET'])
+@check_session_validity
+@limiter.limit("60/minute")
+def security_data():
+    """API endpoint to get all security dashboard data as JSON"""
+    try:
+        # Get security settings
+        security_settings = get_security_settings()
+
+        # Get all banned IPs
+        banned_ips = IPBan.get_all_bans()
+
+        # Get suspicious IPs (1+ 404 errors to show all tracking)
+        suspicious_ips = Error404Tracker.get_suspicious_ips(min_errors=1)
+
+        # Get suspicious API users (1+ invalid API key attempts to show all)
+        suspicious_api_users = InvalidAPIKeyTracker.get_suspicious_api_users(min_attempts=1)
+
+        # Format data for display
+        banned_data = [{
+            'ip_address': ban.ip_address,
+            'ban_reason': ban.ban_reason,
+            'banned_at': ban.banned_at.strftime('%d-%m-%Y %I:%M:%S %p') if ban.banned_at else 'Unknown',
+            'expires_at': ban.expires_at.strftime('%d-%m-%Y %I:%M:%S %p') if ban.expires_at else 'Permanent',
+            'is_permanent': ban.is_permanent,
+            'ban_count': ban.ban_count,
+            'created_by': ban.created_by
+        } for ban in banned_ips]
+
+        suspicious_data = [{
+            'ip_address': tracker.ip_address,
+            'error_count': tracker.error_count,
+            'first_error_at': tracker.first_error_at.strftime('%d-%m-%Y %I:%M:%S %p') if tracker.first_error_at else 'Unknown',
+            'last_error_at': tracker.last_error_at.strftime('%d-%m-%Y %I:%M:%S %p') if tracker.last_error_at else 'Unknown',
+            'paths_attempted': tracker.paths_attempted
+        } for tracker in suspicious_ips]
+
+        api_abuse_data = [{
+            'ip_address': tracker.ip_address,
+            'attempt_count': tracker.attempt_count,
+            'first_attempt_at': tracker.first_attempt_at.strftime('%d-%m-%Y %I:%M:%S %p') if tracker.first_attempt_at else 'Unknown',
+            'last_attempt_at': tracker.last_attempt_at.strftime('%d-%m-%Y %I:%M:%S %p') if tracker.last_attempt_at else 'Unknown',
+            'api_keys_tried': tracker.api_keys_tried
+        } for tracker in suspicious_api_users]
+
+        return jsonify({
+            'banned_ips': banned_data,
+            'suspicious_ips': suspicious_data,
+            'api_abuse_ips': api_abuse_data,
+            'security_settings': security_settings
+        })
+    except Exception as e:
+        logger.error(f"Error loading security data: {e}")
+        return jsonify({
+            'banned_ips': [],
+            'suspicious_ips': [],
+            'api_abuse_ips': [],
+            'security_settings': get_security_settings()
+        })
+
+
 @security_bp.route('/stats', methods=['GET'])
 @check_session_validity
 @limiter.limit("60/minute")

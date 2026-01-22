@@ -78,6 +78,87 @@ def sandbox_config():
         flash('Error loading sandbox configuration', 'error')
         return redirect(url_for('core_bp.home'))
 
+@sandbox_bp.route('/api/configs')
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def api_get_configs():
+    """API endpoint to get all sandbox configuration values as JSON"""
+    try:
+        # Get all current configuration values
+        configs = get_all_configs()
+
+        # Default values to use if config not in database
+        defaults = {
+            'starting_capital': {'value': '10000000.00', 'description': 'Starting sandbox capital in INR'},
+            'reset_day': {'value': 'Never', 'description': 'Day of week for automatic fund reset'},
+            'reset_time': {'value': '00:00', 'description': 'Time for automatic fund reset (IST)'},
+            'equity_mis_leverage': {'value': '5', 'description': 'Leverage multiplier for equity MIS'},
+            'equity_cnc_leverage': {'value': '1', 'description': 'Leverage multiplier for equity CNC'},
+            'futures_leverage': {'value': '10', 'description': 'Leverage multiplier for futures'},
+            'option_buy_leverage': {'value': '1', 'description': 'Leverage for buying options'},
+            'option_sell_leverage': {'value': '1', 'description': 'Leverage for selling options'},
+            'nse_bse_square_off_time': {'value': '15:15', 'description': 'Square-off time for NSE/BSE MIS'},
+            'cds_bcd_square_off_time': {'value': '16:45', 'description': 'Square-off time for CDS/BCD MIS'},
+            'mcx_square_off_time': {'value': '23:30', 'description': 'Square-off time for MCX MIS'},
+            'ncdex_square_off_time': {'value': '17:00', 'description': 'Square-off time for NCDEX MIS'},
+            'order_check_interval': {'value': '5', 'description': 'Interval to check pending orders (1-30 sec)'},
+            'mtm_update_interval': {'value': '5', 'description': 'Interval to update MTM (0-60 sec)'},
+        }
+
+        # Helper to get config with fallback to default
+        def get_config_value(key):
+            return configs.get(key, defaults.get(key, {'value': '', 'description': ''}))
+
+        # Organize configs into categories for better UI presentation
+        organized_configs = {
+            'capital': {
+                'title': 'Capital Settings',
+                'configs': {
+                    'starting_capital': get_config_value('starting_capital'),
+                    'reset_day': get_config_value('reset_day'),
+                    'reset_time': get_config_value('reset_time')
+                }
+            },
+            'leverage': {
+                'title': 'Leverage Settings',
+                'configs': {
+                    'equity_mis_leverage': get_config_value('equity_mis_leverage'),
+                    'equity_cnc_leverage': get_config_value('equity_cnc_leverage'),
+                    'futures_leverage': get_config_value('futures_leverage'),
+                    'option_buy_leverage': get_config_value('option_buy_leverage'),
+                    'option_sell_leverage': get_config_value('option_sell_leverage')
+                }
+            },
+            'square_off': {
+                'title': 'Square-Off Times (IST)',
+                'configs': {
+                    'nse_bse_square_off_time': get_config_value('nse_bse_square_off_time'),
+                    'cds_bcd_square_off_time': get_config_value('cds_bcd_square_off_time'),
+                    'mcx_square_off_time': get_config_value('mcx_square_off_time'),
+                    'ncdex_square_off_time': get_config_value('ncdex_square_off_time')
+                }
+            },
+            'intervals': {
+                'title': 'Update Intervals (seconds)',
+                'configs': {
+                    'order_check_interval': get_config_value('order_check_interval'),
+                    'mtm_update_interval': get_config_value('mtm_update_interval')
+                }
+            }
+        }
+
+        return jsonify({
+            'status': 'success',
+            'configs': organized_configs
+        })
+    except Exception as e:
+        logger.error(f"Error getting sandbox configs: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Error loading configuration: {str(e)}'
+        }), 500
+
+
 @sandbox_bp.route('/update', methods=['POST'])
 @check_session_validity
 @limiter.limit(API_RATE_LIMIT)
@@ -326,6 +407,149 @@ def squareoff_status():
         return jsonify({
             'status': 'error',
             'message': f'Error getting square-off status: {str(e)}'
+        }), 500
+
+
+@sandbox_bp.route('/mypnl/api/data')
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def api_my_pnl_data():
+    """API endpoint to get P&L data as JSON for React frontend"""
+    try:
+        from decimal import Decimal
+
+        user_id = session.get('user')
+
+        # Get all positions (both open and closed) for P&L history
+        positions = SandboxPositions.query.filter_by(user_id=user_id).order_by(
+            SandboxPositions.updated_at.desc()
+        ).all()
+
+        # Get holdings for P&L
+        holdings = SandboxHoldings.query.filter_by(user_id=user_id).order_by(
+            SandboxHoldings.updated_at.desc()
+        ).all()
+
+        # Get funds for summary
+        funds = SandboxFunds.query.filter_by(user_id=user_id).first()
+
+        # Prepare position data
+        position_list = []
+        positions_unrealized = Decimal('0.00')
+
+        for pos in positions:
+            today_realized = Decimal(str(pos.today_realized_pnl or 0))
+            all_time_realized = Decimal(str(pos.accumulated_realized_pnl or 0))
+            unrealized = Decimal(str(pos.pnl or 0)) if pos.quantity != 0 else Decimal('0.00')
+
+            if pos.quantity != 0:
+                positions_unrealized += unrealized
+
+            position_list.append({
+                'symbol': pos.symbol,
+                'exchange': pos.exchange,
+                'product': pos.product,
+                'quantity': pos.quantity,
+                'average_price': float(pos.average_price),
+                'ltp': float(pos.ltp) if pos.ltp else 0.0,
+                'unrealized_pnl': float(unrealized),
+                'today_realized_pnl': float(today_realized),
+                'all_time_realized_pnl': float(all_time_realized),
+                'status': 'Open' if pos.quantity != 0 else 'Closed',
+                'updated_at': pos.updated_at.strftime('%Y-%m-%d %H:%M:%S') if pos.updated_at else ''
+            })
+
+        # Prepare holdings data
+        holdings_list = []
+        holdings_unrealized = Decimal('0.00')
+
+        for holding in holdings:
+            if holding.quantity != 0:
+                unrealized = Decimal(str(holding.pnl or 0))
+                holdings_unrealized += unrealized
+
+                holdings_list.append({
+                    'symbol': holding.symbol,
+                    'exchange': holding.exchange,
+                    'product': 'CNC',
+                    'quantity': holding.quantity,
+                    'average_price': float(holding.average_price),
+                    'ltp': float(holding.ltp) if holding.ltp else 0.0,
+                    'unrealized_pnl': float(unrealized),
+                    'pnl_percent': float(holding.pnl_percent or 0),
+                    'settlement_date': holding.settlement_date.strftime('%Y-%m-%d') if holding.settlement_date else ''
+                })
+
+        # Get recent trades
+        trades = SandboxTrades.query.filter_by(user_id=user_id).order_by(
+            SandboxTrades.trade_timestamp.desc()
+        ).limit(50).all()
+
+        trade_list = []
+        for trade in trades:
+            trade_list.append({
+                'tradeid': trade.tradeid,
+                'symbol': trade.symbol,
+                'exchange': trade.exchange,
+                'action': trade.action,
+                'quantity': trade.quantity,
+                'price': float(trade.price),
+                'product': trade.product,
+                'timestamp': trade.trade_timestamp.strftime('%Y-%m-%d %H:%M:%S') if trade.trade_timestamp else ''
+            })
+
+        # Get date-wise P&L history (last 30 days)
+        from database.sandbox_db import SandboxDailyPnL
+        daily_pnl_records = SandboxDailyPnL.query.filter_by(user_id=user_id).order_by(
+            SandboxDailyPnL.date.desc()
+        ).limit(30).all()
+
+        daily_pnl_list = []
+        for record in daily_pnl_records:
+            daily_pnl_list.append({
+                'date': record.date.strftime('%Y-%m-%d'),
+                'realized_pnl': float(record.realized_pnl or 0),
+                'positions_unrealized': float(record.positions_unrealized_pnl or 0),
+                'holdings_unrealized': float(record.holdings_unrealized_pnl or 0),
+                'total_unrealized': float((record.positions_unrealized_pnl or 0) + (record.holdings_unrealized_pnl or 0)),
+                'total_mtm': float(record.total_mtm or 0),
+                'portfolio_value': float(record.portfolio_value or 0)
+            })
+
+        # Calculate today's live P&L (not yet snapshotted)
+        today_realized = Decimal(str(funds.today_realized_pnl or 0)) if funds else Decimal('0.00')
+        total_unrealized = positions_unrealized + holdings_unrealized
+        today_total_mtm = today_realized + total_unrealized
+
+        # Summary data
+        summary = {
+            'today_realized_pnl': float(today_realized),
+            'all_time_realized_pnl': float(funds.realized_pnl or 0) if funds else 0.0,
+            'positions_unrealized_pnl': float(positions_unrealized),
+            'holdings_unrealized_pnl': float(holdings_unrealized),
+            'total_unrealized_pnl': float(total_unrealized),
+            'today_total_mtm': float(today_total_mtm),
+            'total_pnl': float(funds.total_pnl or 0) if funds else 0.0,
+            'available_balance': float(funds.available_balance or 0) if funds else 0.0,
+            'total_capital': float(funds.total_capital or 0) if funds else 0.0
+        }
+
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'summary': summary,
+                'daily_pnl': daily_pnl_list,
+                'positions': position_list,
+                'holdings': holdings_list,
+                'trades': trade_list
+            }
+        })
+
+    except Exception as e:
+        logger.error(f"Error getting P&L data: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Error loading P&L data: {str(e)}'
         }), 500
 
 

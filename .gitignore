@@ -23,6 +23,7 @@ config.ini
 
 *.egg-info/
 *.db
+*.duckdb
 *.sqlite
 *.log
 *.tmp
@@ -48,14 +49,27 @@ ENV/
 env.bak/ 
 venv.bak/ 
 
-# Node modules
-/node_modules/
+# Node modules (all directories)
+node_modules/
+**/node_modules/
 
 # Build output
-/dist/
-/build/
-/.next/
-/out/
+dist/
+!frontend/dist/
+build/
+.next/
+out/
+
+# Frontend specific
+# frontend/dist/ is INCLUDED - pre-built for community used
+frontend/.cache/
+*.local
 
 # Tailwind CSS output
 # **/output.css
+
+# npm cache
+.npm/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

@@ -17,6 +17,25 @@ body:json {
       "exchange": "NSE",
       "interval": "1m",
       "start_date": "2025-10-15",
-      "end_date": "2025-10-20"
+      "end_date": "2025-10-20",
+      "source": "api"
   }
+}
+
+docs {
+  # History API - Intraday
+
+  Fetch intraday historical data for a symbol.
+
+  ## Parameters
+
+  | Parameter | Type | Required | Description |
+  |-----------|------|----------|-------------|
+  | apikey | string | Yes | OpenAlgo API key |
+  | symbol | string | Yes | Trading symbol |
+  | exchange | string | Yes | Exchange (NSE, BSE, NFO, etc.) |
+  | interval | string | Yes | Timeframe: 1m, 2m, 3m, 5m, 10m, 15m, 20m, 30m, 1h, 2h, 3h, 4h |
+  | start_date | string | Yes | Start date (YYYY-MM-DD) |
+  | end_date | string | Yes | End date (YYYY-MM-DD) |
+  | source | string | No | "api" (default) or "db" (DuckDB/Historify) |
 }

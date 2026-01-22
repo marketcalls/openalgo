@@ -49,97 +49,102 @@ def send_test_email(recipient_email, sender_name="OpenAlgo Admin"):
             }
         
         # Create test email content
-        subject = "OpenAlgo SMTP Configuration Test"
-        
-        # Create HTML email content
+        subject = "OpenAlgo - SMTP Test Successful"
+
+        # Create modern minimalistic HTML email
         html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <title>OpenAlgo SMTP Test</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-                .header {{ background: #2563eb; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }}
-                .content {{ background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }}
-                .success-badge {{ background: #10b981; color: white; padding: 8px 16px; border-radius: 20px; display: inline-block; margin: 10px 0; }}
-                .info-box {{ background: white; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #2563eb; }}
-                .footer {{ text-align: center; margin-top: 30px; color: #6b7280; font-size: 14px; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>🎉 SMTP Configuration Test</h1>
-                </div>
-                <div class="content">
-                    <div class="success-badge">✅ Test Successful!</div>
-                    
-                    <p>Congratulations! Your OpenAlgo SMTP configuration is working correctly.</p>
-                    
-                    <div class="info-box">
-                        <h3>📋 Test Details:</h3>
-                        <ul>
-                            <li><strong>Test Date:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}</li>
-                            <li><strong>SMTP Server:</strong> {smtp_settings['smtp_server']}:{smtp_settings['smtp_port']}</li>
-                            <li><strong>Security:</strong> {'TLS/SSL Enabled' if smtp_settings.get('smtp_use_tls') else 'No Encryption'}</li>
-                            <li><strong>From Address:</strong> {smtp_settings['smtp_from_email']}</li>
-                            <li><strong>Recipient:</strong> {recipient_email}</li>
-                        </ul>
-                    </div>
-                    
-                    <p>🔐 <strong>What this means:</strong></p>
-                    <ul>
-                        <li>Password reset emails will work correctly</li>
-                        <li>System notifications can be sent</li>
-                        <li>Your SMTP credentials are properly configured</li>
-                    </ul>
-                    
-                    <p><strong>Next Steps:</strong></p>
-                    <ul>
-                        <li>You can now use the password reset functionality</li>
-                        <li>Consider setting up email notifications for important events</li>
-                        <li>Keep your SMTP credentials secure</li>
-                    </ul>
-                </div>
-                <div class="footer">
-                    <p>This is an automated test email from OpenAlgo.<br>
-                    If you didn't request this test, please contact your system administrator.</p>
-                </div>
-            </div>
-        </body>
-        </html>
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SMTP Test</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #0a0a0a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="min-height: 100vh;">
+        <tr>
+            <td align="center" style="padding: 40px 20px;">
+                <table role="presentation" width="100%" style="max-width: 480px; background-color: #141414; border-radius: 16px; overflow: hidden; border: 1px solid #262626;">
+                    <!-- Header -->
+                    <tr>
+                        <td style="padding: 40px 40px 30px 40px; text-align: center;">
+                            <div style="width: 56px; height: 56px; background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); border-radius: 14px; margin: 0 auto 24px auto;">
+                                <table role="presentation" width="100%" height="100%">
+                                    <tr>
+                                        <td align="center" valign="middle" style="font-size: 28px; color: #1a1a1a;">&#10003;</td>
+                                    </tr>
+                                </table>
+                            </div>
+                            <h1 style="margin: 0; font-size: 24px; font-weight: 600; color: #fafafa; letter-spacing: -0.5px;">Connection Verified</h1>
+                            <p style="margin: 12px 0 0 0; font-size: 15px; color: #a1a1aa;">Your SMTP configuration is working</p>
+                        </td>
+                    </tr>
+
+                    <!-- Details Card -->
+                    <tr>
+                        <td style="padding: 0 40px 30px 40px;">
+                            <table role="presentation" width="100%" style="background-color: #1c1c1c; border-radius: 12px; border: 1px solid #262626;">
+                                <tr>
+                                    <td style="padding: 20px;">
+                                        <table role="presentation" width="100%">
+                                            <tr>
+                                                <td style="padding: 8px 0; border-bottom: 1px solid #262626;">
+                                                    <span style="font-size: 13px; color: #71717a;">Server</span><br>
+                                                    <span style="font-size: 14px; color: #e4e4e7; font-weight: 500;">{smtp_settings['smtp_server']}:{smtp_settings['smtp_port']}</span>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding: 8px 0; border-bottom: 1px solid #262626;">
+                                                    <span style="font-size: 13px; color: #71717a;">Security</span><br>
+                                                    <span style="font-size: 14px; color: #22c55e; font-weight: 500;">{'TLS/SSL Enabled' if smtp_settings.get('smtp_use_tls') else 'No Encryption'}</span>
+                                                </td>
+                                            </tr>
+                                            <tr>
+                                                <td style="padding: 8px 0;">
+                                                    <span style="font-size: 13px; color: #71717a;">Sent to</span><br>
+                                                    <span style="font-size: 14px; color: #e4e4e7; font-weight: 500;">{recipient_email}</span>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- Footer -->
+                    <tr>
+                        <td style="padding: 0 40px 40px 40px; text-align: center;">
+                            <p style="margin: 0; font-size: 13px; color: #52525b;">
+                                {datetime.now().strftime('%B %d, %Y at %H:%M UTC')}
+                            </p>
+                            <p style="margin: 16px 0 0 0; font-size: 12px; color: #3f3f46;">
+                                Sent by <span style="color: #a1a1aa;">OpenAlgo</span>
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
         """
-        
+
         # Create plain text version
         text_content = f"""
-OpenAlgo SMTP Configuration Test
+SMTP Configuration Test - Success
 
-✅ Test Successful!
+Your OpenAlgo SMTP configuration is working correctly.
 
-Congratulations! Your OpenAlgo SMTP configuration is working correctly.
+Server: {smtp_settings['smtp_server']}:{smtp_settings['smtp_port']}
+Security: {'TLS/SSL Enabled' if smtp_settings.get('smtp_use_tls') else 'No Encryption'}
+Sent to: {recipient_email}
 
-Test Details:
-- Test Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}
-- SMTP Server: {smtp_settings['smtp_server']}:{smtp_settings['smtp_port']}
-- Security: {'TLS/SSL Enabled' if smtp_settings.get('smtp_use_tls') else 'No Encryption'}
-- From Address: {smtp_settings['smtp_from_email']}
-- Recipient: {recipient_email}
+Date: {datetime.now().strftime('%B %d, %Y at %H:%M UTC')}
 
-What this means:
-- Password reset emails will work correctly
-- System notifications can be sent
-- Your SMTP credentials are properly configured
-
-Next Steps:
-- You can now use the password reset functionality
-- Consider setting up email notifications for important events
-- Keep your SMTP credentials secure
-
----
-This is an automated test email from OpenAlgo.
-If you didn't request this test, please contact your system administrator.
+--
+Sent by OpenAlgo
         """
         
         # Send the email
@@ -188,85 +193,114 @@ def send_password_reset_email(recipient_email, reset_link, user_name="User"):
                 'message': 'SMTP not configured'
             }
         
-        subject = "OpenAlgo Password Reset Request"
-        
+        subject = "Reset your OpenAlgo password"
+
         html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <title>Password Reset</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-                .header {{ background: #dc2626; color: white; padding: 20px; text-align: center; border-radius: 8px 8px 0 0; }}
-                .content {{ background: #f8f9fa; padding: 30px; border-radius: 0 0 8px 8px; }}
-                .reset-button {{ display: inline-block; background: #2563eb !important; color: #ffffff !important; padding: 12px 30px; text-decoration: none !important; border-radius: 6px; margin: 20px 0; font-weight: bold; border: none; -webkit-text-fill-color: #ffffff !important; }}
-                .reset-button:hover {{ background: #1d4ed8 !important; color: #ffffff !important; -webkit-text-fill-color: #ffffff !important; }}
-                .reset-button:visited {{ color: #ffffff !important; -webkit-text-fill-color: #ffffff !important; }}
-                .reset-button:active {{ color: #ffffff !important; -webkit-text-fill-color: #ffffff !important; }}
-                .reset-button span {{ color: #ffffff !important; -webkit-text-fill-color: #ffffff !important; }}
-                .reset-button * {{ color: #ffffff !important; -webkit-text-fill-color: #ffffff !important; }}
-                .warning-box {{ background: #fef3c7; border: 1px solid #f59e0b; padding: 15px; border-radius: 6px; margin: 20px 0; }}
-                .footer {{ text-align: center; margin-top: 30px; color: #6b7280; font-size: 14px; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>🔒 Password Reset Request</h1>
-                </div>
-                <div class="content">
-                    <p>Hello {user_name},</p>
-                    
-                    <p>We received a request to reset your OpenAlgo account password. If you made this request, click the button below to reset your password:</p>
-                    
-                    <div style="text-align: center;">
-                        <a href="{reset_link}" class="reset-button" style="display: inline-block; background: #2563eb !important; color: #ffffff !important; padding: 12px 30px; text-decoration: none !important; border-radius: 6px; margin: 20px 0; font-weight: bold; border: none; mso-padding-alt: 0; text-align: center; -webkit-text-fill-color: #ffffff !important;"><!--[if mso]><i style="letter-spacing: 30px; mso-font-width: -100%; mso-text-raise: 30pt;">&nbsp;</i><![endif]--><span style="mso-text-raise: 15pt; color: #ffffff !important; -webkit-text-fill-color: #ffffff !important;">Reset My Password</span><!--[if mso]><i style="letter-spacing: 30px; mso-font-width: -100%;">&nbsp;</i><![endif]--></a>
-                    </div>
-                    
-                    <div class="warning-box">
-                        <strong>⚠️ Security Notice:</strong>
-                        <ul>
-                            <li>This link will expire in 1 hour</li>
-                            <li>If you didn't request this reset, please ignore this email</li>
-                            <li>Never share this link with anyone</li>
-                        </ul>
-                    </div>
-                    
-                    <p>If the button above doesn't work, copy and paste this link into your browser:</p>
-                    <p style="word-break: break-all; background: #e5e7eb; padding: 10px; border-radius: 4px;">{reset_link}</p>
-                    
-                    <p>If you didn't request this password reset, you can safely ignore this email. Your password will not be changed.</p>
-                </div>
-                <div class="footer">
-                    <p>This is an automated email from OpenAlgo.<br>
-                    For security reasons, please do not reply to this email.</p>
-                </div>
-            </div>
-        </body>
-        </html>
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Password Reset</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #0a0a0a; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="min-height: 100vh;">
+        <tr>
+            <td align="center" style="padding: 40px 20px;">
+                <table role="presentation" width="100%" style="max-width: 480px; background-color: #141414; border-radius: 16px; overflow: hidden; border: 1px solid #262626;">
+                    <!-- Header -->
+                    <tr>
+                        <td style="padding: 40px 40px 24px 40px; text-align: center;">
+                            <div style="width: 56px; height: 56px; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); border-radius: 14px; margin: 0 auto 24px auto;">
+                                <table role="presentation" width="100%" height="100%">
+                                    <tr>
+                                        <td align="center" valign="middle" style="font-size: 24px; color: #ffffff;">&#128274;</td>
+                                    </tr>
+                                </table>
+                            </div>
+                            <h1 style="margin: 0; font-size: 24px; font-weight: 600; color: #fafafa; letter-spacing: -0.5px;">Reset your password</h1>
+                            <p style="margin: 12px 0 0 0; font-size: 15px; color: #a1a1aa; line-height: 1.5;">Hi {user_name}, we received a request to reset your password.</p>
+                        </td>
+                    </tr>
+
+                    <!-- Button -->
+                    <tr>
+                        <td style="padding: 8px 40px 32px 40px; text-align: center;">
+                            <a href="{reset_link}" style="display: inline-block; background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 10px; font-size: 15px; font-weight: 600; letter-spacing: 0.3px;">Reset Password</a>
+                        </td>
+                    </tr>
+
+                    <!-- Divider -->
+                    <tr>
+                        <td style="padding: 0 40px;">
+                            <div style="height: 1px; background-color: #262626;"></div>
+                        </td>
+                    </tr>
+
+                    <!-- Security Notice -->
+                    <tr>
+                        <td style="padding: 24px 40px;">
+                            <table role="presentation" width="100%">
+                                <tr>
+                                    <td style="padding-bottom: 12px;">
+                                        <span style="font-size: 13px; color: #71717a; display: flex; align-items: center;">
+                                            <span style="margin-right: 8px;">&#9201;</span> Link expires in 1 hour
+                                        </span>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td>
+                                        <span style="font-size: 13px; color: #71717a; display: flex; align-items: center;">
+                                            <span style="margin-right: 8px;">&#128274;</span> Never share this link
+                                        </span>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- Link fallback -->
+                    <tr>
+                        <td style="padding: 0 40px 24px 40px;">
+                            <p style="margin: 0 0 8px 0; font-size: 12px; color: #52525b;">If the button doesn't work, copy this link:</p>
+                            <p style="margin: 0; font-size: 12px; color: #3b82f6; word-break: break-all; background-color: #1c1c1c; padding: 12px; border-radius: 8px; border: 1px solid #262626;">{reset_link}</p>
+                        </td>
+                    </tr>
+
+                    <!-- Footer -->
+                    <tr>
+                        <td style="padding: 16px 40px 32px 40px; text-align: center;">
+                            <p style="margin: 0; font-size: 12px; color: #3f3f46;">
+                                Didn't request this? You can safely ignore this email.
+                            </p>
+                            <p style="margin: 16px 0 0 0; font-size: 12px; color: #3f3f46;">
+                                Sent by <span style="color: #a1a1aa;">OpenAlgo</span>
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
         """
-        
+
         text_content = f"""
-OpenAlgo Password Reset Request
+Reset your password
 
-Hello {user_name},
+Hi {user_name},
 
-We received a request to reset your OpenAlgo account password. If you made this request, use the link below to reset your password:
+We received a request to reset your OpenAlgo password. Click the link below to set a new password:
 
 {reset_link}
 
-Security Notice:
-- This link will expire in 1 hour
-- If you didn't request this reset, please ignore this email
-- Never share this link with anyone
+This link expires in 1 hour. Never share this link with anyone.
 
-If you didn't request this password reset, you can safely ignore this email. Your password will not be changed.
+If you didn't request this, you can safely ignore this email.
 
----
-This is an automated email from OpenAlgo.
-For security reasons, please do not reply to this email.
+--
+Sent by OpenAlgo
         """
         
         return send_email(
@@ -338,29 +372,26 @@ def send_email(recipient_email, subject, text_content, html_content=None, smtp_s
             # Port 465 uses SSL from the start (SMTPS)
             logger.info(f"Using SMTP_SSL for port {smtp_port}")
             server = smtplib.SMTP_SSL(smtp_settings['smtp_server'], smtp_port, context=context)
+            # Send EHLO after SSL connection
+            helo_hostname = smtp_settings.get('smtp_helo_hostname') or smtp_settings['smtp_server']
+            server.ehlo(helo_hostname)
         else:
             # Port 587 or others use SMTP with STARTTLS
             logger.info(f"Using SMTP with STARTTLS for port {smtp_port}")
             server = smtplib.SMTP(smtp_settings['smtp_server'], smtp_port)
-            
+
+            # Send initial EHLO
+            helo_hostname = smtp_settings.get('smtp_helo_hostname') or smtp_settings['smtp_server']
+            server.ehlo(helo_hostname)
+
             # Enable TLS if configured
             if use_tls:
                 server.starttls(context=context)
-        
+                # MUST send EHLO again after STARTTLS
+                server.ehlo(helo_hostname)
+
         # Enable debug output for troubleshooting (uncomment if needed)
         # server.set_debuglevel(1)
-        
-        # Set HELO hostname if specified
-        if smtp_settings.get('smtp_helo_hostname'):
-            logger.info(f"Setting HELO hostname: {smtp_settings['smtp_helo_hostname']}")
-            try:
-                server.ehlo(smtp_settings['smtp_helo_hostname'])
-            except Exception as e:
-                logger.warning(f"EHLO with custom hostname failed, trying HELO: {e}")
-                try:
-                    server.helo(smtp_settings['smtp_helo_hostname'])
-                except Exception as e2:
-                    logger.warning(f"HELO with custom hostname failed: {e2}")
         
         # Login and send email
         server.login(smtp_settings['smtp_username'], smtp_settings['smtp_password'])
@@ -447,24 +478,23 @@ def validate_smtp_settings(smtp_settings):
         if smtp_port == 465:
             # Port 465 uses SSL from the start (SMTPS)
             server = smtplib.SMTP_SSL(smtp_settings['smtp_server'], smtp_port, context=context)
+            # Send EHLO after SSL connection
+            helo_hostname = smtp_settings.get('smtp_helo_hostname') or smtp_settings['smtp_server']
+            server.ehlo(helo_hostname)
         else:
             # Port 587 or others use SMTP with STARTTLS
             server = smtplib.SMTP(smtp_settings['smtp_server'], smtp_port)
-            
+
+            # Send initial EHLO
+            helo_hostname = smtp_settings.get('smtp_helo_hostname') or smtp_settings['smtp_server']
+            server.ehlo(helo_hostname)
+
             # Enable TLS if configured
             if use_tls:
                 server.starttls(context=context)
-        
-        # Set HELO hostname if specified
-        if smtp_settings.get('smtp_helo_hostname'):
-            try:
-                server.ehlo(smtp_settings['smtp_helo_hostname'])
-            except Exception as e:
-                try:
-                    server.helo(smtp_settings['smtp_helo_hostname'])
-                except Exception:
-                    pass  # Continue without custom HELO
-        
+                # MUST send EHLO again after STARTTLS
+                server.ehlo(helo_hostname)
+
         server.login(smtp_settings['smtp_username'], smtp_settings['smtp_password'])
         server.quit()
         
