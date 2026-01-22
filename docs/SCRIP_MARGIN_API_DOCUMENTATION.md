@@ -15,7 +15,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/margin/scrip
 The Scrip Margin API provides detailed margin and leverage calculations for individual trading symbols. It offers several advanced features:
 
 - **Dynamic Leverage Calculation**: Automatically calculates leverage based on current LTP and margin requirements
-- **Automatic Lot Size Detection**: For derivatives (NFO/BFO/CDS/MCX), automatically fetches and uses the correct lot size
+- **Automatic Lot Size Detection**: Automatically fetches and uses the correct lot size from the database for any symbol with lotsize > 1
 - **Per-Unit Margin Breakdown**: Returns margin per share/contract for easy scaling calculations
 - **Graceful LTP Handling**: If LTP is unavailable (pre-market hours, permissions), returns margin data with null leverage
 - **Multi-Broker Support**: Works with 24+ broker integrations
@@ -81,8 +81,8 @@ User can override automatic lot size detection by providing explicit quantity.
 The API uses the following priority order to determine quantity:
 
 1. **User-Provided Quantity** (Highest Priority): If you explicitly provide `quantity`, it will be used regardless of symbol type
-2. **Auto Lot Size for Derivatives**: For NFO/BFO/CDS/MCX exchanges, automatically fetches lot size from database
-3. **Default to 1 for Equities**: For NSE/BSE exchanges, defaults to quantity=1 for per-share calculations
+2. **Auto Lot Size Detection**: For any exchange, automatically fetches lot size from database if lotsize > 1
+3. **Default to 1**: If no user quantity provided and lotsize is 1 or not defined, defaults to quantity=1
 
 ## Response Format
 
@@ -241,13 +241,11 @@ Different brokers provide different margin components. Common fields include:
 
 ### 1. Automatic Lot Size Detection
 
-For derivatives (NFO, BFO, CDS, MCX):
-- API automatically fetches lot size from the token database
-- Example: NIFTY futures automatically uses lot size of 50
-- If lot size not found, logs warning and defaults to quantity=1
-
-For equities (NSE, BSE):
-- Defaults to quantity=1 for per-share margin calculation
+For All Exchanges (NSE/BSE/NFO/BFO/CDS/MCX):
+- If quantity is NOT provided, the API checks the symbol's lot size in the database
+- If lotsize > 1, uses that as the default quantity
+- If lotsize = 1 or not defined, defaults to quantity=1
+- This ensures accurate margin calculations for both derivatives and equities with non-standard lot sizes
 - Users can override by providing explicit quantity
 
 ### 2. Leverage Calculation Formula

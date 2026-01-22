@@ -39,8 +39,8 @@ class ScripMargin(Resource):
     def post(self):
         """Calculate margin and leverage for a single symbol with automatic lot size detection
 
-        Automatically fetches lot size for derivatives (NFO/BFO/CDS/MCX) and uses it as quantity.
-        For equities (NSE/BSE), defaults to quantity=1. Users can override by providing explicit quantity.
+        Automatically fetches lot size from database for any symbol with lotsize > 1.
+        Users can override by providing explicit quantity.
 
         Request Body:
         {

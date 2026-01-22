@@ -9,9 +9,6 @@ from utils.logging import get_logger
 # Initialize logger
 logger = get_logger(__name__)
 
-# Constants for derivative exchanges
-DERIVATIVE_EXCHANGES = ['NFO', 'BFO', 'CDS', 'MCX', 'BCD', 'NCDEX']
-
 
 def resolve_quantity(symbol: str, exchange: str, user_quantity: Optional[int]) -> Tuple[int, Optional[int]]:
     """
