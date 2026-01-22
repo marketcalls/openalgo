@@ -382,41 +382,90 @@ class FlowOpenAlgoClient:
 
     def options_order(
         self,
-        symbol: str,
+        underlying: str,
         exchange: str,
         action: str,
         quantity: int,
-        expiry: str,
+        expiry_date: str,
+        offset: str,
         option_type: str,
-        strike_price: float,
         price_type: str = "MARKET",
-        product_type: str = "MIS",
-        price: float = 0
+        product: str = "NRML",
+        price: float = 0,
+        splitsize: int = 0,
+        strategy: str = "flow_workflow"
     ) -> Dict[str, Any]:
-        """Place an options order"""
+        """Place an options order with ATM/ITM/OTM offset resolution
+
+        Args:
+            underlying: Underlying symbol (e.g., NIFTY, BANKNIFTY)
+            exchange: Exchange for underlying (NSE_INDEX, BSE_INDEX)
+            action: BUY or SELL
+            quantity: Total quantity
+            expiry_date: Expiry date (e.g., 27JAN26)
+            offset: Strike offset (ATM, ITM1-ITM50, OTM1-OTM50)
+            option_type: CE or PE
+            price_type: MARKET, LIMIT, SL, SL-M
+            product: NRML, MIS
+            price: Price for limit orders
+            splitsize: Split large orders into smaller chunks (0 = no split)
+            strategy: Strategy name for tracking
+        """
         from services.place_options_order_service import place_options_order
 
         order_data = {
-            'symbol': symbol,
+            'apikey': self.api_key,
+            'strategy': strategy,
+            'underlying': underlying,
             'exchange': exchange,
             'action': action.upper(),
             'quantity': quantity,
-            'expiry': expiry,
-            'option_type': option_type,
-            'strike_price': strike_price,
-            'pricetype': price_type,  # Service expects 'pricetype' (no underscore) for options
-            'product': product_type,  # Service expects 'product' not 'product_type'
-            'price': price
+            'expiry_date': expiry_date,
+            'offset': offset,
+            'option_type': option_type.upper(),
+            'pricetype': price_type,
+            'product': product,
+            'price': price,
+            'splitsize': splitsize
         }
 
         success, response, status_code = place_options_order(order_data, api_key=self.api_key)
         return self._handle_response(success, response, status_code)
 
-    def options_multi_order(self, orders: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Place multiple options orders"""
-        from services.options_multiorder_service import place_options_multi_order
+    def options_multi_order(
+        self,
+        underlying: str,
+        exchange: str,
+        expiry_date: str,
+        legs: List[Dict[str, Any]],
+        strategy: str = "flow_workflow",
+        strike_int: int = None
+    ) -> Dict[str, Any]:
+        """
+        Place multiple option legs with common underlying.
+        BUY legs are executed first for margin efficiency.
 
-        success, response, status_code = place_options_multi_order(orders, api_key=self.api_key)
+        Args:
+            underlying: Underlying symbol (e.g., NIFTY, BANKNIFTY)
+            exchange: Exchange for underlying (NSE_INDEX, BSE_INDEX)
+            expiry_date: Expiry date (e.g., 27JAN26)
+            legs: List of leg dicts with offset, option_type, action, quantity, etc.
+            strategy: Strategy name for tracking
+            strike_int: Optional specific strike price (overrides offset)
+        """
+        from services.options_multiorder_service import place_options_multiorder
+
+        multiorder_data = {
+            'apikey': self.api_key,
+            'strategy': strategy,
+            'underlying': underlying,
+            'exchange': exchange,
+            'expiry_date': expiry_date,
+            'strike_int': strike_int,
+            'legs': legs
+        }
+
+        success, response, status_code = place_options_multiorder(multiorder_data, api_key=self.api_key)
         return self._handle_response(success, response, status_code)
 
     # --- Market Calendar ---
@@ -466,8 +515,10 @@ class FlowOpenAlgoClient:
     # --- Alerts ---
 
     def telegram(self, message: str) -> Dict[str, Any]:
-        """Send a Telegram alert"""
+        """Send a Telegram alert using existing telegram_alert_service"""
         from services.telegram_alert_service import telegram_alert_service
+        from database.telegram_db import get_telegram_user_by_username
+        from datetime import datetime
 
         try:
             # Get username from API key
@@ -479,22 +530,38 @@ class FlowOpenAlgoClient:
                     'error': 'Invalid API key'
                 }
 
-            # Send custom alert
-            result = telegram_alert_service.send_custom_alert(
-                username=username,
-                message=message
-            )
-
-            if result:
-                return {
-                    'status': 'success',
-                    'data': {'message': 'Alert sent successfully'}
-                }
-            else:
+            # Get telegram user by username
+            telegram_user = get_telegram_user_by_username(username)
+            if not telegram_user:
+                logger.info(f"No telegram user linked for username: {username}")
                 return {
                     'status': 'error',
-                    'error': 'Failed to send Telegram alert'
+                    'error': f'No Telegram account linked for user: {username}'
                 }
+
+            if not telegram_user.get('notifications_enabled'):
+                logger.info(f"Notifications disabled for telegram user: {username}")
+                return {
+                    'status': 'error',
+                    'error': 'Telegram notifications are disabled'
+                }
+
+            telegram_id = telegram_user['telegram_id']
+
+            # Format the message with timestamp
+            timestamp = datetime.now().strftime('%H:%M:%S')
+            formatted_message = f"📢 *Flow Alert*\n─────────────────────\n{message}\n\n⏰ Time: {timestamp}"
+
+            # Send alert using existing send_alert_sync method
+            from concurrent.futures import ThreadPoolExecutor
+            alert_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flow_telegram")
+            alert_executor.submit(telegram_alert_service.send_alert_sync, telegram_id, formatted_message)
+
+            return {
+                'status': 'success',
+                'data': {'message': 'Alert queued successfully'}
+            }
+
         except Exception as e:
             logger.error(f"Error sending Telegram alert: {e}")
             return {
