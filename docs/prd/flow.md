@@ -2,7 +2,7 @@
 
 ## Overview
 
-Flow is a no-code visual workflow builder that enables traders to create automated trading strategies using drag-and-drop nodes.
+Flow is a no-code visual workflow builder that enables traders to create automated trading strategies using drag-and-drop nodes. Built with React Flow for the visual canvas and a Python-based execution engine.
 
 ## Problem Statement
 
@@ -27,6 +27,47 @@ A visual canvas where users:
 | Non-coder Trader | Automate simple strategies |
 | Signal Follower | Route TradingView alerts with conditions |
 | Multi-strategy Trader | Manage multiple workflows visually |
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        React Frontend                                │
+│  ┌─────────────────────────────────────────────────────────────────┐│
+│  │                    @xyflow/react Canvas                          ││
+│  │  [Start] ──▶ [Price Check] ──▶ [Place Order] ──▶ [Telegram]     ││
+│  └─────────────────────────────────────────────────────────────────┘│
+│        │                    │                    │                   │
+│  ┌─────▼─────┐      ┌──────▼──────┐      ┌─────▼─────┐             │
+│  │Node Palette│      │Config Panel │      │ Log Panel │             │
+│  └───────────┘      └─────────────┘      └───────────┘             │
+└─────────────────────────────────────────────────────────────────────┘
+                              │ REST API
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Flask Backend                                 │
+│  ┌─────────────────────────────────────────────────────────────────┐│
+│  │                   Execution Engine                               ││
+│  │  WorkflowContext │ NodeExecutor │ FlowOpenAlgoClient            ││
+│  └─────────────────────────────────────────────────────────────────┘│
+│        │                    │                    │                   │
+│  ┌─────▼─────┐      ┌──────▼──────┐      ┌─────▼─────┐             │
+│  │APScheduler│      │Price Monitor│      │  Webhook  │             │
+│  │  (IST)    │      │             │      │  Handler  │             │
+│  └───────────┘      └─────────────┘      └───────────┘             │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+## Node Categories (50+ nodes)
+
+| Category | Count | Examples |
+|----------|-------|----------|
+| Triggers | 4 | Start, Webhook, PriceAlert, HttpRequest |
+| Actions | 10 | PlaceOrder, SmartOrder, OptionsOrder, BasketOrder |
+| Conditions | 8 | PriceCondition, TimeWindow, PositionCheck, LogicGates |
+| Data | 16 | GetQuote, GetDepth, PositionBook, OptionChain |
+| Streaming | 4 | SubscribeLTP, SubscribeQuote, SubscribeDepth |
+| Utility | 7 | Variable, Delay, Log, TelegramAlert, MathExpression |
 
 ## Functional Requirements
 
@@ -60,9 +101,11 @@ A visual canvas where users:
 |----|-------------|----------|
 | FR4.1 | Place order | P0 |
 | FR4.2 | Smart order (position-aware) | P0 |
-| FR4.3 | Cancel order | P1 |
-| FR4.4 | Close position | P1 |
+| FR4.3 | Options order (single leg) | P1 |
+| FR4.4 | Options multi-order (strategies) | P1 |
 | FR4.5 | Basket order | P2 |
+| FR4.6 | Cancel/modify orders | P1 |
+| FR4.7 | Close positions | P1 |
 
 ### FR5: Data Nodes
 | ID | Requirement | Priority |
@@ -70,7 +113,8 @@ A visual canvas where users:
 | FR5.1 | Get quote (LTP, OHLC) | P0 |
 | FR5.2 | Get market depth | P1 |
 | FR5.3 | Get positions/holdings | P1 |
-| FR5.4 | Subscribe to real-time data | P1 |
+| FR5.4 | Get option chain | P1 |
+| FR5.5 | Get historical data | P1 |
 
 ### FR6: Utility Nodes
 | ID | Requirement | Priority |
@@ -80,19 +124,20 @@ A visual canvas where users:
 | FR6.3 | HTTP request (external API) | P1 |
 | FR6.4 | Telegram alert | P1 |
 | FR6.5 | Log message | P0 |
+| FR6.6 | Math expression | P1 |
 
 ### FR7: Webhook System
 | ID | Requirement | Priority |
 |----|-------------|----------|
 | FR7.1 | Unique webhook URL per workflow | P0 |
 | FR7.2 | Secret-based authentication | P0 |
-| FR7.3 | Symbol injection from URL path | P1 |
+| FR7.3 | Symbol injection from payload | P1 |
 | FR7.4 | Regenerate token/secret | P1 |
 
 ### FR8: Scheduling
 | ID | Requirement | Priority |
 |----|-------------|----------|
-| FR8.1 | Daily at specific time | P0 |
+| FR8.1 | Daily at specific time (IST) | P0 |
 | FR8.2 | Weekly on specific days | P1 |
 | FR8.3 | Interval (every N minutes) | P1 |
 | FR8.4 | One-time at datetime | P2 |
@@ -116,78 +161,60 @@ A visual canvas where users:
 | Max concurrent workflows | 50 |
 | Webhook response time | < 1 second |
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     React Flow Canvas                        │
-│  [Start] ──▶ [Price Check] ──▶ [Place Order] ──▶ [Telegram] │
-└─────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   Execution Engine                           │
-│  WorkflowContext │ NodeExecutor │ FlowOpenAlgoClient        │
-└─────────────────────────────────────────────────────────────┘
-                          │
-            ┌─────────────┼─────────────┐
-            ▼             ▼             ▼
-      APScheduler   Price Monitor   Webhook Handler
-```
-
-## Node Categories (60+ nodes)
-
-| Category | Count | Examples |
-|----------|-------|----------|
-| Triggers | 3 | Start, Webhook, PriceAlert |
-| Orders | 8 | PlaceOrder, SmartOrder, CancelOrder |
-| Data | 10 | GetQuote, GetDepth, PositionBook |
-| Conditions | 8 | PriceCondition, TimeWindow, AndGate |
-| Streaming | 4 | SubscribeLTP, SubscribeQuote |
-| Utility | 6 | Variable, Delay, HttpRequest |
-
 ## Database Schema
 
 ```sql
 flow_workflows (
-  id, name, nodes JSON, edges JSON,
-  is_active, webhook_token, webhook_secret,
-  schedule_job_id, api_key
+  id INTEGER PRIMARY KEY,
+  name VARCHAR,
+  description TEXT,
+  nodes JSON,           -- ReactFlow node array
+  edges JSON,           -- ReactFlow edge array
+  is_active BOOLEAN,
+  webhook_token VARCHAR UNIQUE,
+  webhook_secret VARCHAR,
+  webhook_enabled BOOLEAN,
+  webhook_auth_type VARCHAR,  -- "payload" or "url"
+  schedule_job_id VARCHAR,
+  api_key VARCHAR,
+  created_at DATETIME,
+  updated_at DATETIME
 )
 
 flow_workflow_executions (
-  id, workflow_id, status, logs JSON,
-  started_at, completed_at, error
+  id INTEGER PRIMARY KEY,
+  workflow_id INTEGER FK,
+  status VARCHAR,       -- pending, running, completed, failed
+  started_at DATETIME,
+  completed_at DATETIME,
+  logs JSON,            -- [{time, message, level}]
+  error TEXT
 )
 ```
 
-## UI Wireframe
+## API Endpoints
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  Flow Editor - "Morning Breakout Strategy"         [Save] [Activate]│
-├───────────────┬─────────────────────────────────────┬───────────────┤
-│  Node Palette │           Canvas                    │  Config Panel │
-│               │                                     │               │
-│  ▸ Triggers   │   ┌───────┐      ┌───────────┐    │  Start Node   │
-│    • Start    │   │ Start │─────▶│ Price > X │    │               │
-│    • Webhook  │   └───────┘      └─────┬─────┘    │  Schedule:    │
-│               │                    yes │ no       │  [Daily ▼]    │
-│  ▸ Conditions │                        ▼          │  Time: [09:20]│
-│    • Price    │                  ┌──────────┐     │               │
-│    • Time     │                  │ Buy SBIN │     │               │
-│               │                  └────┬─────┘     │               │
-│  ▸ Actions    │                       ▼          │               │
-│    • Order    │                  ┌──────────┐     │               │
-│    • Close    │                  │ Telegram │     │               │
-│               │                  └──────────┘     │               │
-└───────────────┴─────────────────────────────────────┴───────────────┘
-│  Execution Logs                                                      │
-│  [09:20:01] Workflow started                                        │
-│  [09:20:02] Price check: SBIN = 625.50 > 620 ✓                     │
-│  [09:20:03] Order placed: SBIN BUY 10 @ MARKET                      │
-└─────────────────────────────────────────────────────────────────────┘
-```
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/flow/api/workflows` | GET | List all workflows |
+| `/flow/api/workflows` | POST | Create workflow |
+| `/flow/api/workflows/<id>` | GET | Get workflow |
+| `/flow/api/workflows/<id>` | PUT | Update workflow |
+| `/flow/api/workflows/<id>` | DELETE | Delete workflow |
+| `/flow/api/workflows/<id>/execute` | POST | Manual execution |
+| `/flow/api/workflows/<id>/activate` | POST | Activate (schedule) |
+| `/flow/api/workflows/<id>/deactivate` | POST | Deactivate |
+| `/flow/api/workflows/<id>/executions` | GET | Execution history |
+| `/flow/api/workflows/<id>/webhook` | GET | Webhook info |
+
+## Related Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Node Reference](./flow-node-reference.md) | Complete list of 50+ nodes |
+| [Node Creation Guide](./flow-node-creation.md) | How to create new nodes |
+| [UI Components](./flow-ui-components.md) | React components guide |
+| [Execution Engine](./flow-execution.md) | Backend execution details |
 
 ## Success Metrics
 
