@@ -24,7 +24,7 @@ export const MathExpressionNode = memo(({ data, selected }: MathExpressionNodePr
 
   // Truncate expression for display
   const displayExpr = expression.length > 25
-    ? expression.substring(0, 22) + '...'
+    ? `${expression.substring(0, 22)}...`
     : expression
 
   return (

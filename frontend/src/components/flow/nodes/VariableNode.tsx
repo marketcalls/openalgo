@@ -45,7 +45,7 @@ const operationDescriptions: Record<string, string> = {
 
 export const VariableNode = memo(({ data, selected }: VariableNodeProps) => {
   const displayValue = typeof data.value === 'object'
-    ? JSON.stringify(data.value).slice(0, 20) + '...'
+    ? `${JSON.stringify(data.value).slice(0, 20)}...`
     : String(data.value || '').slice(0, 20)
 
   return (
@@ -89,7 +89,7 @@ export const VariableNode = memo(({ data, selected }: VariableNodeProps) => {
           </div>
         </div>
         <div className="mt-1.5 text-center text-[8px] text-muted-foreground">
-          Use: {'{{' + (data.variableName || 'var') + '}}'}
+          Use: {`{{${data.variableName || 'var'}}}`}
         </div>
       </div>
       <Handle

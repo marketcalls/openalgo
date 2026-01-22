@@ -158,7 +158,7 @@ export default function HistorifyCharts() {
       // For W, MO, Q, Y with value 1, just use the unit (e.g., 'W', 'M')
       // For values > 1, use value + unit (e.g., '2W', '3MO')
       if (['W', 'M', 'Q', 'Y'].includes(customIntervalUnit)) {
-        const val = parseInt(customIntervalValue) || 1
+        const val = parseInt(customIntervalValue, 10) || 1
         return val === 1 ? customIntervalUnit : `${val}${customIntervalUnit}`
       }
       return `${customIntervalValue}${customIntervalUnit}`

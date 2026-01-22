@@ -29,7 +29,7 @@ const methodColors: Record<string, string> = {
 export const HttpRequestNode = memo(({ data, selected }: HttpRequestNodeProps) => {
   const method = data.method || 'GET'
   const url = data.url || ''
-  const displayUrl = url.length > 20 ? url.substring(0, 20) + '...' : url
+  const displayUrl = url.length > 20 ? `${url.substring(0, 20)}...` : url
 
   return (
     <div

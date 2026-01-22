@@ -18,7 +18,7 @@ export const TelegramAlertNode = memo(({ data, selected }: TelegramAlertNodeProp
   const nodeData = data as unknown as Record<string, unknown>
   const truncatedMessage = data.message
     ? data.message.length > 25
-      ? data.message.substring(0, 25) + '...'
+      ? `${data.message.substring(0, 25)}...`
       : data.message
     : 'No message'
 

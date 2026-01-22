@@ -157,7 +157,7 @@ export function MessageLog({ messages, onClear, onExport }: MessageLogProps) {
     const isExpanded = expandedMessages.has(msg.id)
 
     // Truncate for collapsed view
-    const preview = jsonStr.length > 100 ? jsonStr.slice(0, 100) + '...' : jsonStr
+    const preview = jsonStr.length > 100 ? `${jsonStr.slice(0, 100)}...` : jsonStr
 
     return (
       <div className="relative group">

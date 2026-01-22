@@ -168,6 +168,7 @@ export function InsertableEdge({
           <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
             <DropdownMenuTrigger asChild>
               <button
+                type="button"
                 className={cn(
                   'flex h-5 w-5 items-center justify-center rounded-full border bg-background shadow-sm transition-all',
                   'hover:scale-110 hover:border-primary hover:bg-primary hover:text-primary-foreground',
