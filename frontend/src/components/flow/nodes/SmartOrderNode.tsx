@@ -59,8 +59,8 @@ export const SmartOrderNode = memo(({ data, selected }: SmartOrderNodeProps) => 
             </div>
           </div>
           <div className="flex items-center justify-between rounded bg-muted/50 px-1.5 py-1">
-            <span className="text-[10px] text-muted-foreground">Max Pos</span>
-            <span className="mono-data text-[10px] font-medium">{data.positionSize || 0}</span>
+            <span className="text-[10px] text-muted-foreground">Target Pos</span>
+            <span className="mono-data text-[10px] font-medium">{data.positionSize ?? 0}</span>
           </div>
           <div className="flex items-center justify-between text-[9px] text-muted-foreground">
             <span>{data.priceType || 'MARKET'}</span>

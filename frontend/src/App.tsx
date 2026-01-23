@@ -156,7 +156,7 @@ function App() {
                   path="/chartink/:strategyId/configure"
                   element={<ConfigureChartinkSymbols />}
                 />
-                {/* Flow Workflows */}
+                {/* Flow Editor */}
                 <Route path="/flow" element={<FlowIndex />} />
                 <Route path="/flow/shortcuts" element={<FlowKeyboardShortcuts />} />
                 {/* Phase 7: Admin */}
