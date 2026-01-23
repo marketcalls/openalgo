@@ -515,11 +515,14 @@ class NodeExecutor:
         symbol = self.get_str(node_data, "symbol", "")
         exchange = self.get_str(node_data, "exchange", "NSE")
         action = self.get_str(node_data, "action", "BUY")
-        quantity = self.get_int(node_data, "quantity", 1)
+        # Support both newQuantity (frontend) and quantity (legacy) field names
+        quantity = self.get_int(node_data, "newQuantity", 0) or self.get_int(node_data, "quantity", 1)
         price_type = self.get_str(node_data, "priceType", "LIMIT")
         product = self.get_str(node_data, "product", "MIS")
-        price = self.get_float(node_data, "price", 0)
-        trigger_price = self.get_float(node_data, "triggerPrice", 0)
+        # Support both newPrice (frontend) and price (legacy) field names
+        price = self.get_float(node_data, "newPrice", 0) or self.get_float(node_data, "price", 0)
+        # Support both newTriggerPrice (frontend) and triggerPrice (legacy) field names
+        trigger_price = self.get_float(node_data, "newTriggerPrice", 0) or self.get_float(node_data, "triggerPrice", 0)
 
         self.log(f"Modifying order: {order_id} - {symbol} {action} qty={quantity} price={price} trigger={trigger_price}")
         result = self.client.modify_order(
