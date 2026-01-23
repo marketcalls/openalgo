@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir uv && \
     uv venv .venv && \
     uv pip install --upgrade pip && \
     uv sync && \
-    uv pip install gunicorn eventlet==0.35.2 && \
+    uv pip install gunicorn eventlet>=0.40.3 && \
     rm -rf /root/.cache
 # --------------------------------------------------------------------------- #
 # ------------------------------ Production Stage --------------------------- #
