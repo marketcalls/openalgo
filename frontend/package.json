@@ -25,7 +25,6 @@
   },
   "dependencies": {
     "@codemirror/lang-json": "^6.0.2",
-    "@xyflow/react": "^12.3.6",
     "@codemirror/lang-python": "^6.2.1",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-avatar": "^1.1.11",
@@ -48,6 +47,7 @@
     "@types/react-syntax-highlighter": "^15.5.13",
     "@uiw/codemirror-themes": "^4.25.4",
     "@uiw/react-codemirror": "^4.25.4",
+    "@xyflow/react": "^12.3.6",
     "axios": "^1.13.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -56,6 +56,7 @@
     "lightweight-charts": "^5.1.0",
     "lucide-react": "^0.562.0",
     "next-themes": "^0.4.6",
+    "openalgo": "file:..",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-resizable-panels": "^4.3.3",
