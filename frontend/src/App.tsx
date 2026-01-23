@@ -48,6 +48,9 @@ const Playground = lazy(() => import('@/pages/Playground'))
 const Historify = lazy(() => import('@/pages/Historify'))
 const HistorifyCharts = lazy(() => import('@/pages/HistorifyCharts'))
 
+// Option Chain
+const OptionChain = lazy(() => import('@/pages/OptionChain'))
+
 // Strategy pages
 const StrategyIndex = lazy(() => import('@/pages/strategy/StrategyIndex'))
 const NewStrategy = lazy(() => import('@/pages/strategy/NewStrategy'))
@@ -135,6 +138,7 @@ function App() {
                 <Route path="/sandbox" element={<Sandbox />} />
                 <Route path="/sandbox/mypnl" element={<SandboxPnL />} />
                 <Route path="/analyzer" element={<Analyzer />} />
+                <Route path="/optionchain" element={<OptionChain />} />
                 <Route path="/websocket/test" element={<WebSocketTest />} />
                 {/* Phase 6: Webhook Strategies */}
                 <Route path="/strategy" element={<StrategyIndex />} />
