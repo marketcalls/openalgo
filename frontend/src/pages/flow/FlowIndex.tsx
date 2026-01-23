@@ -605,7 +605,7 @@ export default function FlowIndex() {
     <div className="mx-auto max-w-6xl px-6 py-8">
       <div className="mb-8 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Flow Workflows</h1>
+          <h1 className="text-2xl font-bold">Flow Editor</h1>
           <p className="text-muted-foreground">
             Create and manage your trading automations
           </p>
