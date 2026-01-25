@@ -5,6 +5,13 @@ load_and_check_env_variables()
 import re
 import sys
 
+import mimetypes
+mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("application/json", ".json")
+mimetypes.add_type("application/font-woff", ".woff")
+mimetypes.add_type("application/font-woff2", ".woff2")
+
 # Initialize logging EARLY to suppress verbose startup logs
 from utils.logging import get_logger, log_startup_banner, highlight_url  # Import centralized logging
 
