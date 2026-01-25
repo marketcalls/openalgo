@@ -15,6 +15,7 @@
 #   pull     - Pull latest image from Docker Hub
 #   status   - Show container status
 #   shell    - Open bash shell in container
+#   migrate  - Run database migrations manually
 #   setup    - Re-run setup (regenerate keys, edit .env)
 #   help     - Show this help
 #
@@ -293,25 +294,20 @@ do_setup() {
     echo "  Documentation: https://docs.openalgo.in"
     echo ""
 
-    # Try to open .env in editor
-    if [[ "$OSTYPE" == "darwin"* ]]; then
-        read -p "Open .env in your default editor for review? (y/n): " OPEN_EDITOR
-        if [[ "$OPEN_EDITOR" =~ ^[Yy]$ ]]; then
+    # Try to open .env in editor (non-blocking)
+    read -p "Open .env in editor for review? (y/n): " OPEN_EDITOR
+    if [[ "$OPEN_EDITOR" =~ ^[Yy]$ ]]; then
+        if [[ "$OSTYPE" == "darwin"* ]]; then
             open -t "$OPENALGO_DIR/$ENV_FILE"
-        fi
-    else
-        if command -v nano &> /dev/null; then
-            read -p "Open .env in nano for review? (y/n): " OPEN_EDITOR
-            if [[ "$OPEN_EDITOR" =~ ^[Yy]$ ]]; then
-                nano "$OPENALGO_DIR/$ENV_FILE"
-            fi
-        elif command -v vim &> /dev/null; then
-            read -p "Open .env in vim for review? (y/n): " OPEN_EDITOR
-            if [[ "$OPEN_EDITOR" =~ ^[Yy]$ ]]; then
-                vim "$OPENALGO_DIR/$ENV_FILE"
-            fi
+        elif command -v xdg-open &> /dev/null; then
+            # Linux with desktop environment - non-blocking
+            xdg-open "$OPENALGO_DIR/$ENV_FILE" &>/dev/null &
+        elif command -v gedit &> /dev/null; then
+            gedit "$OPENALGO_DIR/$ENV_FILE" &>/dev/null &
+        elif command -v code &> /dev/null; then
+            code "$OPENALGO_DIR/$ENV_FILE"
         else
-            echo "Edit .env manually: $OPENALGO_DIR/$ENV_FILE"
+            echo "  Edit .env manually: $OPENALGO_DIR/$ENV_FILE"
         fi
     fi
 
