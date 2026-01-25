@@ -30,18 +30,21 @@ chmod +x docker-run.sh
 
 ### What Happens
 
-1. Creates `~/openalgo` directory (or `%USERPROFILE%\openalgo` on Windows)
+1. Sets up in the **current directory** (where the script is located)
 2. Downloads configuration template from GitHub
 3. Generates secure APP_KEY and API_KEY_PEPPER
-4. Opens editor to configure your broker credentials
-5. Pulls and starts the Docker container
+4. Prompts for broker name (with validation)
+5. Prompts for API credentials
+6. For **XTS brokers** (fivepaisaxts, compositedge, ibulls, iifl, jainamxts, wisdom): prompts for market data credentials
+7. Pulls and starts the Docker container
+8. **Runs database migrations automatically** on startup
 
 ### After Setup
 
 - **Web UI**: http://127.0.0.1:5000
 - **WebSocket**: ws://127.0.0.1:8765
-- **Config file**: `~/openalgo/.env`
-- **Database**: `~/openalgo/db/`
+- **Config file**: `.env` (in script directory)
+- **Database**: `db/` (in script directory)
 
 ### Management Commands
 
@@ -49,10 +52,12 @@ chmod +x docker-run.sh
 # Windows
 docker-run.bat start     # Start OpenAlgo
 docker-run.bat stop      # Stop OpenAlgo
-docker-run.bat restart   # Restart after config changes
+docker-run.bat restart   # Restart (pulls latest + auto-migrates)
 docker-run.bat logs      # View live logs
 docker-run.bat status    # Check if running
-docker-run.bat pull      # Update to latest version
+docker-run.bat pull      # Pull latest image
+docker-run.bat migrate   # Run database migrations manually
+docker-run.bat shell     # Open bash shell in container
 docker-run.bat setup     # Re-run setup (regenerate keys)
 
 # macOS / Linux
@@ -62,19 +67,56 @@ docker-run.bat setup     # Re-run setup (regenerate keys)
 ./docker-run.sh logs
 ./docker-run.sh status
 ./docker-run.sh pull
+./docker-run.sh migrate
+./docker-run.sh shell
 ./docker-run.sh setup
 ```
 
 ### Updating OpenAlgo
 
+Database migrations run **automatically** when the container starts.
+
 ```bash
-# Pull latest image and restart
-docker-run.bat pull      # Windows
+# Windows - Pull latest and restart (auto-migrates)
 docker-run.bat restart
 
-./docker-run.sh pull     # macOS/Linux
+# macOS/Linux - Pull latest and restart (auto-migrates)
 ./docker-run.sh restart
+
+# Or step by step:
+docker-run.bat pull      # Pull latest image
+docker-run.bat restart   # Restart with new image
+
+# Manual migration (if needed)
+docker-run.bat migrate
 ```
+
+### File Permissions
+
+The scripts automatically handle file permissions:
+
+- **db/** directory: Created with write access for the container
+- **.env** file: Read-only mount inside container (`:ro`)
+- **Container user**: Runs as non-root user `appuser` (UID 1000)
+
+If you encounter permission issues on Linux:
+```bash
+# Fix database directory permissions
+sudo chown -R 1000:1000 db/
+chmod -R 755 db/
+```
+
+### XTS Brokers
+
+These brokers require **additional market data credentials**:
+- fivepaisaxts
+- compositedge
+- ibulls
+- iifl
+- jainamxts
+- wisdom
+
+The setup script will automatically prompt for these credentials when you select an XTS broker.
 
 ---
 
@@ -217,6 +259,8 @@ sudo docker compose up -d
 
 ### Updating OpenAlgo
 
+Database migrations run **automatically** when the container starts.
+
 ```bash
 cd /opt/openalgo
 
@@ -229,12 +273,15 @@ sudo docker compose down
 # Pull latest code
 sudo git pull origin main
 
-# Rebuild and restart
+# Rebuild and restart (migrations run automatically)
 sudo docker compose build --no-cache
 sudo docker compose up -d
 
 # Verify
 openalgo-status
+
+# Manual migration (if needed)
+sudo docker compose exec web python /app/upgrade/migrate_all.py
 ```
 
 ### Troubleshooting
