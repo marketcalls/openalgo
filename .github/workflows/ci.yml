@@ -19,6 +19,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          python-version: "3.12"
       - run: uv sync --dev
       - name: Ruff lint check
         run: uv run ruff check .
@@ -35,6 +36,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          python-version: "3.12"
       - run: uv sync
       - name: Run CI-safe tests
         run: |
@@ -132,6 +134,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          python-version: "3.12"
       - run: uv sync --dev
       - name: Bandit security scan
         run: uv run bandit -r . -x .venv,test,frontend,node_modules -ll -f txt
