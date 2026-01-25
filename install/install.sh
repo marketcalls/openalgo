@@ -924,6 +924,11 @@ server {
         proxy_connect_timeout 300s;
         proxy_send_timeout 300s;
 
+        # Increased buffer sizes for large headers (auth tokens, session cookies)
+        proxy_buffer_size 128k;
+        proxy_buffers 4 256k;
+        proxy_busy_buffers_size 256k;
+
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
