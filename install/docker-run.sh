@@ -289,6 +289,9 @@ do_setup() {
     echo "  Redirect URL for broker portal:"
     echo "  http://127.0.0.1:5000/$BROKER_NAME/callback"
     echo ""
+    echo "  Documentation:"
+    echo "  https://github.com/marketcalls/openalgo/blob/main/install/Docker-install-readme.md"
+    echo ""
 
     # Try to open .env in editor
     if [[ "$OSTYPE" == "darwin"* ]]; then
