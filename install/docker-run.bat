@@ -225,8 +225,8 @@ REM Update broker credentials
 powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'BROKER_API_KEY = ''YOUR_BROKER_API_KEY''', 'BROKER_API_KEY = ''%BROKER_API_KEY%''' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
 powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'BROKER_API_SECRET = ''YOUR_BROKER_API_SECRET''', 'BROKER_API_SECRET = ''%BROKER_API_SECRET%''' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
 
-REM Update redirect URL with broker name
-powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace '/fyers/callback', '/%BROKER_NAME%/callback' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
+REM Update redirect URL with broker name (replace <broker> placeholder)
+powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace '<broker>', '%BROKER_NAME%' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
 
 REM Update XTS market data credentials if applicable
 if "%IS_XTS%"=="1" (

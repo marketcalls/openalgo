@@ -253,7 +253,7 @@ do_setup() {
         # macOS sed syntax
         sed -i '' "s/BROKER_API_KEY = 'YOUR_BROKER_API_KEY'/BROKER_API_KEY = '$BROKER_API_KEY'/g" "$OPENALGO_DIR/$ENV_FILE"
         sed -i '' "s/BROKER_API_SECRET = 'YOUR_BROKER_API_SECRET'/BROKER_API_SECRET = '$BROKER_API_SECRET'/g" "$OPENALGO_DIR/$ENV_FILE"
-        sed -i '' "s|/fyers/callback|/$BROKER_NAME/callback|g" "$OPENALGO_DIR/$ENV_FILE"
+        sed -i '' "s|<broker>|$BROKER_NAME|g" "$OPENALGO_DIR/$ENV_FILE"
 
         if [ "$IS_XTS" -eq 1 ]; then
             sed -i '' "s/BROKER_API_KEY_MARKET = 'YOUR_BROKER_MARKET_API_KEY'/BROKER_API_KEY_MARKET = '$BROKER_API_KEY_MARKET'/g" "$OPENALGO_DIR/$ENV_FILE"
@@ -263,7 +263,7 @@ do_setup() {
         # Linux sed syntax
         sed -i "s/BROKER_API_KEY = 'YOUR_BROKER_API_KEY'/BROKER_API_KEY = '$BROKER_API_KEY'/g" "$OPENALGO_DIR/$ENV_FILE"
         sed -i "s/BROKER_API_SECRET = 'YOUR_BROKER_API_SECRET'/BROKER_API_SECRET = '$BROKER_API_SECRET'/g" "$OPENALGO_DIR/$ENV_FILE"
-        sed -i "s|/fyers/callback|/$BROKER_NAME/callback|g" "$OPENALGO_DIR/$ENV_FILE"
+        sed -i "s|<broker>|$BROKER_NAME|g" "$OPENALGO_DIR/$ENV_FILE"
 
         if [ "$IS_XTS" -eq 1 ]; then
             sed -i "s/BROKER_API_KEY_MARKET = 'YOUR_BROKER_MARKET_API_KEY'/BROKER_API_KEY_MARKET = '$BROKER_API_KEY_MARKET'/g" "$OPENALGO_DIR/$ENV_FILE"
