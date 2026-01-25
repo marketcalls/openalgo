@@ -164,14 +164,14 @@ fi
 log "\n=== Configuration ===" "$BLUE"
 
 # 0. Git Repository Selection
-DEFAULT_REPO="https://github.com/aravindgandavadi/openalgo.git"
+DEFAULT_REPO="https://github.com/marketcalls/openalgo.git"
 read -p "Enter Git Repository URL [Default: $DEFAULT_REPO]: " REPO_URL
 REPO_URL=${REPO_URL:-$DEFAULT_REPO}
 log "Using Repository: $REPO_URL" "$GREEN"
 
 # 1. Get Domains
 while true; do
-    read -p "Enter domain names separated by SPACE (e.g., domain.com api.domain.com): " -a DOMAINS_INPUT
+    read -p "Enter domain names separated by SPACE (e.g., domain.com zerodha.domain.com): " -a DOMAINS_INPUT
     if [ ${#DOMAINS_INPUT[@]} -eq 0 ]; then
         log "Error: At least one domain is required" "$RED"
         continue
