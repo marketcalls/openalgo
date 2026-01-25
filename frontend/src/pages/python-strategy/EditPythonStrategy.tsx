@@ -8,7 +8,7 @@ import {
   RotateCcw,
   Save,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { pythonStrategyApi } from '@/api/python-strategy'
@@ -40,6 +40,12 @@ export default function EditPythonStrategy() {
   const hasChanges = code !== originalCode
   const isRunning = strategy?.status === 'running'
 
+  // Ref to always have access to the latest code value in event handlers
+  const codeRef = useRef(code)
+  useEffect(() => {
+    codeRef.current = code
+  }, [code])
+
   const fetchData = async () => {
     if (!strategyId) return
     try {
@@ -66,14 +72,38 @@ export default function EditPythonStrategy() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const handleSave = useCallback(async () => {
+    // Use ref to get the latest code value (important for keyboard shortcuts)
+    const currentCode = codeRef.current
+    const currentHasChanges = currentCode !== originalCode
+
+    if (!strategyId || !currentHasChanges || isRunning) return
+
+    try {
+      setSaving(true)
+      const response = await pythonStrategyApi.saveStrategy(strategyId, currentCode)
+
+      if (response.status === 'success') {
+        setOriginalCode(currentCode)
+        toast.success('Strategy saved')
+      } else {
+        toast.error(response.message || 'Failed to save strategy')
+      }
+    } catch (error) {
+      console.error('Failed to save strategy:', error)
+      toast.error('Failed to save strategy')
+    } finally {
+      setSaving(false)
+    }
+  }, [strategyId, originalCode, isRunning])
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault()
-        if (hasChanges && !isRunning) {
-          handleSave()
-        }
+        // handleSave uses codeRef internally to get the latest code
+        handleSave()
       }
       if (e.key === 'F11') {
         e.preventDefault()
@@ -86,29 +116,7 @@ export default function EditPythonStrategy() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasChanges, isRunning, isFullscreen])
-
-  const handleSave = async () => {
-    if (!strategyId || !hasChanges || isRunning) return
-
-    try {
-      setSaving(true)
-      const response = await pythonStrategyApi.saveStrategy(strategyId, code)
-
-      if (response.status === 'success') {
-        setOriginalCode(code)
-        toast.success('Strategy saved')
-      } else {
-        toast.error(response.message || 'Failed to save strategy')
-      }
-    } catch (error) {
-      console.error('Failed to save strategy:', error)
-      toast.error('Failed to save strategy')
-    } finally {
-      setSaving(false)
-    }
-  }
+  }, [handleSave, isFullscreen])
 
   const handleReset = () => {
     setCode(originalCode)
