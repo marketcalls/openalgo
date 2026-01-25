@@ -67,7 +67,7 @@ dependencies = [
   "kaleido==1.2.0",
   "limits==3.13.0",
   "llvmlite==0.46.0b1",
-  "logistro>=2.0.1",
+  "logistro==2.0.1",
   "logzero==1.7.0",
   "markdown-it-py==3.0.0",
   "MarkupSafe==2.1.5",
