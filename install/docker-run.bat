@@ -3,22 +3,24 @@ REM ============================================================================
 REM OpenAlgo Docker Runner for Windows
 REM ============================================================================
 REM
-REM Usage: docker-run.bat [command]
+REM Quick Start (2 commands):
+REM   1. Download: curl -O https://raw.githubusercontent.com/marketcalls/openalgo/main/install/docker-run.bat
+REM   2. Run:      docker-run.bat
 REM
 REM Commands:
-REM   start    - Start OpenAlgo container (default)
+REM   start    - Start OpenAlgo container (default, runs setup if needed)
 REM   stop     - Stop and remove container
 REM   restart  - Restart container
 REM   logs     - View container logs (live)
 REM   pull     - Pull latest image from Docker Hub
 REM   status   - Show container status
 REM   shell    - Open bash shell in container
-REM   setup    - Initial setup (create .env from sample)
+REM   setup    - Re-run setup (regenerate keys, edit .env)
 REM   help     - Show this help
 REM
 REM Prerequisites:
-REM   1. Docker Desktop installed and running
-REM   2. .env file configured (run 'docker-run.bat setup' first)
+REM   - Docker Desktop installed and running
+REM   - curl (included in Windows 10/11)
 REM
 REM ============================================================================
 
@@ -28,13 +30,8 @@ REM Configuration
 set IMAGE=marketcalls/openalgo:latest
 set CONTAINER=openalgo
 set ENV_FILE=.env
-set SAMPLE_ENV=.sample.env
-
-REM Get the directory where this script is located
-set SCRIPT_DIR=%~dp0
-REM Go to parent directory (project root)
-cd /d "%SCRIPT_DIR%.."
-set PROJECT_DIR=%cd%
+set SAMPLE_ENV_URL=https://raw.githubusercontent.com/marketcalls/openalgo/main/.sample.env
+set OPENALGO_DIR=%USERPROFILE%\openalgo
 
 REM Banner
 echo.
@@ -77,9 +74,21 @@ goto help
 echo [INFO] Setting up OpenAlgo...
 echo.
 
+REM Create openalgo directory
+if not exist "%OPENALGO_DIR%" (
+    echo [INFO] Creating OpenAlgo directory at %OPENALGO_DIR%...
+    mkdir "%OPENALGO_DIR%"
+)
+
+REM Create db directory
+if not exist "%OPENALGO_DIR%\db" (
+    echo [INFO] Creating database directory...
+    mkdir "%OPENALGO_DIR%\db"
+)
+
 REM Check if .env already exists
-if exist "%PROJECT_DIR%\%ENV_FILE%" (
-    echo [WARNING] .env file already exists!
+if exist "%OPENALGO_DIR%\%ENV_FILE%" (
+    echo [WARNING] .env file already exists at %OPENALGO_DIR%\%ENV_FILE%
     set /p OVERWRITE="Do you want to overwrite it? (y/n): "
     if /i not "!OVERWRITE!"=="y" (
         echo [INFO] Setup cancelled. Using existing .env file.
@@ -87,63 +96,80 @@ if exist "%PROJECT_DIR%\%ENV_FILE%" (
     )
 )
 
-REM Check if sample.env exists
-if not exist "%PROJECT_DIR%\%SAMPLE_ENV%" (
-    echo [ERROR] %SAMPLE_ENV% not found!
-    echo Please ensure you are in the OpenAlgo project directory.
+REM Download sample.env from GitHub
+echo [INFO] Downloading configuration template from GitHub...
+curl -sL "%SAMPLE_ENV_URL%" -o "%OPENALGO_DIR%\%ENV_FILE%"
+if errorlevel 1 (
+    echo [ERROR] Failed to download configuration template!
+    echo Please check your internet connection.
     goto end
 )
+echo [OK] Configuration template downloaded.
 
-REM Copy sample.env to .env
-copy "%PROJECT_DIR%\%SAMPLE_ENV%" "%PROJECT_DIR%\%ENV_FILE%" >nul
-echo [OK] Created .env from %SAMPLE_ENV%
-
-REM Generate random keys
+REM Generate random keys using Python
 echo [INFO] Generating secure keys...
+where python >nul 2>&1
+if errorlevel 1 (
+    echo [WARNING] Python not found. You need to manually set APP_KEY and API_KEY_PEPPER.
+    echo Generate keys at: https://www.uuidgenerator.net/
+    goto open_env
+)
+
 for /f %%i in ('python -c "import secrets; print(secrets.token_hex(32))"') do set APP_KEY=%%i
 for /f %%i in ('python -c "import secrets; print(secrets.token_hex(32))"') do set API_KEY_PEPPER=%%i
 
-REM Display keys for manual update
+REM Update .env file with generated keys
+echo [INFO] Updating configuration with secure keys...
+powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace '3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84', '%APP_KEY%' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
+powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772', '%API_KEY_PEPPER%' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
+echo [OK] Secure keys generated and saved.
+
+:open_env
 echo.
-echo [IMPORTANT] Add these keys to your .env file:
+echo   ========================================
+echo   IMPORTANT: Configure your broker
+echo   ========================================
 echo.
-echo   APP_KEY=%APP_KEY%
-echo   API_KEY_PEPPER=%API_KEY_PEPPER%
+echo   Please edit %OPENALGO_DIR%\%ENV_FILE%
+echo   and update:
 echo.
-echo [INFO] Opening .env file in Notepad for editing...
+echo   1. BROKER_API_KEY=your_broker_api_key
+echo   2. BROKER_API_SECRET=your_broker_api_secret
+echo   3. Change broker name if needed (default: zerodha)
 echo.
-echo Please update:
-echo   1. APP_KEY and API_KEY_PEPPER with the values above
-echo   2. BROKER_API_KEY and BROKER_API_SECRET with your broker credentials
-echo   3. Any other settings as needed
+echo   Opening .env file in Notepad...
 echo.
 pause
 
 REM Open .env in notepad
-notepad "%PROJECT_DIR%\%ENV_FILE%"
+notepad "%OPENALGO_DIR%\%ENV_FILE%"
 
 echo.
-echo [OK] Setup complete! Run 'docker-run.bat start' to launch OpenAlgo.
+echo [OK] Setup complete!
+echo.
+echo   Data directory: %OPENALGO_DIR%
+echo   Config file:    %OPENALGO_DIR%\%ENV_FILE%
+echo   Database:       %OPENALGO_DIR%\db\
+echo.
+echo   Run 'docker-run.bat start' to launch OpenAlgo.
+echo.
 goto end
 
 :start
 echo [INFO] Starting OpenAlgo...
 echo.
 
-REM Check if .env exists
-if not exist "%PROJECT_DIR%\%ENV_FILE%" (
-    echo [ERROR] .env file not found!
+REM Check if setup is needed
+if not exist "%OPENALGO_DIR%\%ENV_FILE%" (
+    echo [INFO] First time setup detected. Running setup...
     echo.
-    echo Please run setup first:
-    echo   docker-run.bat setup
-    echo.
-    goto end
+    goto setup_then_start
 )
 
 REM Create db directory if not exists
-if not exist "%PROJECT_DIR%\db" (
-    echo [INFO] Creating db directory...
-    mkdir "%PROJECT_DIR%\db"
+if not exist "%OPENALGO_DIR%\db" (
+    echo [INFO] Creating database directory...
+    mkdir "%OPENALGO_DIR%\db"
 )
 
 REM Pull latest image
@@ -163,8 +189,8 @@ docker run -d ^
     --name %CONTAINER% ^
     -p 5000:5000 ^
     -p 8765:8765 ^
-    -v "%PROJECT_DIR%\db:/app/db" ^
-    -v "%PROJECT_DIR%\.env:/app/.env:ro" ^
+    -v "%OPENALGO_DIR%\db:/app/db" ^
+    -v "%OPENALGO_DIR%\.env:/app/.env:ro" ^
     --restart unless-stopped ^
     %IMAGE%
 
@@ -175,7 +201,7 @@ if errorlevel 1 (
     echo Troubleshooting:
     echo   1. Check if ports 5000 and 8765 are available
     echo   2. Ensure Docker Desktop is running
-    echo   3. Check .env file for errors
+    echo   3. Check .env file: %OPENALGO_DIR%\%ENV_FILE%
     echo.
     goto end
 )
@@ -188,12 +214,21 @@ echo   Web UI:     http://127.0.0.1:5000
 echo   WebSocket:  ws://127.0.0.1:8765
 echo   ========================================
 echo.
+echo   Data directory: %OPENALGO_DIR%
+echo.
 echo   Useful commands:
 echo     docker-run.bat logs     - View logs
 echo     docker-run.bat stop     - Stop OpenAlgo
 echo     docker-run.bat restart  - Restart OpenAlgo
 echo.
 goto end
+
+:setup_then_start
+call :setup
+echo.
+echo [INFO] Starting OpenAlgo after setup...
+echo.
+goto start
 
 :stop
 echo [INFO] Stopping OpenAlgo...
@@ -206,8 +241,7 @@ goto end
 echo [INFO] Restarting OpenAlgo...
 call :stop
 echo.
-call :start
-goto end
+goto start
 
 :logs
 echo [INFO] Showing logs (Press Ctrl+C to exit)...
@@ -240,6 +274,8 @@ if errorlevel 1 (
     echo.
     echo   Web UI: http://127.0.0.1:5000
 )
+echo.
+echo   Data directory: %OPENALGO_DIR%
 goto end
 
 :shell
@@ -252,28 +288,25 @@ echo.
 echo Usage: docker-run.bat [command]
 echo.
 echo Commands:
-echo   start    Start OpenAlgo container (default)
+echo   start    Start OpenAlgo (runs setup if needed, default)
 echo   stop     Stop and remove container
 echo   restart  Restart container
 echo   logs     View container logs (live)
 echo   pull     Pull latest image from Docker Hub
 echo   status   Show container status
 echo   shell    Open bash shell in container
-echo   setup    Initial setup (create .env from sample)
+echo   setup    Re-run setup (regenerate keys, edit .env)
 echo   help     Show this help
 echo.
-echo Prerequisites:
-echo   1. Docker Desktop for Windows installed and running
-echo      Download: https://www.docker.com/products/docker-desktop
+echo Quick Start:
+echo   1. Install Docker Desktop: https://www.docker.com/products/docker-desktop
+echo   2. Download this script:
+echo      curl -O https://raw.githubusercontent.com/marketcalls/openalgo/main/install/docker-run.bat
+echo   3. Run: docker-run.bat
 echo.
-echo   2. .env file configured
-echo      Run 'docker-run.bat setup' for initial configuration
-echo.
-echo Examples:
-echo   docker-run.bat setup     First time setup
-echo   docker-run.bat start     Start OpenAlgo
-echo   docker-run.bat logs      View live logs
-echo   docker-run.bat restart   Restart after config changes
+echo Data Location: %OPENALGO_DIR%
+echo   - Config:   %OPENALGO_DIR%\.env
+echo   - Database: %OPENALGO_DIR%\db\
 echo.
 goto end
 
