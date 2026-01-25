@@ -47,13 +47,54 @@ class ExecutionEngine:
         """
         Main execution loop - checks all pending orders and executes if conditions met
         Respects rate limits through batch processing
+
+        Session-based cleanup:
+        - Orders from previous sessions (before SESSION_EXPIRY_TIME) are auto-cancelled
+        - Only current session orders are processed
         """
         try:
-            # Get all pending orders
-            pending_orders = SandboxOrders.query.filter_by(order_status='open').all()
+            from sandbox.utils import get_sandbox_session_start
+            from sandbox.order_manager import OrderManager
 
-            if not pending_orders:
+            # Get session start time
+            session_start = get_sandbox_session_start()
+
+            # Get all open orders
+            all_open_orders = SandboxOrders.query.filter_by(order_status='open').all()
+
+            if not all_open_orders:
                 logger.debug("No pending orders to process")
+                return
+
+            # Separate stale orders from current session orders
+            stale_orders = []
+            pending_orders = []
+
+            for order in all_open_orders:
+                # Compare order timestamp with session start
+                # Note: order_timestamp is timezone-naive, session_start is also timezone-naive
+                if order.order_timestamp < session_start:
+                    stale_orders.append(order)
+                else:
+                    pending_orders.append(order)
+
+            # Cancel stale orders from previous sessions
+            if stale_orders:
+                logger.info(f"Cancelling {len(stale_orders)} stale orders from previous session")
+                for order in stale_orders:
+                    try:
+                        order_manager = OrderManager(order.user_id)
+                        success, response, status_code = order_manager.cancel_order(order.orderid)
+                        if success:
+                            logger.info(f"Auto-cancelled stale order {order.orderid} ({order.symbol})")
+                        else:
+                            logger.warning(f"Failed to cancel stale order {order.orderid}: {response.get('message')}")
+                    except Exception as e:
+                        logger.error(f"Error cancelling stale order {order.orderid}: {e}")
+
+            # Process only current session orders
+            if not pending_orders:
+                logger.debug("No current session orders to process")
                 return
 
             logger.info(f"Processing {len(pending_orders)} pending orders")
