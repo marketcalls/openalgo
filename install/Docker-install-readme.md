@@ -1,6 +1,88 @@
-# OpenAlgo Docker Installation Script
+# OpenAlgo Docker Installation
 
-## Quick Start
+## Desktop Installation (Windows/macOS/Linux)
+
+For **personal trading** on your desktop/laptop with Docker Desktop.
+
+### Prerequisites
+
+1. **Install Docker Desktop**
+   - Windows: https://docs.docker.com/desktop/install/windows-install/
+   - macOS: https://docs.docker.com/desktop/install/mac-install/
+   - Linux: https://docs.docker.com/desktop/install/linux-install/
+
+2. **Start Docker Desktop** and wait for it to fully initialize
+
+### Quick Start (2 Commands)
+
+#### Windows (PowerShell or Command Prompt)
+```powershell
+curl -O https://raw.githubusercontent.com/marketcalls/openalgo/main/install/docker-run.bat
+docker-run.bat
+```
+
+#### macOS / Linux (Terminal)
+```bash
+curl -O https://raw.githubusercontent.com/marketcalls/openalgo/main/install/docker-run.sh
+chmod +x docker-run.sh
+./docker-run.sh
+```
+
+### What Happens
+
+1. Creates `~/openalgo` directory (or `%USERPROFILE%\openalgo` on Windows)
+2. Downloads configuration template from GitHub
+3. Generates secure APP_KEY and API_KEY_PEPPER
+4. Opens editor to configure your broker credentials
+5. Pulls and starts the Docker container
+
+### After Setup
+
+- **Web UI**: http://127.0.0.1:5000
+- **WebSocket**: ws://127.0.0.1:8765
+- **Config file**: `~/openalgo/.env`
+- **Database**: `~/openalgo/db/`
+
+### Management Commands
+
+```bash
+# Windows
+docker-run.bat start     # Start OpenAlgo
+docker-run.bat stop      # Stop OpenAlgo
+docker-run.bat restart   # Restart after config changes
+docker-run.bat logs      # View live logs
+docker-run.bat status    # Check if running
+docker-run.bat pull      # Update to latest version
+docker-run.bat setup     # Re-run setup (regenerate keys)
+
+# macOS / Linux
+./docker-run.sh start
+./docker-run.sh stop
+./docker-run.sh restart
+./docker-run.sh logs
+./docker-run.sh status
+./docker-run.sh pull
+./docker-run.sh setup
+```
+
+### Updating OpenAlgo
+
+```bash
+# Pull latest image and restart
+docker-run.bat pull      # Windows
+docker-run.bat restart
+
+./docker-run.sh pull     # macOS/Linux
+./docker-run.sh restart
+```
+
+---
+
+## Server Installation (Ubuntu/Debian with SSL)
+
+For **production deployment** on a cloud server with custom domain and SSL certificate.
+
+### Quick Start
 
 This script provides a simplified, automated installation of OpenAlgo using Docker on Ubuntu/Debian systems with custom domain and SSL.
 
