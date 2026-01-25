@@ -188,21 +188,22 @@ export default function SchedulePythonStrategy() {
               <Label>Days to Run</Label>
               <div className="flex flex-wrap gap-2">
                 {SCHEDULE_DAYS.map((day) => (
-                  <label
+                  <div
                     key={day.value}
                     className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
                       selectedDays.includes(day.value)
                         ? 'bg-primary text-primary-foreground border-primary'
                         : 'bg-background hover:bg-muted'
                     }`}
+                    onClick={() => handleDayToggle(day.value)}
                   >
                     <Checkbox
                       checked={selectedDays.includes(day.value)}
                       onCheckedChange={() => handleDayToggle(day.value)}
-                      className="hidden"
+                      className="pointer-events-none"
                     />
                     <span className="text-sm font-medium">{day.label}</span>
-                  </label>
+                  </div>
                 ))}
               </div>
             </div>
