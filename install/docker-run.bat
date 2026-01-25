@@ -30,7 +30,10 @@ set IMAGE=marketcalls/openalgo:latest
 set CONTAINER=openalgo
 set ENV_FILE=.env
 set SAMPLE_ENV_URL=https://raw.githubusercontent.com/marketcalls/openalgo/main/.sample.env
-set OPENALGO_DIR=%USERPROFILE%\openalgo
+REM Use the directory where the script is located
+set OPENALGO_DIR=%~dp0
+REM Remove trailing backslash
+if "%OPENALGO_DIR:~-1%"=="\" set OPENALGO_DIR=%OPENALGO_DIR:~0,-1%
 set SETUP_FAILED=0
 
 REM XTS Brokers that require market data credentials
@@ -77,19 +80,8 @@ if /i "%CMD%"=="help" goto help
 goto help
 
 :setup
-echo [INFO] Setting up OpenAlgo...
+echo [INFO] Setting up OpenAlgo in %OPENALGO_DIR%...
 echo.
-
-REM Create openalgo directory with full path
-if not exist "%OPENALGO_DIR%\" (
-    echo [INFO] Creating OpenAlgo directory at %OPENALGO_DIR%...
-    md "%OPENALGO_DIR%" 2>nul
-    if errorlevel 1 (
-        echo [ERROR] Failed to create directory %OPENALGO_DIR%
-        set SETUP_FAILED=1
-        goto setup_end
-    )
-)
 
 REM Create db directory
 if not exist "%OPENALGO_DIR%\db\" (

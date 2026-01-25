@@ -35,7 +35,9 @@ IMAGE="marketcalls/openalgo:latest"
 CONTAINER="openalgo"
 ENV_FILE=".env"
 SAMPLE_ENV_URL="https://raw.githubusercontent.com/marketcalls/openalgo/main/.sample.env"
-OPENALGO_DIR="$HOME/openalgo"
+# Use the directory where the script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OPENALGO_DIR="$SCRIPT_DIR"
 
 # XTS Brokers that require market data credentials
 XTS_BROKERS="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,wisdom"
@@ -113,18 +115,8 @@ is_xts_broker() {
 
 # Setup function
 do_setup() {
-    log_info "Setting up OpenAlgo..."
+    log_info "Setting up OpenAlgo in $OPENALGO_DIR..."
     echo ""
-
-    # Create openalgo directory
-    if [ ! -d "$OPENALGO_DIR" ]; then
-        log_info "Creating OpenAlgo directory at $OPENALGO_DIR..."
-        mkdir -p "$OPENALGO_DIR"
-        if [ $? -ne 0 ]; then
-            log_error "Failed to create directory $OPENALGO_DIR"
-            return 1
-        fi
-    fi
 
     # Create db directory
     if [ ! -d "$OPENALGO_DIR/db" ]; then
