@@ -157,3 +157,58 @@ dependencies = [
 [build-system]
 requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
+
+# Ruff - Fast Python linter and formatter
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [
+    ".venv",
+    "frontend",
+    "node_modules",
+    "__pycache__",
+    "*.pyc",
+    "db",
+    "log",
+    "strategies",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "W",      # pycodestyle warnings
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B008",   # function call in default argument
+    "E402",   # module level import not at top of file
+    "F401",   # imported but unused (sometimes intentional)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["broker", "blueprints", "database", "services", "utils", "restx_api", "extensions", "limiter", "cors", "csp"]
+
+# Pytest configuration
+[tool.pytest.ini_options]
+testpaths = ["test"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --timeout=60"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+[dependency-groups]
+dev = [
+    "bandit>=1.9.3",
+    "detect-secrets>=1.5.0",
+    "pip-audit>=2.10.0",
+    "pytest-timeout>=2.4.0",
+    "ruff>=0.14.14",
+]
