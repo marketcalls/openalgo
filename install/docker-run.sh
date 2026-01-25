@@ -453,6 +453,17 @@ do_shell() {
     docker exec -it "$CONTAINER" /bin/bash
 }
 
+# Migrate function
+do_migrate() {
+    log_info "Running database migrations..."
+    docker exec -it "$CONTAINER" /app/.venv/bin/python /app/upgrade/migrate_all.py
+    if [ $? -eq 0 ]; then
+        log_ok "Migrations completed successfully."
+    else
+        log_warn "Some migrations may have had issues. Check the output above."
+    fi
+}
+
 # Help function
 do_help() {
     echo ""
@@ -466,6 +477,7 @@ do_help() {
     echo "  pull     Pull latest image from Docker Hub"
     echo "  status   Show container status"
     echo "  shell    Open bash shell in container"
+    echo "  migrate  Run database migrations manually"
     echo "  setup    Re-run setup (regenerate keys, edit .env)"
     echo "  help     Show this help"
     echo ""
@@ -516,6 +528,9 @@ case "$CMD" in
         ;;
     shell)
         do_shell
+        ;;
+    migrate)
+        do_migrate
         ;;
     setup)
         do_setup

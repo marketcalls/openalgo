@@ -76,6 +76,7 @@ if /i "%CMD%"=="pull" goto pull
 if /i "%CMD%"=="status" goto status
 if /i "%CMD%"=="shell" goto shell
 if /i "%CMD%"=="setup" goto setup
+if /i "%CMD%"=="migrate" goto migrate
 if /i "%CMD%"=="help" goto help
 goto help
 
@@ -394,6 +395,16 @@ echo [INFO] Opening shell in container...
 docker exec -it %CONTAINER% /bin/bash
 goto end
 
+:migrate
+echo [INFO] Running database migrations...
+docker exec -it %CONTAINER% /app/.venv/bin/python /app/upgrade/migrate_all.py
+if errorlevel 1 (
+    echo [WARNING] Some migrations may have had issues. Check the output above.
+) else (
+    echo [OK] Migrations completed successfully.
+)
+goto end
+
 :help
 echo.
 echo Usage: docker-run.bat [command]
@@ -406,6 +417,7 @@ echo   logs     View container logs (live)
 echo   pull     Pull latest image from Docker Hub
 echo   status   Show container status
 echo   shell    Open bash shell in container
+echo   migrate  Run database migrations manually
 echo   setup    Re-run setup (regenerate keys, edit .env)
 echo   help     Show this help
 echo.
