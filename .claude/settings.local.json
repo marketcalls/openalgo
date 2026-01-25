@@ -40,7 +40,16 @@
       "Bash(npm run lint:*)",
       "Bash(npm run test:run:*)",
       "Bash(dir:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(gh run:*)",
+      "Bash(echo:*)",
+      "Bash(git pull:*)",
+      "Bash(git stash:*)",
+      "Bash(git stash pop:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh api:*)",
+      "Bash(uv sync:*)"
     ]
   }
 }
