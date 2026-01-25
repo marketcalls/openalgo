@@ -308,7 +308,7 @@ export default function Historify() {
   // Schedule form state
   const [scheduleName, setScheduleName] = useState('')
   const [scheduleDescription, setScheduleDescription] = useState('')
-  const [scheduleType, setScheduleType] = useState<'interval' | 'daily'>('interval')
+  const [scheduleType, setScheduleType] = useState<'interval' | 'daily'>('daily')
   const [scheduleIntervalValue, setScheduleIntervalValue] = useState(5)
   const [scheduleIntervalUnit, setScheduleIntervalUnit] = useState<'minutes' | 'hours'>('minutes')
   const [scheduleTimeOfDay, setScheduleTimeOfDay] = useState('09:15')
@@ -669,7 +669,7 @@ export default function Historify() {
   const resetScheduleForm = () => {
     setScheduleName('')
     setScheduleDescription('')
-    setScheduleType('interval')
+    setScheduleType('daily')
     setScheduleIntervalValue(5)
     setScheduleIntervalUnit('minutes')
     setScheduleTimeOfDay('09:15')
