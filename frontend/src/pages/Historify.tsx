@@ -852,7 +852,11 @@ export default function Historify() {
     if (schedule.schedule_type === 'interval') {
       return `Every ${schedule.interval_value} ${schedule.interval_unit}`
     }
-    return `Daily at ${schedule.time_of_day}`
+    // Convert 24-hour to 12-hour format with AM/PM
+    const [h, m] = (schedule.time_of_day || '09:15').split(':').map(Number)
+    const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h
+    const ampm = h >= 12 ? 'PM' : 'AM'
+    return `Daily at ${hour12}:${m.toString().padStart(2, '0')} ${ampm} IST`
   }
 
   const performSearch = async (query: string) => {
@@ -2483,13 +2487,75 @@ export default function Historify() {
               </div>
             ) : (
               <div>
-                <Label>Time of Day</Label>
-                <Input
-                  type="time"
-                  value={scheduleTimeOfDay}
-                  onChange={(e) => setScheduleTimeOfDay(e.target.value)}
-                  className="mt-1"
-                />
+                <Label>Time of Day (IST)</Label>
+                <div className="flex gap-2 mt-1">
+                  <Select
+                    value={(() => {
+                      const [h] = scheduleTimeOfDay.split(':').map(Number)
+                      const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h
+                      return hour12.toString()
+                    })()}
+                    onValueChange={(v) => {
+                      const [h, m] = scheduleTimeOfDay.split(':').map(Number)
+                      const isPM = h >= 12
+                      let newHour = parseInt(v)
+                      if (isPM) {
+                        newHour = newHour === 12 ? 12 : newHour + 12
+                      } else {
+                        newHour = newHour === 12 ? 0 : newHour
+                      }
+                      setScheduleTimeOfDay(`${newHour.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`)
+                    }}
+                  >
+                    <SelectTrigger className="w-20">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((h) => (
+                        <SelectItem key={h} value={h.toString()}>{h}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <span className="flex items-center">:</span>
+                  <Select
+                    value={scheduleTimeOfDay.split(':')[1] || '00'}
+                    onValueChange={(v) => {
+                      const [h] = scheduleTimeOfDay.split(':').map(Number)
+                      setScheduleTimeOfDay(`${h.toString().padStart(2, '0')}:${v}`)
+                    }}
+                  >
+                    <SelectTrigger className="w-20">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {['00', '15', '30', '45'].map((m) => (
+                        <SelectItem key={m} value={m}>{m}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select
+                    value={parseInt(scheduleTimeOfDay.split(':')[0]) >= 12 ? 'PM' : 'AM'}
+                    onValueChange={(v) => {
+                      const [h, m] = scheduleTimeOfDay.split(':').map(Number)
+                      const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h
+                      let newHour: number
+                      if (v === 'PM') {
+                        newHour = hour12 === 12 ? 12 : hour12 + 12
+                      } else {
+                        newHour = hour12 === 12 ? 0 : hour12
+                      }
+                      setScheduleTimeOfDay(`${newHour.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`)
+                    }}
+                  >
+                    <SelectTrigger className="w-20">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="AM">AM</SelectItem>
+                      <SelectItem value="PM">PM</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             )}
 
