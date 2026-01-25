@@ -47,6 +47,58 @@ These files have been modified from upstream. **Pay attention to these during `g
 
 ---
 
+### `utils/auth_utils.py`
+**Change Type**: Feature addition  
+**Conflict Risk**: Medium  
+**Description**: Auto-run `share_credentials.py` after successful broker login
+
+**Specific Changes**:
+1. Added imports at top of file:
+   ```python
+   import os
+   from extensions import socketio
+   ```
+
+2. Added `run_share_credentials()` function (~25 lines):
+   - Checks if `BROKER_USER_ID` env var is set
+   - If set, imports and runs `scripts/share_credentials.main()`
+   - Returns success/failure status and message
+
+3. Added `async_post_login_tasks()` function (~25 lines):
+   - Runs in background thread after broker auth
+   - Waits 2 seconds for dashboard to load
+   - Calls `run_share_credentials()` and emits SocketIO toast event
+   - Calls existing `async_master_contract_download()`
+
+4. Modified `handle_auth_success()` function:
+   - Changed thread target from `async_master_contract_download` to `async_post_login_tasks`
+
+**Resolution Strategy**: If upstream modifies `handle_auth_success()`, re-apply the thread target change and ensure the two new functions exist.
+
+---
+
+### `frontend/src/hooks/useSocket.ts`
+**Change Type**: Feature addition  
+**Conflict Risk**: Low  
+**Description**: Added SocketIO listener for share credentials toast notification
+
+**Specific Changes**:
+Added event listener after `master_contract_download` handler:
+```typescript
+// Share credentials notification (post broker login)
+socket.on('share_credentials_status', (data: { status: string; message: string }) => {
+  if (data.status === 'success') {
+    toast.success(data.message)
+  } else {
+    toast.error(data.message)
+  }
+})
+```
+
+**Resolution Strategy**: This is a simple addition. Re-add the event listener if it gets removed during merge.
+
+---
+
 ## Files to NOT Track in Git
 
 These files should remain in `.gitignore`:
@@ -60,16 +112,20 @@ These files should remain in `.gitignore`:
 
 ## Environment Variables (Fork-Specific)
 
-This fork introduces the following optional environment variable:
+This fork introduces the following optional environment variables:
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `SHARED_CREDENTIALS_FILE` | Path to JSON file containing shared Zerodha credentials | Not set (disabled) |
+| `BROKER_USER_ID` | User ID for auto-exporting credentials after broker login | Not set (disabled) |
+| `BROKER_API_KEY` | Broker API key (used by share_credentials.py) | Not set |
 
 **Example Usage**:
 ```bash
 # In .env file
 SHARED_CREDENTIALS_FILE=/path/to/shared/zerodha_credentials.json
+BROKER_USER_ID=your_broker_user_id
+BROKER_API_KEY=your_broker_api_key
 ```
 
 ---
@@ -113,20 +169,32 @@ git status
 
 ### Problem Solved
 When running multiple OpenAlgo instances (e.g., different machines, different strategies), each instance normally needs its own Zerodha login. This fork allows:
-- **Machine 1**: Login to Zerodha normally, export credentials
+- **Machine 1**: Login to Zerodha normally, credentials auto-exported
 - **Machine 2+**: Read credentials from shared file, skip login
 
 ### How It Works
+
+**Option A: Automatic Export (Recommended)**
+1. Set `BROKER_USER_ID`, `BROKER_API_KEY`, and `SHARED_CREDENTIALS_FILE` in `.env`
+2. Login to broker normally via the web UI
+3. Credentials are **automatically exported** after successful broker authentication
+4. A toast notification confirms "Credentials shared successfully"
+
+**Option B: Manual Export**
 1. On primary machine: `uv run python scripts/share_credentials.py`
 2. This creates a JSON file with `api_key` and `access_token`
-3. On secondary machines: Set `SHARED_CREDENTIALS_FILE` env var pointing to this JSON
-4. The `credential_manager.py` automatically uses shared credentials when available
+
+**On Secondary Machines:**
+1. Set `SHARED_CREDENTIALS_FILE` env var pointing to the shared JSON
+2. The `credential_manager.py` automatically uses shared credentials when available
 
 ### Files Involved
-- `broker/zerodha/credential_manager.py` - Core logic
-- `scripts/share_credentials.py` - Export script
-- `broker/zerodha/api/data.py` - Integration point (modified)
+- `utils/auth_utils.py` - Auto-export trigger after broker login (modified)
+- `frontend/src/hooks/useSocket.ts` - Toast notification for export status (modified)
+- `broker/zerodha/credential_manager.py` - Core credential reading logic
+- `scripts/share_credentials.py` - Export script (manual or auto-invoked)
+- `broker/zerodha/api/data.py` - Integration point for using shared credentials (modified)
 
 ---
 
-*Last updated: 2026-01-25*
+*Last updated: 2026-01-26*

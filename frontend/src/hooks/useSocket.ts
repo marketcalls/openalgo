@@ -144,6 +144,15 @@ export function useSocket() {
       toast.info(`Master Contract: ${data.message}`)
     })
 
+    // Share credentials notification (post broker login)
+    socket.on('share_credentials_status', (data: { status: string; message: string }) => {
+      if (data.status === 'success') {
+        toast.success(data.message)
+      } else {
+        toast.error(data.message)
+      }
+    })
+
     // Cancel order notification - only play sound, UI handles toast
     socket.on('cancel_order_event', (data: CancelOrderEventData) => {
       if (!data.batch_order) {
