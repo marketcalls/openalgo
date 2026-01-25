@@ -33,6 +33,12 @@ set SAMPLE_ENV_URL=https://raw.githubusercontent.com/marketcalls/openalgo/main/.
 set OPENALGO_DIR=%USERPROFILE%\openalgo
 set SETUP_FAILED=0
 
+REM XTS Brokers that require market data credentials
+set XTS_BROKERS=fivepaisaxts,compositedge,ibulls,iifl,jainamxts,wisdom
+
+REM Valid brokers list
+set VALID_BROKERS=fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha
+
 REM Banner
 echo.
 echo   ========================================
@@ -136,13 +142,13 @@ REM Generate random keys using Python
 echo [INFO] Generating secure keys...
 where python >nul 2>&1
 if errorlevel 1 (
-    echo [WARNING] Python not found. You need to manually set APP_KEY and API_KEY_PEPPER.
-    echo Generate keys at: https://www.uuidgenerator.net/
-    goto open_env
+    echo [WARNING] Python not found. Keys will be generated using PowerShell.
+    for /f %%i in ('powershell -Command "[guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')"') do set APP_KEY=%%i
+    for /f %%i in ('powershell -Command "[guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')"') do set API_KEY_PEPPER=%%i
+) else (
+    for /f %%i in ('python -c "import secrets; print(secrets.token_hex(32))"') do set APP_KEY=%%i
+    for /f %%i in ('python -c "import secrets; print(secrets.token_hex(32))"') do set API_KEY_PEPPER=%%i
 )
-
-for /f %%i in ('python -c "import secrets; print(secrets.token_hex(32))"') do set APP_KEY=%%i
-for /f %%i in ('python -c "import secrets; print(secrets.token_hex(32))"') do set API_KEY_PEPPER=%%i
 
 REM Update .env file with generated keys
 echo [INFO] Updating configuration with secure keys...
@@ -150,32 +156,115 @@ powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace '3daa040
 powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772', '%API_KEY_PEPPER%' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
 echo [OK] Secure keys generated and saved.
 
-:open_env
+REM Get broker configuration
 echo.
 echo   ========================================
-echo   IMPORTANT: Configure your broker
+echo   Broker Configuration
 echo   ========================================
 echo.
-echo   Please edit %OPENALGO_DIR%\%ENV_FILE%
-echo   and update:
+echo   Valid brokers:
+echo   fivepaisa, fivepaisaxts, aliceblue, angel, compositedge,
+echo   definedge, dhan, dhan_sandbox, firstock, flattrade, fyers,
+echo   groww, ibulls, iifl, indmoney, jainamxts, kotak, motilal,
+echo   mstock, paytm, pocketful, samco, shoonya, tradejini,
+echo   upstox, wisdom, zebu, zerodha
 echo.
-echo   1. BROKER_API_KEY=your_broker_api_key
-echo   2. BROKER_API_SECRET=your_broker_api_secret
-echo   3. Change broker name if needed (default: zerodha)
-echo.
-echo   Opening .env file in Notepad...
-echo.
-pause
 
-REM Open .env in notepad
-notepad "%OPENALGO_DIR%\%ENV_FILE%"
+:get_broker
+set /p BROKER_NAME="Enter broker name (e.g., zerodha, fyers, angel): "
+
+REM Validate broker name
+echo,%VALID_BROKERS%, | findstr /i /c:",%BROKER_NAME%," >nul
+if errorlevel 1 (
+    echo [ERROR] Invalid broker: %BROKER_NAME%
+    echo Please enter a valid broker name from the list above.
+    goto get_broker
+)
+
+echo [OK] Broker: %BROKER_NAME%
+
+REM Get broker API credentials
+echo.
+set /p BROKER_API_KEY="Enter your %BROKER_NAME% API Key: "
+set /p BROKER_API_SECRET="Enter your %BROKER_NAME% API Secret: "
+
+if "%BROKER_API_KEY%"=="" (
+    echo [ERROR] API Key is required!
+    set SETUP_FAILED=1
+    goto setup_end
+)
+
+if "%BROKER_API_SECRET%"=="" (
+    echo [ERROR] API Secret is required!
+    set SETUP_FAILED=1
+    goto setup_end
+)
+
+REM Check if XTS broker (requires market data credentials)
+set IS_XTS=0
+echo,%XTS_BROKERS%, | findstr /i /c:",%BROKER_NAME%," >nul
+if not errorlevel 1 (
+    set IS_XTS=1
+    echo.
+    echo [INFO] %BROKER_NAME% is an XTS-based broker.
+    echo        Additional market data credentials are required.
+    echo.
+    set /p BROKER_API_KEY_MARKET="Enter Market Data API Key: "
+    set /p BROKER_API_SECRET_MARKET="Enter Market Data API Secret: "
+
+    if "!BROKER_API_KEY_MARKET!"=="" (
+        echo [ERROR] Market Data API Key is required for XTS brokers!
+        set SETUP_FAILED=1
+        goto setup_end
+    )
+    if "!BROKER_API_SECRET_MARKET!"=="" (
+        echo [ERROR] Market Data API Secret is required for XTS brokers!
+        set SETUP_FAILED=1
+        goto setup_end
+    )
+)
+
+REM Update .env with broker configuration
+echo.
+echo [INFO] Updating broker configuration...
+
+REM Update broker credentials
+powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'BROKER_API_KEY = ''YOUR_BROKER_API_KEY''', 'BROKER_API_KEY = ''%BROKER_API_KEY%''' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
+powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'BROKER_API_SECRET = ''YOUR_BROKER_API_SECRET''', 'BROKER_API_SECRET = ''%BROKER_API_SECRET%''' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
+
+REM Update redirect URL with broker name
+powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace '/fyers/callback', '/%BROKER_NAME%/callback' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
+
+REM Update XTS market data credentials if applicable
+if "%IS_XTS%"=="1" (
+    powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'BROKER_API_KEY_MARKET = ''YOUR_BROKER_MARKET_API_KEY''', 'BROKER_API_KEY_MARKET = ''!BROKER_API_KEY_MARKET!''' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
+    powershell -Command "(Get-Content '%OPENALGO_DIR%\%ENV_FILE%') -replace 'BROKER_API_SECRET_MARKET = ''YOUR_BROKER_MARKET_API_SECRET''', 'BROKER_API_SECRET_MARKET = ''!BROKER_API_SECRET_MARKET!''' | Set-Content '%OPENALGO_DIR%\%ENV_FILE%'"
+)
+
+echo [OK] Broker configuration saved.
 
 echo.
-echo [OK] Setup complete!
+echo   ========================================
+echo   Setup Complete!
+echo   ========================================
 echo.
+echo   Broker:         %BROKER_NAME%
+if "%IS_XTS%"=="1" echo   Type:           XTS API (with market data)
 echo   Data directory: %OPENALGO_DIR%
 echo   Config file:    %OPENALGO_DIR%\%ENV_FILE%
 echo   Database:       %OPENALGO_DIR%\db\
+echo.
+echo   Redirect URL for broker portal:
+echo   http://127.0.0.1:5000/%BROKER_NAME%/callback
+echo.
+echo   Press any key to open .env for review (optional)...
+pause >nul
+
+REM Open .env in notepad for review
+notepad "%OPENALGO_DIR%\%ENV_FILE%"
+
+echo.
+echo [OK] Setup complete! Run 'docker-run.bat start' to launch OpenAlgo.
 echo.
 
 :setup_end
@@ -337,6 +426,9 @@ echo.
 echo Data Location: %OPENALGO_DIR%
 echo   - Config:   %OPENALGO_DIR%\.env
 echo   - Database: %OPENALGO_DIR%\db\
+echo.
+echo XTS Brokers (require market data credentials):
+echo   fivepaisaxts, compositedge, ibulls, iifl, jainamxts, wisdom
 echo.
 goto end
 
