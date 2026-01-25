@@ -22,7 +22,7 @@ jobs:
           uv run bandit -r . -x .venv,test,frontend,node_modules -f sarif -o bandit.sarif || true
 
       - name: Upload Bandit results
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: bandit.sarif
           category: bandit
