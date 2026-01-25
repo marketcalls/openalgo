@@ -102,7 +102,7 @@ Pygments==2.18.0
 PyJWT==2.10.1
 pyngrok==7.1.6
 pyotp==2.9.0
-pytest==8.4.2
+pytest==9.0.2
 pytest-timeout==2.4.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
