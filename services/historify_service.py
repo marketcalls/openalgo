@@ -37,8 +37,36 @@ from database.historify_db import (
 from services.history_service import get_history
 from services.intervals_service import get_intervals
 from database.auth_db import get_auth_token_broker
+from database.token_db_enhanced import get_symbol_info
 
 logger = get_logger(__name__)
+
+
+def validate_symbol(symbol: str, exchange: str) -> Tuple[bool, str]:
+    """
+    Validate that a symbol exists in the master contract database.
+
+    Args:
+        symbol: Trading symbol
+        exchange: Exchange code
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    # Index exchanges don't need validation against master contract
+    if exchange.upper() in ('NSE_INDEX', 'BSE_INDEX'):
+        return True, ""
+
+    try:
+        symbol_info = get_symbol_info(symbol.upper(), exchange.upper())
+        if symbol_info is None:
+            return False, f"Symbol '{symbol}' not found in {exchange} master contract. Please check the symbol name."
+        return True, ""
+    except Exception as e:
+        logger.warning(f"Could not validate symbol {symbol}:{exchange}: {e}")
+        # If validation fails due to cache/db issues, allow the symbol
+        # (it will fail during download if truly invalid)
+        return True, ""
 
 
 # =============================================================================
@@ -90,6 +118,14 @@ def add_to_watchlist(symbol: str, exchange: str, display_name: str = None) -> Tu
             return False, {
                 'status': 'error',
                 'message': f'Invalid exchange. Supported: {", ".join(SUPPORTED_EXCHANGES)}'
+            }, 400
+
+        # Validate symbol exists in master contract database
+        is_valid, error_msg = validate_symbol(symbol, exchange)
+        if not is_valid:
+            return False, {
+                'status': 'error',
+                'message': error_msg
             }, 400
 
         success, msg = db_add_to_watchlist(symbol, exchange, display_name)
@@ -163,8 +199,47 @@ def bulk_add_to_watchlist(symbols: List[Dict[str, str]]) -> Tuple[bool, Dict[str
         Tuple of (success, response_data, status_code)
     """
     try:
-        # Use bulk insert for better performance
-        added, skipped, failed = db_bulk_add_to_watchlist(symbols)
+        # Validate symbols before bulk insert
+        validated_symbols = []
+        invalid_symbols = []
+
+        for item in symbols:
+            symbol = item.get('symbol', '').upper()
+            exchange = item.get('exchange', '').upper()
+
+            if not symbol or not exchange:
+                invalid_symbols.append({
+                    'symbol': symbol or 'MISSING',
+                    'exchange': exchange or 'MISSING',
+                    'error': 'Missing symbol or exchange'
+                })
+                continue
+
+            if exchange not in SUPPORTED_EXCHANGES:
+                invalid_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': f'Invalid exchange'
+                })
+                continue
+
+            # Validate symbol exists in master contract
+            is_valid, error_msg = validate_symbol(symbol, exchange)
+            if not is_valid:
+                invalid_symbols.append({
+                    'symbol': symbol,
+                    'exchange': exchange,
+                    'error': error_msg
+                })
+                continue
+
+            validated_symbols.append(item)
+
+        # Use bulk insert for validated symbols
+        added, skipped, failed = db_bulk_add_to_watchlist(validated_symbols)
+
+        # Add invalid symbols to failed list
+        failed.extend(invalid_symbols)
 
         return True, {
             'status': 'success',
@@ -1367,53 +1442,104 @@ def _process_download_job(job_id: str, api_key: str):
             _emit_progress(job_id, processed_count, total_items, item['symbol'])
 
             try:
-                # Determine start date - use incremental if enabled
-                start_date = job['start_date']
-                end_date = job['end_date']
+                # Determine date ranges - use incremental if enabled
+                requested_start = job['start_date']
+                requested_end = job['end_date']
+                total_records = 0
+                download_error = None
 
                 if incremental:
-                    # Check last available data timestamp
+                    # Check existing data range for this symbol
                     data_range = get_data_range(item['symbol'], item['exchange'], job['interval'])
-                    if data_range and data_range.get('last_timestamp'):
+
+                    if data_range and data_range.get('first_timestamp') and data_range.get('last_timestamp'):
+                        first_ts = data_range['first_timestamp']
                         last_ts = data_range['last_timestamp']
+                        first_datetime = datetime.fromtimestamp(first_ts)
                         last_datetime = datetime.fromtimestamp(last_ts)
 
-                        # For intraday data (1m), start from the same day to get remaining data
-                        # For daily data (D), start from the next day
-                        if job['interval'] == '1m':
-                            # Start from the same day - broker will return data after last_ts
-                            # We use the same date because there may be more candles on that day
-                            incremental_start = last_datetime.strftime('%Y-%m-%d')
-                        else:
-                            # For daily data, start from next day
-                            incremental_start = (last_datetime + timedelta(days=1)).strftime('%Y-%m-%d')
+                        requested_start_dt = datetime.strptime(requested_start, '%Y-%m-%d')
+                        requested_end_dt = datetime.strptime(requested_end, '%Y-%m-%d')
 
-                        # Check if we need to download at all
-                        end_datetime = datetime.strptime(end_date, '%Y-%m-%d')
-                        if incremental_start > end_date:
-                            # Data is already up to date
-                            update_job_item_status(item['id'], 'skipped', 0, 'Data already up to date')
-                            logger.info(f"Skipping {item['symbol']} - data already up to date")
+                        # Determine what needs to be downloaded:
+                        # 1. Data BEFORE existing data (if requested_start < first_timestamp)
+                        # 2. Data AFTER existing data (if requested_end > last_timestamp)
+
+                        need_before = requested_start_dt.date() < first_datetime.date()
+                        need_after = requested_end_dt.date() > last_datetime.date()
+
+                        # For 1m data, be more precise about timing
+                        if job['interval'] == '1m':
+                            need_after = requested_end_dt.date() >= last_datetime.date()
+
+                        if not need_before and not need_after:
+                            # Data already covers the requested range
+                            update_job_item_status(item['id'], 'skipped', 0, 'Data already covers requested range')
+                            logger.info(f"Skipping {item['symbol']} - data already covers requested range")
                             continue
 
-                        # For 1m data, also check if we have data up to market close on end_date
-                        if job['interval'] == '1m':
-                            end_of_day_ts = int(end_datetime.timestamp()) + 86400 - 1  # End of end_date
-                            if last_ts >= end_of_day_ts:
-                                update_job_item_status(item['id'], 'skipped', 0, 'Data already up to date')
-                                logger.info(f"Skipping {item['symbol']} - data already up to date")
-                                continue
+                        # Download data BEFORE existing range if needed
+                        if need_before:
+                            # End date for "before" download is the day before first existing data
+                            if job['interval'] == '1m':
+                                before_end = first_datetime.strftime('%Y-%m-%d')
+                            else:
+                                before_end = (first_datetime - timedelta(days=1)).strftime('%Y-%m-%d')
 
-                        start_date = incremental_start
-                        logger.debug(f"Incremental: {item['symbol']} starting from {start_date} (last data: {last_datetime})")
+                            if requested_start <= before_end:
+                                logger.debug(f"Incremental (before): {item['symbol']} from {requested_start} to {before_end}")
+                                success_before, response_before, _ = download_data(
+                                    symbol=item['symbol'],
+                                    exchange=item['exchange'],
+                                    interval=job['interval'],
+                                    start_date=requested_start,
+                                    end_date=before_end,
+                                    api_key=api_key
+                                )
+                                if success_before:
+                                    total_records += response_before.get('records', 0)
+                                else:
+                                    download_error = response_before.get('message', 'Error downloading earlier data')
 
-                # Download data for this symbol
+                        # Download data AFTER existing range if needed
+                        if need_after and download_error is None:
+                            # Start date for "after" download
+                            if job['interval'] == '1m':
+                                after_start = last_datetime.strftime('%Y-%m-%d')
+                            else:
+                                after_start = (last_datetime + timedelta(days=1)).strftime('%Y-%m-%d')
+
+                            if after_start <= requested_end:
+                                logger.debug(f"Incremental (after): {item['symbol']} from {after_start} to {requested_end}")
+                                success_after, response_after, _ = download_data(
+                                    symbol=item['symbol'],
+                                    exchange=item['exchange'],
+                                    interval=job['interval'],
+                                    start_date=after_start,
+                                    end_date=requested_end,
+                                    api_key=api_key
+                                )
+                                if success_after:
+                                    total_records += response_after.get('records', 0)
+                                else:
+                                    download_error = response_after.get('message', 'Error downloading later data')
+
+                        # Update status based on results
+                        if download_error:
+                            update_job_item_status(item['id'], 'error', total_records, download_error)
+                            failed += 1
+                        else:
+                            update_job_item_status(item['id'], 'success', total_records)
+                            completed += 1
+                        continue
+
+                # Non-incremental or no existing data: download full range
                 success, response, _ = download_data(
                     symbol=item['symbol'],
                     exchange=item['exchange'],
                     interval=job['interval'],
-                    start_date=start_date,
-                    end_date=end_date,
+                    start_date=requested_start,
+                    end_date=requested_end,
                     api_key=api_key
                 )
 

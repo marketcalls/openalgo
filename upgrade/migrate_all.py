@@ -52,6 +52,7 @@ MIGRATIONS = [
 
     # Feature migrations
     ('migrate_historify.py', 'Historify DuckDB Setup'),
+    ('migrate_historify_scheduler.py', 'Historify Scheduler Tables'),
     ('migrate_flow.py', 'Flow Workflow Automation'),
 ]
 

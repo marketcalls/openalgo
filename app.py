@@ -452,6 +452,14 @@ def setup_environment(app):
         except Exception as e:
             logger.error(f"Failed to initialize Flow scheduler: {e}")
 
+        # Initialize Historify scheduler
+        try:
+            from services.historify_scheduler_service import init_historify_scheduler
+            init_historify_scheduler(socketio=socketio)
+            logger.debug("Historify scheduler initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Historify scheduler: {e}")
+
     # Setup ngrok cleanup handlers (always register, regardless of ngrok being enabled)
     # This ensures proper cleanup on shutdown even if ngrok is enabled/disabled via UI
     # The actual tunnel creation happens in the __main__ block below
