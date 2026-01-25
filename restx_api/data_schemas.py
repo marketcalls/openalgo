@@ -152,10 +152,21 @@ class MultiOptionGreeksSchema(Schema):
     """Schema for batch option greeks requests"""
     apikey = fields.Str(required=True)      # API Key for authentication
     symbols = fields.List(
-        fields.Nested(OptionSymbolRequest), 
-        required=True, 
+        fields.Nested(OptionSymbolRequest),
+        required=True,
         validate=validate.Length(min=1, max=50)  # Max 50 symbols per request
     )
     interest_rate = fields.Float(required=False, validate=validate.Range(min=0, max=100))  # Common interest rate for all
     expiry_time = fields.Str(required=False)  # Optional: Common expiry time for all
+
+class ScripMarginSchema(Schema):
+    """Schema for per-scrip margin calculation with leverage"""
+    apikey = fields.Str(required=True)
+    symbol = fields.Str(required=True, validate=validate.Length(min=1, max=50))
+    exchange = fields.Str(required=True, validate=validate.OneOf(["NSE", "BSE", "NFO", "BFO", "CDS", "MCX"]))
+    product = fields.Str(required=True, validate=validate.OneOf(["MIS", "NRML", "CNC"]))
+    quantity = fields.Int(missing=None, validate=validate.Range(min=1), allow_none=True)
+    action = fields.Str(missing='BUY', validate=validate.OneOf(["BUY", "SELL", "buy", "sell"]))
+    pricetype = fields.Str(missing='MARKET', validate=validate.OneOf(["MARKET", "LIMIT", "SL", "SL-M"]))
+    price = fields.Str(missing='0')
 

@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import pytz
 from utils.logging import get_logger
+from utils.data_sanitizer import redact_sensitive_data
 
 logger = get_logger(__name__)
 
@@ -57,9 +58,13 @@ executor = ThreadPoolExecutor(10)  # Increased from 2 to 10 for better concurren
 
 def async_log_order(api_type,request_data, response_data):
     try:
-        # Serialize JSON data for storage
-        request_json = json.dumps(request_data)
-        response_json = json.dumps(response_data)
+        # Redact sensitive data before storage
+        sanitized_request = redact_sensitive_data(request_data)
+        sanitized_response = redact_sensitive_data(response_data)
+
+        # Serialize sanitized JSON data for storage
+        request_json = json.dumps(sanitized_request)
+        response_json = json.dumps(sanitized_response)
 
         # Get current time in IST
         ist = pytz.timezone('Asia/Kolkata')
