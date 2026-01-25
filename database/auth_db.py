@@ -376,6 +376,21 @@ def get_api_key_for_tradingview(user_id):
         logger.error(f"Error while querying the database for API key: {e}")
         return None
 
+
+def get_first_available_api_key():
+    """
+    Get the first available decrypted API key from the database.
+    Used for background services that don't have session context.
+    """
+    try:
+        api_key_obj = ApiKeys.query.first()
+        if api_key_obj and api_key_obj.api_key_encrypted:
+            return decrypt_token(api_key_obj.api_key_encrypted)
+        return None
+    except Exception as e:
+        logger.error(f"Error getting first available API key: {e}")
+        return None
+
 def verify_api_key(provided_api_key):
     """
     Verify an API key using Argon2 with intelligent caching.
