@@ -2503,7 +2503,7 @@ export default function Historify() {
                 onChange={(e) => setScheduleLookbackDays(parseInt(e.target.value) || 1)}
                 className="mt-1"
               />
-              <p className="text-xs text-muted-foreground mt-1">Downloads data for symbols in watchlist</p>
+              <p className="text-xs text-muted-foreground mt-1">Incremental download from watchlist. Lookback used only for new symbols.</p>
             </div>
           </div>
           <DialogFooter>
