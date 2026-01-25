@@ -1,14 +1,25 @@
 # database/flow_db.py
 
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, ForeignKey, DateTime, Text, JSON
-from sqlalchemy.orm import scoped_session, sessionmaker, relationship
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.sql import func
-from sqlalchemy.pool import NullPool
-from cachetools import TTLCache
+import logging
 import os
 import secrets
-import logging
+
+from cachetools import TTLCache
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    create_engine,
+)
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship, scoped_session, sessionmaker
+from sqlalchemy.pool import NullPool
+from sqlalchemy.sql import func
 
 logger = logging.getLogger(__name__)
 
@@ -16,24 +27,17 @@ logger = logging.getLogger(__name__)
 _workflow_webhook_cache = TTLCache(maxsize=5000, ttl=300)  # 5 minutes TTL
 _workflow_cache = TTLCache(maxsize=1000, ttl=600)  # 10 minutes TTL
 
-DATABASE_URL = os.getenv('DATABASE_URL')
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Conditionally create engine based on DB type
-if DATABASE_URL and 'sqlite' in DATABASE_URL:
+if DATABASE_URL and "sqlite" in DATABASE_URL:
     # SQLite: Use NullPool to prevent connection pool exhaustion
     engine = create_engine(
-        DATABASE_URL,
-        poolclass=NullPool,
-        connect_args={'check_same_thread': False}
+        DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
     )
 else:
     # For other databases like PostgreSQL, use connection pooling
-    engine = create_engine(
-        DATABASE_URL,
-        pool_size=50,
-        max_overflow=100,
-        pool_timeout=10
-    )
+    engine = create_engine(DATABASE_URL, pool_size=50, max_overflow=100, pool_timeout=10)
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
@@ -52,7 +56,8 @@ def generate_webhook_secret():
 
 class FlowWorkflow(Base):
     """Model for flow workflows"""
-    __tablename__ = 'flow_workflows'
+
+    __tablename__ = "flow_workflows"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
@@ -65,20 +70,25 @@ class FlowWorkflow(Base):
     webhook_secret = Column(String(64), nullable=True, default=generate_webhook_secret)
     webhook_enabled = Column(Boolean, default=False)
     webhook_auth_type = Column(String(20), default="payload")  # "payload" or "url"
-    api_key = Column(String(255), nullable=True)  # Stored when workflow is activated, used for webhook execution
+    api_key = Column(
+        String(255), nullable=True
+    )  # Stored when workflow is activated, used for webhook execution
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Relationships
-    executions = relationship("FlowWorkflowExecution", back_populates="workflow", cascade="all, delete-orphan")
+    executions = relationship(
+        "FlowWorkflowExecution", back_populates="workflow", cascade="all, delete-orphan"
+    )
 
 
 class FlowWorkflowExecution(Base):
     """Model for flow workflow executions"""
-    __tablename__ = 'flow_workflow_executions'
+
+    __tablename__ = "flow_workflow_executions"
 
     id = Column(Integer, primary_key=True, index=True)
-    workflow_id = Column(Integer, ForeignKey('flow_workflows.id'), nullable=False)
+    workflow_id = Column(Integer, ForeignKey("flow_workflows.id"), nullable=False)
     status = Column(String(50), default="pending")  # pending, running, completed, failed
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
@@ -92,6 +102,7 @@ class FlowWorkflowExecution(Base):
 def init_db():
     """Initialize the database"""
     from database.db_init_helper import init_db_with_logging
+
     init_db_with_logging(Base, engine, "Flow DB", logger)
 
     # Migrate: Add api_key column if it doesn't exist (for existing databases)
@@ -102,17 +113,18 @@ def _migrate_add_api_key_column():
     """Add api_key column to flow_workflows table if it doesn't exist"""
     try:
         from sqlalchemy import inspect, text
+
         inspector = inspect(engine)
 
         # Check if table exists
-        if 'flow_workflows' not in inspector.get_table_names():
+        if "flow_workflows" not in inspector.get_table_names():
             return
 
         # Check if column exists
-        columns = [col['name'] for col in inspector.get_columns('flow_workflows')]
-        if 'api_key' not in columns:
+        columns = [col["name"] for col in inspector.get_columns("flow_workflows")]
+        if "api_key" not in columns:
             with engine.connect() as conn:
-                conn.execute(text('ALTER TABLE flow_workflows ADD COLUMN api_key VARCHAR(255)'))
+                conn.execute(text("ALTER TABLE flow_workflows ADD COLUMN api_key VARCHAR(255)"))
                 conn.commit()
                 logger.info("Migration: Added 'api_key' column to flow_workflows table")
     except Exception as e:
@@ -122,14 +134,12 @@ def _migrate_add_api_key_column():
 
 # --- Workflow CRUD Operations ---
 
+
 def create_workflow(name, description=None, nodes=None, edges=None):
     """Create a new workflow"""
     try:
         workflow = FlowWorkflow(
-            name=name,
-            description=description,
-            nodes=nodes or [],
-            edges=edges or []
+            name=name, description=description, nodes=nodes or [], edges=edges or []
         )
         db_session.add(workflow)
         db_session.commit()
@@ -197,8 +207,17 @@ def update_workflow(workflow_id, **kwargs):
             return None
 
         # Update allowed fields
-        allowed_fields = ['name', 'description', 'nodes', 'edges', 'is_active',
-                         'schedule_job_id', 'webhook_enabled', 'webhook_auth_type', 'api_key']
+        allowed_fields = [
+            "name",
+            "description",
+            "nodes",
+            "edges",
+            "is_active",
+            "schedule_job_id",
+            "webhook_enabled",
+            "webhook_auth_type",
+            "api_key",
+        ]
         for field in allowed_fields:
             if field in kwargs:
                 setattr(workflow, field, kwargs[field])
@@ -246,9 +265,9 @@ def delete_workflow(workflow_id):
 
 def activate_workflow(workflow_id, api_key=None):
     """Activate a workflow and optionally store the API key for webhook execution"""
-    kwargs = {'is_active': True}
+    kwargs = {"is_active": True}
     if api_key:
-        kwargs['api_key'] = api_key
+        kwargs["api_key"] = api_key
     return update_workflow(workflow_id, **kwargs)
 
 
@@ -310,7 +329,7 @@ def disable_webhook(workflow_id):
 
 def set_webhook_auth_type(workflow_id, auth_type):
     """Set webhook auth type for a workflow"""
-    if auth_type not in ['payload', 'url']:
+    if auth_type not in ["payload", "url"]:
         logger.error(f"Invalid webhook auth type: {auth_type}")
         return None
     return update_workflow(workflow_id, webhook_auth_type=auth_type)
@@ -364,14 +383,11 @@ def set_schedule_job_id(workflow_id, job_id):
 
 # --- Workflow Execution CRUD Operations ---
 
+
 def create_execution(workflow_id, status="pending"):
     """Create a new workflow execution"""
     try:
-        execution = FlowWorkflowExecution(
-            workflow_id=workflow_id,
-            status=status,
-            logs=[]
-        )
+        execution = FlowWorkflowExecution(workflow_id=workflow_id, status=status, logs=[])
         db_session.add(execution)
         db_session.commit()
 
@@ -395,10 +411,12 @@ def get_execution(execution_id):
 def get_workflow_executions(workflow_id, limit=50):
     """Get executions for a workflow"""
     try:
-        return FlowWorkflowExecution.query.filter_by(workflow_id=workflow_id)\
-            .order_by(FlowWorkflowExecution.started_at.desc())\
-            .limit(limit)\
+        return (
+            FlowWorkflowExecution.query.filter_by(workflow_id=workflow_id)
+            .order_by(FlowWorkflowExecution.started_at.desc())
+            .limit(limit)
             .all()
+        )
     except Exception as e:
         logger.error(f"Error getting executions for workflow {workflow_id}: {str(e)}")
         return []

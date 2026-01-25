@@ -3,16 +3,20 @@ Socket.IO Error Handler
 Handles common Socket.IO errors like disconnected sessions gracefully
 """
 
-from utils.logging import get_logger
-from flask_socketio import disconnect
 import functools
 
+from flask_socketio import disconnect
+
+from utils.logging import get_logger
+
 logger = get_logger(__name__)
+
 
 def handle_disconnected_session(f):
     """
     Decorator to handle disconnected session errors in Socket.IO event handlers
     """
+
     @functools.wraps(f)
     def wrapper(*args, **kwargs):
         try:
@@ -29,30 +33,32 @@ def handle_disconnected_session(f):
                 disconnect()
                 return None
             raise
+
     return wrapper
+
 
 def init_socketio_error_handling(socketio_instance):
     """
     Initialize Socket.IO error handling
-    
+
     Args:
         socketio_instance: The Flask-SocketIO instance
     """
-    
+
     @socketio_instance.on_error_default
     def default_error_handler(e):
         """
         Default error handler for all namespaces
         """
         error_msg = str(e)
-        
+
         # Handle common disconnection errors silently
         if "Session is disconnected" in error_msg:
             logger.debug(f"Socket.IO session disconnected: {error_msg}")
             return False  # Don't emit error to client
-        
+
         # Log other errors
         logger.error(f"Socket.IO error: {e}")
         return True  # Let the error propagate
-    
+
     logger.debug("Socket.IO error handling initialized")

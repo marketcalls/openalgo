@@ -1,11 +1,12 @@
 # Mapping OpenAlgo API Request https://openalgo.in/docs
 # Mapping Fyers Margin API
 
+from broker.fyers.mapping.transform_data import map_action, map_order_type, map_product_type
 from database.token_db import get_br_symbol
-from broker.fyers.mapping.transform_data import map_product_type, map_action, map_order_type
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
 
 def transform_margin_positions(positions):
     """
@@ -47,14 +48,14 @@ def transform_margin_positions(positions):
 
     for position in positions:
         try:
-            symbol = position['symbol']
-            exchange = position['exchange']
+            symbol = position["symbol"]
+            exchange = position["exchange"]
 
             # Get the broker symbol for Fyers
             br_symbol = get_br_symbol(symbol, exchange)
 
             # Validate symbol exists and is not None
-            if not br_symbol or br_symbol is None or str(br_symbol).lower() == 'none':
+            if not br_symbol or br_symbol is None or str(br_symbol).lower() == "none":
                 logger.warning(f"Symbol not found for: {symbol} on exchange: {exchange}")
                 skipped_positions.append(f"{symbol} ({exchange})")
                 continue
@@ -62,25 +63,29 @@ def transform_margin_positions(positions):
             # Validate symbol is a valid string
             br_symbol_str = str(br_symbol).strip()
             if not br_symbol_str:
-                logger.warning(f"Invalid symbol format for {symbol} ({exchange}): '{br_symbol_str}'")
+                logger.warning(
+                    f"Invalid symbol format for {symbol} ({exchange}): '{br_symbol_str}'"
+                )
                 skipped_positions.append(f"{symbol} ({exchange}) - invalid symbol: {br_symbol_str}")
                 continue
 
             # Transform the position
             transformed_position = {
                 "symbol": br_symbol_str,
-                "qty": int(position['quantity']),
-                "side": map_action(position['action'].upper()),
-                "type": map_order_type(position['pricetype']),
-                "productType": map_product_type(position['product']),
-                "limitPrice": float(position.get('price', 0.0)),
+                "qty": int(position["quantity"]),
+                "side": map_action(position["action"].upper()),
+                "type": map_order_type(position["pricetype"]),
+                "productType": map_product_type(position["product"]),
+                "limitPrice": float(position.get("price", 0.0)),
                 "stopLoss": 0.0,
-                "stopPrice": float(position.get('trigger_price', 0.0)),
-                "takeProfit": 0.0
+                "stopPrice": float(position.get("trigger_price", 0.0)),
+                "takeProfit": 0.0,
             }
 
             transformed_positions.append(transformed_position)
-            logger.debug(f"Successfully transformed position: {symbol} ({exchange}) -> {br_symbol_str}")
+            logger.debug(
+                f"Successfully transformed position: {symbol} ({exchange}) -> {br_symbol_str}"
+            )
 
         except Exception as e:
             logger.error(f"Error transforming position: {position}, Error: {e}")
@@ -89,12 +94,17 @@ def transform_margin_positions(positions):
 
     # Log summary
     if skipped_positions:
-        logger.warning(f"Skipped {len(skipped_positions)} position(s) due to missing/invalid symbols: {', '.join(skipped_positions)}")
+        logger.warning(
+            f"Skipped {len(skipped_positions)} position(s) due to missing/invalid symbols: {', '.join(skipped_positions)}"
+        )
 
     if transformed_positions:
-        logger.info(f"Successfully transformed {len(transformed_positions)} position(s) for margin calculation")
+        logger.info(
+            f"Successfully transformed {len(transformed_positions)} position(s) for margin calculation"
+        )
 
     return transformed_positions
+
 
 def parse_margin_response(response_data):
     """
@@ -136,32 +146,29 @@ def parse_margin_response(response_data):
     """
     try:
         if not response_data or not isinstance(response_data, dict):
-            return {
-                'status': 'error',
-                'message': 'Invalid response from broker'
-            }
+            return {"status": "error", "message": "Invalid response from broker"}
 
         # Check if the response has the expected structure
         # Fyers uses 's' field for status: 'ok' for success
-        if response_data.get('s') != 'ok':
-            error_message = response_data.get('message', 'Failed to calculate margin')
-            error_code = response_data.get('code', 'Unknown')
+        if response_data.get("s") != "ok":
+            error_message = response_data.get("message", "Failed to calculate margin")
+            error_code = response_data.get("code", "Unknown")
             return {
-                'status': 'error',
-                'message': f"Fyers API Error (Code {error_code}): {error_message}"
+                "status": "error",
+                "message": f"Fyers API Error (Code {error_code}): {error_message}",
             }
 
         # Extract margin data
-        data = response_data.get('data', {})
+        data = response_data.get("data", {})
 
         # Extract values from Fyers response
-        margin_avail = data.get('margin_avail', 0)
-        margin_total = data.get('margin_total', 0)
-        margin_new_order = data.get('margin_new_order', 0)
+        margin_avail = data.get("margin_avail", 0)
+        margin_total = data.get("margin_total", 0)
+        margin_new_order = data.get("margin_new_order", 0)
 
-        logger.info("="*80)
+        logger.info("=" * 80)
         logger.info("FYERS MARGIN API - DETAILED BREAKDOWN")
-        logger.info("="*80)
+        logger.info("=" * 80)
         logger.info(f"Available Margin:        Rs. {margin_avail:,.2f}")
         logger.info(f"Margin Total:            Rs. {margin_total:,.2f}")
         logger.info(f"Margin New Order:        Rs. {margin_new_order:,.2f}")
@@ -173,23 +180,20 @@ def parse_margin_response(response_data):
         logger.info("")
         logger.warning("⚠ IMPORTANT: Fyers does not provide SPAN/Exposure breakdown")
         logger.warning("⚠ Using margin_new_order as total_margin_required")
-        logger.info("="*80)
+        logger.info("=" * 80)
 
         # Return standardized format matching OpenAlgo specification
         # Note: Fyers doesn't provide span_margin and exposure_margin breakdown
         # We use margin_new_order as the total margin required
         return {
-            'status': 'success',
-            'data': {
-                'total_margin_required': margin_new_order,
-                'span_margin': 0,  # Fyers doesn't provide SPAN margin breakdown
-                'exposure_margin': 0  # Fyers doesn't provide Exposure margin breakdown
-            }
+            "status": "success",
+            "data": {
+                "total_margin_required": margin_new_order,
+                "span_margin": 0,  # Fyers doesn't provide SPAN margin breakdown
+                "exposure_margin": 0,  # Fyers doesn't provide Exposure margin breakdown
+            },
         }
 
     except Exception as e:
         logger.error(f"Error parsing margin response: {e}")
-        return {
-            'status': 'error',
-            'message': f'Failed to parse margin response: {str(e)}'
-        }
+        return {"status": "error", "message": f"Failed to parse margin response: {str(e)}"}

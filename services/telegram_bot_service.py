@@ -1,48 +1,59 @@
-import os
 import asyncio
-import logging
-import sys
 import concurrent.futures
-from typing import Dict, List, Optional, Tuple, Any
+import logging
+import os
+import sys
+from typing import Any, Dict, List, Optional, Tuple
 
 # Import the original threading module to run the bot in a real OS thread,
 # bypassing eventlet's monkey-patching which causes event loop conflicts.
-if 'eventlet' in sys.modules:
+if "eventlet" in sys.modules:
     import eventlet
-    original_threading = eventlet.patcher.original('threading')
+
+    original_threading = eventlet.patcher.original("threading")
 else:
     import threading as original_threading
 
-from datetime import datetime, timedelta
-import httpx
-from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-from telegram.constants import ParseMode
-import telegram.error
-import json
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import pandas as pd
-import io
 import base64
+import io
+import json
+from datetime import datetime, timedelta
+
+import httpx
+import pandas as pd
+import plotly.graph_objects as go
+import telegram.error
 from openalgo import api as openalgo_api
+from plotly.subplots import make_subplots
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update
+from telegram.constants import ParseMode
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
+
+from database.auth_db import get_username_by_apikey
 
 # Database imports
 from database.telegram_db import (
-    get_telegram_user,
     create_or_update_telegram_user,
-    get_bot_config,
-    update_bot_config,
-    log_command,
-    get_command_stats,
-    get_all_telegram_users,
     delete_telegram_user,
-    get_user_credentials
+    get_all_telegram_users,
+    get_bot_config,
+    get_command_stats,
+    get_telegram_user,
+    get_user_credentials,
+    log_command,
+    update_bot_config,
 )
-from database.auth_db import get_username_by_apikey
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
 
 class TelegramBotService:
     """Service class for managing Telegram bot operations with OpenAlgo SDK integration"""
@@ -58,7 +69,7 @@ class TelegramBotService:
         self.sdk_clients = {}  # Cache for OpenAlgo SDK clients per user
         self._stop_event = original_threading.Event()  # Thread-safe stop signal
 
-    def _get_sdk_client(self, telegram_id: int) -> Optional[openalgo_api]:
+    def _get_sdk_client(self, telegram_id: int) -> openalgo_api | None:
         """Get or create OpenAlgo SDK client for a user"""
         try:
             # Check if client already exists
@@ -67,12 +78,12 @@ class TelegramBotService:
 
             # Get user credentials
             credentials = get_user_credentials(telegram_id)
-            if not credentials or not credentials.get('api_key'):
+            if not credentials or not credentials.get("api_key"):
                 logger.error(f"No valid credentials for telegram_id: {telegram_id}")
                 return None
 
-            host_url = credentials['host_url'].rstrip('/')
-            api_key = credentials['api_key']
+            host_url = credentials["host_url"].rstrip("/")
+            api_key = credentials["api_key"]
 
             # Create SDK client
             client = openalgo_api(api_key=api_key, host=host_url)
@@ -86,7 +97,7 @@ class TelegramBotService:
             logger.error(f"Error creating SDK client: {e}")
             return None
 
-    async def _make_sdk_call(self, telegram_id: int, method: str, **kwargs) -> Optional[Dict]:
+    async def _make_sdk_call(self, telegram_id: int, method: str, **kwargs) -> dict | None:
         """Make an SDK call in async context"""
         try:
             client = self._get_sdk_client(telegram_id)
@@ -104,7 +115,9 @@ class TelegramBotService:
             logger.error(f"Error making SDK call: {e}")
             return None
 
-    async def _generate_intraday_chart(self, symbol: str, exchange: str, interval: str, days: int, telegram_id: int) -> Optional[bytes]:
+    async def _generate_intraday_chart(
+        self, symbol: str, exchange: str, interval: str, days: int, telegram_id: int
+    ) -> bytes | None:
         """Generate intraday chart with specified interval"""
         try:
             client = self._get_sdk_client(telegram_id)
@@ -116,13 +129,15 @@ class TelegramBotService:
             end_date = datetime.now()
             start_date = end_date - timedelta(days=days)
 
-            logger.debug(f"Generating intraday chart for {symbol} on {exchange} with interval {interval}")
+            logger.debug(
+                f"Generating intraday chart for {symbol} on {exchange} with interval {interval}"
+            )
 
             # Get historical data - be robust about event loops
             history_data = None
 
             # Try async first if we have a loop
-            if hasattr(self, 'bot_loop') and self.bot_loop:
+            if hasattr(self, "bot_loop") and self.bot_loop:
                 try:
                     logger.debug("Using bot's event loop for intraday history")
                     history_data = await self.bot_loop.run_in_executor(
@@ -132,8 +147,8 @@ class TelegramBotService:
                             exchange=exchange,
                             interval=interval,
                             start_date=start_date.strftime("%Y-%m-%d"),
-                            end_date=end_date.strftime("%Y-%m-%d")
-                        )
+                            end_date=end_date.strftime("%Y-%m-%d"),
+                        ),
                     )
                 except Exception as e:
                     logger.warning(f"Failed to fetch via bot loop: {e}")
@@ -147,73 +162,83 @@ class TelegramBotService:
                         exchange=exchange,
                         interval=interval,
                         start_date=start_date.strftime("%Y-%m-%d"),
-                        end_date=end_date.strftime("%Y-%m-%d")
+                        end_date=end_date.strftime("%Y-%m-%d"),
                     )
                 except Exception as e:
                     logger.error(f"Synchronous history fetch failed: {e}")
                     return None
 
             # Check if we got data
-            if history_data is None or (isinstance(history_data, pd.DataFrame) and history_data.empty):
+            if history_data is None or (
+                isinstance(history_data, pd.DataFrame) and history_data.empty
+            ):
                 logger.error("No data available for chart generation")
                 return None
 
             # The API returns a DataFrame directly with timestamp as index
-            df = history_data if isinstance(history_data, pd.DataFrame) else pd.DataFrame(history_data)
+            df = (
+                history_data
+                if isinstance(history_data, pd.DataFrame)
+                else pd.DataFrame(history_data)
+            )
 
             # Reset index to get timestamp as a column
             df = df.reset_index()
             # After reset_index(), the index becomes a column named 'index'
             # Rename it to 'timestamp' for clarity
-            if 'index' in df.columns:
-                df.rename(columns={'index': 'timestamp'}, inplace=True)
+            if "index" in df.columns:
+                df.rename(columns={"index": "timestamp"}, inplace=True)
 
             # Create candlestick chart with volume
             fig = make_subplots(
-                rows=2, cols=1,
+                rows=2,
+                cols=1,
                 shared_xaxes=True,
                 vertical_spacing=0.03,
-                subplot_titles=(f'{symbol} - {days} Day Intraday ({interval})', None),
-                row_heights=[0.7, 0.3]
+                subplot_titles=(f"{symbol} - {days} Day Intraday ({interval})", None),
+                row_heights=[0.7, 0.3],
             )
 
             # Add candlestick chart (following sample code exactly)
             fig.add_trace(
                 go.Candlestick(
-                    x=df['timestamp'],  # x-axis as timestamp
-                    open=df['open'],
-                    high=df['high'],
-                    low=df['low'],
-                    close=df['close'],
-                    name='Price',
-                    increasing_line_color='green',
-                    decreasing_line_color='red'
+                    x=df["timestamp"],  # x-axis as timestamp
+                    open=df["open"],
+                    high=df["high"],
+                    low=df["low"],
+                    close=df["close"],
+                    name="Price",
+                    increasing_line_color="green",
+                    decreasing_line_color="red",
                 ),
-                row=1, col=1
+                row=1,
+                col=1,
             )
 
             # Add volume bar chart
-            colors = ['red' if close < open else 'green'
-                     for close, open in zip(df['close'], df['open'])]
+            colors = [
+                "red" if close < open else "green" for close, open in zip(df["close"], df["open"])
+            ]
 
             fig.add_trace(
                 go.Bar(
-                    x=df['timestamp'],  # x-axis as timestamp
-                    y=df['volume'],
+                    x=df["timestamp"],  # x-axis as timestamp
+                    y=df["volume"],
                     marker_color=colors,
-                    name='Volume',
-                    showlegend=False
+                    name="Volume",
+                    showlegend=False,
                 ),
-                row=2, col=1
+                row=2,
+                col=1,
             )
 
             # Update layout - simplified like the sample code
             fig.update_layout(
                 xaxis_rangeslider_visible=False,
                 height=600,
-                template='plotly_white',
+                template="plotly_white",
                 showlegend=False,
-                hovermode='x unified'
+                hovermode="x unified",
             )
 
             # Apply category type to both x-axes to avoid gaps
@@ -222,25 +247,27 @@ class TelegramBotService:
             # Format timestamps as "22 SEP 09:15"
             tick_labels = []
             for i in range(0, len(df), tick_spacing):
-                if pd.notna(df['timestamp'].iloc[i]):
-                    ts = pd.to_datetime(df['timestamp'].iloc[i])
-                    tick_labels.append(ts.strftime('%d %b %H:%M').upper())
+                if pd.notna(df["timestamp"].iloc[i]):
+                    ts = pd.to_datetime(df["timestamp"].iloc[i])
+                    tick_labels.append(ts.strftime("%d %b %H:%M").upper())
                 else:
-                    tick_labels.append('')
+                    tick_labels.append("")
 
             fig.update_xaxes(
-                type='category',
-                row=2, col=1,  # Apply to bottom subplot
-                tickmode='array',
+                type="category",
+                row=2,
+                col=1,  # Apply to bottom subplot
+                tickmode="array",
                 tickvals=list(range(0, len(df), tick_spacing)),
                 ticktext=tick_labels,
-                tickangle=45
+                tickangle=45,
             )
             # Hide ticks on top subplot
             fig.update_xaxes(
-                type='category',
-                row=1, col=1,  # Apply to top subplot
-                showticklabels=False
+                type="category",
+                row=1,
+                col=1,  # Apply to top subplot
+                showticklabels=False,
             )
 
             # Clean up axes
@@ -254,7 +281,9 @@ class TelegramBotService:
             logger.error(f"Error generating intraday chart: {e}")
             return None
 
-    async def _generate_daily_chart(self, symbol: str, exchange: str, interval: str, days: int, telegram_id: int) -> Optional[bytes]:
+    async def _generate_daily_chart(
+        self, symbol: str, exchange: str, interval: str, days: int, telegram_id: int
+    ) -> bytes | None:
         """Generate daily chart with specified days"""
         try:
             client = self._get_sdk_client(telegram_id)
@@ -267,13 +296,15 @@ class TelegramBotService:
             # For daily charts, add extra days to ensure we get enough trading days
             start_date = end_date - timedelta(days=int(days * 1.5))
 
-            logger.debug(f"Generating daily chart for {symbol} on {exchange} with interval {interval}")
+            logger.debug(
+                f"Generating daily chart for {symbol} on {exchange} with interval {interval}"
+            )
 
             # Get historical data - be robust about event loops
             history_data = None
 
             # Try async first if we have a loop
-            if hasattr(self, 'bot_loop') and self.bot_loop:
+            if hasattr(self, "bot_loop") and self.bot_loop:
                 try:
                     logger.debug("Using bot's event loop for daily history")
                     history_data = await self.bot_loop.run_in_executor(
@@ -283,8 +314,8 @@ class TelegramBotService:
                             exchange=exchange,
                             interval=interval,
                             start_date=start_date.strftime("%Y-%m-%d"),
-                            end_date=end_date.strftime("%Y-%m-%d")
-                        )
+                            end_date=end_date.strftime("%Y-%m-%d"),
+                        ),
                     )
                 except Exception as e:
                     logger.warning(f"Failed to fetch daily via bot loop: {e}")
@@ -298,77 +329,86 @@ class TelegramBotService:
                         exchange=exchange,
                         interval=interval,
                         start_date=start_date.strftime("%Y-%m-%d"),
-                        end_date=end_date.strftime("%Y-%m-%d")
+                        end_date=end_date.strftime("%Y-%m-%d"),
                     )
                 except Exception as e:
                     logger.error(f"Synchronous daily history fetch failed: {e}")
                     return None
 
             # Check if we got data
-            if history_data is None or (isinstance(history_data, pd.DataFrame) and history_data.empty):
+            if history_data is None or (
+                isinstance(history_data, pd.DataFrame) and history_data.empty
+            ):
                 logger.error("No data available for chart generation")
                 return None
 
             # The API returns a DataFrame directly with timestamp as index
-            df = history_data if isinstance(history_data, pd.DataFrame) else pd.DataFrame(history_data)
+            df = (
+                history_data
+                if isinstance(history_data, pd.DataFrame)
+                else pd.DataFrame(history_data)
+            )
 
             # Reset index to get timestamp as a column
             df = df.reset_index()
             # After reset_index(), the index becomes a column named 'index'
             # Rename it to 'timestamp' for clarity
-            if 'index' in df.columns:
-                df.rename(columns={'index': 'timestamp'}, inplace=True)
+            if "index" in df.columns:
+                df.rename(columns={"index": "timestamp"}, inplace=True)
 
             # Keep last N trading days
             df = df.tail(days)
 
             # Create candlestick chart with volume
             fig = make_subplots(
-                rows=2, cols=1,
+                rows=2,
+                cols=1,
                 shared_xaxes=True,
                 vertical_spacing=0.03,
-                subplot_titles=(f'{symbol} - Daily Chart ({days} Days)', None),
-                row_heights=[0.7, 0.3]
+                subplot_titles=(f"{symbol} - Daily Chart ({days} Days)", None),
+                row_heights=[0.7, 0.3],
             )
 
             # Add candlestick chart (following sample code exactly)
             fig.add_trace(
                 go.Candlestick(
-                    x=df['timestamp'],  # x-axis as timestamp
-                    open=df['open'],
-                    high=df['high'],
-                    low=df['low'],
-                    close=df['close'],
-                    name='Price',
-                    increasing_line_color='green',
-                    decreasing_line_color='red'
+                    x=df["timestamp"],  # x-axis as timestamp
+                    open=df["open"],
+                    high=df["high"],
+                    low=df["low"],
+                    close=df["close"],
+                    name="Price",
+                    increasing_line_color="green",
+                    decreasing_line_color="red",
                 ),
-                row=1, col=1
+                row=1,
+                col=1,
             )
 
-
             # Add volume bar chart
-            colors = ['red' if close < open else 'green'
-                     for close, open in zip(df['close'], df['open'])]
+            colors = [
+                "red" if close < open else "green" for close, open in zip(df["close"], df["open"])
+            ]
 
             fig.add_trace(
                 go.Bar(
-                    x=df['timestamp'],  # x-axis as timestamp
-                    y=df['volume'],
+                    x=df["timestamp"],  # x-axis as timestamp
+                    y=df["volume"],
                     marker_color=colors,
-                    name='Volume',
-                    showlegend=False
+                    name="Volume",
+                    showlegend=False,
                 ),
-                row=2, col=1
+                row=2,
+                col=1,
             )
 
             # Update layout - simplified like the sample code
             fig.update_layout(
                 xaxis_rangeslider_visible=False,
                 height=600,
-                template='plotly_white',
+                template="plotly_white",
                 showlegend=False,
-                hovermode='x unified'
+                hovermode="x unified",
             )
 
             # Apply category type to both x-axes to avoid gaps
@@ -377,25 +417,27 @@ class TelegramBotService:
             # Format dates for display as "22 SEP"
             tick_labels = []
             for i in range(0, len(df), tick_spacing):
-                if pd.notna(df['timestamp'].iloc[i]):
-                    ts = pd.to_datetime(df['timestamp'].iloc[i])
-                    tick_labels.append(ts.strftime('%d %b').upper())
+                if pd.notna(df["timestamp"].iloc[i]):
+                    ts = pd.to_datetime(df["timestamp"].iloc[i])
+                    tick_labels.append(ts.strftime("%d %b").upper())
                 else:
-                    tick_labels.append('')
+                    tick_labels.append("")
 
             fig.update_xaxes(
-                type='category',
-                row=2, col=1,  # Apply to bottom subplot
-                tickmode='array',
+                type="category",
+                row=2,
+                col=1,  # Apply to bottom subplot
+                tickmode="array",
                 tickvals=list(range(0, len(df), tick_spacing)),
                 ticktext=tick_labels,
-                tickangle=45
+                tickangle=45,
             )
             # Hide ticks on top subplot
             fig.update_xaxes(
-                type='category',
-                row=1, col=1,  # Apply to top subplot
-                showticklabels=False
+                type="category",
+                row=1,
+                col=1,  # Apply to top subplot
+                showticklabels=False,
             )
 
             # Clean up axes
@@ -409,7 +451,7 @@ class TelegramBotService:
             logger.error(f"Error generating daily chart: {e}")
             return None
 
-    async def initialize_bot(self, token: str) -> Tuple[bool, str]:
+    async def initialize_bot(self, token: str) -> tuple[bool, str]:
         """Initialize the Telegram bot with given token"""
         try:
             # If bot is running, stop it first
@@ -430,11 +472,9 @@ class TelegramBotService:
             await temp_app.shutdown()
 
             # Update bot config in database
-            update_bot_config({
-                'bot_token': token,
-                'is_active': False,
-                'bot_username': bot_info.username
-            })
+            update_bot_config(
+                {"bot_token": token, "is_active": False, "bot_username": bot_info.username}
+            )
 
             return True, f"Bot initialized successfully: @{bot_info.username}"
 
@@ -442,40 +482,38 @@ class TelegramBotService:
             logger.error(f"Failed to initialize bot: {e}")
             return False, str(e)
 
-    def initialize_bot_sync(self, token: str) -> Tuple[bool, str]:
+    def initialize_bot_sync(self, token: str) -> tuple[bool, str]:
         """Synchronous initialization for eventlet environments"""
         import sys
 
         # Check if we're in eventlet environment
-        if 'eventlet' in sys.modules:
+        if "eventlet" in sys.modules:
             logger.info("Using synchronous initialization for eventlet environment")
             # Use synchronous requests to validate token
             import requests
 
             try:
-                response = requests.get(
-                    f"https://api.telegram.org/bot{token}/getMe",
-                    timeout=10
-                )
+                response = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
 
                 if response.status_code == 200:
                     data = response.json()
-                    if data.get('ok'):
-                        bot_info = data.get('result', {})
-                        bot_username = bot_info.get('username', 'unknown')
+                    if data.get("ok"):
+                        bot_info = data.get("result", {})
+                        bot_username = bot_info.get("username", "unknown")
 
                         # Store token and update config
                         self.bot_token = token
-                        update_bot_config({
-                            'bot_token': token,
-                            'is_active': False,
-                            'bot_username': bot_username
-                        })
+                        update_bot_config(
+                            {"bot_token": token, "is_active": False, "bot_username": bot_username}
+                        )
 
                         logger.info(f"Bot validated: @{bot_username}")
                         return True, f"Bot initialized successfully: @{bot_username}"
                     else:
-                        return False, f"Invalid response: {data.get('description', 'Unknown error')}"
+                        return (
+                            False,
+                            f"Invalid response: {data.get('description', 'Unknown error')}",
+                        )
                 else:
                     return False, f"HTTP {response.status_code}: Failed to validate token"
 
@@ -489,6 +527,7 @@ class TelegramBotService:
             # Non-eventlet environment, use regular async initialization
             logger.info("Using async initialization (non-eventlet environment)")
             import asyncio
+
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
@@ -501,7 +540,7 @@ class TelegramBotService:
         import sys
 
         # Check if eventlet is active
-        if 'eventlet' in sys.modules:
+        if "eventlet" in sys.modules:
             logger.info("Eventlet detected - using special handling for asyncio")
             # For eventlet, we need to be very careful with asyncio
             import asyncio
@@ -510,6 +549,7 @@ class TelegramBotService:
             try:
                 # Use the default, unpatched event loop policy
                 from asyncio import DefaultEventLoopPolicy, SelectorEventLoop
+
                 policy = DefaultEventLoopPolicy()
                 asyncio.set_event_loop_policy(policy)
                 logger.info("Reset to default event loop policy")
@@ -565,11 +605,11 @@ class TelegramBotService:
             logger.error(f"Unhandled error in Telegram bot: {error}", exc_info=error)
 
         # If we have an update, try to inform the user (if possible)
-        if update and hasattr(update, 'effective_chat'):
+        if update and hasattr(update, "effective_chat"):
             try:
                 await context.bot.send_message(
                     chat_id=update.effective_chat.id,
-                    text="⚠️ An error occurred. Please try again later."
+                    text="⚠️ An error occurred. Please try again later.",
                 )
             except:
                 pass  # If we can't send the message, just ignore
@@ -615,11 +655,11 @@ class TelegramBotService:
                 logger.debug("Starting bot in polling mode...")
                 await self.application.updater.start_polling(
                     drop_pending_updates=True,  # Ignore old messages
-                    allowed_updates=Update.ALL_TYPES
+                    allowed_updates=Update.ALL_TYPES,
                 )
 
                 self.is_running = True
-                update_bot_config({'is_active': True})
+                update_bot_config({"is_active": True})
                 logger.debug("Telegram bot started successfully and is polling for updates")
 
                 # Reset retry count on successful connection
@@ -645,10 +685,17 @@ class TelegramBotService:
                 logger.debug("Bot stopping gracefully...")
                 break
 
-            except (httpx.ConnectError, httpx.NetworkError, httpx.TimeoutException, telegram.error.NetworkError) as e:
+            except (
+                httpx.ConnectError,
+                httpx.NetworkError,
+                httpx.TimeoutException,
+                telegram.error.NetworkError,
+            ) as e:
                 retry_count += 1
-                delay = base_delay * (2 ** retry_count)  # Exponential backoff
-                logger.warning(f"Network error while connecting to Telegram (attempt {retry_count}/{max_retries}): {type(e).__name__}")
+                delay = base_delay * (2**retry_count)  # Exponential backoff
+                logger.warning(
+                    f"Network error while connecting to Telegram (attempt {retry_count}/{max_retries}): {type(e).__name__}"
+                )
                 logger.debug(f"Network error details: {str(e)}")
 
                 if retry_count < max_retries:
@@ -656,7 +703,9 @@ class TelegramBotService:
                     await asyncio.sleep(delay)
                 else:
                     logger.error("Max retries reached. Unable to connect to Telegram servers.")
-                    logger.info("This might be due to: 1) No internet connection, 2) Telegram blocked by firewall/ISP, 3) DNS issues")
+                    logger.info(
+                        "This might be due to: 1) No internet connection, 2) Telegram blocked by firewall/ISP, 3) DNS issues"
+                    )
                     self.is_running = False
                     break
 
@@ -667,37 +716,40 @@ class TelegramBotService:
                 break
 
         # Cleanup after the retry loop
-        if self.application and hasattr(self.application, 'updater') and self.application.updater.running:
+        if (
+            self.application
+            and hasattr(self.application, "updater")
+            and self.application.updater.running
+        ):
             try:
                 await self.application.updater.stop()
             except Exception as e:
                 logger.debug(f"Error stopping updater: {e}")
 
-    def start_bot(self) -> Tuple[bool, str]:
+    def start_bot(self) -> tuple[bool, str]:
         """Start the bot in a separate thread"""
         try:
             if self.is_running:
                 return False, "Bot is already running"
 
             config = get_bot_config()
-            if not config or not config.get('bot_token'):
+            if not config or not config.get("bot_token"):
                 return False, "Bot token not configured"
 
-            self.bot_token = config['bot_token']
+            self.bot_token = config["bot_token"]
 
             # Reset stop event
             self._stop_event.clear()
 
             # Start bot in separate thread with isolated event loop
             self.bot_thread = original_threading.Thread(
-                target=self._run_bot_in_thread,
-                daemon=True,
-                name="TelegramBotThread"
+                target=self._run_bot_in_thread, daemon=True, name="TelegramBotThread"
             )
             self.bot_thread.start()
 
             # Wait for bot to start
             import time
+
             for _ in range(10):  # Wait up to 5 seconds
                 if self.is_running:
                     return True, "Bot started successfully"
@@ -709,7 +761,7 @@ class TelegramBotService:
             logger.error(f"Failed to start bot: {e}")
             return False, str(e)
 
-    def stop_bot(self) -> Tuple[bool, str]:
+    def stop_bot(self) -> tuple[bool, str]:
         """Stop the bot"""
         try:
             if not self.is_running:
@@ -732,7 +784,7 @@ class TelegramBotService:
             self.bot_loop = None  # Clear the loop reference
 
             # Update database
-            update_bot_config({'is_active': False})
+            update_bot_config({"is_active": False})
 
             logger.info("Telegram bot stopped")
             return True, "Bot stopped successfully"
@@ -756,7 +808,7 @@ class TelegramBotService:
             await update.message.reply_text(
                 f"Welcome back, {user.first_name}! 👋\n\n"
                 "Your account is linked. Use /menu to see available options.",
-                parse_mode=ParseMode.MARKDOWN
+                parse_mode=ParseMode.MARKDOWN,
             )
         else:
             await update.message.reply_text(
@@ -766,10 +818,10 @@ class TelegramBotService:
                 "Example:\n"
                 "`/link your_api_key_here http://127.0.0.1:5000`\n\n"
                 "Use /help to see all available commands.",
-                parse_mode=ParseMode.MARKDOWN
+                parse_mode=ParseMode.MARKDOWN,
             )
 
-        log_command(user.id, 'start', update.effective_chat.id)
+        log_command(user.id, "start", update.effective_chat.id)
 
     async def cmd_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /help command"""
@@ -809,7 +861,7 @@ class TelegramBotService:
 """
 
         await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
-        log_command(update.effective_user.id, 'help', update.effective_chat.id)
+        log_command(update.effective_user.id, "help", update.effective_chat.id)
 
     async def cmd_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /link command"""
@@ -821,12 +873,12 @@ class TelegramBotService:
                 "❌ Invalid format\n"
                 "Usage: `/link <api_key> <host_url>`\n"
                 "Example: `/link your_api_key http://127.0.0.1:5000`",
-                parse_mode=ParseMode.MARKDOWN
+                parse_mode=ParseMode.MARKDOWN,
             )
             return
 
         api_key = context.args[0]
-        host_url = context.args[1].rstrip('/')
+        host_url = context.args[1].rstrip("/")
 
         # Validate API key by making a test call
         try:
@@ -837,7 +889,7 @@ class TelegramBotService:
             loop = asyncio.get_event_loop()
             test_response = await loop.run_in_executor(None, test_client.funds)
 
-            if test_response and test_response.get('status') == 'success':
+            if test_response and test_response.get("status") == "success":
                 # Valid credentials, save them
                 # Get the actual OpenAlgo username from the API key
                 openalgo_username = None
@@ -848,23 +900,29 @@ class TelegramBotService:
                     logger.error(f"Error getting username from API key: {e}")
 
                 # If we couldn't get username from API key, try to extract from response
-                if not openalgo_username and test_response.get('data'):
+                if not openalgo_username and test_response.get("data"):
                     # Some brokers return username in the funds response
-                    data = test_response.get('data', {})
+                    data = test_response.get("data", {})
                     if isinstance(data, dict):
-                        openalgo_username = data.get('username') or data.get('user_id') or data.get('client_id')
+                        openalgo_username = (
+                            data.get("username") or data.get("user_id") or data.get("client_id")
+                        )
                         if openalgo_username:
                             logger.info(f"Got username from funds response: {openalgo_username}")
 
                 # Log for debugging
-                logger.info(f"Linking Telegram user {user.id} (@{user.username}) with OpenAlgo username: '{openalgo_username}'")
+                logger.info(
+                    f"Linking Telegram user {user.id} (@{user.username}) with OpenAlgo username: '{openalgo_username}'"
+                )
 
                 # If we still can't get username, DON'T use telegram username with @
                 # Use a proper fallback
                 if not openalgo_username:
                     # Try to get from session or use telegram ID
                     openalgo_username = f"user_{user.id}"
-                    logger.warning(f"Could not get OpenAlgo username, using fallback: {openalgo_username}")
+                    logger.warning(
+                        f"Could not get OpenAlgo username, using fallback: {openalgo_username}"
+                    )
                 else:
                     logger.info(f"Successfully retrieved OpenAlgo username: {openalgo_username}")
 
@@ -875,7 +933,7 @@ class TelegramBotService:
                     first_name=user.first_name,
                     last_name=user.last_name,
                     api_key=api_key,
-                    host_url=host_url
+                    host_url=host_url,
                 )
 
                 logger.info(f"Database updated - Username stored as: {openalgo_username}")
@@ -884,24 +942,21 @@ class TelegramBotService:
                     "✅ Account linked successfully!\n"
                     "You can now use all bot features.\n"
                     "Type /menu to see available options.",
-                    parse_mode=ParseMode.MARKDOWN
+                    parse_mode=ParseMode.MARKDOWN,
                 )
             else:
                 await update.message.reply_text(
-                    "❌ Failed to validate API key.\n"
-                    "Please check your credentials and try again.",
-                    parse_mode=ParseMode.MARKDOWN
+                    "❌ Failed to validate API key.\nPlease check your credentials and try again.",
+                    parse_mode=ParseMode.MARKDOWN,
                 )
 
         except Exception as e:
             logger.error(f"Error linking account: {e}")
             await update.message.reply_text(
-                "❌ Failed to link account.\n"
-                f"Error: {str(e)}",
-                parse_mode=ParseMode.MARKDOWN
+                f"❌ Failed to link account.\nError: {str(e)}", parse_mode=ParseMode.MARKDOWN
             )
 
-        log_command(user.id, 'link', chat_id)
+        log_command(user.id, "link", chat_id)
 
     async def cmd_unlink(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /unlink command"""
@@ -913,17 +968,15 @@ class TelegramBotService:
                 del self.sdk_clients[user.id]
 
             await update.message.reply_text(
-                "✅ Account unlinked successfully.\n"
-                "Your data has been removed.",
-                parse_mode=ParseMode.MARKDOWN
+                "✅ Account unlinked successfully.\nYour data has been removed.",
+                parse_mode=ParseMode.MARKDOWN,
             )
         else:
             await update.message.reply_text(
-                "❌ No linked account found.",
-                parse_mode=ParseMode.MARKDOWN
+                "❌ No linked account found.", parse_mode=ParseMode.MARKDOWN
             )
 
-        log_command(user.id, 'unlink', update.effective_chat.id)
+        log_command(user.id, "unlink", update.effective_chat.id)
 
     async def cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /status command"""
@@ -938,7 +991,7 @@ class TelegramBotService:
                     loop = asyncio.get_event_loop()
                     test_response = await loop.run_in_executor(None, client.funds)
 
-                    if test_response and test_response.get('status') == 'success':
+                    if test_response and test_response.get("status") == "success":
                         status = "🟢 Connected"
                     else:
                         status = "🔴 Connection Failed"
@@ -948,8 +1001,12 @@ class TelegramBotService:
                 status = "🔴 Client Error"
 
             # Get display name (prefer telegram_username, fallback to openalgo_username)
-            display_name = telegram_user.get('telegram_username') or telegram_user.get('openalgo_username') or 'N/A'
-            host_url = telegram_user.get('host_url') or 'N/A'
+            display_name = (
+                telegram_user.get("telegram_username")
+                or telegram_user.get("openalgo_username")
+                or "N/A"
+            )
+            host_url = telegram_user.get("host_url") or "N/A"
 
             await update.message.reply_text(
                 f"*Account Status*\n"
@@ -958,16 +1015,15 @@ class TelegramBotService:
                 f"Status: {status}\n"
                 f"Host: {host_url}\n"
                 f"Linked: {telegram_user.get('created_at', 'N/A')}",
-                parse_mode=ParseMode.MARKDOWN
+                parse_mode=ParseMode.MARKDOWN,
             )
         else:
             await update.message.reply_text(
-                "❌ No linked account found.\n"
-                "Use /link to connect your OpenAlgo account.",
-                parse_mode=ParseMode.MARKDOWN
+                "❌ No linked account found.\nUse /link to connect your OpenAlgo account.",
+                parse_mode=ParseMode.MARKDOWN,
             )
 
-        log_command(user.id, 'status', update.effective_chat.id)
+        log_command(user.id, "status", update.effective_chat.id)
 
     async def cmd_orderbook(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /orderbook command"""
@@ -987,35 +1043,47 @@ class TelegramBotService:
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(None, client.orderbook)
 
-        if not response or response.get('status') != 'success':
+        if not response or response.get("status") != "success":
             await update.message.reply_text("❌ Failed to fetch orderbook")
             return
 
-        orders = response.get('data', {}).get('orders', [])
-        statistics = response.get('data', {}).get('statistics', {})
+        orders = response.get("data", {}).get("orders", [])
+        statistics = response.get("data", {}).get("statistics", {})
 
         if not orders:
-            await update.message.reply_text("📊 *ORDERBOOK*\n━━━━━━━━━━━━━━━\n\nNo open orders", parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(
+                "📊 *ORDERBOOK*\n━━━━━━━━━━━━━━━\n\nNo open orders", parse_mode=ParseMode.MARKDOWN
+            )
             return
 
         message = "📊 *ORDERBOOK*\n━━━━━━━━━━━━━━━\n\n"
 
         for order in orders[:10]:  # Limit to 10 orders
-            status = order.get('order_status', 'unknown')
-            status_emoji = "✅" if status == 'complete' else "🟡" if status == 'open' else "❌" if status == 'rejected' else "⏸️"
-            action_emoji = "📈" if order.get('action') == 'BUY' else "📉"
+            status = order.get("order_status", "unknown")
+            status_emoji = (
+                "✅"
+                if status == "complete"
+                else "🟡"
+                if status == "open"
+                else "❌"
+                if status == "rejected"
+                else "⏸️"
+            )
+            action_emoji = "📈" if order.get("action") == "BUY" else "📉"
 
             # Handle price and quantity (might be strings from some brokers)
             try:
-                price = float(order.get('price', 0))
-                price_str = "Market" if price == 0 and order.get('pricetype') == 'MARKET' else f"₹{price}"
+                price = float(order.get("price", 0))
+                price_str = (
+                    "Market" if price == 0 and order.get("pricetype") == "MARKET" else f"₹{price}"
+                )
             except (ValueError, TypeError):
                 price_str = f"₹{order.get('price', 0)}"
 
             try:
-                quantity = int(order.get('quantity', 0))
+                quantity = int(order.get("quantity", 0))
             except (ValueError, TypeError):
-                quantity = order.get('quantity', 0)
+                quantity = order.get("quantity", 0)
 
             message += (
                 f"{status_emoji} *{order.get('symbol', 'N/A')}* ({order.get('exchange', 'N/A')})\n"
@@ -1028,7 +1096,7 @@ class TelegramBotService:
 
             # Handle trigger price (might be string from some brokers)
             try:
-                trigger_price = float(order.get('trigger_price', 0))
+                trigger_price = float(order.get("trigger_price", 0))
                 if trigger_price > 0:
                     message += f"├ Trigger: ₹{trigger_price}\n"
             except (ValueError, TypeError):
@@ -1044,27 +1112,27 @@ class TelegramBotService:
         if statistics:
             # Handle statistics that might be strings from some brokers
             try:
-                total_open = int(statistics.get('total_open_orders', 0))
+                total_open = int(statistics.get("total_open_orders", 0))
             except (ValueError, TypeError):
                 total_open = 0
 
             try:
-                total_completed = int(statistics.get('total_completed_orders', 0))
+                total_completed = int(statistics.get("total_completed_orders", 0))
             except (ValueError, TypeError):
                 total_completed = 0
 
             try:
-                total_rejected = int(statistics.get('total_rejected_orders', 0))
+                total_rejected = int(statistics.get("total_rejected_orders", 0))
             except (ValueError, TypeError):
                 total_rejected = 0
 
             try:
-                total_buy = int(statistics.get('total_buy_orders', 0))
+                total_buy = int(statistics.get("total_buy_orders", 0))
             except (ValueError, TypeError):
                 total_buy = 0
 
             try:
-                total_sell = int(statistics.get('total_sell_orders', 0))
+                total_sell = int(statistics.get("total_sell_orders", 0))
             except (ValueError, TypeError):
                 total_sell = 0
 
@@ -1079,7 +1147,7 @@ class TelegramBotService:
             )
 
         await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
-        log_command(user.id, 'orderbook', update.effective_chat.id)
+        log_command(user.id, "orderbook", update.effective_chat.id)
 
     async def cmd_tradebook(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /tradebook command"""
@@ -1099,14 +1167,17 @@ class TelegramBotService:
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(None, client.tradebook)
 
-        if not response or response.get('status') != 'success':
+        if not response or response.get("status") != "success":
             await update.message.reply_text("❌ Failed to fetch tradebook")
             return
 
-        trades = response.get('data', [])
+        trades = response.get("data", [])
 
         if not trades:
-            await update.message.reply_text("📈 *TRADEBOOK*\n━━━━━━━━━━━━━━━\n\nNo trades executed today", parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(
+                "📈 *TRADEBOOK*\n━━━━━━━━━━━━━━━\n\nNo trades executed today",
+                parse_mode=ParseMode.MARKDOWN,
+            )
             return
 
         message = "📈 *TRADEBOOK*\n━━━━━━━━━━━━━━━\n\n"
@@ -1114,27 +1185,27 @@ class TelegramBotService:
         total_sell_value = 0
 
         for trade in trades[:10]:  # Limit to 10 trades
-            action_emoji = "📈" if trade.get('action') == 'BUY' else "📉"
+            action_emoji = "📈" if trade.get("action") == "BUY" else "📉"
 
             # Handle trade_value (might be string from some brokers)
             try:
-                trade_value = float(trade.get('trade_value', 0))
+                trade_value = float(trade.get("trade_value", 0))
             except (ValueError, TypeError):
                 trade_value = 0.0
 
-            if trade.get('action') == 'BUY':
+            if trade.get("action") == "BUY":
                 total_buy_value += trade_value
             else:
                 total_sell_value += trade_value
 
             # Handle quantity and average_price formatting
             try:
-                quantity = int(trade.get('quantity', 0))
+                quantity = int(trade.get("quantity", 0))
             except (ValueError, TypeError):
-                quantity = trade.get('quantity', 0)
+                quantity = trade.get("quantity", 0)
 
             try:
-                avg_price = float(trade.get('average_price', 0))
+                avg_price = float(trade.get("average_price", 0))
                 avg_price_str = f"₹{avg_price:,.2f}"
             except (ValueError, TypeError):
                 avg_price_str = f"₹{trade.get('average_price', 0)}"
@@ -1160,7 +1231,7 @@ class TelegramBotService:
         )
 
         await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
-        log_command(user.id, 'tradebook', update.effective_chat.id)
+        log_command(user.id, "tradebook", update.effective_chat.id)
 
     async def cmd_positions(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /positions command"""
@@ -1180,21 +1251,27 @@ class TelegramBotService:
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(None, client.positionbook)
 
-        if not response or response.get('status') != 'success':
+        if not response or response.get("status") != "success":
             await update.message.reply_text("❌ Failed to fetch positions")
             return
 
-        positions = response.get('data', [])
+        positions = response.get("data", [])
 
         if not positions:
-            await update.message.reply_text("💼 *POSITIONS*\n━━━━━━━━━━━━━━━\n\nNo open positions", parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(
+                "💼 *POSITIONS*\n━━━━━━━━━━━━━━━\n\nNo open positions",
+                parse_mode=ParseMode.MARKDOWN,
+            )
             return
 
         # Filter out positions with 0 quantity
-        active_positions = [pos for pos in positions if pos.get('quantity', 0) != 0]
+        active_positions = [pos for pos in positions if pos.get("quantity", 0) != 0]
 
         if not active_positions:
-            await update.message.reply_text("💼 *POSITIONS*\n━━━━━━━━━━━━━━━\n\nNo active positions", parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(
+                "💼 *POSITIONS*\n━━━━━━━━━━━━━━━\n\nNo active positions",
+                parse_mode=ParseMode.MARKDOWN,
+            )
             return
 
         message = "💼 *POSITIONS*\n━━━━━━━━━━━━━━━\n\n"
@@ -1204,12 +1281,12 @@ class TelegramBotService:
         for pos in active_positions[:10]:  # Limit to 10 positions
             # Handle quantity and average_price (might be strings from some brokers)
             try:
-                quantity = int(pos.get('quantity', 0))
+                quantity = int(pos.get("quantity", 0))
             except (ValueError, TypeError):
                 quantity = 0
 
             try:
-                avg_price = float(pos.get('average_price', '0.00') or 0)
+                avg_price = float(pos.get("average_price", "0.00") or 0)
             except (ValueError, TypeError):
                 avg_price = 0.0
 
@@ -1246,7 +1323,7 @@ class TelegramBotService:
         )
 
         await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
-        log_command(user.id, 'positions', update.effective_chat.id)
+        log_command(user.id, "positions", update.effective_chat.id)
 
     async def cmd_holdings(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /holdings command"""
@@ -1266,15 +1343,17 @@ class TelegramBotService:
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(None, client.holdings)
 
-        if not response or response.get('status') != 'success':
+        if not response or response.get("status") != "success":
             await update.message.reply_text("❌ Failed to fetch holdings")
             return
 
-        holdings = response.get('data', {}).get('holdings', [])
-        statistics = response.get('data', {}).get('statistics', {})
+        holdings = response.get("data", {}).get("holdings", [])
+        statistics = response.get("data", {}).get("statistics", {})
 
         if not holdings:
-            await update.message.reply_text("🏦 *HOLDINGS*\n━━━━━━━━━━━━━━━\n\nNo holdings found", parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(
+                "🏦 *HOLDINGS*\n━━━━━━━━━━━━━━━\n\nNo holdings found", parse_mode=ParseMode.MARKDOWN
+            )
             return
 
         message = "🏦 *HOLDINGS*\n━━━━━━━━━━━━━━━\n\n"
@@ -1282,17 +1361,17 @@ class TelegramBotService:
         for holding in holdings[:10]:
             # Handle numeric values that might be strings from some brokers
             try:
-                pnl = float(holding.get('pnl', 0))
+                pnl = float(holding.get("pnl", 0))
             except (ValueError, TypeError):
                 pnl = 0.0
 
             try:
-                pnl_percent = float(holding.get('pnlpercent', 0))
+                pnl_percent = float(holding.get("pnlpercent", 0))
             except (ValueError, TypeError):
                 pnl_percent = 0.0
 
             try:
-                quantity = int(holding.get('quantity', 0))
+                quantity = int(holding.get("quantity", 0))
             except (ValueError, TypeError):
                 quantity = 0
 
@@ -1312,22 +1391,22 @@ class TelegramBotService:
         if statistics:
             # Handle statistics that might be strings from some brokers
             try:
-                total_holding_value = float(statistics.get('totalholdingvalue', 0))
+                total_holding_value = float(statistics.get("totalholdingvalue", 0))
             except (ValueError, TypeError):
                 total_holding_value = 0.0
 
             try:
-                total_inv_value = float(statistics.get('totalinvvalue', 0))
+                total_inv_value = float(statistics.get("totalinvvalue", 0))
             except (ValueError, TypeError):
                 total_inv_value = 0.0
 
             try:
-                total_pnl = float(statistics.get('totalprofitandloss', 0))
+                total_pnl = float(statistics.get("totalprofitandloss", 0))
             except (ValueError, TypeError):
                 total_pnl = 0.0
 
             try:
-                total_pnl_percent = float(statistics.get('totalpnlpercentage', 0))
+                total_pnl_percent = float(statistics.get("totalpnlpercentage", 0))
             except (ValueError, TypeError):
                 total_pnl_percent = 0.0
 
@@ -1341,7 +1420,7 @@ class TelegramBotService:
             )
 
         await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
-        log_command(user.id, 'holdings', update.effective_chat.id)
+        log_command(user.id, "holdings", update.effective_chat.id)
 
     async def cmd_funds(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /funds command"""
@@ -1361,25 +1440,25 @@ class TelegramBotService:
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(None, client.funds)
 
-        if not response or response.get('status') != 'success':
+        if not response or response.get("status") != "success":
             await update.message.reply_text("❌ Failed to fetch funds")
             return
 
-        funds = response.get('data', {})
+        funds = response.get("data", {})
 
         # Handle funds that might be strings from some brokers
         try:
-            available = float(funds.get('availablecash', 0))
+            available = float(funds.get("availablecash", 0))
         except (ValueError, TypeError):
             available = 0.0
 
         try:
-            collateral = float(funds.get('collateral', 0))
+            collateral = float(funds.get("collateral", 0))
         except (ValueError, TypeError):
             collateral = 0.0
 
         try:
-            utilized = float(funds.get('utiliseddebits', 0))
+            utilized = float(funds.get("utiliseddebits", 0))
         except (ValueError, TypeError):
             utilized = 0.0
 
@@ -1397,7 +1476,7 @@ class TelegramBotService:
         )
 
         await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
-        log_command(user.id, 'funds', update.effective_chat.id)
+        log_command(user.id, "funds", update.effective_chat.id)
 
     async def cmd_pnl(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /pnl command"""
@@ -1417,20 +1496,20 @@ class TelegramBotService:
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(None, client.funds)
 
-        if not response or response.get('status') != 'success':
+        if not response or response.get("status") != "success":
             await update.message.reply_text("❌ Failed to fetch P&L")
             return
 
-        funds = response.get('data', {})
+        funds = response.get("data", {})
 
         # Handle P&L values that might be strings from some brokers
         try:
-            realized_pnl = float(funds.get('m2mrealized', 0))
+            realized_pnl = float(funds.get("m2mrealized", 0))
         except (ValueError, TypeError):
             realized_pnl = 0.0
 
         try:
-            unrealized_pnl = float(funds.get('m2munrealized', 0))
+            unrealized_pnl = float(funds.get("m2munrealized", 0))
         except (ValueError, TypeError):
             unrealized_pnl = 0.0
 
@@ -1453,7 +1532,7 @@ class TelegramBotService:
         )
 
         await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
-        log_command(user.id, 'pnl', update.effective_chat.id)
+        log_command(user.id, "pnl", update.effective_chat.id)
 
     async def cmd_quote(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /quote command"""
@@ -1469,12 +1548,12 @@ class TelegramBotService:
                 "❌ Usage: /quote <symbol> [exchange]\n"
                 "Example: /quote RELIANCE\n"
                 "Example: /quote NIFTY NSE_INDEX",
-                parse_mode=ParseMode.MARKDOWN
+                parse_mode=ParseMode.MARKDOWN,
             )
             return
 
         symbol = context.args[0].upper()
-        exchange = context.args[1].upper() if len(context.args) > 1 else 'NSE'
+        exchange = context.args[1].upper() if len(context.args) > 1 else "NSE"
 
         # Get quote using SDK
         client = self._get_sdk_client(user.id)
@@ -1484,24 +1563,23 @@ class TelegramBotService:
 
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
-            None,
-            lambda: client.quotes(symbol=symbol, exchange=exchange)
+            None, lambda: client.quotes(symbol=symbol, exchange=exchange)
         )
 
-        if not response or response.get('status') != 'success':
+        if not response or response.get("status") != "success":
             await update.message.reply_text(f"❌ Failed to fetch quote for {symbol}")
             return
 
-        quote = response.get('data', {})
+        quote = response.get("data", {})
 
         # Handle quote values that might be strings from some brokers
         try:
-            ltp = float(quote.get('ltp', 0))
+            ltp = float(quote.get("ltp", 0))
         except (ValueError, TypeError):
             ltp = 0.0
 
         try:
-            prev_close = float(quote.get('prev_close', ltp))
+            prev_close = float(quote.get("prev_close", ltp))
         except (ValueError, TypeError):
             prev_close = ltp
 
@@ -1512,22 +1590,22 @@ class TelegramBotService:
 
         # Handle other quote values
         try:
-            open_price = float(quote.get('open', 0))
+            open_price = float(quote.get("open", 0))
         except (ValueError, TypeError):
             open_price = 0.0
 
         try:
-            high_price = float(quote.get('high', 0))
+            high_price = float(quote.get("high", 0))
         except (ValueError, TypeError):
             high_price = 0.0
 
         try:
-            low_price = float(quote.get('low', 0))
+            low_price = float(quote.get("low", 0))
         except (ValueError, TypeError):
             low_price = 0.0
 
         try:
-            volume = int(quote.get('volume', 0))
+            volume = int(quote.get("volume", 0))
         except (ValueError, TypeError):
             volume = 0
 
@@ -1544,7 +1622,7 @@ class TelegramBotService:
         )
 
         await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
-        log_command(user.id, 'quote', update.effective_chat.id)
+        log_command(user.id, "quote", update.effective_chat.id)
 
     async def cmd_chart(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /chart command with customizable parameters"""
@@ -1564,23 +1642,25 @@ class TelegramBotService:
                 "/chart RELIANCE NSE intraday 15m 10\n"
                 "/chart NIFTY NSE_INDEX daily D 100\n"
                 "/chart RELIANCE NSE both - Both charts",
-                parse_mode=ParseMode.MARKDOWN
+                parse_mode=ParseMode.MARKDOWN,
             )
             return
 
         # Parse arguments with defaults
         symbol = context.args[0].upper()
-        exchange = context.args[1].upper() if len(context.args) > 1 else 'NSE'
-        chart_type = context.args[2].lower() if len(context.args) > 2 else 'intraday'  # Default to intraday only
+        exchange = context.args[1].upper() if len(context.args) > 1 else "NSE"
+        chart_type = (
+            context.args[2].lower() if len(context.args) > 2 else "intraday"
+        )  # Default to intraday only
         interval = context.args[3] if len(context.args) > 3 else None
         days = int(context.args[4]) if len(context.args) > 4 else None
 
         # Set default intervals and days based on chart type
-        if chart_type in ['intraday', 'i']:
-            interval = interval or '5m'
+        if chart_type in ["intraday", "i"]:
+            interval = interval or "5m"
             days = days or 5
-        elif chart_type in ['daily', 'd']:
-            interval = interval or 'D'
+        elif chart_type in ["daily", "d"]:
+            interval = interval or "D"
             days = days or 252
         else:  # both
             pass
@@ -1591,9 +1671,9 @@ class TelegramBotService:
         try:
             charts_generated = []
 
-            if chart_type in ['both', 'intraday', 'i']:
+            if chart_type in ["both", "intraday", "i"]:
                 # Generate intraday chart
-                intraday_interval = interval or '5m'
+                intraday_interval = interval or "5m"
                 intraday_days = days or 5
                 intraday_chart = await self._generate_intraday_chart(
                     symbol, exchange, intraday_interval, intraday_days, user.id
@@ -1602,22 +1682,21 @@ class TelegramBotService:
                     charts_generated.append(
                         InputMediaPhoto(
                             intraday_chart,
-                            caption=f"{symbol} - {intraday_days} Day Intraday Chart ({intraday_interval} intervals)"
+                            caption=f"{symbol} - {intraday_days} Day Intraday Chart ({intraday_interval} intervals)",
                         )
                     )
 
-            if chart_type in ['both', 'daily', 'd']:
+            if chart_type in ["both", "daily", "d"]:
                 # Generate daily chart
-                daily_interval = 'D' if chart_type == 'both' else (interval or 'D')
-                daily_days = 252 if chart_type == 'both' else (days or 252)
+                daily_interval = "D" if chart_type == "both" else (interval or "D")
+                daily_days = 252 if chart_type == "both" else (days or 252)
                 daily_chart = await self._generate_daily_chart(
                     symbol, exchange, daily_interval, daily_days, user.id
                 )
                 if daily_chart:
                     charts_generated.append(
                         InputMediaPhoto(
-                            daily_chart,
-                            caption=f"{symbol} - Daily Chart ({daily_days} days)"
+                            daily_chart, caption=f"{symbol} - Daily Chart ({daily_days} days)"
                         )
                     )
 
@@ -1629,8 +1708,7 @@ class TelegramBotService:
                     await update.message.reply_media_group(charts_generated)
                 else:
                     await update.message.reply_photo(
-                        photo=charts_generated[0].media,
-                        caption=charts_generated[0].caption
+                        photo=charts_generated[0].media, caption=charts_generated[0].caption
                     )
             else:
                 await update.message.reply_text(f"❌ Failed to generate charts for {symbol}")
@@ -1643,7 +1721,7 @@ class TelegramBotService:
                 pass
             await update.message.reply_text(f"❌ Error generating charts: {str(e)}")
 
-        log_command(user.id, 'chart', update.effective_chat.id)
+        log_command(user.id, "chart", update.effective_chat.id)
 
     async def cmd_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle /menu command"""
@@ -1656,57 +1734,66 @@ class TelegramBotService:
 
         keyboard = [
             [
-                InlineKeyboardButton("📊 Orderbook", callback_data='orderbook'),
-                InlineKeyboardButton("📈 Tradebook", callback_data='tradebook'),
+                InlineKeyboardButton("📊 Orderbook", callback_data="orderbook"),
+                InlineKeyboardButton("📈 Tradebook", callback_data="tradebook"),
             ],
             [
-                InlineKeyboardButton("💼 Positions", callback_data='positions'),
-                InlineKeyboardButton("🏦 Holdings", callback_data='holdings'),
+                InlineKeyboardButton("💼 Positions", callback_data="positions"),
+                InlineKeyboardButton("🏦 Holdings", callback_data="holdings"),
             ],
             [
-                InlineKeyboardButton("💰 Funds", callback_data='funds'),
-                InlineKeyboardButton("💹 P&L", callback_data='pnl'),
+                InlineKeyboardButton("💰 Funds", callback_data="funds"),
+                InlineKeyboardButton("💹 P&L", callback_data="pnl"),
             ],
             [
-                InlineKeyboardButton("🔄 Refresh", callback_data='menu'),
-            ]
+                InlineKeyboardButton("🔄 Refresh", callback_data="menu"),
+            ],
         ]
 
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await update.message.reply_text(
-            "📱 *OpenAlgo Trading Menu*\n"
-            "Select an option below:",
+            "📱 *OpenAlgo Trading Menu*\nSelect an option below:",
             reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
+            parse_mode=ParseMode.MARKDOWN,
         )
 
-        log_command(user.id, 'menu', update.effective_chat.id)
+        log_command(user.id, "menu", update.effective_chat.id)
 
     def _format_orderbook(self, response: dict) -> str:
         """Format orderbook response into message"""
-        if not response or response.get('status') != 'success':
+        if not response or response.get("status") != "success":
             return "❌ Failed to fetch orderbook"
 
-        orders = response.get('data', {}).get('orders', [])
+        orders = response.get("data", {}).get("orders", [])
         if not orders:
             return "📊 *ORDERBOOK*\n━━━━━━━━━━━━━━━\n\nNo open orders"
 
         message = "📊 *ORDERBOOK*\n━━━━━━━━━━━━━━━\n\n"
         for order in orders[:10]:
-            status = order.get('order_status', 'unknown')
-            status_emoji = "✅" if status == 'complete' else "🟡" if status == 'open' else "❌" if status == 'rejected' else "⏸️"
-            action_emoji = "📈" if order.get('action') == 'BUY' else "📉"
+            status = order.get("order_status", "unknown")
+            status_emoji = (
+                "✅"
+                if status == "complete"
+                else "🟡"
+                if status == "open"
+                else "❌"
+                if status == "rejected"
+                else "⏸️"
+            )
+            action_emoji = "📈" if order.get("action") == "BUY" else "📉"
             try:
-                price = float(order.get('price', 0))
+                price = float(order.get("price", 0))
                 price_str = "Market" if price == 0 else f"₹{price}"
             except:
                 price_str = f"₹{order.get('price', 0)}"
             try:
-                quantity = int(order.get('quantity', 0))
+                quantity = int(order.get("quantity", 0))
             except:
-                quantity = order.get('quantity', 0)
-            message += f"{status_emoji} *{order.get('symbol', 'N/A')}* ({order.get('exchange', 'N/A')})\n"
+                quantity = order.get("quantity", 0)
+            message += (
+                f"{status_emoji} *{order.get('symbol', 'N/A')}* ({order.get('exchange', 'N/A')})\n"
+            )
             message += f"{action_emoji} {order.get('action', 'N/A')} {quantity} @ {price_str}\n"
             message += f"└ Status: {status.title()}\n\n"
         if len(orders) > 10:
@@ -1715,26 +1802,28 @@ class TelegramBotService:
 
     def _format_tradebook(self, response: dict) -> str:
         """Format tradebook response into message"""
-        if not response or response.get('status') != 'success':
+        if not response or response.get("status") != "success":
             return "❌ Failed to fetch tradebook"
 
-        trades = response.get('data', [])
+        trades = response.get("data", [])
         if not trades:
             return "📈 *TRADEBOOK*\n━━━━━━━━━━━━━━━\n\nNo trades executed today"
 
         message = "📈 *TRADEBOOK*\n━━━━━━━━━━━━━━━\n\n"
         for trade in trades[:10]:
-            action_emoji = "📈" if trade.get('action') == 'BUY' else "📉"
+            action_emoji = "📈" if trade.get("action") == "BUY" else "📉"
             try:
-                quantity = int(trade.get('quantity', 0))
+                quantity = int(trade.get("quantity", 0))
             except:
-                quantity = trade.get('quantity', 0)
+                quantity = trade.get("quantity", 0)
             try:
-                avg_price = float(trade.get('average_price', 0))
+                avg_price = float(trade.get("average_price", 0))
                 avg_price_str = f"₹{avg_price:,.2f}"
             except:
                 avg_price_str = f"₹{trade.get('average_price', 0)}"
-            message += f"{action_emoji} *{trade.get('symbol', 'N/A')}* ({trade.get('exchange', 'N/A')})\n"
+            message += (
+                f"{action_emoji} *{trade.get('symbol', 'N/A')}* ({trade.get('exchange', 'N/A')})\n"
+            )
             message += f"├ {trade.get('action', 'N/A')} {quantity} @ {avg_price_str}\n"
             message += f"└ Time: {trade.get('timestamp', 'N/A')}\n\n"
         if len(trades) > 10:
@@ -1743,23 +1832,25 @@ class TelegramBotService:
 
     def _format_positions(self, response: dict) -> str:
         """Format positions response into message"""
-        if not response or response.get('status') != 'success':
+        if not response or response.get("status") != "success":
             return "❌ Failed to fetch positions"
 
-        positions = response.get('data', [])
-        active_positions = [pos for pos in positions if pos.get('quantity', 0) != 0]
+        positions = response.get("data", [])
+        active_positions = [pos for pos in positions if pos.get("quantity", 0) != 0]
         if not active_positions:
             return "💼 *POSITIONS*\n━━━━━━━━━━━━━━━\n\nNo active positions"
 
         message = "💼 *POSITIONS*\n━━━━━━━━━━━━━━━\n\n"
         for pos in active_positions[:10]:
             try:
-                quantity = int(pos.get('quantity', 0))
+                quantity = int(pos.get("quantity", 0))
             except:
                 quantity = 0
             position_emoji = "🟢" if quantity > 0 else "🔴"
             position_type = "LONG 📈" if quantity > 0 else "SHORT 📉"
-            message += f"{position_emoji} *{pos.get('symbol', 'N/A')}* ({pos.get('exchange', 'N/A')})\n"
+            message += (
+                f"{position_emoji} *{pos.get('symbol', 'N/A')}* ({pos.get('exchange', 'N/A')})\n"
+            )
             message += f"├ {position_type}\n"
             message += f"└ Qty: {abs(quantity)}\n\n"
         if len(active_positions) > 10:
@@ -1768,18 +1859,18 @@ class TelegramBotService:
 
     def _format_holdings(self, response: dict) -> str:
         """Format holdings response into message"""
-        if not response or response.get('status') != 'success':
+        if not response or response.get("status") != "success":
             return "❌ Failed to fetch holdings"
 
-        holdings = response.get('data', {}).get('holdings', [])
+        holdings = response.get("data", {}).get("holdings", [])
         if not holdings:
             return "🏦 *HOLDINGS*\n━━━━━━━━━━━━━━━\n\nNo holdings found"
 
         message = "🏦 *HOLDINGS*\n━━━━━━━━━━━━━━━\n\n"
         for holding in holdings[:10]:
             try:
-                pnl = float(holding.get('pnl', 0))
-                pnl_percent = float(holding.get('pnlpercent', 0))
+                pnl = float(holding.get("pnl", 0))
+                pnl_percent = float(holding.get("pnlpercent", 0))
             except:
                 pnl, pnl_percent = 0.0, 0.0
             pnl_emoji = "🟢" if pnl > 0 else "🔴" if pnl < 0 else "⚪"
@@ -1791,14 +1882,14 @@ class TelegramBotService:
 
     def _format_funds(self, response: dict) -> str:
         """Format funds response into message"""
-        if not response or response.get('status') != 'success':
+        if not response or response.get("status") != "success":
             return "❌ Failed to fetch funds"
 
-        funds = response.get('data', {})
+        funds = response.get("data", {})
         try:
-            available = float(funds.get('availablecash', 0))
-            collateral = float(funds.get('collateral', 0))
-            utilized = float(funds.get('utiliseddebits', 0))
+            available = float(funds.get("availablecash", 0))
+            collateral = float(funds.get("collateral", 0))
+            utilized = float(funds.get("utiliseddebits", 0))
         except:
             available, collateral, utilized = 0.0, 0.0, 0.0
 
@@ -1812,24 +1903,20 @@ class TelegramBotService:
 
     def _format_pnl(self, response: dict) -> str:
         """Format P&L response into message (uses positionbook data)"""
-        if not response or response.get('status') != 'success':
+        if not response or response.get("status") != "success":
             return "❌ Failed to fetch P&L"
 
-        positions = response.get('data', [])
+        positions = response.get("data", [])
         total_pnl = 0.0
         for pos in positions:
             try:
-                pnl = float(pos.get('pnl', 0))
+                pnl = float(pos.get("pnl", 0))
                 total_pnl += pnl
             except:
                 pass
 
         pnl_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
-        return (
-            "💹 *PROFIT & LOSS*\n━━━━━━━━━━━━━━━\n\n"
-            f"{pnl_emoji} *Day P&L*\n"
-            f"└ ₹{total_pnl:,.2f}"
-        )
+        return f"💹 *PROFIT & LOSS*\n━━━━━━━━━━━━━━━\n\n{pnl_emoji} *Day P&L*\n└ ₹{total_pnl:,.2f}"
 
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle inline button callbacks"""
@@ -1841,34 +1928,33 @@ class TelegramBotService:
         callback_data = query.data
 
         # Handle menu refresh separately - edit the existing message
-        if callback_data == 'menu':
+        if callback_data == "menu":
             keyboard = [
                 [
-                    InlineKeyboardButton("📊 Orderbook", callback_data='orderbook'),
-                    InlineKeyboardButton("📈 Tradebook", callback_data='tradebook'),
+                    InlineKeyboardButton("📊 Orderbook", callback_data="orderbook"),
+                    InlineKeyboardButton("📈 Tradebook", callback_data="tradebook"),
                 ],
                 [
-                    InlineKeyboardButton("💼 Positions", callback_data='positions'),
-                    InlineKeyboardButton("🏦 Holdings", callback_data='holdings'),
+                    InlineKeyboardButton("💼 Positions", callback_data="positions"),
+                    InlineKeyboardButton("🏦 Holdings", callback_data="holdings"),
                 ],
                 [
-                    InlineKeyboardButton("💰 Funds", callback_data='funds'),
-                    InlineKeyboardButton("💹 P&L", callback_data='pnl'),
+                    InlineKeyboardButton("💰 Funds", callback_data="funds"),
+                    InlineKeyboardButton("💹 P&L", callback_data="pnl"),
                 ],
                 [
-                    InlineKeyboardButton("🔄 Refresh", callback_data='menu'),
-                ]
+                    InlineKeyboardButton("🔄 Refresh", callback_data="menu"),
+                ],
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             try:
                 from datetime import datetime
+
                 timestamp = datetime.now().strftime("%H:%M:%S")
                 await query.edit_message_text(
-                    f"📱 *OpenAlgo Trading Menu*\n"
-                    f"Select an option below:\n"
-                    f"_Updated: {timestamp}_",
+                    f"📱 *OpenAlgo Trading Menu*\nSelect an option below:\n_Updated: {timestamp}_",
                     reply_markup=reply_markup,
-                    parse_mode=ParseMode.MARKDOWN
+                    parse_mode=ParseMode.MARKDOWN,
                 )
             except Exception as e:
                 # If edit fails (message not modified), just acknowledge
@@ -1879,56 +1965,49 @@ class TelegramBotService:
         telegram_user = get_telegram_user(user.id)
         if not telegram_user:
             await context.bot.send_message(
-                chat_id=chat_id,
-                text="❌ Please link your account first using /link"
+                chat_id=chat_id, text="❌ Please link your account first using /link"
             )
             return
 
         client = self._get_sdk_client(user.id)
         if not client:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text="❌ Failed to connect to OpenAlgo"
-            )
+            await context.bot.send_message(chat_id=chat_id, text="❌ Failed to connect to OpenAlgo")
             return
 
         # Map callback data to API calls and formatters
         try:
             loop = asyncio.get_event_loop()
 
-            if callback_data == 'orderbook':
+            if callback_data == "orderbook":
                 response = await loop.run_in_executor(None, client.orderbook)
                 message = self._format_orderbook(response)
-            elif callback_data == 'tradebook':
+            elif callback_data == "tradebook":
                 response = await loop.run_in_executor(None, client.tradebook)
                 message = self._format_tradebook(response)
-            elif callback_data == 'positions':
+            elif callback_data == "positions":
                 response = await loop.run_in_executor(None, client.positionbook)
                 message = self._format_positions(response)
-            elif callback_data == 'holdings':
+            elif callback_data == "holdings":
                 response = await loop.run_in_executor(None, client.holdings)
                 message = self._format_holdings(response)
-            elif callback_data == 'funds':
+            elif callback_data == "funds":
                 response = await loop.run_in_executor(None, client.funds)
                 message = self._format_funds(response)
-            elif callback_data == 'pnl':
+            elif callback_data == "pnl":
                 response = await loop.run_in_executor(None, client.positionbook)
                 message = self._format_pnl(response)
             else:
                 message = "❌ Unknown command"
 
             await context.bot.send_message(
-                chat_id=chat_id,
-                text=message,
-                parse_mode=ParseMode.MARKDOWN
+                chat_id=chat_id, text=message, parse_mode=ParseMode.MARKDOWN
             )
             log_command(user.id, callback_data, chat_id)
 
         except Exception as e:
             logger.error(f"Error in button callback for {callback_data}: {e}")
             await context.bot.send_message(
-                chat_id=chat_id,
-                text="❌ Failed to fetch data. Please try again."
+                chat_id=chat_id, text="❌ Failed to fetch data. Please try again."
             )
 
     async def send_notification(self, telegram_id: int, message: str) -> bool:
@@ -1941,18 +2020,14 @@ class TelegramBotService:
             # Get the bot from the application
             bot = self.application.bot
 
-            await bot.send_message(
-                chat_id=telegram_id,
-                text=message,
-                parse_mode='Markdown'
-            )
+            await bot.send_message(chat_id=telegram_id, text=message, parse_mode="Markdown")
             logger.debug(f"Notification sent to telegram_id: {telegram_id}")
             return True
         except Exception as e:
             logger.error(f"Error sending notification to {telegram_id}: {str(e)}")
             return False
 
-    async def broadcast_message(self, message: str, filters: Dict = None) -> Tuple[int, int]:
+    async def broadcast_message(self, message: str, filters: dict = None) -> tuple[int, int]:
         """Broadcast a message to all or filtered users."""
         try:
             if not self.application or not self.is_running:
@@ -1965,23 +2040,29 @@ class TelegramBotService:
             # Apply filters if provided
             if filters:
                 # Filter users based on criteria
-                if filters.get('notifications_enabled') is not None:
-                    users = [u for u in users if u.get('notifications_enabled') == filters['notifications_enabled']]
-                if filters.get('openalgo_username'):
-                    users = [u for u in users if u.get('openalgo_username') == filters['openalgo_username']]
+                if filters.get("notifications_enabled") is not None:
+                    users = [
+                        u
+                        for u in users
+                        if u.get("notifications_enabled") == filters["notifications_enabled"]
+                    ]
+                if filters.get("openalgo_username"):
+                    users = [
+                        u
+                        for u in users
+                        if u.get("openalgo_username") == filters["openalgo_username"]
+                    ]
 
             success_count = 0
             fail_count = 0
 
             for user in users:
                 try:
-                    telegram_id = user.get('telegram_id')
+                    telegram_id = user.get("telegram_id")
                     if telegram_id:
                         bot = self.application.bot
                         await bot.send_message(
-                            chat_id=telegram_id,
-                            text=message,
-                            parse_mode='Markdown'
+                            chat_id=telegram_id, text=message, parse_mode="Markdown"
                         )
                         success_count += 1
                         # Add small delay to avoid rate limits

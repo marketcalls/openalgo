@@ -1,16 +1,18 @@
 import json
 import os
-from database.auth_db import get_user_id, verify_api_key
-from broker.dhan_sandbox.mapping.margin_data import (
-    transform_margin_position,
-    parse_margin_response,
-    parse_batch_margin_response
-)
+
 from broker.dhan_sandbox.api.baseurl import get_url
+from broker.dhan_sandbox.mapping.margin_data import (
+    parse_batch_margin_response,
+    parse_margin_response,
+    transform_margin_position,
+)
+from database.auth_db import get_user_id, verify_api_key
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
 
 def get_client_id(api_key=None):
     """
@@ -22,12 +24,12 @@ def get_client_id(api_key=None):
     Returns:
         Client ID string or None
     """
-    BROKER_API_KEY = os.getenv('BROKER_API_KEY')
+    BROKER_API_KEY = os.getenv("BROKER_API_KEY")
 
     # Extract client_id from BROKER_API_KEY if format is client_id:::api_key
     client_id = None
-    if BROKER_API_KEY and ':::' in BROKER_API_KEY:
-        client_id, _ = BROKER_API_KEY.split(':::')
+    if BROKER_API_KEY and ":::" in BROKER_API_KEY:
+        client_id, _ = BROKER_API_KEY.split(":::")
         return client_id
 
     # If client_id not found in API key, try to fetch from database
@@ -37,6 +39,7 @@ def get_client_id(api_key=None):
             client_id = get_user_id(user_id)
 
     return client_id
+
 
 def calculate_single_margin(position_data, auth, client_id):
     """
@@ -54,14 +57,14 @@ def calculate_single_margin(position_data, auth, client_id):
 
     # Prepare headers
     headers = {
-        'access-token': AUTH_TOKEN,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
+        "access-token": AUTH_TOKEN,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
     }
 
     # Add client-id header if available
     if client_id:
-        headers['client-id'] = client_id
+        headers["client-id"] = client_id
 
     # Prepare payload
     payload = json.dumps(position_data)
@@ -86,10 +89,7 @@ def calculate_single_margin(position_data, auth, client_id):
             response_data = response.json()
         except json.JSONDecodeError:
             logger.error(f"Failed to parse JSON response: {response.text}")
-            error_response = {
-                'status': 'error',
-                'message': 'Invalid response from broker API'
-            }
+            error_response = {"status": "error", "message": "Invalid response from broker API"}
             return response, error_response
 
         logger.info(f"Dhan Sandbox margin calculation response: {response_data}")
@@ -101,15 +101,15 @@ def calculate_single_margin(position_data, auth, client_id):
 
     except Exception as e:
         logger.error(f"Error calling Dhan Sandbox margin API: {e}")
-        error_response = {
-            'status': 'error',
-            'message': f'Failed to calculate margin: {str(e)}'
-        }
+        error_response = {"status": "error", "message": f"Failed to calculate margin: {str(e)}"}
+
         # Create a mock response object
         class MockResponse:
             status_code = 500
             status = 500
+
         return MockResponse(), error_response
+
 
 def calculate_margin_api(positions, auth, api_key=None):
     """
@@ -132,12 +132,14 @@ def calculate_margin_api(positions, auth, api_key=None):
     if not client_id:
         logger.error("Could not determine Dhan Sandbox client ID")
         error_response = {
-            'status': 'error',
-            'message': 'Could not determine Dhan Sandbox client ID. Please ensure BROKER_API_KEY is configured correctly.'
+            "status": "error",
+            "message": "Could not determine Dhan Sandbox client ID. Please ensure BROKER_API_KEY is configured correctly.",
         }
+
         class MockResponse:
             status_code = 400
             status = 400
+
         return MockResponse(), error_response
 
     # Transform all positions
@@ -149,12 +151,14 @@ def calculate_margin_api(positions, auth, api_key=None):
 
     if not transformed_positions:
         error_response = {
-            'status': 'error',
-            'message': 'No valid positions to calculate margin. Check if symbols are valid.'
+            "status": "error",
+            "message": "No valid positions to calculate margin. Check if symbols are valid.",
         }
+
         class MockResponse:
             status_code = 400
             status = 400
+
         return MockResponse(), error_response
 
     # Calculate margin for each position
@@ -168,8 +172,10 @@ def calculate_margin_api(positions, auth, api_key=None):
 
         # If any single margin calculation fails, we might want to continue
         # but log the error
-        if parsed_response.get('status') == 'error':
-            logger.warning(f"Margin calculation failed for position: {position_data}, Error: {parsed_response.get('message')}")
+        if parsed_response.get("status") == "error":
+            logger.warning(
+                f"Margin calculation failed for position: {position_data}, Error: {parsed_response.get('message')}"
+            )
 
     # Aggregate the responses
     if len(margin_responses) == 1:

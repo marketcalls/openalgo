@@ -5,19 +5,23 @@ Handles connection to Motilal Oswal's market data streaming API
 Note: Motilal Oswal uses BINARY packets for market data subscriptions,
 not JSON. This is different from their Trade WebSocket which uses JSON.
 """
+
 import json
 import logging
-import threading
-import time
-import websocket
 import ssl
 import struct
-from struct import pack, unpack
+import threading
+import time
 from datetime import datetime, timedelta
+from struct import pack, unpack
 from typing import Dict, Optional
+
+import websocket
+
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
 
 class MotilalWebSocket:
     """
@@ -67,10 +71,10 @@ class MotilalWebSocket:
         self.subscriptions = {}  # Dictionary to track subscribed instruments
 
         # Data storage
-        self.last_quotes = {}   # exchange:token -> quote data
-        self.last_depth = {}    # exchange:token -> depth data
-        self.last_oi = {}       # exchange:token -> OI data
-        self.last_index = {}    # exchange:token -> index data
+        self.last_quotes = {}  # exchange:token -> quote data
+        self.last_depth = {}  # exchange:token -> depth data
+        self.last_oi = {}  # exchange:token -> OI data
+        self.last_index = {}  # exchange:token -> index data
 
         # Threading
         self._connect_thread = None
@@ -112,7 +116,7 @@ class MotilalWebSocket:
                     on_open=self.on_open,
                     on_message=self.on_message,
                     on_error=self.on_error,
-                    on_close=self.on_close
+                    on_close=self.on_close,
                 )
 
                 # Reset reconnect count on successful connection attempt
@@ -121,7 +125,6 @@ class MotilalWebSocket:
                 # Run the WebSocket connection with SSL certificate verification disabled
                 # Note: Disabled due to Motilal Oswal's expired SSL certificate
                 self.ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
-
 
                 # If we're here, the connection was closed
                 if self.is_connected:
@@ -137,12 +140,16 @@ class MotilalWebSocket:
 
             # Exponential backoff for reconnection attempts
             attempt += 1
-            sleep_time = min(2 ** attempt, 30)  # Max 30 seconds between retries
-            logger.debug(f"Reconnection attempt {attempt}/{self.MAX_RECONNECT_ATTEMPTS} failed. Retrying in {sleep_time}s")
+            sleep_time = min(2**attempt, 30)  # Max 30 seconds between retries
+            logger.debug(
+                f"Reconnection attempt {attempt}/{self.MAX_RECONNECT_ATTEMPTS} failed. Retrying in {sleep_time}s"
+            )
             time.sleep(sleep_time)
 
         if attempt >= self.MAX_RECONNECT_ATTEMPTS and not self.is_connected:
-            logger.error("Maximum reconnection attempts reached. Could not connect to Motilal WebSocket.")
+            logger.error(
+                "Maximum reconnection attempts reached. Could not connect to Motilal WebSocket."
+            )
 
     def disconnect(self):
         """
@@ -158,10 +165,7 @@ class MotilalWebSocket:
             logger.info("Closing Motilal WebSocket connection")
             # Send logout message before closing
             try:
-                logout_msg = {
-                    "clientid": self.client_id,
-                    "action": "logout"
-                }
+                logout_msg = {"clientid": self.client_id, "action": "logout"}
                 self.ws.send(json.dumps(logout_msg))
             except Exception as e:
                 logger.error(f"Error sending logout message: {str(e)}")
@@ -184,7 +188,7 @@ class MotilalWebSocket:
         try:
             # Create binary login packet using struct.pack
             # Format: "=cHB15sB30sBBBB10sBBBBB45s"
-            msg_type = "Q".encode()
+            msg_type = b"Q"
             clientcode = self.client_id
             version = self.WEBSOCKET_VERSION
 
@@ -197,17 +201,23 @@ class MotilalWebSocket:
             # Build binary login packet
             login_packet = pack(
                 "=cHB15sB30sBBBB10sBBBBB45s",
-                msg_type,           # 'Q' for login
-                111,                # Fixed value
-                len(clientcode),    # Client code length
-                clientcode_15,      # Client code (15 bytes)
-                len(clientcode),    # Client code length (repeated)
-                clientcode_30,      # Client code (30 bytes)
-                1, 1, 1,           # Flags
-                len(version),       # Version length
-                version_10,         # Version (10 bytes)
-                0, 0, 0, 0, 1,     # More flags
-                padding_45          # Padding (45 bytes)
+                msg_type,  # 'Q' for login
+                111,  # Fixed value
+                len(clientcode),  # Client code length
+                clientcode_15,  # Client code (15 bytes)
+                len(clientcode),  # Client code length (repeated)
+                clientcode_30,  # Client code (30 bytes)
+                1,
+                1,
+                1,  # Flags
+                len(version),  # Version length
+                version_10,  # Version (10 bytes)
+                0,
+                0,
+                0,
+                0,
+                1,  # More flags
+                padding_45,  # Padding (45 bytes)
             )
 
             # Send binary login packet
@@ -241,7 +251,9 @@ class MotilalWebSocket:
                 if not self.is_connected:
                     with self.lock:
                         self.is_connected = True
-                    logger.info("✓ Motilal WebSocket connection authenticated (received binary response)")
+                    logger.info(
+                        "✓ Motilal WebSocket connection authenticated (received binary response)"
+                    )
 
                     # Resubscribe to any previous subscriptions
                     self._resubscribe()
@@ -290,16 +302,16 @@ class MotilalWebSocket:
 
             for i in range(num_packets):
                 offset = i * packet_size
-                packet = message[offset:offset + packet_size]
+                packet = message[offset : offset + packet_size]
 
                 if len(packet) < packet_size:
                     continue
 
                 # Parse header (10 bytes)
-                exchange_byte = packet[0:1].decode('utf-8', errors='ignore')
-                scrip = int.from_bytes(packet[1:5], byteorder='little', signed=True)
-                timestamp = int.from_bytes(packet[5:9], byteorder='little', signed=True)
-                msgtype = packet[9:10].decode('utf-8', errors='ignore')
+                exchange_byte = packet[0:1].decode("utf-8", errors="ignore")
+                scrip = int.from_bytes(packet[1:5], byteorder="little", signed=True)
+                timestamp = int.from_bytes(packet[5:9], byteorder="little", signed=True)
+                msgtype = packet[9:10].decode("utf-8", errors="ignore")
 
                 # Parse body (20 bytes) based on message type
                 body = packet[10:30]
@@ -315,61 +327,62 @@ class MotilalWebSocket:
                         symbol = self.subscriptions[subscription_key].symbol
 
                 # Log what we're parsing
-                logger.debug(f"📊 Parsing packet: Exchange={exchange_byte}, Scrip={scrip}, MsgType='{msgtype}', Key={key}, Symbol={symbol}")
+                logger.debug(
+                    f"📊 Parsing packet: Exchange={exchange_byte}, Scrip={scrip}, MsgType='{msgtype}', Key={key}, Symbol={symbol}"
+                )
 
                 # Detailed logging for subscribed scrips to analyze unknown packets
                 subscription_key_check = f"{self._map_exchange_back(exchange_byte)}|{scrip}"
                 with self.lock:
                     if subscription_key_check in self.subscriptions:
-                        logger.debug(f"🔍 SUBSCRIBED SCRIP DATA: {key} ({symbol}) - MsgType='{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}), BodyHex={body.hex()}")
+                        logger.debug(
+                            f"🔍 SUBSCRIBED SCRIP DATA: {key} ({symbol}) - MsgType='{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}), BodyHex={body.hex()}"
+                        )
 
                 # Parse based on message type
                 # Message types from Motilal SDK:
                 # 'A' = LTP, 'B'-'F' = Depth levels 1-5, 'G' = OHLC, 'H' = Index, 'm' = OI
-                if msgtype in ['B', 'C', 'D', 'E', 'F']:  # Market Depth levels 1-5
-                    level = ord(msgtype) - ord('B') + 1  # B=1, C=2, D=3, E=4, F=5
-                    logger.debug(f"✓ Parsing DEPTH level {level} (msgtype='{msgtype}') packet for {key}, Symbol: {symbol}")
+                if msgtype in ["B", "C", "D", "E", "F"]:  # Market Depth levels 1-5
+                    level = ord(msgtype) - ord("B") + 1  # B=1, C=2, D=3, E=4, F=5
+                    logger.debug(
+                        f"✓ Parsing DEPTH level {level} (msgtype='{msgtype}') packet for {key}, Symbol: {symbol}"
+                    )
                     self._parse_depth_level_packet(body, key, symbol, level)
-                elif msgtype == 'A':  # LTP
+                elif msgtype == "A":  # LTP
                     logger.debug(f"✓ Parsing LTP packet for {key}")
                     self._parse_ltp_packet(body, key, symbol)
-                elif msgtype == 'G':  # Day OHLC
+                elif msgtype == "G":  # Day OHLC
                     logger.debug(f"✓ Parsing OHLC packet for {key}")
                     self._parse_ohlc_packet(body, key, symbol)
-                elif msgtype == 'H':  # Index data
+                elif msgtype == "H":  # Index data
                     logger.debug(f"✓ Parsing INDEX packet for {key}")
                     self._parse_index_packet(body, key, symbol)
-                elif msgtype == 'm':  # Open Interest
+                elif msgtype == "m":  # Open Interest
                     logger.debug(f"✓ Parsing OI packet for {key}")
                     self._parse_oi_packet(body, key, symbol)
-                elif msgtype == 'W':  # DPR (circuit limits)
+                elif msgtype == "W":  # DPR (circuit limits)
                     logger.debug(f"Skipping DPR packet for {key}")
-                elif msgtype == '1':  # Heartbeat
-                    logger.debug(f"Heartbeat received")
-                elif msgtype == 'X':  # Unknown - need to investigate
+                elif msgtype == "1":  # Heartbeat
+                    logger.debug("Heartbeat received")
+                elif msgtype == "X":  # Unknown - need to investigate
                     logger.debug(f"Received message type 'X' for {key} - investigating")
-                elif msgtype == 'g':  # Lowercase 'g' - possibly alternate OHLC or tick data
+                elif msgtype == "g":  # Lowercase 'g' - possibly alternate OHLC or tick data
                     logger.debug(f"📦 Packet 'g' for {key}: {body.hex()}")
-                elif msgtype == 'z':  # Lowercase 'z' - unknown supplementary data
+                elif msgtype == "z":  # Lowercase 'z' - unknown supplementary data
                     logger.debug(f"📦 Packet 'z' for {key}: {body.hex()}")
-                elif msgtype == 'Y':  # Uppercase 'Y' - exchange-specific data
+                elif msgtype == "Y":  # Uppercase 'Y' - exchange-specific data
                     logger.debug(f"📦 Packet 'Y' for {key}: {body.hex()}")
                 else:
-                    logger.warning(f"❌ Unknown message type '{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}) for {key}, body: {body.hex()}")
+                    logger.warning(
+                        f"❌ Unknown message type '{msgtype}' (ASCII {ord(msgtype) if msgtype else 'None'}) for {key}, body: {body.hex()}"
+                    )
 
         except Exception as e:
             logger.error(f"Error parsing binary market data: {str(e)}")
 
     def _map_exchange_back(self, exchange_char: str) -> str:
         """Map single character back to full exchange name"""
-        mapping = {
-            'N': 'NSE',
-            'B': 'BSE',
-            'M': 'MCX',
-            'C': 'NSECD',
-            'D': 'NCDEX',
-            'G': 'BSEFO'
-        }
+        mapping = {"N": "NSE", "B": "BSE", "M": "MCX", "C": "NSECD", "D": "NCDEX", "G": "BSEFO"}
         return mapping.get(exchange_char, exchange_char)
 
     def _parse_depth_level_packet(self, body: bytes, key: str, symbol: str, level: int):
@@ -391,41 +404,39 @@ class MotilalWebSocket:
             # Bytes 14-17: OfferQty (int)
             # Bytes 18-19: OfferOrder (short)
 
-            bid_rate = unpack('f', body[0:4])[0]
-            bid_qty = int.from_bytes(body[4:8], byteorder='little', signed=True)
-            bid_order = int.from_bytes(body[8:10], byteorder='little', signed=True)
-            offer_rate = unpack('f', body[10:14])[0]
-            offer_qty = int.from_bytes(body[14:18], byteorder='little', signed=True)
-            offer_order = int.from_bytes(body[18:20], byteorder='little', signed=True)
+            bid_rate = unpack("f", body[0:4])[0]
+            bid_qty = int.from_bytes(body[4:8], byteorder="little", signed=True)
+            bid_order = int.from_bytes(body[8:10], byteorder="little", signed=True)
+            offer_rate = unpack("f", body[10:14])[0]
+            offer_qty = int.from_bytes(body[14:18], byteorder="little", signed=True)
+            offer_order = int.from_bytes(body[18:20], byteorder="little", signed=True)
 
             # Store depth data
             with self.lock:
                 if key not in self.last_depth:
                     # Initialize with 5 empty levels
                     self.last_depth[key] = {
-                        'bids': [None] * 5,
-                        'asks': [None] * 5,
-                        'symbol': symbol
+                        "bids": [None] * 5,
+                        "asks": [None] * 5,
+                        "symbol": symbol,
                     }
 
                 # Create bid/ask data for this level
-                bid_data = {
-                    'price': round(bid_rate, 2),
-                    'quantity': bid_qty,
-                    'orders': bid_order
-                }
+                bid_data = {"price": round(bid_rate, 2), "quantity": bid_qty, "orders": bid_order}
                 ask_data = {
-                    'price': round(offer_rate, 2),
-                    'quantity': offer_qty,
-                    'orders': offer_order
+                    "price": round(offer_rate, 2),
+                    "quantity": offer_qty,
+                    "orders": offer_order,
                 }
 
                 # Store at the correct level index (level-1 for 0-indexed array)
                 level_index = level - 1
                 if 0 <= level_index < 5:
-                    self.last_depth[key]['bids'][level_index] = bid_data
-                    self.last_depth[key]['asks'][level_index] = ask_data
-                    logger.debug(f"📊 Depth level {level} stored for {key} ({symbol}): Bid={bid_data['price']}@{bid_qty}, Ask={ask_data['price']}@{offer_qty}")
+                    self.last_depth[key]["bids"][level_index] = bid_data
+                    self.last_depth[key]["asks"][level_index] = ask_data
+                    logger.debug(
+                        f"📊 Depth level {level} stored for {key} ({symbol}): Bid={bid_data['price']}@{bid_qty}, Ask={ask_data['price']}@{offer_qty}"
+                    )
 
         except Exception as e:
             logger.error(f"Error parsing depth level {level} packet: {str(e)}")
@@ -433,14 +444,14 @@ class MotilalWebSocket:
     def _parse_ltp_packet(self, body: bytes, key: str, symbol: str):
         """Parse LTP packet"""
         try:
-            rate = unpack('f', body[0:4])[0]
-            qty = int.from_bytes(body[4:8], byteorder='little', signed=True)
+            rate = unpack("f", body[0:4])[0]
+            qty = int.from_bytes(body[4:8], byteorder="little", signed=True)
 
             with self.lock:
                 if key not in self.last_quotes:
-                    self.last_quotes[key] = {'symbol': symbol}
-                self.last_quotes[key]['ltp'] = round(rate, 2)
-                self.last_quotes[key]['volume'] = qty
+                    self.last_quotes[key] = {"symbol": symbol}
+                self.last_quotes[key]["ltp"] = round(rate, 2)
+                self.last_quotes[key]["volume"] = qty
 
             logger.debug(f"LTP updated for {key}: {rate}@{qty}")
         except Exception as e:
@@ -449,20 +460,22 @@ class MotilalWebSocket:
     def _parse_ohlc_packet(self, body: bytes, key: str, symbol: str):
         """Parse OHLC packet"""
         try:
-            open_price = unpack('f', body[0:4])[0]
-            high_price = unpack('f', body[4:8])[0]
-            low_price = unpack('f', body[8:12])[0]
-            close_price = unpack('f', body[12:16])[0]
+            open_price = unpack("f", body[0:4])[0]
+            high_price = unpack("f", body[4:8])[0]
+            low_price = unpack("f", body[8:12])[0]
+            close_price = unpack("f", body[12:16])[0]
 
             with self.lock:
                 if key not in self.last_quotes:
-                    self.last_quotes[key] = {'symbol': symbol}
-                self.last_quotes[key].update({
-                    'open': round(open_price, 2),
-                    'high': round(high_price, 2),
-                    'low': round(low_price, 2),
-                    'prev_close': round(close_price, 2)
-                })
+                    self.last_quotes[key] = {"symbol": symbol}
+                self.last_quotes[key].update(
+                    {
+                        "open": round(open_price, 2),
+                        "high": round(high_price, 2),
+                        "low": round(low_price, 2),
+                        "prev_close": round(close_price, 2),
+                    }
+                )
 
             logger.debug(f"OHLC updated for {key}")
         except Exception as e:
@@ -471,10 +484,10 @@ class MotilalWebSocket:
     def _parse_oi_packet(self, body: bytes, key: str, symbol: str):
         """Parse Open Interest packet"""
         try:
-            oi = int.from_bytes(body[0:4], byteorder='little', signed=True)
+            oi = int.from_bytes(body[0:4], byteorder="little", signed=True)
 
             with self.lock:
-                self.last_oi[key] = {'symbol': symbol, 'oi': oi}
+                self.last_oi[key] = {"symbol": symbol, "oi": oi}
 
             logger.debug(f"OI updated for {key}: {oi}")
         except Exception as e:
@@ -484,12 +497,12 @@ class MotilalWebSocket:
         """Parse Index data packet (for index symbols like NIFTY, SENSEX)"""
         try:
             # Index packet format (typically contains index value as float)
-            index_value = unpack('f', body[0:4])[0]
+            index_value = unpack("f", body[0:4])[0]
 
             with self.lock:
                 if key not in self.last_quotes:
-                    self.last_quotes[key] = {'symbol': symbol}
-                self.last_quotes[key]['ltp'] = round(index_value, 2)
+                    self.last_quotes[key] = {"symbol": symbol}
+                self.last_quotes[key]["ltp"] = round(index_value, 2)
 
             logger.debug(f"Index value updated for {key}: {index_value}")
         except Exception as e:
@@ -512,9 +525,9 @@ class MotilalWebSocket:
         """
         try:
             # Determine message type based on fields present
-            exchange = data.get('Exchange', '')
-            scrip_code = data.get('Scrip Code', '')
-            timestamp = data.get('Time', '')
+            exchange = data.get("Exchange", "")
+            scrip_code = data.get("Scrip Code", "")
+            timestamp = data.get("Time", "")
 
             if not exchange or not scrip_code:
                 logger.debug("Message does not contain Exchange or Scrip Code, skipping")
@@ -532,34 +545,36 @@ class MotilalWebSocket:
 
             # Use subscription symbol if available
             symbol = None
-            if original_instrument and hasattr(original_instrument, 'symbol'):
+            if original_instrument and hasattr(original_instrument, "symbol"):
                 symbol = original_instrument.symbol
                 logger.debug(f"✓ Using subscription symbol: {symbol} for {subscription_key}")
             else:
                 logger.warning(f"✗ No subscription symbol found for {subscription_key}")
 
             # Process DayOHLC data
-            if 'Open' in data or 'High' in data or 'Low' in data or 'PrevDayClose' in data:
+            if "Open" in data or "High" in data or "Low" in data or "PrevDayClose" in data:
                 self._process_dayohlc(data, key, symbol)
 
             # Process LTP data
-            if 'LTP_Rate' in data:
+            if "LTP_Rate" in data:
                 self._process_ltp(data, key, symbol)
 
             # Process DPR data (circuit limits)
-            if 'UpperCktLimit' in data or 'LowerCktLimit' in data:
+            if "UpperCktLimit" in data or "LowerCktLimit" in data:
                 self._process_dpr(data, key, symbol)
 
             # Process Market Depth data
-            if 'BidRate' in data or 'OfferRate' in data:
+            if "BidRate" in data or "OfferRate" in data:
                 self._process_depth(data, key, symbol)
 
             # Process Open Interest data
-            if 'Open Interest' in data:
+            if "Open Interest" in data:
                 self._process_oi(data, key, symbol)
 
             # Process Index data
-            if 'Rate' in data and 'LTP_Rate' not in data:  # Rate field without LTP_Rate indicates index
+            if (
+                "Rate" in data and "LTP_Rate" not in data
+            ):  # Rate field without LTP_Rate indicates index
                 self._process_index(data, key, symbol)
 
         except Exception as e:
@@ -569,15 +584,15 @@ class MotilalWebSocket:
         """Process Day OHLC data"""
         try:
             ohlc_data = {
-                'exchange': data.get('Exchange', ''),
-                'scrip_code': data.get('Scrip Code', ''),
-                'symbol': symbol,
-                'time': data.get('Time', ''),
-                'open': float(data.get('Open', 0)) / 100.0,  # Convert paisa to rupees
-                'high': float(data.get('High', 0)) / 100.0,
-                'low': float(data.get('Low', 0)) / 100.0,
-                'prev_close': float(data.get('PrevDayClose', 0)) / 100.0,
-                'timestamp': datetime.now().isoformat()
+                "exchange": data.get("Exchange", ""),
+                "scrip_code": data.get("Scrip Code", ""),
+                "symbol": symbol,
+                "time": data.get("Time", ""),
+                "open": float(data.get("Open", 0)) / 100.0,  # Convert paisa to rupees
+                "high": float(data.get("High", 0)) / 100.0,
+                "low": float(data.get("Low", 0)) / 100.0,
+                "prev_close": float(data.get("PrevDayClose", 0)) / 100.0,
+                "timestamp": datetime.now().isoformat(),
             }
 
             with self.lock:
@@ -593,17 +608,17 @@ class MotilalWebSocket:
         """Process LTP (Last Traded Price) data"""
         try:
             ltp_data = {
-                'exchange': data.get('Exchange', ''),
-                'scrip_code': data.get('Scrip Code', ''),
-                'symbol': symbol,
-                'time': data.get('Time', ''),
-                'ltp': float(data.get('LTP_Rate', 0)) / 100.0,  # Convert paisa to rupees
-                'ltp_qty': int(data.get('LTP_Qty', 0)),
-                'cumulative_qty': int(data.get('LTP_Cumulative Qty', 0)),
-                'avg_trade_price': float(data.get('LTP_AvgTradePrice', 0)) / 100.0,
-                'open_interest': int(data.get('LTP_Open Interest', 0)),
-                'volume': int(data.get('LTP_Cumulative Qty', 0)),  # Use cumulative qty as volume
-                'timestamp': datetime.now().isoformat()
+                "exchange": data.get("Exchange", ""),
+                "scrip_code": data.get("Scrip Code", ""),
+                "symbol": symbol,
+                "time": data.get("Time", ""),
+                "ltp": float(data.get("LTP_Rate", 0)) / 100.0,  # Convert paisa to rupees
+                "ltp_qty": int(data.get("LTP_Qty", 0)),
+                "cumulative_qty": int(data.get("LTP_Cumulative Qty", 0)),
+                "avg_trade_price": float(data.get("LTP_AvgTradePrice", 0)) / 100.0,
+                "open_interest": int(data.get("LTP_Open Interest", 0)),
+                "volume": int(data.get("LTP_Cumulative Qty", 0)),  # Use cumulative qty as volume
+                "timestamp": datetime.now().isoformat(),
             }
 
             with self.lock:
@@ -611,7 +626,9 @@ class MotilalWebSocket:
                     self.last_quotes[key] = {}
                 self.last_quotes[key].update(ltp_data)
 
-            logger.debug(f"✓ Updated LTP data for {key} - LTP: {ltp_data['ltp']}, Symbol: {symbol}, OI: {ltp_data['open_interest']}")
+            logger.debug(
+                f"✓ Updated LTP data for {key} - LTP: {ltp_data['ltp']}, Symbol: {symbol}, OI: {ltp_data['open_interest']}"
+            )
         except Exception as e:
             logger.error(f"Error processing LTP data: {str(e)}")
 
@@ -619,13 +636,13 @@ class MotilalWebSocket:
         """Process DPR (Daily Price Range - circuit limits) data"""
         try:
             dpr_data = {
-                'exchange': data.get('Exchange', ''),
-                'scrip_code': data.get('Scrip Code', ''),
-                'symbol': symbol,
-                'time': data.get('Time', ''),
-                'upper_circuit': float(data.get('UpperCktLimit', 0)) / 100.0,
-                'lower_circuit': float(data.get('LowerCktLimit', 0)) / 100.0,
-                'timestamp': datetime.now().isoformat()
+                "exchange": data.get("Exchange", ""),
+                "scrip_code": data.get("Scrip Code", ""),
+                "symbol": symbol,
+                "time": data.get("Time", ""),
+                "upper_circuit": float(data.get("UpperCktLimit", 0)) / 100.0,
+                "lower_circuit": float(data.get("LowerCktLimit", 0)) / 100.0,
+                "timestamp": datetime.now().isoformat(),
             }
 
             with self.lock:
@@ -642,43 +659,43 @@ class MotilalWebSocket:
         try:
             # Motilal provides depth data level by level
             # Each message contains one level of market depth
-            level = int(data.get('Level', 1))
+            level = int(data.get("Level", 1))
 
             bid_data = {
-                'price': float(data.get('BidRate', 0)) / 100.0,
-                'quantity': int(data.get('BidQty', 0)),
-                'orders': int(data.get('BidOrder', 0))
+                "price": float(data.get("BidRate", 0)) / 100.0,
+                "quantity": int(data.get("BidQty", 0)),
+                "orders": int(data.get("BidOrder", 0)),
             }
 
             ask_data = {
-                'price': float(data.get('OfferRate', 0)) / 100.0,
-                'quantity': int(data.get('OfferQty', 0)),
-                'orders': int(data.get('OfferOrder', 0))
+                "price": float(data.get("OfferRate", 0)) / 100.0,
+                "quantity": int(data.get("OfferQty", 0)),
+                "orders": int(data.get("OfferOrder", 0)),
             }
 
             with self.lock:
                 if key not in self.last_depth:
                     self.last_depth[key] = {
-                        'exchange': data.get('Exchange', ''),
-                        'scrip_code': data.get('Scrip Code', ''),
-                        'symbol': symbol,
-                        'time': data.get('Time', ''),
-                        'bids': [],
-                        'asks': [],
-                        'timestamp': datetime.now().isoformat()
+                        "exchange": data.get("Exchange", ""),
+                        "scrip_code": data.get("Scrip Code", ""),
+                        "symbol": symbol,
+                        "time": data.get("Time", ""),
+                        "bids": [],
+                        "asks": [],
+                        "timestamp": datetime.now().isoformat(),
                     }
 
                 # Ensure we have enough levels
-                while len(self.last_depth[key]['bids']) < level:
-                    self.last_depth[key]['bids'].append({'price': 0, 'quantity': 0, 'orders': 0})
-                while len(self.last_depth[key]['asks']) < level:
-                    self.last_depth[key]['asks'].append({'price': 0, 'quantity': 0, 'orders': 0})
+                while len(self.last_depth[key]["bids"]) < level:
+                    self.last_depth[key]["bids"].append({"price": 0, "quantity": 0, "orders": 0})
+                while len(self.last_depth[key]["asks"]) < level:
+                    self.last_depth[key]["asks"].append({"price": 0, "quantity": 0, "orders": 0})
 
                 # Update the specific level (1-indexed, so subtract 1)
-                self.last_depth[key]['bids'][level - 1] = bid_data
-                self.last_depth[key]['asks'][level - 1] = ask_data
-                self.last_depth[key]['time'] = data.get('Time', '')
-                self.last_depth[key]['timestamp'] = datetime.now().isoformat()
+                self.last_depth[key]["bids"][level - 1] = bid_data
+                self.last_depth[key]["asks"][level - 1] = ask_data
+                self.last_depth[key]["time"] = data.get("Time", "")
+                self.last_depth[key]["timestamp"] = datetime.now().isoformat()
 
             logger.debug(f"✓ Updated market depth level {level} for {key} - Symbol: {symbol}")
         except Exception as e:
@@ -688,14 +705,14 @@ class MotilalWebSocket:
         """Process Open Interest data"""
         try:
             oi_data = {
-                'exchange': data.get('Exchange', ''),
-                'scrip_code': data.get('Scrip Code', ''),
-                'symbol': symbol,
-                'time': data.get('Time', ''),
-                'open_interest': int(data.get('Open Interest', 0)),
-                'oi_high': int(data.get('Open Interest High', 0)),
-                'oi_low': int(data.get('Open Interest Low', 0)),
-                'timestamp': datetime.now().isoformat()
+                "exchange": data.get("Exchange", ""),
+                "scrip_code": data.get("Scrip Code", ""),
+                "symbol": symbol,
+                "time": data.get("Time", ""),
+                "open_interest": int(data.get("Open Interest", 0)),
+                "oi_high": int(data.get("Open Interest High", 0)),
+                "oi_low": int(data.get("Open Interest Low", 0)),
+                "timestamp": datetime.now().isoformat(),
             }
 
             with self.lock:
@@ -703,9 +720,11 @@ class MotilalWebSocket:
 
                 # Also update in quotes if exists
                 if key in self.last_quotes:
-                    self.last_quotes[key]['open_interest'] = oi_data['open_interest']
+                    self.last_quotes[key]["open_interest"] = oi_data["open_interest"]
 
-            logger.debug(f"Updated OI data for {key} - OI: {oi_data['open_interest']}, Symbol: {symbol}")
+            logger.debug(
+                f"Updated OI data for {key} - OI: {oi_data['open_interest']}, Symbol: {symbol}"
+            )
         except Exception as e:
             logger.error(f"Error processing OI data: {str(e)}")
 
@@ -713,12 +732,12 @@ class MotilalWebSocket:
         """Process Index data"""
         try:
             index_data = {
-                'exchange': data.get('Exchange', ''),
-                'scrip_code': data.get('Scrip Code', ''),
-                'symbol': symbol,
-                'time': data.get('Time', ''),
-                'rate': float(data.get('Rate', 0)) / 100.0,  # Convert paisa to rupees
-                'timestamp': datetime.now().isoformat()
+                "exchange": data.get("Exchange", ""),
+                "scrip_code": data.get("Scrip Code", ""),
+                "symbol": symbol,
+                "time": data.get("Time", ""),
+                "rate": float(data.get("Rate", 0)) / 100.0,  # Convert paisa to rupees
+                "timestamp": datetime.now().isoformat(),
             }
 
             with self.lock:
@@ -759,7 +778,7 @@ class MotilalWebSocket:
             self.reconnect_count += 1
 
             # Reconnect with exponential backoff
-            sleep_time = min(2 ** self.reconnect_count, 30)
+            sleep_time = min(2**self.reconnect_count, 30)
             logger.info(f"Attempting to reconnect in {sleep_time} seconds")
 
             def delayed_reconnect():
@@ -769,7 +788,9 @@ class MotilalWebSocket:
 
             threading.Thread(target=delayed_reconnect, daemon=True).start()
 
-    def register_scrip(self, exchange: str, exchange_type: str, scrip_code: int, symbol: str = None):
+    def register_scrip(
+        self, exchange: str, exchange_type: str, scrip_code: int, symbol: str = None
+    ):
         """
         Register a scrip for market data updates using BINARY packet.
 
@@ -791,20 +812,24 @@ class MotilalWebSocket:
             subscription_key = f"{exchange}|{scrip_code}"
 
             # Store subscription
-            self.subscriptions[subscription_key] = type('obj', (object,), {
-                'exchange': exchange,
-                'exchange_type': exchange_type,
-                'scrip_code': scrip_code,
-                'symbol': symbol
-            })()
+            self.subscriptions[subscription_key] = type(
+                "obj",
+                (object,),
+                {
+                    "exchange": exchange,
+                    "exchange_type": exchange_type,
+                    "scrip_code": scrip_code,
+                    "symbol": symbol,
+                },
+            )()
 
             # Also store in subscribed_scrips for resubscription
             full_key = f"{exchange}|{exchange_type}|{scrip_code}"
             self.subscribed_scrips[full_key] = {
-                'exchange': exchange,
-                'exchange_type': exchange_type,
-                'scrip_code': scrip_code,
-                'symbol': symbol
+                "exchange": exchange,
+                "exchange_type": exchange_type,
+                "scrip_code": scrip_code,
+                "symbol": symbol,
             }
 
             # Map exchange to single character
@@ -825,23 +850,25 @@ class MotilalWebSocket:
             # Create binary register packet
             # Format: "=cHcciB" - msg_type, size, exchange, exchange_type, scrip_code, add_to_list
             try:
-                msg_type = "D".encode()
+                msg_type = b"D"
                 exchange_byte = exchange_char.encode()
                 exchange_type_byte = exchange_type_char.encode()
                 add_to_list = 1  # 1 for register, 0 for unregister
 
                 register_packet = pack(
                     "=cHcciB",
-                    msg_type,           # 'D' for data subscription
-                    7,                  # Fixed size
-                    exchange_byte,      # Exchange (1 char)
-                    exchange_type_byte, # Exchange type (1 char)
-                    scrip_code,         # Scrip code (int)
-                    add_to_list         # 1 to add
+                    msg_type,  # 'D' for data subscription
+                    7,  # Fixed size
+                    exchange_byte,  # Exchange (1 char)
+                    exchange_type_byte,  # Exchange type (1 char)
+                    scrip_code,  # Scrip code (int)
+                    add_to_list,  # 1 to add
                 )
 
                 self.ws.send(register_packet, opcode=websocket.ABNF.OPCODE_BINARY)
-                logger.debug(f"Registered scrip: {exchange} {exchange_type} {scrip_code} (Symbol: {symbol})")
+                logger.debug(
+                    f"Registered scrip: {exchange} {exchange_type} {scrip_code} (Symbol: {symbol})"
+                )
                 return True
             except Exception as e:
                 logger.error(f"Error sending register packet: {str(e)}")
@@ -889,7 +916,7 @@ class MotilalWebSocket:
 
             # Create binary unregister packet (same format as register, but add_to_list = 0)
             try:
-                msg_type = "D".encode()
+                msg_type = b"D"
                 exchange_byte = exchange_char.encode()
                 exchange_type_byte = exchange_type_char.encode()
                 add_to_list = 0  # 0 for unregister
@@ -901,7 +928,7 @@ class MotilalWebSocket:
                     exchange_byte,
                     exchange_type_byte,
                     scrip_code,
-                    add_to_list         # 0 to remove
+                    add_to_list,  # 0 to remove
                 )
 
                 self.ws.send(unregister_packet, opcode=websocket.ABNF.OPCODE_BINARY)
@@ -933,7 +960,7 @@ class MotilalWebSocket:
             index_msg = {
                 "clientid": self.client_id,
                 "action": "IndexRegister",
-                "exchange": exchange
+                "exchange": exchange,
             }
 
             try:
@@ -965,7 +992,7 @@ class MotilalWebSocket:
             index_msg = {
                 "clientid": self.client_id,
                 "action": "IndexUnregister",
-                "exchange": exchange
+                "exchange": exchange,
             }
 
             try:
@@ -980,15 +1007,17 @@ class MotilalWebSocket:
         """
         Resubscribes to all previously subscribed scrips and indices after reconnection.
         """
-        logger.debug(f"Resubscribing to {len(self.subscribed_scrips)} scrips and {len(self.subscribed_indices)} indices")
+        logger.debug(
+            f"Resubscribing to {len(self.subscribed_scrips)} scrips and {len(self.subscribed_indices)} indices"
+        )
 
         # Resubscribe to scrips
         for full_key, scrip_info in self.subscribed_scrips.items():
             self.register_scrip(
-                scrip_info['exchange'],
-                scrip_info['exchange_type'],
-                scrip_info['scrip_code'],
-                scrip_info.get('symbol')
+                scrip_info["exchange"],
+                scrip_info["exchange_type"],
+                scrip_info["scrip_code"],
+                scrip_info.get("symbol"),
             )
 
         # Resubscribe to indices
@@ -1039,7 +1068,9 @@ class MotilalWebSocket:
         with self.lock:
             quote = self.last_quotes.get(key)
             if quote:
-                logger.debug(f"Retrieved quote for {key} - LTP: {quote.get('ltp', 'N/A')}, Symbol: {quote.get('symbol', 'N/A')}")
+                logger.debug(
+                    f"Retrieved quote for {key} - LTP: {quote.get('ltp', 'N/A')}, Symbol: {quote.get('symbol', 'N/A')}"
+                )
             else:
                 logger.debug(f"No quote data available for {key}")
                 logger.debug(f"Available quote keys: {list(self.last_quotes.keys())}")
@@ -1048,16 +1079,16 @@ class MotilalWebSocket:
     def _map_exchange_to_char(self, exchange: str) -> str:
         """Map full exchange name to single character"""
         mapping = {
-            'NSE': 'N',
-            'BSE': 'B',
-            'MCX': 'M',
-            'NSECD': 'C',
-            'NCDEX': 'D',
-            'BSEFO': 'G',
-            'NSEFO': 'N'  # NSEFO uses 'N' like NSE
+            "NSE": "N",
+            "BSE": "B",
+            "MCX": "M",
+            "NSECD": "C",
+            "NCDEX": "D",
+            "BSEFO": "G",
+            "NSEFO": "N",  # NSEFO uses 'N' like NSE
         }
         exchange_upper = exchange.upper()
-        return mapping.get(exchange_upper, exchange_upper[0] if exchange_upper else '')
+        return mapping.get(exchange_upper, exchange_upper[0] if exchange_upper else "")
 
     def get_market_depth(self, exchange: str, scrip_code: str):
         """
@@ -1077,33 +1108,39 @@ class MotilalWebSocket:
 
         with self.lock:
             depth = self.last_depth.get(key)
-            logger.debug(f"🔍 Looking for depth with key '{key}'. Available keys: {list(self.last_depth.keys())}")
+            logger.debug(
+                f"🔍 Looking for depth with key '{key}'. Available keys: {list(self.last_depth.keys())}"
+            )
 
             if depth:
                 # Filter out None values from bids and asks arrays
                 # Since we now store 5 levels, some may be None
-                bids_raw = depth.get('bids', [])
-                asks_raw = depth.get('asks', [])
+                bids_raw = depth.get("bids", [])
+                asks_raw = depth.get("asks", [])
 
                 # Filter out None entries
                 bids_filtered = [bid for bid in bids_raw if bid is not None]
                 asks_filtered = [ask for ask in asks_raw if ask is not None]
 
                 # Log detailed depth summary
-                logger.debug(f"✓ Found depth data for {key}: {len(bids_filtered)} bid levels, {len(asks_filtered)} ask levels")
+                logger.debug(
+                    f"✓ Found depth data for {key}: {len(bids_filtered)} bid levels, {len(asks_filtered)} ask levels"
+                )
                 for i, bid in enumerate(bids_filtered, 1):
-                    logger.debug(f"  Bid Level {i}: Price={bid.get('price')}, Qty={bid.get('quantity')}, Orders={bid.get('orders')}")
+                    logger.debug(
+                        f"  Bid Level {i}: Price={bid.get('price')}, Qty={bid.get('quantity')}, Orders={bid.get('orders')}"
+                    )
                 for i, ask in enumerate(asks_filtered, 1):
-                    logger.debug(f"  Ask Level {i}: Price={ask.get('price')}, Qty={ask.get('quantity')}, Orders={ask.get('orders')}")
+                    logger.debug(
+                        f"  Ask Level {i}: Price={ask.get('price')}, Qty={ask.get('quantity')}, Orders={ask.get('orders')}"
+                    )
 
-                logger.debug(f"Retrieved market depth for {key} - Bid levels: {len(bids_filtered)}, Ask levels: {len(asks_filtered)}, Symbol: {depth.get('symbol', 'N/A')}")
+                logger.debug(
+                    f"Retrieved market depth for {key} - Bid levels: {len(bids_filtered)}, Ask levels: {len(asks_filtered)}, Symbol: {depth.get('symbol', 'N/A')}"
+                )
 
                 # Return filtered depth
-                return {
-                    'bids': bids_filtered,
-                    'asks': asks_filtered,
-                    'symbol': depth.get('symbol')
-                }
+                return {"bids": bids_filtered, "asks": asks_filtered, "symbol": depth.get("symbol")}
             else:
                 logger.warning(f"❌ No depth data found for key '{key}'")
                 logger.debug(f"No market depth data available for {key}")
@@ -1128,7 +1165,9 @@ class MotilalWebSocket:
         with self.lock:
             oi = self.last_oi.get(key)
             if oi:
-                logger.debug(f"Retrieved OI for {key} - OI: {oi.get('open_interest', 'N/A')}, Symbol: {oi.get('symbol', 'N/A')}")
+                logger.debug(
+                    f"Retrieved OI for {key} - OI: {oi.get('open_interest', 'N/A')}, Symbol: {oi.get('symbol', 'N/A')}"
+                )
             else:
                 logger.debug(f"No OI data available for {key}")
             return oi

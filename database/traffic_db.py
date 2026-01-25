@@ -1,43 +1,51 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Boolean, Text, Index
-from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.sql import func
-from sqlalchemy.pool import NullPool
-import os
-import logging
-from datetime import datetime, timedelta
 import json
+import logging
+import os
+from datetime import datetime, timedelta
+
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    create_engine,
+)
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import scoped_session, sessionmaker
+from sqlalchemy.pool import NullPool
+from sqlalchemy.sql import func
+
 from database.settings_db import get_security_settings
 
 logger = logging.getLogger(__name__)
 
 # Use a separate database for logs
-LOGS_DATABASE_URL = os.getenv('LOGS_DATABASE_URL', 'sqlite:///db/logs.db')
+LOGS_DATABASE_URL = os.getenv("LOGS_DATABASE_URL", "sqlite:///db/logs.db")
 
 # Conditionally create engine based on DB type
-if LOGS_DATABASE_URL and 'sqlite' in LOGS_DATABASE_URL:
+if LOGS_DATABASE_URL and "sqlite" in LOGS_DATABASE_URL:
     # SQLite: Use NullPool to prevent connection pool exhaustion
     logs_engine = create_engine(
-        LOGS_DATABASE_URL,
-        poolclass=NullPool,
-        connect_args={'check_same_thread': False}
+        LOGS_DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
     )
 else:
     # For other databases like PostgreSQL, use connection pooling
-    logs_engine = create_engine(
-        LOGS_DATABASE_URL,
-        pool_size=50,
-        max_overflow=100,
-        pool_timeout=10
-    )
+    logs_engine = create_engine(LOGS_DATABASE_URL, pool_size=50, max_overflow=100, pool_timeout=10)
 
 logs_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=logs_engine))
 LogBase = declarative_base()
 LogBase.query = logs_session.query_property()
 
+
 class TrafficLog(LogBase):
     """Model for traffic logging"""
-    __tablename__ = 'traffic_logs'
+
+    __tablename__ = "traffic_logs"
 
     id = Column(Integer, primary_key=True)
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
@@ -52,15 +60,21 @@ class TrafficLog(LogBase):
 
     # Performance indexes for common query patterns
     __table_args__ = (
-        Index('idx_traffic_timestamp', 'timestamp'),          # Speeds up time-based queries and log retrieval
-        Index('idx_traffic_client_ip', 'client_ip'),          # Speeds up IP-based filtering and analytics
-        Index('idx_traffic_status_code', 'status_code'),      # Speeds up error rate calculations
-        Index('idx_traffic_user_id', 'user_id'),              # Speeds up per-user traffic analysis
-        Index('idx_traffic_ip_timestamp', 'client_ip', 'timestamp'),  # Composite for IP + time range queries
+        Index(
+            "idx_traffic_timestamp", "timestamp"
+        ),  # Speeds up time-based queries and log retrieval
+        Index("idx_traffic_client_ip", "client_ip"),  # Speeds up IP-based filtering and analytics
+        Index("idx_traffic_status_code", "status_code"),  # Speeds up error rate calculations
+        Index("idx_traffic_user_id", "user_id"),  # Speeds up per-user traffic analysis
+        Index(
+            "idx_traffic_ip_timestamp", "client_ip", "timestamp"
+        ),  # Composite for IP + time range queries
     )
 
     @staticmethod
-    def log_request(client_ip, method, path, status_code, duration_ms, host=None, error=None, user_id=None):
+    def log_request(
+        client_ip, method, path, status_code, duration_ms, host=None, error=None, user_id=None
+    ):
         """Log a request to the database"""
         try:
             log = TrafficLog(
@@ -71,7 +85,7 @@ class TrafficLog(LogBase):
                 duration_ms=duration_ms,
                 host=host,
                 error=error,
-                user_id=user_id
+                user_id=user_id,
             )
             logs_session.add(log)
             logs_session.commit()
@@ -95,27 +109,25 @@ class TrafficLog(LogBase):
         """Get basic traffic statistics"""
         try:
             from sqlalchemy import func
-            
+
             total_requests = TrafficLog.query.count()
             error_requests = TrafficLog.query.filter(TrafficLog.status_code >= 400).count()
             avg_duration = logs_session.query(func.avg(TrafficLog.duration_ms)).scalar() or 0
-            
+
             return {
-                'total_requests': total_requests,
-                'error_requests': error_requests,
-                'avg_duration': round(float(avg_duration), 2)
+                "total_requests": total_requests,
+                "error_requests": error_requests,
+                "avg_duration": round(float(avg_duration), 2),
             }
         except Exception as e:
             logger.error(f"Error getting traffic stats: {str(e)}")
-            return {
-                'total_requests': 0,
-                'error_requests': 0,
-                'avg_duration': 0
-            }
+            return {"total_requests": 0, "error_requests": 0, "avg_duration": 0}
+
 
 class IPBan(LogBase):
     """Model for banned IPs"""
-    __tablename__ = 'ip_bans'
+
+    __tablename__ = "ip_bans"
 
     id = Column(Integer, primary_key=True)
     ip_address = Column(String(50), unique=True, nullable=False, index=True)
@@ -124,7 +136,7 @@ class IPBan(LogBase):
     banned_at = Column(DateTime(timezone=True), server_default=func.now())
     expires_at = Column(DateTime(timezone=True))  # NULL means permanent ban
     is_permanent = Column(Boolean, default=False)
-    created_by = Column(String(50), default='system')  # 'system' or 'manual'
+    created_by = Column(String(50), default="system")  # 'system' or 'manual'
 
     @staticmethod
     def is_ip_banned(ip_address):
@@ -155,17 +167,17 @@ class IPBan(LogBase):
             return False
 
     @staticmethod
-    def ban_ip(ip_address, reason, duration_hours=24, permanent=False, created_by='system'):
+    def ban_ip(ip_address, reason, duration_hours=24, permanent=False, created_by="system"):
         """Ban an IP address"""
         try:
             # Never ban localhost
-            if ip_address in ['127.0.0.1', '::1', 'localhost']:
+            if ip_address in ["127.0.0.1", "::1", "localhost"]:
                 logger.warning(f"Attempted to ban localhost IP {ip_address} - ignoring")
                 return False
 
             # Get repeat offender limit from settings
             security_settings = get_security_settings()
-            repeat_limit = security_settings['repeat_offender_limit']
+            repeat_limit = security_settings["repeat_offender_limit"]
 
             existing_ban = IPBan.query.filter_by(ip_address=ip_address).first()
 
@@ -179,18 +191,24 @@ class IPBan(LogBase):
                 if existing_ban.ban_count >= repeat_limit:
                     existing_ban.is_permanent = True
                     existing_ban.expires_at = None
-                    logger.warning(f"IP {ip_address} permanently banned after {existing_ban.ban_count} offenses")
+                    logger.warning(
+                        f"IP {ip_address} permanently banned after {existing_ban.ban_count} offenses"
+                    )
                 else:
                     existing_ban.is_permanent = permanent
-                    existing_ban.expires_at = None if permanent else datetime.utcnow() + timedelta(hours=duration_hours)
+                    existing_ban.expires_at = (
+                        None if permanent else datetime.utcnow() + timedelta(hours=duration_hours)
+                    )
             else:
                 # Create new ban
                 ban = IPBan(
                     ip_address=ip_address,
                     ban_reason=reason,
                     is_permanent=permanent,
-                    expires_at=None if permanent else datetime.utcnow() + timedelta(hours=duration_hours),
-                    created_by=created_by
+                    expires_at=None
+                    if permanent
+                    else datetime.utcnow() + timedelta(hours=duration_hours),
+                    created_by=created_by,
                 )
                 logs_session.add(ban)
 
@@ -224,8 +242,7 @@ class IPBan(LogBase):
         try:
             # Remove expired bans first
             expired = IPBan.query.filter(
-                IPBan.is_permanent == False,
-                IPBan.expires_at < datetime.utcnow()
+                IPBan.is_permanent == False, IPBan.expires_at < datetime.utcnow()
             ).all()
 
             for ban in expired:
@@ -239,9 +256,11 @@ class IPBan(LogBase):
             logger.error(f"Error getting IP bans: {e}")
             return []
 
+
 class Error404Tracker(LogBase):
     """Track 404 errors per IP for bot detection"""
-    __tablename__ = 'error_404_tracker'
+
+    __tablename__ = "error_404_tracker"
 
     id = Column(Integer, primary_key=True)
     ip_address = Column(String(50), nullable=False, index=True)
@@ -252,8 +271,8 @@ class Error404Tracker(LogBase):
 
     # Performance indexes for security monitoring
     __table_args__ = (
-        Index('idx_404_error_count', 'error_count'),              # Speeds up get_suspicious_ips() filtering
-        Index('idx_404_first_error_at', 'first_error_at'),        # Speeds up old entry cleanup
+        Index("idx_404_error_count", "error_count"),  # Speeds up get_suspicious_ips() filtering
+        Index("idx_404_first_error_at", "first_error_at"),  # Speeds up old entry cleanup
     )
 
     @staticmethod
@@ -266,8 +285,8 @@ class Error404Tracker(LogBase):
 
             # Get security settings from database
             security_settings = get_security_settings()
-            threshold_404 = security_settings['404_threshold']
-            ban_duration_404 = security_settings['404_ban_duration']
+            threshold_404 = security_settings["404_threshold"]
+            ban_duration_404 = security_settings["404_ban_duration"]
 
             now = datetime.utcnow()
             tracker = Error404Tracker.query.filter_by(ip_address=ip_address).first()
@@ -284,7 +303,7 @@ class Error404Tracker(LogBase):
                     tracker.error_count += 1
 
                     # Add path to attempted paths
-                    paths = json.loads(tracker.paths_attempted or '[]')
+                    paths = json.loads(tracker.paths_attempted or "[]")
                     if path not in paths:
                         paths.append(path)
                         tracker.paths_attempted = json.dumps(paths[-50:])  # Keep last 50 paths
@@ -309,9 +328,7 @@ class Error404Tracker(LogBase):
             else:
                 # Create new tracker
                 tracker = Error404Tracker(
-                    ip_address=ip_address,
-                    error_count=1,
-                    paths_attempted=json.dumps([path])
+                    ip_address=ip_address, error_count=1, paths_attempted=json.dumps([path])
                 )
                 logs_session.add(tracker)
 
@@ -339,16 +356,20 @@ class Error404Tracker(LogBase):
             logs_session.commit()
 
             # Return suspicious IPs
-            return Error404Tracker.query.filter(
-                Error404Tracker.error_count >= min_errors
-            ).order_by(Error404Tracker.error_count.desc()).all()
+            return (
+                Error404Tracker.query.filter(Error404Tracker.error_count >= min_errors)
+                .order_by(Error404Tracker.error_count.desc())
+                .all()
+            )
         except Exception as e:
             logger.error(f"Error getting suspicious IPs: {e}")
             return []
 
+
 class InvalidAPIKeyTracker(LogBase):
     """Track invalid API key attempts per IP"""
-    __tablename__ = 'invalid_api_key_tracker'
+
+    __tablename__ = "invalid_api_key_tracker"
 
     id = Column(Integer, primary_key=True)
     ip_address = Column(String(50), nullable=False, index=True)
@@ -359,8 +380,12 @@ class InvalidAPIKeyTracker(LogBase):
 
     # Performance indexes for security monitoring
     __table_args__ = (
-        Index('idx_api_tracker_attempt_count', 'attempt_count'),      # Speeds up get_suspicious_api_users() filtering
-        Index('idx_api_tracker_first_attempt_at', 'first_attempt_at'), # Speeds up old entry cleanup
+        Index(
+            "idx_api_tracker_attempt_count", "attempt_count"
+        ),  # Speeds up get_suspicious_api_users() filtering
+        Index(
+            "idx_api_tracker_first_attempt_at", "first_attempt_at"
+        ),  # Speeds up old entry cleanup
     )
 
     @staticmethod
@@ -373,8 +398,8 @@ class InvalidAPIKeyTracker(LogBase):
 
             # Get security settings from database
             security_settings = get_security_settings()
-            threshold_api = security_settings['api_threshold']
-            ban_duration_api = security_settings['api_ban_duration']
+            threshold_api = security_settings["api_threshold"]
+            ban_duration_api = security_settings["api_ban_duration"]
 
             now = datetime.utcnow()
             tracker = InvalidAPIKeyTracker.query.filter_by(ip_address=ip_address).first()
@@ -392,10 +417,12 @@ class InvalidAPIKeyTracker(LogBase):
 
                     # Add API key hash to tried list
                     if api_key_hash:
-                        keys_tried = json.loads(tracker.api_keys_tried or '[]')
+                        keys_tried = json.loads(tracker.api_keys_tried or "[]")
                         if api_key_hash not in keys_tried:
                             keys_tried.append(api_key_hash)
-                            tracker.api_keys_tried = json.dumps(keys_tried[-20:])  # Keep last 20 keys
+                            tracker.api_keys_tried = json.dumps(
+                                keys_tried[-20:]
+                            )  # Keep last 20 keys
 
                 tracker.last_attempt_at = now
 
@@ -420,7 +447,7 @@ class InvalidAPIKeyTracker(LogBase):
                 tracker = InvalidAPIKeyTracker(
                     ip_address=ip_address,
                     attempt_count=1,
-                    api_keys_tried=json.dumps([api_key_hash] if api_key_hash else [])
+                    api_keys_tried=json.dumps([api_key_hash] if api_key_hash else []),
                 )
                 logs_session.add(tracker)
 
@@ -448,20 +475,26 @@ class InvalidAPIKeyTracker(LogBase):
             logs_session.commit()
 
             # Return suspicious IPs
-            return InvalidAPIKeyTracker.query.filter(
-                InvalidAPIKeyTracker.attempt_count >= min_attempts
-            ).order_by(InvalidAPIKeyTracker.attempt_count.desc()).all()
+            return (
+                InvalidAPIKeyTracker.query.filter(
+                    InvalidAPIKeyTracker.attempt_count >= min_attempts
+                )
+                .order_by(InvalidAPIKeyTracker.attempt_count.desc())
+                .all()
+            )
         except Exception as e:
             logger.error(f"Error getting suspicious API users: {e}")
             return []
 
+
 def init_logs_db():
     """Initialize the logs database"""
     # Extract directory from database URL and create if it doesn't exist
-    db_path = LOGS_DATABASE_URL.replace('sqlite:///', '')
+    db_path = LOGS_DATABASE_URL.replace("sqlite:///", "")
     db_dir = os.path.dirname(db_path)
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
 
     from database.db_init_helper import init_db_with_logging
+
     init_db_with_logging(LogBase, logs_engine, "Traffic Logs DB", logger)

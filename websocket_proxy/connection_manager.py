@@ -10,12 +10,15 @@ Configuration:
     MAX_WEBSOCKET_CONNECTIONS: Maximum WebSocket connections per user/broker (default: 3)
 """
 
-import os
 import json
+import os
 import threading
-import zmq
-from typing import Dict, List, Optional, Any, Tuple, Callable
 from collections import defaultdict
+from collections.abc import Callable
+from typing import Any, Dict, List, Optional, Tuple
+
+import zmq
+
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -28,12 +31,13 @@ _pooled_creation_context = threading.local()
 
 def is_pooled_creation() -> bool:
     """Check if we're currently creating an adapter within a ConnectionPool"""
-    return getattr(_pooled_creation_context, 'active', False)
+    return getattr(_pooled_creation_context, "active", False)
 
 
 def get_shared_publisher_for_pooled_creation():
     """Get the shared publisher during pooled adapter creation"""
-    return getattr(_pooled_creation_context, 'shared_publisher', None)
+    return getattr(_pooled_creation_context, "shared_publisher", None)
+
 
 # Default configuration - can be overridden via environment variables
 DEFAULT_MAX_SYMBOLS_PER_WEBSOCKET = 1000
@@ -42,12 +46,12 @@ DEFAULT_MAX_WEBSOCKET_CONNECTIONS = 3
 
 def get_max_symbols_per_websocket() -> int:
     """Get maximum symbols per WebSocket connection from config"""
-    return int(os.getenv('MAX_SYMBOLS_PER_WEBSOCKET', DEFAULT_MAX_SYMBOLS_PER_WEBSOCKET))
+    return int(os.getenv("MAX_SYMBOLS_PER_WEBSOCKET", DEFAULT_MAX_SYMBOLS_PER_WEBSOCKET))
 
 
 def get_max_websocket_connections() -> int:
     """Get maximum WebSocket connections from config"""
-    return int(os.getenv('MAX_WEBSOCKET_CONNECTIONS', DEFAULT_MAX_WEBSOCKET_CONNECTIONS))
+    return int(os.getenv("MAX_WEBSOCKET_CONNECTIONS", DEFAULT_MAX_WEBSOCKET_CONNECTIONS))
 
 
 class SharedZmqPublisher:
@@ -83,7 +87,7 @@ class SharedZmqPublisher:
         self._bound = False
         self._publish_lock = threading.Lock()
 
-    def bind(self, port: Optional[int] = None) -> int:
+    def bind(self, port: int | None = None) -> int:
         """
         Bind to a ZeroMQ port. If already bound, returns existing port.
 
@@ -113,7 +117,7 @@ class SharedZmqPublisher:
                     self.logger.warning(f"Failed to bind to port {port}: {e}")
 
             # Find available port
-            default_port = int(os.getenv('ZMQ_PORT', '5555'))
+            default_port = int(os.getenv("ZMQ_PORT", "5555"))
             for attempt_port in range(default_port, default_port + 100):
                 try:
                     self.socket.bind(f"tcp://*:{attempt_port}")
@@ -142,10 +146,9 @@ class SharedZmqPublisher:
 
         with self._publish_lock:
             try:
-                self.socket.send_multipart([
-                    topic.encode('utf-8'),
-                    json.dumps(data).encode('utf-8')
-                ])
+                self.socket.send_multipart(
+                    [topic.encode("utf-8"), json.dumps(data).encode("utf-8")]
+                )
             except Exception as e:
                 self.logger.error(f"Error publishing to ZMQ: {e}")
 
@@ -187,8 +190,8 @@ class ConnectionPool:
         adapter_class: type,
         broker_name: str,
         user_id: str,
-        max_symbols_per_connection: Optional[int] = None,
-        max_connections: Optional[int] = None
+        max_symbols_per_connection: int | None = None,
+        max_connections: int | None = None,
     ):
         """
         Initialize the connection pool.
@@ -210,11 +213,11 @@ class ConnectionPool:
         self.lock = threading.RLock()
 
         # Connection tracking
-        self.adapters: List[Any] = []  # List of adapter instances
-        self.adapter_symbol_counts: List[int] = []  # Symbols per adapter
+        self.adapters: list[Any] = []  # List of adapter instances
+        self.adapter_symbol_counts: list[int] = []  # Symbols per adapter
 
         # Subscription tracking: (symbol, exchange, mode) -> adapter_index
-        self.subscription_map: Dict[Tuple[str, str, int], int] = {}
+        self.subscription_map: dict[tuple[str, str, int], int] = {}
 
         # Shared ZeroMQ publisher
         self.shared_publisher = SharedZmqPublisher()
@@ -228,18 +231,12 @@ class ConnectionPool:
         self.peak_connections_used = 0
         self.peak_symbol_counts = []  # Snapshot of counts at peak
 
-        self.logger.info(
-            f"[POOL] ========== CONNECTION POOL INITIALIZED =========="
-        )
-        self.logger.info(
-            f"[POOL] Broker: {broker_name} | User: {user_id}"
-        )
+        self.logger.info("[POOL] ========== CONNECTION POOL INITIALIZED ==========")
+        self.logger.info(f"[POOL] Broker: {broker_name} | User: {user_id}")
         self.logger.info(
             f"[POOL] Config: {self.max_symbols} symbols/connection x {self.max_connections} max connections = {self.max_symbols * self.max_connections} total capacity"
         )
-        self.logger.info(
-            f"[POOL] =================================================="
-        )
+        self.logger.info("[POOL] ==================================================")
 
     def _create_adapter(self) -> Any:
         """
@@ -277,7 +274,7 @@ class ConnectionPool:
             _pooled_creation_context.active = False
             _pooled_creation_context.shared_publisher = None
 
-    def _get_adapter_with_capacity(self) -> Tuple[int, Any]:
+    def _get_adapter_with_capacity(self) -> tuple[int, Any]:
         """
         Get an adapter with available capacity, or create a new one.
 
@@ -322,7 +319,9 @@ class ConnectionPool:
 
             return len(self.adapters) - 1, adapter
 
-    def initialize(self, broker_name: str = None, user_id: str = None, auth_data: dict = None) -> dict:
+    def initialize(
+        self, broker_name: str = None, user_id: str = None, auth_data: dict = None
+    ) -> dict:
         """
         Initialize the connection pool with the first adapter.
 
@@ -335,7 +334,7 @@ class ConnectionPool:
             Initialization result dict
         """
         if self.initialized:
-            return {'success': True, 'message': 'Already initialized'}
+            return {"success": True, "message": "Already initialized"}
 
         with self.lock:
             try:
@@ -350,7 +349,7 @@ class ConnectionPool:
                 adapter = self._create_adapter()
                 result = adapter.initialize(self.broker_name, self.user_id, auth_data)
 
-                if result and not result.get('success', True):
+                if result and not result.get("success", True):
                     return result
 
                 self.adapters.append(adapter)
@@ -358,11 +357,11 @@ class ConnectionPool:
                 self.initialized = True
 
                 self.logger.info(f"ConnectionPool initialized for {self.broker_name}")
-                return {'success': True, 'message': 'Connection pool initialized'}
+                return {"success": True, "message": "Connection pool initialized"}
 
             except Exception as e:
                 self.logger.error(f"Failed to initialize connection pool: {e}")
-                return {'success': False, 'error': str(e)}
+                return {"success": False, "error": str(e)}
 
     def connect(self) -> dict:
         """
@@ -373,25 +372,25 @@ class ConnectionPool:
             Connection result dict
         """
         if not self.initialized:
-            return {'success': False, 'error': 'Not initialized'}
+            return {"success": False, "error": "Not initialized"}
 
         if self.connected:
-            return {'success': True, 'message': 'Already connected'}
+            return {"success": True, "message": "Already connected"}
 
         with self.lock:
             try:
                 if self.adapters:
                     result = self.adapters[0].connect()
-                    if result and not result.get('success', True):
+                    if result and not result.get("success", True):
                         return result
                     self.connected = True
-                    return {'success': True, 'message': 'Connected'}
+                    return {"success": True, "message": "Connected"}
                 else:
-                    return {'success': False, 'error': 'No adapters available'}
+                    return {"success": False, "error": "No adapters available"}
 
             except Exception as e:
                 self.logger.error(f"Failed to connect: {e}")
-                return {'success': False, 'error': str(e)}
+                return {"success": False, "error": str(e)}
 
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> dict:
         """
@@ -412,9 +411,9 @@ class ConnectionPool:
             # Check if already subscribed
             if sub_key in self.subscription_map:
                 return {
-                    'status': 'success',
-                    'message': f'Already subscribed to {symbol}.{exchange}',
-                    'connection': self.subscription_map[sub_key] + 1
+                    "status": "success",
+                    "message": f"Already subscribed to {symbol}.{exchange}",
+                    "connection": self.subscription_map[sub_key] + 1,
                 }
 
             try:
@@ -424,7 +423,7 @@ class ConnectionPool:
                 # Subscribe
                 result = adapter.subscribe(symbol, exchange, mode, depth_level)
 
-                if result.get('status') == 'success':
+                if result.get("status") == "success":
                     self.subscription_map[sub_key] = adapter_idx
                     self.adapter_symbol_counts[adapter_idx] += 1
                     symbols_on_conn = self.adapter_symbol_counts[adapter_idx]
@@ -437,9 +436,9 @@ class ConnectionPool:
                         self.peak_symbol_counts = list(self.adapter_symbol_counts)
 
                     # Add connection info to result
-                    result['connection'] = adapter_idx + 1
-                    result['total_connections'] = len(self.adapters)
-                    result['symbols_on_connection'] = symbols_on_conn
+                    result["connection"] = adapter_idx + 1
+                    result["total_connections"] = len(self.adapters)
+                    result["symbols_on_connection"] = symbols_on_conn
 
                     # Log at key milestones: every 100 symbols, at 1000, and when new connection starts
                     if symbols_on_conn == 1:
@@ -462,18 +461,10 @@ class ConnectionPool:
 
             except RuntimeError as e:
                 # Max capacity reached
-                return {
-                    'status': 'error',
-                    'code': 'MAX_CAPACITY_REACHED',
-                    'message': str(e)
-                }
+                return {"status": "error", "code": "MAX_CAPACITY_REACHED", "message": str(e)}
             except Exception as e:
                 self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
-                return {
-                    'status': 'error',
-                    'code': 'SUBSCRIPTION_ERROR',
-                    'message': str(e)
-                }
+                return {"status": "error", "code": "SUBSCRIPTION_ERROR", "message": str(e)}
 
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> dict:
         """
@@ -492,9 +483,9 @@ class ConnectionPool:
         with self.lock:
             if sub_key not in self.subscription_map:
                 return {
-                    'status': 'error',
-                    'code': 'NOT_SUBSCRIBED',
-                    'message': f'Not subscribed to {symbol}.{exchange}'
+                    "status": "error",
+                    "code": "NOT_SUBSCRIBED",
+                    "message": f"Not subscribed to {symbol}.{exchange}",
                 }
 
             try:
@@ -503,7 +494,7 @@ class ConnectionPool:
 
                 result = adapter.unsubscribe(symbol, exchange, mode)
 
-                if result.get('status') == 'success':
+                if result.get("status") == "success":
                     del self.subscription_map[sub_key]
                     self.adapter_symbol_counts[adapter_idx] -= 1
 
@@ -516,11 +507,7 @@ class ConnectionPool:
 
             except Exception as e:
                 self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
-                return {
-                    'status': 'error',
-                    'code': 'UNSUBSCRIPTION_ERROR',
-                    'message': str(e)
-                }
+                return {"status": "error", "code": "UNSUBSCRIPTION_ERROR", "message": str(e)}
 
     def unsubscribe_all(self):
         """Unsubscribe from all symbols across all connections"""
@@ -530,16 +517,18 @@ class ConnectionPool:
             num_connections = len(self.adapters)
 
             if total_symbols > 0:
-                self.logger.info(f"[POOL] ========== UNSUBSCRIBING ALL ==========")
+                self.logger.info("[POOL] ========== UNSUBSCRIBING ALL ==========")
                 self.logger.info(f"[POOL] Connections used: {num_connections}")
                 self.logger.info(f"[POOL] Total symbols subscribed: {total_symbols}")
                 for idx, count in enumerate(self.adapter_symbol_counts):
                     if count > 0:
-                        self.logger.info(f"[POOL]   Connection {idx + 1}: {count}/{self.max_symbols} symbols ({(count/self.max_symbols)*100:.0f}%)")
-                self.logger.info(f"[POOL] ==========================================")
+                        self.logger.info(
+                            f"[POOL]   Connection {idx + 1}: {count}/{self.max_symbols} symbols ({(count / self.max_symbols) * 100:.0f}%)"
+                        )
+                self.logger.info("[POOL] ==========================================")
 
             for adapter in self.adapters:
-                if hasattr(adapter, 'unsubscribe_all'):
+                if hasattr(adapter, "unsubscribe_all"):
                     adapter.unsubscribe_all()
 
             self.subscription_map.clear()
@@ -551,17 +540,19 @@ class ConnectionPool:
         """Disconnect all adapters and clean up"""
         with self.lock:
             # Log PEAK usage (not current, since unsubscribes may have already happened)
-            self.logger.info(f"[POOL] ========== DISCONNECTING POOL ==========")
+            self.logger.info("[POOL] ========== DISCONNECTING POOL ==========")
             self.logger.info(f"[POOL] Peak connections used: {self.peak_connections_used}")
             self.logger.info(f"[POOL] Peak symbols subscribed: {self.peak_total_symbols}")
             for idx, count in enumerate(self.peak_symbol_counts):
-                self.logger.info(f"[POOL]   Connection {idx + 1}: {count}/{self.max_symbols} symbols ({(count/self.max_symbols)*100:.0f}%)")
-            self.logger.info(f"[POOL] ==========================================")
+                self.logger.info(
+                    f"[POOL]   Connection {idx + 1}: {count}/{self.max_symbols} symbols ({(count / self.max_symbols) * 100:.0f}%)"
+                )
+            self.logger.info("[POOL] ==========================================")
 
             for idx, adapter in enumerate(self.adapters):
                 try:
                     # Skip ZMQ cleanup for adapters using shared publisher
-                    if hasattr(adapter, '_uses_shared_zmq') and adapter._uses_shared_zmq:
+                    if hasattr(adapter, "_uses_shared_zmq") and adapter._uses_shared_zmq:
                         # Temporarily disable ZMQ cleanup
                         original_cleanup = adapter.cleanup_zmq
                         adapter.cleanup_zmq = lambda: None
@@ -597,22 +588,24 @@ class ConnectionPool:
             max_capacity = self.max_connections * self.max_symbols
 
             return {
-                'broker': self.broker_name,
-                'user_id': self.user_id,
-                'active_connections': len(self.adapters),
-                'max_connections': self.max_connections,
-                'max_symbols_per_connection': self.max_symbols,
-                'total_subscriptions': total_symbols,
-                'max_capacity': max_capacity,
-                'capacity_used_percent': (total_symbols / max_capacity * 100) if max_capacity > 0 else 0,
-                'connections': [
+                "broker": self.broker_name,
+                "user_id": self.user_id,
+                "active_connections": len(self.adapters),
+                "max_connections": self.max_connections,
+                "max_symbols_per_connection": self.max_symbols,
+                "total_subscriptions": total_symbols,
+                "max_capacity": max_capacity,
+                "capacity_used_percent": (total_symbols / max_capacity * 100)
+                if max_capacity > 0
+                else 0,
+                "connections": [
                     {
-                        'index': idx + 1,
-                        'symbols': count,
-                        'capacity_percent': (count / self.max_symbols * 100)
+                        "index": idx + 1,
+                        "symbols": count,
+                        "capacity_percent": (count / self.max_symbols * 100),
                     }
                     for idx, count in enumerate(self.adapter_symbol_counts)
-                ]
+                ],
             }
 
     # Compatibility methods to match BaseBrokerWebSocketAdapter interface
@@ -621,7 +614,7 @@ class ConnectionPool:
     def subscriptions(self) -> dict:
         """Get subscriptions dict for compatibility"""
         return {
-            f"{k[0]}_{k[1]}_{k[2]}": {'symbol': k[0], 'exchange': k[1], 'mode': k[2]}
+            f"{k[0]}_{k[1]}_{k[2]}": {"symbol": k[0], "exchange": k[1], "mode": k[2]}
             for k in self.subscription_map.keys()
         }
 
@@ -633,8 +626,8 @@ class ConnectionPool:
 def create_pooled_adapter(
     adapter_class: type,
     broker_name: str,
-    max_symbols_per_connection: Optional[int] = None,
-    max_connections: Optional[int] = None
+    max_symbols_per_connection: int | None = None,
+    max_connections: int | None = None,
 ) -> Callable:
     """
     Factory function to create a pooled adapter factory.
@@ -651,6 +644,7 @@ def create_pooled_adapter(
     Returns:
         A factory function that creates ConnectionPool instances
     """
+
     def factory():
         # The pool will be initialized with user_id later
         # Return a wrapper that creates the pool on first use
@@ -669,7 +663,7 @@ def create_pooled_adapter(
                         broker_name=self._broker_name,
                         user_id=user_id,
                         max_symbols_per_connection=self._max_symbols,
-                        max_connections=self._max_connections
+                        max_connections=self._max_connections,
                     )
                 return self._pool
 
@@ -680,7 +674,7 @@ def create_pooled_adapter(
             def connect(self):
                 if self._pool:
                     return self._pool.connect()
-                return {'success': False, 'error': 'Not initialized'}
+                return {"success": False, "error": "Not initialized"}
 
             def disconnect(self):
                 if self._pool:
@@ -689,12 +683,12 @@ def create_pooled_adapter(
             def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5):
                 if self._pool:
                     return self._pool.subscribe(symbol, exchange, mode, depth_level)
-                return {'status': 'error', 'message': 'Not initialized'}
+                return {"status": "error", "message": "Not initialized"}
 
             def unsubscribe(self, symbol: str, exchange: str, mode: int = 2):
                 if self._pool:
                     return self._pool.unsubscribe(symbol, exchange, mode)
-                return {'status': 'error', 'message': 'Not initialized'}
+                return {"status": "error", "message": "Not initialized"}
 
             def unsubscribe_all(self):
                 if self._pool:

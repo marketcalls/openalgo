@@ -2,6 +2,7 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+
 def calculate_margin_api(positions, auth):
     """
     Calculate margin requirement for a basket of positions.
@@ -18,4 +19,6 @@ def calculate_margin_api(positions, auth):
         NotImplementedError: Paytm Money does not support position-specific margin calculator API
     """
     logger.warning("Paytm Money does not provide position-specific margin calculator API")
-    raise NotImplementedError("Paytm Money does not support position-specific margin calculator API")
+    raise NotImplementedError(
+        "Paytm Money does not support position-specific margin calculator API"
+    )

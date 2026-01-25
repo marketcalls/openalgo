@@ -34,7 +34,13 @@
       "Bash(tree:*)",
       "Bash(xargs basename:*)",
       "Bash(ls:*)",
-      "Bash(uv pip:*)"
+      "Bash(uv pip:*)",
+      "Bash(findstr:*)",
+      "Bash(uv add:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npm run test:run:*)",
+      "Bash(dir:*)",
+      "Bash(git reset:*)"
     ]
   }
 }

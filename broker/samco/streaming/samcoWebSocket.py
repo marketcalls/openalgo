@@ -3,13 +3,16 @@ Samco WebSocket Client Implementation
 Handles connection to Samco's Broadcast API for streaming market data
 Based on official Samco Python SDK pattern
 """
+
 import json
 import logging
 import threading
 import time
-import websocket
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any, Dict, List, Optional
 from urllib.parse import unquote
+
+import websocket
 
 from utils.logging import get_logger
 
@@ -49,12 +52,16 @@ class SamcoWebSocket:
     REQUEST_SUBSCRIBE = "subscribe"
     REQUEST_UNSUBSCRIBE = "unsubscribe"
 
-    def __init__(self, session_token: str, user_id: str,
-                 on_message: Optional[Callable] = None,
-                 on_error: Optional[Callable] = None,
-                 on_close: Optional[Callable] = None,
-                 on_open: Optional[Callable] = None,
-                 on_data: Optional[Callable] = None):
+    def __init__(
+        self,
+        session_token: str,
+        user_id: str,
+        on_message: Callable | None = None,
+        on_error: Callable | None = None,
+        on_close: Callable | None = None,
+        on_open: Callable | None = None,
+        on_data: Callable | None = None,
+    ):
         """
         Initialize Samco WebSocket client
 
@@ -172,13 +179,15 @@ class SamcoWebSocket:
 
         # Build headers with session token
         # Log token info for debugging (first/last 4 chars only for security)
-        token_preview = f"{self.session_token[:4]}...{self.session_token[-4:]}" if len(self.session_token) > 8 else "***"
+        token_preview = (
+            f"{self.session_token[:4]}...{self.session_token[-4:]}"
+            if len(self.session_token) > 8
+            else "***"
+        )
         self.logger.info(f"Connecting to {self.WS_URL} with token: {token_preview}")
 
         # Headers as dict - matching official Samco SDK format
-        headers = {
-            'x-session-token': self.session_token
-        }
+        headers = {"x-session-token": self.session_token}
 
         # Enable trace for debugging (matching official SDK)
         websocket.enableTrace(True)
@@ -189,7 +198,7 @@ class SamcoWebSocket:
             on_open=self._on_open,
             on_message=self._on_message,
             on_error=self._on_error,
-            on_close=self._on_close
+            on_close=self._on_close,
         )
 
         self.ws_thread = threading.Thread(target=self._run_websocket, daemon=True)
@@ -212,10 +221,7 @@ class SamcoWebSocket:
     def _run_websocket(self) -> None:
         """Run the WebSocket connection with proper error handling"""
         try:
-            self.ws.run_forever(
-                ping_interval=self.PING_INTERVAL,
-                ping_timeout=self.PING_TIMEOUT
-            )
+            self.ws.run_forever(ping_interval=self.PING_INTERVAL, ping_timeout=self.PING_TIMEOUT)
         except Exception as e:
             self.logger.error(f"WebSocket run error: {e}")
         finally:
@@ -283,23 +289,27 @@ class SamcoWebSocket:
         self._update_last_message_time()
 
         # Log all incoming messages for debugging
-        self.logger.debug(f"Received WebSocket message: {message[:500] if len(message) > 500 else message}")
+        self.logger.debug(
+            f"Received WebSocket message: {message[:500] if len(message) > 500 else message}"
+        )
 
         try:
             # Try to parse as JSON
             data = json.loads(message)
 
             # Check for response wrapper from Samco
-            if 'response' in data:
-                response = data['response']
-                streaming_type = response.get('streaming_type', '')
+            if "response" in data:
+                response = data["response"]
+                streaming_type = response.get("streaming_type", "")
 
-                if streaming_type in ['quote', 'quote2', 'marketDepth']:
+                if streaming_type in ["quote", "quote2", "marketDepth"]:
                     # Market data - normalize and pass to data callback
-                    market_data = response.get('data', {})
+                    market_data = response.get("data", {})
                     normalized = self._normalize_market_data(market_data, streaming_type)
 
-                    self.logger.debug(f"Normalized data: symbol={normalized.get('symbol')}, has_callback={self._on_data_callback is not None}")
+                    self.logger.debug(
+                        f"Normalized data: symbol={normalized.get('symbol')}, has_callback={self._on_data_callback is not None}"
+                    )
 
                     if self._on_data_callback:
                         try:
@@ -327,7 +337,7 @@ class SamcoWebSocket:
                 except Exception as e:
                     self.logger.error(f"Error in on_message callback: {e}")
 
-    def _normalize_market_data(self, data: Dict, streaming_type: str) -> Dict:
+    def _normalize_market_data(self, data: dict, streaming_type: str) -> dict:
         """
         Normalize Samco quote data to common format
 
@@ -353,14 +363,14 @@ class SamcoWebSocket:
         - vol: Volume
         """
         # Determine mode: quote2 has depth data, quote has OHLC data
-        if streaming_type in ['quote2', 'marketDepth']:
+        if streaming_type in ["quote2", "marketDepth"]:
             mode = self.DEPTH_MODE  # quote2 has bidValues/askValues (depth data)
         else:
             mode = self.QUOTE_MODE  # quote has ltp, ohlc, vol
 
         # Extract bid/ask values - quote2 has bidValues/askValues arrays
-        bid_values = data.get('bidValues', [])
-        ask_values = data.get('askValues', [])
+        bid_values = data.get("bidValues", [])
+        ask_values = data.get("askValues", [])
 
         # Get best bid/ask from first level (quote2) or direct fields (quote)
         best_bid_price = 0.0
@@ -370,91 +380,92 @@ class SamcoWebSocket:
 
         if bid_values and len(bid_values) > 0:
             # quote2 format with depth arrays
-            best_bid_price = self._safe_float(bid_values[0].get('price', 0))
-            best_bid_qty = self._safe_int(bid_values[0].get('qty', 0))
+            best_bid_price = self._safe_float(bid_values[0].get("price", 0))
+            best_bid_qty = self._safe_int(bid_values[0].get("qty", 0))
         else:
             # quote format with direct fields: bPr, bSz
-            best_bid_price = self._safe_float(data.get('bPr', 0))
-            best_bid_qty = self._safe_int(data.get('bSz', 0))
+            best_bid_price = self._safe_float(data.get("bPr", 0))
+            best_bid_qty = self._safe_int(data.get("bSz", 0))
 
         if ask_values and len(ask_values) > 0:
             # quote2 format with depth arrays
-            best_ask_price = self._safe_float(ask_values[0].get('price', 0))
-            best_ask_qty = self._safe_int(ask_values[0].get('qty', 0))
+            best_ask_price = self._safe_float(ask_values[0].get("price", 0))
+            best_ask_qty = self._safe_int(ask_values[0].get("qty", 0))
         else:
             # quote format with direct fields: aPr, aSz
-            best_ask_price = self._safe_float(data.get('aPr', 0))
-            best_ask_qty = self._safe_int(data.get('aSz', 0))
+            best_ask_price = self._safe_float(data.get("aPr", 0))
+            best_ask_qty = self._safe_int(data.get("aSz", 0))
 
         # Build depth data
         depth_buy = []
         depth_sell = []
         for bid in bid_values:
-            depth_buy.append({
-                'price': self._safe_float(bid.get('price', 0)),
-                'quantity': self._safe_int(bid.get('qty', 0)),
-                'orders': self._safe_int(bid.get('no', 0))
-            })
+            depth_buy.append(
+                {
+                    "price": self._safe_float(bid.get("price", 0)),
+                    "quantity": self._safe_int(bid.get("qty", 0)),
+                    "orders": self._safe_int(bid.get("no", 0)),
+                }
+            )
         for ask in ask_values:
-            depth_sell.append({
-                'price': self._safe_float(ask.get('price', 0)),
-                'quantity': self._safe_int(ask.get('qty', 0)),
-                'orders': self._safe_int(ask.get('no', 0))
-            })
+            depth_sell.append(
+                {
+                    "price": self._safe_float(ask.get("price", 0)),
+                    "quantity": self._safe_int(ask.get("qty", 0)),
+                    "orders": self._safe_int(ask.get("no", 0)),
+                }
+            )
 
         result = {
-            'subscription_mode': mode,
-            'subscription_mode_val': 'DEPTH' if mode == self.DEPTH_MODE else 'QUOTE',
-            'token': data.get('symbol', '') or data.get('sym', ''),
-            'symbol': data.get('symbol', '') or data.get('sym', ''),
-            'last_traded_price': self._safe_float(data.get('ltp', 0)),
-            'open_price_of_the_day': self._safe_float(data.get('o', 0)),
-            'high_price_of_the_day': self._safe_float(data.get('h', 0)),
-            'low_price_of_the_day': self._safe_float(data.get('l', 0)),
-            'closed_price': self._safe_float(data.get('c', 0)),
-            'last_traded_quantity': self._safe_int(data.get('ltq', 0)),
-            'volume_trade_for_the_day': self._safe_int(data.get('vol', 0)),
-            'average_traded_price': self._safe_float(data.get('avgPr', 0)),
-            'change': self._safe_float(data.get('ch', 0)),
-            'change_percentage': self._safe_float(data.get('chPer', 0)),
-            'best_bid_price': best_bid_price,
-            'best_bid_quantity': best_bid_qty,
-            'best_ask_price': best_ask_price,
-            'best_ask_quantity': best_ask_qty,
-            'total_bid_quantity': self._safe_int(data.get('tbq', 0)),
-            'total_ask_quantity': self._safe_int(data.get('taq', 0)),
-            'open_interest': self._safe_int(data.get('oI', 0)),
-            'last_traded_time': data.get('lTrdT', '') or data.get('ltt', ''),
-            'exchange_timestamp': int(time.time() * 1000)
+            "subscription_mode": mode,
+            "subscription_mode_val": "DEPTH" if mode == self.DEPTH_MODE else "QUOTE",
+            "token": data.get("symbol", "") or data.get("sym", ""),
+            "symbol": data.get("symbol", "") or data.get("sym", ""),
+            "last_traded_price": self._safe_float(data.get("ltp", 0)),
+            "open_price_of_the_day": self._safe_float(data.get("o", 0)),
+            "high_price_of_the_day": self._safe_float(data.get("h", 0)),
+            "low_price_of_the_day": self._safe_float(data.get("l", 0)),
+            "closed_price": self._safe_float(data.get("c", 0)),
+            "last_traded_quantity": self._safe_int(data.get("ltq", 0)),
+            "volume_trade_for_the_day": self._safe_int(data.get("vol", 0)),
+            "average_traded_price": self._safe_float(data.get("avgPr", 0)),
+            "change": self._safe_float(data.get("ch", 0)),
+            "change_percentage": self._safe_float(data.get("chPer", 0)),
+            "best_bid_price": best_bid_price,
+            "best_bid_quantity": best_bid_qty,
+            "best_ask_price": best_ask_price,
+            "best_ask_quantity": best_ask_qty,
+            "total_bid_quantity": self._safe_int(data.get("tbq", 0)),
+            "total_ask_quantity": self._safe_int(data.get("taq", 0)),
+            "open_interest": self._safe_int(data.get("oI", 0)),
+            "last_traded_time": data.get("lTrdT", "") or data.get("ltt", ""),
+            "exchange_timestamp": int(time.time() * 1000),
         }
 
         # Add depth data if available
         if depth_buy or depth_sell:
-            result['depth'] = {
-                'buy': depth_buy,
-                'sell': depth_sell
-            }
+            result["depth"] = {"buy": depth_buy, "sell": depth_sell}
 
         return result
 
     def _safe_float(self, value) -> float:
         """Safely convert value to float"""
-        if value is None or value == '':
+        if value is None or value == "":
             return 0.0
         try:
             if isinstance(value, str):
-                value = value.replace(',', '')
+                value = value.replace(",", "")
             return float(value)
         except (ValueError, TypeError):
             return 0.0
 
     def _safe_int(self, value) -> int:
         """Safely convert value to int"""
-        if value is None or value == '':
+        if value is None or value == "":
             return 0
         try:
             if isinstance(value, str):
-                value = value.replace(',', '')
+                value = value.replace(",", "")
             return int(float(value))
         except (ValueError, TypeError):
             return 0
@@ -474,7 +485,9 @@ class SamcoWebSocket:
             self.RESUBSCRIBE_FLAG = True
             self.current_retry_attempt += 1
             delay = self.retry_delay * (self.retry_multiplier ** (self.current_retry_attempt - 1))
-            self.logger.warning(f"Attempting reconnection (Attempt {self.current_retry_attempt}) after {delay}s delay...")
+            self.logger.warning(
+                f"Attempting reconnection (Attempt {self.current_retry_attempt}) after {delay}s delay..."
+            )
 
             time.sleep(delay)
 
@@ -484,7 +497,9 @@ class SamcoWebSocket:
             except Exception as e:
                 self.logger.error(f"Error during reconnection: {e}")
 
-    def _on_close(self, ws, close_status_code: Optional[int] = None, close_msg: Optional[str] = None) -> None:
+    def _on_close(
+        self, ws, close_status_code: int | None = None, close_msg: str | None = None
+    ) -> None:
         """Handle WebSocket connection close event"""
         self.connected = False
         self.logger.info(f"Samco WebSocket closed: {close_status_code} - {close_msg}")
@@ -542,7 +557,7 @@ class SamcoWebSocket:
         return True
 
     # Subscription Management
-    def subscribe(self, correlation_id: str, mode: int, token_list: List[Dict]) -> bool:
+    def subscribe(self, correlation_id: str, mode: int, token_list: list[dict]) -> bool:
         """
         Subscribe to market data for given symbols
 
@@ -563,17 +578,17 @@ class SamcoWebSocket:
             symbols_list = []
 
             for token_group in token_list:
-                exchange = token_group.get('exchangeType', 'NSE')
-                tokens = token_group.get('tokens', [])
+                exchange = token_group.get("exchangeType", "NSE")
+                tokens = token_group.get("tokens", [])
 
                 for token in tokens:
                     # Samco streaming uses format: scripCode_segment (e.g., "11536_NSE", "464925_MFO")
                     # Index tokens start with '-' (e.g., "-23" for NIFTY) and should NOT have exchange suffix
                     token_str = str(token)
-                    if token_str.startswith('-'):
+                    if token_str.startswith("-"):
                         # Index token - use as-is without exchange suffix
                         symbol_key = token_str
-                    elif '_' in token_str:
+                    elif "_" in token_str:
                         # Token already has format like "11536_NSE"
                         symbol_key = token_str
                     else:
@@ -585,10 +600,10 @@ class SamcoWebSocket:
 
                     # Track subscription
                     self.subscribed_symbols[symbol_key] = {
-                        'symbol': symbol_key,
-                        'exchange': exchange,
-                        'mode': mode,
-                        'correlation_id': correlation_id
+                        "symbol": symbol_key,
+                        "exchange": exchange,
+                        "mode": mode,
+                        "correlation_id": correlation_id,
                     }
 
             # Store for resubscription
@@ -596,8 +611,8 @@ class SamcoWebSocket:
                 self.input_request_dict[mode] = {}
 
             for token_group in token_list:
-                exchange = token_group.get('exchangeType', 'NSE')
-                tokens = token_group.get('tokens', [])
+                exchange = token_group.get("exchangeType", "NSE")
+                tokens = token_group.get("tokens", [])
                 if exchange in self.input_request_dict[mode]:
                     self.input_request_dict[mode][exchange].extend(tokens)
                 else:
@@ -614,8 +629,10 @@ class SamcoWebSocket:
             all_symbols_for_mode = []
             for sym_key, sym_info in self.subscribed_symbols.items():
                 # Include all symbols that use the same streaming type
-                sym_mode = sym_info.get('mode', 2)
-                sym_streaming_type = self.STREAMING_TYPE_QUOTE if sym_mode == self.DEPTH_MODE else "quote"
+                sym_mode = sym_info.get("mode", 2)
+                sym_streaming_type = (
+                    self.STREAMING_TYPE_QUOTE if sym_mode == self.DEPTH_MODE else "quote"
+                )
                 if sym_streaming_type == streaming_type:
                     all_symbols_for_mode.append({"symbol": sym_key})
 
@@ -623,11 +640,9 @@ class SamcoWebSocket:
             request_data = {
                 "request": {
                     "streaming_type": streaming_type,
-                    "data": {
-                        "symbols": all_symbols_for_mode
-                    },
+                    "data": {"symbols": all_symbols_for_mode},
                     "request_type": self.REQUEST_SUBSCRIBE,
-                    "response_format": "json"
+                    "response_format": "json",
                 }
             }
 
@@ -644,7 +659,7 @@ class SamcoWebSocket:
             self.logger.error(f"Error during subscribe: {e}")
             return False
 
-    def unsubscribe(self, correlation_id: str, mode: int, token_list: List[Dict]) -> bool:
+    def unsubscribe(self, correlation_id: str, mode: int, token_list: list[dict]) -> bool:
         """
         Unsubscribe from market data for given symbols
 
@@ -663,16 +678,16 @@ class SamcoWebSocket:
             symbols_list = []
 
             for token_group in token_list:
-                exchange = token_group.get('exchangeType', 'NSE')
-                tokens = token_group.get('tokens', [])
+                exchange = token_group.get("exchangeType", "NSE")
+                tokens = token_group.get("tokens", [])
 
                 for token in tokens:
                     # Build symbol key same way as subscribe
                     token_str = str(token)
-                    if token_str.startswith('-'):
+                    if token_str.startswith("-"):
                         # Index token - use as-is without exchange suffix
                         symbol_key = token_str
-                    elif '_' in token_str:
+                    elif "_" in token_str:
                         symbol_key = token_str
                     else:
                         symbol_key = f"{token_str}_{exchange}"
@@ -699,11 +714,9 @@ class SamcoWebSocket:
             request_data = {
                 "request": {
                     "streaming_type": streaming_type,
-                    "data": {
-                        "symbols": symbols_list
-                    },
+                    "data": {"symbols": symbols_list},
                     "request_type": self.REQUEST_UNSUBSCRIBE,
-                    "response_format": "json"
+                    "response_format": "json",
                 }
             }
 
@@ -724,10 +737,7 @@ class SamcoWebSocket:
                 token_list = []
                 for exchange, tokens in exchanges.items():
                     if tokens:
-                        token_list.append({
-                            'exchangeType': exchange,
-                            'tokens': tokens
-                        })
+                        token_list.append({"exchangeType": exchange, "tokens": tokens})
 
                 if token_list:
                     self.subscribe(f"resub_{mode}", mode, token_list)

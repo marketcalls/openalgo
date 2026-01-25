@@ -9,17 +9,19 @@ which is the correct model for Indian F&O markets (NFO, BFO, MCX, CDS)
 
 import re
 from datetime import datetime
-from typing import Dict, Any, Tuple, Optional
+from typing import Any, Dict, Optional, Tuple
+
 from utils.logging import get_logger
 
 # Import py_vollib for Black-76 calculations
 try:
-    from py_vollib.black.implied_volatility import implied_volatility as black_iv
     from py_vollib.black.greeks.analytical import delta as black_delta
     from py_vollib.black.greeks.analytical import gamma as black_gamma
+    from py_vollib.black.greeks.analytical import rho as black_rho
     from py_vollib.black.greeks.analytical import theta as black_theta
     from py_vollib.black.greeks.analytical import vega as black_vega
-    from py_vollib.black.greeks.analytical import rho as black_rho
+    from py_vollib.black.implied_volatility import implied_volatility as black_iv
+
     PYVOLLIB_AVAILABLE = True
 except ImportError:
     PYVOLLIB_AVAILABLE = False
@@ -28,45 +30,67 @@ logger = get_logger(__name__)
 
 # Exchange-specific symbol mappings
 NSE_INDEX_SYMBOLS = {
-    "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY",
-    "NIFTYNXT50", "NIFTYIT", "NIFTYPHARMA", "NIFTYBANK"
+    "NIFTY",
+    "BANKNIFTY",
+    "FINNIFTY",
+    "MIDCPNIFTY",
+    "NIFTYNXT50",
+    "NIFTYIT",
+    "NIFTYPHARMA",
+    "NIFTYBANK",
 }
 
-BSE_INDEX_SYMBOLS = {
-    "SENSEX", "BANKEX", "SENSEX50"
-}
+BSE_INDEX_SYMBOLS = {"SENSEX", "BANKEX", "SENSEX50"}
 
-CURRENCY_SYMBOLS = {
-    "USDINR", "EURINR", "GBPINR", "JPYINR"
-}
+CURRENCY_SYMBOLS = {"USDINR", "EURINR", "GBPINR", "JPYINR"}
 
 COMMODITY_SYMBOLS = {
-    "GOLD", "GOLDM", "GOLDPETAL", "SILVER", "SILVERM", "SILVERMIC",
-    "CRUDEOIL", "CRUDEOILM", "NATURALGAS", "COPPER", "ZINC", "LEAD",
-    "ALUMINIUM", "NICKEL", "COTTONCANDY", "MENTHAOIL"
+    "GOLD",
+    "GOLDM",
+    "GOLDPETAL",
+    "SILVER",
+    "SILVERM",
+    "SILVERMIC",
+    "CRUDEOIL",
+    "CRUDEOILM",
+    "NATURALGAS",
+    "COPPER",
+    "ZINC",
+    "LEAD",
+    "ALUMINIUM",
+    "NICKEL",
+    "COTTONCANDY",
+    "MENTHAOIL",
 }
 
 # Default interest rates by exchange (annualized %)
 # Set to 0 - users should explicitly define interest rate if needed
 DEFAULT_INTEREST_RATES = {
-    "NFO": 0,      # NSE F&O
-    "BFO": 0,      # BSE F&O
-    "CDS": 0,      # Currency derivatives
-    "MCX": 0       # Commodities
+    "NFO": 0,  # NSE F&O
+    "BFO": 0,  # BSE F&O
+    "CDS": 0,  # Currency derivatives
+    "MCX": 0,  # Commodities
 }
+
 
 def check_pyvollib_availability():
     """Check if py_vollib library is available"""
     if not PYVOLLIB_AVAILABLE:
         logger.error("py_vollib library not installed. Install with: pip install py_vollib")
-        return False, {
-            'status': 'error',
-            'message': 'Option Greeks calculation requires py_vollib library. Install with: pip install py_vollib'
-        }, 500
+        return (
+            False,
+            {
+                "status": "error",
+                "message": "Option Greeks calculation requires py_vollib library. Install with: pip install py_vollib",
+            },
+            500,
+        )
     return True, None, None
 
 
-def parse_option_symbol(symbol: str, exchange: str, custom_expiry_time: Optional[str] = None) -> Tuple[str, datetime, float, str]:
+def parse_option_symbol(
+    symbol: str, exchange: str, custom_expiry_time: str | None = None
+) -> tuple[str, datetime, float, str]:
     """
     Parse option symbol to extract underlying, expiry, strike, and option type
 
@@ -100,21 +124,35 @@ def parse_option_symbol(symbol: str, exchange: str, custom_expiry_time: Optional
 
         # Month mapping
         month_map = {
-            'JAN': 1, 'FEB': 2, 'MAR': 3, 'APR': 4, 'MAY': 5, 'JUN': 6,
-            'JUL': 7, 'AUG': 8, 'SEP': 9, 'OCT': 10, 'NOV': 11, 'DEC': 12
+            "JAN": 1,
+            "FEB": 2,
+            "MAR": 3,
+            "APR": 4,
+            "MAY": 5,
+            "JUN": 6,
+            "JUL": 7,
+            "AUG": 8,
+            "SEP": 9,
+            "OCT": 10,
+            "NOV": 11,
+            "DEC": 12,
         }
 
         # Determine expiry time
         if custom_expiry_time:
             # Parse custom expiry time (format: "HH:MM")
             try:
-                time_parts = custom_expiry_time.split(':')
+                time_parts = custom_expiry_time.split(":")
                 if len(time_parts) != 2:
-                    raise ValueError(f"Invalid expiry_time format: {custom_expiry_time}. Use HH:MM format (e.g., '15:30', '19:00')")
+                    raise ValueError(
+                        f"Invalid expiry_time format: {custom_expiry_time}. Use HH:MM format (e.g., '15:30', '19:00')"
+                    )
                 expiry_hour = int(time_parts[0])
                 expiry_minute = int(time_parts[1])
                 if not (0 <= expiry_hour <= 23) or not (0 <= expiry_minute <= 59):
-                    raise ValueError(f"Invalid expiry_time values: {custom_expiry_time}. Hour must be 0-23, minute must be 0-59")
+                    raise ValueError(
+                        f"Invalid expiry_time values: {custom_expiry_time}. Hour must be 0-23, minute must be 0-59"
+                    )
                 logger.info(f"Using custom expiry time: {custom_expiry_time}")
             except Exception as e:
                 raise ValueError(f"Failed to parse expiry_time '{custom_expiry_time}': {str(e)}")
@@ -134,18 +172,16 @@ def parse_option_symbol(symbol: str, exchange: str, custom_expiry_time: Optional
                 expiry_minute = 30
 
         expiry = datetime(
-            int('20' + year),
-            month_map[month_str],
-            int(day),
-            expiry_hour,
-            expiry_minute
+            int("20" + year), month_map[month_str], int(day), expiry_hour, expiry_minute
         )
 
         # Convert strike to proper format
         # Strike must be in same units as futures price for Black-76
         strike = float(strike_str)
 
-        logger.info(f"Parsed symbol {symbol}: base={base_symbol}, expiry={expiry}, strike={strike}, type={opt_type}")
+        logger.info(
+            f"Parsed symbol {symbol}: base={base_symbol}, expiry={expiry}, strike={strike}, type={opt_type}"
+        )
 
         return base_symbol, expiry, strike, opt_type.upper()
 
@@ -181,7 +217,7 @@ def get_underlying_exchange(base_symbol: str, options_exchange: str) -> str:
     return "NSE"
 
 
-def calculate_time_to_expiry(expiry: datetime) -> Tuple[float, float]:
+def calculate_time_to_expiry(expiry: datetime) -> tuple[float, float]:
     """
     Calculate time to expiry in years (for py_vollib Black-76 model)
 
@@ -206,7 +242,7 @@ def calculate_time_to_expiry(expiry: datetime) -> Tuple[float, float]:
     if years_to_expiry < 0.0001:  # Less than ~1 hour
         years_to_expiry = 0.0001
         days_to_expiry = years_to_expiry * 365.0
-        logger.info(f"Very close to expiry - using minimum 0.0001 years")
+        logger.info("Very close to expiry - using minimum 0.0001 years")
 
     logger.info(f"Time to expiry: {days_to_expiry:.4f} days ({years_to_expiry:.6f} years)")
 
@@ -220,8 +256,8 @@ def calculate_greeks(
     option_price: float,
     interest_rate: float = None,
     expiry_time: str = None,
-    api_key: str = None
-) -> Tuple[bool, Dict[str, Any], int]:
+    api_key: str = None,
+) -> tuple[bool, dict[str, Any], int]:
     """
     Calculate Option Greeks using Black-76 model (py_vollib)
 
@@ -247,16 +283,22 @@ def calculate_greeks(
             return False, error_response, status_code
 
         # Parse option symbol with custom expiry time if provided
-        base_symbol, expiry, strike, opt_type = parse_option_symbol(option_symbol, exchange, expiry_time)
+        base_symbol, expiry, strike, opt_type = parse_option_symbol(
+            option_symbol, exchange, expiry_time
+        )
 
         # Calculate time to expiry (returns years and days)
         time_to_expiry_years, time_to_expiry_days = calculate_time_to_expiry(expiry)
 
         if time_to_expiry_years <= 0:
-            return False, {
-                'status': 'error',
-                'message': f'Option has expired on {expiry.strftime("%d-%b-%Y")}'
-            }, 400
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": f"Option has expired on {expiry.strftime('%d-%b-%Y')}",
+                },
+                400,
+            )
 
         # Use default interest rate if not provided
         if interest_rate is None:
@@ -268,22 +310,20 @@ def calculate_greeks(
 
         # Validate inputs
         if spot_price <= 0 or option_price <= 0:
-            return False, {
-                'status': 'error',
-                'message': 'Spot price and option price must be positive'
-            }, 400
+            return (
+                False,
+                {"status": "error", "message": "Spot price and option price must be positive"},
+                400,
+            )
 
         if strike <= 0:
-            return False, {
-                'status': 'error',
-                'message': 'Strike price must be positive'
-            }, 400
+            return False, {"status": "error", "message": "Strike price must be positive"}, 400
 
         # Set option flag for py_vollib ('c' for call, 'p' for put)
-        flag = 'c' if opt_type == 'CE' else 'p'
+        flag = "c" if opt_type == "CE" else "p"
 
         # Calculate intrinsic value to validate option price
-        if opt_type == 'CE':
+        if opt_type == "CE":
             intrinsic_value = max(spot_price - strike, 0)
         else:  # PE
             intrinsic_value = max(strike - spot_price, 0)
@@ -294,31 +334,31 @@ def calculate_greeks(
         if time_value <= 0 or (intrinsic_value > 0 and time_value < 0.01):
             # Deep ITM option with no/negligible time value
             # Return theoretical Greeks: IV=0, Delta=+/-1, Gamma=0, Theta=0, Vega=0
-            logger.info(f"Deep ITM option with no time value - returning theoretical Greeks")
+            logger.info("Deep ITM option with no time value - returning theoretical Greeks")
 
             response = {
-                'status': 'success',
-                'symbol': option_symbol,
-                'exchange': exchange,
-                'underlying': base_symbol,
-                'strike': round(strike, 2),
-                'option_type': opt_type,
-                'expiry_date': expiry.strftime('%d-%b-%Y'),
-                'days_to_expiry': round(time_to_expiry_days, 4),
-                'spot_price': round(spot_price, 2),
-                'option_price': round(option_price, 2),
-                'intrinsic_value': round(intrinsic_value, 2),
-                'time_value': round(max(time_value, 0), 2),
-                'interest_rate': round(interest_rate, 2),
-                'implied_volatility': 0,  # No IV for deep ITM
-                'greeks': {
-                    'delta': 1.0 if opt_type == 'CE' else -1.0,  # Deep ITM delta
-                    'gamma': 0,
-                    'theta': 0,
-                    'vega': 0,
-                    'rho': 0
+                "status": "success",
+                "symbol": option_symbol,
+                "exchange": exchange,
+                "underlying": base_symbol,
+                "strike": round(strike, 2),
+                "option_type": opt_type,
+                "expiry_date": expiry.strftime("%d-%b-%Y"),
+                "days_to_expiry": round(time_to_expiry_days, 4),
+                "spot_price": round(spot_price, 2),
+                "option_price": round(option_price, 2),
+                "intrinsic_value": round(intrinsic_value, 2),
+                "time_value": round(max(time_value, 0), 2),
+                "interest_rate": round(interest_rate, 2),
+                "implied_volatility": 0,  # No IV for deep ITM
+                "greeks": {
+                    "delta": 1.0 if opt_type == "CE" else -1.0,  # Deep ITM delta
+                    "gamma": 0,
+                    "theta": 0,
+                    "vega": 0,
+                    "rho": 0,
                 },
-                'note': 'Deep ITM option with no time value - theoretical Greeks returned'
+                "note": "Deep ITM option with no time value - theoretical Greeks returned",
             }
             return True, response, 200
 
@@ -327,12 +367,7 @@ def calculate_greeks(
             # black_iv(price, F, K, r, t, flag)
             # Returns IV as decimal (e.g., 0.15 for 15%)
             implied_volatility_decimal = black_iv(
-                option_price,
-                spot_price,
-                strike,
-                interest_rate_decimal,
-                time_to_expiry_years,
-                flag
+                option_price, spot_price, strike, interest_rate_decimal, time_to_expiry_years, flag
             )
             # Convert to percentage for display
             implied_volatility = implied_volatility_decimal * 100.0
@@ -341,47 +376,92 @@ def calculate_greeks(
             logger.error(f"Error calculating IV: {e}")
             error_msg = str(e)
             # If IV calculation fails due to numerical issues, return theoretical deep ITM Greeks
-            if "intrinsic" in error_msg.lower() or "below" in error_msg.lower() or "convergence" in error_msg.lower():
-                logger.info(f"IV calculation failed - returning theoretical Greeks for deep ITM option")
+            if (
+                "intrinsic" in error_msg.lower()
+                or "below" in error_msg.lower()
+                or "convergence" in error_msg.lower()
+            ):
+                logger.info(
+                    "IV calculation failed - returning theoretical Greeks for deep ITM option"
+                )
                 response = {
-                    'status': 'success',
-                    'symbol': option_symbol,
-                    'exchange': exchange,
-                    'underlying': base_symbol,
-                    'strike': round(strike, 2),
-                    'option_type': opt_type,
-                    'expiry_date': expiry.strftime('%d-%b-%Y'),
-                    'days_to_expiry': round(time_to_expiry_days, 4),
-                    'spot_price': round(spot_price, 2),
-                    'option_price': round(option_price, 2),
-                    'intrinsic_value': round(intrinsic_value, 2),
-                    'time_value': round(max(time_value, 0), 2),
-                    'interest_rate': round(interest_rate, 2),
-                    'implied_volatility': 0,  # No IV calculable
-                    'greeks': {
-                        'delta': 1.0 if opt_type == 'CE' else -1.0,
-                        'gamma': 0,
-                        'theta': 0,
-                        'vega': 0,
-                        'rho': 0
+                    "status": "success",
+                    "symbol": option_symbol,
+                    "exchange": exchange,
+                    "underlying": base_symbol,
+                    "strike": round(strike, 2),
+                    "option_type": opt_type,
+                    "expiry_date": expiry.strftime("%d-%b-%Y"),
+                    "days_to_expiry": round(time_to_expiry_days, 4),
+                    "spot_price": round(spot_price, 2),
+                    "option_price": round(option_price, 2),
+                    "intrinsic_value": round(intrinsic_value, 2),
+                    "time_value": round(max(time_value, 0), 2),
+                    "interest_rate": round(interest_rate, 2),
+                    "implied_volatility": 0,  # No IV calculable
+                    "greeks": {
+                        "delta": 1.0 if opt_type == "CE" else -1.0,
+                        "gamma": 0,
+                        "theta": 0,
+                        "vega": 0,
+                        "rho": 0,
                     },
-                    'note': 'IV calculation not possible - theoretical deep ITM Greeks returned'
+                    "note": "IV calculation not possible - theoretical deep ITM Greeks returned",
                 }
                 return True, response, 200
-            return False, {
-                'status': 'error',
-                'message': f'Failed to calculate Implied Volatility: {error_msg}'
-            }, 500
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": f"Failed to calculate Implied Volatility: {error_msg}",
+                },
+                500,
+            )
 
         # Calculate Greeks using Black-76 model
         try:
             # All Greek functions: func(flag, F, K, t, r, sigma)
             # sigma is IV as decimal
-            delta = black_delta(flag, spot_price, strike, time_to_expiry_years, interest_rate_decimal, implied_volatility_decimal)
-            gamma = black_gamma(flag, spot_price, strike, time_to_expiry_years, interest_rate_decimal, implied_volatility_decimal)
-            theta = black_theta(flag, spot_price, strike, time_to_expiry_years, interest_rate_decimal, implied_volatility_decimal)
-            vega = black_vega(flag, spot_price, strike, time_to_expiry_years, interest_rate_decimal, implied_volatility_decimal)
-            rho = black_rho(flag, spot_price, strike, time_to_expiry_years, interest_rate_decimal, implied_volatility_decimal)
+            delta = black_delta(
+                flag,
+                spot_price,
+                strike,
+                time_to_expiry_years,
+                interest_rate_decimal,
+                implied_volatility_decimal,
+            )
+            gamma = black_gamma(
+                flag,
+                spot_price,
+                strike,
+                time_to_expiry_years,
+                interest_rate_decimal,
+                implied_volatility_decimal,
+            )
+            theta = black_theta(
+                flag,
+                spot_price,
+                strike,
+                time_to_expiry_years,
+                interest_rate_decimal,
+                implied_volatility_decimal,
+            )
+            vega = black_vega(
+                flag,
+                spot_price,
+                strike,
+                time_to_expiry_years,
+                interest_rate_decimal,
+                implied_volatility_decimal,
+            )
+            rho = black_rho(
+                flag,
+                spot_price,
+                strike,
+                time_to_expiry_years,
+                interest_rate_decimal,
+                implied_volatility_decimal,
+            )
 
             # Note: py_vollib Black model returns Greeks in trader-friendly units:
             # - theta: already daily theta (no conversion needed)
@@ -389,32 +469,33 @@ def calculate_greeks(
 
         except Exception as e:
             logger.error(f"Error calculating Greeks: {e}")
-            return False, {
-                'status': 'error',
-                'message': f'Failed to calculate Greeks: {str(e)}'
-            }, 500
+            return (
+                False,
+                {"status": "error", "message": f"Failed to calculate Greeks: {str(e)}"},
+                500,
+            )
 
         # Build response
         response = {
-            'status': 'success',
-            'symbol': option_symbol,
-            'exchange': exchange,
-            'underlying': base_symbol,
-            'strike': round(strike, 2),
-            'option_type': opt_type,
-            'expiry_date': expiry.strftime('%d-%b-%Y'),
-            'days_to_expiry': round(time_to_expiry_days, 4),
-            'spot_price': round(spot_price, 2),
-            'option_price': round(option_price, 2),
-            'interest_rate': round(interest_rate, 2),
-            'implied_volatility': round(implied_volatility, 2),
-            'greeks': {
-                'delta': round(delta, 4),
-                'gamma': round(gamma, 6),
-                'theta': round(theta, 4),
-                'vega': round(vega, 4),
-                'rho': round(rho, 6)
-            }
+            "status": "success",
+            "symbol": option_symbol,
+            "exchange": exchange,
+            "underlying": base_symbol,
+            "strike": round(strike, 2),
+            "option_type": opt_type,
+            "expiry_date": expiry.strftime("%d-%b-%Y"),
+            "days_to_expiry": round(time_to_expiry_days, 4),
+            "spot_price": round(spot_price, 2),
+            "option_price": round(option_price, 2),
+            "interest_rate": round(interest_rate, 2),
+            "implied_volatility": round(implied_volatility, 2),
+            "greeks": {
+                "delta": round(delta, 4),
+                "gamma": round(gamma, 6),
+                "theta": round(theta, 4),
+                "vega": round(vega, 4),
+                "rho": round(rho, 6),
+            },
         }
 
         logger.info(f"Greeks calculated successfully for {option_symbol} using Black-76 model")
@@ -422,29 +503,27 @@ def calculate_greeks(
 
     except ValueError as e:
         logger.error(f"Validation error in calculate_greeks: {e}")
-        return False, {
-            'status': 'error',
-            'message': str(e)
-        }, 400
+        return False, {"status": "error", "message": str(e)}, 400
 
     except Exception as e:
         logger.exception(f"Unexpected error in calculate_greeks: {e}")
-        return False, {
-            'status': 'error',
-            'message': f'Failed to calculate option Greeks: {str(e)}'
-        }, 500
+        return (
+            False,
+            {"status": "error", "message": f"Failed to calculate option Greeks: {str(e)}"},
+            500,
+        )
 
 
 def get_option_greeks(
     option_symbol: str,
     exchange: str,
-    interest_rate: Optional[float] = None,
-    forward_price: Optional[float] = None,
-    underlying_symbol: Optional[str] = None,
-    underlying_exchange: Optional[str] = None,
-    expiry_time: Optional[str] = None,
-    api_key: Optional[str] = None
-) -> Tuple[bool, Dict[str, Any], int]:
+    interest_rate: float | None = None,
+    forward_price: float | None = None,
+    underlying_symbol: str | None = None,
+    underlying_exchange: str | None = None,
+    expiry_time: str | None = None,
+    api_key: str | None = None,
+) -> tuple[bool, dict[str, Any], int]:
     """
     Get option Greeks by fetching current market prices and calculating
 
@@ -466,7 +545,9 @@ def get_option_greeks(
         from services.quotes_service import get_quotes
 
         # Parse symbol to get underlying (if not provided)
-        base_symbol, expiry, strike, opt_type = parse_option_symbol(option_symbol, exchange, expiry_time)
+        base_symbol, expiry, strike, opt_type = parse_option_symbol(
+            option_symbol, exchange, expiry_time
+        )
 
         # Determine the forward/futures price to use
         if forward_price:
@@ -493,34 +574,36 @@ def get_option_greeks(
             success, spot_response, status_code = get_quotes(spot_symbol, spot_exchange, api_key)
 
             if not success:
-                return False, {
-                    'status': 'error',
-                    'message': f'Failed to fetch underlying price: {spot_response.get("message", "Unknown error")}'
-                }, status_code
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": f"Failed to fetch underlying price: {spot_response.get('message', 'Unknown error')}",
+                    },
+                    status_code,
+                )
 
-            spot_price = spot_response.get('data', {}).get('ltp')
+            spot_price = spot_response.get("data", {}).get("ltp")
             if not spot_price:
-                return False, {
-                    'status': 'error',
-                    'message': 'Underlying LTP not available'
-                }, 404
+                return False, {"status": "error", "message": "Underlying LTP not available"}, 404
 
         # Fetch option price
         logger.info(f"Fetching option price for {option_symbol} from {exchange}")
         success, option_response, status_code = get_quotes(option_symbol, exchange, api_key)
 
         if not success:
-            return False, {
-                'status': 'error',
-                'message': f'Failed to fetch option price: {option_response.get("message", "Unknown error")}'
-            }, status_code
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": f"Failed to fetch option price: {option_response.get('message', 'Unknown error')}",
+                },
+                status_code,
+            )
 
-        option_price = option_response.get('data', {}).get('ltp')
+        option_price = option_response.get("data", {}).get("ltp")
         if not option_price:
-            return False, {
-                'status': 'error',
-                'message': 'Option LTP not available'
-            }, 404
+            return False, {"status": "error", "message": "Option LTP not available"}, 404
 
         # Calculate Greeks
         return calculate_greeks(
@@ -530,58 +613,55 @@ def get_option_greeks(
             option_price=option_price,
             interest_rate=interest_rate,
             expiry_time=expiry_time,
-            api_key=api_key
+            api_key=api_key,
         )
 
     except Exception as e:
         logger.exception(f"Error in get_option_greeks: {e}")
-        return False, {
-            'status': 'error',
-            'message': f'Failed to get option Greeks: {str(e)}'
-        }, 500
+        return False, {"status": "error", "message": f"Failed to get option Greeks: {str(e)}"}, 500
 
 
 def get_multi_option_greeks(
     symbols: list,
-    interest_rate: Optional[float] = None,
-    expiry_time: Optional[str] = None,
-    api_key: Optional[str] = None
-) -> Tuple[bool, Dict[str, Any], int]:
+    interest_rate: float | None = None,
+    expiry_time: str | None = None,
+    api_key: str | None = None,
+) -> tuple[bool, dict[str, Any], int]:
     """
     Get option Greeks for multiple symbols in a single call.
     Uses concurrent execution for efficiency.
-    
+
     Args:
         symbols: List of dicts with 'symbol', 'exchange', optional 'underlying_symbol', 'underlying_exchange'
         interest_rate: Optional common interest rate for all symbols
         expiry_time: Optional common expiry time for all symbols
         api_key: API key for authentication
-        
+
     Returns:
         Tuple of (success, response_dict, status_code)
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    
+
     # Early return for empty symbols list
     if not symbols:
-        return True, {
-            'status': 'success',
-            'data': [],
-            'summary': {'total': 0, 'success': 0, 'failed': 0}
-        }, 200
-    
+        return (
+            True,
+            {"status": "success", "data": [], "summary": {"total": 0, "success": 0, "failed": 0}},
+            200,
+        )
+
     results = []
     success_count = 0
     failed_count = 0
-    
+
     def fetch_single_greeks(symbol_request):
         """Fetch Greeks for a single symbol"""
         try:
-            symbol = symbol_request.get('symbol')
-            exchange = symbol_request.get('exchange')
-            underlying_symbol = symbol_request.get('underlying_symbol')
-            underlying_exchange = symbol_request.get('underlying_exchange')
-            
+            symbol = symbol_request.get("symbol")
+            exchange = symbol_request.get("exchange")
+            underlying_symbol = symbol_request.get("underlying_symbol")
+            underlying_exchange = symbol_request.get("underlying_exchange")
+
             success, response, status_code = get_option_greeks(
                 option_symbol=symbol,
                 exchange=exchange,
@@ -590,68 +670,61 @@ def get_multi_option_greeks(
                 underlying_symbol=underlying_symbol,
                 underlying_exchange=underlying_exchange,
                 expiry_time=expiry_time,
-                api_key=api_key
+                api_key=api_key,
             )
-            
+
             return {
-                'success': success,
-                'response': response,
-                'symbol': symbol,
-                'exchange': exchange
+                "success": success,
+                "response": response,
+                "symbol": symbol,
+                "exchange": exchange,
             }
         except Exception as e:
             logger.error(f"Error fetching Greeks for {symbol_request.get('symbol')}: {e}")
             return {
-                'success': False,
-                'response': {
-                    'status': 'error',
-                    'symbol': symbol_request.get('symbol'),
-                    'exchange': symbol_request.get('exchange'),
-                    'message': str(e)
+                "success": False,
+                "response": {
+                    "status": "error",
+                    "symbol": symbol_request.get("symbol"),
+                    "exchange": symbol_request.get("exchange"),
+                    "message": str(e),
                 },
-                'symbol': symbol_request.get('symbol'),
-                'exchange': symbol_request.get('exchange')
+                "symbol": symbol_request.get("symbol"),
+                "exchange": symbol_request.get("exchange"),
             }
-    
+
     # Use ThreadPoolExecutor for parallel execution
     # Limit workers to avoid overwhelming the broker API
     max_workers = min(len(symbols), 10)
-    
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Submit all tasks
-        future_to_symbol = {
-            executor.submit(fetch_single_greeks, sym): sym 
-            for sym in symbols
-        }
-        
+        future_to_symbol = {executor.submit(fetch_single_greeks, sym): sym for sym in symbols}
+
         # Collect results as they complete
         for future in as_completed(future_to_symbol):
             result = future.result()
-            
-            if result['success']:
+
+            if result["success"]:
                 success_count += 1
-                results.append(result['response'])
+                results.append(result["response"])
             else:
                 failed_count += 1
-                results.append(result['response'])
-    
+                results.append(result["response"])
+
     # Sort results to maintain original order
-    symbol_order = {sym['symbol']: idx for idx, sym in enumerate(symbols)}
-    results.sort(key=lambda x: symbol_order.get(x.get('symbol'), 999))
-    
+    symbol_order = {sym["symbol"]: idx for idx, sym in enumerate(symbols)}
+    results.sort(key=lambda x: symbol_order.get(x.get("symbol"), 999))
+
     response = {
-        'status': 'success' if failed_count == 0 else 'partial' if success_count > 0 else 'error',
-        'data': results,
-        'summary': {
-            'total': len(symbols),
-            'success': success_count,
-            'failed': failed_count
-        }
+        "status": "success" if failed_count == 0 else "partial" if success_count > 0 else "error",
+        "data": results,
+        "summary": {"total": len(symbols), "success": success_count, "failed": failed_count},
     }
-    
+
     logger.info(f"Multi Greeks completed: {success_count}/{len(symbols)} successful")
-    
+
     # Return False only when ALL operations fail (status='error')
     # Return True for 'success' or 'partial' (at least some succeeded)
-    is_success = response['status'] != 'error'
+    is_success = response["status"] != "error"
     return is_success, response, 200

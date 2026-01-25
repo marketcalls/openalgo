@@ -16,17 +16,18 @@ Migration: 010
 Created: 2025-01-14
 """
 
-import sys
-import os
 import argparse
+import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.logging import get_logger
 from dotenv import load_dotenv
+
+from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -36,10 +37,10 @@ MIGRATION_VERSION = "010"
 
 # Load environment
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-load_dotenv(os.path.join(parent_dir, '.env'))
+load_dotenv(os.path.join(parent_dir, ".env"))
 
 # Database path
-HISTORIFY_DB_PATH = os.getenv('HISTORIFY_DATABASE_PATH', 'db/historify.duckdb')
+HISTORIFY_DB_PATH = os.getenv("HISTORIFY_DATABASE_PATH", "db/historify.duckdb")
 
 
 def get_db_path():
@@ -53,6 +54,7 @@ def check_duckdb_available():
     """Check if DuckDB is installed."""
     try:
         import duckdb
+
         logger.info(f"DuckDB version: {duckdb.__version__}")
         return True
     except ImportError:
@@ -237,6 +239,7 @@ def upgrade():
     except Exception as e:
         logger.error(f"Migration failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -265,8 +268,14 @@ def status():
 
         try:
             # Check all required tables exist
-            required_tables = ['market_data', 'watchlist', 'data_catalog',
-                               'download_jobs', 'job_items', 'symbol_metadata']
+            required_tables = [
+                "market_data",
+                "watchlist",
+                "data_catalog",
+                "download_jobs",
+                "job_items",
+                "symbol_metadata",
+            ]
             missing_tables = []
 
             for table in required_tables:
@@ -320,13 +329,12 @@ def status():
         return False
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description=f'Migration: {MIGRATION_NAME} (v{MIGRATION_VERSION})',
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        description=f"Migration: {MIGRATION_NAME} (v{MIGRATION_VERSION})",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument('--status', action='store_true',
-                        help='Check migration status')
+    parser.add_argument("--status", action="store_true", help="Check migration status")
 
     args = parser.parse_args()
 

@@ -1,13 +1,13 @@
-from openalgo import api
 import pandas as pd
 import plotly.express as px
+from openalgo import api
 
 # ---------------------------------------------------
 # OpenAlgo Client
 # ---------------------------------------------------
 client = api(
     api_key="7371cc58b9d30204e5fee1d143dc8cd926bcad90c24218201ad81735384d2752",
-    host="http://127.0.0.1:5000"
+    host="http://127.0.0.1:5000",
 )
 
 print("🔁 OpenAlgo Python Bot is running.")
@@ -16,14 +16,56 @@ print("🔁 OpenAlgo Python Bot is running.")
 # NIFTY 50 SYMBOLS
 # ---------------------------------------------------
 symbols = [
-    "INDIGO","TRENT","HINDUNILVR","HCLTECH","WIPRO","INFY","TATACONSUM",
-    "TATASTEEL","ITC","ASIANPAINT","SBILIFE","LT","SHRIRAMFIN","BEL","SBIN",
-    "COALINDIA","KOTAKBANK","TCS","SUNPHARMA","MAXHEALTH","NESTLEIND",
-    "RELIANCE","ETERNAL","APOLLOHOSP","ICICIBANK","GRASIM","ULTRACEMCO",
-    "ADANIENT","AXISBANK","DRREDDY","TECHM","TMPV","JIOFIN","NTPC",
-    "BAJFINANCE","BHARTIARTL","POWERGRID","HINDALCO","HDFCBANK","TITAN",
-    "HDFCLIFE","MARUTI","BAJAJFINSV","ADANIPORTS","CIPLA","JSWSTEEL",
-    "BAJAJ-AUTO","ONGC","EICHERMOT","M&M"
+    "INDIGO",
+    "TRENT",
+    "HINDUNILVR",
+    "HCLTECH",
+    "WIPRO",
+    "INFY",
+    "TATACONSUM",
+    "TATASTEEL",
+    "ITC",
+    "ASIANPAINT",
+    "SBILIFE",
+    "LT",
+    "SHRIRAMFIN",
+    "BEL",
+    "SBIN",
+    "COALINDIA",
+    "KOTAKBANK",
+    "TCS",
+    "SUNPHARMA",
+    "MAXHEALTH",
+    "NESTLEIND",
+    "RELIANCE",
+    "ETERNAL",
+    "APOLLOHOSP",
+    "ICICIBANK",
+    "GRASIM",
+    "ULTRACEMCO",
+    "ADANIENT",
+    "AXISBANK",
+    "DRREDDY",
+    "TECHM",
+    "TMPV",
+    "JIOFIN",
+    "NTPC",
+    "BAJFINANCE",
+    "BHARTIARTL",
+    "POWERGRID",
+    "HINDALCO",
+    "HDFCBANK",
+    "TITAN",
+    "HDFCLIFE",
+    "MARUTI",
+    "BAJAJFINSV",
+    "ADANIPORTS",
+    "CIPLA",
+    "JSWSTEEL",
+    "BAJAJ-AUTO",
+    "ONGC",
+    "EICHERMOT",
+    "M&M",
 ]
 
 # ---------------------------------------------------
@@ -66,16 +108,12 @@ pivot_labels = df.pivot(index="row", columns="col", values="Symbol")
 # ---------------------------------------------------
 # HEATMAP PLOT
 # ---------------------------------------------------
-fig = px.imshow(
-    pivot_values,
-    color_continuous_scale="RdYlGn",
-    aspect="auto"
-)
+fig = px.imshow(pivot_values, color_continuous_scale="RdYlGn", aspect="auto")
 
 fig.update_traces(
     text=pivot_labels.values,
     texttemplate="%{text}<br>%{z:.2f}%",
-    hovertemplate="Symbol: %{text}<br>Change: %{z:.2f}%"
+    hovertemplate="Symbol: %{text}<br>Change: %{z:.2f}%",
 )
 
 fig.update_layout(
@@ -83,17 +121,12 @@ fig.update_layout(
     xaxis=dict(type="category", title=""),
     yaxis=dict(type="category", autorange="reversed", title=""),
     template="plotly_dark",
-    height=600
+    height=600,
 )
 
 # ---------------------------------------------------
 # SAVE IMAGE (NO HTML OUTPUT)
 # ---------------------------------------------------
-fig.write_image(
-    "nifty50_heatmap.png",
-    width=1200,
-    height=600,
-    scale=2
-)
+fig.write_image("nifty50_heatmap.png", width=1200, height=600, scale=2)
 
 print("\n✅ Heatmap saved as nifty50_heatmap.png")

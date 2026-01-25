@@ -7,14 +7,16 @@ Optimized for backtesting and analytical queries.
 """
 
 import os
+from contextlib import contextmanager
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
 import duckdb
 import pandas as pd
-from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
-from datetime import datetime, date
-from contextlib import contextmanager
-from utils.logging import get_logger
 from dotenv import load_dotenv
+
+from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -23,7 +25,7 @@ logger = get_logger(__name__)
 load_dotenv()
 
 # Database path - in /db folder like other OpenAlgo databases
-HISTORIFY_DB_PATH = os.getenv('HISTORIFY_DATABASE_PATH', 'db/historify.duckdb')
+HISTORIFY_DB_PATH = os.getenv("HISTORIFY_DATABASE_PATH", "db/historify.duckdb")
 
 
 def get_db_path() -> str:
@@ -274,7 +276,8 @@ def init_database():
 # Watchlist Operations
 # =============================================================================
 
-def get_watchlist() -> List[Dict[str, Any]]:
+
+def get_watchlist() -> list[dict[str, Any]]:
     """Get all symbols in the watchlist."""
     with get_connection() as conn:
         result = conn.execute("""
@@ -286,10 +289,10 @@ def get_watchlist() -> List[Dict[str, Any]]:
         if result.empty:
             return []
 
-        return result.to_dict('records')
+        return result.to_dict("records")
 
 
-def add_to_watchlist(symbol: str, exchange: str, display_name: str = None) -> Tuple[bool, str]:
+def add_to_watchlist(symbol: str, exchange: str, display_name: str = None) -> tuple[bool, str]:
     """
     Add a symbol to the watchlist.
 
@@ -299,9 +302,12 @@ def add_to_watchlist(symbol: str, exchange: str, display_name: str = None) -> Tu
     try:
         with get_connection() as conn:
             # Check if symbol already exists
-            existing = conn.execute("""
+            existing = conn.execute(
+                """
                 SELECT id FROM watchlist WHERE symbol = ? AND exchange = ?
-            """, [symbol.upper(), exchange.upper()]).fetchone()
+            """,
+                [symbol.upper(), exchange.upper()],
+            ).fetchone()
 
             if existing:
                 return True, f"{symbol} already in watchlist"
@@ -310,10 +316,13 @@ def add_to_watchlist(symbol: str, exchange: str, display_name: str = None) -> Tu
             result = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM watchlist").fetchone()
             next_id = result[0] if result else 1
 
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO watchlist (id, symbol, exchange, display_name)
                 VALUES (?, ?, ?, ?)
-            """, [next_id, symbol.upper(), exchange.upper(), display_name])
+            """,
+                [next_id, symbol.upper(), exchange.upper(), display_name],
+            )
 
         logger.info(f"Added {symbol}:{exchange} to watchlist")
         return True, f"Added {symbol} to watchlist"
@@ -322,7 +331,7 @@ def add_to_watchlist(symbol: str, exchange: str, display_name: str = None) -> Tu
         return False, str(e)
 
 
-def bulk_add_to_watchlist(symbols: List[Dict[str, str]]) -> Tuple[int, int, List[Dict[str, str]]]:
+def bulk_add_to_watchlist(symbols: list[dict[str, str]]) -> tuple[int, int, list[dict[str, str]]]:
     """
     Add multiple symbols to the watchlist in a single transaction.
 
@@ -351,12 +360,18 @@ def bulk_add_to_watchlist(symbols: List[Dict[str, str]]) -> Tuple[int, int, List
             # Prepare records for bulk insert
             records_to_insert = []
             for item in symbols:
-                symbol = item.get('symbol', '').upper()
-                exchange = item.get('exchange', '').upper()
-                display_name = item.get('display_name')
+                symbol = item.get("symbol", "").upper()
+                exchange = item.get("exchange", "").upper()
+                display_name = item.get("display_name")
 
                 if not symbol or not exchange:
-                    failed.append({'symbol': symbol, 'exchange': exchange, 'error': 'Missing symbol or exchange'})
+                    failed.append(
+                        {
+                            "symbol": symbol,
+                            "exchange": exchange,
+                            "error": "Missing symbol or exchange",
+                        }
+                    )
                     continue
 
                 # Skip if already exists
@@ -370,10 +385,13 @@ def bulk_add_to_watchlist(symbols: List[Dict[str, str]]) -> Tuple[int, int, List
 
             # Bulk insert all records at once
             if records_to_insert:
-                conn.executemany("""
+                conn.executemany(
+                    """
                     INSERT INTO watchlist (id, symbol, exchange, display_name)
                     VALUES (?, ?, ?, ?)
-                """, records_to_insert)
+                """,
+                    records_to_insert,
+                )
                 added = len(records_to_insert)
 
         logger.info(f"Bulk added {added} symbols to watchlist (skipped {skipped} existing)")
@@ -381,10 +399,10 @@ def bulk_add_to_watchlist(symbols: List[Dict[str, str]]) -> Tuple[int, int, List
 
     except Exception as e:
         logger.error(f"Error bulk adding to watchlist: {e}")
-        return 0, 0, [{'symbol': 'batch', 'exchange': '', 'error': str(e)}]
+        return 0, 0, [{"symbol": "batch", "exchange": "", "error": str(e)}]
 
 
-def remove_from_watchlist(symbol: str, exchange: str) -> Tuple[bool, str]:
+def remove_from_watchlist(symbol: str, exchange: str) -> tuple[bool, str]:
     """
     Remove a symbol from the watchlist.
 
@@ -393,10 +411,13 @@ def remove_from_watchlist(symbol: str, exchange: str) -> Tuple[bool, str]:
     """
     try:
         with get_connection() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 DELETE FROM watchlist
                 WHERE symbol = ? AND exchange = ?
-            """, [symbol.upper(), exchange.upper()])
+            """,
+                [symbol.upper(), exchange.upper()],
+            )
 
         logger.info(f"Removed {symbol}:{exchange} from watchlist")
         return True, f"Removed {symbol} from watchlist"
@@ -405,7 +426,7 @@ def remove_from_watchlist(symbol: str, exchange: str) -> Tuple[bool, str]:
         return False, str(e)
 
 
-def clear_watchlist() -> Tuple[bool, str]:
+def clear_watchlist() -> tuple[bool, str]:
     """Clear all symbols from watchlist."""
     try:
         with get_connection() as conn:
@@ -420,6 +441,7 @@ def clear_watchlist() -> Tuple[bool, str]:
 # =============================================================================
 # Market Data Operations
 # =============================================================================
+
 
 def upsert_market_data(df: pd.DataFrame, symbol: str, exchange: str, interval: str) -> int:
     """
@@ -440,20 +462,33 @@ def upsert_market_data(df: pd.DataFrame, symbol: str, exchange: str, interval: s
     try:
         # Prepare DataFrame
         df = df.copy()
-        df['symbol'] = symbol.upper()
-        df['exchange'] = exchange.upper()
-        df['interval'] = interval
+        df["symbol"] = symbol.upper()
+        df["exchange"] = exchange.upper()
+        df["interval"] = interval
 
         # Ensure required columns exist
-        if 'oi' not in df.columns:
-            df['oi'] = 0
+        if "oi" not in df.columns:
+            df["oi"] = 0
 
         # Ensure timestamp is integer (epoch seconds)
-        if df['timestamp'].dtype != 'int64':
-            df['timestamp'] = pd.to_datetime(df['timestamp']).astype('int64') // 10**9
+        if df["timestamp"].dtype != "int64":
+            df["timestamp"] = pd.to_datetime(df["timestamp"]).astype("int64") // 10**9
 
         # Select only required columns in correct order
-        df = df[['symbol', 'exchange', 'interval', 'timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi']]
+        df = df[
+            [
+                "symbol",
+                "exchange",
+                "interval",
+                "timestamp",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "oi",
+            ]
+        ]
 
         with get_connection() as conn:
             # Use INSERT with ON CONFLICT for upsert (DuckDB requires explicit conflict target)
@@ -472,14 +507,18 @@ def upsert_market_data(df: pd.DataFrame, symbol: str, exchange: str, interval: s
             """)
 
             # Update catalog - check if exists first due to multiple constraints
-            existing = conn.execute("""
+            existing = conn.execute(
+                """
                 SELECT id FROM data_catalog
                 WHERE symbol = ? AND exchange = ? AND interval = ?
-            """, [symbol.upper(), exchange.upper(), interval]).fetchone()
+            """,
+                [symbol.upper(), exchange.upper(), interval],
+            ).fetchone()
 
             if existing:
                 # Update existing record
-                conn.execute("""
+                conn.execute(
+                    """
                     UPDATE data_catalog SET
                         first_timestamp = (SELECT MIN(timestamp) FROM market_data
                                           WHERE symbol = ? AND exchange = ? AND interval = ?),
@@ -489,16 +528,31 @@ def upsert_market_data(df: pd.DataFrame, symbol: str, exchange: str, interval: s
                                        WHERE symbol = ? AND exchange = ? AND interval = ?),
                         last_download_at = current_timestamp
                     WHERE symbol = ? AND exchange = ? AND interval = ?
-                """, [symbol.upper(), exchange.upper(), interval,
-                      symbol.upper(), exchange.upper(), interval,
-                      symbol.upper(), exchange.upper(), interval,
-                      symbol.upper(), exchange.upper(), interval])
+                """,
+                    [
+                        symbol.upper(),
+                        exchange.upper(),
+                        interval,
+                        symbol.upper(),
+                        exchange.upper(),
+                        interval,
+                        symbol.upper(),
+                        exchange.upper(),
+                        interval,
+                        symbol.upper(),
+                        exchange.upper(),
+                        interval,
+                    ],
+                )
             else:
                 # Insert new record
-                next_id_result = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM data_catalog").fetchone()
+                next_id_result = conn.execute(
+                    "SELECT COALESCE(MAX(id), 0) + 1 FROM data_catalog"
+                ).fetchone()
                 next_id = next_id_result[0] if next_id_result else 1
 
-                conn.execute("""
+                conn.execute(
+                    """
                     INSERT INTO data_catalog
                     (id, symbol, exchange, interval, first_timestamp, last_timestamp,
                      record_count, last_download_at)
@@ -508,8 +562,17 @@ def upsert_market_data(df: pd.DataFrame, symbol: str, exchange: str, interval: s
                         current_timestamp
                     FROM market_data
                     WHERE symbol = ? AND exchange = ? AND interval = ?
-                """, [next_id, symbol.upper(), exchange.upper(), interval,
-                      symbol.upper(), exchange.upper(), interval])
+                """,
+                    [
+                        next_id,
+                        symbol.upper(),
+                        exchange.upper(),
+                        interval,
+                        symbol.upper(),
+                        exchange.upper(),
+                        interval,
+                    ],
+                )
 
         logger.info(f"Upserted {len(df)} records for {symbol}:{exchange}:{interval}")
         return len(df)
@@ -520,22 +583,22 @@ def upsert_market_data(df: pd.DataFrame, symbol: str, exchange: str, interval: s
 
 
 # Storage intervals - only these are physically stored
-STORAGE_INTERVALS = {'1m', 'D'}
+STORAGE_INTERVALS = {"1m", "D"}
 
 # Standard computed intervals - these are aggregated from 1m data on-the-fly
-COMPUTED_INTERVALS = {'5m', '15m', '30m', '1h'}
+COMPUTED_INTERVALS = {"5m", "15m", "30m", "1h"}
 
 # Interval to minutes mapping for standard intervals
 INTERVAL_MINUTES = {
-    '1m': 1,
-    '5m': 5,
-    '15m': 15,
-    '30m': 30,
-    '1h': 60,
+    "1m": 1,
+    "5m": 5,
+    "15m": 15,
+    "30m": 30,
+    "1h": 60,
 }
 
 
-def parse_interval(interval: str) -> Optional[Dict[str, Any]]:
+def parse_interval(interval: str) -> dict[str, Any] | None:
     """
     Parse an interval string into its components.
 
@@ -564,21 +627,21 @@ def parse_interval(interval: str) -> Optional[Dict[str, Any]]:
     interval = interval.strip()
 
     # Handle single letter shortcuts (case-sensitive)
-    if interval == 'D':
-        return {'type': 'daily', 'days': 1, 'value': 1, 'unit': 'D'}
-    if interval == 'W':
-        return {'type': 'weekly', 'days': 7, 'value': 1, 'unit': 'W'}
-    if interval == 'M':
+    if interval == "D":
+        return {"type": "daily", "days": 1, "value": 1, "unit": "D"}
+    if interval == "W":
+        return {"type": "weekly", "days": 7, "value": 1, "unit": "W"}
+    if interval == "M":
         # Uppercase M = Monthly
-        return {'type': 'monthly', 'months': 1, 'value': 1, 'unit': 'M'}
-    if interval == 'Q':
-        return {'type': 'quarterly', 'months': 3, 'value': 1, 'unit': 'Q'}
-    if interval == 'Y':
-        return {'type': 'yearly', 'months': 12, 'value': 1, 'unit': 'Y'}
+        return {"type": "monthly", "months": 1, "value": 1, "unit": "M"}
+    if interval == "Q":
+        return {"type": "quarterly", "months": 3, "value": 1, "unit": "Q"}
+    if interval == "Y":
+        return {"type": "yearly", "months": 12, "value": 1, "unit": "Y"}
 
     # Parse format: number + unit (e.g., '25m', '2h', '3D', '2W', '2M', '2Q', '1Y')
     # Case-sensitive: lowercase m/h for intraday, uppercase for higher timeframes
-    match = re.match(r'^(\d+)([mhDWMQY])$', interval)
+    match = re.match(r"^(\d+)([mhDWMQY])$", interval)
     if not match:
         return None
 
@@ -588,27 +651,27 @@ def parse_interval(interval: str) -> Optional[Dict[str, Any]]:
     if value <= 0:
         return None
 
-    if unit == 'm':
+    if unit == "m":
         # Lowercase m = Minutes
-        return {'type': 'intraday', 'minutes': value, 'value': value, 'unit': 'm'}
-    elif unit == 'h':
+        return {"type": "intraday", "minutes": value, "value": value, "unit": "m"}
+    elif unit == "h":
         # Lowercase h = Hours - convert to minutes
-        return {'type': 'intraday', 'minutes': value * 60, 'value': value, 'unit': 'h'}
-    elif unit == 'D':
+        return {"type": "intraday", "minutes": value * 60, "value": value, "unit": "h"}
+    elif unit == "D":
         # Days
-        return {'type': 'daily', 'days': value, 'value': value, 'unit': 'D'}
-    elif unit == 'W':
+        return {"type": "daily", "days": value, "value": value, "unit": "D"}
+    elif unit == "W":
         # Weeks
-        return {'type': 'weekly', 'days': value * 7, 'value': value, 'unit': 'W'}
-    elif unit == 'M':
+        return {"type": "weekly", "days": value * 7, "value": value, "unit": "W"}
+    elif unit == "M":
         # Uppercase M = Monthly
-        return {'type': 'monthly', 'months': value, 'value': value, 'unit': 'M'}
-    elif unit == 'Q':
+        return {"type": "monthly", "months": value, "value": value, "unit": "M"}
+    elif unit == "Q":
         # Quarters - 3 months each
-        return {'type': 'quarterly', 'months': value * 3, 'value': value, 'unit': 'Q'}
-    elif unit == 'Y':
+        return {"type": "quarterly", "months": value * 3, "value": value, "unit": "Q"}
+    elif unit == "Y":
         # Years - 12 months each
-        return {'type': 'yearly', 'months': value * 12, 'value': value, 'unit': 'Y'}
+        return {"type": "yearly", "months": value * 12, "value": value, "unit": "Y"}
 
     return None
 
@@ -635,7 +698,7 @@ def is_custom_interval(interval: str) -> bool:
         return False
 
     # Only intraday custom intervals can be computed from 1m data
-    return parsed['type'] == 'intraday'
+    return parsed["type"] == "intraday"
 
 
 def is_daily_aggregated_interval(interval: str) -> bool:
@@ -659,15 +722,15 @@ def is_daily_aggregated_interval(interval: str) -> bool:
         return False
 
     # Weekly, Monthly, Quarterly, Yearly need aggregation from D data
-    return parsed['type'] in ('weekly', 'monthly', 'quarterly', 'yearly')
+    return parsed["type"] in ("weekly", "monthly", "quarterly", "yearly")
 
 
 def get_ohlcv(
     symbol: str,
     exchange: str,
     interval: str,
-    start_timestamp: Optional[int] = None,
-    end_timestamp: Optional[int] = None
+    start_timestamp: int | None = None,
+    end_timestamp: int | None = None,
 ) -> pd.DataFrame:
     """
     Retrieve OHLCV data for a symbol.
@@ -696,7 +759,7 @@ def get_ohlcv(
                 exchange=exchange,
                 target_interval=interval,
                 start_timestamp=start_timestamp,
-                end_timestamp=end_timestamp
+                end_timestamp=end_timestamp,
             )
 
         # Check if this is an intraday computed interval (standard or custom)
@@ -706,7 +769,7 @@ def get_ohlcv(
                 exchange=exchange,
                 target_interval=interval,
                 start_timestamp=start_timestamp,
-                end_timestamp=end_timestamp
+                end_timestamp=end_timestamp,
             )
 
         # Standard query for stored intervals (1m, D)
@@ -742,15 +805,15 @@ def get_ohlcv(
 # NSE/BSE/NFO/BFO: 9:15 AM = 9*3600 + 15*60 = 33300 seconds
 # MCX/CDS/BCD: 9:00 AM = 9*3600 = 32400 seconds
 EXCHANGE_MARKET_OPEN_SECONDS = {
-    'NSE': 33300,       # 09:15
-    'BSE': 33300,       # 09:15
-    'NFO': 33300,       # 09:15
-    'BFO': 33300,       # 09:15
-    'CDS': 32400,       # 09:00
-    'BCD': 32400,       # 09:00
-    'MCX': 32400,       # 09:00
-    'NSE_INDEX': 33300, # 09:15
-    'BSE_INDEX': 33300, # 09:15
+    "NSE": 33300,  # 09:15
+    "BSE": 33300,  # 09:15
+    "NFO": 33300,  # 09:15
+    "BFO": 33300,  # 09:15
+    "CDS": 32400,  # 09:00
+    "BCD": 32400,  # 09:00
+    "MCX": 32400,  # 09:00
+    "NSE_INDEX": 33300,  # 09:15
+    "BSE_INDEX": 33300,  # 09:15
 }
 
 
@@ -769,10 +832,11 @@ def _get_market_open_seconds(exchange: str) -> int:
     try:
         # Try to get from market_calendar_db if available
         from database.market_calendar_db import get_market_timing
+
         timing = get_market_timing(exchange.upper())
-        if timing and timing.get('start_offset'):
+        if timing and timing.get("start_offset"):
             # start_offset is in milliseconds, convert to seconds
-            return timing['start_offset'] // 1000
+            return timing["start_offset"] // 1000
     except Exception:
         pass
 
@@ -784,8 +848,8 @@ def _get_aggregated_ohlcv(
     symbol: str,
     exchange: str,
     target_interval: str,
-    start_timestamp: Optional[int] = None,
-    end_timestamp: Optional[int] = None
+    start_timestamp: int | None = None,
+    end_timestamp: int | None = None,
 ) -> pd.DataFrame:
     """
     Aggregate 1m data to higher timeframes using DuckDB SQL.
@@ -811,8 +875,8 @@ def _get_aggregated_ohlcv(
         minutes = INTERVAL_MINUTES.get(target_interval)
         if minutes is None:
             parsed = parse_interval(target_interval)
-            if parsed and parsed['type'] == 'intraday':
-                minutes = parsed['minutes']
+            if parsed and parsed["type"] == "intraday":
+                minutes = parsed["minutes"]
             else:
                 logger.error(f"Cannot aggregate to interval: {target_interval}")
                 return pd.DataFrame()
@@ -888,8 +952,8 @@ def _get_daily_aggregated_ohlcv(
     symbol: str,
     exchange: str,
     target_interval: str,
-    start_timestamp: Optional[int] = None,
-    end_timestamp: Optional[int] = None
+    start_timestamp: int | None = None,
+    end_timestamp: int | None = None,
 ) -> pd.DataFrame:
     """
     Aggregate Daily (D) data to higher timeframes (W, M, Q, Y) using DuckDB SQL.
@@ -916,14 +980,14 @@ def _get_daily_aggregated_ohlcv(
             logger.error(f"Cannot parse interval: {target_interval}")
             return pd.DataFrame()
 
-        interval_type = parsed['type']
-        interval_value = parsed.get('value', 1)
+        interval_type = parsed["type"]
+        interval_value = parsed.get("value", 1)
 
         # IST timezone offset from UTC (5 hours 30 minutes = 19800 seconds)
         ist_offset = 19800
 
         # Build the GROUP BY expression based on interval type
-        if interval_type == 'weekly':
+        if interval_type == "weekly":
             # Group by ISO week number, adjusting for multi-week intervals
             # ISO week starts on Monday
             if interval_value == 1:
@@ -934,7 +998,7 @@ def _get_daily_aggregated_ohlcv(
                     DATE_TRUNC('week', to_timestamp(timestamp + {ist_offset})) -
                     INTERVAL ((EXTRACT(WEEK FROM to_timestamp(timestamp + {ist_offset})) - 1) % {interval_value}) WEEK
                 """
-        elif interval_type == 'monthly':
+        elif interval_type == "monthly":
             # Group by calendar month
             if interval_value == 1:
                 group_expr = f"DATE_TRUNC('month', to_timestamp(timestamp + {ist_offset}))"
@@ -944,9 +1008,9 @@ def _get_daily_aggregated_ohlcv(
                     DATE_TRUNC('month', to_timestamp(timestamp + {ist_offset})) -
                     INTERVAL ((EXTRACT(MONTH FROM to_timestamp(timestamp + {ist_offset})) - 1) % {interval_value}) MONTH
                 """
-        elif interval_type == 'quarterly':
+        elif interval_type == "quarterly":
             # Group by calendar quarter (3 months)
-            months = parsed.get('months', 3)
+            months = parsed.get("months", 3)
             if months == 3:
                 group_expr = f"DATE_TRUNC('quarter', to_timestamp(timestamp + {ist_offset}))"
             else:
@@ -955,7 +1019,7 @@ def _get_daily_aggregated_ohlcv(
                     DATE_TRUNC('quarter', to_timestamp(timestamp + {ist_offset})) -
                     INTERVAL ((EXTRACT(QUARTER FROM to_timestamp(timestamp + {ist_offset})) - 1) % {interval_value}) QUARTER
                 """
-        elif interval_type == 'yearly':
+        elif interval_type == "yearly":
             # Group by calendar year
             if interval_value == 1:
                 group_expr = f"DATE_TRUNC('year', to_timestamp(timestamp + {ist_offset}))"
@@ -1009,7 +1073,7 @@ def _get_daily_aggregated_ohlcv(
         return pd.DataFrame()
 
 
-def get_data_catalog() -> List[Dict[str, Any]]:
+def get_data_catalog() -> list[dict[str, Any]]:
     """
     Get summary of all available data in the database.
 
@@ -1030,14 +1094,14 @@ def get_data_catalog() -> List[Dict[str, Any]]:
         if result.empty:
             return []
 
-        return result.to_dict('records')
+        return result.to_dict("records")
 
     except Exception as e:
         logger.error(f"Error fetching data catalog: {e}")
         return []
 
 
-def get_available_symbols() -> List[Dict[str, str]]:
+def get_available_symbols() -> list[dict[str, str]]:
     """
     Get list of unique symbol-exchange combinations with data.
 
@@ -1055,14 +1119,14 @@ def get_available_symbols() -> List[Dict[str, str]]:
         if result.empty:
             return []
 
-        return result.to_dict('records')
+        return result.to_dict("records")
 
     except Exception as e:
         logger.error(f"Error fetching available symbols: {e}")
         return []
 
 
-def get_data_range(symbol: str, exchange: str, interval: str) -> Optional[Dict[str, Any]]:
+def get_data_range(symbol: str, exchange: str, interval: str) -> dict[str, Any] | None:
     """
     Get the date range of available data for a symbol.
 
@@ -1072,17 +1136,20 @@ def get_data_range(symbol: str, exchange: str, interval: str) -> Optional[Dict[s
     """
     try:
         with get_connection() as conn:
-            result = conn.execute("""
+            result = conn.execute(
+                """
                 SELECT first_timestamp, last_timestamp, record_count
                 FROM data_catalog
                 WHERE symbol = ? AND exchange = ? AND interval = ?
-            """, [symbol.upper(), exchange.upper(), interval]).fetchone()
+            """,
+                [symbol.upper(), exchange.upper(), interval],
+            ).fetchone()
 
         if result:
             return {
-                'first_timestamp': result[0],
-                'last_timestamp': result[1],
-                'record_count': result[2]
+                "first_timestamp": result[0],
+                "last_timestamp": result[1],
+                "record_count": result[2],
             }
         return None
 
@@ -1091,11 +1158,7 @@ def get_data_range(symbol: str, exchange: str, interval: str) -> Optional[Dict[s
         return None
 
 
-def delete_market_data(
-    symbol: str,
-    exchange: str,
-    interval: Optional[str] = None
-) -> Tuple[bool, str]:
+def delete_market_data(symbol: str, exchange: str, interval: str | None = None) -> tuple[bool, str]:
     """
     Delete market data for a symbol.
 
@@ -1110,24 +1173,36 @@ def delete_market_data(
     try:
         with get_connection() as conn:
             if interval:
-                conn.execute("""
+                conn.execute(
+                    """
                     DELETE FROM market_data
                     WHERE symbol = ? AND exchange = ? AND interval = ?
-                """, [symbol.upper(), exchange.upper(), interval])
-                conn.execute("""
+                """,
+                    [symbol.upper(), exchange.upper(), interval],
+                )
+                conn.execute(
+                    """
                     DELETE FROM data_catalog
                     WHERE symbol = ? AND exchange = ? AND interval = ?
-                """, [symbol.upper(), exchange.upper(), interval])
+                """,
+                    [symbol.upper(), exchange.upper(), interval],
+                )
                 msg = f"Deleted {symbol}:{exchange}:{interval} data"
             else:
-                conn.execute("""
+                conn.execute(
+                    """
                     DELETE FROM market_data
                     WHERE symbol = ? AND exchange = ?
-                """, [symbol.upper(), exchange.upper()])
-                conn.execute("""
+                """,
+                    [symbol.upper(), exchange.upper()],
+                )
+                conn.execute(
+                    """
                     DELETE FROM data_catalog
                     WHERE symbol = ? AND exchange = ?
-                """, [symbol.upper(), exchange.upper()])
+                """,
+                    [symbol.upper(), exchange.upper()],
+                )
                 msg = f"Deleted all {symbol}:{exchange} data"
 
         logger.info(msg)
@@ -1142,14 +1217,15 @@ def delete_market_data(
 # Export Operations
 # =============================================================================
 
+
 def export_to_csv(
     output_path: str,
-    symbol: Optional[str] = None,
-    exchange: Optional[str] = None,
-    interval: Optional[str] = None,
-    start_timestamp: Optional[int] = None,
-    end_timestamp: Optional[int] = None
-) -> Tuple[bool, str]:
+    symbol: str | None = None,
+    exchange: str | None = None,
+    interval: str | None = None,
+    start_timestamp: int | None = None,
+    end_timestamp: int | None = None,
+) -> tuple[bool, str]:
     """
     Export market data to CSV file.
 
@@ -1200,6 +1276,7 @@ def export_to_csv(
 
         # Validate output path - must be within temp directory
         import tempfile
+
         temp_dir = tempfile.gettempdir()
         abs_output = os.path.abspath(output_path)
         if not abs_output.startswith(os.path.abspath(temp_dir)):
@@ -1222,8 +1299,8 @@ def export_to_dataframe(
     symbol: str,
     exchange: str,
     interval: str,
-    start_timestamp: Optional[int] = None,
-    end_timestamp: Optional[int] = None
+    start_timestamp: int | None = None,
+    end_timestamp: int | None = None,
 ) -> pd.DataFrame:
     """
     Export market data to pandas DataFrame (for backtesting).
@@ -1237,9 +1314,9 @@ def export_to_dataframe(
         return df
 
     # Convert timestamp to datetime and set as index
-    df['datetime'] = pd.to_datetime(df['timestamp'], unit='s')
-    df.set_index('datetime', inplace=True)
-    df.drop('timestamp', axis=1, inplace=True)
+    df["datetime"] = pd.to_datetime(df["timestamp"], unit="s")
+    df.set_index("datetime", inplace=True)
+    df.drop("timestamp", axis=1, inplace=True)
 
     return df
 
@@ -1248,7 +1325,8 @@ def export_to_dataframe(
 # Utility Functions
 # =============================================================================
 
-def get_database_stats() -> Dict[str, Any]:
+
+def get_database_stats() -> dict[str, Any]:
     """
     Get database statistics.
 
@@ -1261,25 +1339,27 @@ def get_database_stats() -> Dict[str, Any]:
 
         with get_connection() as conn:
             total_records = conn.execute("SELECT COUNT(*) FROM market_data").fetchone()[0]
-            total_symbols = conn.execute("SELECT COUNT(DISTINCT symbol || exchange) FROM market_data").fetchone()[0]
+            total_symbols = conn.execute(
+                "SELECT COUNT(DISTINCT symbol || exchange) FROM market_data"
+            ).fetchone()[0]
             watchlist_count = conn.execute("SELECT COUNT(*) FROM watchlist").fetchone()[0]
 
         return {
-            'database_path': db_path,
-            'database_size_mb': round(db_size / (1024 * 1024), 2),
-            'total_records': total_records,
-            'total_symbols': total_symbols,
-            'watchlist_count': watchlist_count
+            "database_path": db_path,
+            "database_size_mb": round(db_size / (1024 * 1024), 2),
+            "total_records": total_records,
+            "total_symbols": total_symbols,
+            "watchlist_count": watchlist_count,
         }
 
     except Exception as e:
         logger.error(f"Error fetching database stats: {e}")
         return {
-            'database_path': get_db_path(),
-            'database_size_mb': 0,
-            'total_records': 0,
-            'total_symbols': 0,
-            'watchlist_count': 0
+            "database_path": get_db_path(),
+            "database_size_mb": 0,
+            "total_records": 0,
+            "total_symbols": 0,
+            "watchlist_count": 0,
         }
 
 
@@ -1296,13 +1376,10 @@ def vacuum_database():
 
 
 # Supported exchanges (these are static across brokers)
-SUPPORTED_EXCHANGES = [
-    'NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS', 'BCD',
-    'NSE_INDEX', 'BSE_INDEX'
-]
+SUPPORTED_EXCHANGES = ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "BCD", "NSE_INDEX", "BSE_INDEX"]
 
 
-def get_supported_intervals(api_key: str) -> List[str]:
+def get_supported_intervals(api_key: str) -> list[str]:
     """
     Get supported intervals dynamically from the broker.
     Uses the intervals_service to fetch broker-specific supported timeframes.
@@ -1318,11 +1395,11 @@ def get_supported_intervals(api_key: str) -> List[str]:
 
         success, response, _ = get_intervals(api_key=api_key)
 
-        if success and response.get('status') == 'success':
-            intervals_data = response.get('data', {})
+        if success and response.get("status") == "success":
+            intervals_data = response.get("data", {})
             # Flatten all interval categories into a single list
             all_intervals = []
-            for category in ['seconds', 'minutes', 'hours', 'days', 'weeks', 'months']:
+            for category in ["seconds", "minutes", "hours", "days", "weeks", "months"]:
                 all_intervals.extend(intervals_data.get(category, []))
             return all_intervals
         return []
@@ -1335,12 +1412,10 @@ def get_supported_intervals(api_key: str) -> List[str]:
 # CSV Import Operations
 # =============================================================================
 
+
 def import_from_csv(
-    file_path: str,
-    symbol: str,
-    exchange: str,
-    interval: str
-) -> Tuple[bool, str, int]:
+    file_path: str, symbol: str, exchange: str, interval: str
+) -> tuple[bool, str, int]:
     """
     Import OHLCV data from a CSV file into the database.
 
@@ -1371,55 +1446,55 @@ def import_from_csv(
         df.columns = df.columns.str.lower().str.strip()
 
         # Handle different timestamp formats
-        if 'timestamp' in df.columns:
+        if "timestamp" in df.columns:
             # Check if timestamp is already epoch seconds or milliseconds
-            if pd.api.types.is_numeric_dtype(df['timestamp']):
-                first_val = df['timestamp'].iloc[0]
+            if pd.api.types.is_numeric_dtype(df["timestamp"]):
+                first_val = df["timestamp"].iloc[0]
                 # Epoch milliseconds are > 1e12 (after year 2001 in ms)
                 # Epoch seconds are typically between 1e9 and 2e9 (1970-2033)
                 if first_val > 1e12:
                     # Milliseconds - convert to seconds
-                    df['timestamp'] = df['timestamp'] // 1000
+                    df["timestamp"] = df["timestamp"] // 1000
                 # else: Already epoch seconds, no conversion needed
             else:
                 # Parse as datetime string
-                df['timestamp'] = pd.to_datetime(df['timestamp']).astype('int64') // 10**9
-        elif 'datetime' in df.columns:
-            df['timestamp'] = pd.to_datetime(df['datetime']).astype('int64') // 10**9
-        elif 'date' in df.columns:
-            if 'time' in df.columns:
-                df['datetime'] = df['date'].astype(str) + ' ' + df['time'].astype(str)
+                df["timestamp"] = pd.to_datetime(df["timestamp"]).astype("int64") // 10**9
+        elif "datetime" in df.columns:
+            df["timestamp"] = pd.to_datetime(df["datetime"]).astype("int64") // 10**9
+        elif "date" in df.columns:
+            if "time" in df.columns:
+                df["datetime"] = df["date"].astype(str) + " " + df["time"].astype(str)
             else:
-                df['datetime'] = df['date'].astype(str)
-            df['timestamp'] = pd.to_datetime(df['datetime']).astype('int64') // 10**9
+                df["datetime"] = df["date"].astype(str)
+            df["timestamp"] = pd.to_datetime(df["datetime"]).astype("int64") // 10**9
         else:
             return False, "CSV must have 'timestamp', 'datetime', or 'date' column", 0
 
         # Validate required OHLCV columns
-        required_cols = ['open', 'high', 'low', 'close', 'volume']
+        required_cols = ["open", "high", "low", "close", "volume"]
         missing_cols = [c for c in required_cols if c not in df.columns]
         if missing_cols:
             return False, f"Missing required columns: {', '.join(missing_cols)}", 0
 
         # Add optional columns if missing
-        if 'oi' not in df.columns:
-            df['oi'] = 0
+        if "oi" not in df.columns:
+            df["oi"] = 0
 
         # Select and order columns
-        df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi']]
+        df = df[["timestamp", "open", "high", "low", "close", "volume", "oi"]]
 
         # Convert data types
-        df['timestamp'] = df['timestamp'].astype('int64')
-        df['open'] = pd.to_numeric(df['open'], errors='coerce')
-        df['high'] = pd.to_numeric(df['high'], errors='coerce')
-        df['low'] = pd.to_numeric(df['low'], errors='coerce')
-        df['close'] = pd.to_numeric(df['close'], errors='coerce')
-        df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0).astype('int64')
-        df['oi'] = pd.to_numeric(df['oi'], errors='coerce').fillna(0).astype('int64')
+        df["timestamp"] = df["timestamp"].astype("int64")
+        df["open"] = pd.to_numeric(df["open"], errors="coerce")
+        df["high"] = pd.to_numeric(df["high"], errors="coerce")
+        df["low"] = pd.to_numeric(df["low"], errors="coerce")
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0).astype("int64")
+        df["oi"] = pd.to_numeric(df["oi"], errors="coerce").fillna(0).astype("int64")
 
         # Drop rows with NaN values in OHLC
         initial_count = len(df)
-        df = df.dropna(subset=['open', 'high', 'low', 'close'])
+        df = df.dropna(subset=["open", "high", "low", "close"])
         dropped_count = initial_count - len(df)
 
         if df.empty:
@@ -1444,11 +1519,8 @@ def import_from_csv(
 
 
 def import_from_parquet(
-    file_path: str,
-    symbol: str,
-    exchange: str,
-    interval: str
-) -> Tuple[bool, str, int]:
+    file_path: str, symbol: str, exchange: str, interval: str
+) -> tuple[bool, str, int]:
     """
     Import OHLCV data from a Parquet file into the database.
 
@@ -1475,50 +1547,50 @@ def import_from_parquet(
         df.columns = df.columns.str.lower().str.strip()
 
         # Handle timestamp column
-        if 'timestamp' in df.columns:
+        if "timestamp" in df.columns:
             # Check if timestamp is already epoch seconds or milliseconds
-            if pd.api.types.is_numeric_dtype(df['timestamp']):
-                first_val = df['timestamp'].iloc[0]
+            if pd.api.types.is_numeric_dtype(df["timestamp"]):
+                first_val = df["timestamp"].iloc[0]
                 if first_val > 1e12:
-                    df['timestamp'] = df['timestamp'] // 1000
+                    df["timestamp"] = df["timestamp"] // 1000
             else:
-                df['timestamp'] = pd.to_datetime(df['timestamp']).astype('int64') // 10**9
-        elif 'datetime' in df.columns:
-            df['timestamp'] = pd.to_datetime(df['datetime']).astype('int64') // 10**9
-        elif 'date' in df.columns:
-            if 'time' in df.columns:
-                df['datetime'] = df['date'].astype(str) + ' ' + df['time'].astype(str)
+                df["timestamp"] = pd.to_datetime(df["timestamp"]).astype("int64") // 10**9
+        elif "datetime" in df.columns:
+            df["timestamp"] = pd.to_datetime(df["datetime"]).astype("int64") // 10**9
+        elif "date" in df.columns:
+            if "time" in df.columns:
+                df["datetime"] = df["date"].astype(str) + " " + df["time"].astype(str)
             else:
-                df['datetime'] = df['date'].astype(str)
-            df['timestamp'] = pd.to_datetime(df['datetime']).astype('int64') // 10**9
+                df["datetime"] = df["date"].astype(str)
+            df["timestamp"] = pd.to_datetime(df["datetime"]).astype("int64") // 10**9
         else:
             return False, "Parquet must have 'timestamp', 'datetime', or 'date' column", 0
 
         # Validate required OHLCV columns
-        required_cols = ['open', 'high', 'low', 'close', 'volume']
+        required_cols = ["open", "high", "low", "close", "volume"]
         missing_cols = [c for c in required_cols if c not in df.columns]
         if missing_cols:
             return False, f"Missing required columns: {', '.join(missing_cols)}", 0
 
         # Add optional columns if missing
-        if 'oi' not in df.columns:
-            df['oi'] = 0
+        if "oi" not in df.columns:
+            df["oi"] = 0
 
         # Select and order columns
-        df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi']]
+        df = df[["timestamp", "open", "high", "low", "close", "volume", "oi"]]
 
         # Convert data types
-        df['timestamp'] = df['timestamp'].astype('int64')
-        df['open'] = pd.to_numeric(df['open'], errors='coerce')
-        df['high'] = pd.to_numeric(df['high'], errors='coerce')
-        df['low'] = pd.to_numeric(df['low'], errors='coerce')
-        df['close'] = pd.to_numeric(df['close'], errors='coerce')
-        df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0).astype('int64')
-        df['oi'] = pd.to_numeric(df['oi'], errors='coerce').fillna(0).astype('int64')
+        df["timestamp"] = df["timestamp"].astype("int64")
+        df["open"] = pd.to_numeric(df["open"], errors="coerce")
+        df["high"] = pd.to_numeric(df["high"], errors="coerce")
+        df["low"] = pd.to_numeric(df["low"], errors="coerce")
+        df["close"] = pd.to_numeric(df["close"], errors="coerce")
+        df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0).astype("int64")
+        df["oi"] = pd.to_numeric(df["oi"], errors="coerce").fillna(0).astype("int64")
 
         # Drop rows with NaN values in OHLC
         initial_count = len(df)
-        df = df.dropna(subset=['open', 'high', 'low', 'close'])
+        df = df.dropna(subset=["open", "high", "low", "close"])
         dropped_count = initial_count - len(df)
 
         if df.empty:
@@ -1543,15 +1615,16 @@ def import_from_parquet(
 # Download Job Operations
 # =============================================================================
 
+
 def create_download_job(
     job_id: str,
     job_type: str,
-    symbols: List[Dict[str, str]],
+    symbols: list[dict[str, str]],
     interval: str,
     start_date: str,
     end_date: str,
-    config: Dict[str, Any] = None
-) -> Tuple[bool, str]:
+    config: dict[str, Any] = None,
+) -> tuple[bool, str]:
     """
     Create a new download job with symbol items.
 
@@ -1576,25 +1649,37 @@ def create_download_job(
 
             try:
                 # Create the job record
-                conn.execute("""
+                conn.execute(
+                    """
                     INSERT INTO download_jobs
                     (id, job_type, status, total_symbols, interval, start_date, end_date, config)
                     VALUES (?, ?, 'pending', ?, ?, ?, ?, ?)
-                """, [job_id, job_type, len(symbols), interval, start_date, end_date,
-                      json.dumps(config) if config else None])
+                """,
+                    [
+                        job_id,
+                        job_type,
+                        len(symbols),
+                        interval,
+                        start_date,
+                        end_date,
+                        json.dumps(config) if config else None,
+                    ],
+                )
 
                 # Prepare symbols DataFrame for batch insert
                 # Use atomic ID generation within the same transaction
                 if symbols:
-                    symbols_df = pd.DataFrame([
-                        {
-                            'job_id': job_id,
-                            'symbol': sym['symbol'].upper(),
-                            'exchange': sym['exchange'].upper(),
-                            'status': 'pending'
-                        }
-                        for sym in symbols
-                    ])
+                    symbols_df = pd.DataFrame(
+                        [
+                            {
+                                "job_id": job_id,
+                                "symbol": sym["symbol"].upper(),
+                                "exchange": sym["exchange"].upper(),
+                                "status": "pending",
+                            }
+                            for sym in symbols
+                        ]
+                    )
 
                     # Atomic batch insert with computed IDs using ROW_NUMBER
                     # This generates IDs atomically without race conditions
@@ -1620,48 +1705,51 @@ def create_download_job(
         return False, str(e)
 
 
-def _safe_timestamp(val) -> Optional[str]:
+def _safe_timestamp(val) -> str | None:
     """Convert timestamp to ISO string, handling NaT/None values."""
     if val is None:
         return None
     if pd.isna(val):
         return None
     try:
-        if hasattr(val, 'isoformat'):
+        if hasattr(val, "isoformat"):
             return val.isoformat()
         return str(val)
     except:
         return None
 
 
-def get_download_job(job_id: str) -> Optional[Dict[str, Any]]:
+def get_download_job(job_id: str) -> dict[str, Any] | None:
     """Get a download job by ID."""
     try:
         with get_connection() as conn:
-            result = conn.execute("""
+            result = conn.execute(
+                """
                 SELECT id, job_type, status, total_symbols, completed_symbols,
                        failed_symbols, interval, start_date, end_date, config,
                        created_at, started_at, completed_at, error_message
                 FROM download_jobs
                 WHERE id = ?
-            """, [job_id]).fetchone()
+            """,
+                [job_id],
+            ).fetchone()
 
             if result:
                 return {
-                    'id': result[0],
-                    'job_type': result[1],
-                    'status': result[2],
-                    'total_symbols': result[3],
-                    'completed_symbols': result[4],
-                    'failed_symbols': result[5],
-                    'interval': result[6],
-                    'start_date': result[7],
-                    'end_date': result[8],
-                    'config': result[9],
-                    'created_at': _safe_timestamp(result[10]),
-                    'started_at': _safe_timestamp(result[11]),
-                    'completed_at': _safe_timestamp(result[12]),
-                    'error_message': result[13]
+                    "id": result[0],
+                    "job_type": result[1],
+                    "status": result[2],
+                    "total_symbols": result[3],
+                    "completed_symbols": result[4],
+                    "failed_symbols": result[5],
+                    "interval": result[6],
+                    "start_date": result[7],
+                    "end_date": result[8],
+                    "config": result[9],
+                    "created_at": _safe_timestamp(result[10]),
+                    "started_at": _safe_timestamp(result[11]),
+                    "completed_at": _safe_timestamp(result[12]),
+                    "error_message": result[13],
                 }
             return None
 
@@ -1670,12 +1758,13 @@ def get_download_job(job_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def get_all_download_jobs(status: str = None, limit: int = 50) -> List[Dict[str, Any]]:
+def get_all_download_jobs(status: str = None, limit: int = 50) -> list[dict[str, Any]]:
     """Get all download jobs, optionally filtered by status."""
     try:
         with get_connection() as conn:
             if status:
-                result = conn.execute("""
+                result = conn.execute(
+                    """
                     SELECT id, job_type, status, total_symbols, completed_symbols,
                            failed_symbols, interval, start_date, end_date,
                            created_at, started_at, completed_at
@@ -1683,66 +1772,77 @@ def get_all_download_jobs(status: str = None, limit: int = 50) -> List[Dict[str,
                     WHERE status = ?
                     ORDER BY created_at DESC
                     LIMIT ?
-                """, [status, limit]).fetchdf()
+                """,
+                    [status, limit],
+                ).fetchdf()
             else:
-                result = conn.execute("""
+                result = conn.execute(
+                    """
                     SELECT id, job_type, status, total_symbols, completed_symbols,
                            failed_symbols, interval, start_date, end_date,
                            created_at, started_at, completed_at
                     FROM download_jobs
                     ORDER BY created_at DESC
                     LIMIT ?
-                """, [limit]).fetchdf()
+                """,
+                    [limit],
+                ).fetchdf()
 
             if result.empty:
                 return []
 
             # Handle NaT (Not a Time) values - replace with None for JSON serialization
-            for col in ['created_at', 'started_at', 'completed_at']:
+            for col in ["created_at", "started_at", "completed_at"]:
                 if col in result.columns:
                     result[col] = result[col].apply(
                         lambda x: x.isoformat() if pd.notna(x) else None
                     )
 
-            return result.to_dict('records')
+            return result.to_dict("records")
 
     except Exception as e:
         logger.error(f"Error fetching download jobs: {e}")
         return []
 
 
-def get_job_items(job_id: str, status: str = None) -> List[Dict[str, Any]]:
+def get_job_items(job_id: str, status: str = None) -> list[dict[str, Any]]:
     """Get all items for a job, optionally filtered by status."""
     try:
         with get_connection() as conn:
             if status:
-                result = conn.execute("""
+                result = conn.execute(
+                    """
                     SELECT id, job_id, symbol, exchange, status,
                            records_downloaded, error_message, started_at, completed_at
                     FROM job_items
                     WHERE job_id = ? AND status = ?
                     ORDER BY id
-                """, [job_id, status]).fetchdf()
+                """,
+                    [job_id, status],
+                ).fetchdf()
             else:
-                result = conn.execute("""
+                result = conn.execute(
+                    """
                     SELECT id, job_id, symbol, exchange, status,
                            records_downloaded, error_message, started_at, completed_at
                     FROM job_items
                     WHERE job_id = ?
                     ORDER BY id
-                """, [job_id]).fetchdf()
+                """,
+                    [job_id],
+                ).fetchdf()
 
             if result.empty:
                 return []
 
             # Handle NaT (Not a Time) values - replace with None for JSON serialization
-            for col in ['started_at', 'completed_at']:
+            for col in ["started_at", "completed_at"]:
                 if col in result.columns:
                     result[col] = result[col].apply(
                         lambda x: x.isoformat() if pd.notna(x) else None
                     )
 
-            return result.to_dict('records')
+            return result.to_dict("records")
 
     except Exception as e:
         logger.error(f"Error fetching job items: {e}")
@@ -1753,24 +1853,33 @@ def update_job_status(job_id: str, status: str, error_message: str = None) -> bo
     """Update the status of a download job."""
     try:
         with get_connection() as conn:
-            if status == 'running':
-                conn.execute("""
+            if status == "running":
+                conn.execute(
+                    """
                     UPDATE download_jobs
                     SET status = ?, started_at = current_timestamp
                     WHERE id = ?
-                """, [status, job_id])
-            elif status in ('completed', 'failed', 'cancelled'):
-                conn.execute("""
+                """,
+                    [status, job_id],
+                )
+            elif status in ("completed", "failed", "cancelled"):
+                conn.execute(
+                    """
                     UPDATE download_jobs
                     SET status = ?, completed_at = current_timestamp, error_message = ?
                     WHERE id = ?
-                """, [status, error_message, job_id])
+                """,
+                    [status, error_message, job_id],
+                )
             else:
-                conn.execute("""
+                conn.execute(
+                    """
                     UPDATE download_jobs
                     SET status = ?
                     WHERE id = ?
-                """, [status, job_id])
+                """,
+                    [status, job_id],
+                )
 
         logger.info(f"Updated job {job_id} status to {status}")
         return True
@@ -1781,33 +1890,39 @@ def update_job_status(job_id: str, status: str, error_message: str = None) -> bo
 
 
 def update_job_item_status(
-    item_id: int,
-    status: str,
-    records_downloaded: int = 0,
-    error_message: str = None
+    item_id: int, status: str, records_downloaded: int = 0, error_message: str = None
 ) -> bool:
     """Update the status of a job item."""
     try:
         with get_connection() as conn:
-            if status == 'downloading':
-                conn.execute("""
+            if status == "downloading":
+                conn.execute(
+                    """
                     UPDATE job_items
                     SET status = ?, started_at = current_timestamp
                     WHERE id = ?
-                """, [status, item_id])
-            elif status in ('success', 'error', 'skipped'):
-                conn.execute("""
+                """,
+                    [status, item_id],
+                )
+            elif status in ("success", "error", "skipped"):
+                conn.execute(
+                    """
                     UPDATE job_items
                     SET status = ?, records_downloaded = ?, error_message = ?,
                         completed_at = current_timestamp
                     WHERE id = ?
-                """, [status, records_downloaded, error_message, item_id])
+                """,
+                    [status, records_downloaded, error_message, item_id],
+                )
             else:
-                conn.execute("""
+                conn.execute(
+                    """
                     UPDATE job_items
                     SET status = ?
                     WHERE id = ?
-                """, [status, item_id])
+                """,
+                    [status, item_id],
+                )
 
         return True
 
@@ -1820,11 +1935,14 @@ def update_job_progress(job_id: str, completed: int, failed: int) -> bool:
     """Update job progress counters."""
     try:
         with get_connection() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE download_jobs
                 SET completed_symbols = ?, failed_symbols = ?
                 WHERE id = ?
-            """, [completed, failed, job_id])
+            """,
+                [completed, failed, job_id],
+            )
         return True
 
     except Exception as e:
@@ -1832,7 +1950,7 @@ def update_job_progress(job_id: str, completed: int, failed: int) -> bool:
         return False
 
 
-def delete_download_job(job_id: str) -> Tuple[bool, str]:
+def delete_download_job(job_id: str) -> tuple[bool, str]:
     """Delete a download job and its items."""
     try:
         with get_connection() as conn:
@@ -1851,7 +1969,8 @@ def delete_download_job(job_id: str) -> Tuple[bool, str]:
 # Symbol Metadata Operations
 # =============================================================================
 
-def upsert_symbol_metadata(symbols: List[Dict[str, Any]]) -> int:
+
+def upsert_symbol_metadata(symbols: list[dict[str, Any]]) -> int:
     """
     Insert or update symbol metadata.
 
@@ -1868,44 +1987,52 @@ def upsert_symbol_metadata(symbols: List[Dict[str, Any]]) -> int:
         with get_connection() as conn:
             for sym in symbols:
                 # Check if exists
-                existing = conn.execute("""
+                existing = conn.execute(
+                    """
                     SELECT symbol FROM symbol_metadata
                     WHERE symbol = ? AND exchange = ?
-                """, [sym.get('symbol', '').upper(),
-                      sym.get('exchange', '').upper()]).fetchone()
+                """,
+                    [sym.get("symbol", "").upper(), sym.get("exchange", "").upper()],
+                ).fetchone()
 
                 if existing:
-                    conn.execute("""
+                    conn.execute(
+                        """
                         UPDATE symbol_metadata SET
                             name = ?, expiry = ?, strike = ?, lotsize = ?,
                             instrumenttype = ?, tick_size = ?,
                             last_updated = current_timestamp
                         WHERE symbol = ? AND exchange = ?
-                    """, [
-                        sym.get('name'),
-                        sym.get('expiry'),
-                        sym.get('strike'),
-                        sym.get('lotsize'),
-                        sym.get('instrumenttype'),
-                        sym.get('tick_size'),
-                        sym.get('symbol', '').upper(),
-                        sym.get('exchange', '').upper()
-                    ])
+                    """,
+                        [
+                            sym.get("name"),
+                            sym.get("expiry"),
+                            sym.get("strike"),
+                            sym.get("lotsize"),
+                            sym.get("instrumenttype"),
+                            sym.get("tick_size"),
+                            sym.get("symbol", "").upper(),
+                            sym.get("exchange", "").upper(),
+                        ],
+                    )
                 else:
-                    conn.execute("""
+                    conn.execute(
+                        """
                         INSERT INTO symbol_metadata
                         (symbol, exchange, name, expiry, strike, lotsize, instrumenttype, tick_size)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, [
-                        sym.get('symbol', '').upper(),
-                        sym.get('exchange', '').upper(),
-                        sym.get('name'),
-                        sym.get('expiry'),
-                        sym.get('strike'),
-                        sym.get('lotsize'),
-                        sym.get('instrumenttype'),
-                        sym.get('tick_size')
-                    ])
+                    """,
+                        [
+                            sym.get("symbol", "").upper(),
+                            sym.get("exchange", "").upper(),
+                            sym.get("name"),
+                            sym.get("expiry"),
+                            sym.get("strike"),
+                            sym.get("lotsize"),
+                            sym.get("instrumenttype"),
+                            sym.get("tick_size"),
+                        ],
+                    )
 
         logger.info(f"Upserted metadata for {len(symbols)} symbols")
         return len(symbols)
@@ -1915,28 +2042,31 @@ def upsert_symbol_metadata(symbols: List[Dict[str, Any]]) -> int:
         return 0
 
 
-def get_symbol_metadata(symbol: str, exchange: str) -> Optional[Dict[str, Any]]:
+def get_symbol_metadata(symbol: str, exchange: str) -> dict[str, Any] | None:
     """Get metadata for a specific symbol."""
     try:
         with get_connection() as conn:
-            result = conn.execute("""
+            result = conn.execute(
+                """
                 SELECT symbol, exchange, name, expiry, strike, lotsize,
                        instrumenttype, tick_size, last_updated
                 FROM symbol_metadata
                 WHERE symbol = ? AND exchange = ?
-            """, [symbol.upper(), exchange.upper()]).fetchone()
+            """,
+                [symbol.upper(), exchange.upper()],
+            ).fetchone()
 
             if result:
                 return {
-                    'symbol': result[0],
-                    'exchange': result[1],
-                    'name': result[2],
-                    'expiry': result[3],
-                    'strike': result[4],
-                    'lotsize': result[5],
-                    'instrumenttype': result[6],
-                    'tick_size': result[7],
-                    'last_updated': result[8]
+                    "symbol": result[0],
+                    "exchange": result[1],
+                    "name": result[2],
+                    "expiry": result[3],
+                    "strike": result[4],
+                    "lotsize": result[5],
+                    "instrumenttype": result[6],
+                    "tick_size": result[7],
+                    "last_updated": result[8],
                 }
             return None
 
@@ -1945,7 +2075,7 @@ def get_symbol_metadata(symbol: str, exchange: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def get_catalog_with_metadata() -> List[Dict[str, Any]]:
+def get_catalog_with_metadata() -> list[dict[str, Any]]:
     """
     Get data catalog enriched with symbol metadata.
 
@@ -1969,14 +2099,14 @@ def get_catalog_with_metadata() -> List[Dict[str, Any]]:
 
             if result.empty:
                 return []
-            return result.to_dict('records')
+            return result.to_dict("records")
 
     except Exception as e:
         logger.error(f"Error fetching catalog with metadata: {e}")
         return []
 
 
-def get_catalog_grouped(group_by: str = 'underlying') -> Dict[str, List[Dict[str, Any]]]:
+def get_catalog_grouped(group_by: str = "underlying") -> dict[str, list[dict[str, Any]]]:
     """
     Get data catalog grouped by underlying or exchange.
 
@@ -1990,15 +2120,15 @@ def get_catalog_grouped(group_by: str = 'underlying') -> Dict[str, List[Dict[str
         catalog = get_catalog_with_metadata()
         grouped = {}
 
-        if group_by == 'underlying':
+        if group_by == "underlying":
             for item in catalog:
-                key = item.get('name') or item.get('symbol', 'Unknown')
+                key = item.get("name") or item.get("symbol", "Unknown")
                 if key not in grouped:
                     grouped[key] = []
                 grouped[key].append(item)
         else:  # exchange
             for item in catalog:
-                key = item.get('exchange', 'Unknown')
+                key = item.get("exchange", "Unknown")
                 if key not in grouped:
                     grouped[key] = []
                 grouped[key].append(item)
@@ -2014,14 +2144,15 @@ def get_catalog_grouped(group_by: str = 'underlying') -> Dict[str, List[Dict[str
 # Advanced Export Operations
 # =============================================================================
 
+
 def export_to_parquet(
     output_path: str,
-    symbols: Optional[List[Dict[str, str]]] = None,
-    interval: Optional[str] = None,
-    start_timestamp: Optional[int] = None,
-    end_timestamp: Optional[int] = None,
-    compression: str = 'zstd'
-) -> Tuple[bool, str, int]:
+    symbols: list[dict[str, str]] | None = None,
+    interval: str | None = None,
+    start_timestamp: int | None = None,
+    end_timestamp: int | None = None,
+    compression: str = "zstd",
+) -> tuple[bool, str, int]:
     """
     Export market data to Parquet format with ZSTD compression.
 
@@ -2050,7 +2181,7 @@ def export_to_parquet(
             symbol_conditions = []
             for sym in symbols:
                 symbol_conditions.append("(symbol = ? AND exchange = ?)")
-                params.extend([sym['symbol'].upper(), sym['exchange'].upper()])
+                params.extend([sym["symbol"].upper(), sym["exchange"].upper()])
             conditions.append(f"({' OR '.join(symbol_conditions)})")
 
         if interval:
@@ -2108,7 +2239,7 @@ def export_to_parquet(
                     ORDER BY symbol, exchange, interval, timestamp
                 """
                 df = conn.execute(select_query, params).fetchdf()
-                df['datetime'] = pd.to_datetime(df['timestamp'], unit='s')
+                df["datetime"] = pd.to_datetime(df["timestamp"], unit="s")
                 df.to_parquet(abs_output, compression=compression, index=False)
             else:
                 # No params - can use COPY directly
@@ -2135,12 +2266,12 @@ def export_to_parquet(
 
 def export_to_txt(
     output_path: str,
-    symbols: Optional[List[Dict[str, str]]] = None,
-    interval: Optional[str] = None,
-    start_timestamp: Optional[int] = None,
-    end_timestamp: Optional[int] = None,
-    delimiter: str = '\t'
-) -> Tuple[bool, str, int]:
+    symbols: list[dict[str, str]] | None = None,
+    interval: str | None = None,
+    start_timestamp: int | None = None,
+    end_timestamp: int | None = None,
+    delimiter: str = "\t",
+) -> tuple[bool, str, int]:
     """
     Export market data to TXT format (tab or pipe delimited).
 
@@ -2166,7 +2297,7 @@ def export_to_txt(
             symbol_conditions = []
             for sym in symbols:
                 symbol_conditions.append("(symbol = ? AND exchange = ?)")
-                params.extend([sym['symbol'].upper(), sym['exchange'].upper()])
+                params.extend([sym["symbol"].upper(), sym["exchange"].upper()])
             conditions.append(f"({' OR '.join(symbol_conditions)})")
 
         if interval:
@@ -2218,21 +2349,22 @@ def export_to_txt(
 def _sanitize_filename(name: str) -> str:
     """Remove path traversal and special characters from filename."""
     import re
+
     # Remove any path separators and null bytes
-    name = name.replace('/', '_').replace('\\', '_').replace('\x00', '')
+    name = name.replace("/", "_").replace("\\", "_").replace("\x00", "")
     # Keep only alphanumeric, dash, underscore, dot
-    name = re.sub(r'[^A-Za-z0-9_\-.]', '_', name)
+    name = re.sub(r"[^A-Za-z0-9_\-.]", "_", name)
     return name
 
 
 def export_to_zip(
     output_path: str,
-    symbols: Optional[List[Dict[str, str]]] = None,
-    intervals: Optional[List[str]] = None,
-    start_timestamp: Optional[int] = None,
-    end_timestamp: Optional[int] = None,
-    split_by: str = 'symbol'
-) -> Tuple[bool, str, int]:
+    symbols: list[dict[str, str]] | None = None,
+    intervals: list[str] | None = None,
+    start_timestamp: int | None = None,
+    end_timestamp: int | None = None,
+    split_by: str = "symbol",
+) -> tuple[bool, str, int]:
     """
     Export market data to ZIP archive containing CSVs.
 
@@ -2267,24 +2399,26 @@ def export_to_zip(
         # IST timezone offset from UTC (5 hours 30 minutes = 19800 seconds)
         ist_offset = 19800
 
-        with zipfile.ZipFile(abs_output, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+        with zipfile.ZipFile(abs_output, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
             with get_connection() as conn:
                 # Get symbols to export
                 if symbols and len(symbols) > 0:
-                    symbols_list = [(s['symbol'].upper(), s['exchange'].upper()) for s in symbols]
+                    symbols_list = [(s["symbol"].upper(), s["exchange"].upper()) for s in symbols]
                 else:
                     # Get all symbols from catalog
                     symbols_df = conn.execute("""
                         SELECT DISTINCT symbol, exchange FROM data_catalog
                         ORDER BY symbol, exchange
                     """).fetchdf()
-                    symbols_list = [(row['symbol'], row['exchange']) for _, row in symbols_df.iterrows()]
+                    symbols_list = [
+                        (row["symbol"], row["exchange"]) for _, row in symbols_df.iterrows()
+                    ]
 
                 if not symbols_list:
                     return False, "No symbols found to export", 0
 
                 # Determine intervals to export
-                intervals_to_export = intervals if intervals else ['D']
+                intervals_to_export = intervals if intervals else ["D"]
 
                 for sym, exch in symbols_list:
                     market_open_seconds = _get_market_open_seconds(exch)
@@ -2294,7 +2428,9 @@ def export_to_zip(
                         is_daily_agg = is_daily_aggregated_interval(interval)
 
                         # Determine if this is an intraday computed interval (standard or custom)
-                        is_intraday_computed = interval in COMPUTED_INTERVALS or is_custom_interval(interval)
+                        is_intraday_computed = interval in COMPUTED_INTERVALS or is_custom_interval(
+                            interval
+                        )
 
                         if is_daily_agg:
                             # Check if D data exists before attempting aggregation
@@ -2312,7 +2448,9 @@ def export_to_zip(
 
                             count = conn.execute(check_query, check_params).fetchone()[0]
                             if count == 0:
-                                logger.warning(f"No D data for {sym}:{exch}, skipping daily-aggregated interval {interval}")
+                                logger.warning(
+                                    f"No D data for {sym}:{exch}, skipping daily-aggregated interval {interval}"
+                                )
                                 skipped_intervals.append(f"{sym}:{exch}:{interval}")
                                 continue
 
@@ -2322,14 +2460,20 @@ def export_to_zip(
                                 exchange=exch,
                                 target_interval=interval,
                                 start_timestamp=start_timestamp,
-                                end_timestamp=end_timestamp
+                                end_timestamp=end_timestamp,
                             )
 
                             if not df.empty:
                                 # Format timestamp as date and time columns
-                                df['date'] = pd.to_datetime(df['timestamp'] + ist_offset, unit='s').dt.strftime('%Y-%m-%d')
-                                df['time'] = pd.to_datetime(df['timestamp'] + ist_offset, unit='s').dt.strftime('%H:%M:%S')
-                                df = df[['date', 'time', 'open', 'high', 'low', 'close', 'volume', 'oi']]
+                                df["date"] = pd.to_datetime(
+                                    df["timestamp"] + ist_offset, unit="s"
+                                ).dt.strftime("%Y-%m-%d")
+                                df["time"] = pd.to_datetime(
+                                    df["timestamp"] + ist_offset, unit="s"
+                                ).dt.strftime("%H:%M:%S")
+                                df = df[
+                                    ["date", "time", "open", "high", "low", "close", "volume", "oi"]
+                                ]
 
                                 # Create CSV content
                                 csv_buffer = df.to_csv(index=False)
@@ -2359,7 +2503,9 @@ def export_to_zip(
 
                             count = conn.execute(check_query, check_params).fetchone()[0]
                             if count == 0:
-                                logger.warning(f"No 1m data for {sym}:{exch}, skipping computed interval {interval}")
+                                logger.warning(
+                                    f"No 1m data for {sym}:{exch}, skipping computed interval {interval}"
+                                )
                                 skipped_intervals.append(f"{sym}:{exch}:{interval}")
                                 continue
 
@@ -2369,8 +2515,8 @@ def export_to_zip(
                             minutes = INTERVAL_MINUTES.get(interval)
                             if minutes is None:
                                 parsed = parse_interval(interval)
-                                if parsed and parsed['type'] == 'intraday':
-                                    minutes = parsed['minutes']
+                                if parsed and parsed["type"] == "intraday":
+                                    minutes = parsed["minutes"]
                                 else:
                                     logger.warning(f"Cannot parse interval {interval}, skipping")
                                     skipped_intervals.append(f"{sym}:{exch}:{interval}")
@@ -2415,9 +2561,15 @@ def export_to_zip(
                             if not df.empty:
                                 # Format timestamp as date and time columns
                                 # Add IST offset (19800 seconds) for display since aggregated timestamps are UTC
-                                df['date'] = pd.to_datetime(df['ts'] + ist_offset, unit='s').dt.strftime('%Y-%m-%d')
-                                df['time'] = pd.to_datetime(df['ts'] + ist_offset, unit='s').dt.strftime('%H:%M:%S')
-                                df = df[['date', 'time', 'open', 'high', 'low', 'close', 'volume', 'oi']]
+                                df["date"] = pd.to_datetime(
+                                    df["ts"] + ist_offset, unit="s"
+                                ).dt.strftime("%Y-%m-%d")
+                                df["time"] = pd.to_datetime(
+                                    df["ts"] + ist_offset, unit="s"
+                                ).dt.strftime("%H:%M:%S")
+                                df = df[
+                                    ["date", "time", "open", "high", "low", "close", "volume", "oi"]
+                                ]
 
                         else:
                             # Direct query for stored intervals (1m, D)
@@ -2454,7 +2606,11 @@ def export_to_zip(
             if os.path.exists(abs_output):
                 os.remove(abs_output)
             if skipped_intervals:
-                return False, f"No data exported. Missing 1m data for computed intervals: {len(skipped_intervals)} symbol(s)", 0
+                return (
+                    False,
+                    f"No data exported. Missing 1m data for computed intervals: {len(skipped_intervals)} symbol(s)",
+                    0,
+                )
             return False, "No data matching the criteria", 0
 
         file_size = os.path.getsize(abs_output) / (1024 * 1024)  # MB
@@ -2477,11 +2633,11 @@ def export_to_zip(
 
 def export_bulk_csv(
     output_path: str,
-    symbols: List[Dict[str, str]],
-    interval: Optional[str] = None,
-    start_timestamp: Optional[int] = None,
-    end_timestamp: Optional[int] = None
-) -> Tuple[bool, str, int]:
+    symbols: list[dict[str, str]],
+    interval: str | None = None,
+    start_timestamp: int | None = None,
+    end_timestamp: int | None = None,
+) -> tuple[bool, str, int]:
     """
     Export multiple symbols to a single CSV file.
 
@@ -2507,7 +2663,7 @@ def export_bulk_csv(
             symbol_conditions = []
             for sym in symbols:
                 symbol_conditions.append("(symbol = ? AND exchange = ?)")
-                params.extend([sym['symbol'].upper(), sym['exchange'].upper()])
+                params.extend([sym["symbol"].upper(), sym["exchange"].upper()])
             conditions.append(f"({' OR '.join(symbol_conditions)})")
         # If no symbols specified, export all (no symbol filter needed)
 
@@ -2558,11 +2714,11 @@ def export_bulk_csv(
 
 
 def get_export_preview(
-    symbols: Optional[List[Dict[str, str]]] = None,
-    interval: Optional[str] = None,
-    start_timestamp: Optional[int] = None,
-    end_timestamp: Optional[int] = None
-) -> Dict[str, Any]:
+    symbols: list[dict[str, str]] | None = None,
+    interval: str | None = None,
+    start_timestamp: int | None = None,
+    end_timestamp: int | None = None,
+) -> dict[str, Any]:
     """
     Get a preview of what will be exported (record count, date range, etc.)
 
@@ -2583,7 +2739,7 @@ def get_export_preview(
             symbol_conditions = []
             for sym in symbols:
                 symbol_conditions.append("(symbol = ? AND exchange = ?)")
-                params.extend([sym['symbol'].upper(), sym['exchange'].upper()])
+                params.extend([sym["symbol"].upper(), sym["exchange"].upper()])
             conditions.append(f"({' OR '.join(symbol_conditions)})")
 
         if interval:
@@ -2615,14 +2771,14 @@ def get_export_preview(
 
             if result[0] == 0:
                 return {
-                    'total_records': 0,
-                    'symbol_count': 0,
-                    'exchange_count': 0,
-                    'interval_count': 0,
-                    'first_date': None,
-                    'last_date': None,
-                    'estimated_size_csv_mb': 0,
-                    'estimated_size_parquet_mb': 0
+                    "total_records": 0,
+                    "symbol_count": 0,
+                    "exchange_count": 0,
+                    "interval_count": 0,
+                    "first_date": None,
+                    "last_date": None,
+                    "estimated_size_csv_mb": 0,
+                    "estimated_size_parquet_mb": 0,
                 }
 
             # Estimate file sizes (rough approximation)
@@ -2632,28 +2788,32 @@ def get_export_preview(
             parquet_size = (result[0] * 20) / (1024 * 1024)
 
             return {
-                'total_records': result[0],
-                'symbol_count': result[1],
-                'exchange_count': result[2],
-                'interval_count': result[3],
-                'first_date': datetime.fromtimestamp(result[4]).strftime('%Y-%m-%d') if result[4] else None,
-                'last_date': datetime.fromtimestamp(result[5]).strftime('%Y-%m-%d') if result[5] else None,
-                'estimated_size_csv_mb': round(csv_size, 2),
-                'estimated_size_parquet_mb': round(parquet_size, 2)
+                "total_records": result[0],
+                "symbol_count": result[1],
+                "exchange_count": result[2],
+                "interval_count": result[3],
+                "first_date": datetime.fromtimestamp(result[4]).strftime("%Y-%m-%d")
+                if result[4]
+                else None,
+                "last_date": datetime.fromtimestamp(result[5]).strftime("%Y-%m-%d")
+                if result[5]
+                else None,
+                "estimated_size_csv_mb": round(csv_size, 2),
+                "estimated_size_parquet_mb": round(parquet_size, 2),
             }
 
     except Exception as e:
         logger.error(f"Error getting export preview: {e}")
         return {
-            'total_records': 0,
-            'symbol_count': 0,
-            'exchange_count': 0,
-            'interval_count': 0,
-            'first_date': None,
-            'last_date': None,
-            'estimated_size_csv_mb': 0,
-            'estimated_size_parquet_mb': 0,
-            'error': str(e)
+            "total_records": 0,
+            "symbol_count": 0,
+            "exchange_count": 0,
+            "interval_count": 0,
+            "first_date": None,
+            "last_date": None,
+            "estimated_size_csv_mb": 0,
+            "estimated_size_parquet_mb": 0,
+            "error": str(e),
         }
 
 
@@ -2661,18 +2821,19 @@ def get_export_preview(
 # Scheduler Operations
 # =============================================================================
 
+
 def create_schedule(
     schedule_id: str,
     name: str,
     schedule_type: str,
     data_interval: str,
-    interval_value: Optional[int] = None,
-    interval_unit: Optional[str] = None,
-    time_of_day: Optional[str] = None,
-    download_source: str = 'watchlist',
+    interval_value: int | None = None,
+    interval_unit: str | None = None,
+    time_of_day: str | None = None,
+    download_source: str = "watchlist",
     lookback_days: int = 1,
-    description: Optional[str] = None
-) -> Tuple[bool, str]:
+    description: str | None = None,
+) -> tuple[bool, str]:
     """
     Create a new schedule configuration.
 
@@ -2695,21 +2856,33 @@ def create_schedule(
         with get_connection() as conn:
             # Check if schedule ID already exists
             existing = conn.execute(
-                "SELECT id FROM historify_schedules WHERE id = ?",
-                [schedule_id]
+                "SELECT id FROM historify_schedules WHERE id = ?", [schedule_id]
             ).fetchone()
 
             if existing:
                 return False, f"Schedule ID '{schedule_id}' already exists"
 
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO historify_schedules
                 (id, name, description, schedule_type, interval_value, interval_unit,
                  time_of_day, download_source, data_interval, lookback_days,
                  is_enabled, is_paused, status, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, FALSE, 'idle', current_timestamp)
-            """, [schedule_id, name, description, schedule_type, interval_value,
-                  interval_unit, time_of_day, download_source, data_interval, lookback_days])
+            """,
+                [
+                    schedule_id,
+                    name,
+                    description,
+                    schedule_type,
+                    interval_value,
+                    interval_unit,
+                    time_of_day,
+                    download_source,
+                    data_interval,
+                    lookback_days,
+                ],
+            )
 
         logger.info(f"Created schedule: {name} ({schedule_id})")
         return True, f"Schedule '{name}' created successfully"
@@ -2719,7 +2892,7 @@ def create_schedule(
         return False, str(e)
 
 
-def _clean_schedule_record(record: Dict[str, Any]) -> Dict[str, Any]:
+def _clean_schedule_record(record: dict[str, Any]) -> dict[str, Any]:
     """
     Clean a schedule record for JSON serialization.
     Converts pandas NaT/NaN values to None and timestamps to ISO strings.
@@ -2732,18 +2905,19 @@ def _clean_schedule_record(record: Dict[str, Any]) -> Dict[str, Any]:
             cleaned[key] = None
         elif isinstance(value, pd.Timestamp):
             cleaned[key] = value.isoformat() if not pd.isna(value) else None
-        elif hasattr(value, 'isoformat'):
+        elif hasattr(value, "isoformat"):
             cleaned[key] = value.isoformat()
         else:
             cleaned[key] = value
     return cleaned
 
 
-def get_schedule(schedule_id: str) -> Optional[Dict[str, Any]]:
+def get_schedule(schedule_id: str) -> dict[str, Any] | None:
     """Get a schedule by ID."""
     try:
         with get_connection() as conn:
-            result = conn.execute("""
+            result = conn.execute(
+                """
                 SELECT id, name, description, schedule_type, interval_value,
                        interval_unit, time_of_day, download_source, data_interval,
                        lookback_days, is_enabled, is_paused, status, apscheduler_job_id,
@@ -2751,12 +2925,14 @@ def get_schedule(schedule_id: str) -> Optional[Dict[str, Any]]:
                        total_runs, successful_runs, failed_runs
                 FROM historify_schedules
                 WHERE id = ?
-            """, [schedule_id]).fetchdf()
+            """,
+                [schedule_id],
+            ).fetchdf()
 
             if result.empty:
                 return None
 
-            record = result.to_dict('records')[0]
+            record = result.to_dict("records")[0]
             return _clean_schedule_record(record)
 
     except Exception as e:
@@ -2764,7 +2940,7 @@ def get_schedule(schedule_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def get_all_schedules() -> List[Dict[str, Any]]:
+def get_all_schedules() -> list[dict[str, Any]]:
     """Get all schedules."""
     try:
         with get_connection() as conn:
@@ -2781,7 +2957,7 @@ def get_all_schedules() -> List[Dict[str, Any]]:
             if result.empty:
                 return []
 
-            records = result.to_dict('records')
+            records = result.to_dict("records")
             return [_clean_schedule_record(r) for r in records]
 
     except Exception as e:
@@ -2791,23 +2967,23 @@ def get_all_schedules() -> List[Dict[str, Any]]:
 
 def update_schedule(
     schedule_id: str,
-    name: Optional[str] = None,
-    description: Optional[str] = None,
-    schedule_type: Optional[str] = None,
-    interval_value: Optional[int] = None,
-    interval_unit: Optional[str] = None,
-    time_of_day: Optional[str] = None,
-    download_source: Optional[str] = None,
-    data_interval: Optional[str] = None,
-    lookback_days: Optional[int] = None,
-    is_enabled: Optional[bool] = None,
-    is_paused: Optional[bool] = None,
-    status: Optional[str] = None,
-    apscheduler_job_id: Optional[str] = None,
-    next_run_at: Optional[datetime] = None,
-    last_run_at: Optional[datetime] = None,
-    last_run_status: Optional[str] = None
-) -> Tuple[bool, str]:
+    name: str | None = None,
+    description: str | None = None,
+    schedule_type: str | None = None,
+    interval_value: int | None = None,
+    interval_unit: str | None = None,
+    time_of_day: str | None = None,
+    download_source: str | None = None,
+    data_interval: str | None = None,
+    lookback_days: int | None = None,
+    is_enabled: bool | None = None,
+    is_paused: bool | None = None,
+    status: str | None = None,
+    apscheduler_job_id: str | None = None,
+    next_run_at: datetime | None = None,
+    last_run_at: datetime | None = None,
+    last_run_status: str | None = None,
+) -> tuple[bool, str]:
     """Update a schedule configuration."""
     try:
         updates = []
@@ -2879,20 +3055,16 @@ def update_schedule(
         return False, str(e)
 
 
-def delete_schedule(schedule_id: str) -> Tuple[bool, str]:
+def delete_schedule(schedule_id: str) -> tuple[bool, str]:
     """Delete a schedule and its execution history."""
     try:
         with get_connection() as conn:
             # Delete execution history first
             conn.execute(
-                "DELETE FROM historify_schedule_executions WHERE schedule_id = ?",
-                [schedule_id]
+                "DELETE FROM historify_schedule_executions WHERE schedule_id = ?", [schedule_id]
             )
             # Delete schedule
-            conn.execute(
-                "DELETE FROM historify_schedules WHERE id = ?",
-                [schedule_id]
-            )
+            conn.execute("DELETE FROM historify_schedules WHERE id = ?", [schedule_id])
 
         logger.info(f"Deleted schedule: {schedule_id}")
         return True, "Schedule deleted successfully"
@@ -2902,29 +3074,32 @@ def delete_schedule(schedule_id: str) -> Tuple[bool, str]:
         return False, str(e)
 
 
-def increment_schedule_run_counts(
-    schedule_id: str,
-    is_success: bool
-) -> Tuple[bool, str]:
+def increment_schedule_run_counts(schedule_id: str, is_success: bool) -> tuple[bool, str]:
     """Increment run counts for a schedule."""
     try:
         with get_connection() as conn:
             if is_success:
-                conn.execute("""
+                conn.execute(
+                    """
                     UPDATE historify_schedules
                     SET total_runs = total_runs + 1,
                         successful_runs = successful_runs + 1,
                         last_run_at = current_timestamp
                     WHERE id = ?
-                """, [schedule_id])
+                """,
+                    [schedule_id],
+                )
             else:
-                conn.execute("""
+                conn.execute(
+                    """
                     UPDATE historify_schedules
                     SET total_runs = total_runs + 1,
                         failed_runs = failed_runs + 1,
                         last_run_at = current_timestamp
                     WHERE id = ?
-                """, [schedule_id])
+                """,
+                    [schedule_id],
+                )
 
         return True, "Run counts updated"
 
@@ -2933,10 +3108,7 @@ def increment_schedule_run_counts(
         return False, str(e)
 
 
-def create_schedule_execution(
-    schedule_id: str,
-    download_job_id: Optional[str] = None
-) -> Optional[int]:
+def create_schedule_execution(schedule_id: str, download_job_id: str | None = None) -> int | None:
     """
     Create a new execution record for a schedule.
 
@@ -2954,11 +3126,14 @@ def create_schedule_execution(
             # Try inserting, if collision occurs retry with incremented ID
             for attempt in range(3):
                 try:
-                    conn.execute("""
+                    conn.execute(
+                        """
                         INSERT INTO historify_schedule_executions
                         (id, schedule_id, download_job_id, status, started_at)
                         VALUES (?, ?, ?, 'running', current_timestamp)
-                    """, [execution_id + attempt, schedule_id, download_job_id])
+                    """,
+                        [execution_id + attempt, schedule_id, download_job_id],
+                    )
                     execution_id = execution_id + attempt
                     break
                 except Exception:
@@ -2976,15 +3151,15 @@ def create_schedule_execution(
 
 def update_schedule_execution(
     execution_id: int,
-    status: Optional[str] = None,
-    completed_at: Optional[datetime] = None,
-    symbols_processed: Optional[int] = None,
-    symbols_success: Optional[int] = None,
-    symbols_failed: Optional[int] = None,
-    records_downloaded: Optional[int] = None,
-    error_message: Optional[str] = None,
-    download_job_id: Optional[str] = None
-) -> Tuple[bool, str]:
+    status: str | None = None,
+    completed_at: datetime | None = None,
+    symbols_processed: int | None = None,
+    symbols_success: int | None = None,
+    symbols_failed: int | None = None,
+    records_downloaded: int | None = None,
+    error_message: str | None = None,
+    download_job_id: str | None = None,
+) -> tuple[bool, str]:
     """Update an execution record."""
     try:
         updates = []
@@ -3031,14 +3206,12 @@ def update_schedule_execution(
         return False, str(e)
 
 
-def get_schedule_executions(
-    schedule_id: str,
-    limit: int = 20
-) -> List[Dict[str, Any]]:
+def get_schedule_executions(schedule_id: str, limit: int = 20) -> list[dict[str, Any]]:
     """Get execution history for a schedule."""
     try:
         with get_connection() as conn:
-            result = conn.execute("""
+            result = conn.execute(
+                """
                 SELECT id, schedule_id, download_job_id, status,
                        started_at, completed_at, symbols_processed,
                        symbols_success, symbols_failed, records_downloaded,
@@ -3047,12 +3220,14 @@ def get_schedule_executions(
                 WHERE schedule_id = ?
                 ORDER BY started_at DESC
                 LIMIT ?
-            """, [schedule_id, limit]).fetchdf()
+            """,
+                [schedule_id, limit],
+            ).fetchdf()
 
             if result.empty:
                 return []
 
-            records = result.to_dict('records')
+            records = result.to_dict("records")
             return [_clean_schedule_record(r) for r in records]
 
     except Exception as e:
@@ -3060,7 +3235,7 @@ def get_schedule_executions(
         return []
 
 
-def get_active_schedules() -> List[Dict[str, Any]]:
+def get_active_schedules() -> list[dict[str, Any]]:
     """Get all enabled and non-paused schedules."""
     try:
         with get_connection() as conn:
@@ -3078,7 +3253,7 @@ def get_active_schedules() -> List[Dict[str, Any]]:
             if result.empty:
                 return []
 
-            records = result.to_dict('records')
+            records = result.to_dict("records")
             return [_clean_schedule_record(r) for r in records]
 
     except Exception as e:

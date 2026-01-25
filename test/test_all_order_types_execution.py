@@ -11,10 +11,11 @@ This script will:
 4. Check execution results
 """
 
-import requests
 import json
 import time
 from datetime import datetime
+
+import requests
 
 # Configuration
 BASE_URL = "http://127.0.0.1:5000"
@@ -34,7 +35,7 @@ TEST_ORDERS = {
         "price": "0",
         "trigger_price": "0",
         "pricetype": "MARKET",
-        "product": "MIS"
+        "product": "MIS",
     },
     # Smart order - requires position_size field
     "placesmartorder": {
@@ -48,7 +49,7 @@ TEST_ORDERS = {
         "price": "0",
         "trigger_price": "0",
         "pricetype": "MARKET",
-        "product": "MIS"
+        "product": "MIS",
     },
     # Basket order - array of orders
     "basketorder": {
@@ -63,7 +64,7 @@ TEST_ORDERS = {
                 "price": "0",
                 "trigger_price": "0",
                 "pricetype": "MARKET",
-                "product": "MIS"
+                "product": "MIS",
             },
             {
                 "symbol": "INFY",
@@ -73,9 +74,9 @@ TEST_ORDERS = {
                 "price": "0",
                 "trigger_price": "0",
                 "pricetype": "MARKET",
-                "product": "MIS"
-            }
-        ]
+                "product": "MIS",
+            },
+        ],
     },
     # Split order - quantity split into multiple orders
     # Note: Does NOT include price/trigger_price in main request
@@ -88,7 +89,7 @@ TEST_ORDERS = {
         "quantity": "10",
         "splitsize": "1",  # Split into orders of size 1
         "pricetype": "MARKET",
-        "product": "MIS"
+        "product": "MIS",
     },
     # Options order - requires expiry_date and option-specific fields
     "optionsorder": {
@@ -106,8 +107,8 @@ TEST_ORDERS = {
         "product": "MIS",
         "price": "0",
         "trigger_price": "0",
-        "disclosed_quantity": "0"
-    }
+        "disclosed_quantity": "0",
+    },
 }
 
 
@@ -135,12 +136,12 @@ def place_order(order_type, order_data):
             log(f"[OK] {order_type} placed successfully", "SUCCESS")
 
             # Check if it was queued
-            if result.get('mode') == 'semi_auto':
-                pending_order_id = result.get('pending_order_id')
+            if result.get("mode") == "semi_auto":
+                pending_order_id = result.get("pending_order_id")
                 log(f"  -> Queued in Action Center (ID: {pending_order_id})", "INFO")
                 return True, pending_order_id
             else:
-                log(f"  -> Executed immediately (not queued)", "WARNING")
+                log("  -> Executed immediately (not queued)", "WARNING")
                 return True, None
         else:
             log(f"[FAIL] {order_type} failed: {response.text}", "ERROR")
@@ -232,5 +233,6 @@ if __name__ == "__main__":
     except Exception as e:
         log(f"Unexpected error: {str(e)}", "ERROR")
         import traceback
+
         traceback.print_exc()
         exit(1)

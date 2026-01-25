@@ -1,11 +1,12 @@
-#Market Price Protection (MPP) Slab Configuration
-#Reference: https://support.zerodha.com/category/trading-and-markets/charts-and-orders/order/articles/market-price-protection-on-the-order-window
+# Market Price Protection (MPP) Slab Configuration
+# Reference: https://support.zerodha.com/category/trading-and-markets/charts-and-orders/order/articles/market-price-protection-on-the-order-window
 #
-#This module provides centralized Market Price Protection functionality for OpenAlgo.
-#When brokers stop supporting market orders, this converts MARKET orders to LIMIT orders
-#with a price buffer based on configurable protection percentages.
+# This module provides centralized Market Price Protection functionality for OpenAlgo.
+# When brokers stop supporting market orders, this converts MARKET orders to LIMIT orders
+# with a price buffer based on configurable protection percentages.
 
 from typing import Optional
+
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -14,23 +15,22 @@ logger = get_logger(__name__)
 # Based on Indian exchange regulations
 # Format: (max_price, protection_percentage)
 EQ_FUT_MPP_SLABS = [
-    (100, 2.0),           # Price < 100: 2% protection
-    (500, 1.0),           # Price 100-500: 1% protection
-    (float('inf'), 0.5),  # Price > 500: 0.5% protection
+    (100, 2.0),  # Price < 100: 2% protection
+    (500, 1.0),  # Price 100-500: 1% protection
+    (float("inf"), 0.5),  # Price > 500: 0.5% protection
 ]
 
 # MPP Slabs for Options (CE and PE)
 # Options have different slabs due to higher volatility
 OPT_MPP_SLABS = [
-    (10, 5.0),            # Price < 10: 5% protection
-    (100, 3.0),           # Price 10-100: 3% protection
-    (500, 2.0),           # Price 100-500: 2% protection
-    (float('inf'), 1.0),  # Price > 500: 1% protection
+    (10, 5.0),  # Price < 10: 5% protection
+    (100, 3.0),  # Price 10-100: 3% protection
+    (500, 2.0),  # Price 100-500: 2% protection
+    (float("inf"), 1.0),  # Price > 500: 1% protection
 ]
 
 # Instrument types that use Options slabs
-OPTIONS_INSTRUMENT_TYPES = ['CE', 'PE']
-
+OPTIONS_INSTRUMENT_TYPES = ["CE", "PE"]
 
 
 def get_instrument_type_from_symbol(symbol: str) -> str:
@@ -44,14 +44,14 @@ def get_instrument_type_from_symbol(symbol: str) -> str:
         str: 'CE', 'PE', 'FUT', or 'EQ'
     """
     symbol_upper = symbol.upper()
-    if symbol_upper.endswith('CE'):
-        return 'CE'
-    elif symbol_upper.endswith('PE'):
-        return 'PE'
-    elif symbol_upper.endswith('FUT'):
-        return 'FUT'
+    if symbol_upper.endswith("CE"):
+        return "CE"
+    elif symbol_upper.endswith("PE"):
+        return "PE"
+    elif symbol_upper.endswith("FUT"):
+        return "FUT"
     else:
-        return 'EQ'
+        return "EQ"
 
 
 def get_mpp_slabs(instrument_type: str) -> list:
@@ -70,7 +70,7 @@ def get_mpp_slabs(instrument_type: str) -> list:
         return EQ_FUT_MPP_SLABS
 
 
-def get_mpp_percentage(price: float, instrument_type: str = 'EQ') -> float:
+def get_mpp_percentage(price: float, instrument_type: str = "EQ") -> float:
     """
     Get the Market Price Protection percentage for a given price and instrument type.
 
@@ -92,9 +92,11 @@ def get_mpp_percentage(price: float, instrument_type: str = 'EQ') -> float:
     # Find the appropriate slab for the price
     for max_price, percentage in slabs:
         if price < max_price:
-            slab_desc = f"< {max_price}" if max_price != float('inf') else "> 500"
-            logger.info(f"MPP Slab Lookup: InstrumentType={instrument_type}, Price={price}, "
-                       f"Slab={slab_desc}, Protection={percentage}%, SlabType={slab_type}")
+            slab_desc = f"< {max_price}" if max_price != float("inf") else "> 500"
+            logger.info(
+                f"MPP Slab Lookup: InstrumentType={instrument_type}, Price={price}, "
+                f"Slab={slab_desc}, Protection={percentage}%, SlabType={slab_type}"
+            )
             return percentage
 
 
@@ -125,9 +127,14 @@ def round_to_tick_size(price: float, tick_size: float = None) -> float:
     return round(rounded, 2)
 
 
-def calculate_protected_price(price: float, action: str, symbol: str = None,
-                              instrument_type: str = None, tick_size: float = None,
-                              custom_percentage: float = None) -> float:
+def calculate_protected_price(
+    price: float,
+    action: str,
+    symbol: str = None,
+    instrument_type: str = None,
+    tick_size: float = None,
+    custom_percentage: float = None,
+) -> float:
     """
     Calculate the protected limit price for a market order with tick size rounding.
 
@@ -150,7 +157,7 @@ def calculate_protected_price(price: float, action: str, symbol: str = None,
     if instrument_type is None and symbol:
         instrument_type = get_instrument_type_from_symbol(symbol)
     elif instrument_type is None:
-        instrument_type = 'EQ'  # Default to EQ
+        instrument_type = "EQ"  # Default to EQ
 
     # Get protection percentage
     if custom_percentage is not None:
@@ -162,7 +169,7 @@ def calculate_protected_price(price: float, action: str, symbol: str = None,
     multiplier = percentage / 100
     price_adjustment = round(price * multiplier, 2)
 
-    if action.upper() == 'BUY':
+    if action.upper() == "BUY":
         # For BUY orders, add protection percentage to ensure execution
         protected_price = price * (1 + multiplier)
         adjustment_type = "+"
@@ -174,16 +181,19 @@ def calculate_protected_price(price: float, action: str, symbol: str = None,
     # Round to tick size
     protected_price = round_to_tick_size(protected_price, tick_size)
 
-    logger.info(f"MPP Calculation: Symbol={symbol or 'N/A'}, InstrumentType={instrument_type}, "
-                f"Action={action.upper()}, BasePrice={price}, Protection={percentage}%, "
-                f"Adjustment={adjustment_type}{price_adjustment}, TickSize={tick_size}, "
-                f"ProtectedPrice={protected_price}")
+    logger.info(
+        f"MPP Calculation: Symbol={symbol or 'N/A'}, InstrumentType={instrument_type}, "
+        f"Action={action.upper()}, BasePrice={price}, Protection={percentage}%, "
+        f"Adjustment={adjustment_type}{price_adjustment}, TickSize={tick_size}, "
+        f"ProtectedPrice={protected_price}"
+    )
 
     return protected_price
 
 
-def get_mpp_info(price: float, symbol: str = None, instrument_type: str = None,
-                 tick_size: float = None) -> dict:
+def get_mpp_info(
+    price: float, symbol: str = None, instrument_type: str = None, tick_size: float = None
+) -> dict:
     """
     Get detailed MPP information for a given price.
 
@@ -199,20 +209,20 @@ def get_mpp_info(price: float, symbol: str = None, instrument_type: str = None,
     if instrument_type is None and symbol:
         instrument_type = get_instrument_type_from_symbol(symbol)
     elif instrument_type is None:
-        instrument_type = 'EQ'
+        instrument_type = "EQ"
 
     percentage = get_mpp_percentage(price, instrument_type)
     slab_type = "OPT" if instrument_type in OPTIONS_INSTRUMENT_TYPES else "EQ/FUT"
 
     return {
-        'base_price': price,
-        'symbol': symbol,
-        'instrument_type': instrument_type,
-        'slab_type': slab_type,
-        'percentage': percentage,
-        'tick_size': tick_size,
-        'buy_price': calculate_protected_price(price, 'BUY', symbol, instrument_type, tick_size),
-        'sell_price': calculate_protected_price(price, 'SELL', symbol, instrument_type, tick_size),
+        "base_price": price,
+        "symbol": symbol,
+        "instrument_type": instrument_type,
+        "slab_type": slab_type,
+        "percentage": percentage,
+        "tick_size": tick_size,
+        "buy_price": calculate_protected_price(price, "BUY", symbol, instrument_type, tick_size),
+        "sell_price": calculate_protected_price(price, "SELL", symbol, instrument_type, tick_size),
     }
 
 
@@ -223,7 +233,7 @@ def log_mpp_slabs():
     logger.info("-" * 50)
     prev_max = 0
     for max_price, percentage in EQ_FUT_MPP_SLABS:
-        if max_price == float('inf'):
+        if max_price == float("inf"):
             logger.info(f"  Price >= {prev_max}: {percentage}%")
         else:
             logger.info(f"  Price < {max_price}: {percentage}%")
@@ -234,7 +244,7 @@ def log_mpp_slabs():
     logger.info("-" * 50)
     prev_max = 0
     for max_price, percentage in OPT_MPP_SLABS:
-        if max_price == float('inf'):
+        if max_price == float("inf"):
             logger.info(f"  Price >= {prev_max}: {percentage}%")
         else:
             logger.info(f"  Price < {max_price}: {percentage}%")

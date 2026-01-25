@@ -1,24 +1,25 @@
-import requests
-import json
-import hashlib
 import enum
+import hashlib
+import json
 import logging
-from datetime import time, datetime
-from time import sleep
-from collections import namedtuple
 import os
-import websocket
 import ssl
 import threading
+from collections import namedtuple
+from datetime import datetime, time
+from time import sleep
+
+import requests
+import websocket
 
 logger = logging.getLogger(__name__)
 
-Instrument = namedtuple('Instrument', ['exchange', 'token', 'symbol', 'name', 'expiry', 'lot_size'])
+Instrument = namedtuple("Instrument", ["exchange", "token", "symbol", "name", "expiry", "lot_size"])
 
 
 class TransactionType(enum.Enum):
-    Buy = 'BUY'
-    Sell = 'SELL'
+    Buy = "BUY"
+    Sell = "SELL"
 
 
 class LiveFeedType(enum.IntEnum):
@@ -29,18 +30,18 @@ class LiveFeedType(enum.IntEnum):
 
 
 class OrderType(enum.Enum):
-    Market = 'MKT'
-    Limit = 'L'
-    StopLossLimit = 'SL'
-    StopLossMarket = 'SL-M'
+    Market = "MKT"
+    Limit = "L"
+    StopLossLimit = "SL"
+    StopLossMarket = "SL-M"
 
 
 class ProductType(enum.Enum):
-    Intraday = 'MIS'
-    Delivery = 'CNC'
-    CoverOrder = 'CO'
-    BracketOrder = 'BO'
-    Normal = 'NRML'
+    Intraday = "MIS"
+    Delivery = "CNC"
+    CoverOrder = "CO"
+    BracketOrder = "BO"
+    Normal = "NRML"
 
 
 def encrypt_string(hashing):
@@ -91,14 +92,12 @@ class Aliceblue:
         # Authorization
         "encryption_key": "customer/getAPIEncpkey",
         "getsessiondata": "customer/getUserSID",
-
         # Market Watch
         "marketwatch_scrips": "marketWatch/fetchMWScrips",
         "addscrips": "marketWatch/addScripToMW",
         "getmarketwatch_list": "marketWatch/fetchMWList",
         "scripdetails": "ScripDetails/getScripQuoteDetails",
         "getdelete_scrips": "marketWatch/deleteMWScrip",
-
         # OrderManagement
         "squareoffposition": "positionAndHoldings/sqrOofPosition",
         "position_conversion": "positionAndHoldings/positionConvertion",
@@ -116,17 +115,10 @@ class Aliceblue:
         "profile": "customer/accountDetails",
         "basket_margin": "basket/getMargin",
         # Websocket
-        "base_url_socket": "wss://ws1.aliceblueonline.com/NorenWS/"
-
+        "base_url_socket": "wss://ws1.aliceblueonline.com/NorenWS/",
     }
 
-    def __init__(self,
-                 user_id,
-                 api_key,
-                 base=None,
-                 session_id=None,
-                 disable_ssl=False):
-
+    def __init__(self, user_id, api_key, base=None, session_id=None, disable_ssl=False):
         self.user_id = user_id.upper()
         self.api_key = api_key
         self.disable_ssl = disable_ssl
@@ -139,14 +131,13 @@ class Aliceblue:
 
     # Get method declaration
     def _get(self, sub_url, data=None):
-
         url = self.base + sub_url
         headers = self._user_agent()
 
         response = requests.get(url, headers=headers, params=data, verify=not self.disable_ssl)
 
         if response.status_code == 200:
-            if 'json' in response.headers.get('content-type'):
+            if "json" in response.headers.get("content-type"):
                 return response.json()
             else:
                 return response.content
@@ -155,13 +146,12 @@ class Aliceblue:
 
     # Post method declaration
     def _post(self, sub_url, data=None):
-
         url = self.base + sub_url
         headers = self._user_agent()
         response = requests.post(url, json=data, headers=headers, verify=not self.disable_ssl)
 
         if response.status_code == 200:
-            if 'json' in response.headers.get('content-type'):
+            if "json" in response.headers.get("content-type"):
                 return response.json()
             else:
                 return response.content
@@ -170,12 +160,11 @@ class Aliceblue:
 
     # Post method declaration
     def _dummypost(self, url, data=None):
-
         headers = self._user_agent()
         response = requests.post(url, json=data, headers=headers, verify=not self.disable_ssl)
 
         if response.status_code == 200:
-            if 'json' in response.headers.get('content-type'):
+            if "json" in response.headers.get("content-type"):
                 return response.json()
             else:
                 return response.content
@@ -183,33 +172,25 @@ class Aliceblue:
             return self._error_response(response.status_code)
 
     def _user_agent(self):
-
-        return {
-            'X-API-KEY': self.api_key,
-            'Content-Type': 'application/json'
-        }
+        return {"X-API-KEY": self.api_key, "Content-Type": "application/json"}
 
     def _user_authorization(self):
+        return {"Authorization": f"Bearer {self.user_id} {self.session_id}"}
 
-        return {
-            'Authorization': f'Bearer {self.user_id} {self.session_id}'
-        }
-
-    # 
+    #
     #     Headers with authorization. For some requests authorization
     #     is not required. It will be send as empty String
-    #     
+    #
     def _request(self, method, req_type, data=None):
-
         headers = self._user_agent()
 
-        if req_type != '':
+        if req_type != "":
             headers.update(self._user_authorization())
 
         url = self.base + method
 
         # Debug logging for WebSocket session creation
-        if 'createWsSession' in method:
+        if "createWsSession" in method:
             logger.info(f"Creating WebSocket session - URL: {url}")
             logger.info(f"Request headers: {headers}")
             logger.info(f"Request data: {data}")
@@ -217,13 +198,13 @@ class Aliceblue:
         response = requests.post(url, json=data, headers=headers, verify=not self.disable_ssl)
 
         # Debug logging for WebSocket session response
-        if 'createWsSession' in method:
+        if "createWsSession" in method:
             logger.info(f"Response status: {response.status_code}")
             logger.info(f"Response headers: {dict(response.headers)}")
             logger.info(f"Response content: {response.text}")
 
         if response.status_code == 200:
-            if 'json' in response.headers.get('content-type'):
+            if "json" in response.headers.get("content-type"):
                 return response.json()
             else:
                 return response.content
@@ -231,15 +212,12 @@ class Aliceblue:
             return self._error_response(response.status_code)
 
     def _error_response(self, message):
-        return {
-            'status': 'error',
-            'message': message
-        }
+        return {"status": "error", "message": message}
 
     def get_session_id(self, data=None):
         response = self._post(self._sub_urls["getsessiondata"], data)
-        if response['stat'] == 'Ok':
-            return response['result']
+        if response["stat"] == "Ok":
+            return response["result"]
         else:
             return response
 
@@ -251,13 +229,22 @@ class Aliceblue:
         response = self._request(self._sub_urls["cancelorder"], "A", nextorder)
         return response
 
-    def place_order(self, transaction_type, instrument, quantity, order_type,
-                    product_type, price=0.0, trigger_price=None,
-                    stop_loss=None, square_off=None, trailing_sl=None,
-                    is_amo=False,
-                    order_tag=None,
-                    is_ioc=False):
-
+    def place_order(
+        self,
+        transaction_type,
+        instrument,
+        quantity,
+        order_type,
+        product_type,
+        price=0.0,
+        trigger_price=None,
+        stop_loss=None,
+        square_off=None,
+        trailing_sl=None,
+        is_amo=False,
+        order_tag=None,
+        is_ioc=False,
+    ):
         data = {
             "prctyp": order_type,
             "qty": str(quantity),
@@ -268,21 +255,29 @@ class Aliceblue:
             "tsym": instrument.symbol,
             "trantype": transaction_type,
             "ret": "DAY",
-            "uid": self.user_id
+            "uid": self.user_id,
         }
 
         if trigger_price:
-            data['trgprc'] = str(trigger_price)
+            data["trgprc"] = str(trigger_price)
 
         if order_tag:
-            data['ordenttag'] = order_tag
+            data["ordenttag"] = order_tag
 
         response = self._request(self._sub_urls["placeorder"], "A", data)
         return response
 
-    def modify_order(self, transaction_type, instrument, product_type, order_id, order_type, quantity, price=0.0,
-                     trigger_price=0.0):
-
+    def modify_order(
+        self,
+        transaction_type,
+        instrument,
+        product_type,
+        order_id,
+        order_type,
+        quantity,
+        price=0.0,
+        trigger_price=0.0,
+    ):
         data = {
             "norenordno": order_id,
             "prctyp": order_type,
@@ -293,11 +288,11 @@ class Aliceblue:
             "tsym": instrument.symbol,
             "trantype": transaction_type,
             "ret": "DAY",
-            "uid": self.user_id
+            "uid": self.user_id,
         }
 
         if trigger_price:
-            data['trgprc'] = str(trigger_price)
+            data["trgprc"] = str(trigger_price)
 
         response = self._request(self._sub_urls["modifyorder"], "A", data)
         return response
@@ -305,7 +300,7 @@ class Aliceblue:
     def get_contract_master(self, exchange):
         url = self.base_url_c % exchange
         response = requests.get(url)
-        
+
         if response.status_code == 200:
             return response.content
         else:
@@ -319,12 +314,20 @@ class Aliceblue:
         # Implementation for getting instrument by token
         pass
 
-    def start_websocket(self, socket_open_callback=None, socket_close_callback=None, socket_error_callback=None,
-                        subscription_callback=None, check_subscription_callback=None, run_in_background=False,
-                        market_depth=False):
+    def start_websocket(
+        self,
+        socket_open_callback=None,
+        socket_close_callback=None,
+        socket_error_callback=None,
+        subscription_callback=None,
+        check_subscription_callback=None,
+        run_in_background=False,
+        market_depth=False,
+    ):
         """
         Start the WebSocket connection for live data streaming
         """
+
         def on_message(ws, message):
             if subscription_callback:
                 subscription_callback(message)
@@ -344,18 +347,20 @@ class Aliceblue:
         # Create WebSocket session first
         session_data = {"loginType": "API"}
         session_response = self._request("ws/createWsSession", "A", session_data)
-        
-        if session_response.get('stat') == 'Ok':
-            ws_session = session_response['result']['wsSess']
-            
+
+        if session_response.get("stat") == "Ok":
+            ws_session = session_response["result"]["wsSess"]
+
             # Connect to WebSocket
             websocket.enableTrace(True)
-            self.ws = websocket.WebSocketApp("wss://ws1.aliceblueonline.com/NorenWS",
-                                           on_open=on_open,
-                                           on_message=on_message,
-                                           on_error=on_error,
-                                           on_close=on_close)
-            
+            self.ws = websocket.WebSocketApp(
+                "wss://ws1.aliceblueonline.com/NorenWS",
+                on_open=on_open,
+                on_message=on_message,
+                on_error=on_error,
+                on_close=on_close,
+            )
+
             if run_in_background:
                 self.__ws_thread = threading.Thread(target=self.ws.run_forever)
                 self.__ws_thread.daemon = True
@@ -368,10 +373,7 @@ class Aliceblue:
         Subscribe to live data for an instrument
         """
         if self.ws and self.ws.sock and self.ws.sock.connected:
-            subscription_msg = {
-                "k": f"{instrument.exchange}|{instrument.token}",
-                "t": feed_type
-            }
+            subscription_msg = {"k": f"{instrument.exchange}|{instrument.token}", "t": feed_type}
             self.ws.send(json.dumps(subscription_msg))
             return True
         return False
@@ -381,10 +383,7 @@ class Aliceblue:
         Unsubscribe from live data for an instrument
         """
         if self.ws and self.ws.sock and self.ws.sock.connected:
-            unsubscription_msg = {
-                "k": f"{instrument.exchange}|{instrument.token}",
-                "t": "u"
-            }
+            unsubscription_msg = {"k": f"{instrument.exchange}|{instrument.token}", "t": "u"}
             self.ws.send(json.dumps(unsubscription_msg))
             return True
         return False

@@ -1,197 +1,241 @@
-from flask import Blueprint, render_template, request, jsonify, session, current_app
+import glob
 import json
-from collections import OrderedDict
 import os
 import re
-import glob
+from collections import OrderedDict
+
+from flask import Blueprint, current_app, jsonify, render_template, request, session
+
 from database.auth_db import get_api_key_for_tradingview
-from utils.session import check_session_validity
 from utils.logging import get_logger
+from utils.session import check_session_validity
 
 logger = get_logger(__name__)
+
 
 def parse_bru_file(filepath):
     """Parse a Bruno .bru file and extract endpoint information"""
     try:
-        with open(filepath, 'r', encoding='utf-8') as f:
+        with open(filepath, encoding="utf-8") as f:
             content = f.read()
 
         endpoint = {}
 
         # Extract meta block
-        meta_match = re.search(r'meta\s*\{([^}]+)\}', content)
+        meta_match = re.search(r"meta\s*\{([^}]+)\}", content)
         if meta_match:
             meta_content = meta_match.group(1)
-            name_match = re.search(r'name:\s*(.+)', meta_content)
-            seq_match = re.search(r'seq:\s*(\d+)', meta_content)
-            type_match = re.search(r'type:\s*(.+)', meta_content)
+            name_match = re.search(r"name:\s*(.+)", meta_content)
+            seq_match = re.search(r"seq:\s*(\d+)", meta_content)
+            type_match = re.search(r"type:\s*(.+)", meta_content)
             if name_match:
-                endpoint['name'] = name_match.group(1).strip()
+                endpoint["name"] = name_match.group(1).strip()
             if seq_match:
-                endpoint['seq'] = int(seq_match.group(1).strip())
+                endpoint["seq"] = int(seq_match.group(1).strip())
             if type_match:
-                endpoint['type'] = type_match.group(1).strip()
+                endpoint["type"] = type_match.group(1).strip()
 
         # Check if this is a WebSocket endpoint
-        if endpoint.get('type') == 'websocket':
+        if endpoint.get("type") == "websocket":
             # Extract websocket block
-            ws_match = re.search(r'websocket\s*\{([^}]+)\}', content)
+            ws_match = re.search(r"websocket\s*\{([^}]+)\}", content)
             if ws_match:
                 ws_content = ws_match.group(1)
-                url_match = re.search(r'url:\s*(.+)', ws_content)
-                desc_match = re.search(r'description:\s*(.+)', ws_content)
+                url_match = re.search(r"url:\s*(.+)", ws_content)
+                desc_match = re.search(r"description:\s*(.+)", ws_content)
                 if url_match:
-                    endpoint['path'] = url_match.group(1).strip()
+                    endpoint["path"] = url_match.group(1).strip()
                 if desc_match:
-                    endpoint['description'] = desc_match.group(1).strip()
-                endpoint['method'] = 'WS'
+                    endpoint["description"] = desc_match.group(1).strip()
+                endpoint["method"] = "WS"
 
             # Extract message:json block for WebSocket
-            message_start = content.find('message:json')
+            message_start = content.find("message:json")
             if message_start != -1:
-                brace_start = content.find('{', message_start)
+                brace_start = content.find("{", message_start)
                 if brace_start != -1:
                     depth = 0
                     body_end = brace_start
                     for i, char in enumerate(content[brace_start:], start=brace_start):
-                        if char == '{':
+                        if char == "{":
                             depth += 1
-                        elif char == '}':
+                        elif char == "}":
                             depth -= 1
                             if depth == 0:
                                 body_end = i
                                 break
-                    body_content = content[brace_start+1:body_end].strip()
+                    body_content = content[brace_start + 1 : body_end].strip()
                     try:
                         body_json = json.loads(body_content, object_pairs_hook=OrderedDict)
-                        endpoint['body'] = body_json
+                        endpoint["body"] = body_json
                     except json.JSONDecodeError:
                         logger.warning(f"Failed to parse JSON message in {filepath}")
 
-            return endpoint if 'name' in endpoint else None
+            return endpoint if "name" in endpoint else None
 
         # Extract HTTP method and URL (post/get/put/delete block)
-        method_match = re.search(r'(get|post|put|delete|patch)\s*\{([^}]+)\}', content, re.IGNORECASE)
+        method_match = re.search(
+            r"(get|post|put|delete|patch)\s*\{([^}]+)\}", content, re.IGNORECASE
+        )
         if method_match:
-            endpoint['method'] = method_match.group(1).upper()
+            endpoint["method"] = method_match.group(1).upper()
             method_content = method_match.group(2)
-            url_match = re.search(r'url:\s*(.+)', method_content)
+            url_match = re.search(r"url:\s*(.+)", method_content)
             if url_match:
                 full_url = url_match.group(1).strip()
                 # Extract path and query params from URL
-                path_match = re.search(r'(/api/v1/[^?]+)', full_url)
+                path_match = re.search(r"(/api/v1/[^?]+)", full_url)
                 if path_match:
-                    endpoint['path'] = path_match.group(1)
+                    endpoint["path"] = path_match.group(1)
 
                 # For GET requests, extract query params from URL
-                if endpoint.get('method') == 'GET':
-                    query_match = re.search(r'\?(.+)$', full_url)
+                if endpoint.get("method") == "GET":
+                    query_match = re.search(r"\?(.+)$", full_url)
                     if query_match:
                         query_string = query_match.group(1)
                         params = {}
-                        for param in query_string.split('&'):
-                            if '=' in param:
-                                key, value = param.split('=', 1)
+                        for param in query_string.split("&"):
+                            if "=" in param:
+                                key, value = param.split("=", 1)
                                 # Clear apikey value for security
-                                if key == 'apikey':
-                                    params[key] = ''
+                                if key == "apikey":
+                                    params[key] = ""
                                 else:
                                     params[key] = value
                         if params:
-                            endpoint['params'] = params
+                            endpoint["params"] = params
 
         # Extract body:json block with balanced brace matching
-        body_start = content.find('body:json')
+        body_start = content.find("body:json")
         if body_start != -1:
             # Find the opening brace of the body:json block
-            brace_start = content.find('{', body_start)
+            brace_start = content.find("{", body_start)
             if brace_start != -1:
                 # Count braces to find the matching closing brace
                 depth = 0
                 body_end = brace_start
                 for i, char in enumerate(content[brace_start:], start=brace_start):
-                    if char == '{':
+                    if char == "{":
                         depth += 1
-                    elif char == '}':
+                    elif char == "}":
                         depth -= 1
                         if depth == 0:
                             body_end = i
                             break
 
                 # Extract content between outer braces (the JSON object inside)
-                body_content = content[brace_start+1:body_end].strip()
+                body_content = content[brace_start + 1 : body_end].strip()
                 try:
                     # Use object_pairs_hook to preserve field order from .bru file
                     body_json = json.loads(body_content, object_pairs_hook=OrderedDict)
                     # Clear the hardcoded API key
-                    if isinstance(body_json, (dict, OrderedDict)) and 'apikey' in body_json:
-                        body_json['apikey'] = ''
-                    endpoint['body'] = body_json
+                    if isinstance(body_json, (dict, OrderedDict)) and "apikey" in body_json:
+                        body_json["apikey"] = ""
+                    endpoint["body"] = body_json
                 except json.JSONDecodeError:
                     logger.warning(f"Failed to parse JSON body in {filepath}")
 
         # Extract query params for GET requests
-        params_match = re.search(r'params:query\s*\{([^}]+)\}', content)
+        params_match = re.search(r"params:query\s*\{([^}]+)\}", content)
         if params_match:
             params = {}
             params_content = params_match.group(1)
-            for line in params_content.split('\n'):
-                param_match = re.search(r'(\w+):\s*(.+)', line)
+            for line in params_content.split("\n"):
+                param_match = re.search(r"(\w+):\s*(.+)", line)
                 if param_match:
                     key = param_match.group(1).strip()
                     value = param_match.group(2).strip()
                     params[key] = value
             if params:
-                endpoint['params'] = params
+                endpoint["params"] = params
 
-        return endpoint if 'name' in endpoint and 'path' in endpoint else None
+        return endpoint if "name" in endpoint and "path" in endpoint else None
 
     except Exception as e:
         logger.error(f"Error parsing Bruno file {filepath}: {e}")
         return None
+
 
 def categorize_endpoint(path):
     """Categorize an endpoint based on its path"""
     path_lower = path.lower()
 
     # Account endpoints
-    if any(x in path_lower for x in ['/funds', '/orderbook', '/tradebook', '/positionbook', '/holdings', '/analyzer', '/margin']):
-        return 'account'
+    if any(
+        x in path_lower
+        for x in [
+            "/funds",
+            "/orderbook",
+            "/tradebook",
+            "/positionbook",
+            "/holdings",
+            "/analyzer",
+            "/margin",
+        ]
+    ):
+        return "account"
 
     # Order endpoints
-    if any(x in path_lower for x in ['/placeorder', '/placesmartorder', '/optionsorder', '/optionsmultiorder',
-                                      '/basketorder', '/splitorder', '/modifyorder', '/cancelorder',
-                                      '/cancelallorder', '/closeposition', '/orderstatus', '/openposition', '/closeall']):
-        return 'orders'
+    if any(
+        x in path_lower
+        for x in [
+            "/placeorder",
+            "/placesmartorder",
+            "/optionsorder",
+            "/optionsmultiorder",
+            "/basketorder",
+            "/splitorder",
+            "/modifyorder",
+            "/cancelorder",
+            "/cancelallorder",
+            "/closeposition",
+            "/orderstatus",
+            "/openposition",
+            "/closeall",
+        ]
+    ):
+        return "orders"
 
     # Data endpoints
-    if any(x in path_lower for x in ['/quotes', '/multiquotes', '/depth', '/history', '/intervals', '/symbol',
-                                      '/search', '/expiry', '/optionsymbol', '/optiongreeks', '/multioptiongreeks', '/optionchain',
-                                      '/ticker', '/syntheticfuture', '/instruments']):
-        return 'data'
+    if any(
+        x in path_lower
+        for x in [
+            "/quotes",
+            "/multiquotes",
+            "/depth",
+            "/history",
+            "/intervals",
+            "/symbol",
+            "/search",
+            "/expiry",
+            "/optionsymbol",
+            "/optiongreeks",
+            "/multioptiongreeks",
+            "/optionchain",
+            "/ticker",
+            "/syntheticfuture",
+            "/instruments",
+        ]
+    ):
+        return "data"
 
     # Default to utilities
-    return 'utilities'
+    return "utilities"
+
 
 def load_bruno_endpoints():
     """Load all endpoints from Bruno .bru files"""
-    endpoints = {
-        'account': [],
-        'orders': [],
-        'data': [],
-        'utilities': [],
-        'websocket': []
-    }
+    endpoints = {"account": [], "orders": [], "data": [], "utilities": [], "websocket": []}
 
     # Find all .bru files in collections directory
-    collections_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'collections')
-    bru_files = glob.glob(os.path.join(collections_path, '**', '*.bru'), recursive=True)
+    collections_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "collections")
+    bru_files = glob.glob(os.path.join(collections_path, "**", "*.bru"), recursive=True)
 
     parsed_endpoints = []
 
     for bru_file in bru_files:
         # Skip collection.bru metadata files
-        if os.path.basename(bru_file) == 'collection.bru':
+        if os.path.basename(bru_file) == "collection.bru":
             continue
 
         endpoint = parse_bru_file(bru_file)
@@ -199,93 +243,90 @@ def load_bruno_endpoints():
             parsed_endpoints.append(endpoint)
 
     # Sort by sequence number if available
-    parsed_endpoints.sort(key=lambda x: x.get('seq', 999))
+    parsed_endpoints.sort(key=lambda x: x.get("seq", 999))
 
     # Categorize endpoints
     for endpoint in parsed_endpoints:
         # Check if it's a WebSocket endpoint
-        if endpoint.get('type') == 'websocket':
-            category = 'websocket'
+        if endpoint.get("type") == "websocket":
+            category = "websocket"
         else:
-            category = categorize_endpoint(endpoint.get('path', ''))
+            category = categorize_endpoint(endpoint.get("path", ""))
 
         # Clean up endpoint for frontend (remove seq and type)
         clean_endpoint = {
-            'name': endpoint.get('name', ''),
-            'method': endpoint.get('method', 'POST'),
-            'path': endpoint.get('path', '')
+            "name": endpoint.get("name", ""),
+            "method": endpoint.get("method", "POST"),
+            "path": endpoint.get("path", ""),
         }
-        if 'body' in endpoint:
-            clean_endpoint['body'] = endpoint['body']
-        if 'params' in endpoint:
-            clean_endpoint['params'] = endpoint['params']
-        if 'description' in endpoint:
-            clean_endpoint['description'] = endpoint['description']
+        if "body" in endpoint:
+            clean_endpoint["body"] = endpoint["body"]
+        if "params" in endpoint:
+            clean_endpoint["params"] = endpoint["params"]
+        if "description" in endpoint:
+            clean_endpoint["description"] = endpoint["description"]
 
         endpoints[category].append(clean_endpoint)
 
     # Sort endpoints alphabetically by name within each category
     for category in endpoints:
-        endpoints[category].sort(key=lambda x: x.get('name', '').lower())
+        endpoints[category].sort(key=lambda x: x.get("name", "").lower())
 
     return endpoints
 
-playground_bp = Blueprint('playground', __name__, url_prefix='/playground')
 
-@playground_bp.route('/')
+playground_bp = Blueprint("playground", __name__, url_prefix="/playground")
+
+
+@playground_bp.route("/")
 @check_session_validity
 def index():
     """Render the API tester page"""
-    login_username = session.get('user')
+    login_username = session.get("user")
     # Get the decrypted API key if it exists
     api_key = get_api_key_for_tradingview(login_username) if login_username else None
     logger.info(f"Playground accessed by user: {login_username}")
-    return render_template('playground.html', 
-                         login_username=login_username,
-                         api_key=api_key or '')
+    return render_template("playground.html", login_username=login_username, api_key=api_key or "")
 
-@playground_bp.route('/api-key')
+
+@playground_bp.route("/api-key")
 @check_session_validity
 def get_api_key():
     """Get the current user's API key"""
-    login_username = session.get('user')
+    login_username = session.get("user")
     if not login_username:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
-    api_key = get_api_key_for_tradingview(login_username)
-    return jsonify({'api_key': api_key or ''})
+        return jsonify({"error": "Not authenticated"}), 401
 
-@playground_bp.route('/collections')
+    api_key = get_api_key_for_tradingview(login_username)
+    return jsonify({"api_key": api_key or ""})
+
+
+@playground_bp.route("/collections")
 @check_session_validity
 def get_collections():
     """Get all available API collections"""
     collections = []
-    
+
     # Load Postman collection
-    postman_path = os.path.join('collections', 'postman', 'openalgo.postman_collection.json')
+    postman_path = os.path.join("collections", "postman", "openalgo.postman_collection.json")
     if os.path.exists(postman_path):
-        with open(postman_path, 'r') as f:
+        with open(postman_path) as f:
             postman_data = json.load(f)
-            collections.append({
-                'name': 'Postman Collection',
-                'type': 'postman',
-                'data': postman_data
-            })
-    
+            collections.append(
+                {"name": "Postman Collection", "type": "postman", "data": postman_data}
+            )
+
     # Load Bruno collection
-    bruno_path = os.path.join('collections', 'openalgo_bruno.json')
+    bruno_path = os.path.join("collections", "openalgo_bruno.json")
     if os.path.exists(bruno_path):
-        with open(bruno_path, 'r') as f:
+        with open(bruno_path) as f:
             bruno_data = json.load(f)
-            collections.append({
-                'name': 'Bruno Collection',
-                'type': 'bruno',
-                'data': bruno_data
-            })
-    
+            collections.append({"name": "Bruno Collection", "type": "bruno", "data": bruno_data})
+
     return jsonify(collections)
 
-@playground_bp.route('/endpoints')
+
+@playground_bp.route("/endpoints")
 @check_session_validity
 def get_endpoints():
     """Get structured list of all API endpoints from Bruno collections"""
@@ -296,25 +337,21 @@ def get_endpoints():
         if not any(endpoints.values()):
             logger.warning("No endpoints loaded from Bruno collections")
             return current_app.response_class(
-                response=json.dumps({
-                    'account': [],
-                    'orders': [],
-                    'data': [],
-                    'utilities': [],
-                    'websocket': []
-                }),
+                response=json.dumps(
+                    {"account": [], "orders": [], "data": [], "utilities": [], "websocket": []}
+                ),
                 status=200,
-                mimetype='application/json'
+                mimetype="application/json",
             )
 
-        logger.info(f"Loaded {sum(len(v) for v in endpoints.values())} endpoints from Bruno collections")
+        logger.info(
+            f"Loaded {sum(len(v) for v in endpoints.values())} endpoints from Bruno collections"
+        )
         # Return with sort_keys=False to preserve field order from .bru files
         return current_app.response_class(
-            response=json.dumps(endpoints, sort_keys=False),
-            status=200,
-            mimetype='application/json'
+            response=json.dumps(endpoints, sort_keys=False), status=200, mimetype="application/json"
         )
 
     except Exception as e:
         logger.error(f"Error loading endpoints: {e}")
-        return jsonify({'error': 'Failed to load endpoints'}), 500
+        return jsonify({"error": "Failed to load endpoints"}), 500

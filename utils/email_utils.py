@@ -7,26 +7,30 @@ and password reset notifications.
 
 import smtplib
 import ssl
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from datetime import datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
 from database.settings_db import get_smtp_settings
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+
 class EmailSendError(Exception):
     """Custom exception for email sending errors"""
+
     pass
+
 
 def send_test_email(recipient_email, sender_name="OpenAlgo Admin"):
     """
     Send a test email to verify SMTP configuration.
-    
+
     Args:
         recipient_email (str): Email address to send test email to
         sender_name (str): Name of the sender
-        
+
     Returns:
         dict: Result dictionary with success status and message
     """
@@ -34,20 +38,26 @@ def send_test_email(recipient_email, sender_name="OpenAlgo Admin"):
         smtp_settings = get_smtp_settings()
         if not smtp_settings:
             return {
-                'success': False,
-                'message': 'SMTP settings not configured. Please configure SMTP settings first.'
+                "success": False,
+                "message": "SMTP settings not configured. Please configure SMTP settings first.",
             }
-        
+
         # Validate required settings
-        required_fields = ['smtp_server', 'smtp_port', 'smtp_username', 'smtp_password', 'smtp_from_email']
+        required_fields = [
+            "smtp_server",
+            "smtp_port",
+            "smtp_username",
+            "smtp_password",
+            "smtp_from_email",
+        ]
         missing_fields = [field for field in required_fields if not smtp_settings.get(field)]
-        
+
         if missing_fields:
             return {
-                'success': False,
-                'message': f'Missing required SMTP settings: {", ".join(missing_fields)}'
+                "success": False,
+                "message": f"Missing required SMTP settings: {', '.join(missing_fields)}",
             }
-        
+
         # Create test email content
         subject = "OpenAlgo - SMTP Test Successful"
 
@@ -90,13 +100,13 @@ def send_test_email(recipient_email, sender_name="OpenAlgo Admin"):
                                             <tr>
                                                 <td style="padding: 8px 0; border-bottom: 1px solid #262626;">
                                                     <span style="font-size: 13px; color: #71717a;">Server</span><br>
-                                                    <span style="font-size: 14px; color: #e4e4e7; font-weight: 500;">{smtp_settings['smtp_server']}:{smtp_settings['smtp_port']}</span>
+                                                    <span style="font-size: 14px; color: #e4e4e7; font-weight: 500;">{smtp_settings["smtp_server"]}:{smtp_settings["smtp_port"]}</span>
                                                 </td>
                                             </tr>
                                             <tr>
                                                 <td style="padding: 8px 0; border-bottom: 1px solid #262626;">
                                                     <span style="font-size: 13px; color: #71717a;">Security</span><br>
-                                                    <span style="font-size: 14px; color: #22c55e; font-weight: 500;">{'TLS/SSL Enabled' if smtp_settings.get('smtp_use_tls') else 'No Encryption'}</span>
+                                                    <span style="font-size: 14px; color: #22c55e; font-weight: 500;">{"TLS/SSL Enabled" if smtp_settings.get("smtp_use_tls") else "No Encryption"}</span>
                                                 </td>
                                             </tr>
                                             <tr>
@@ -116,7 +126,7 @@ def send_test_email(recipient_email, sender_name="OpenAlgo Admin"):
                     <tr>
                         <td style="padding: 0 40px 40px 40px; text-align: center;">
                             <p style="margin: 0; font-size: 13px; color: #52525b;">
-                                {datetime.now().strftime('%B %d, %Y at %H:%M UTC')}
+                                {datetime.now().strftime("%B %d, %Y at %H:%M UTC")}
                             </p>
                             <p style="margin: 16px 0 0 0; font-size: 12px; color: #3f3f46;">
                                 Sent by <span style="color: #a1a1aa;">OpenAlgo</span>
@@ -137,62 +147,57 @@ SMTP Configuration Test - Success
 
 Your OpenAlgo SMTP configuration is working correctly.
 
-Server: {smtp_settings['smtp_server']}:{smtp_settings['smtp_port']}
-Security: {'TLS/SSL Enabled' if smtp_settings.get('smtp_use_tls') else 'No Encryption'}
+Server: {smtp_settings["smtp_server"]}:{smtp_settings["smtp_port"]}
+Security: {"TLS/SSL Enabled" if smtp_settings.get("smtp_use_tls") else "No Encryption"}
 Sent to: {recipient_email}
 
-Date: {datetime.now().strftime('%B %d, %Y at %H:%M UTC')}
+Date: {datetime.now().strftime("%B %d, %Y at %H:%M UTC")}
 
 --
 Sent by OpenAlgo
         """
-        
+
         # Send the email
         result = send_email(
             recipient_email=recipient_email,
             subject=subject,
             text_content=text_content,
             html_content=html_content,
-            smtp_settings=smtp_settings
+            smtp_settings=smtp_settings,
         )
-        
-        if result['success']:
+
+        if result["success"]:
             logger.info(f"Test email sent successfully to {recipient_email}")
             return {
-                'success': True,
-                'message': f'Test email sent successfully to {recipient_email}. Please check your inbox (and spam folder).'
+                "success": True,
+                "message": f"Test email sent successfully to {recipient_email}. Please check your inbox (and spam folder).",
             }
         else:
             return result
-            
+
     except Exception as e:
         error_msg = f"Failed to send test email: {str(e)}"
         logger.error(error_msg)
-        return {
-            'success': False,
-            'message': error_msg
-        }
+        return {"success": False, "message": error_msg}
+
 
 def send_password_reset_email(recipient_email, reset_link, user_name="User"):
     """
     Send password reset email.
-    
+
     Args:
         recipient_email (str): Email address to send reset email to
         reset_link (str): Password reset link
         user_name (str): Name of the user
-        
+
     Returns:
         dict: Result dictionary with success status and message
     """
     try:
         smtp_settings = get_smtp_settings()
         if not smtp_settings:
-            return {
-                'success': False,
-                'message': 'SMTP not configured'
-            }
-        
+            return {"success": False, "message": "SMTP not configured"}
+
         subject = "Reset your OpenAlgo password"
 
         html_content = f"""
@@ -302,34 +307,32 @@ If you didn't request this, you can safely ignore this email.
 --
 Sent by OpenAlgo
         """
-        
+
         return send_email(
             recipient_email=recipient_email,
             subject=subject,
             text_content=text_content,
             html_content=html_content,
-            smtp_settings=smtp_settings
+            smtp_settings=smtp_settings,
         )
-        
+
     except Exception as e:
         error_msg = f"Failed to send password reset email: {str(e)}"
         logger.error(error_msg)
-        return {
-            'success': False,
-            'message': error_msg
-        }
+        return {"success": False, "message": error_msg}
+
 
 def send_email(recipient_email, subject, text_content, html_content=None, smtp_settings=None):
     """
     Generic email sending function.
-    
+
     Args:
         recipient_email (str): Recipient email address
         subject (str): Email subject
         text_content (str): Plain text content
         html_content (str, optional): HTML content
         smtp_settings (dict, optional): SMTP settings (fetched if not provided)
-        
+
     Returns:
         dict: Result dictionary with success status and message
     """
@@ -337,51 +340,48 @@ def send_email(recipient_email, subject, text_content, html_content=None, smtp_s
         if not smtp_settings:
             smtp_settings = get_smtp_settings()
             if not smtp_settings:
-                return {
-                    'success': False,
-                    'message': 'SMTP settings not configured'
-                }
-        
+                return {"success": False, "message": "SMTP settings not configured"}
+
         # Create message
         message = MIMEMultipart("alternative")
         message["Subject"] = subject
-        message["From"] = smtp_settings['smtp_from_email']
+        message["From"] = smtp_settings["smtp_from_email"]
         message["To"] = recipient_email
-        
+
         # Add text content
         text_part = MIMEText(text_content, "plain")
         message.attach(text_part)
-        
+
         # Add HTML content if provided
         if html_content:
             html_part = MIMEText(html_content, "html")
             message.attach(html_part)
-        
+
         # Determine connection method based on port and settings
-        smtp_port = smtp_settings['smtp_port']
-        use_tls = smtp_settings.get('smtp_use_tls', True)
-        
+        smtp_port = smtp_settings["smtp_port"]
+        use_tls = smtp_settings.get("smtp_use_tls", True)
+
         # Create SSL context
         context = ssl.create_default_context()
         # For Gmail relay, we might need to be less strict about certificates
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
-        
+
         # Choose connection method based on port
         if smtp_port == 465:
             # Port 465 uses SSL from the start (SMTPS)
             logger.info(f"Using SMTP_SSL for port {smtp_port}")
-            server = smtplib.SMTP_SSL(smtp_settings['smtp_server'], smtp_port, context=context)
+            server = smtplib.SMTP_SSL(smtp_settings["smtp_server"], smtp_port, context=context)
             # Send EHLO after SSL connection
-            helo_hostname = smtp_settings.get('smtp_helo_hostname') or smtp_settings['smtp_server']
+            helo_hostname = smtp_settings.get("smtp_helo_hostname") or smtp_settings["smtp_server"]
             server.ehlo(helo_hostname)
         else:
             # Port 587 or others use SMTP with STARTTLS
             logger.info(f"Using SMTP with STARTTLS for port {smtp_port}")
-            server = smtplib.SMTP(smtp_settings['smtp_server'], smtp_port)
+            server = smtplib.SMTP(smtp_settings["smtp_server"], smtp_port)
 
             # Send initial EHLO
-            helo_hostname = smtp_settings.get('smtp_helo_hostname') or smtp_settings['smtp_server']
+            helo_hostname = smtp_settings.get("smtp_helo_hostname") or smtp_settings["smtp_server"]
             server.ehlo(helo_hostname)
 
             # Enable TLS if configured
@@ -392,38 +392,31 @@ def send_email(recipient_email, subject, text_content, html_content=None, smtp_s
 
         # Enable debug output for troubleshooting (uncomment if needed)
         # server.set_debuglevel(1)
-        
+
         # Login and send email
-        server.login(smtp_settings['smtp_username'], smtp_settings['smtp_password'])
-        server.sendmail(smtp_settings['smtp_from_email'], recipient_email, message.as_string())
+        server.login(smtp_settings["smtp_username"], smtp_settings["smtp_password"])
+        server.sendmail(smtp_settings["smtp_from_email"], recipient_email, message.as_string())
         server.quit()
-        
+
         logger.info(f"Email sent successfully to {recipient_email}")
-        return {
-            'success': True,
-            'message': 'Email sent successfully'
-        }
-        
+        return {"success": True, "message": "Email sent successfully"}
+
     except smtplib.SMTPAuthenticationError as e:
         error_msg = "SMTP Authentication failed. Please check your username and password."
         logger.error(f"SMTP Auth Error: {e}")
-        return {
-            'success': False,
-            'message': error_msg
-        }
+        return {"success": False, "message": error_msg}
     except smtplib.SMTPServerDisconnected as e:
         error_msg = "SMTP Server disconnected. Please check your server settings."
         logger.error(f"SMTP Disconnected: {e}")
-        return {
-            'success': False,
-            'message': error_msg
-        }
+        return {"success": False, "message": error_msg}
     except smtplib.SMTPException as e:
         error_str = str(e)
         logger.error(f"SMTP Exception: {e}")
-        
+
         # Provide specific guidance for common Gmail errors
-        if "Mail relay denied" in error_str and "smtp-relay.gmail.com" in smtp_settings.get('smtp_server', ''):
+        if "Mail relay denied" in error_str and "smtp-relay.gmail.com" in smtp_settings.get(
+            "smtp_server", ""
+        ):
             error_msg = """Gmail Workspace relay denied. Solutions:
             1. Register your server IP (49.207.195.248) in Google Admin Console → Apps → Gmail → SMTP relay
             2. Or switch to personal Gmail: smtp.gmail.com:587 with App Password
@@ -432,61 +425,62 @@ def send_email(recipient_email, subject, text_content, html_content=None, smtp_s
             error_msg = "SMTP Authentication failed. For Gmail, use App Password instead of regular password."
         else:
             error_msg = f"SMTP Error: {error_str}"
-        
-        return {
-            'success': False,
-            'message': error_msg
-        }
+
+        return {"success": False, "message": error_msg}
     except Exception as e:
         error_msg = f"Failed to send email: {str(e)}"
         logger.error(f"Email sending failed: {e}")
-        return {
-            'success': False,
-            'message': error_msg
-        }
+        return {"success": False, "message": error_msg}
+
 
 def validate_smtp_settings(smtp_settings):
     """
     Validate SMTP settings without sending an email.
-    
+
     Args:
         smtp_settings (dict): SMTP configuration
-        
+
     Returns:
         dict: Validation result
     """
     try:
-        required_fields = ['smtp_server', 'smtp_port', 'smtp_username', 'smtp_password', 'smtp_from_email']
+        required_fields = [
+            "smtp_server",
+            "smtp_port",
+            "smtp_username",
+            "smtp_password",
+            "smtp_from_email",
+        ]
         missing_fields = [field for field in required_fields if not smtp_settings.get(field)]
-        
+
         if missing_fields:
             return {
-                'success': False,
-                'message': f'Missing required fields: {", ".join(missing_fields)}'
+                "success": False,
+                "message": f"Missing required fields: {', '.join(missing_fields)}",
             }
-        
+
         # Test connection without sending email
-        smtp_port = smtp_settings['smtp_port']
-        use_tls = smtp_settings.get('smtp_use_tls', True)
-        
+        smtp_port = smtp_settings["smtp_port"]
+        use_tls = smtp_settings.get("smtp_use_tls", True)
+
         # Create SSL context
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
-        
+
         # Choose connection method based on port
         if smtp_port == 465:
             # Port 465 uses SSL from the start (SMTPS)
-            server = smtplib.SMTP_SSL(smtp_settings['smtp_server'], smtp_port, context=context)
+            server = smtplib.SMTP_SSL(smtp_settings["smtp_server"], smtp_port, context=context)
             # Send EHLO after SSL connection
-            helo_hostname = smtp_settings.get('smtp_helo_hostname') or smtp_settings['smtp_server']
+            helo_hostname = smtp_settings.get("smtp_helo_hostname") or smtp_settings["smtp_server"]
             server.ehlo(helo_hostname)
         else:
             # Port 587 or others use SMTP with STARTTLS
-            server = smtplib.SMTP(smtp_settings['smtp_server'], smtp_port)
+            server = smtplib.SMTP(smtp_settings["smtp_server"], smtp_port)
 
             # Send initial EHLO
-            helo_hostname = smtp_settings.get('smtp_helo_hostname') or smtp_settings['smtp_server']
+            helo_hostname = smtp_settings.get("smtp_helo_hostname") or smtp_settings["smtp_server"]
             server.ehlo(helo_hostname)
 
             # Enable TLS if configured
@@ -495,16 +489,10 @@ def validate_smtp_settings(smtp_settings):
                 # MUST send EHLO again after STARTTLS
                 server.ehlo(helo_hostname)
 
-        server.login(smtp_settings['smtp_username'], smtp_settings['smtp_password'])
+        server.login(smtp_settings["smtp_username"], smtp_settings["smtp_password"])
         server.quit()
-        
-        return {
-            'success': True,
-            'message': 'SMTP connection successful'
-        }
-        
+
+        return {"success": True, "message": "SMTP connection successful"}
+
     except Exception as e:
-        return {
-            'success': False,
-            'message': f'SMTP validation failed: {str(e)}'
-        }
+        return {"success": False, "message": f"SMTP validation failed: {str(e)}"}

@@ -1,35 +1,37 @@
 import importlib
-from typing import Dict, Type, Optional
+from typing import Dict, Optional, Type
+
+from utils.logging import get_logger
 
 from .base_adapter import (
-    BaseBrokerWebSocketAdapter,
     ENABLE_CONNECTION_POOLING,
     MAX_SYMBOLS_PER_WEBSOCKET,
-    MAX_WEBSOCKET_CONNECTIONS
+    MAX_WEBSOCKET_CONNECTIONS,
+    BaseBrokerWebSocketAdapter,
 )
 from .connection_manager import ConnectionPool
-from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 # Registry of all supported broker adapters
-BROKER_ADAPTERS: Dict[str, Type[BaseBrokerWebSocketAdapter]] = {}
+BROKER_ADAPTERS: dict[str, type[BaseBrokerWebSocketAdapter]] = {}
 
 # Registry of pooled adapters (one pool per user_id + broker combination)
-_POOLED_ADAPTERS: Dict[str, ConnectionPool] = {}
+_POOLED_ADAPTERS: dict[str, ConnectionPool] = {}
 
-def register_adapter(broker_name: str, adapter_class: Type[BaseBrokerWebSocketAdapter]) -> None:
+
+def register_adapter(broker_name: str, adapter_class: type[BaseBrokerWebSocketAdapter]) -> None:
     """
     Register a broker adapter class for a specific broker
-    
+
     Args:
         broker_name: Name of the broker
         adapter_class: Class that implements the BaseBrokerWebSocketAdapter interface
     """
     BROKER_ADAPTERS[broker_name.lower()] = adapter_class
-    
 
-def _get_adapter_class(broker_name: str) -> Type[BaseBrokerWebSocketAdapter]:
+
+def _get_adapter_class(broker_name: str) -> type[BaseBrokerWebSocketAdapter]:
     """
     Get the adapter class for a broker (without instantiating).
 
@@ -75,9 +77,8 @@ def _get_adapter_class(broker_name: str) -> Type[BaseBrokerWebSocketAdapter]:
 
 
 def create_broker_adapter(
-    broker_name: str,
-    use_pooling: Optional[bool] = None
-) -> Optional[BaseBrokerWebSocketAdapter]:
+    broker_name: str, use_pooling: bool | None = None
+) -> BaseBrokerWebSocketAdapter | None:
     """
     Create an instance of the appropriate broker adapter.
 
@@ -124,8 +125,8 @@ class _PooledAdapterWrapper:
     def __init__(self, adapter_class: type, broker_name: str):
         self._adapter_class = adapter_class
         self._broker_name = broker_name
-        self._pool: Optional[ConnectionPool] = None
-        self._user_id: Optional[str] = None
+        self._pool: ConnectionPool | None = None
+        self._user_id: str | None = None
         self.logger = get_logger(f"pooled_adapter_{broker_name}")
 
     def _ensure_pool(self, user_id: str) -> ConnectionPool:
@@ -143,7 +144,7 @@ class _PooledAdapterWrapper:
                     broker_name=self._broker_name,
                     user_id=user_id,
                     max_symbols_per_connection=MAX_SYMBOLS_PER_WEBSOCKET,
-                    max_connections=MAX_WEBSOCKET_CONNECTIONS
+                    max_connections=MAX_WEBSOCKET_CONNECTIONS,
                 )
                 _POOLED_ADAPTERS[pool_key] = self._pool
                 self.logger.info(
@@ -164,7 +165,7 @@ class _PooledAdapterWrapper:
         """Connect the pool"""
         if self._pool:
             return self._pool.connect()
-        return {'success': False, 'error': 'Not initialized'}
+        return {"success": False, "error": "Not initialized"}
 
     def disconnect(self):
         """Disconnect and cleanup the pool"""
@@ -178,13 +179,13 @@ class _PooledAdapterWrapper:
         """Subscribe to market data"""
         if self._pool:
             return self._pool.subscribe(symbol, exchange, mode, depth_level)
-        return {'status': 'error', 'message': 'Not initialized'}
+        return {"status": "error", "message": "Not initialized"}
 
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2):
         """Unsubscribe from market data"""
         if self._pool:
             return self._pool.unsubscribe(symbol, exchange, mode)
-        return {'status': 'error', 'message': 'Not initialized'}
+        return {"status": "error", "message": "Not initialized"}
 
     def unsubscribe_all(self):
         """Unsubscribe from all symbols"""
