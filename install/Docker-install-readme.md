@@ -253,8 +253,8 @@ sudo docker compose up -d
 | Installation | `/opt/openalgo` |
 | Configuration | `/opt/openalgo/.env` |
 | Database | Docker volume `openalgo_db` |
+| Strategies | Docker volume `openalgo_strategies` |
 | Application Logs | `/opt/openalgo/log` |
-| Broker Logs | `/opt/openalgo/logs` |
 | Nginx Config | `/etc/nginx/sites-available/yourdomain.com` |
 | SSL Certificates | `/etc/letsencrypt/live/yourdomain.com/` |
 | Backups | `/opt/openalgo-backups/` |
@@ -304,7 +304,7 @@ sudo docker inspect openalgo-web --format='{{.State.Health.Status}}'
 ```bash
 # Fix log directory permissions
 cd /opt/openalgo
-sudo chown -R 1000:1000 log logs
+sudo chown -R 1000:1000 log
 sudo docker compose restart
 ```
 
@@ -438,7 +438,7 @@ sudo docker compose stop
 sudo tar -xzf /opt/openalgo-backups/openalgo_backup_TIMESTAMP.tar.gz -C /opt/openalgo
 
 # Fix permissions
-sudo chown -R 1000:1000 log logs
+sudo chown -R 1000:1000 log
 
 # Start container
 sudo docker compose start
@@ -503,10 +503,13 @@ sudo rm -rf /var/lib/docker
 | IBulls | `ibulls` | Yes |
 | IIFL | `iifl` | Yes |
 | IndMoney | `indmoney` | No |
+| Jainam XTS | `jainamxts` | Yes |
 | Kotak | `kotak` | No |
 | Motilal Oswal | `motilal` | No |
+| MStock | `mstock` | No |
 | Paytm Money | `paytm` | No |
 | Pocketful | `pocketful` | No |
+| Samco | `samco` | No |
 | Shoonya | `shoonya` | No |
 | Tradejini | `tradejini` | No |
 | Upstox | `upstox` | No |
