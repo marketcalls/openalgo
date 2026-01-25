@@ -285,12 +285,12 @@ do_setup() {
     echo "  Data directory: $OPENALGO_DIR"
     echo "  Config file:    $OPENALGO_DIR/$ENV_FILE"
     echo "  Database:       $OPENALGO_DIR/db/"
+    echo "  Strategies:     $OPENALGO_DIR/strategies/"
     echo ""
     echo "  Redirect URL for broker portal:"
     echo "  http://127.0.0.1:5000/$BROKER_NAME/callback"
     echo ""
-    echo "  Documentation:"
-    echo "  https://github.com/marketcalls/openalgo/blob/main/install/Docker-install-readme.md"
+    echo "  Documentation: https://docs.openalgo.in"
     echo ""
 
     # Try to open .env in editor
@@ -341,10 +341,15 @@ do_start() {
         echo ""
     fi
 
-    # Create db directory if not exists
+    # Create db and strategies directories if not exist
     if [ ! -d "$OPENALGO_DIR/db" ]; then
         log_info "Creating database directory..."
         mkdir -p "$OPENALGO_DIR/db"
+    fi
+    if [ ! -d "$OPENALGO_DIR/strategies" ]; then
+        log_info "Creating strategies directory..."
+        mkdir -p "$OPENALGO_DIR/strategies/scripts"
+        mkdir -p "$OPENALGO_DIR/strategies/examples"
     fi
 
     # Pull latest image
@@ -364,6 +369,7 @@ do_start() {
         -p 5000:5000 \
         -p 8765:8765 \
         -v "$OPENALGO_DIR/db:/app/db" \
+        -v "$OPENALGO_DIR/strategies:/app/strategies" \
         -v "$OPENALGO_DIR/.env:/app/.env:ro" \
         --restart unless-stopped \
         "$IMAGE"; then
@@ -495,8 +501,9 @@ do_help() {
     echo "     ./docker-run.sh"
     echo ""
     echo "Data Location: $OPENALGO_DIR"
-    echo "  - Config:   $OPENALGO_DIR/.env"
-    echo "  - Database: $OPENALGO_DIR/db/"
+    echo "  - Config:     $OPENALGO_DIR/.env"
+    echo "  - Database:   $OPENALGO_DIR/db/"
+    echo "  - Strategies: $OPENALGO_DIR/strategies/"
     echo ""
     echo "XTS Brokers (require market data credentials):"
     echo "  fivepaisaxts, compositedge, ibulls, iifl, jainamxts, wisdom"

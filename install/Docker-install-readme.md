@@ -45,6 +45,7 @@ chmod +x docker-run.sh
 - **WebSocket**: ws://127.0.0.1:8765
 - **Config file**: `.env` (in script directory)
 - **Database**: `db/` (in script directory)
+- **Strategies**: `strategies/` (Python strategy scripts)
 
 ### Management Commands
 
@@ -96,14 +97,15 @@ docker-run.bat migrate
 The scripts automatically handle file permissions:
 
 - **db/** directory: Created with write access for the container
+- **strategies/** directory: Python strategy scripts (persisted locally)
 - **.env** file: Read-only mount inside container (`:ro`)
 - **Container user**: Runs as non-root user `appuser` (UID 1000)
 
 If you encounter permission issues on Linux:
 ```bash
-# Fix database directory permissions
-sudo chown -R 1000:1000 db/
-chmod -R 755 db/
+# Fix directory permissions
+sudo chown -R 1000:1000 db/ strategies/
+chmod -R 755 db/ strategies/
 ```
 
 ### XTS Brokers
