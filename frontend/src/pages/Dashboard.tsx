@@ -245,7 +245,7 @@ export default function Dashboard() {
       borderColor: 'border-blue-500/20 hover:border-blue-500/40',
     },
     {
-      href: '/latency',
+      href: '/logs/latency',
       label: 'Latency Monitor',
       description: 'Monitor order & API latency',
       icon: Zap,
