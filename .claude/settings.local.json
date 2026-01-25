@@ -49,7 +49,9 @@
       "Bash(gh pr list:*)",
       "Bash(gh pr merge:*)",
       "Bash(gh api:*)",
-      "Bash(uv sync:*)"
+      "Bash(uv sync:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr diff:*)"
     ]
   }
 }
