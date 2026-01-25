@@ -6,7 +6,6 @@ import { pythonStrategyApi } from '@/api/python-strategy'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -290,7 +289,8 @@ export default function NewPythonStrategy() {
                 <Label>Schedule Days</Label>
                 <div className="flex flex-wrap gap-2">
                   {SCHEDULE_DAYS.map((day) => (
-                    <div
+                    <button
+                      type="button"
                       key={day.value}
                       className={`flex items-center gap-2 px-3 py-2 border rounded-lg cursor-pointer transition-colors ${
                         selectedDays.includes(day.value)
@@ -299,13 +299,19 @@ export default function NewPythonStrategy() {
                       }`}
                       onClick={() => handleDayToggle(day.value)}
                     >
-                      <Checkbox
-                        checked={selectedDays.includes(day.value)}
-                        onCheckedChange={() => handleDayToggle(day.value)}
-                        className="pointer-events-none"
-                      />
+                      <div className={`h-4 w-4 rounded border flex items-center justify-center ${
+                        selectedDays.includes(day.value)
+                          ? 'bg-primary-foreground border-primary-foreground'
+                          : 'border-current'
+                      }`}>
+                        {selectedDays.includes(day.value) && (
+                          <svg className="h-3 w-3 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        )}
+                      </div>
                       <span className="text-sm">{day.label}</span>
-                    </div>
+                    </button>
                   ))}
                 </div>
                 {errors.days && <p className="text-sm text-red-500">{errors.days}</p>}
