@@ -5,6 +5,9 @@ openalgo.db
 *.db-shm
 *.db-wal
 *.db-journal
+*.bak
+*.bak-shm
+*.bak-wal
 .env
 .flaskenv
 *.pyc
