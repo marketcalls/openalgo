@@ -1,5 +1,7 @@
 # OpenAlgo Docker Installation
 
+> **Advanced Users**: For multi-instance deployment with custom SSL (wildcard certificates) and Portainer, see [Docker-Multi-SSL-README.md](./Docker-Multi-SSL-README.md)
+
 ## Desktop Installation (Windows/macOS/Linux)
 
 For **personal trading** on your desktop/laptop with Docker Desktop.
