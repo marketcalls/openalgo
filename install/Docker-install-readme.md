@@ -46,6 +46,7 @@ chmod +x docker-run.sh
 - **Config file**: `.env` (in script directory)
 - **Database**: `db/` (in script directory)
 - **Strategies**: `strategies/` (Python strategy scripts)
+- **Logs**: `log/` (application and strategy logs)
 
 ### Management Commands
 
@@ -98,14 +99,15 @@ The scripts automatically handle file permissions:
 
 - **db/** directory: Created with write access for the container
 - **strategies/** directory: Python strategy scripts (persisted locally)
+- **log/** directory: Application and strategy logs (persisted locally)
 - **.env** file: Read-only mount inside container (`:ro`)
 - **Container user**: Runs as non-root user `appuser` (UID 1000)
 
 If you encounter permission issues on Linux:
 ```bash
 # Fix directory permissions
-sudo chown -R 1000:1000 db/ strategies/
-chmod -R 755 db/ strategies/
+sudo chown -R 1000:1000 db/ strategies/ log/
+chmod -R 755 db/ strategies/ log/
 ```
 
 ### XTS Brokers

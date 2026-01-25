@@ -248,6 +248,7 @@ echo   Data directory: %OPENALGO_DIR%
 echo   Config file:    %OPENALGO_DIR%\%ENV_FILE%
 echo   Database:       %OPENALGO_DIR%\db\
 echo   Strategies:     %OPENALGO_DIR%\strategies\
+echo   Logs:           %OPENALGO_DIR%\log\
 echo.
 echo   Redirect URL for broker portal:
 echo   http://127.0.0.1:5000/%BROKER_NAME%/callback
@@ -284,7 +285,7 @@ if not exist "%OPENALGO_DIR%\%ENV_FILE%" (
     echo.
 )
 
-REM Create db and strategies directories if not exist
+REM Create db, strategies, and log directories if not exist
 if not exist "%OPENALGO_DIR%\db\" (
     echo [INFO] Creating database directory...
     md "%OPENALGO_DIR%\db" 2>nul
@@ -294,6 +295,11 @@ if not exist "%OPENALGO_DIR%\strategies\" (
     md "%OPENALGO_DIR%\strategies" 2>nul
     md "%OPENALGO_DIR%\strategies\scripts" 2>nul
     md "%OPENALGO_DIR%\strategies\examples" 2>nul
+)
+if not exist "%OPENALGO_DIR%\log\" (
+    echo [INFO] Creating log directory...
+    md "%OPENALGO_DIR%\log" 2>nul
+    md "%OPENALGO_DIR%\log\strategies" 2>nul
 )
 
 REM Pull latest image
@@ -315,6 +321,7 @@ docker run -d ^
     -p 8765:8765 ^
     -v "%OPENALGO_DIR%\db:/app/db" ^
     -v "%OPENALGO_DIR%\strategies:/app/strategies" ^
+    -v "%OPENALGO_DIR%\log:/app/log" ^
     -v "%OPENALGO_DIR%\.env:/app/.env:ro" ^
     --restart unless-stopped ^
     %IMAGE%
@@ -439,6 +446,7 @@ echo Data Location: %OPENALGO_DIR%
 echo   - Config:     %OPENALGO_DIR%\.env
 echo   - Database:   %OPENALGO_DIR%\db\
 echo   - Strategies: %OPENALGO_DIR%\strategies\
+echo   - Logs:       %OPENALGO_DIR%\log\
 echo.
 echo XTS Brokers (require market data credentials):
 echo   fivepaisaxts, compositedge, ibulls, iifl, jainamxts, wisdom

@@ -287,6 +287,7 @@ do_setup() {
     echo "  Config file:    $OPENALGO_DIR/$ENV_FILE"
     echo "  Database:       $OPENALGO_DIR/db/"
     echo "  Strategies:     $OPENALGO_DIR/strategies/"
+    echo "  Logs:           $OPENALGO_DIR/log/"
     echo ""
     echo "  Redirect URL for broker portal:"
     echo "  http://127.0.0.1:5000/$BROKER_NAME/callback"
@@ -337,7 +338,7 @@ do_start() {
         echo ""
     fi
 
-    # Create db and strategies directories if not exist
+    # Create db, strategies, and log directories if not exist
     if [ ! -d "$OPENALGO_DIR/db" ]; then
         log_info "Creating database directory..."
         mkdir -p "$OPENALGO_DIR/db"
@@ -346,6 +347,10 @@ do_start() {
         log_info "Creating strategies directory..."
         mkdir -p "$OPENALGO_DIR/strategies/scripts"
         mkdir -p "$OPENALGO_DIR/strategies/examples"
+    fi
+    if [ ! -d "$OPENALGO_DIR/log" ]; then
+        log_info "Creating log directory..."
+        mkdir -p "$OPENALGO_DIR/log/strategies"
     fi
 
     # Pull latest image
@@ -366,6 +371,7 @@ do_start() {
         -p 8765:8765 \
         -v "$OPENALGO_DIR/db:/app/db" \
         -v "$OPENALGO_DIR/strategies:/app/strategies" \
+        -v "$OPENALGO_DIR/log:/app/log" \
         -v "$OPENALGO_DIR/.env:/app/.env:ro" \
         --restart unless-stopped \
         "$IMAGE"; then
@@ -500,6 +506,7 @@ do_help() {
     echo "  - Config:     $OPENALGO_DIR/.env"
     echo "  - Database:   $OPENALGO_DIR/db/"
     echo "  - Strategies: $OPENALGO_DIR/strategies/"
+    echo "  - Logs:       $OPENALGO_DIR/log/"
     echo ""
     echo "XTS Brokers (require market data credentials):"
     echo "  fivepaisaxts, compositedge, ibulls, iifl, jainamxts, wisdom"
