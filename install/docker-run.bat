@@ -4,7 +4,7 @@ REM OpenAlgo Docker Runner for Windows
 REM ============================================================================
 REM
 REM Quick Start (2 commands):
-REM   1. Download: curl -O https://raw.githubusercontent.com/marketcalls/openalgo/main/install/docker-run.bat
+REM   1. Download: curl.exe -O https://raw.githubusercontent.com/marketcalls/openalgo/main/install/docker-run.bat
 REM   2. Run:      docker-run.bat
 REM
 REM Commands:
@@ -20,7 +20,6 @@ REM   help     - Show this help
 REM
 REM Prerequisites:
 REM   - Docker Desktop installed and running
-REM   - curl (included in Windows 10/11)
 REM
 REM ============================================================================
 
@@ -32,6 +31,7 @@ set CONTAINER=openalgo
 set ENV_FILE=.env
 set SAMPLE_ENV_URL=https://raw.githubusercontent.com/marketcalls/openalgo/main/.sample.env
 set OPENALGO_DIR=%USERPROFILE%\openalgo
+set SETUP_FAILED=0
 
 REM Banner
 echo.
@@ -74,16 +74,26 @@ goto help
 echo [INFO] Setting up OpenAlgo...
 echo.
 
-REM Create openalgo directory
-if not exist "%OPENALGO_DIR%" (
+REM Create openalgo directory with full path
+if not exist "%OPENALGO_DIR%\" (
     echo [INFO] Creating OpenAlgo directory at %OPENALGO_DIR%...
-    mkdir "%OPENALGO_DIR%"
+    md "%OPENALGO_DIR%" 2>nul
+    if errorlevel 1 (
+        echo [ERROR] Failed to create directory %OPENALGO_DIR%
+        set SETUP_FAILED=1
+        goto setup_end
+    )
 )
 
 REM Create db directory
-if not exist "%OPENALGO_DIR%\db" (
+if not exist "%OPENALGO_DIR%\db\" (
     echo [INFO] Creating database directory...
-    mkdir "%OPENALGO_DIR%\db"
+    md "%OPENALGO_DIR%\db" 2>nul
+    if errorlevel 1 (
+        echo [ERROR] Failed to create database directory
+        set SETUP_FAILED=1
+        goto setup_end
+    )
 )
 
 REM Check if .env already exists
@@ -92,17 +102,33 @@ if exist "%OPENALGO_DIR%\%ENV_FILE%" (
     set /p OVERWRITE="Do you want to overwrite it? (y/n): "
     if /i not "!OVERWRITE!"=="y" (
         echo [INFO] Setup cancelled. Using existing .env file.
-        goto end
+        goto setup_end
     )
 )
 
-REM Download sample.env from GitHub
+REM Download sample.env from GitHub using curl.exe (not PowerShell alias)
 echo [INFO] Downloading configuration template from GitHub...
-curl -sL "%SAMPLE_ENV_URL%" -o "%OPENALGO_DIR%\%ENV_FILE%"
+
+REM Try curl.exe first (Windows 10/11 has this)
+where curl.exe >nul 2>&1
 if errorlevel 1 (
+    echo [INFO] curl.exe not found, trying PowerShell...
+    powershell -Command "Invoke-WebRequest -Uri '%SAMPLE_ENV_URL%' -OutFile '%OPENALGO_DIR%\%ENV_FILE%'" 2>nul
+) else (
+    curl.exe -sL "%SAMPLE_ENV_URL%" -o "%OPENALGO_DIR%\%ENV_FILE%" 2>nul
+)
+
+REM Check if download succeeded
+if not exist "%OPENALGO_DIR%\%ENV_FILE%" (
     echo [ERROR] Failed to download configuration template!
     echo Please check your internet connection.
-    goto end
+    echo.
+    echo Manual setup:
+    echo   1. Download .sample.env from https://github.com/marketcalls/openalgo
+    echo   2. Save it as %OPENALGO_DIR%\.env
+    echo   3. Run this script again
+    set SETUP_FAILED=1
+    goto setup_end
 )
 echo [OK] Configuration template downloaded.
 
@@ -151,9 +177,9 @@ echo   Data directory: %OPENALGO_DIR%
 echo   Config file:    %OPENALGO_DIR%\%ENV_FILE%
 echo   Database:       %OPENALGO_DIR%\db\
 echo.
-echo   Run 'docker-run.bat start' to launch OpenAlgo.
-echo.
-goto end
+
+:setup_end
+exit /b %SETUP_FAILED%
 
 :start
 echo [INFO] Starting OpenAlgo...
@@ -163,13 +189,22 @@ REM Check if setup is needed
 if not exist "%OPENALGO_DIR%\%ENV_FILE%" (
     echo [INFO] First time setup detected. Running setup...
     echo.
-    goto setup_then_start
+    call :setup
+    if errorlevel 1 (
+        echo.
+        echo [ERROR] Setup failed. Cannot start OpenAlgo.
+        echo Please fix the issues above and try again.
+        goto end
+    )
+    echo.
+    echo [INFO] Starting OpenAlgo after setup...
+    echo.
 )
 
 REM Create db directory if not exists
-if not exist "%OPENALGO_DIR%\db" (
+if not exist "%OPENALGO_DIR%\db\" (
     echo [INFO] Creating database directory...
-    mkdir "%OPENALGO_DIR%\db"
+    md "%OPENALGO_DIR%\db" 2>nul
 )
 
 REM Pull latest image
@@ -223,13 +258,6 @@ echo     docker-run.bat restart  - Restart OpenAlgo
 echo.
 goto end
 
-:setup_then_start
-call :setup
-echo.
-echo [INFO] Starting OpenAlgo after setup...
-echo.
-goto start
-
 :stop
 echo [INFO] Stopping OpenAlgo...
 docker stop %CONTAINER% >nul 2>&1
@@ -239,7 +267,9 @@ goto end
 
 :restart
 echo [INFO] Restarting OpenAlgo...
-call :stop
+docker stop %CONTAINER% >nul 2>&1
+docker rm %CONTAINER% >nul 2>&1
+echo [OK] OpenAlgo stopped.
 echo.
 goto start
 
@@ -300,8 +330,8 @@ echo   help     Show this help
 echo.
 echo Quick Start:
 echo   1. Install Docker Desktop: https://www.docker.com/products/docker-desktop
-echo   2. Download this script:
-echo      curl -O https://raw.githubusercontent.com/marketcalls/openalgo/main/install/docker-run.bat
+echo   2. Download this script (use PowerShell):
+echo      curl.exe -O https://raw.githubusercontent.com/marketcalls/openalgo/main/install/docker-run.bat
 echo   3. Run: docker-run.bat
 echo.
 echo Data Location: %OPENALGO_DIR%

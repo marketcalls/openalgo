@@ -17,7 +17,7 @@ For **personal trading** on your desktop/laptop with Docker Desktop.
 
 #### Windows (PowerShell or Command Prompt)
 ```powershell
-curl -O https://raw.githubusercontent.com/marketcalls/openalgo/main/install/docker-run.bat
+curl.exe -O https://raw.githubusercontent.com/marketcalls/openalgo/main/install/docker-run.bat
 docker-run.bat
 ```
 
