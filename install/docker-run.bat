@@ -235,14 +235,15 @@ if "%IS_XTS%"=="1" (
 )
 
 echo [OK] Broker configuration saved.
-
 echo.
 echo   ========================================
 echo   Setup Complete!
 echo   ========================================
 echo.
 echo   Broker:         %BROKER_NAME%
-if "%IS_XTS%"=="1" echo   Type:           XTS API (with market data)
+if "%IS_XTS%"=="1" (
+    echo   Type:           XTS API [with market data]
+)
 echo   Data directory: %OPENALGO_DIR%
 echo   Config file:    %OPENALGO_DIR%\%ENV_FILE%
 echo   Database:       %OPENALGO_DIR%\db\
@@ -250,18 +251,14 @@ echo.
 echo   Redirect URL for broker portal:
 echo   http://127.0.0.1:5000/%BROKER_NAME%/callback
 echo.
-echo   Documentation:
-echo   https://github.com/marketcalls/openalgo/blob/main/install/Docker-install-readme.md
+echo   Documentation: https://docs.openalgo.in
 echo.
-echo   Press any key to open .env for review (optional)...
-pause >nul
-
-REM Open .env in notepad for review
-notepad "%OPENALGO_DIR%\%ENV_FILE%"
-
+set /p OPEN_ENV="Open .env in Notepad for review? (y/n): "
+if /i "%OPEN_ENV%"=="y" (
+    start notepad "%OPENALGO_DIR%\%ENV_FILE%"
+)
 echo.
 echo [OK] Setup complete! Run 'docker-run.bat start' to launch OpenAlgo.
-echo.
 
 :setup_end
 exit /b %SETUP_FAILED%
