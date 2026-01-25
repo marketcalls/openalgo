@@ -184,6 +184,44 @@ interface Stats {
   watchlist_count: number
 }
 
+interface Schedule {
+  id: string
+  name: string
+  description?: string
+  schedule_type: 'interval' | 'daily'
+  interval_value?: number
+  interval_unit?: 'minutes' | 'hours'
+  time_of_day?: string
+  download_source?: 'watchlist'  // Always watchlist, kept for API compatibility
+  data_interval: '1m' | 'D'
+  lookback_days: number
+  is_enabled: boolean
+  is_paused: boolean
+  status: 'idle' | 'running' | 'error'
+  apscheduler_job_id?: string
+  created_at: string
+  last_run_at?: string
+  next_run_at?: string
+  last_run_status?: string
+  total_runs: number
+  successful_runs: number
+  failed_runs: number
+}
+
+interface ScheduleExecution {
+  id: number
+  schedule_id: string
+  download_job_id?: string
+  status: 'running' | 'completed' | 'failed'
+  started_at: string
+  completed_at?: string
+  symbols_processed: number
+  symbols_success: number
+  symbols_failed: number
+  records_downloaded: number
+  error_message?: string
+}
+
 // Helper functions
 async function fetchCSRFToken(): Promise<string> {
   const response = await fetch('/auth/csrf-token', { credentials: 'include' })
@@ -258,6 +296,25 @@ export default function Historify() {
   const [selectedJob, setSelectedJob] = useState<DownloadJob | null>(null)
   const [jobProgress, setJobProgress] = useState<Record<string, JobProgress>>({})
   const [jobsLoading, setJobsLoading] = useState(false)
+
+  // Scheduler state
+  const [schedules, setSchedules] = useState<Schedule[]>([])
+  const [schedulesLoading, setSchedulesLoading] = useState(false)
+  const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false)
+  const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null)
+  const [scheduleExecutions, setScheduleExecutions] = useState<Record<string, ScheduleExecution[]>>({})
+  const [expandedSchedule, setExpandedSchedule] = useState<string | null>(null)
+
+  // Schedule form state
+  const [scheduleName, setScheduleName] = useState('')
+  const [scheduleDescription, setScheduleDescription] = useState('')
+  const [scheduleType, setScheduleType] = useState<'interval' | 'daily'>('daily')
+  const [scheduleIntervalValue, setScheduleIntervalValue] = useState(5)
+  const [scheduleIntervalUnit, setScheduleIntervalUnit] = useState<'minutes' | 'hours'>('minutes')
+  const [scheduleTimeOfDay, setScheduleTimeOfDay] = useState('09:15')
+  const [scheduleDataInterval, setScheduleDataInterval] = useState<'1m' | 'D'>('D')
+  const [scheduleLookbackDays, setScheduleLookbackDays] = useState(1)
+  const [isCreatingSchedule, setIsCreatingSchedule] = useState(false)
 
   // Dialog states
   const [bulkAddDialogOpen, setBulkAddDialogOpen] = useState(false)
@@ -378,6 +435,7 @@ export default function Historify() {
     loadStats()
     loadExchanges()
     loadJobs()
+    loadSchedules()
   }, [])
 
   // Socket.IO event handlers
@@ -429,13 +487,45 @@ export default function Historify() {
     socket.on('historify_job_paused', handleJobPaused)
     socket.on('historify_job_cancelled', handleJobCancelled)
 
+    // Scheduler event handlers
+    const handleScheduleUpdated = () => {
+      loadSchedules()
+    }
+
+    const handleScheduleExecutionStarted = (data: { schedule_id: string; execution_id: number; job_id: string }) => {
+      toast.info(`Schedule execution started`)
+      loadSchedules()
+      loadJobs()
+      if (expandedSchedule === data.schedule_id) {
+        loadScheduleExecutions(data.schedule_id)
+      }
+    }
+
+    const handleScheduleExecutionComplete = (data: { schedule_id: string; execution_id: number; status: string }) => {
+      loadSchedules()
+      if (expandedSchedule === data.schedule_id) {
+        loadScheduleExecutions(data.schedule_id)
+      }
+    }
+
+    socket.on('historify_schedule_created', handleScheduleUpdated)
+    socket.on('historify_schedule_updated', handleScheduleUpdated)
+    socket.on('historify_schedule_deleted', handleScheduleUpdated)
+    socket.on('historify_schedule_execution_started', handleScheduleExecutionStarted)
+    socket.on('historify_schedule_execution_complete', handleScheduleExecutionComplete)
+
     return () => {
       socket.off('historify_progress', handleProgress)
       socket.off('historify_job_complete', handleJobComplete)
       socket.off('historify_job_paused', handleJobPaused)
       socket.off('historify_job_cancelled', handleJobCancelled)
+      socket.off('historify_schedule_created', handleScheduleUpdated)
+      socket.off('historify_schedule_updated', handleScheduleUpdated)
+      socket.off('historify_schedule_deleted', handleScheduleUpdated)
+      socket.off('historify_schedule_execution_started', handleScheduleExecutionStarted)
+      socket.off('historify_schedule_execution_complete', handleScheduleExecutionComplete)
     }
-  }, [socket])
+  }, [socket, expandedSchedule])
 
   // FNO data loading (disabled for now)
   // useEffect(() => {
@@ -548,6 +638,225 @@ export default function Historify() {
     } finally {
       setJobsLoading(false)
     }
+  }
+
+  // Scheduler API functions
+  const loadSchedules = async () => {
+    setSchedulesLoading(true)
+    try {
+      const response = await fetch('/historify/api/schedules', { credentials: 'include' })
+      const data = await response.json()
+      if (data.status === 'success') setSchedules(data.data || [])
+    } catch (error) {
+      console.error('Error loading schedules:', error)
+    } finally {
+      setSchedulesLoading(false)
+    }
+  }
+
+  const loadScheduleExecutions = async (scheduleId: string) => {
+    try {
+      const response = await fetch(`/historify/api/schedules/${scheduleId}/executions?limit=10`, { credentials: 'include' })
+      const data = await response.json()
+      if (data.status === 'success') {
+        setScheduleExecutions((prev) => ({ ...prev, [scheduleId]: data.data || [] }))
+      }
+    } catch (error) {
+      console.error('Error loading schedule executions:', error)
+    }
+  }
+
+  const resetScheduleForm = () => {
+    setScheduleName('')
+    setScheduleDescription('')
+    setScheduleType('daily')
+    setScheduleIntervalValue(5)
+    setScheduleIntervalUnit('minutes')
+    setScheduleTimeOfDay('09:15')
+    setScheduleDataInterval('D')
+    setScheduleLookbackDays(1)
+    setEditingSchedule(null)
+  }
+
+  const openScheduleDialog = (schedule?: Schedule) => {
+    if (schedule) {
+      setEditingSchedule(schedule)
+      setScheduleName(schedule.name)
+      setScheduleDescription(schedule.description || '')
+      setScheduleType(schedule.schedule_type)
+      setScheduleIntervalValue(schedule.interval_value || 5)
+      setScheduleIntervalUnit(schedule.interval_unit || 'minutes')
+      setScheduleTimeOfDay(schedule.time_of_day || '09:15')
+      setScheduleDataInterval(schedule.data_interval)
+      setScheduleLookbackDays(schedule.lookback_days)
+    } else {
+      resetScheduleForm()
+    }
+    setScheduleDialogOpen(true)
+  }
+
+  const handleCreateOrUpdateSchedule = async () => {
+    if (!scheduleName.trim()) {
+      toast.warning('Please enter a schedule name')
+      return
+    }
+
+    setIsCreatingSchedule(true)
+    try {
+      const csrfToken = await fetchCSRFToken()
+      const payload: Record<string, unknown> = {
+        name: scheduleName.trim(),
+        description: scheduleDescription.trim() || undefined,
+        schedule_type: scheduleType,
+        data_interval: scheduleDataInterval,
+        lookback_days: scheduleLookbackDays,
+      }
+
+      if (scheduleType === 'interval') {
+        payload.interval_value = scheduleIntervalValue
+        payload.interval_unit = scheduleIntervalUnit
+      } else {
+        payload.time_of_day = scheduleTimeOfDay
+      }
+
+      const url = editingSchedule
+        ? `/historify/api/schedules/${editingSchedule.id}`
+        : '/historify/api/schedules'
+      const method = editingSchedule ? 'PUT' : 'POST'
+
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+        credentials: 'include',
+        body: JSON.stringify(payload),
+      })
+      const data = await response.json()
+
+      if (data.status === 'success') {
+        toast.success(editingSchedule ? 'Schedule updated' : 'Schedule created')
+        setScheduleDialogOpen(false)
+        resetScheduleForm()
+        loadSchedules()
+      } else {
+        toast.error(data.message || 'Failed to save schedule')
+      }
+    } catch (error) {
+      console.error('Error saving schedule:', error)
+      toast.error('Failed to save schedule')
+    } finally {
+      setIsCreatingSchedule(false)
+    }
+  }
+
+  const handleDeleteSchedule = async (scheduleId: string) => {
+    try {
+      const csrfToken = await fetchCSRFToken()
+      const response = await fetch(`/historify/api/schedules/${scheduleId}`, {
+        method: 'DELETE',
+        headers: { 'X-CSRFToken': csrfToken },
+        credentials: 'include',
+      })
+      const data = await response.json()
+      if (data.status === 'success') {
+        toast.success('Schedule deleted')
+        loadSchedules()
+      } else {
+        toast.error(data.message || 'Failed to delete schedule')
+      }
+    } catch (error) {
+      console.error('Error deleting schedule:', error)
+      toast.error('Failed to delete schedule')
+    }
+  }
+
+  const handleToggleScheduleEnabled = async (schedule: Schedule) => {
+    try {
+      const csrfToken = await fetchCSRFToken()
+      const endpoint = schedule.is_enabled ? 'disable' : 'enable'
+      const response = await fetch(`/historify/api/schedules/${schedule.id}/${endpoint}`, {
+        method: 'POST',
+        headers: { 'X-CSRFToken': csrfToken },
+        credentials: 'include',
+      })
+      const data = await response.json()
+      if (data.status === 'success') {
+        toast.success(`Schedule ${schedule.is_enabled ? 'disabled' : 'enabled'}`)
+        loadSchedules()
+      } else {
+        toast.error(data.message || 'Failed to toggle schedule')
+      }
+    } catch (error) {
+      console.error('Error toggling schedule:', error)
+      toast.error('Failed to toggle schedule')
+    }
+  }
+
+  const handlePauseResumeSchedule = async (schedule: Schedule) => {
+    try {
+      const csrfToken = await fetchCSRFToken()
+      const endpoint = schedule.is_paused ? 'resume' : 'pause'
+      const response = await fetch(`/historify/api/schedules/${schedule.id}/${endpoint}`, {
+        method: 'POST',
+        headers: { 'X-CSRFToken': csrfToken },
+        credentials: 'include',
+      })
+      const data = await response.json()
+      if (data.status === 'success') {
+        toast.success(`Schedule ${schedule.is_paused ? 'resumed' : 'paused'}`)
+        loadSchedules()
+      } else {
+        toast.error(data.message || 'Failed to pause/resume schedule')
+      }
+    } catch (error) {
+      console.error('Error pausing/resuming schedule:', error)
+      toast.error('Failed to pause/resume schedule')
+    }
+  }
+
+  const handleTriggerSchedule = async (scheduleId: string) => {
+    try {
+      const csrfToken = await fetchCSRFToken()
+      const response = await fetch(`/historify/api/schedules/${scheduleId}/trigger`, {
+        method: 'POST',
+        headers: { 'X-CSRFToken': csrfToken },
+        credentials: 'include',
+      })
+      const data = await response.json()
+      if (data.status === 'success') {
+        toast.success('Schedule triggered')
+        loadSchedules()
+        loadJobs()
+      } else {
+        toast.error(data.message || 'Failed to trigger schedule')
+      }
+    } catch (error) {
+      console.error('Error triggering schedule:', error)
+      toast.error('Failed to trigger schedule')
+    }
+  }
+
+  const getScheduleStatusBadge = (schedule: Schedule) => {
+    if (!schedule.is_enabled) {
+      return <Badge variant="secondary">Disabled</Badge>
+    }
+    if (schedule.is_paused) {
+      return <Badge variant="outline" className="border-yellow-500 text-yellow-600">Paused</Badge>
+    }
+    if (schedule.status === 'running') {
+      return <Badge variant="default" className="bg-blue-500">Running</Badge>
+    }
+    return <Badge variant="default" className="bg-green-500">Active</Badge>
+  }
+
+  const formatScheduleFrequency = (schedule: Schedule) => {
+    if (schedule.schedule_type === 'interval') {
+      return `Every ${schedule.interval_value} ${schedule.interval_unit}`
+    }
+    // Convert 24-hour to 12-hour format with AM/PM
+    const [h, m] = (schedule.time_of_day || '09:15').split(':').map(Number)
+    const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h
+    const ampm = h >= 12 ? 'PM' : 'AM'
+    return `Daily at ${hour12}:${m.toString().padStart(2, '0')} ${ampm} IST`
   }
 
   const performSearch = async (query: string) => {
@@ -1225,10 +1534,15 @@ export default function Historify() {
                   <Badge variant="secondary" className="ml-1 h-5 min-w-5 text-xs">{watchlist.length}</Badge>
                 )}
               </TabsTrigger>
-              <TabsTrigger value="catalog" className="gap-1.5 data-[state=active]:bg-muted">
-                <Database className="h-4 w-4" />
-                <span className="hidden sm:inline">Data Catalog</span>
-                <span className="sm:hidden">Catalog</span>
+              <TabsTrigger value="scheduler" className="gap-1.5 data-[state=active]:bg-muted">
+                <RefreshCw className="h-4 w-4" />
+                <span className="hidden sm:inline">Scheduler</span>
+                <span className="sm:hidden">Sched</span>
+                {schedules.filter((s) => s.is_enabled && !s.is_paused).length > 0 && (
+                  <Badge variant="default" className="ml-1 h-5 min-w-5 text-xs bg-green-500">
+                    {schedules.filter((s) => s.is_enabled && !s.is_paused).length}
+                  </Badge>
+                )}
               </TabsTrigger>
               <TabsTrigger value="jobs" className="gap-1.5 data-[state=active]:bg-muted">
                 <DownloadCloud className="h-4 w-4" />
@@ -1240,12 +1554,17 @@ export default function Historify() {
                   </Badge>
                 )}
               </TabsTrigger>
+              <TabsTrigger value="catalog" className="gap-1.5 data-[state=active]:bg-muted">
+                <Database className="h-4 w-4" />
+                <span className="hidden sm:inline">Export/Import</span>
+                <span className="sm:hidden">Export</span>
+              </TabsTrigger>
             </TabsList>
           </div>
 
           {/* Tab Content */}
           <div className="flex-1 overflow-hidden">
-            {/* Data Catalog Tab */}
+            {/* Export/Import Tab */}
             <TabsContent value="catalog" className="h-full m-0 p-4 overflow-auto">
               <div className="space-y-4">
                 {/* Quick Add Symbol */}
@@ -1306,7 +1625,7 @@ export default function Historify() {
                     <div className="flex flex-col sm:flex-row gap-3">
                       <div className="flex-1">
                         <Input
-                          placeholder="Filter catalog symbols..."
+                          placeholder="Filter symbols..."
                           value={catalogFilter.search}
                           onChange={(e) => setCatalogFilter((prev) => ({ ...prev, search: e.target.value }))}
                           className="h-9"
@@ -1893,9 +2212,380 @@ export default function Historify() {
                 </Card>
               </div>
             </TabsContent>
+
+            {/* Scheduler Tab */}
+            <TabsContent value="scheduler" className="h-full m-0 p-4 overflow-auto">
+              <div className="space-y-4">
+                {/* Header with Create button */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold">Scheduled Downloads</h2>
+                    <p className="text-sm text-muted-foreground">Automate data downloads on a schedule</p>
+                  </div>
+                  <Button onClick={() => openScheduleDialog()}>
+                    <Plus className="h-4 w-4 mr-1" />
+                    Create Schedule
+                  </Button>
+                </div>
+
+                {/* Schedules List */}
+                <Card>
+                  <CardContent className="p-0">
+                    {schedulesLoading ? (
+                      <div className="flex items-center justify-center py-12">
+                        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                      </div>
+                    ) : schedules.length === 0 ? (
+                      <div className="text-center py-12 text-muted-foreground">
+                        <RefreshCw className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                        <p>No schedules created yet</p>
+                        <p className="text-sm">Create a schedule to automate data downloads</p>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-border">
+                        {schedules.map((schedule) => (
+                          <div key={schedule.id} className="p-4">
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <h3 className="font-medium">{schedule.name}</h3>
+                                  {getScheduleStatusBadge(schedule)}
+                                  <Badge variant="outline">{schedule.data_interval === '1m' ? '1 Min' : 'Daily'}</Badge>
+                                </div>
+                                <p className="text-sm text-muted-foreground">
+                                  {formatScheduleFrequency(schedule)}
+                                  {schedule.description && ` - ${schedule.description}`}
+                                </p>
+                                <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                                  {schedule.next_run_at && (
+                                    <span>Next: {new Date(schedule.next_run_at).toLocaleString()}</span>
+                                  )}
+                                  {schedule.last_run_at && (
+                                    <span>Last: {new Date(schedule.last_run_at).toLocaleString()}</span>
+                                  )}
+                                  <span>Runs: {schedule.total_runs} ({schedule.successful_runs} ok, {schedule.failed_runs} failed)</span>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                {/* Enable/Disable Toggle */}
+                                <Switch
+                                  checked={schedule.is_enabled}
+                                  onCheckedChange={() => handleToggleScheduleEnabled(schedule)}
+                                  title={schedule.is_enabled ? 'Disable schedule' : 'Enable schedule'}
+                                />
+                                {/* Pause/Resume */}
+                                {schedule.is_enabled && (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8"
+                                    onClick={() => handlePauseResumeSchedule(schedule)}
+                                    title={schedule.is_paused ? 'Resume' : 'Pause'}
+                                  >
+                                    {schedule.is_paused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+                                  </Button>
+                                )}
+                                {/* Trigger Now */}
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  onClick={() => handleTriggerSchedule(schedule.id)}
+                                  disabled={!schedule.is_enabled || schedule.status === 'running'}
+                                  title="Run now"
+                                >
+                                  <Zap className="h-4 w-4" />
+                                </Button>
+                                {/* Edit */}
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  onClick={() => openScheduleDialog(schedule)}
+                                  title="Edit"
+                                >
+                                  <Settings className="h-4 w-4" />
+                                </Button>
+                                {/* View History */}
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  onClick={() => {
+                                    if (expandedSchedule === schedule.id) {
+                                      setExpandedSchedule(null)
+                                    } else {
+                                      setExpandedSchedule(schedule.id)
+                                      loadScheduleExecutions(schedule.id)
+                                    }
+                                  }}
+                                  title="View history"
+                                >
+                                  {expandedSchedule === schedule.id ? <X className="h-4 w-4" /> : <BarChart3 className="h-4 w-4" />}
+                                </Button>
+                                {/* Delete */}
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-destructive hover:text-destructive"
+                                  onClick={() => handleDeleteSchedule(schedule.id)}
+                                  title="Delete"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </div>
+
+                            {/* Execution History (expandable) */}
+                            {expandedSchedule === schedule.id && (
+                              <div className="mt-4 pt-4 border-t border-border">
+                                <h4 className="text-sm font-medium mb-2">Recent Executions</h4>
+                                {!scheduleExecutions[schedule.id] || scheduleExecutions[schedule.id].length === 0 ? (
+                                  <p className="text-sm text-muted-foreground">No executions yet</p>
+                                ) : (
+                                  <Table>
+                                    <TableHeader>
+                                      <TableRow>
+                                        <TableHead>Time</TableHead>
+                                        <TableHead>Status</TableHead>
+                                        <TableHead className="text-right">Symbols</TableHead>
+                                        <TableHead className="text-right">Records</TableHead>
+                                        <TableHead>Error</TableHead>
+                                      </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                      {scheduleExecutions[schedule.id].map((exec) => (
+                                        <TableRow key={exec.id}>
+                                          <TableCell className="text-sm">
+                                            {new Date(exec.started_at).toLocaleString()}
+                                          </TableCell>
+                                          <TableCell>
+                                            <Badge
+                                              variant={exec.status === 'completed' ? 'default' : exec.status === 'running' ? 'secondary' : 'destructive'}
+                                              className={exec.status === 'completed' ? 'bg-green-500' : exec.status === 'running' ? 'bg-blue-500' : ''}
+                                            >
+                                              {exec.status}
+                                            </Badge>
+                                          </TableCell>
+                                          <TableCell className="text-right text-sm">
+                                            {exec.symbols_success}/{exec.symbols_processed}
+                                            {exec.symbols_failed > 0 && (
+                                              <span className="text-destructive ml-1">({exec.symbols_failed} failed)</span>
+                                            )}
+                                          </TableCell>
+                                          <TableCell className="text-right text-sm">
+                                            {exec.records_downloaded.toLocaleString()}
+                                          </TableCell>
+                                          <TableCell className="text-sm text-destructive max-w-[200px] truncate">
+                                            {exec.error_message}
+                                          </TableCell>
+                                        </TableRow>
+                                      ))}
+                                    </TableBody>
+                                  </Table>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            </TabsContent>
           </div>
         </Tabs>
       </div>
+
+      {/* Schedule Dialog */}
+      <Dialog open={scheduleDialogOpen} onOpenChange={(open) => {
+        setScheduleDialogOpen(open)
+        if (!open) resetScheduleForm()
+      }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{editingSchedule ? 'Edit Schedule' : 'Create Schedule'}</DialogTitle>
+            <DialogDescription>
+              {editingSchedule ? 'Update schedule configuration' : 'Set up automated data downloads'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Name</Label>
+              <Input
+                value={scheduleName}
+                onChange={(e) => setScheduleName(e.target.value)}
+                placeholder="Daily Watchlist Update"
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <Label>Description (optional)</Label>
+              <Input
+                value={scheduleDescription}
+                onChange={(e) => setScheduleDescription(e.target.value)}
+                placeholder="Downloads daily data for all watchlist symbols"
+                className="mt-1"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>Schedule Type</Label>
+                <Select value={scheduleType} onValueChange={(v) => setScheduleType(v as 'interval' | 'daily')}>
+                  <SelectTrigger className="mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="interval">Interval</SelectItem>
+                    <SelectItem value="daily">Daily</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Data Interval</Label>
+                <Select value={scheduleDataInterval} onValueChange={(v) => setScheduleDataInterval(v as '1m' | 'D')}>
+                  <SelectTrigger className="mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1m">1 Minute</SelectItem>
+                    <SelectItem value="D">Daily</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {scheduleType === 'interval' ? (
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>Every</Label>
+                  <Select value={String(scheduleIntervalValue)} onValueChange={(v) => setScheduleIntervalValue(parseInt(v))}>
+                    <SelectTrigger className="mt-1">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">1</SelectItem>
+                      <SelectItem value="5">5</SelectItem>
+                      <SelectItem value="15">15</SelectItem>
+                      <SelectItem value="30">30</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Unit</Label>
+                  <Select value={scheduleIntervalUnit} onValueChange={(v) => setScheduleIntervalUnit(v as 'minutes' | 'hours')}>
+                    <SelectTrigger className="mt-1">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="minutes">Minutes</SelectItem>
+                      <SelectItem value="hours">Hours</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <Label>Time of Day (IST)</Label>
+                <div className="flex gap-2 mt-1">
+                  <Select
+                    value={(() => {
+                      const [h] = scheduleTimeOfDay.split(':').map(Number)
+                      const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h
+                      return hour12.toString()
+                    })()}
+                    onValueChange={(v) => {
+                      const [h, m] = scheduleTimeOfDay.split(':').map(Number)
+                      const isPM = h >= 12
+                      let newHour = parseInt(v)
+                      if (isPM) {
+                        newHour = newHour === 12 ? 12 : newHour + 12
+                      } else {
+                        newHour = newHour === 12 ? 0 : newHour
+                      }
+                      setScheduleTimeOfDay(`${newHour.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`)
+                    }}
+                  >
+                    <SelectTrigger className="w-20">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[12, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((h) => (
+                        <SelectItem key={h} value={h.toString()}>{h}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <span className="flex items-center">:</span>
+                  <Select
+                    value={scheduleTimeOfDay.split(':')[1] || '00'}
+                    onValueChange={(v) => {
+                      const [h] = scheduleTimeOfDay.split(':').map(Number)
+                      setScheduleTimeOfDay(`${h.toString().padStart(2, '0')}:${v}`)
+                    }}
+                  >
+                    <SelectTrigger className="w-20">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {['00', '15', '30', '45'].map((m) => (
+                        <SelectItem key={m} value={m}>{m}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Select
+                    value={parseInt(scheduleTimeOfDay.split(':')[0]) >= 12 ? 'PM' : 'AM'}
+                    onValueChange={(v) => {
+                      const [h, m] = scheduleTimeOfDay.split(':').map(Number)
+                      const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h
+                      let newHour: number
+                      if (v === 'PM') {
+                        newHour = hour12 === 12 ? 12 : hour12 + 12
+                      } else {
+                        newHour = hour12 === 12 ? 0 : hour12
+                      }
+                      setScheduleTimeOfDay(`${newHour.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`)
+                    }}
+                  >
+                    <SelectTrigger className="w-20">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="AM">AM</SelectItem>
+                      <SelectItem value="PM">PM</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
+
+            <div>
+              <Label>Lookback Days</Label>
+              <Input
+                type="number"
+                min="1"
+                max="30"
+                value={scheduleLookbackDays}
+                onChange={(e) => setScheduleLookbackDays(parseInt(e.target.value) || 1)}
+                className="mt-1"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Incremental download from watchlist. Lookback used only for new symbols.</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              setScheduleDialogOpen(false)
+              resetScheduleForm()
+            }}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreateOrUpdateSchedule} disabled={isCreatingSchedule}>
+              {isCreatingSchedule && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              {editingSchedule ? 'Update' : 'Create'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Bulk Add Dialog */}
       <Dialog open={bulkAddDialogOpen} onOpenChange={setBulkAddDialogOpen}>

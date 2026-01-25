@@ -1182,3 +1182,438 @@ def enrich_metadata():
         logger.error(f"Error enriching metadata: {e}")
         traceback.print_exc()
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# =============================================================================
+# Scheduler API Endpoints
+# =============================================================================
+
+@historify_bp.route('/api/schedules', methods=['GET'])
+@check_session_validity
+def get_schedules():
+    """Get all schedules."""
+    try:
+        from database.historify_db import get_all_schedules
+        from services.historify_scheduler_service import get_historify_scheduler
+
+        schedules = get_all_schedules()
+
+        # Enrich with next_run_at from APScheduler
+        scheduler = get_historify_scheduler()
+        for schedule in schedules:
+            next_run = scheduler.get_next_run_time(schedule['id'])
+            if next_run:
+                schedule['next_run_at'] = next_run.isoformat()
+
+        return jsonify({
+            'status': 'success',
+            'data': schedules,
+            'count': len(schedules)
+        }), 200
+    except Exception as e:
+        logger.error(f"Error getting schedules: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/schedules', methods=['POST'])
+@check_session_validity
+def create_schedule():
+    """Create a new schedule."""
+    try:
+        from services.historify_scheduler_service import get_historify_scheduler
+        import uuid
+
+        data = request.get_json()
+
+        # Validate required fields
+        name = data.get('name', '').strip()
+        schedule_type = data.get('schedule_type')
+        data_interval = data.get('data_interval', 'D')
+
+        if not name:
+            return jsonify({
+                'status': 'error',
+                'message': 'Schedule name is required'
+            }), 400
+
+        if schedule_type not in ('interval', 'daily'):
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid schedule type. Must be "interval" or "daily"'
+            }), 400
+
+        if data_interval not in ('1m', 'D'):
+            return jsonify({
+                'status': 'error',
+                'message': 'Invalid data interval. Must be "1m" or "D"'
+            }), 400
+
+        # Validate schedule-type-specific fields
+        if schedule_type == 'interval':
+            interval_value = data.get('interval_value')
+            interval_unit = data.get('interval_unit', 'minutes')
+
+            if not interval_value or not isinstance(interval_value, int) or interval_value < 1:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Invalid interval value'
+                }), 400
+
+            if interval_unit not in ('minutes', 'hours'):
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Invalid interval unit. Must be "minutes" or "hours"'
+                }), 400
+
+        elif schedule_type == 'daily':
+            time_of_day = data.get('time_of_day', '09:15')
+            # Validate time format HH:MM
+            try:
+                hour, minute = map(int, time_of_day.split(':'))
+                if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                    raise ValueError("Invalid time range")
+            except (ValueError, AttributeError):
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Invalid time format. Use HH:MM (e.g., 09:15)'
+                }), 400
+
+        # Validate lookback_days
+        lookback_days = data.get('lookback_days', 1)
+        if not isinstance(lookback_days, int) or lookback_days < 1 or lookback_days > 365:
+            return jsonify({
+                'status': 'error',
+                'message': 'lookback_days must be between 1 and 365'
+            }), 400
+
+        # Generate schedule ID
+        schedule_id = str(uuid.uuid4())[:8]
+
+        # Create schedule (always uses watchlist as download source)
+        scheduler = get_historify_scheduler()
+        success, msg = scheduler.add_schedule(
+            schedule_id=schedule_id,
+            name=name,
+            schedule_type=schedule_type,
+            data_interval=data_interval,
+            interval_value=data.get('interval_value'),
+            interval_unit=data.get('interval_unit', 'minutes'),
+            time_of_day=data.get('time_of_day', '09:15'),
+            lookback_days=lookback_days,
+            description=data.get('description')
+        )
+
+        if success:
+            return jsonify({
+                'status': 'success',
+                'message': msg,
+                'schedule_id': schedule_id
+            }), 201
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': msg
+            }), 400
+
+    except Exception as e:
+        logger.error(f"Error creating schedule: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/schedules/<schedule_id>', methods=['GET'])
+@check_session_validity
+def get_schedule(schedule_id):
+    """Get a specific schedule."""
+    try:
+        from database.historify_db import get_schedule as db_get_schedule
+        from services.historify_scheduler_service import get_historify_scheduler
+
+        schedule = db_get_schedule(schedule_id)
+
+        if not schedule:
+            return jsonify({
+                'status': 'error',
+                'message': 'Schedule not found'
+            }), 404
+
+        # Enrich with next_run_at from APScheduler
+        scheduler = get_historify_scheduler()
+        next_run = scheduler.get_next_run_time(schedule_id)
+        if next_run:
+            schedule['next_run_at'] = next_run.isoformat()
+
+        return jsonify({
+            'status': 'success',
+            'data': schedule
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting schedule: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/schedules/<schedule_id>', methods=['PUT'])
+@check_session_validity
+def update_schedule(schedule_id):
+    """Update a schedule."""
+    try:
+        from services.historify_scheduler_service import get_historify_scheduler
+        from database.historify_db import get_schedule as db_get_schedule
+
+        # Check if schedule exists
+        existing = db_get_schedule(schedule_id)
+        if not existing:
+            return jsonify({
+                'status': 'error',
+                'message': 'Schedule not found'
+            }), 404
+
+        data = request.get_json()
+
+        # Validate schedule-type-specific fields if provided
+        schedule_type = data.get('schedule_type', existing.get('schedule_type'))
+
+        if schedule_type == 'interval':
+            interval_value = data.get('interval_value', existing.get('interval_value'))
+            interval_unit = data.get('interval_unit', existing.get('interval_unit', 'minutes'))
+
+            if interval_value is not None and (not isinstance(interval_value, int) or interval_value < 1):
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Invalid interval value'
+                }), 400
+
+            if interval_unit not in ('minutes', 'hours'):
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Invalid interval unit'
+                }), 400
+
+        elif schedule_type == 'daily':
+            time_of_day = data.get('time_of_day', existing.get('time_of_day', '09:15'))
+            try:
+                hour, minute = map(int, time_of_day.split(':'))
+                if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                    raise ValueError("Invalid time range")
+            except (ValueError, AttributeError):
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Invalid time format. Use HH:MM'
+                }), 400
+
+        # Update schedule
+        scheduler = get_historify_scheduler()
+        success, msg = scheduler.update_schedule(
+            schedule_id=schedule_id,
+            name=data.get('name'),
+            description=data.get('description'),
+            schedule_type=data.get('schedule_type'),
+            interval_value=data.get('interval_value'),
+            interval_unit=data.get('interval_unit'),
+            time_of_day=data.get('time_of_day'),
+            data_interval=data.get('data_interval'),
+            lookback_days=data.get('lookback_days')
+        )
+
+        if success:
+            return jsonify({
+                'status': 'success',
+                'message': msg
+            }), 200
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': msg
+            }), 400
+
+    except Exception as e:
+        logger.error(f"Error updating schedule: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/schedules/<schedule_id>', methods=['DELETE'])
+@check_session_validity
+def delete_schedule(schedule_id):
+    """Delete a schedule."""
+    try:
+        from services.historify_scheduler_service import get_historify_scheduler
+
+        scheduler = get_historify_scheduler()
+        success, msg = scheduler.delete_schedule(schedule_id)
+
+        if success:
+            return jsonify({
+                'status': 'success',
+                'message': msg
+            }), 200
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': msg
+            }), 400
+
+    except Exception as e:
+        logger.error(f"Error deleting schedule: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/schedules/<schedule_id>/enable', methods=['POST'])
+@check_session_validity
+def enable_schedule(schedule_id):
+    """Enable a schedule."""
+    try:
+        from services.historify_scheduler_service import get_historify_scheduler
+
+        scheduler = get_historify_scheduler()
+        success, msg = scheduler.enable_schedule(schedule_id)
+
+        if success:
+            return jsonify({
+                'status': 'success',
+                'message': msg
+            }), 200
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': msg
+            }), 400
+
+    except Exception as e:
+        logger.error(f"Error enabling schedule: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/schedules/<schedule_id>/disable', methods=['POST'])
+@check_session_validity
+def disable_schedule(schedule_id):
+    """Disable a schedule."""
+    try:
+        from services.historify_scheduler_service import get_historify_scheduler
+
+        scheduler = get_historify_scheduler()
+        success, msg = scheduler.disable_schedule(schedule_id)
+
+        if success:
+            return jsonify({
+                'status': 'success',
+                'message': msg
+            }), 200
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': msg
+            }), 400
+
+    except Exception as e:
+        logger.error(f"Error disabling schedule: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/schedules/<schedule_id>/pause', methods=['POST'])
+@check_session_validity
+def pause_schedule(schedule_id):
+    """Pause a schedule."""
+    try:
+        from services.historify_scheduler_service import get_historify_scheduler
+
+        scheduler = get_historify_scheduler()
+        success, msg = scheduler.pause_schedule(schedule_id)
+
+        if success:
+            return jsonify({
+                'status': 'success',
+                'message': msg
+            }), 200
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': msg
+            }), 400
+
+    except Exception as e:
+        logger.error(f"Error pausing schedule: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/schedules/<schedule_id>/resume', methods=['POST'])
+@check_session_validity
+def resume_schedule(schedule_id):
+    """Resume a paused schedule."""
+    try:
+        from services.historify_scheduler_service import get_historify_scheduler
+
+        scheduler = get_historify_scheduler()
+        success, msg = scheduler.resume_schedule(schedule_id)
+
+        if success:
+            return jsonify({
+                'status': 'success',
+                'message': msg
+            }), 200
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': msg
+            }), 400
+
+    except Exception as e:
+        logger.error(f"Error resuming schedule: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/schedules/<schedule_id>/trigger', methods=['POST'])
+@check_session_validity
+def trigger_schedule(schedule_id):
+    """Manually trigger a schedule execution."""
+    try:
+        from services.historify_scheduler_service import get_historify_scheduler
+
+        scheduler = get_historify_scheduler()
+        success, msg = scheduler.trigger_schedule(schedule_id)
+
+        if success:
+            return jsonify({
+                'status': 'success',
+                'message': msg
+            }), 200
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': msg
+            }), 400
+
+    except Exception as e:
+        logger.error(f"Error triggering schedule: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@historify_bp.route('/api/schedules/<schedule_id>/executions', methods=['GET'])
+@check_session_validity
+def get_schedule_executions(schedule_id):
+    """Get execution history for a schedule."""
+    try:
+        from database.historify_db import get_schedule_executions as db_get_executions
+
+        limit = min(request.args.get('limit', 20, type=int), 100)
+        executions = db_get_executions(schedule_id, limit)
+
+        return jsonify({
+            'status': 'success',
+            'data': executions,
+            'count': len(executions)
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting executions: {e}")
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500

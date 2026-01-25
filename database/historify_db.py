@@ -45,16 +45,43 @@ def ensure_db_directory():
 
 
 @contextmanager
-def get_connection():
+def get_connection(max_retries: int = 3, retry_delay: float = 0.5):
     """
-    Get a DuckDB connection with proper resource management.
+    Get a DuckDB connection with proper resource management and retry logic.
+
+    DuckDB uses exclusive file locking on Windows. This function includes retry
+    logic to handle temporary file access conflicts in concurrent scenarios.
+
+    Args:
+        max_retries: Maximum number of connection attempts (default: 3)
+        retry_delay: Delay in seconds between retries (default: 0.5)
 
     Usage:
         with get_connection() as conn:
             result = conn.execute("SELECT * FROM market_data").fetchdf()
     """
+    import time
+
     ensure_db_directory()
-    conn = duckdb.connect(get_db_path())
+    db_path = get_db_path()
+    conn = None
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            conn = duckdb.connect(db_path)
+            break
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries - 1:
+                logger.debug(f"DuckDB connection attempt {attempt + 1} failed, retrying: {e}")
+                time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
+            else:
+                logger.error(f"Failed to connect to DuckDB after {max_retries} attempts: {e}")
+
+    if conn is None:
+        raise last_error or Exception("Failed to connect to DuckDB")
+
     try:
         yield conn
     finally:
@@ -165,6 +192,51 @@ def init_database():
             )
         """)
 
+        # Scheduler Tables
+        # Schedule configurations
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS historify_schedules (
+                id VARCHAR PRIMARY KEY,
+                name VARCHAR NOT NULL,
+                description VARCHAR,
+                schedule_type VARCHAR NOT NULL,
+                interval_value INTEGER,
+                interval_unit VARCHAR,
+                time_of_day VARCHAR,
+                download_source VARCHAR DEFAULT 'watchlist',
+                data_interval VARCHAR NOT NULL,
+                lookback_days INTEGER DEFAULT 1,
+                is_enabled BOOLEAN DEFAULT TRUE,
+                is_paused BOOLEAN DEFAULT FALSE,
+                status VARCHAR DEFAULT 'idle',
+                apscheduler_job_id VARCHAR,
+                created_at TIMESTAMP DEFAULT current_timestamp,
+                last_run_at TIMESTAMP,
+                next_run_at TIMESTAMP,
+                last_run_status VARCHAR,
+                total_runs INTEGER DEFAULT 0,
+                successful_runs INTEGER DEFAULT 0,
+                failed_runs INTEGER DEFAULT 0
+            )
+        """)
+
+        # Execution history
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS historify_schedule_executions (
+                id INTEGER PRIMARY KEY,
+                schedule_id VARCHAR NOT NULL,
+                download_job_id VARCHAR,
+                status VARCHAR NOT NULL,
+                started_at TIMESTAMP DEFAULT current_timestamp,
+                completed_at TIMESTAMP,
+                symbols_processed INTEGER DEFAULT 0,
+                symbols_success INTEGER DEFAULT 0,
+                symbols_failed INTEGER DEFAULT 0,
+                records_downloaded INTEGER DEFAULT 0,
+                error_message VARCHAR
+            )
+        """)
+
         # Create indexes for common query patterns
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_market_data_timestamp
@@ -185,6 +257,14 @@ def init_database():
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_download_jobs_status
             ON download_jobs (status)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_historify_schedules_enabled
+            ON historify_schedules (is_enabled, is_paused)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_historify_schedule_executions_schedule_id
+            ON historify_schedule_executions (schedule_id)
         """)
 
         logger.debug("Historify database initialized successfully")
@@ -2575,3 +2655,432 @@ def get_export_preview(
             'estimated_size_parquet_mb': 0,
             'error': str(e)
         }
+
+
+# =============================================================================
+# Scheduler Operations
+# =============================================================================
+
+def create_schedule(
+    schedule_id: str,
+    name: str,
+    schedule_type: str,
+    data_interval: str,
+    interval_value: Optional[int] = None,
+    interval_unit: Optional[str] = None,
+    time_of_day: Optional[str] = None,
+    download_source: str = 'watchlist',
+    lookback_days: int = 1,
+    description: Optional[str] = None
+) -> Tuple[bool, str]:
+    """
+    Create a new schedule configuration.
+
+    Args:
+        schedule_id: Unique identifier for the schedule
+        name: Human-readable schedule name
+        schedule_type: 'interval' or 'daily'
+        data_interval: Data timeframe to download ('1m' or 'D')
+        interval_value: Numeric value for interval schedules (e.g., 5 for 5 minutes)
+        interval_unit: Unit for interval schedules ('minutes' or 'hours')
+        time_of_day: Time for daily schedules ('HH:MM')
+        download_source: 'watchlist' or 'catalog'
+        lookback_days: Number of days to look back for incremental downloads
+        description: Optional description
+
+    Returns:
+        Tuple of (success, message)
+    """
+    try:
+        with get_connection() as conn:
+            # Check if schedule ID already exists
+            existing = conn.execute(
+                "SELECT id FROM historify_schedules WHERE id = ?",
+                [schedule_id]
+            ).fetchone()
+
+            if existing:
+                return False, f"Schedule ID '{schedule_id}' already exists"
+
+            conn.execute("""
+                INSERT INTO historify_schedules
+                (id, name, description, schedule_type, interval_value, interval_unit,
+                 time_of_day, download_source, data_interval, lookback_days,
+                 is_enabled, is_paused, status, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, FALSE, 'idle', current_timestamp)
+            """, [schedule_id, name, description, schedule_type, interval_value,
+                  interval_unit, time_of_day, download_source, data_interval, lookback_days])
+
+        logger.info(f"Created schedule: {name} ({schedule_id})")
+        return True, f"Schedule '{name}' created successfully"
+
+    except Exception as e:
+        logger.error(f"Error creating schedule: {e}")
+        return False, str(e)
+
+
+def _clean_schedule_record(record: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Clean a schedule record for JSON serialization.
+    Converts pandas NaT/NaN values to None and timestamps to ISO strings.
+    """
+    import pandas as pd
+
+    cleaned = {}
+    for key, value in record.items():
+        if pd.isna(value):
+            cleaned[key] = None
+        elif isinstance(value, pd.Timestamp):
+            cleaned[key] = value.isoformat() if not pd.isna(value) else None
+        elif hasattr(value, 'isoformat'):
+            cleaned[key] = value.isoformat()
+        else:
+            cleaned[key] = value
+    return cleaned
+
+
+def get_schedule(schedule_id: str) -> Optional[Dict[str, Any]]:
+    """Get a schedule by ID."""
+    try:
+        with get_connection() as conn:
+            result = conn.execute("""
+                SELECT id, name, description, schedule_type, interval_value,
+                       interval_unit, time_of_day, download_source, data_interval,
+                       lookback_days, is_enabled, is_paused, status, apscheduler_job_id,
+                       created_at, last_run_at, next_run_at, last_run_status,
+                       total_runs, successful_runs, failed_runs
+                FROM historify_schedules
+                WHERE id = ?
+            """, [schedule_id]).fetchdf()
+
+            if result.empty:
+                return None
+
+            record = result.to_dict('records')[0]
+            return _clean_schedule_record(record)
+
+    except Exception as e:
+        logger.error(f"Error getting schedule: {e}")
+        return None
+
+
+def get_all_schedules() -> List[Dict[str, Any]]:
+    """Get all schedules."""
+    try:
+        with get_connection() as conn:
+            result = conn.execute("""
+                SELECT id, name, description, schedule_type, interval_value,
+                       interval_unit, time_of_day, download_source, data_interval,
+                       lookback_days, is_enabled, is_paused, status, apscheduler_job_id,
+                       created_at, last_run_at, next_run_at, last_run_status,
+                       total_runs, successful_runs, failed_runs
+                FROM historify_schedules
+                ORDER BY created_at DESC
+            """).fetchdf()
+
+            if result.empty:
+                return []
+
+            records = result.to_dict('records')
+            return [_clean_schedule_record(r) for r in records]
+
+    except Exception as e:
+        logger.error(f"Error getting schedules: {e}")
+        return []
+
+
+def update_schedule(
+    schedule_id: str,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    schedule_type: Optional[str] = None,
+    interval_value: Optional[int] = None,
+    interval_unit: Optional[str] = None,
+    time_of_day: Optional[str] = None,
+    download_source: Optional[str] = None,
+    data_interval: Optional[str] = None,
+    lookback_days: Optional[int] = None,
+    is_enabled: Optional[bool] = None,
+    is_paused: Optional[bool] = None,
+    status: Optional[str] = None,
+    apscheduler_job_id: Optional[str] = None,
+    next_run_at: Optional[datetime] = None,
+    last_run_at: Optional[datetime] = None,
+    last_run_status: Optional[str] = None
+) -> Tuple[bool, str]:
+    """Update a schedule configuration."""
+    try:
+        updates = []
+        params = []
+
+        if name is not None:
+            updates.append("name = ?")
+            params.append(name)
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
+        if schedule_type is not None:
+            updates.append("schedule_type = ?")
+            params.append(schedule_type)
+        if interval_value is not None:
+            updates.append("interval_value = ?")
+            params.append(interval_value)
+        if interval_unit is not None:
+            updates.append("interval_unit = ?")
+            params.append(interval_unit)
+        if time_of_day is not None:
+            updates.append("time_of_day = ?")
+            params.append(time_of_day)
+        if download_source is not None:
+            updates.append("download_source = ?")
+            params.append(download_source)
+        if data_interval is not None:
+            updates.append("data_interval = ?")
+            params.append(data_interval)
+        if lookback_days is not None:
+            updates.append("lookback_days = ?")
+            params.append(lookback_days)
+        if is_enabled is not None:
+            updates.append("is_enabled = ?")
+            params.append(is_enabled)
+        if is_paused is not None:
+            updates.append("is_paused = ?")
+            params.append(is_paused)
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+        if apscheduler_job_id is not None:
+            updates.append("apscheduler_job_id = ?")
+            params.append(apscheduler_job_id)
+        if next_run_at is not None:
+            updates.append("next_run_at = ?")
+            params.append(next_run_at)
+        if last_run_at is not None:
+            updates.append("last_run_at = ?")
+            params.append(last_run_at)
+        if last_run_status is not None:
+            updates.append("last_run_status = ?")
+            params.append(last_run_status)
+
+        if not updates:
+            return False, "No fields to update"
+
+        params.append(schedule_id)
+        query = f"UPDATE historify_schedules SET {', '.join(updates)} WHERE id = ?"
+
+        with get_connection() as conn:
+            conn.execute(query, params)
+
+        logger.info(f"Updated schedule: {schedule_id}")
+        return True, "Schedule updated successfully"
+
+    except Exception as e:
+        logger.error(f"Error updating schedule: {e}")
+        return False, str(e)
+
+
+def delete_schedule(schedule_id: str) -> Tuple[bool, str]:
+    """Delete a schedule and its execution history."""
+    try:
+        with get_connection() as conn:
+            # Delete execution history first
+            conn.execute(
+                "DELETE FROM historify_schedule_executions WHERE schedule_id = ?",
+                [schedule_id]
+            )
+            # Delete schedule
+            conn.execute(
+                "DELETE FROM historify_schedules WHERE id = ?",
+                [schedule_id]
+            )
+
+        logger.info(f"Deleted schedule: {schedule_id}")
+        return True, "Schedule deleted successfully"
+
+    except Exception as e:
+        logger.error(f"Error deleting schedule: {e}")
+        return False, str(e)
+
+
+def increment_schedule_run_counts(
+    schedule_id: str,
+    is_success: bool
+) -> Tuple[bool, str]:
+    """Increment run counts for a schedule."""
+    try:
+        with get_connection() as conn:
+            if is_success:
+                conn.execute("""
+                    UPDATE historify_schedules
+                    SET total_runs = total_runs + 1,
+                        successful_runs = successful_runs + 1,
+                        last_run_at = current_timestamp
+                    WHERE id = ?
+                """, [schedule_id])
+            else:
+                conn.execute("""
+                    UPDATE historify_schedules
+                    SET total_runs = total_runs + 1,
+                        failed_runs = failed_runs + 1,
+                        last_run_at = current_timestamp
+                    WHERE id = ?
+                """, [schedule_id])
+
+        return True, "Run counts updated"
+
+    except Exception as e:
+        logger.error(f"Error incrementing run counts: {e}")
+        return False, str(e)
+
+
+def create_schedule_execution(
+    schedule_id: str,
+    download_job_id: Optional[str] = None
+) -> Optional[int]:
+    """
+    Create a new execution record for a schedule.
+
+    Returns:
+        Execution ID or None on failure
+    """
+    import time
+
+    try:
+        # Use timestamp-based ID to minimize collision risk
+        # Format: last 9 digits of current timestamp in microseconds
+        execution_id = int(time.time() * 1000000) % 1000000000
+
+        with get_connection() as conn:
+            # Try inserting, if collision occurs retry with incremented ID
+            for attempt in range(3):
+                try:
+                    conn.execute("""
+                        INSERT INTO historify_schedule_executions
+                        (id, schedule_id, download_job_id, status, started_at)
+                        VALUES (?, ?, ?, 'running', current_timestamp)
+                    """, [execution_id + attempt, schedule_id, download_job_id])
+                    execution_id = execution_id + attempt
+                    break
+                except Exception:
+                    if attempt == 2:
+                        raise
+                    continue
+
+        logger.info(f"Created execution {execution_id} for schedule {schedule_id}")
+        return execution_id
+
+    except Exception as e:
+        logger.error(f"Error creating execution record: {e}")
+        return None
+
+
+def update_schedule_execution(
+    execution_id: int,
+    status: Optional[str] = None,
+    completed_at: Optional[datetime] = None,
+    symbols_processed: Optional[int] = None,
+    symbols_success: Optional[int] = None,
+    symbols_failed: Optional[int] = None,
+    records_downloaded: Optional[int] = None,
+    error_message: Optional[str] = None,
+    download_job_id: Optional[str] = None
+) -> Tuple[bool, str]:
+    """Update an execution record."""
+    try:
+        updates = []
+        params = []
+
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+        if completed_at is not None:
+            updates.append("completed_at = ?")
+            params.append(completed_at)
+        if symbols_processed is not None:
+            updates.append("symbols_processed = ?")
+            params.append(symbols_processed)
+        if symbols_success is not None:
+            updates.append("symbols_success = ?")
+            params.append(symbols_success)
+        if symbols_failed is not None:
+            updates.append("symbols_failed = ?")
+            params.append(symbols_failed)
+        if download_job_id is not None:
+            updates.append("download_job_id = ?")
+            params.append(download_job_id)
+        if records_downloaded is not None:
+            updates.append("records_downloaded = ?")
+            params.append(records_downloaded)
+        if error_message is not None:
+            updates.append("error_message = ?")
+            params.append(error_message)
+
+        if not updates:
+            return False, "No fields to update"
+
+        params.append(execution_id)
+        query = f"UPDATE historify_schedule_executions SET {', '.join(updates)} WHERE id = ?"
+
+        with get_connection() as conn:
+            conn.execute(query, params)
+
+        return True, "Execution updated"
+
+    except Exception as e:
+        logger.error(f"Error updating execution: {e}")
+        return False, str(e)
+
+
+def get_schedule_executions(
+    schedule_id: str,
+    limit: int = 20
+) -> List[Dict[str, Any]]:
+    """Get execution history for a schedule."""
+    try:
+        with get_connection() as conn:
+            result = conn.execute("""
+                SELECT id, schedule_id, download_job_id, status,
+                       started_at, completed_at, symbols_processed,
+                       symbols_success, symbols_failed, records_downloaded,
+                       error_message
+                FROM historify_schedule_executions
+                WHERE schedule_id = ?
+                ORDER BY started_at DESC
+                LIMIT ?
+            """, [schedule_id, limit]).fetchdf()
+
+            if result.empty:
+                return []
+
+            records = result.to_dict('records')
+            return [_clean_schedule_record(r) for r in records]
+
+    except Exception as e:
+        logger.error(f"Error getting executions: {e}")
+        return []
+
+
+def get_active_schedules() -> List[Dict[str, Any]]:
+    """Get all enabled and non-paused schedules."""
+    try:
+        with get_connection() as conn:
+            result = conn.execute("""
+                SELECT id, name, description, schedule_type, interval_value,
+                       interval_unit, time_of_day, download_source, data_interval,
+                       lookback_days, is_enabled, is_paused, status, apscheduler_job_id,
+                       created_at, last_run_at, next_run_at, last_run_status,
+                       total_runs, successful_runs, failed_runs
+                FROM historify_schedules
+                WHERE is_enabled = TRUE AND is_paused = FALSE
+                ORDER BY created_at DESC
+            """).fetchdf()
+
+            if result.empty:
+                return []
+
+            records = result.to_dict('records')
+            return [_clean_schedule_record(r) for r in records]
+
+    except Exception as e:
+        logger.error(f"Error getting active schedules: {e}")
+        return []
