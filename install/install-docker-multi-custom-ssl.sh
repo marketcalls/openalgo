@@ -179,30 +179,52 @@ while true; do
     break
 done
 
-# 2. Wildcard SSL Check
-read -p "Do you have a WILDCARD SSL certificate for these domains? (y/n): " USE_WILDCARD_SSL
+# 2. First Pass: Determine which domains are updates vs fresh installs
+declare -a NEW_DOMAINS
+declare -a UPDATE_DOMAINS
 
+for DOMAIN in "${DOMAINS_INPUT[@]}"; do
+    INSTANCE_DIR="$INSTALL_BASE/$DOMAIN"
+    if [ -d "$INSTANCE_DIR" ] && [ -d "$INSTANCE_DIR/.git" ] && [ -f "$INSTANCE_DIR/.env" ]; then
+        log "Found existing installation: $DOMAIN" "$GREEN"
+        UPDATE_DOMAINS+=("$DOMAIN")
+    else
+        NEW_DOMAINS+=("$DOMAIN")
+    fi
+done
+
+log "Update domains: ${#UPDATE_DOMAINS[@]}, New domains: ${#NEW_DOMAINS[@]}" "$BLUE"
+
+# 3. Wildcard SSL Check - Only ask if there are NEW domains to configure
 WILDCARD_CERT_PATH=""
 WILDCARD_KEY_PATH=""
+USE_WILDCARD_SSL="n"
 
-if [[ $USE_WILDCARD_SSL =~ ^[Yy]$ ]]; then
-    while true; do
-        read -e -p "Enter path to Wildcard FULL CHAIN .pem file: " WILDCARD_CERT_PATH
-        if [ ! -f "$WILDCARD_CERT_PATH" ]; then
-            log "Error: File not found at $WILDCARD_CERT_PATH" "$RED"
-            continue
-        fi
-        break
-    done
+if [ ${#NEW_DOMAINS[@]} -gt 0 ]; then
+    log "\n${#NEW_DOMAINS[@]} new domain(s) detected. SSL configuration required." "$YELLOW"
+    read -p "Do you have a WILDCARD SSL certificate for these domains? (y/n): " USE_WILDCARD_SSL
 
-    while true; do
-        read -e -p "Enter path to Wildcard PRIVATE KEY .key file: " WILDCARD_KEY_PATH
-        if [ ! -f "$WILDCARD_KEY_PATH" ]; then
-            log "Error: File not found at $WILDCARD_KEY_PATH" "$RED"
-            continue
-        fi
-        break
-    done
+    if [[ $USE_WILDCARD_SSL =~ ^[Yy]$ ]]; then
+        while true; do
+            read -e -p "Enter path to Wildcard FULL CHAIN .pem file: " WILDCARD_CERT_PATH
+            if [ ! -f "$WILDCARD_CERT_PATH" ]; then
+                log "Error: File not found at $WILDCARD_CERT_PATH" "$RED"
+                continue
+            fi
+            break
+        done
+
+        while true; do
+            read -e -p "Enter path to Wildcard PRIVATE KEY .key file: " WILDCARD_KEY_PATH
+            if [ ! -f "$WILDCARD_KEY_PATH" ]; then
+                log "Error: File not found at $WILDCARD_KEY_PATH" "$RED"
+                continue
+            fi
+            break
+        done
+    fi
+else
+    log "\nAll domains are existing installations - SSL configuration will be preserved." "$GREEN"
 fi
 
 # Arrays to store config
@@ -214,21 +236,89 @@ declare -a CONF_MARKET_KEYS
 declare -a CONF_MARKET_SECRETS
 declare -a CONF_SSL_CERTS
 declare -a CONF_SSL_KEYS
+declare -a UPDATE_MODE  # Track update vs fresh install per domain
+
+# Helper function to extract value from .env file
+extract_env_value() {
+    local env_file="$1"
+    local key="$2"
+    grep "^${key}" "$env_file" 2>/dev/null | head -1 | cut -d"'" -f2 | tr -d "'" || echo ""
+}
 
 # 3. Iterate Domains for Config
 for DOMAIN in "${DOMAINS_INPUT[@]}"; do
     log "\n--- Configuring Instance: $DOMAIN ---" "$YELLOW"
 
-    # Check existing
+    # Check existing installation
     INSTANCE_DIR="$INSTALL_BASE/$DOMAIN"
+    IS_UPDATE="false"
+    
     if [ -d "$INSTANCE_DIR" ] && [ -d "$INSTANCE_DIR/.git" ]; then
-        read -p "Instance for $DOMAIN already exists. Re-install/Update? (y/n): " UPDATE_EXISTING
-        if [[ ! $UPDATE_EXISTING =~ ^[Yy]$ ]]; then
-            log "Skipping $DOMAIN" "$YELLOW"
-            continue
-        fi
-        log "Warning: Existing data in $INSTANCE_DIR might be overwritten (databases preserved in volumes)" "$YELLOW"
+        read -p "Instance for $DOMAIN already exists. Update code only? (y=update, n=skip, r=reinstall): " UPDATE_CHOICE
+        case "$UPDATE_CHOICE" in
+            [Yy]*)
+                IS_UPDATE="true"
+                log "Update mode: Will pull latest code and preserve configuration." "$GREEN"
+                
+                # Load existing configuration from .env
+                EXISTING_ENV="$INSTANCE_DIR/.env"
+                if [ -f "$EXISTING_ENV" ]; then
+                    log "Loading existing configuration from .env..." "$GREEN"
+                    EXISTING_BROKER=$(extract_env_value "$EXISTING_ENV" "REDIRECT_URL" | sed 's|.*/\([^/]*\)/callback|\1|')
+                    EXISTING_API_KEY=$(extract_env_value "$EXISTING_ENV" "BROKER_API_KEY")
+                    EXISTING_API_SECRET=$(extract_env_value "$EXISTING_ENV" "BROKER_API_SECRET")
+                    EXISTING_M_KEY=$(extract_env_value "$EXISTING_ENV" "BROKER_API_KEY_MARKET")
+                    EXISTING_M_SECRET=$(extract_env_value "$EXISTING_ENV" "BROKER_API_SECRET_MARKET")
+                    
+                    # Use existing values
+                    CONF_DOMAINS+=("$DOMAIN")
+                    CONF_BROKERS+=("$EXISTING_BROKER")
+                    CONF_API_KEYS+=("$EXISTING_API_KEY")
+                    CONF_API_SECRETS+=("$EXISTING_API_SECRET")
+                    CONF_MARKET_KEYS+=("${EXISTING_M_KEY:-}")
+                    CONF_MARKET_SECRETS+=("${EXISTING_M_SECRET:-}")
+                    UPDATE_MODE+=("true")
+                    
+                    # SSL already configured, get existing paths
+                    SSL_DIR="/etc/nginx/ssl/$DOMAIN"
+                    if [ -f "$SSL_DIR/fullchain.pem" ]; then
+                        CONF_SSL_CERTS+=("$SSL_DIR/fullchain.pem")
+                        CONF_SSL_KEYS+=("$SSL_DIR/privkey.pem")
+                    else
+                        log "Warning: SSL certs not found, will need reconfiguration" "$YELLOW"
+                        CONF_SSL_CERTS+=("EXISTING")
+                        CONF_SSL_KEYS+=("EXISTING")
+                    fi
+                    
+                    log "Loaded: Broker=$EXISTING_BROKER" "$GREEN"
+                    continue  # Skip interactive prompts for this domain
+                else
+                    log "Warning: No .env found, treating as fresh install" "$YELLOW"
+                    IS_UPDATE="false"
+                fi
+                ;;
+            [Nn]*)
+                log "Skipping $DOMAIN" "$YELLOW"
+                continue
+                ;;
+            [Rr]*)
+                log "Reinstall mode: Will ask for all configuration again." "$YELLOW"
+                log "Warning: This will regenerate security keys and invalidate existing passwords!" "$RED"
+                read -p "Are you sure you want to reinstall? (yes to confirm): " CONFIRM_REINSTALL
+                if [ "$CONFIRM_REINSTALL" != "yes" ]; then
+                    log "Skipping $DOMAIN" "$YELLOW"
+                    continue
+                fi
+                ;;
+            *)
+                log "Invalid choice. Skipping $DOMAIN" "$RED"
+                continue
+                ;;
+        esac
     fi
+    
+    # Mark as fresh install if not update mode
+    UPDATE_MODE+=("$IS_UPDATE")
 
     CONF_DOMAINS+=("$DOMAIN")
 
@@ -349,9 +439,60 @@ ufw allow 80/tcp
 ufw allow 443/tcp
 ufw --force enable
 
-# Optional Portainer Installation
-read -p "Do you want to install Portainer (Docker Management UI)? (y/n): " INSTALL_PORTAINER
+# Optional Portainer Installation - Smart Detection
+PORTAINER_RUNNING=$(docker ps -q -f name=portainer)
+PORTAINER_EXISTS=$(docker ps -aq -f name=portainer)
+INSTALL_PORTAINER="n"
 PORTAINER_DOMAIN=""
+
+if [ ! -z "$PORTAINER_RUNNING" ]; then
+    # Portainer is already running
+    CURRENT_IMAGE=$(docker inspect portainer --format '{{.Config.Image}}' 2>/dev/null || echo "unknown")
+    log "Portainer is already running (Image: $CURRENT_IMAGE)" "$GREEN"
+    
+    read -p "Check for Portainer updates? (y/n): " CHECK_PORTAINER_UPDATE
+    if [[ $CHECK_PORTAINER_UPDATE =~ ^[Yy]$ ]]; then
+        log "Checking for Portainer updates..." "$YELLOW"
+        docker pull portainer/portainer-ce:latest
+        
+        NEW_IMAGE_ID=$(docker inspect portainer/portainer-ce:latest --format '{{.Id}}' 2>/dev/null | cut -c8-19)
+        OLD_IMAGE_ID=$(docker inspect portainer --format '{{.Image}}' 2>/dev/null | cut -c8-19)
+        
+        if [ "$NEW_IMAGE_ID" != "$OLD_IMAGE_ID" ] && [ ! -z "$NEW_IMAGE_ID" ]; then
+            log "New Portainer version available. Updating..." "$YELLOW"
+            
+            # Get current binding (preserve domain/IP configuration)
+            CURRENT_BIND=$(docker port portainer 9000 2>/dev/null | cut -d: -f1)
+            BIND_IP="${CURRENT_BIND:-127.0.0.1}"
+            
+            docker stop portainer && docker rm portainer
+            docker run -d -p $BIND_IP:9000:9000 --name portainer --restart=always \
+                -v /var/run/docker.sock:/var/run/docker.sock \
+                -v portainer_data:/data \
+                portainer/portainer-ce:latest
+            log "Portainer updated successfully!" "$GREEN"
+        else
+            log "Portainer is already at latest version." "$GREEN"
+        fi
+    fi
+    
+    # Skip all further Portainer prompts - already configured
+    INSTALL_PORTAINER="skip"
+    
+elif [ ! -z "$PORTAINER_EXISTS" ]; then
+    # Portainer container exists but is stopped
+    log "Portainer container exists but is stopped." "$YELLOW"
+    read -p "Start existing Portainer? (y/n): " START_PORTAINER
+    if [[ $START_PORTAINER =~ ^[Yy]$ ]]; then
+        docker start portainer
+        log "Portainer started." "$GREEN"
+    fi
+    INSTALL_PORTAINER="skip"
+    
+else
+    # Fresh install option
+    read -p "Do you want to install Portainer (Docker Management UI)? (y/n): " INSTALL_PORTAINER
+fi
 
 if [[ $INSTALL_PORTAINER =~ ^[Yy]$ ]]; then
     read -p "Enter Domain for Portainer (Leave EMPTY to use IP:9000): " PORTAINER_DOMAIN
@@ -604,33 +745,50 @@ for i in "${!CONF_DOMAINS[@]}"; do
     
     mkdir -p "$INSTANCE_DIR"/{log,logs,keys,db,strategies/scripts,strategies/examples}
     
-    # 5. Env Config
-    cp "$INSTANCE_DIR/.sample.env" "$INSTANCE_DIR/.env"
+    # 5. Env Config - CRITICAL: Preserve .env during updates to maintain passwords
+    IS_UPDATE_MODE="${UPDATE_MODE[$i]}"
     ENV_FILE="$INSTANCE_DIR/.env"
     
-    APP_KEY=$(generate_hex)
-    PEPPER=$(generate_hex)
-    
-    sed -i "s|YOUR_BROKER_API_KEY|$API_KEY|g" "$ENV_FILE"
-    sed -i "s|YOUR_BROKER_API_SECRET|$API_SECRET|g" "$ENV_FILE"
-    sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" "$ENV_FILE"
-    sed -i "s|<broker>|$BROKER|g" "$ENV_FILE"
-    sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" "$ENV_FILE"
-    sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$PEPPER|g" "$ENV_FILE"
-    
-    # XTS
-    if [ ! -z "$M_KEY" ]; then
-        sed -i "s|YOUR_BROKER_MARKET_API_KEY|$M_KEY|g" "$ENV_FILE"
-        sed -i "s|YOUR_BROKER_MARKET_API_SECRET|$M_SECRET|g" "$ENV_FILE"
+    if [ "$IS_UPDATE_MODE" == "true" ] && [ -f "$ENV_FILE" ]; then
+        log "Preserving existing .env file (keeps APP_KEY, PEPPER, and passwords valid)" "$GREEN"
+        
+        # Only update connectivity settings if needed (in case domain changed)
+        # These are safe to update without breaking authentication
+        sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" "$ENV_FILE"
+        sed -i "s|CORS_ALLOWED_ORIGINS = '.*'|CORS_ALLOWED_ORIGINS = 'https://$DOMAIN'|g" "$ENV_FILE"
+        sed -i "s|CSP_CONNECT_SRC = \"'self'.*\"|CSP_CONNECT_SRC = \"'self' wss://$DOMAIN https://$DOMAIN wss: ws: https://cdn.socket.io\"|g" "$ENV_FILE"
+        
+        log "Updated connectivity settings only" "$GREEN"
+    else
+        log "Creating new .env configuration..." "$YELLOW"
+        cp "$INSTANCE_DIR/.sample.env" "$ENV_FILE"
+        
+        APP_KEY=$(generate_hex)
+        PEPPER=$(generate_hex)
+        
+        sed -i "s|YOUR_BROKER_API_KEY|$API_KEY|g" "$ENV_FILE"
+        sed -i "s|YOUR_BROKER_API_SECRET|$API_SECRET|g" "$ENV_FILE"
+        sed -i "s|http://127.0.0.1:5000|https://$DOMAIN|g" "$ENV_FILE"
+        sed -i "s|<broker>|$BROKER|g" "$ENV_FILE"
+        sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" "$ENV_FILE"
+        sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$PEPPER|g" "$ENV_FILE"
+        
+        # XTS
+        if [ ! -z "$M_KEY" ]; then
+            sed -i "s|YOUR_BROKER_MARKET_API_KEY|$M_KEY|g" "$ENV_FILE"
+            sed -i "s|YOUR_BROKER_MARKET_API_SECRET|$M_SECRET|g" "$ENV_FILE"
+        fi
+        
+        # Connectivity
+        sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" "$ENV_FILE"
+        sed -i "s|WEBSOCKET_HOST='127.0.0.1'|WEBSOCKET_HOST='0.0.0.0'|g" "$ENV_FILE"
+        sed -i "s|ZMQ_HOST='127.0.0.1'|ZMQ_HOST='0.0.0.0'|g" "$ENV_FILE"
+        sed -i "s|FLASK_HOST_IP='127.0.0.1'|FLASK_HOST_IP='0.0.0.0'|g" "$ENV_FILE"
+        sed -i "s|CORS_ALLOWED_ORIGINS = '.*'|CORS_ALLOWED_ORIGINS = 'https://$DOMAIN'|g" "$ENV_FILE"
+        sed -i "s|CSP_CONNECT_SRC = \"'self'.*\"|CSP_CONNECT_SRC = \"'self' wss://$DOMAIN https://$DOMAIN wss: ws: https://cdn.socket.io\"|g" "$ENV_FILE"
+        
+        log "New .env created with fresh security keys" "$GREEN"
     fi
-    
-    # Connectivity
-    sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" "$ENV_FILE"
-    sed -i "s|WEBSOCKET_HOST='127.0.0.1'|WEBSOCKET_HOST='0.0.0.0'|g" "$ENV_FILE"
-    sed -i "s|ZMQ_HOST='127.0.0.1'|ZMQ_HOST='0.0.0.0'|g" "$ENV_FILE"
-    sed -i "s|FLASK_HOST_IP='127.0.0.1'|FLASK_HOST_IP='0.0.0.0'|g" "$ENV_FILE"
-    sed -i "s|CORS_ALLOWED_ORIGINS = '.*'|CORS_ALLOWED_ORIGINS = 'https://$DOMAIN'|g" "$ENV_FILE"
-    sed -i "s|CSP_CONNECT_SRC = \"'self'.*\"|CSP_CONNECT_SRC = \"'self' wss://$DOMAIN https://$DOMAIN wss: ws: https://cdn.socket.io\"|g" "$ENV_FILE"
 
     # 6. Docker Compose
     cat <<EOF > "$INSTANCE_DIR/docker-compose.yaml"
