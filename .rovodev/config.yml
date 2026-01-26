@@ -1,0 +1,21 @@
+toolPermissions::
+  tools:
+    create_file: ask
+    delete_file: ask
+    move_file: ask
+    find_and_replace_code: ask
+    open_files: allow
+    expand_code_chunks: allow
+    expand_folder: allow
+    grep: allow
+  bash:
+    # Default permission for bash commands not explicitly listed
+    default: ask
+    # List of specific bash commands with their permission settings
+    commands:
+      - command: ls.*
+        permission: allow
+      - command: cat.*
+        permission: allow
+      - command: git.*
+        permission: allow

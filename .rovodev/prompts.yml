@@ -1,0 +1,8 @@
+prompts:
+  - name: create-pr-on-main
+    description: Creates a pull request against the main branch
+    content_file: create-pr-on-main.md
+
+  - name: create-pr-from-staging-to-main
+    description: Creates a pull request from staging to main with auto-generated summary
+    content_file: create-pr-staging-to-main.md

@@ -54,6 +54,7 @@ from blueprints.historify import historify_bp  # Import the historify blueprint
 from blueprints.flow import flow_bp  # Import the flow blueprint
 from blueprints.broker_credentials import broker_credentials_bp  # Import the broker credentials blueprint
 from blueprints.system_permissions import system_permissions_bp  # Import the system permissions blueprint
+from blueprints.strategy_state import strategy_state_bp  # Import the strategy state blueprint
 from services.telegram_bot_service import telegram_bot_service
 from database.telegram_db import get_bot_config
 
@@ -212,6 +213,7 @@ def create_app():
     app.register_blueprint(flow_bp)  # Register Flow blueprint
     app.register_blueprint(broker_credentials_bp)  # Register Broker credentials blueprint
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
+    app.register_blueprint(strategy_state_bp)  # Register Strategy state blueprint
 
 
     # Exempt webhook endpoints from CSRF protection after app initialization
