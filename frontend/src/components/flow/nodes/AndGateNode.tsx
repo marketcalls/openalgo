@@ -52,24 +52,24 @@ export const AndGateNode = memo(({ data, selected }: AndGateNodeProps) => {
         </div>
         {/* Handle labels */}
         <div className="mt-2 flex justify-between px-1 text-[8px]">
-          <span className="text-buy">Yes</span>
-          <span className="text-sell">No</span>
+          <span className="text-buy">True</span>
+          <span className="text-sell">False</span>
         </div>
       </div>
-      {/* Yes output (left) */}
+      {/* True output (left) */}
       <Handle
         type="source"
         position={Position.Bottom}
-        id="yes"
-        className="!bottom-0 !translate-y-1/2 !bg-buy"
+        id="true"
+        className="!bottom-0 !translate-y-1/2 !bg-buy !w-3 !h-3"
         style={{ left: '25%' }}
       />
-      {/* No output (right) */}
+      {/* False output (right) */}
       <Handle
         type="source"
         position={Position.Bottom}
-        id="no"
-        className="!bottom-0 !translate-y-1/2 !bg-sell"
+        id="false"
+        className="!bottom-0 !translate-y-1/2 !bg-sell !w-3 !h-3"
         style={{ left: '75%' }}
       />
     </div>
