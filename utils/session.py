@@ -77,6 +77,10 @@ def revoke_user_tokens(revoke_db_tokens=True):
     """
     Revoke auth tokens for the current user when session expires.
 
+    Also publishes cache invalidation events via ZeroMQ for multi-process deployments.
+    This ensures WebSocket proxy and other processes clear their stale cached tokens.
+    See GitHub issue #765 for details on the cross-process cache synchronization problem.
+
     Args:
         revoke_db_tokens (bool): If True, revokes the token in the database (Invalidates API Key).
                                  If False, only clears local caches (Preserves API Key).
@@ -93,6 +97,16 @@ def revoke_user_tokens(revoke_db_tokens=True):
                 del auth_cache[cache_key_auth]
             if cache_key_feed in feed_token_cache:
                 del feed_token_cache[cache_key_feed]
+
+            # Publish cache invalidation event via ZeroMQ for other processes
+            # This notifies WebSocket proxy and other processes to clear their stale caches
+            try:
+                from database.cache_invalidation import publish_all_cache_invalidation
+                publish_all_cache_invalidation(username)
+                logger.debug(f"Published cache invalidation for user: {username}")
+            except Exception as invalidation_error:
+                # Don't fail logout if cache invalidation fails
+                logger.warning(f"Failed to publish cache invalidation for user {username}: {invalidation_error}")
 
             # Clear symbol cache on logout/session expiry
             try:

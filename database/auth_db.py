@@ -201,7 +201,12 @@ def decrypt_token(encrypted_token):
 
 
 def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=False):
-    """Store encrypted auth token and feed token if provided"""
+    """Store encrypted auth token and feed token if provided.
+
+    Also publishes cache invalidation events via ZeroMQ for multi-process deployments.
+    This ensures WebSocket proxy and other processes clear their stale cached tokens.
+    See GitHub issue #765 for details on the cross-process cache synchronization problem.
+    """
     encrypted_token = encrypt_token(auth_token)
     encrypted_feed_token = encrypt_token(feed_token) if feed_token else None
 
@@ -242,17 +247,54 @@ def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=
             feed_token_cache[cache_key_feed] = auth_obj
         logger.debug(f"Auth cache populated for user: {name}")
 
+    # Publish cache invalidation event via ZeroMQ for other processes
+    # This notifies WebSocket proxy and other processes to clear their stale caches
+    try:
+        from database.cache_invalidation import publish_all_cache_invalidation
+        publish_all_cache_invalidation(name)
+        logger.debug(f"Published cache invalidation for user: {name}")
+    except Exception as e:
+        # Don't fail auth operation if cache invalidation fails
+        # The database fallback in other processes will handle it
+        logger.warning(f"Failed to publish cache invalidation for user {name}: {e}")
+
     return auth_obj.id
 
 
-def get_auth_token(name):
-    """Get decrypted auth token"""
+def get_auth_token(name, bypass_cache: bool = False):
+    """Get decrypted auth token.
+
+    Args:
+        name: The user identifier to get the token for
+        bypass_cache: If True, skip the cache and query the database directly.
+                     Use this when retrying after a 403 error to get fresh credentials.
+                     See GitHub issue #765 for details.
+
+    Returns:
+        The decrypted auth token, or None if not found/revoked
+    """
     # Handle None or empty name gracefully
     if not name:
         logger.debug("get_auth_token called with empty/None name, returning None")
         return None
 
     cache_key = f"auth-{name}"
+
+    # Bypass cache if requested (e.g., after 403 error for fresh token)
+    if bypass_cache:
+        logger.debug(f"Bypassing cache for user: {name} (fresh token requested)")
+        # Clear stale cache entry
+        if cache_key in auth_cache:
+            del auth_cache[cache_key]
+        # Query database directly
+        auth_obj = get_auth_token_dbquery(name)
+        if isinstance(auth_obj, Auth) and not auth_obj.is_revoked:
+            # Update cache with fresh data
+            auth_cache[cache_key] = auth_obj
+            return decrypt_token(auth_obj.auth)
+        return None
+
+    # Normal cache-first lookup
     if cache_key in auth_cache:
         auth_obj = auth_cache[cache_key]
         if isinstance(auth_obj, Auth) and not auth_obj.is_revoked:
@@ -266,6 +308,22 @@ def get_auth_token(name):
             auth_cache[cache_key] = auth_obj
             return decrypt_token(auth_obj.auth)
         return None
+
+
+def get_auth_token_fresh(name):
+    """Get fresh auth token directly from database, bypassing cache.
+
+    This is a convenience function for use after authentication failures (403 errors).
+    It clears the local cache and fetches the latest token from the database.
+    See GitHub issue #765 for details on when to use this.
+
+    Args:
+        name: The user identifier to get the token for
+
+    Returns:
+        The decrypted auth token, or None if not found/revoked
+    """
+    return get_auth_token(name, bypass_cache=True)
 
 
 def get_auth_token_dbquery(name):
