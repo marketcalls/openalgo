@@ -272,8 +272,25 @@ $SUDO sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" .env
 $SUDO sed -i "s|WEBSOCKET_HOST='127.0.0.1'|WEBSOCKET_HOST='0.0.0.0'|g" .env
 $SUDO sed -i "s|ZMQ_HOST='127.0.0.1'|ZMQ_HOST='0.0.0.0'|g" .env
 $SUDO sed -i "s|FLASK_HOST_IP='127.0.0.1'|FLASK_HOST_IP='0.0.0.0'|g" .env
-$SUDO sed -i "s|CORS_ALLOWED_ORIGINS = '.*'|CORS_ALLOWED_ORIGINS = 'https://$DOMAIN'|g" .env
-$SUDO sed -i "s|CSP_CONNECT_SRC = \"'self'.*\"|CSP_CONNECT_SRC = \"'self' wss://$DOMAIN https://$DOMAIN wss: ws: https://cdn.socket.io\"|g" .env
+# CORS: Add domain if not already present (preserves custom domains)
+# NOTE: Flask-CORS expects comma-separated origins (see cors.py line 25)
+if ! grep "CORS_ALLOWED_ORIGINS" .env | grep -q "https://$DOMAIN"; then
+    CURRENT_CORS=$(grep "CORS_ALLOWED_ORIGINS" .env | sed "s/.*= '\\(.*\\)'/\\1/")
+    if [ -n "$CURRENT_CORS" ]; then
+        NEW_CORS="$CURRENT_CORS,https://$DOMAIN"
+        NEW_CORS=$(echo "$NEW_CORS" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+        $SUDO sed -i "s|CORS_ALLOWED_ORIGINS = '.*'|CORS_ALLOWED_ORIGINS = '$NEW_CORS'|g" .env
+    fi
+fi
+
+# CSP: Add domain if not already present (preserves custom domains)
+if ! grep "CSP_CONNECT_SRC" .env | grep -q "https://$DOMAIN"; then
+    CURRENT_CSP=$(grep "CSP_CONNECT_SRC" .env | sed 's/.*= "\\(.*\\)"/\\1/')
+    if [ -n "$CURRENT_CSP" ] && ! echo "$CURRENT_CSP" | grep -q "https://$DOMAIN"; then
+        NEW_CSP="$CURRENT_CSP https://$DOMAIN wss://$DOMAIN"
+        $SUDO sed -i "s|CSP_CONNECT_SRC = \".*\"|CSP_CONNECT_SRC = \"$NEW_CSP\"|g" .env
+    fi
+fi
 
 check_status "Environment configuration failed"
 
