@@ -83,7 +83,7 @@ def sandbox_config():
 
         return render_template("sandbox.html", configs=organized_configs)
     except Exception as e:
-        logger.error(f"Error rendering sandbox config: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error rendering sandbox config: {str(e)}\n{traceback.format_exc()}")
         flash("Error loading sandbox configuration", "error")
         return redirect(url_for("core_bp.home"))
 
@@ -183,7 +183,7 @@ def api_get_configs():
 
         return jsonify({"status": "success", "configs": organized_configs})
     except Exception as e:
-        logger.error(f"Error getting sandbox configs: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error getting sandbox configs: {str(e)}\n{traceback.format_exc()}")
         return jsonify(
             {"status": "error", "message": f"Error loading configuration: {str(e)}"}
         ), 500
@@ -238,7 +238,7 @@ def update_config():
                         f"Updated {len(funds)} user funds with new starting capital: ₹{new_capital}"
                     )
                 except Exception as e:
-                    logger.error(f"Error updating user funds with new capital: {e}")
+                    logger.exception(f"Error updating user funds with new capital: {e}")
                     db_session.rollback()
 
             # If square-off time was updated, reload the schedule automatically
@@ -256,7 +256,7 @@ def update_config():
                             f"Failed to reload square-off schedule: {reload_response.get('message')}"
                         )
                 except Exception as e:
-                    logger.error(f"Error auto-reloading square-off schedule: {e}")
+                    logger.exception(f"Error auto-reloading square-off schedule: {e}")
 
             # If reset day or reset time was updated, reload the schedule automatically
             if config_key in ["reset_day", "reset_time"]:
@@ -273,7 +273,7 @@ def update_config():
                             f"Failed to reload schedule: {reload_response.get('message')}"
                         )
                 except Exception as e:
-                    logger.error(f"Error auto-reloading schedule: {e}")
+                    logger.exception(f"Error auto-reloading schedule: {e}")
 
             return jsonify(
                 {"status": "success", "message": f"Configuration {config_key} updated successfully"}
@@ -282,7 +282,7 @@ def update_config():
             return jsonify({"status": "error", "message": "Failed to update configuration"}), 500
 
     except Exception as e:
-        logger.error(f"Error updating sandbox config: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error updating sandbox config: {str(e)}\n{traceback.format_exc()}")
         return jsonify(
             {"status": "error", "message": f"Error updating configuration: {str(e)}"}
         ), 500
@@ -385,7 +385,7 @@ def reset_config():
 
         except Exception as e:
             db_session.rollback()
-            logger.error(f"Error clearing sandbox data: {str(e)}\n{traceback.format_exc()}")
+            logger.exception(f"Error clearing sandbox data: {str(e)}\n{traceback.format_exc()}")
             raise
 
         logger.info("Sandbox configuration and data reset to defaults")
@@ -397,7 +397,7 @@ def reset_config():
         )
 
     except Exception as e:
-        logger.error(f"Error resetting sandbox config: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error resetting sandbox config: {str(e)}\n{traceback.format_exc()}")
         return jsonify(
             {"status": "error", "message": f"Error resetting configuration: {str(e)}"}
         ), 500
@@ -419,7 +419,7 @@ def reload_squareoff():
             return jsonify(response), status_code
 
     except Exception as e:
-        logger.error(f"Error reloading square-off schedule: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error reloading square-off schedule: {str(e)}\n{traceback.format_exc()}")
         return jsonify(
             {"status": "error", "message": f"Error reloading square-off schedule: {str(e)}"}
         ), 500
@@ -441,7 +441,7 @@ def squareoff_status():
             return jsonify(response), status_code
 
     except Exception as e:
-        logger.error(f"Error getting square-off status: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error getting square-off status: {str(e)}\n{traceback.format_exc()}")
         return jsonify(
             {"status": "error", "message": f"Error getting square-off status: {str(e)}"}
         ), 500
@@ -613,7 +613,7 @@ def api_my_pnl_data():
         )
 
     except Exception as e:
-        logger.error(f"Error getting P&L data: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error getting P&L data: {str(e)}\n{traceback.format_exc()}")
         return jsonify({"status": "error", "message": f"Error loading P&L data: {str(e)}"}), 500
 
 
@@ -783,7 +783,7 @@ def my_pnl():
         )
 
     except Exception as e:
-        logger.error(f"Error rendering my P&L page: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error rendering my P&L page: {str(e)}\n{traceback.format_exc()}")
         flash("Error loading P&L data", "error")
         return redirect(url_for("sandbox_bp.sandbox_config"))
 
@@ -862,5 +862,5 @@ def validate_config(config_key, config_value):
         return None  # No validation error
 
     except Exception as e:
-        logger.error(f"Error validating config: {str(e)}")
+        logger.exception(f"Error validating config: {str(e)}")
         return f"Validation error: {str(e)}"

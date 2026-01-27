@@ -144,7 +144,7 @@ def parse_pending_order(pending_order) -> dict[str, Any]:
         return order_dict
 
     except Exception as e:
-        logger.error(f"Error parsing pending order (api_type={pending_order.api_type}): {e}")
+        logger.exception(f"Error parsing pending order (api_type={pending_order.api_type}): {e}")
         return {
             "id": pending_order.id if hasattr(pending_order, "id") else None,
             "api_type": pending_order.api_type if hasattr(pending_order, "api_type") else "unknown",
@@ -258,7 +258,7 @@ def get_action_center_data(
         return True, response_data, 200
 
     except Exception as e:
-        logger.error(f"Error getting action center data: {e}")
+        logger.exception(f"Error getting action center data: {e}")
         return (
             False,
             {"status": "error", "message": f"Failed to retrieve action center data: {str(e)}"},

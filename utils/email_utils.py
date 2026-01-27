@@ -177,7 +177,7 @@ Sent by OpenAlgo
 
     except Exception as e:
         error_msg = f"Failed to send test email: {str(e)}"
-        logger.error(error_msg)
+        logger.exception(error_msg)
         return {"success": False, "message": error_msg}
 
 
@@ -318,7 +318,7 @@ Sent by OpenAlgo
 
     except Exception as e:
         error_msg = f"Failed to send password reset email: {str(e)}"
-        logger.error(error_msg)
+        logger.exception(error_msg)
         return {"success": False, "message": error_msg}
 
 
@@ -429,7 +429,7 @@ def send_email(recipient_email, subject, text_content, html_content=None, smtp_s
         return {"success": False, "message": error_msg}
     except Exception as e:
         error_msg = f"Failed to send email: {str(e)}"
-        logger.error(f"Email sending failed: {e}")
+        logger.exception(f"Email sending failed: {e}")
         return {"success": False, "message": error_msg}
 
 

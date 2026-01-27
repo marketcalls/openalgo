@@ -46,7 +46,7 @@ class ExecutionEngineThread(threading.Thread):
             try:
                 engine.check_and_execute_pending_orders()
             except Exception as e:
-                logger.error(f"Error in execution engine thread: {e}")
+                logger.exception(f"Error in execution engine thread: {e}")
 
             # Sleep in small increments to allow quick shutdown
             for _ in range(self.check_interval):
@@ -160,7 +160,7 @@ def start_execution_engine(engine_type: str = None):
             return True, "Polling execution engine started"
 
         except Exception as e:
-            logger.error(f"Failed to start execution engine: {e}")
+            logger.exception(f"Failed to start execution engine: {e}")
             return False, f"Failed to start execution engine: {str(e)}"
 
 
@@ -185,7 +185,7 @@ def stop_execution_engine():
                     stopped_any = True
                 _websocket_engine = None
             except Exception as e:
-                logger.error(f"Error stopping WebSocket execution engine: {e}")
+                logger.exception(f"Error stopping WebSocket execution engine: {e}")
 
         # Stop polling engine if running
         if _execution_thread is not None and _execution_thread.is_alive():
@@ -204,7 +204,7 @@ def stop_execution_engine():
 
                 _execution_thread = None
             except Exception as e:
-                logger.error(f"Error stopping polling execution engine: {e}")
+                logger.exception(f"Error stopping polling execution engine: {e}")
 
         _current_engine_type = None
 

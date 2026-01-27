@@ -34,7 +34,7 @@ def read_env_file():
         with open(env_path, encoding="utf-8") as f:
             return f.read(), None
     except Exception as e:
-        logger.error(f"Error reading .env file: {e}")
+        logger.exception(f"Error reading .env file: {e}")
         return None, str(e)
 
 
@@ -154,7 +154,7 @@ def get_credentials():
             }
         )
     except Exception as e:
-        logger.error(f"Error getting broker credentials: {e}")
+        logger.exception(f"Error getting broker credentials: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -316,7 +316,7 @@ def update_credentials():
                 f.write(content)
             logger.info(f"Updated broker credentials: {', '.join(updated_fields)}")
         except Exception as e:
-            logger.error(f"Error writing .env file: {e}")
+            logger.exception(f"Error writing .env file: {e}")
             return jsonify({"status": "error", "message": f"Failed to write .env file: {e}"}), 500
 
         return jsonify(
@@ -329,5 +329,5 @@ def update_credentials():
         )
 
     except Exception as e:
-        logger.error(f"Error updating broker credentials: {e}")
+        logger.exception(f"Error updating broker credentials: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500

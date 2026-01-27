@@ -109,7 +109,7 @@ def async_log_analyzer(request_data, response_data, api_type="placeorder"):
         db_session.add(analyzer_log)
         db_session.commit()
     except Exception as e:
-        logger.error(f"Error saving analyzer log: {e}")
+        logger.exception(f"Error saving analyzer log: {e}")
         db_session.rollback()
     finally:
         db_session.remove()

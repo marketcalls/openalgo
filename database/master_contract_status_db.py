@@ -76,7 +76,7 @@ def init_broker_status(broker):
         logger.info(f"Initialized master contract status for {broker}")
 
     except Exception as e:
-        logger.error(f"Error initializing status for {broker}: {str(e)}")
+        logger.exception(f"Error initializing status for {broker}: {str(e)}")
         session.rollback()
     finally:
         session.close()
@@ -112,7 +112,7 @@ def update_status(broker, status, message, total_symbols=None):
         logger.info(f"Updated master contract status for {broker}: {status}")
 
     except Exception as e:
-        logger.error(f"Error updating status for {broker}: {str(e)}")
+        logger.exception(f"Error updating status for {broker}: {str(e)}")
         session.rollback()
     finally:
         session.close()
@@ -143,7 +143,7 @@ def get_status(broker):
                 "is_ready": False,
             }
     except Exception as e:
-        logger.error(f"Error getting status for {broker}: {str(e)}")
+        logger.exception(f"Error getting status for {broker}: {str(e)}")
         return {
             "broker": broker,
             "status": "error",
@@ -163,7 +163,7 @@ def check_if_ready(broker):
         status = session.query(MasterContractStatus).filter_by(broker=broker).first()
         return status.is_ready if status else False
     except Exception as e:
-        logger.error(f"Error checking if ready for {broker}: {str(e)}")
+        logger.exception(f"Error checking if ready for {broker}: {str(e)}")
         return False
     finally:
         session.close()

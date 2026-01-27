@@ -97,7 +97,7 @@ class FundManager:
 
             except Exception as e:
                 db_session.rollback()
-                logger.error(f"Error initializing funds for user {self.user_id}: {e}")
+                logger.exception(f"Error initializing funds for user {self.user_id}: {e}")
                 return False, f"Error initializing funds: {str(e)}"
 
     def get_funds(self):
@@ -134,7 +134,7 @@ class FundManager:
             }
 
         except Exception as e:
-            logger.error(f"Error getting funds for user {self.user_id}: {e}")
+            logger.exception(f"Error getting funds for user {self.user_id}: {e}")
             return None
 
     def _check_and_reset_funds(self, funds):
@@ -167,7 +167,7 @@ class FundManager:
                     self._reset_funds(funds)
 
         except Exception as e:
-            logger.error(f"Error checking fund reset for user {self.user_id}: {e}")
+            logger.exception(f"Error checking fund reset for user {self.user_id}: {e}")
 
     def _reset_funds(self, funds):
         """Reset funds to starting capital"""
@@ -199,7 +199,7 @@ class FundManager:
 
             except Exception as e:
                 db_session.rollback()
-                logger.error(f"Error resetting funds for user {self.user_id}: {e}")
+                logger.exception(f"Error resetting funds for user {self.user_id}: {e}")
 
     def check_margin_available(self, required_margin):
         """Check if user has sufficient margin available"""
@@ -221,7 +221,7 @@ class FundManager:
                 )
 
         except Exception as e:
-            logger.error(f"Error checking margin for user {self.user_id}: {e}")
+            logger.exception(f"Error checking margin for user {self.user_id}: {e}")
             return False, f"Error checking margin: {str(e)}"
 
     def block_margin(self, amount, description=""):
@@ -252,7 +252,7 @@ class FundManager:
 
             except Exception as e:
                 db_session.rollback()
-                logger.error(f"Error blocking margin for user {self.user_id}: {e}")
+                logger.exception(f"Error blocking margin for user {self.user_id}: {e}")
                 return False, f"Error blocking margin: {str(e)}"
 
     def release_margin(self, amount, realized_pnl=0, description=""):
@@ -289,7 +289,7 @@ class FundManager:
 
             except Exception as e:
                 db_session.rollback()
-                logger.error(f"Error releasing margin for user {self.user_id}: {e}")
+                logger.exception(f"Error releasing margin for user {self.user_id}: {e}")
                 return False, f"Error releasing margin: {str(e)}"
 
     def transfer_margin_to_holdings(self, amount, description=""):
@@ -320,7 +320,7 @@ class FundManager:
 
             except Exception as e:
                 db_session.rollback()
-                logger.error(f"Error transferring margin to holdings for user {self.user_id}: {e}")
+                logger.exception(f"Error transferring margin to holdings for user {self.user_id}: {e}")
                 return False, f"Error transferring margin to holdings: {str(e)}"
 
     def credit_sale_proceeds(self, amount, description=""):
@@ -349,7 +349,7 @@ class FundManager:
 
             except Exception as e:
                 db_session.rollback()
-                logger.error(f"Error crediting sale proceeds for user {self.user_id}: {e}")
+                logger.exception(f"Error crediting sale proceeds for user {self.user_id}: {e}")
                 return False, f"Error crediting sale proceeds: {str(e)}"
 
     def update_unrealized_pnl(self, unrealized_pnl):
@@ -372,7 +372,7 @@ class FundManager:
 
             except Exception as e:
                 db_session.rollback()
-                logger.error(f"Error updating unrealized P&L for user {self.user_id}: {e}")
+                logger.exception(f"Error updating unrealized P&L for user {self.user_id}: {e}")
                 return False, f"Error updating unrealized P&L: {str(e)}"
 
     def calculate_margin_required(self, symbol, exchange, product, quantity, price, action=None):
@@ -407,7 +407,7 @@ class FundManager:
             return margin, "Margin calculated successfully"
 
         except Exception as e:
-            logger.error(f"Error calculating margin: {e}")
+            logger.exception(f"Error calculating margin: {e}")
             return None, f"Error calculating margin: {str(e)}"
 
     def _get_leverage(self, exchange, product, symbol, action=None):
@@ -438,7 +438,7 @@ class FundManager:
             return Decimal("1")
 
         except Exception as e:
-            logger.error(f"Error getting leverage: {e}")
+            logger.exception(f"Error getting leverage: {e}")
             return Decimal("1")
 
 
@@ -480,13 +480,13 @@ def reset_all_user_funds():
                 reset_count += 1
 
             except Exception as e:
-                logger.error(f"Error resetting funds for user {fund.user_id}: {e}")
+                logger.exception(f"Error resetting funds for user {fund.user_id}: {e}")
                 continue
 
         logger.info(f"=== AUTO-RESET: Successfully reset {reset_count} user fund accounts ===")
 
     except Exception as e:
-        logger.error(f"Error in scheduled auto-reset: {e}")
+        logger.exception(f"Error in scheduled auto-reset: {e}")
 
 
 def reconcile_margin(user_id, auto_fix=True):
@@ -553,7 +553,7 @@ def reconcile_margin(user_id, auto_fix=True):
             )
 
     except Exception as e:
-        logger.error(f"Error reconciling margin for user {user_id}: {e}")
+        logger.exception(f"Error reconciling margin for user {user_id}: {e}")
         db_session.rollback()
         return False, Decimal("0"), f"Error during reconciliation: {str(e)}"
 
@@ -600,7 +600,7 @@ def reconcile_all_users_margin():
         }
 
     except Exception as e:
-        logger.error(f"Error in margin reconciliation: {e}")
+        logger.exception(f"Error in margin reconciliation: {e}")
         return {"error": str(e)}
 
 
@@ -640,5 +640,5 @@ def validate_margin_consistency(user_id):
         return True, Decimal("0")
 
     except Exception as e:
-        logger.error(f"Error validating margin for user {user_id}: {e}")
+        logger.exception(f"Error validating margin for user {user_id}: {e}")
         return True, Decimal("0")  # Don't block operations on validation error

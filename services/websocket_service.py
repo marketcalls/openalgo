@@ -41,7 +41,7 @@ def get_user_api_key(username: str) -> str | None:
             )
         return api_key
     except Exception as e:
-        logger.error(f"Error getting API key for user {username}: {e}")
+        logger.exception(f"Error getting API key for user {username}: {e}")
         return None
 
 

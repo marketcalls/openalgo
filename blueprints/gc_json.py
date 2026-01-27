@@ -71,7 +71,7 @@ def gocharting_json():
             return jsonify(json_data)
 
         except Exception as e:
-            logger.error(f"Error processing GoCharting request: {str(e)}")
+            logger.exception(f"Error processing GoCharting request: {str(e)}")
             return jsonify({"error": str(e)}), 500
 
     return render_template("gocharting.html", host=host)

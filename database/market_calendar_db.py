@@ -599,7 +599,7 @@ def get_holidays_by_year(year: int) -> list[dict[str, Any]]:
         return result
 
     except Exception as e:
-        logger.error(f"Error fetching holidays for year {year}: {e}")
+        logger.exception(f"Error fetching holidays for year {year}: {e}")
         return []
 
 
@@ -721,7 +721,7 @@ def get_market_timings_for_date(query_date: date) -> list[dict[str, Any]]:
         return result
 
     except Exception as e:
-        logger.error(f"Error fetching market timings for {query_date}: {e}")
+        logger.exception(f"Error fetching market timings for {query_date}: {e}")
         return []
 
 
@@ -792,7 +792,7 @@ def reset_holiday_data():
         return True
     except Exception as e:
         db_session.rollback()
-        logger.error(f"Failed to reset holiday data: {e}")
+        logger.exception(f"Failed to reset holiday data: {e}")
         return False
 
 
@@ -812,7 +812,7 @@ def check_and_update_holidays():
 
         return True
     except Exception as e:
-        logger.error(f"Error checking holiday data: {e}")
+        logger.exception(f"Error checking holiday data: {e}")
         return False
 
 
@@ -896,7 +896,7 @@ def get_all_market_timings() -> list[dict[str, Any]]:
         return result
 
     except Exception as e:
-        logger.error(f"Error fetching market timings: {e}")
+        logger.exception(f"Error fetching market timings: {e}")
         return []
 
 
@@ -954,7 +954,7 @@ def update_market_timing(exchange: str, start_time: str, end_time: str) -> bool:
 
     except Exception as e:
         db_session.rollback()
-        logger.error(f"Error updating market timing: {e}")
+        logger.exception(f"Error updating market timing: {e}")
         return False
 
 
@@ -995,7 +995,7 @@ def get_market_timing(exchange: str) -> dict[str, Any] | None:
         return None
 
     except Exception as e:
-        logger.error(f"Error fetching market timing for {exchange}: {e}")
+        logger.exception(f"Error fetching market timing for {exchange}: {e}")
         return None
 
 
@@ -1036,7 +1036,7 @@ def is_market_open(exchange: str = None) -> bool:
             return False
 
     except Exception as e:
-        logger.error(f"Error checking if market is open: {e}")
+        logger.exception(f"Error checking if market is open: {e}")
         return False
 
 
@@ -1098,7 +1098,7 @@ def get_market_hours_status() -> dict[str, Any]:
         }
 
     except Exception as e:
-        logger.error(f"Error getting market hours status: {e}")
+        logger.exception(f"Error getting market hours status: {e}")
         return {"is_trading_day": False, "any_market_open": False, "exchanges": {}, "error": str(e)}
 
 
@@ -1160,5 +1160,5 @@ def get_next_market_event() -> tuple[str, datetime]:
                 return ("open", None)
 
     except Exception as e:
-        logger.error(f"Error getting next market event: {e}")
+        logger.exception(f"Error getting next market event: {e}")
         return ("unknown", None)

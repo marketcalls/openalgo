@@ -201,7 +201,7 @@ class WebSocketProxy:
                         else:
                             raise
                 except Exception as e:
-                    logger.error(f"Error closing WebSocket server: {e}")
+                    logger.exception(f"Error closing WebSocket server: {e}")
 
             # Close all client connections
             close_tasks = []
@@ -210,7 +210,7 @@ class WebSocketProxy:
                     if hasattr(websocket, "open") and websocket.open:
                         close_tasks.append(websocket.close())
                 except Exception as e:
-                    logger.error(f"Error preparing to close client {client_id}: {e}")
+                    logger.exception(f"Error preparing to close client {client_id}: {e}")
 
             # Wait for all connections to close with timeout
             if close_tasks:
@@ -227,7 +227,7 @@ class WebSocketProxy:
                 try:
                     adapter.disconnect()
                 except Exception as e:
-                    logger.error(f"Error disconnecting adapter for user {user_id}: {e}")
+                    logger.exception(f"Error disconnecting adapter for user {user_id}: {e}")
 
             # Close ZeroMQ socket with linger=0 for immediate close
             if hasattr(self, "socket") and self.socket:
@@ -235,19 +235,19 @@ class WebSocketProxy:
                     self.socket.setsockopt(zmq.LINGER, 0)  # Don't wait for pending messages
                     self.socket.close()
                 except Exception as e:
-                    logger.error(f"Error closing ZMQ socket: {e}")
+                    logger.exception(f"Error closing ZMQ socket: {e}")
 
             # Close ZeroMQ context with timeout
             if hasattr(self, "context") and self.context:
                 try:
                     self.context.term()
                 except Exception as e:
-                    logger.error(f"Error terminating ZMQ context: {e}")
+                    logger.exception(f"Error terminating ZMQ context: {e}")
 
             logger.info("WebSocket server stopped and resources cleaned up")
 
         except Exception as e:
-            logger.error(f"Error during WebSocket server stop: {e}")
+            logger.exception(f"Error during WebSocket server stop: {e}")
 
     async def handle_client(self, websocket):
         """
@@ -634,7 +634,7 @@ class WebSocketProxy:
 
             except Exception as e:
                 error_str = str(e)
-                logger.error(f"Failed to create broker adapter for {broker_name}: {e}")
+                logger.exception(f"Failed to create broker adapter for {broker_name}: {e}")
 
                 # Check if exception is an auth error - retry with fresh token
                 # This handles the stale cache issue described in GitHub issue #765
@@ -663,12 +663,12 @@ class WebSocketProxy:
                             await self.send_error(client_id, "BROKER_ERROR", f"Failed to create adapter for {broker_name}")
                             return
                     except Exception as retry_error:
-                        logger.error(f"Retry also failed for {broker_name}: {retry_error}")
+                        logger.exception(f"Retry also failed for {broker_name}: {retry_error}")
                         await self.send_error(client_id, "BROKER_ERROR", str(retry_error))
                         return
                 else:
                     import traceback
-                    logger.error(traceback.format_exc())
+                    logger.exception(traceback.format_exc())
                     await self.send_error(client_id, "BROKER_ERROR", error_str)
                     return
 
@@ -706,7 +706,7 @@ class WebSocketProxy:
                 },
             )
         except Exception as e:
-            logger.error(f"Error getting supported brokers: {e}")
+            logger.exception(f"Error getting supported brokers: {e}")
             await self.send_error(client_id, "BROKER_LIST_ERROR", str(e))
 
     async def get_broker_info(self, client_id):
@@ -1192,7 +1192,7 @@ class WebSocketProxy:
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse cache invalidation message: {e}")
         except Exception as e:
-            logger.error(f"Error processing cache invalidation: {e}")
+            logger.exception(f"Error processing cache invalidation: {e}")
 
     def _is_auth_error_exception(self, error_message: str) -> bool:
         """
@@ -1262,7 +1262,7 @@ class WebSocketProxy:
                 logger.debug(f"No cached auth data found for user {user_id}")
 
         except Exception as e:
-            logger.error(f"Error clearing auth cache for user {user_id}: {e}")
+            logger.exception(f"Error clearing auth cache for user {user_id}: {e}")
 
     async def zmq_listener(self):
         """
@@ -1305,7 +1305,7 @@ class WebSocketProxy:
                     try:
                         self._handle_cache_invalidation(topic_str, data_str)
                     except Exception as e:
-                        logger.error(f"Error handling cache invalidation: {e}")
+                        logger.exception(f"Error handling cache invalidation: {e}")
                     continue  # Skip market data processing for cache messages
 
                 market_data = json.loads(data_str)
@@ -1436,7 +1436,7 @@ class WebSocketProxy:
                     await aio.gather(*send_tasks, return_exceptions=True)
 
             except Exception as e:
-                logger.error(f"Error in ZeroMQ listener: {e}")
+                logger.exception(f"Error in ZeroMQ listener: {e}")
                 # Continue running despite errors
                 await aio.sleep(1)
 
@@ -1475,7 +1475,7 @@ async def main():
         import traceback
 
         error_details = traceback.format_exc()
-        logger.error(f"Server error: {e}\n{error_details}")
+        logger.exception(f"Server error: {e}\n{error_details}")
         raise
     finally:
         # Always clean up resources
@@ -1483,7 +1483,7 @@ async def main():
             try:
                 await proxy.stop()
             except Exception as cleanup_error:
-                logger.error(f"Error during cleanup: {cleanup_error}")
+                logger.exception(f"Error during cleanup: {cleanup_error}")
 
 
 if __name__ == "__main__":

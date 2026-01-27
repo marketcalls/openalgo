@@ -110,7 +110,7 @@ class HoldingsManager:
             )
 
         except Exception as e:
-            logger.error(f"Error getting holdings for user {self.user_id}: {e}")
+            logger.exception(f"Error getting holdings for user {self.user_id}: {e}")
             return (
                 False,
                 {
@@ -248,7 +248,7 @@ class HoldingsManager:
 
         except Exception as e:
             db_session.rollback()
-            logger.error(f"Error processing T+1 settlement for user {self.user_id}: {e}")
+            logger.exception(f"Error processing T+1 settlement for user {self.user_id}: {e}")
             return False, f"Settlement error: {str(e)}"
 
     def _update_holdings_mtm(self, holdings):
@@ -287,7 +287,7 @@ class HoldingsManager:
 
         except Exception as e:
             db_session.rollback()
-            logger.error(f"Error updating holdings MTM: {e}")
+            logger.exception(f"Error updating holdings MTM: {e}")
 
     def _calculate_holding_pnl(self, quantity, avg_price, ltp):
         """Calculate P&L for a holding"""
@@ -302,7 +302,7 @@ class HoldingsManager:
             return pnl
 
         except Exception as e:
-            logger.error(f"Error calculating holding P&L: {e}")
+            logger.exception(f"Error calculating holding P&L: {e}")
             return Decimal("0.00")
 
     def _calculate_pnl_percent(self, avg_price, ltp):
@@ -319,7 +319,7 @@ class HoldingsManager:
             return pnl_percent
 
         except Exception as e:
-            logger.error(f"Error calculating P&L percent: {e}")
+            logger.exception(f"Error calculating P&L percent: {e}")
             return Decimal("0.00")
 
     def _fetch_quote(self, symbol, exchange):
@@ -348,7 +348,7 @@ class HoldingsManager:
                 return None
 
         except Exception as e:
-            logger.error(f"Error fetching quote for {symbol}: {e}")
+            logger.exception(f"Error fetching quote for {symbol}: {e}")
             return None
 
 
@@ -383,7 +383,7 @@ def process_all_t1_settlements():
         logger.info(f"T+1 settlement completed for {settled_users} users")
 
     except Exception as e:
-        logger.error(f"Error processing all T+1 settlements: {e}")
+        logger.exception(f"Error processing all T+1 settlements: {e}")
 
 
 if __name__ == "__main__":

@@ -114,7 +114,7 @@ def revoke_user_tokens(revoke_db_tokens=True):
 
                 clear_cache_on_logout()
             except Exception as cache_error:
-                logger.error(f"Error clearing symbol cache: {cache_error}")
+                logger.exception(f"Error clearing symbol cache: {cache_error}")
 
             # Clear settings cache on logout/session expiry
             try:
@@ -122,7 +122,7 @@ def revoke_user_tokens(revoke_db_tokens=True):
 
                 clear_settings_cache()
             except Exception as cache_error:
-                logger.error(f"Error clearing settings cache: {cache_error}")
+                logger.exception(f"Error clearing settings cache: {cache_error}")
 
             # Clear strategy cache on logout/session expiry
             try:
@@ -130,7 +130,7 @@ def revoke_user_tokens(revoke_db_tokens=True):
 
                 clear_strategy_cache()
             except Exception as cache_error:
-                logger.error(f"Error clearing strategy cache: {cache_error}")
+                logger.exception(f"Error clearing strategy cache: {cache_error}")
 
             # Clear telegram cache on logout/session expiry
             try:
@@ -138,7 +138,7 @@ def revoke_user_tokens(revoke_db_tokens=True):
 
                 clear_telegram_cache()
             except Exception as cache_error:
-                logger.error(f"Error clearing telegram cache: {cache_error}")
+                logger.exception(f"Error clearing telegram cache: {cache_error}")
 
             if revoke_db_tokens:
                 # Revoke the auth token in database
@@ -153,7 +153,7 @@ def revoke_user_tokens(revoke_db_tokens=True):
                 )
 
         except Exception as e:
-            logger.error(f"Error revoking tokens during auto-expiry for user {username}: {e}")
+            logger.exception(f"Error revoking tokens during auto-expiry for user {username}: {e}")
 
 
 def check_session_validity(f):

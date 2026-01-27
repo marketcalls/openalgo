@@ -34,7 +34,7 @@ def sanitize_request_data(data):
         logger.error(f"Error decoding JSON: {data}")
         return {}
     except Exception as e:
-        logger.error(f"Error sanitizing data: {str(e)}")
+        logger.exception(f"Error sanitizing data: {str(e)}")
         return {}
     return data
 
@@ -49,7 +49,7 @@ def format_log_entry(log, ist):
             logger.error(f"Error decoding response JSON for log {log.id}")
             response_data = {}
         except Exception as e:
-            logger.error(f"Error processing response data for log {log.id}: {str(e)}")
+            logger.exception(f"Error processing response data for log {log.id}: {str(e)}")
             response_data = {}
 
         # Extract strategy from request data
@@ -66,7 +66,7 @@ def format_log_entry(log, ist):
             "created_at": log.created_at.astimezone(ist).strftime("%Y-%m-%d %I:%M:%S %p"),
         }
     except Exception as e:
-        logger.error(f"Error formatting log {log.id}: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error formatting log {log.id}: {str(e)}\n{traceback.format_exc()}")
         return {
             "id": log.id,
             "api_type": log.api_type,
@@ -130,7 +130,7 @@ def get_filtered_logs(start_date=None, end_date=None, search_query=None, page=No
         return logs, total_pages, total_logs
 
     except Exception as e:
-        logger.error(f"Error in get_filtered_logs: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error in get_filtered_logs: {str(e)}\n{traceback.format_exc()}")
         return [], 1, 0
 
 
@@ -197,13 +197,13 @@ def generate_csv(logs):
                 writer.writerow(row)
                 logger.debug(f"Wrote row: {row}")
             except Exception as e:
-                logger.error(f"Error writing row for log {log.get('id')}: {str(e)}")
+                logger.exception(f"Error writing row for log {log.get('id')}: {str(e)}")
                 continue
 
         return si.getvalue()
 
     except Exception as e:
-        logger.error(f"Error generating CSV: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error generating CSV: {str(e)}\n{traceback.format_exc()}")
         raise
 
 
@@ -243,7 +243,7 @@ def view_logs():
         )
 
     except Exception as e:
-        logger.error(f"Error in view_logs: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error in view_logs: {str(e)}\n{traceback.format_exc()}")
         return render_template(
             "logs.html",
             logs=[],
@@ -301,5 +301,5 @@ def export_logs():
 
     except Exception as e:
         error_msg = f"Error exporting logs: {str(e)}\n{traceback.format_exc()}"
-        logger.error(error_msg)
+        logger.exception(error_msg)
         return jsonify({"error": error_msg}), 500

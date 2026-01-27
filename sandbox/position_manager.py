@@ -231,7 +231,7 @@ class PositionManager:
                     # Add to valid_positions - it's now closed but still show it
                     valid_positions.append(position)
                 except Exception as e:
-                    logger.error(f"Error settling expired position {position.symbol}: {e}")
+                    logger.exception(f"Error settling expired position {position.symbol}: {e}")
                     valid_positions.append(position)
             else:
                 # Contract is still valid
@@ -508,7 +508,7 @@ class PositionManager:
             )
 
         except Exception as e:
-            logger.error(f"Error getting positions for user {self.user_id}: {e}")
+            logger.exception(f"Error getting positions for user {self.user_id}: {e}")
             return (
                 False,
                 {
@@ -544,7 +544,7 @@ class PositionManager:
             }
 
         except Exception as e:
-            logger.error(f"Error getting position for {symbol}: {e}")
+            logger.exception(f"Error getting position for {symbol}: {e}")
             return None
 
     def _update_positions_mtm(self, positions):
@@ -627,7 +627,7 @@ class PositionManager:
 
         except Exception as e:
             db_session.rollback()
-            logger.error(f"Error updating positions MTM: {e}")
+            logger.exception(f"Error updating positions MTM: {e}")
 
     def _update_single_position_mtm(self, position):
         """
@@ -668,7 +668,7 @@ class PositionManager:
 
         except Exception as e:
             db_session.rollback()
-            logger.error(f"Error updating position MTM for {position.symbol}: {e}")
+            logger.exception(f"Error updating position MTM for {position.symbol}: {e}")
 
     def _calculate_position_pnl(self, quantity, avg_price, ltp):
         """Calculate P&L for a position"""
@@ -687,7 +687,7 @@ class PositionManager:
             return pnl
 
         except Exception as e:
-            logger.error(f"Error calculating position P&L: {e}")
+            logger.exception(f"Error calculating position P&L: {e}")
             return Decimal("0.00")
 
     def _calculate_pnl_percent(self, avg_price, ltp, quantity):
@@ -709,7 +709,7 @@ class PositionManager:
             return pnl_percent
 
         except Exception as e:
-            logger.error(f"Error calculating P&L percent: {e}")
+            logger.exception(f"Error calculating P&L percent: {e}")
             return Decimal("0.00")
 
     def _fetch_quotes_from_websocket(self, symbols_list):
@@ -781,7 +781,7 @@ class PositionManager:
                 return None
 
         except Exception as e:
-            logger.error(f"Error fetching quote for {symbol}: {e}")
+            logger.exception(f"Error fetching quote for {symbol}: {e}")
             return None
 
     def _fetch_quotes_batch(self, symbols_list):
@@ -904,7 +904,7 @@ class PositionManager:
                 return False, response, status_code
 
         except Exception as e:
-            logger.error(f"Error closing position {symbol}: {e}")
+            logger.exception(f"Error closing position {symbol}: {e}")
             return (
                 False,
                 {
@@ -978,7 +978,7 @@ class PositionManager:
             return True, {"status": "success", "data": tradebook, "mode": "analyze"}, 200
 
         except Exception as e:
-            logger.error(f"Error getting tradebook: {e}")
+            logger.exception(f"Error getting tradebook: {e}")
             return (
                 False,
                 {
@@ -1078,7 +1078,7 @@ class PositionManager:
             )
 
         except Exception as e:
-            logger.error(f"Error in EOD settlement: {e}")
+            logger.exception(f"Error in EOD settlement: {e}")
             db.session.rollback()
             return (
                 False,
@@ -1118,7 +1118,7 @@ def update_all_positions_mtm():
         logger.info("MTM update completed")
 
     except Exception as e:
-        logger.error(f"Error updating MTM for all positions: {e}")
+        logger.exception(f"Error updating MTM for all positions: {e}")
 
 
 def process_all_users_settlement():
@@ -1150,13 +1150,13 @@ def process_all_users_settlement():
                     logger.error(f"Settlement failed for user {user_id}: {message}")
 
             except Exception as e:
-                logger.error(f"Error in settlement for user {user_id}: {e}")
+                logger.exception(f"Error in settlement for user {user_id}: {e}")
                 continue
 
         logger.debug("T+1 settlement completed for all users")
 
     except Exception as e:
-        logger.error(f"Error in T+1 settlement process: {e}")
+        logger.exception(f"Error in T+1 settlement process: {e}")
 
 
 def cleanup_expired_contracts():
@@ -1300,11 +1300,11 @@ def cleanup_expired_contracts():
 
                     except Exception as e:
                         db_session.rollback()
-                        logger.error(f"Error cleaning up expired position {position.symbol}: {e}")
+                        logger.exception(f"Error cleaning up expired position {position.symbol}: {e}")
                         continue
 
             except Exception as e:
-                logger.error(f"Error processing expired contracts for user {user_id}: {e}")
+                logger.exception(f"Error processing expired contracts for user {user_id}: {e}")
                 continue
 
         logger.info(
@@ -1312,7 +1312,7 @@ def cleanup_expired_contracts():
         )
 
     except Exception as e:
-        logger.error(f"Error in expired contract cleanup: {e}")
+        logger.exception(f"Error in expired contract cleanup: {e}")
 
 
 def catchup_missed_settlements():
@@ -1360,13 +1360,13 @@ def catchup_missed_settlements():
                     logger.error(f"Catch-up settlement failed for user {user_id}: {message}")
 
             except Exception as e:
-                logger.error(f"Error in catch-up settlement for user {user_id}: {e}")
+                logger.exception(f"Error in catch-up settlement for user {user_id}: {e}")
                 continue
 
         logger.info("Catch-up settlement process completed")
 
     except Exception as e:
-        logger.error(f"Error in catch-up settlement: {e}")
+        logger.exception(f"Error in catch-up settlement: {e}")
 
 
 if __name__ == "__main__":
@@ -1392,4 +1392,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("MTM updater stopped by user")
     except Exception as e:
-        logger.error(f"MTM updater error: {e}")
+        logger.exception(f"MTM updater error: {e}")

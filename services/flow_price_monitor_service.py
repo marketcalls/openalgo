@@ -150,7 +150,7 @@ class FlowPriceMonitor:
             try:
                 self._check_all_alerts()
             except Exception as e:
-                logger.error(f"Error in monitoring loop: {e}")
+                logger.exception(f"Error in monitoring loop: {e}")
 
             # Wait for next poll interval
             self._stop_event.wait(timeout=self._poll_interval)
@@ -163,7 +163,7 @@ class FlowPriceMonitor:
                 try:
                     self._check_alert(alert)
                 except Exception as e:
-                    logger.error(f"Error checking alert for workflow {workflow_id}: {e}")
+                    logger.exception(f"Error checking alert for workflow {workflow_id}: {e}")
 
     def _check_alert(self, alert: PriceAlert):
         """Check a single alert against current price"""
@@ -201,7 +201,7 @@ class FlowPriceMonitor:
                 alert.last_price = current_price
 
         except Exception as e:
-            logger.error(f"Error checking price for {alert.symbol}: {e}")
+            logger.exception(f"Error checking price for {alert.symbol}: {e}")
 
     def _evaluate_condition(self, alert: PriceAlert, current_price: float) -> bool:
         """Evaluate if the price condition is met"""
@@ -281,7 +281,7 @@ class FlowPriceMonitor:
                 logger.info(f"Workflow {workflow_id} execution result: {result.get('status')}")
 
             except Exception as e:
-                logger.error(f"Failed to execute workflow {workflow_id}: {e}")
+                logger.exception(f"Failed to execute workflow {workflow_id}: {e}")
 
         thread = threading.Thread(target=run_workflow, daemon=True)
         thread.start()

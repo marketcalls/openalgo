@@ -118,7 +118,7 @@ def get_logs():
             ]
         )
     except Exception as e:
-        logger.error(f"Error fetching traffic logs: {e}")
+        logger.exception(f"Error fetching traffic logs: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -184,7 +184,7 @@ def get_stats():
 
         return jsonify({"overall": overall_stats, "api": api_stats, "endpoints": endpoint_stats})
     except Exception as e:
-        logger.error(f"Error fetching traffic stats: {e}")
+        logger.exception(f"Error fetching traffic stats: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -210,7 +210,7 @@ def export_logs():
         return response
 
     except Exception as e:
-        logger.error(f"Error exporting traffic logs: {e}")
+        logger.exception(f"Error exporting traffic logs: {e}")
         return jsonify({"error": str(e)}), 500
 
 

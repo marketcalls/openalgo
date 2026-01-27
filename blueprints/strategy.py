@@ -121,7 +121,7 @@ def process_orders():
                             f"Error placing smart order for {smart_order['payload']['symbol']}: {response.text}"
                         )
                 except Exception as e:
-                    logger.error(f"Error placing smart order: {str(e)}")
+                    logger.exception(f"Error placing smart order: {str(e)}")
 
                 # Always wait 1 second after smart order
                 time_module.sleep(1)
@@ -158,7 +158,7 @@ def process_orders():
                                 f"Error placing regular order for {regular_order['payload']['symbol']}: {response.text}"
                             )
                     except Exception as e:
-                        logger.error(f"Error placing regular order: {str(e)}")
+                        logger.exception(f"Error placing regular order: {str(e)}")
 
                 except queue.Empty:
                     pass  # No regular orders
@@ -167,7 +167,7 @@ def process_orders():
             time_module.sleep(0.1)
 
         except Exception as e:
-            logger.error(f"Error in order processor: {str(e)}")
+            logger.exception(f"Error in order processor: {str(e)}")
             time_module.sleep(1)  # Sleep on error to prevent rapid retries
 
 
@@ -268,7 +268,7 @@ def schedule_squareoff(strategy_id):
         )
         logger.info(f"Scheduled squareoff for strategy {strategy_id} at {hours}:{minutes}")
     except Exception as e:
-        logger.error(f"Error scheduling squareoff for strategy {strategy_id}: {str(e)}")
+        logger.exception(f"Error scheduling squareoff for strategy {strategy_id}: {str(e)}")
 
 
 def squareoff_positions(strategy_id):
@@ -308,7 +308,7 @@ def squareoff_positions(strategy_id):
             queue_order("placesmartorder", payload)
 
     except Exception as e:
-        logger.error(f"Error in squareoff_positions for strategy {strategy_id}: {str(e)}")
+        logger.exception(f"Error in squareoff_positions for strategy {strategy_id}: {str(e)}")
 
 
 @strategy_bp.route("/")
@@ -327,7 +327,7 @@ def index():
         strategies = get_user_strategies(user_id)
         return render_template("strategy/index.html", strategies=strategies)
     except Exception as e:
-        logger.error(f"Error in index route: {str(e)}")
+        logger.exception(f"Error in index route: {str(e)}")
         flash("Error loading strategies", "error")
         return redirect(url_for("dashboard_bp.index"))
 
@@ -413,7 +413,7 @@ def new_strategy():
                 return redirect(url_for("strategy_bp.new_strategy"))
 
         except Exception as e:
-            logger.error(f"Error creating strategy: {str(e)}")
+            logger.exception(f"Error creating strategy: {str(e)}")
             flash("Error creating strategy", "error")
             return redirect(url_for("strategy_bp.new_strategy"))
 
@@ -501,7 +501,7 @@ def delete_strategy_route(strategy_id):
         else:
             return jsonify({"status": "error", "error": "Failed to delete strategy"}), 500
     except Exception as e:
-        logger.error(f"Error deleting strategy {strategy_id}: {str(e)}")
+        logger.exception(f"Error deleting strategy {strategy_id}: {str(e)}")
         return jsonify({"status": "error", "error": str(e)}), 500
 
 
@@ -612,7 +612,7 @@ def configure_symbols(strategy_id):
 
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Error configuring symbols: {error_msg}")
+            logger.exception(f"Error configuring symbols: {error_msg}")
             return jsonify({"status": "error", "error": error_msg}), 400
 
     symbol_mappings = get_symbol_mappings(strategy_id)
@@ -643,7 +643,7 @@ def delete_symbol(strategy_id, mapping_id):
         else:
             return jsonify({"status": "error", "error": "Symbol mapping not found"}), 404
     except Exception as e:
-        logger.error(f"Error deleting symbol mapping: {str(e)}")
+        logger.exception(f"Error deleting symbol mapping: {str(e)}")
         return jsonify({"status": "error", "error": str(e)}), 400
 
 
@@ -817,7 +817,7 @@ def api_create_strategy():
             return jsonify({"status": "error", "message": "Failed to create strategy"}), 500
 
     except Exception as e:
-        logger.error(f"Error creating strategy via API: {str(e)}")
+        logger.exception(f"Error creating strategy via API: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -843,7 +843,7 @@ def api_toggle_strategy(strategy_id):
         else:
             return jsonify({"status": "error", "message": "Failed to toggle strategy"}), 500
     except Exception as e:
-        logger.error(f"Error toggling strategy via API: {str(e)}")
+        logger.exception(f"Error toggling strategy via API: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1010,5 +1010,5 @@ def webhook(webhook_id):
         return jsonify({"message": f"Order queued successfully for {data['symbol']}"}), 200
 
     except Exception as e:
-        logger.error(f"Error processing webhook: {str(e)}")
+        logger.exception(f"Error processing webhook: {str(e)}")
         return jsonify({"error": "Internal server error"}), 500

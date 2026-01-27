@@ -92,7 +92,7 @@ def create_strategy(
         db_session.commit()
         return strategy
     except Exception as e:
-        logger.error(f"Error creating strategy: {str(e)}")
+        logger.exception(f"Error creating strategy: {str(e)}")
         db_session.rollback()
         return None
 
@@ -102,7 +102,7 @@ def get_strategy(strategy_id):
     try:
         return ChartinkStrategy.query.get(strategy_id)
     except Exception as e:
-        logger.error(f"Error getting strategy {strategy_id}: {str(e)}")
+        logger.exception(f"Error getting strategy {strategy_id}: {str(e)}")
         return None
 
 
@@ -111,7 +111,7 @@ def get_strategy_by_webhook_id(webhook_id):
     try:
         return ChartinkStrategy.query.filter_by(webhook_id=webhook_id).first()
     except Exception as e:
-        logger.error(f"Error getting strategy by webhook ID {webhook_id}: {str(e)}")
+        logger.exception(f"Error getting strategy by webhook ID {webhook_id}: {str(e)}")
         return None
 
 
@@ -120,7 +120,7 @@ def get_all_strategies():
     try:
         return ChartinkStrategy.query.all()
     except Exception as e:
-        logger.error(f"Error getting all strategies: {str(e)}")
+        logger.exception(f"Error getting all strategies: {str(e)}")
         return []
 
 
@@ -129,7 +129,7 @@ def get_user_strategies(user_id):
     try:
         return ChartinkStrategy.query.filter_by(user_id=user_id).all()
     except Exception as e:
-        logger.error(f"Error getting strategies for user {user_id}: {str(e)}")
+        logger.exception(f"Error getting strategies for user {user_id}: {str(e)}")
         return []
 
 
@@ -143,7 +143,7 @@ def delete_strategy(strategy_id):
             return True
         return False
     except Exception as e:
-        logger.error(f"Error deleting strategy {strategy_id}: {str(e)}")
+        logger.exception(f"Error deleting strategy {strategy_id}: {str(e)}")
         db_session.rollback()
         return False
 
@@ -158,7 +158,7 @@ def toggle_strategy(strategy_id):
             return strategy
         return None
     except Exception as e:
-        logger.error(f"Error toggling strategy {strategy_id}: {str(e)}")
+        logger.exception(f"Error toggling strategy {strategy_id}: {str(e)}")
         db_session.rollback()
         return None
 
@@ -178,7 +178,7 @@ def update_strategy_times(strategy_id, start_time=None, end_time=None, squareoff
             return strategy
         return None
     except Exception as e:
-        logger.error(f"Error updating strategy times {strategy_id}: {str(e)}")
+        logger.exception(f"Error updating strategy times {strategy_id}: {str(e)}")
         db_session.rollback()
         return None
 
@@ -197,7 +197,7 @@ def add_symbol_mapping(strategy_id, chartink_symbol, exchange, quantity, product
         db_session.commit()
         return mapping
     except Exception as e:
-        logger.error(f"Error adding symbol mapping: {str(e)}")
+        logger.exception(f"Error adding symbol mapping: {str(e)}")
         db_session.rollback()
         return None
 
@@ -217,7 +217,7 @@ def bulk_add_symbol_mappings(strategy_id, mappings):
         db_session.commit()
         return True
     except Exception as e:
-        logger.error(f"Error bulk adding symbol mappings: {str(e)}")
+        logger.exception(f"Error bulk adding symbol mappings: {str(e)}")
         db_session.rollback()
         return False
 
@@ -227,7 +227,7 @@ def get_symbol_mappings(strategy_id):
     try:
         return ChartinkSymbolMapping.query.filter_by(strategy_id=strategy_id).all()
     except Exception as e:
-        logger.error(f"Error getting symbol mappings for strategy {strategy_id}: {str(e)}")
+        logger.exception(f"Error getting symbol mappings for strategy {strategy_id}: {str(e)}")
         return []
 
 
@@ -241,6 +241,6 @@ def delete_symbol_mapping(mapping_id):
             return True
         return False
     except Exception as e:
-        logger.error(f"Error deleting symbol mapping {mapping_id}: {str(e)}")
+        logger.exception(f"Error deleting symbol mapping {mapping_id}: {str(e)}")
         db_session.rollback()
         return False

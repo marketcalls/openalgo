@@ -73,7 +73,7 @@ class HistorifyScheduler:
                 self._restore_schedules()
 
             except Exception as e:
-                logger.error(f"Failed to initialize Historify Scheduler: {e}")
+                logger.exception(f"Failed to initialize Historify Scheduler: {e}")
                 raise
 
     def set_api_key(self, api_key: str):
@@ -128,7 +128,7 @@ class HistorifyScheduler:
                 logger.info(f"Restored {restored_count} Historify schedules")
 
         except Exception as e:
-            logger.error(f"Error restoring schedules: {e}")
+            logger.exception(f"Error restoring schedules: {e}")
 
     def _add_schedule_job(self, schedule: dict[str, Any]) -> str | None:
         """Add a schedule to APScheduler based on its configuration"""
@@ -191,7 +191,7 @@ class HistorifyScheduler:
             return job_id
 
         except Exception as e:
-            logger.error(f"Error adding schedule job: {e}")
+            logger.exception(f"Error adding schedule job: {e}")
             return None
 
     def add_schedule(
@@ -259,7 +259,7 @@ class HistorifyScheduler:
             return True, f"Schedule '{name}' created successfully"
 
         except Exception as e:
-            logger.error(f"Error adding schedule: {e}")
+            logger.exception(f"Error adding schedule: {e}")
             return False, str(e)
 
     def update_schedule(self, schedule_id: str, **kwargs) -> tuple[bool, str]:
@@ -291,7 +291,7 @@ class HistorifyScheduler:
             return True, "Schedule updated successfully"
 
         except Exception as e:
-            logger.error(f"Error updating schedule: {e}")
+            logger.exception(f"Error updating schedule: {e}")
             return False, str(e)
 
     def delete_schedule(self, schedule_id: str) -> tuple[bool, str]:
@@ -315,7 +315,7 @@ class HistorifyScheduler:
             return True, "Schedule deleted successfully"
 
         except Exception as e:
-            logger.error(f"Error deleting schedule: {e}")
+            logger.exception(f"Error deleting schedule: {e}")
             return False, str(e)
 
     def enable_schedule(self, schedule_id: str) -> tuple[bool, str]:
@@ -337,7 +337,7 @@ class HistorifyScheduler:
             return True, "Schedule enabled"
 
         except Exception as e:
-            logger.error(f"Error enabling schedule: {e}")
+            logger.exception(f"Error enabling schedule: {e}")
             return False, str(e)
 
     def disable_schedule(self, schedule_id: str) -> tuple[bool, str]:
@@ -356,7 +356,7 @@ class HistorifyScheduler:
             return True, "Schedule disabled"
 
         except Exception as e:
-            logger.error(f"Error disabling schedule: {e}")
+            logger.exception(f"Error disabling schedule: {e}")
             return False, str(e)
 
     def pause_schedule(self, schedule_id: str) -> tuple[bool, str]:
@@ -375,7 +375,7 @@ class HistorifyScheduler:
             return True, "Schedule paused"
 
         except Exception as e:
-            logger.error(f"Error pausing schedule: {e}")
+            logger.exception(f"Error pausing schedule: {e}")
             return False, str(e)
 
     def resume_schedule(self, schedule_id: str) -> tuple[bool, str]:
@@ -404,7 +404,7 @@ class HistorifyScheduler:
             return True, "Schedule resumed"
 
         except Exception as e:
-            logger.error(f"Error resuming schedule: {e}")
+            logger.exception(f"Error resuming schedule: {e}")
             return False, str(e)
 
     def trigger_schedule(self, schedule_id: str) -> tuple[bool, str]:
@@ -426,7 +426,7 @@ class HistorifyScheduler:
             return True, "Schedule triggered"
 
         except Exception as e:
-            logger.error(f"Error triggering schedule: {e}")
+            logger.exception(f"Error triggering schedule: {e}")
             return False, str(e)
 
     def remove_job(self, job_id: str) -> bool:
@@ -598,7 +598,7 @@ def execute_schedule(schedule_id: str, api_key: str = None):
             logger.error(f"Scheduled download failed: {error_msg}")
 
     except Exception as e:
-        logger.error(f"Error executing schedule {schedule_id}: {e}")
+        logger.exception(f"Error executing schedule {schedule_id}: {e}")
         if execution_id:
             update_schedule_execution(
                 execution_id, status="failed", completed_at=datetime.now(), error_message=str(e)
