@@ -1094,6 +1094,13 @@ class PositionManager:
 def update_all_positions_mtm():
     """Background task to update MTM for all positions"""
     try:
+        # Skip MTM updates when market is closed (prices won't change)
+        from database.market_calendar_db import is_market_open
+
+        if not is_market_open():
+            logger.debug("Market closed - skipping MTM update")
+            return
+
         # Get all unique users with positions
         positions = SandboxPositions.query.all()
 

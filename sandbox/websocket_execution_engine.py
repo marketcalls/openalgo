@@ -21,7 +21,7 @@ from typing import Dict, List, Optional, Set
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.sandbox_db import SandboxOrders, db_session
-from services.market_data_service import SubscriberPriority, get_market_data_service
+from services.market_data_service import get_market_data_service
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -71,11 +71,9 @@ class WebSocketExecutionEngine:
 
         # Subscribe to MarketDataService with CRITICAL priority for immediate processing
         try:
-            self._subscriber_id = self.market_data_service.subscribe(
-                data_type="ltp",
+            self._subscriber_id = self.market_data_service.subscribe_critical(
                 callback=self._on_market_data,
                 filter_symbols=None,  # All symbols - we filter in callback
-                priority=SubscriberPriority.CRITICAL,
                 name="sandbox_websocket_execution_engine",
             )
             logger.info(f"Subscribed to MarketDataService with ID: {self._subscriber_id}")
@@ -101,7 +99,7 @@ class WebSocketExecutionEngine:
         # Unsubscribe from MarketDataService
         if self._subscriber_id:
             try:
-                self.market_data_service.unsubscribe(self._subscriber_id)
+                self.market_data_service.unsubscribe_from_updates(self._subscriber_id)
                 logger.info("Unsubscribed from MarketDataService")
             except Exception as e:
                 logger.error(f"Error unsubscribing from MarketDataService: {e}")

@@ -454,7 +454,7 @@ def api_timings_list():
         today = date.today()
         today_timings = get_market_timings_for_date(today)
 
-        # Convert epoch to readable time for today's timings
+        # Convert epoch to readable time for today's timings (for display)
         today_timings_formatted = []
         for t in today_timings:
             start_dt = datetime.fromtimestamp(t["start_time"] / 1000)
@@ -470,7 +470,10 @@ def api_timings_list():
         return jsonify(
             {
                 "status": "success",
+                # data: admin config data with HH:MM strings (for admin UI)
                 "data": timings_data,
+                # market_status: epoch-based timings for frontend market status checks
+                "market_status": today_timings,
                 "today_timings": today_timings_formatted,
                 "today": today.strftime("%Y-%m-%d"),
                 "exchanges": SUPPORTED_EXCHANGES,
