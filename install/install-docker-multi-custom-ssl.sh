@@ -918,6 +918,7 @@ EOF
     
     # 8. Service Start
     log "Starting Container for $DOMAIN..." "$BLUE"
+    log "Building Docker image (includes automated frontend build, may take 2-5 minutes)..." "$YELLOW"
     cd "$INSTANCE_DIR"
     docker compose build
     docker compose up -d

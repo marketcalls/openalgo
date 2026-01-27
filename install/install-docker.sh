@@ -591,7 +591,7 @@ check_status "Nginx reload failed"
 
 # Build and start Docker container
 log "\n=== Building Docker Image ===" "$BLUE"
-log "This may take several minutes..." "$YELLOW"
+log "Includes automated frontend build. This may take 2-5 minutes depending on your server..." "$YELLOW"
 sudo docker compose build
 check_status "Docker build failed"
 
