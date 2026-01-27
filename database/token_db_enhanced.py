@@ -3,6 +3,7 @@ Enhanced Token DB with Full Memory Caching for 100,000+ symbols
 Optimized for zero-config deployment with configurable session reset time (SESSION_EXPIRY_TIME)
 """
 
+import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -14,6 +15,44 @@ import pytz
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# FNO exchanges that have derivatives
+FNO_EXCHANGES = {"NFO", "BFO", "MCX", "CDS"}
+
+# Regex pattern to extract underlying from OpenAlgo symbol format
+# Format: [BaseSymbol][DDMMMYY][StrikePrice][CE/PE] or [BaseSymbol][DDMMMYY]FUT
+# Examples: NIFTY28MAR2420800CE, BANKNIFTY24APR24FUT, CRUDEOIL17APR246750CE
+_UNDERLYING_PATTERN = re.compile(
+    r"^(.+?)"  # Underlying (non-greedy capture)
+    r"(\d{2}(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\d{2})"  # Date: DDMMMYY
+    r"(?:\d+(?:\.\d+)?)?(?:FUT|CE|PE)?$",  # Optional strike + FUT/CE/PE
+    re.IGNORECASE,
+)
+
+
+def extract_underlying_from_symbol(symbol: str, exchange: str) -> str | None:
+    """
+    Extract underlying name from OpenAlgo symbol format.
+
+    OpenAlgo symbol formats:
+    - Futures: [BaseSymbol][DDMMMYY]FUT (e.g., BANKNIFTY24APR24FUT -> BANKNIFTY)
+    - Options: [BaseSymbol][DDMMMYY][Strike][CE/PE] (e.g., NIFTY28MAR2420800CE -> NIFTY)
+
+    Args:
+        symbol: OpenAlgo formatted symbol
+        exchange: Exchange code (NFO, BFO, MCX, CDS, etc.)
+
+    Returns:
+        Underlying name or None if not extractable
+    """
+    if not symbol or exchange not in FNO_EXCHANGES:
+        return None
+
+    match = _UNDERLYING_PATTERN.match(symbol.upper())
+    if match:
+        return match.group(1)
+
+    return None
 
 
 @dataclass
@@ -64,6 +103,7 @@ class SymbolData:
     lotsize: int | None = None
     instrumenttype: str | None = None
     tick_size: float | None = None
+    underlying: str | None = None  # Extracted from OpenAlgo symbol format for F&O
 
 
 class BrokerSymbolCache:
@@ -85,6 +125,12 @@ class BrokerSymbolCache:
         self.by_token_exchange: dict[tuple[str, str], SymbolData] = {}
         self.by_brsymbol_exchange: dict[tuple[str, str], SymbolData] = {}
         self.by_token: dict[str, SymbolData] = {}
+
+        # Pre-computed indexes for FNO filter performance (O(1) lookups)
+        self.by_exchange: dict[str, list[SymbolData]] = defaultdict(list)
+        self.expiries_by_exchange: dict[str, set[str]] = defaultdict(set)
+        self.underlyings_by_exchange: dict[str, set[str]] = defaultdict(set)
+        self.expiries_by_exchange_underlying: dict[tuple[str, str], set[str]] = defaultdict(set)
 
         # Cache statistics
         self.stats = CacheStats()
@@ -118,6 +164,11 @@ class BrokerSymbolCache:
 
             # Build in-memory structures
             for sym in symbols:
+                # Extract underlying from OpenAlgo symbol format for FNO exchanges
+                underlying = None
+                if sym.exchange in FNO_EXCHANGES:
+                    underlying = extract_underlying_from_symbol(sym.symbol, sym.exchange)
+
                 # Create lightweight data object
                 symbol_data = SymbolData(
                     symbol=sym.symbol,
@@ -131,6 +182,7 @@ class BrokerSymbolCache:
                     lotsize=sym.lotsize,
                     instrumenttype=sym.instrumenttype,
                     tick_size=sym.tick_size,
+                    underlying=underlying,
                 )
 
                 # Store in primary dict
@@ -141,6 +193,17 @@ class BrokerSymbolCache:
                 self.by_token_exchange[(sym.token, sym.exchange)] = symbol_data
                 self.by_brsymbol_exchange[(sym.brsymbol, sym.exchange)] = symbol_data
                 self.by_token[sym.token] = symbol_data
+
+                # Build FNO filter indexes for O(1) lookups
+                self.by_exchange[sym.exchange].append(symbol_data)
+                if sym.expiry:
+                    self.expiries_by_exchange[sym.exchange].add(sym.expiry)
+                    # Use extracted underlying for index (more reliable than broker's name field)
+                    if underlying:
+                        self.expiries_by_exchange_underlying[(sym.exchange, underlying)].add(sym.expiry)
+                # Use extracted underlying for underlyings index
+                if underlying:
+                    self.underlyings_by_exchange[sym.exchange].add(underlying)
 
             # Update cache metadata
             self.active_broker = broker
@@ -323,6 +386,7 @@ class BrokerSymbolCache:
         Search symbols by partial match with multi-term support.
         All terms must match (AND logic).
         Returns list of matching SymbolData objects
+        Optimized to use exchange index when available
         """
         # Split query into terms
         terms = [term.strip().upper() for term in query.split() if term.strip()]
@@ -339,11 +403,13 @@ class BrokerSymbolCache:
             except ValueError:
                 pass
 
-        for symbol_data in self.symbols.values():
-            # Skip if exchange filter doesn't match
-            if exchange and symbol_data.exchange != exchange:
-                continue
+        # Use exchange index if available - significantly faster
+        if exchange and exchange in self.by_exchange:
+            symbols_to_search = self.by_exchange[exchange]
+        else:
+            symbols_to_search = self.symbols.values()
 
+        for symbol_data in symbols_to_search:
             # All terms must match
             all_match = True
             for term in terms:
@@ -386,6 +452,7 @@ class BrokerSymbolCache:
     ) -> list[SymbolData]:
         """
         FNO-specific search with advanced filters - in-memory cache search
+        Optimized to use exchange index for O(n/exchanges) instead of O(n) iteration
 
         Args:
             query: Optional search query string
@@ -419,14 +486,17 @@ class BrokerSymbolCache:
                     except ValueError:
                         pass
 
-        for symbol_data in self.symbols.values():
-            # Exchange filter
-            if exchange and symbol_data.exchange != exchange:
-                continue
+        # Use exchange index if available - significantly faster for FNO searches
+        if exchange and exchange in self.by_exchange:
+            symbols_to_search = self.by_exchange[exchange]
+        else:
+            # Fallback to all symbols if no exchange filter
+            symbols_to_search = self.symbols.values()
 
-            # Underlying filter (match name field)
+        for symbol_data in symbols_to_search:
+            # Underlying filter (use extracted underlying from OpenAlgo symbol format)
             if underlying_upper and (
-                not symbol_data.name or symbol_data.name.upper() != underlying_upper
+                not symbol_data.underlying or symbol_data.underlying != underlying_upper
             ):
                 continue
 
@@ -486,19 +556,21 @@ class BrokerSymbolCache:
         primary_term = query_terms[0] if query_terms else None
 
         def sort_key(s):
-            # Priority 1: Exact match on name/underlying (e.g., "NIFTY" matches name="NIFTY" exactly)
-            name_exact = 0 if (primary_term and s.name and s.name.upper() == primary_term) else 1
+            # Priority 1: Exact match on underlying (e.g., "NIFTY" matches underlying="NIFTY" exactly)
+            underlying_exact = (
+                0 if (primary_term and s.underlying and s.underlying == primary_term) else 1
+            )
 
-            # Priority 2: Name starts with search term (e.g., "NIFTY" before "BANKNIFTY")
-            name_starts = (
-                0 if (primary_term and s.name and s.name.upper().startswith(primary_term)) else 1
+            # Priority 2: Underlying starts with search term (e.g., "NIFTY" before "BANKNIFTY")
+            underlying_starts = (
+                0 if (primary_term and s.underlying and s.underlying.startswith(primary_term)) else 1
             )
 
             # Priority 3: Symbol starts with search term
             symbol_starts = 0 if (primary_term and s.symbol.upper().startswith(primary_term)) else 1
 
             # Priority 4: Alphabetical by symbol
-            return (name_exact, name_starts, symbol_starts, s.symbol)
+            return (underlying_exact, underlying_starts, symbol_starts, s.symbol)
 
         matches.sort(key=sort_key)
         return matches[:limit]
@@ -510,6 +582,11 @@ class BrokerSymbolCache:
         self.by_token_exchange.clear()
         self.by_brsymbol_exchange.clear()
         self.by_token.clear()
+        # Clear FNO filter indexes
+        self.by_exchange.clear()
+        self.expiries_by_exchange.clear()
+        self.underlyings_by_exchange.clear()
+        self.expiries_by_exchange_underlying.clear()
         self.cache_loaded = False
         self.active_broker = None
         logger.debug("Cache cleared")
@@ -907,6 +984,7 @@ def fno_search_symbols(
                 "lotsize": s.lotsize,
                 "instrumenttype": s.instrumenttype,
                 "tick_size": s.tick_size,
+                "underlying": s.underlying,
                 "freeze_qty": get_freeze_qty_for_option(s.symbol, s.exchange),
             }
             for s in results
@@ -938,7 +1016,7 @@ def get_distinct_expiries_cached(
     exchange: str | None = None, underlying: str | None = None
 ) -> list[str]:
     """
-    Get distinct expiry dates from cache - fast in-memory lookup
+    Get distinct expiry dates from cache - fast O(1) lookup using pre-computed indexes
     Falls back to database if cache is not available
     """
     cache = get_cache()
@@ -946,23 +1024,20 @@ def get_distinct_expiries_cached(
     if cache.cache_loaded and cache.is_cache_valid():
         from datetime import datetime
 
-        expiries = set()
+        # Use pre-computed indexes for O(1) lookup instead of iterating all symbols
         underlying_upper = underlying.strip().upper() if underlying else None
 
-        for symbol_data in cache.symbols.values():
-            # Filter by exchange
-            if exchange and symbol_data.exchange != exchange:
-                continue
-
-            # Filter by underlying
-            if underlying_upper and (
-                not symbol_data.name or symbol_data.name.upper() != underlying_upper
-            ):
-                continue
-
-            # Collect non-empty expiries
-            if symbol_data.expiry:
-                expiries.add(symbol_data.expiry)
+        if exchange and underlying_upper:
+            # Use the combined index for exchange + underlying
+            expiries = cache.expiries_by_exchange_underlying.get((exchange, underlying_upper), set())
+        elif exchange:
+            # Use the exchange-only index
+            expiries = cache.expiries_by_exchange.get(exchange, set())
+        else:
+            # No filter - combine all expiries (rare case)
+            expiries = set()
+            for exp_set in cache.expiries_by_exchange.values():
+                expiries.update(exp_set)
 
         # Sort expiries chronologically
         def parse_expiry(exp_str):
@@ -988,22 +1063,20 @@ def get_distinct_expiries_cached(
 
 def get_distinct_underlyings_cached(exchange: str | None = None) -> list[str]:
     """
-    Get distinct underlying names from cache - fast in-memory lookup
+    Get distinct underlying names from cache - fast O(1) lookup using pre-computed indexes
     Falls back to database if cache is not available
     """
     cache = get_cache()
 
     if cache.cache_loaded and cache.is_cache_valid():
-        underlyings = set()
-
-        for symbol_data in cache.symbols.values():
-            # Filter by exchange
-            if exchange and symbol_data.exchange != exchange:
-                continue
-
-            # Collect non-empty names
-            if symbol_data.name:
-                underlyings.add(symbol_data.name)
+        # Use pre-computed index for O(1) lookup instead of iterating all symbols
+        if exchange:
+            underlyings = cache.underlyings_by_exchange.get(exchange, set())
+        else:
+            # No filter - combine all underlyings (rare case)
+            underlyings = set()
+            for underlying_set in cache.underlyings_by_exchange.values():
+                underlyings.update(underlying_set)
 
         return sorted(list(underlyings))
 

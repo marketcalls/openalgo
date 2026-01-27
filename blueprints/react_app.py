@@ -79,6 +79,12 @@ def react_download():
     return serve_react_app()
 
 
+# FAQ page
+@react_bp.route("/faq")
+def react_faq():
+    return serve_react_app()
+
+
 # Error page
 @react_bp.route("/error")
 def react_error():
