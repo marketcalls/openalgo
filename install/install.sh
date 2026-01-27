@@ -965,12 +965,13 @@ ExecStart=/bin/bash -c 'source $VENV_PATH/bin/activate && $VENV_PATH/bin/gunicor
     --worker-class eventlet \
     -w 1 \
     --bind unix:$SOCKET_FILE \
+    --timeout 300 \
     --log-level info \
     app:app'
 # Restart settings
 Restart=always
 RestartSec=5
-TimeoutSec=60
+TimeoutSec=300
 
 [Install]
 WantedBy=multi-user.target
