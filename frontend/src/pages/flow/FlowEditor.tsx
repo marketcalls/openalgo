@@ -620,6 +620,8 @@ function FlowEditorContent() {
               animated: true,
             }}
             connectionLineStyle={{ stroke: 'hsl(var(--primary))', strokeWidth: 2 }}
+            connectionRadius={30}
+            connectOnClick={true}
           >
             <Background gap={16} size={1} />
             <Controls />

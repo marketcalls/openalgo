@@ -25,7 +25,7 @@ export const TimeWindowNode = memo(({ data, selected }: TimeWindowNodeProps) => 
       <Handle
         type="target"
         position={Position.Top}
-        className="!top-0 !-translate-y-1/2"
+        className="!top-0 !-translate-y-1/2 !h-3 !w-3 hover:!scale-125 !transition-all"
       />
       <div className="p-2">
         <div className="mb-1.5 flex items-center gap-1.5">
@@ -56,8 +56,8 @@ export const TimeWindowNode = memo(({ data, selected }: TimeWindowNodeProps) => 
         </div>
         {/* Handle labels */}
         <div className="mt-2 flex justify-between px-1 text-[8px]">
-          <span className="text-buy">Yes</span>
-          <span className="text-sell">No</span>
+          <span className="text-buy">True</span>
+          <span className="text-sell">False</span>
         </div>
       </div>
       {/* True output (left) - Within time window */}
@@ -65,7 +65,7 @@ export const TimeWindowNode = memo(({ data, selected }: TimeWindowNodeProps) => 
         type="source"
         position={Position.Bottom}
         id="true"
-        className="!bottom-0 !left-1/4 !translate-y-1/2 !bg-buy"
+        className="!bottom-0 !translate-y-1/2 !bg-buy !h-3 !w-3 hover:!scale-125 !transition-all"
         style={{ left: '25%' }}
       />
       {/* False output (right) - Outside time window */}
@@ -73,7 +73,7 @@ export const TimeWindowNode = memo(({ data, selected }: TimeWindowNodeProps) => 
         type="source"
         position={Position.Bottom}
         id="false"
-        className="!bottom-0 !left-3/4 !translate-y-1/2 !bg-sell"
+        className="!bottom-0 !translate-y-1/2 !bg-sell !h-3 !w-3 hover:!scale-125 !transition-all"
         style={{ left: '75%' }}
       />
     </div>
