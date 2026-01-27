@@ -504,9 +504,11 @@ def debug_smtp():
 def get_session_status():
     """Return current session status for React SPA."""
     if "user" not in session:
+        # Return 200 with authenticated: false instead of 401
+        # This prevents unnecessary console errors in the browser
         return jsonify(
-            {"status": "error", "message": "Not authenticated", "authenticated": False}
-        ), 401
+            {"status": "success", "message": "Not authenticated", "authenticated": False, "logged_in": False}
+        ), 200
 
     # If session claims to be logged in with broker, validate the auth token exists
     if session.get("logged_in") and session.get("broker"):
@@ -520,8 +522,8 @@ def get_session_status():
             # Clear the stale session
             session.clear()
             return jsonify(
-                {"status": "error", "message": "Session expired", "authenticated": False}
-            ), 401
+                {"status": "success", "message": "Session expired", "authenticated": False, "logged_in": False}
+            ), 200
 
         # Get API key for the user
         api_key = get_api_key_for_tradingview(session.get("user"))

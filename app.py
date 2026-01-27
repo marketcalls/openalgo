@@ -329,6 +329,7 @@ def create_app():
         if (
             request.path.startswith("/static/")
             or request.path.startswith("/api/")
+            or request.path.startswith("/assets/")  # React frontend assets
             or request.path
             in [
                 "/",
@@ -336,9 +337,12 @@ def create_app():
                 "/auth/reset-password",
                 "/auth/csrf-token",
                 "/auth/broker-config",
+                "/auth/session-status",  # Session status check for React SPA
+                "/auth/check-setup",  # Setup check for React SPA
                 "/setup",
                 "/download",
                 "/faq",
+                "/login",  # React login page
             ]
             or request.path.startswith("/auth/broker/")  # OAuth callbacks
             or request.path.startswith("/_reload-ws")
