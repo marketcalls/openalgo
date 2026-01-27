@@ -275,12 +275,12 @@ def transform_positions_data(positions_data):
     transformed_data = []
 
     for position in positions_data:
-        # Ensure average_price is treated as a float, then format to a string with 2 decimal places
-        average_price_formatted = "{:.2f}".format(float(position.get("netAvg", 0.0)))
+        # Ensure values are floats rounded to 2 decimal places (not strings)
+        average_price_formatted = round(float(position.get("netAvg", 0.0)), 2)
 
-        # Get LTP and PNL from Fyers response
-        ltp = "{:.2f}".format(float(position.get("ltp", 0.0)))
-        pnl = "{:.2f}".format(float(position.get("pl", 0.0)))
+        # Get LTP and PNL from Fyers response as numbers
+        ltp = round(float(position.get("ltp", 0.0)), 2)
+        pnl = round(float(position.get("pl", 0.0)), 2)
 
         if position.get("productType") == "CNC":
             producttype = "CNC"
