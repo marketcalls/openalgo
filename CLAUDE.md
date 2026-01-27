@@ -386,3 +386,11 @@ const { data, isLoading, error } = useQuery({
 1. Ensure Node.js version matches `frontend/package.json` engines
 2. Delete `frontend/node_modules` and run `npm install`
 3. Check for TypeScript errors: `npm run build`
+
+## Claude Code Instructions
+
+### Frontend Build Process
+When building the React frontend locally:
+- Run `cd frontend && npm run build` (build only, no tests)
+- Tests are handled by CI/CD pipeline, not required for local builds
+- The `frontend/dist/` directory is gitignored and built by GitHub Actions
