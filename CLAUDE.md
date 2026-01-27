@@ -29,6 +29,9 @@ cp .sample.env .env
 # Generate new APP_KEY and API_KEY_PEPPER:
 uv run python -c "import secrets; print(secrets.token_hex(32))"
 
+# Build React frontend (required - not tracked in git)
+cd frontend && npm install && npm run build && cd ..
+
 # Run application (uv automatically handles virtual env and dependencies)
 uv run app.py
 ```
@@ -204,6 +207,22 @@ npm run build
 # The React build artifacts go to frontend/dist/
 # These are served by Flask via blueprints/react_app.py
 ```
+
+### Important: Frontend Build (CI/CD)
+
+**`frontend/dist/` is NOT tracked in git.** The CI/CD pipeline builds it automatically on each push.
+
+For local development after cloning:
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+This is required before running the application locally. The build artifacts are gitignored to:
+- Prevent merge conflicts on hash-named files
+- Keep the repository size smaller
+- Ensure fresh builds via CI/CD
 
 ## Key Architectural Concepts
 

@@ -52,16 +52,18 @@ export function useMarketStatus() {
         }
 
         // Fetch market timings and holidays in parallel
+        // Note: These endpoints are under the admin blueprint (/admin prefix)
         const [timingsRes, holidaysRes] = await Promise.all([
-          fetch('/api/market-timings', { headers, credentials: 'include' }),
-          fetch('/api/holidays', { headers, credentials: 'include' }),
+          fetch('/admin/api/timings', { headers, credentials: 'include' }),
+          fetch('/admin/api/holidays', { headers, credentials: 'include' }),
         ])
 
         const timingsData = await timingsRes.json()
         const holidaysData = await holidaysRes.json()
 
         setState({
-          timings: timingsData.status === 'success' ? timingsData.data || [] : [],
+          // Use market_status field which contains epoch timestamps for market open checks
+          timings: timingsData.status === 'success' ? timingsData.market_status || [] : [],
           holidays: holidaysData.status === 'success' ? holidaysData.data || [] : [],
           isLoading: false,
           error: null,
