@@ -8,6 +8,8 @@ Always create PRs on your fork/origin repo, not upstream.
 
 Prefer auto-detecting the current repo:
 ```bash
+# If you see: "No default remote repository has been set", run:
+#   gh repo set-default gopinathshiva/openalgo
 REPO="${REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
 # then use: --repo "$REPO"
 ```

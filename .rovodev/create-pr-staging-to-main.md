@@ -34,6 +34,8 @@ Use GitHub CLI (`gh pr create`) to create the PR with:
 
 - Auto-detect repo before creating the PR:
   ```bash
+  # If you see: "No default remote repository has been set", run:
+  #   gh repo set-default gopinathshiva/openalgo
   REPO="${REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
   ```
   Then use `gh pr create --repo "$REPO" ...`
