@@ -32,5 +32,9 @@ Use GitHub CLI (`gh pr create`) to create the PR with:
 
 ## Notes
 
-- **Always use `--repo gopinathshiva/openalgo`** to ensure PR is created on your fork, not upstream
+- Auto-detect repo before creating the PR:
+  ```bash
+  REPO="${REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
+  ```
+  Then use `gh pr create --repo "$REPO" ...`
 - The PR will target the `main` branch

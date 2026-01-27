@@ -8,7 +8,6 @@ This database stores Python strategy execution states and trade history.
 import os
 import json
 from datetime import datetime
-from typing import Tuple
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Float, Boolean
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
@@ -17,8 +16,26 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+
+class StrategyStateError(Exception):
+    """Base exception for strategy state database operations."""
+
+
+class StrategyStateDbNotFoundError(StrategyStateError):
+    """Raised when the strategy state database file is missing."""
+
+
+class StrategyStateNotFoundError(StrategyStateError):
+    """Raised when a requested strategy state record is missing."""
+
+
+class StrategyStateDbError(StrategyStateError):
+    """Raised for unexpected database errors."""
+
+
 # Strategy state database path
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'db', 'strategy_state.db')
+DEFAULT_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'db', 'strategy_state.db')
+DB_PATH = os.getenv('STRATEGY_STATE_DB_PATH', DEFAULT_DB_PATH)
 DATABASE_URL = f'sqlite:///{DB_PATH}'
 
 # Create engine with NullPool for SQLite
@@ -207,34 +224,39 @@ def get_strategy_state_by_instance_id(instance_id: str):
         db_session.remove()
 
 
-def delete_strategy_state(instance_id: str) -> Tuple[bool, str]:
-    """
-    Delete a strategy state by instance_id.
-    
+def delete_strategy_state(instance_id: str) -> None:
+    """Delete a strategy state by instance_id.
+
     Args:
         instance_id: The unique instance identifier
-        
-    Returns:
-        Tuple[bool, str]: (success, message) where message indicates reason for failure
+
+    Raises:
+        StrategyStateDbNotFoundError: If the DB file is missing
+        StrategyStateNotFoundError: If the record does not exist
+        StrategyStateDbError: For other unexpected DB errors
     """
     try:
         if not os.path.exists(DB_PATH):
-            return False, "Strategy state database not found"
-        
+            raise StrategyStateDbNotFoundError("Strategy state database not found")
+
         state = StrategyExecutionState.query.filter_by(instance_id=instance_id).first()
-        
         if not state:
-            return False, "Strategy state not found"
-        
+            raise StrategyStateNotFoundError("Strategy state not found")
+
         db_session.delete(state)
         db_session.commit()
         logger.info(f"Deleted strategy state: {instance_id}")
-        return True, "Strategy state deleted successfully"
-    
+
+    except (StrategyStateDbNotFoundError, StrategyStateNotFoundError):
+        # Let caller handle expected error conditions
+        db_session.rollback()
+        raise
+
     except Exception as e:
         logger.error(f"Error deleting strategy state {instance_id}: {e}")
         db_session.rollback()
-        return False, f"Database error: {str(e)}"
+        raise StrategyStateDbError(f"Database error: {str(e)}") from e
+
     finally:
         db_session.remove()
 
@@ -243,18 +265,25 @@ def delete_strategy_state(instance_id: str) -> Tuple[bool, str]:
 # Database Initialization
 # ============================================================================
 
-def init_db():
-    """
-    Initialize the strategy_overrides table if it doesn't exist.
-    Called during application startup.
+def init_db() -> None:
+    """Initialize required tables for the Strategy State DB.
+
+    Ensures both `strategy_execution_states` and `strategy_overrides` exist.
+    Safe to call multiple times.
     """
     try:
-        if os.path.exists(DB_PATH):
-            # Create only the strategy_overrides table if it doesn't exist
-            StrategyOverride.__table__.create(engine, checkfirst=True)
-            logger.info("Strategy State DB: strategy_overrides table initialized")
+        if not os.path.exists(DB_PATH):
+            # Do not create the DB file implicitly; caller decides lifecycle.
+            logger.warning("Strategy State DB: database file not found; skipping table initialization")
+            return
+
+        StrategyExecutionState.__table__.create(engine, checkfirst=True)
+        StrategyOverride.__table__.create(engine, checkfirst=True)
+        logger.info("Strategy State DB: tables initialized")
+
     except Exception as e:
-        logger.error(f"Strategy State DB: Error initializing strategy_overrides table: {e}")
+        logger.error(f"Strategy State DB: Error initializing tables: {e}")
+        raise StrategyStateDbError(f"Failed to initialize tables: {str(e)}") from e
 
 
 # ============================================================================
@@ -263,22 +292,25 @@ def init_db():
 
 
 def create_strategy_override(instance_id: str, leg_key: str, override_type: str, new_value: float) -> dict:
-    """
-    Create a new strategy override record.
-    
+    """Create a new strategy override record.
+
     Args:
         instance_id: The strategy instance ID
         leg_key: The leg identifier (e.g., "CE_SPREAD_CE_SELL")
         override_type: Either 'sl_price' or 'target_price' (validated by API layer)
         new_value: The new price value (validated by API layer)
-        
+
     Returns:
-        dict: The created override record or error dict
+        dict: The created override record
+
+    Raises:
+        StrategyStateDbNotFoundError: If the DB file is missing
+        StrategyStateDbError: For other unexpected DB errors
     """
     try:
         if not os.path.exists(DB_PATH):
-            return {'error': 'Strategy state database not found'}
-        
+            raise StrategyStateDbNotFoundError('Strategy state database not found')
+
         # Create the override record
         override = StrategyOverride(
             instance_id=instance_id,
@@ -306,10 +338,15 @@ def create_strategy_override(instance_id: str, leg_key: str, override_type: str,
         logger.info(f"Created strategy override: {instance_id}/{leg_key}/{override_type} = {new_value}")
         return result
     
+    except StrategyStateDbNotFoundError:
+        db_session.rollback()
+        raise
+
     except Exception as e:
         logger.error(f"Error creating strategy override: {e}")
         db_session.rollback()
-        return {'error': str(e)}
+        raise StrategyStateDbError(f"Database error: {str(e)}") from e
+
     finally:
         db_session.remove()
 

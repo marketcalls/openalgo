@@ -7,10 +7,13 @@ Provides read-only access to Python strategy execution states and positions.
 
 from flask import Blueprint, jsonify, request
 from database.strategy_state_db import (
-    get_all_strategy_states, 
-    get_strategy_state_by_instance_id, 
+    get_all_strategy_states,
+    get_strategy_state_by_instance_id,
     delete_strategy_state,
-    create_strategy_override
+    create_strategy_override,
+    StrategyStateDbNotFoundError,
+    StrategyStateNotFoundError,
+    StrategyStateDbError,
 )
 from utils.session import check_session_validity
 from utils.logging import get_logger
@@ -130,27 +133,32 @@ def delete_strategy_state_endpoint(instance_id):
     """
     try:
         logger.debug(f"DELETE request for instance_id: {instance_id}")
-        success, message = delete_strategy_state(instance_id)
-        
-        if not success:
-            # Distinguish not-found from other DB errors
-            if 'not found' in message.lower():
-                logger.warning(f"Strategy state not found: {instance_id}")
-                return jsonify({
-                    'status': 'error',
-                    'message': message
-                }), 404
 
-            logger.error(f"Failed to delete strategy state {instance_id}: {message}")
+        try:
+            delete_strategy_state(instance_id)
+        except StrategyStateNotFoundError:
+            logger.warning(f"Strategy state not found: {instance_id}")
             return jsonify({
                 'status': 'error',
-                'message': message
+                'message': f'Strategy state not found: {instance_id}'
+            }), 404
+        except StrategyStateDbNotFoundError as e:
+            logger.error(f"Strategy State DB missing: {e}")
+            return jsonify({
+                'status': 'error',
+                'message': str(e)
             }), 500
-        
+        except StrategyStateDbError as e:
+            logger.error(f"Strategy State DB error deleting {instance_id}: {e}")
+            return jsonify({
+                'status': 'error',
+                'message': str(e)
+            }), 500
+
         logger.debug(f"Strategy state deleted successfully: {instance_id}")
         return jsonify({
             'status': 'success',
-            'message': message
+            'message': f'Strategy state deleted: {instance_id}'
         })
     
     except Exception as e:
@@ -258,21 +266,29 @@ def create_strategy_override_endpoint(instance_id):
             }), 400
         
         # Create the override
-        result = create_strategy_override(
-            instance_id=instance_id,
-            leg_key=leg_key,
-            override_type=override_type,
-            new_value=new_value
-        )
-        
-        if 'error' in result:
+        try:
+            result = create_strategy_override(
+                instance_id=instance_id,
+                leg_key=leg_key,
+                override_type=override_type,
+                new_value=new_value,
+            )
+        except StrategyStateDbNotFoundError as e:
+            # Server-side issue (DB missing)
+            logger.error(f"Strategy State DB missing: {e}")
             return jsonify({
                 'status': 'error',
-                'message': result['error']
-            }), 400
-        
+                'message': str(e)
+            }), 500
+        except StrategyStateDbError as e:
+            logger.error(f"Strategy State DB error creating override: {e}")
+            return jsonify({
+                'status': 'error',
+                'message': str(e)
+            }), 500
+
         logger.info(f"Created override for {instance_id}/{leg_key}: {override_type}={new_value}")
-        
+
         return jsonify({
             'status': 'success',
             'message': f'{override_type.replace("_", " ").title()} override created. Will be applied within 5 seconds.',
