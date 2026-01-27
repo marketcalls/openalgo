@@ -296,6 +296,7 @@ For positions with `IN_POSITION` status, users can **inline edit** Stop Loss and
 - Strategy applies the override with its own validation and calls `mark_override_applied()`
 
 **`strategy_overrides` Table Schema:**
+
 | Column | Type | Description |
 |--------|------|-------------|
 | id | INTEGER | Primary key (auto-increment) |

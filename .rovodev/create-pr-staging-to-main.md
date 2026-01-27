@@ -29,3 +29,8 @@ Use GitHub CLI (`gh pr create`) to create the PR with:
 - Base branch: `main`
 - Head branch: `staging`
 - Auto-generated title and body based on commit analysis
+
+## Notes
+
+- **Always use `--repo gopinathshiva/openalgo`** to ensure PR is created on your fork, not upstream
+- The PR will target the `main` branch

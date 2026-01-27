@@ -30,9 +30,9 @@ def get_strategy_states():
         JSON response with list of strategy states
     """
     try:
-        logger.info("[STRATPOS_DEBUG] GET /api/strategy-state called")
+        logger.debug("GET /api/strategy-state called")
         states = get_all_strategy_states()
-        logger.info(f"[STRATPOS_DEBUG] Found {len(states)} strategy states")
+        logger.debug(f"Found {len(states)} strategy states")
         
         # Calculate summary statistics for each strategy
         for state in states:
@@ -129,20 +129,28 @@ def delete_strategy_state_endpoint(instance_id):
         JSON response with deletion status
     """
     try:
-        logger.info(f"[STRATPOS_DEBUG] DELETE request for instance_id: {instance_id}")
-        success = delete_strategy_state(instance_id)
+        logger.debug(f"DELETE request for instance_id: {instance_id}")
+        success, message = delete_strategy_state(instance_id)
         
         if not success:
-            logger.warning(f"[STRATPOS_DEBUG] Strategy state not found: {instance_id}")
+            # Distinguish not-found from other DB errors
+            if 'not found' in message.lower():
+                logger.warning(f"Strategy state not found: {instance_id}")
+                return jsonify({
+                    'status': 'error',
+                    'message': message
+                }), 404
+
+            logger.error(f"Failed to delete strategy state {instance_id}: {message}")
             return jsonify({
                 'status': 'error',
-                'message': f'Strategy state not found: {instance_id}'
-            }), 404
+                'message': message
+            }), 500
         
-        logger.info(f"[STRATPOS_DEBUG] Strategy state deleted successfully: {instance_id}")
+        logger.debug(f"Strategy state deleted successfully: {instance_id}")
         return jsonify({
             'status': 'success',
-            'message': f'Strategy state deleted: {instance_id}'
+            'message': message
         })
     
     except Exception as e:

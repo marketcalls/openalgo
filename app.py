@@ -74,6 +74,7 @@ from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.action_center_db import init_db as ensure_action_center_tables_exists
 from database.historify_db import init_database as ensure_historify_tables_exists
 from database.flow_db import init_db as ensure_flow_tables_exists
+from database.strategy_state_db import init_db as ensure_strategy_state_tables_exists
 
 from utils.plugin_loader import load_broker_auth_functions
 
@@ -428,6 +429,7 @@ def setup_environment(app):
             ('Qty Freeze DB', ensure_qty_freeze_tables_exists),
             ('Historify DB', ensure_historify_tables_exists),
             ('Flow DB', ensure_flow_tables_exists),
+            ('Strategy State DB', ensure_strategy_state_tables_exists),
         ]
 
         db_init_start = time.time()

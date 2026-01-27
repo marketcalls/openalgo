@@ -7,6 +7,8 @@ This database stores Python strategy execution states and trade history.
 
 import os
 import json
+from datetime import datetime
+from typing import Tuple
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Float, Boolean
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
@@ -118,12 +120,14 @@ def get_all_strategy_states():
                 except json.JSONDecodeError as e:
                     logger.error(f"Error parsing state_data for {state.instance_id}: {e}")
             
-            # Parse metadata JSON
+            # Parse metadata JSON - always include key for consistent schema
             if state.strategy_metadata:
                 try:
                     state_dict['metadata'] = json.loads(state.strategy_metadata)
                 except json.JSONDecodeError:
                     state_dict['metadata'] = None
+            else:
+                state_dict['metadata'] = None
             
             result.append(state_dict)
         
@@ -185,11 +189,14 @@ def get_strategy_state_by_instance_id(instance_id: str):
             except json.JSONDecodeError as e:
                 logger.error(f"Error parsing state_data for {instance_id}: {e}")
         
+        # Parse metadata JSON - always include key for consistent schema
         if state.strategy_metadata:
             try:
                 state_dict['metadata'] = json.loads(state.strategy_metadata)
             except json.JSONDecodeError:
                 state_dict['metadata'] = None
+        else:
+            state_dict['metadata'] = None
         
         return state_dict
     
@@ -200,7 +207,7 @@ def get_strategy_state_by_instance_id(instance_id: str):
         db_session.remove()
 
 
-def delete_strategy_state(instance_id: str) -> bool:
+def delete_strategy_state(instance_id: str) -> Tuple[bool, str]:
     """
     Delete a strategy state by instance_id.
     
@@ -208,35 +215,35 @@ def delete_strategy_state(instance_id: str) -> bool:
         instance_id: The unique instance identifier
         
     Returns:
-        bool: True if deleted, False if not found
+        Tuple[bool, str]: (success, message) where message indicates reason for failure
     """
     try:
         if not os.path.exists(DB_PATH):
-            return False
+            return False, "Strategy state database not found"
         
         state = StrategyExecutionState.query.filter_by(instance_id=instance_id).first()
         
         if not state:
-            return False
+            return False, "Strategy state not found"
         
         db_session.delete(state)
         db_session.commit()
         logger.info(f"Deleted strategy state: {instance_id}")
-        return True
+        return True, "Strategy state deleted successfully"
     
     except Exception as e:
         logger.error(f"Error deleting strategy state {instance_id}: {e}")
         db_session.rollback()
-        return False
+        return False, f"Database error: {str(e)}"
     finally:
         db_session.remove()
 
 
 # ============================================================================
-# Strategy Override Functions
+# Database Initialization
 # ============================================================================
 
-def init_strategy_overrides_table():
+def init_db():
     """
     Initialize the strategy_overrides table if it doesn't exist.
     Called during application startup.
@@ -245,9 +252,14 @@ def init_strategy_overrides_table():
         if os.path.exists(DB_PATH):
             # Create only the strategy_overrides table if it doesn't exist
             StrategyOverride.__table__.create(engine, checkfirst=True)
-            logger.info("Strategy overrides table initialized")
+            logger.info("Strategy State DB: strategy_overrides table initialized")
     except Exception as e:
-        logger.error(f"Error initializing strategy_overrides table: {e}")
+        logger.error(f"Strategy State DB: Error initializing strategy_overrides table: {e}")
+
+
+# ============================================================================
+# Strategy Override Functions
+# ============================================================================
 
 
 def create_strategy_override(instance_id: str, leg_key: str, override_type: str, new_value: float) -> dict:
@@ -257,28 +269,15 @@ def create_strategy_override(instance_id: str, leg_key: str, override_type: str,
     Args:
         instance_id: The strategy instance ID
         leg_key: The leg identifier (e.g., "CE_SPREAD_CE_SELL")
-        override_type: Either 'sl_price' or 'target_price'
-        new_value: The new price value
+        override_type: Either 'sl_price' or 'target_price' (validated by API layer)
+        new_value: The new price value (validated by API layer)
         
     Returns:
         dict: The created override record or error dict
     """
-    from datetime import datetime
-    
     try:
         if not os.path.exists(DB_PATH):
             return {'error': 'Strategy state database not found'}
-        
-        # Validate override_type
-        if override_type not in ('sl_price', 'target_price'):
-            return {'error': f'Invalid override_type: {override_type}. Must be sl_price or target_price'}
-        
-        # Validate new_value
-        if new_value is None or new_value < 0:
-            return {'error': 'new_value must be a non-negative number'}
-        
-        # Ensure table exists
-        init_strategy_overrides_table()
         
         # Create the override record
         override = StrategyOverride(
@@ -367,8 +366,6 @@ def mark_override_applied(override_id: int) -> bool:
     Returns:
         bool: True if updated, False otherwise
     """
-    from datetime import datetime
-    
     try:
         if not os.path.exists(DB_PATH):
             return False

@@ -1,4 +1,4 @@
-toolPermissions::
+toolPermissions:
   tools:
     create_file: ask
     delete_file: ask
