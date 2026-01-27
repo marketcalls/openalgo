@@ -34,7 +34,7 @@ export const PositionCheckNode = memo(({ data, selected }: PositionCheckNodeProp
       <Handle
         type="target"
         position={Position.Top}
-        className="!top-0 !-translate-y-1/2 !h-3 !w-3 hover:!scale-125 !transition-all"
+        className="!top-0 !-translate-y-1/2 !h-3 !w-3 !rounded-full !border-2 !border-background !bg-muted-foreground"
       />
       <div className="p-2">
         <div className="mb-1.5 flex items-center gap-1.5">
@@ -77,7 +77,7 @@ export const PositionCheckNode = memo(({ data, selected }: PositionCheckNodeProp
         type="source"
         position={Position.Bottom}
         id="true"
-        className="!bottom-0 !translate-y-1/2 !bg-buy !h-3 !w-3 hover:!scale-125 !transition-all"
+        className="!bottom-0 !translate-y-1/2 !bg-buy !h-3 !w-3 !rounded-full !border-2 !border-background"
         style={{ left: '25%' }}
       />
       {/* False output (right) */}
@@ -85,7 +85,7 @@ export const PositionCheckNode = memo(({ data, selected }: PositionCheckNodeProp
         type="source"
         position={Position.Bottom}
         id="false"
-        className="!bottom-0 !translate-y-1/2 !bg-sell !h-3 !w-3 hover:!scale-125 !transition-all"
+        className="!bottom-0 !translate-y-1/2 !bg-sell !h-3 !w-3 !rounded-full !border-2 !border-background"
         style={{ left: '75%' }}
       />
     </div>
