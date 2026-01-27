@@ -271,7 +271,6 @@ class _PooledAdapterWrapper:
         try:
             from database.auth_db import (
                 auth_cache,
-                broker_cache,
                 feed_token_cache,
             )
 
@@ -285,9 +284,8 @@ class _PooledAdapterWrapper:
             if cache_key_feed in feed_token_cache:
                 del feed_token_cache[cache_key_feed]
                 caches_cleared.append("feed_token_cache")
-            if cache_key_auth in broker_cache:
-                del broker_cache[cache_key_auth]
-                caches_cleared.append("broker_cache")
+            # Note: broker_cache is keyed by API key, not user_id, so we skip it here
+            # It only caches broker names which don't affect auth token validation
 
             if caches_cleared:
                 self.logger.info(f"Cleared auth caches for user {user_id}: {', '.join(caches_cleared)}")
