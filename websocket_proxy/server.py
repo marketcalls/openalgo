@@ -542,19 +542,88 @@ class WebSocketProxy:
                 # Initialize adapter with broker configuration
                 # The adapter's initialize method should handle broker-specific setup
                 initialization_result = adapter.initialize(broker_name, user_id)
-                if initialization_result and not initialization_result.get("success", True):
+                if initialization_result and initialization_result.get("status") == "error":
                     error_msg = initialization_result.get(
-                        "error", "Failed to initialize broker adapter"
+                        "message", initialization_result.get("error", "Failed to initialize broker adapter")
                     )
-                    await self.send_error(client_id, "BROKER_INIT_ERROR", error_msg)
-                    return
+
+                    # Check if this is an auth error (403/401) - retry with fresh token
+                    # This handles the stale cache issue described in GitHub issue #765
+                    if adapter.is_auth_error(error_msg):
+                        logger.warning(f"Auth error during initialization for user {user_id}, retrying with fresh token")
+                        adapter.clear_auth_cache_for_user(user_id)
+
+                        # Retry initialization with fresh credentials
+                        initialization_result = adapter.initialize(broker_name, user_id)
+                        if initialization_result and initialization_result.get("status") == "error":
+                            error_msg = initialization_result.get("message", "Failed to initialize after retry")
+                            await self.send_error(client_id, "BROKER_INIT_ERROR", error_msg)
+                            return
+                    else:
+                        await self.send_error(client_id, "BROKER_INIT_ERROR", error_msg)
+                        return
 
                 # Connect to the broker
                 connect_result = adapter.connect()
-                if connect_result and not connect_result.get("success", True):
-                    error_msg = connect_result.get("error", "Failed to connect to broker")
-                    await self.send_error(client_id, "BROKER_CONNECTION_ERROR", error_msg)
-                    return
+                # Handle both response formats:
+                # - Adapter format: {"status": "error", "code": "...", "message": "..."}
+                # - ConnectionPool format: {"success": False, "error": "..."}
+                is_error = (
+                    (connect_result and connect_result.get("status") == "error") or
+                    (connect_result and connect_result.get("success") == False)
+                )
+                if is_error:
+                    error_msg = connect_result.get("message", connect_result.get("error", "Failed to connect to broker"))
+                    error_code = connect_result.get("code", "")
+
+                    # Always retry connection failures with fresh token (issue #765)
+                    # Connection failures after re-login are almost always due to stale cached tokens
+                    # The upstox_client logs "401 Unauthorized" but returns generic "CONNECTION_FAILED"
+                    should_retry = (
+                        adapter.is_auth_error(error_msg) or
+                        error_code in ("CONNECTION_FAILED", "CONNECTION_ERROR") or
+                        "failed to connect" in error_msg.lower()
+                    )
+
+                    if should_retry:
+                        logger.warning(f"Connection failed for user {user_id}, retrying with fresh token (error: {error_msg}, code: {error_code})")
+
+                        # Clear stale cache in WebSocket process (issue #765)
+                        self._clear_auth_cache_for_user(user_id)
+                        adapter.clear_auth_cache_for_user(user_id)
+
+                        # Re-initialize with fresh credentials from database (force=True to override existing)
+                        logger.info(f"Re-initializing adapter for user {user_id} with fresh token")
+                        init_retry_result = adapter.initialize(broker_name, user_id, force=True)
+                        # Handle both response formats
+                        init_is_error = (
+                            (init_retry_result and init_retry_result.get("status") == "error") or
+                            (init_retry_result and init_retry_result.get("success") == False)
+                        )
+                        if init_is_error:
+                            error_msg = init_retry_result.get("message", init_retry_result.get("error", "Failed to re-initialize"))
+                            logger.error(f"Re-initialization failed for user {user_id}: {error_msg}")
+                            await self.send_error(client_id, "BROKER_INIT_ERROR", error_msg)
+                            return
+
+                        # Retry connection
+                        logger.info(f"Retrying connection for user {user_id}")
+                        connect_result = adapter.connect()
+                        # Handle both response formats
+                        connect_is_error = (
+                            (connect_result and connect_result.get("status") == "error") or
+                            (connect_result and connect_result.get("success") == False)
+                        )
+                        if connect_is_error:
+                            error_msg = connect_result.get("message", connect_result.get("error", "Failed to connect after retry"))
+                            logger.error(f"Retry connection also failed for user {user_id}: {error_msg}")
+                            await self.send_error(client_id, "BROKER_CONNECTION_ERROR", error_msg)
+                            return
+
+                        logger.info(f"Retry successful for user {user_id}")
+                    else:
+                        await self.send_error(client_id, "BROKER_CONNECTION_ERROR", error_msg)
+                        return
 
                 # Store the adapter
                 self.broker_adapters[user_id] = adapter
@@ -564,12 +633,44 @@ class WebSocketProxy:
                 )
 
             except Exception as e:
+                error_str = str(e)
                 logger.error(f"Failed to create broker adapter for {broker_name}: {e}")
-                import traceback
 
-                logger.error(traceback.format_exc())
-                await self.send_error(client_id, "BROKER_ERROR", str(e))
-                return
+                # Check if exception is an auth error - retry with fresh token
+                # This handles the stale cache issue described in GitHub issue #765
+                if self._is_auth_error_exception(error_str):
+                    logger.warning(f"Auth exception for user {user_id}, retrying with fresh token")
+                    try:
+                        self._clear_auth_cache_for_user(user_id)
+
+                        # Retry adapter creation
+                        adapter = create_broker_adapter(broker_name)
+                        if adapter:
+                            initialization_result = adapter.initialize(broker_name, user_id)
+                            if initialization_result and initialization_result.get("status") != "error":
+                                connect_result = adapter.connect()
+                                if connect_result and connect_result.get("status") != "error":
+                                    self.broker_adapters[user_id] = adapter
+                                    logger.info(f"Successfully connected {broker_name} adapter for user {user_id} after retry")
+                                    # Fall through to success response
+                                else:
+                                    await self.send_error(client_id, "BROKER_CONNECTION_ERROR", "Failed to connect after retry")
+                                    return
+                            else:
+                                await self.send_error(client_id, "BROKER_INIT_ERROR", "Failed to initialize after retry")
+                                return
+                        else:
+                            await self.send_error(client_id, "BROKER_ERROR", f"Failed to create adapter for {broker_name}")
+                            return
+                    except Exception as retry_error:
+                        logger.error(f"Retry also failed for {broker_name}: {retry_error}")
+                        await self.send_error(client_id, "BROKER_ERROR", str(retry_error))
+                        return
+                else:
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    await self.send_error(client_id, "BROKER_ERROR", error_str)
+                    return
 
         # Send success response with broker information
         await self.send_message(
@@ -1006,6 +1107,163 @@ class WebSocketProxy:
         """
         await self.send_message(client_id, {"status": "error", "code": code, "message": message})
 
+    def _handle_cache_invalidation(self, topic_str: str, data_str: str):
+        """
+        Handle cache invalidation messages from Flask process.
+
+        When a user re-authenticates or logs out, Flask publishes a cache invalidation
+        message via ZeroMQ. This method clears the local auth caches so that the next
+        request fetches fresh data from the database.
+
+        This solves the stale token issue described in GitHub issue #765.
+
+        Args:
+            topic_str: The ZMQ topic (format: CACHE_INVALIDATE_{TYPE}_{USER_ID})
+            data_str: JSON string with invalidation details
+        """
+        try:
+            # Import caches locally to avoid circular imports
+            from database.auth_db import (
+                auth_cache,
+                broker_cache,
+                feed_token_cache,
+                invalid_api_key_cache,
+                verified_api_key_cache,
+            )
+
+            # Parse the invalidation message
+            message = json.loads(data_str)
+            user_id = message.get("user_id")
+            cache_type = message.get("cache_type", "ALL")
+
+            if not user_id:
+                logger.warning("Cache invalidation message missing user_id")
+                return
+
+            logger.info(f"Received cache invalidation for user: {user_id}, type: {cache_type}")
+
+            # Clear auth caches for this user
+            cache_key_auth = f"auth-{user_id}"
+            cache_key_feed = f"feed-{user_id}"
+
+            caches_cleared = []
+
+            if cache_type in ("AUTH", "ALL"):
+                if cache_key_auth in auth_cache:
+                    del auth_cache[cache_key_auth]
+                    caches_cleared.append("auth_cache")
+
+            if cache_type in ("FEED", "ALL"):
+                if cache_key_feed in feed_token_cache:
+                    del feed_token_cache[cache_key_feed]
+                    caches_cleared.append("feed_token_cache")
+
+            if cache_type == "ALL":
+                # Clear broker cache for this user
+                if cache_key_auth in broker_cache:
+                    del broker_cache[cache_key_auth]
+                    caches_cleared.append("broker_cache")
+
+                # Clear any cached API key verifications for this user
+                # We can't easily identify which API key hashes belong to this user,
+                # so we clear all API key caches as a safety measure
+                # This is acceptable since the cache will repopulate on next request
+                verified_api_key_cache.clear()
+                invalid_api_key_cache.clear()
+                caches_cleared.append("verified_api_key_cache")
+                caches_cleared.append("invalid_api_key_cache")
+
+            if caches_cleared:
+                logger.info(f"Cleared caches for user {user_id}: {', '.join(caches_cleared)}")
+            else:
+                logger.debug(f"No cached data found for user {user_id}")
+
+            # Also disconnect and clean up any existing broker adapters for this user
+            # This forces re-initialization with fresh credentials on next connection
+            if user_id in self.broker_adapters:
+                try:
+                    adapter = self.broker_adapters[user_id]
+                    adapter.disconnect()
+                    del self.broker_adapters[user_id]
+                    logger.info(f"Disconnected stale broker adapter for user {user_id}")
+                except Exception as adapter_error:
+                    logger.warning(f"Error disconnecting adapter for user {user_id}: {adapter_error}")
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse cache invalidation message: {e}")
+        except Exception as e:
+            logger.error(f"Error processing cache invalidation: {e}")
+
+    def _is_auth_error_exception(self, error_message: str) -> bool:
+        """
+        Check if an error message indicates an authentication failure.
+
+        Used to detect when to retry with fresh credentials (issue #765).
+
+        Args:
+            error_message: The error message string
+
+        Returns:
+            True if the error indicates authentication failure (401/403)
+        """
+        if not error_message:
+            return False
+
+        error_lower = str(error_message).lower()
+        auth_error_indicators = [
+            "401",
+            "403",
+            "unauthorized",
+            "forbidden",
+            "authentication failed",
+            "auth failed",
+            "invalid token",
+            "token expired",
+            "access denied",
+            "invalid credentials",
+            "session expired",
+        ]
+        return any(indicator in error_lower for indicator in auth_error_indicators)
+
+    def _clear_auth_cache_for_user(self, user_id: str):
+        """
+        Clear all cached authentication data for a user.
+
+        Called when detecting stale credentials (e.g., 403 error from broker).
+        See GitHub issue #765 for details.
+
+        Args:
+            user_id: The user's ID
+        """
+        try:
+            from database.auth_db import (
+                auth_cache,
+                broker_cache,
+                feed_token_cache,
+            )
+
+            cache_key_auth = f"auth-{user_id}"
+            cache_key_feed = f"feed-{user_id}"
+
+            caches_cleared = []
+            if cache_key_auth in auth_cache:
+                del auth_cache[cache_key_auth]
+                caches_cleared.append("auth_cache")
+            if cache_key_feed in feed_token_cache:
+                del feed_token_cache[cache_key_feed]
+                caches_cleared.append("feed_token_cache")
+            if cache_key_auth in broker_cache:
+                del broker_cache[cache_key_auth]
+                caches_cleared.append("broker_cache")
+
+            if caches_cleared:
+                logger.info(f"Cleared auth caches for user {user_id}: {', '.join(caches_cleared)}")
+            else:
+                logger.debug(f"No cached auth data found for user {user_id}")
+
+        except Exception as e:
+            logger.error(f"Error clearing auth cache for user {user_id}: {e}")
+
     async def zmq_listener(self):
         """
         OPTIMIZED: Listen for messages from broker adapters via ZeroMQ and forward to clients
@@ -1014,8 +1272,11 @@ class WebSocketProxy:
         1. Increased timeout from 0.1s to 0.3s (reduces busy-waiting by 66%)
         2. Use subscription_index for O(1) lookup instead of O(n²) iteration
         3. Batch message sending with asyncio.gather
+
+        Also handles cache invalidation messages from Flask process for cross-process
+        cache synchronization (see GitHub issue #765).
         """
-        logger.debug("Starting OPTIMIZED ZeroMQ listener with subscription indexing")
+        logger.debug("Starting OPTIMIZED ZeroMQ listener with subscription indexing and cache invalidation support")
 
         while self.running:
             try:
@@ -1036,6 +1297,17 @@ class WebSocketProxy:
                 # Parse the message
                 topic_str = topic.decode("utf-8")
                 data_str = data.decode("utf-8")
+
+                # Handle cache invalidation messages (from Flask process)
+                # These messages clear stale auth tokens after re-login
+                # See GitHub issue #765 for details
+                if topic_str.startswith("CACHE_INVALIDATE"):
+                    try:
+                        self._handle_cache_invalidation(topic_str, data_str)
+                    except Exception as e:
+                        logger.error(f"Error handling cache invalidation: {e}")
+                    continue  # Skip market data processing for cache messages
+
                 market_data = json.loads(data_str)
 
                 # Extract topic components
