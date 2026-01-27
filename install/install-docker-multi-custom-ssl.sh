@@ -757,13 +757,14 @@ for i in "${!CONF_DOMAINS[@]}"; do
         sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" "$ENV_FILE"
         
         # CORS: Add domain if not already present (preserves custom domains like chart.domain.com)
-        if ! grep -q "https://$DOMAIN" "$ENV_FILE" 2>/dev/null || ! grep "CORS_ALLOWED_ORIGINS" "$ENV_FILE" | grep -q "https://$DOMAIN"; then
-            # Extract current CORS value and append new domain
+        # NOTE: Flask-CORS expects comma-separated origins (see cors.py line 25)
+        if ! grep "CORS_ALLOWED_ORIGINS" "$ENV_FILE" | grep -q "https://$DOMAIN"; then
+            # Extract current CORS value and append new domain with comma
             CURRENT_CORS=$(grep "CORS_ALLOWED_ORIGINS" "$ENV_FILE" | sed "s/.*= '\\(.*\\)'/\\1/")
             if [ -n "$CURRENT_CORS" ]; then
-                NEW_CORS="$CURRENT_CORS https://$DOMAIN"
-                # Remove duplicates
-                NEW_CORS=$(echo "$NEW_CORS" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/ $//')
+                NEW_CORS="$CURRENT_CORS,https://$DOMAIN"
+                # Remove duplicates while preserving comma format
+                NEW_CORS=$(echo "$NEW_CORS" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
                 sed -i "s|CORS_ALLOWED_ORIGINS = '.*'|CORS_ALLOWED_ORIGINS = '$NEW_CORS'|g" "$ENV_FILE"
             fi
         fi
