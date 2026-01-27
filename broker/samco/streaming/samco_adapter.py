@@ -1,22 +1,22 @@
-import threading
 import json
 import logging
+import os
+import sys
+import threading
 import time
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
-from broker.samco.streaming.samcoWebSocket import SamcoWebSocket
 from broker.samco.api.data import BrokerData
+from broker.samco.streaming.samcoWebSocket import SamcoWebSocket
 from database.auth_db import get_auth_token
 
-import sys
-import os
-
 # Add parent directory to path to allow imports
-sys.path.append(os.path.join(os.path.dirname(__file__), '../../../'))
+sys.path.append(os.path.join(os.path.dirname(__file__), "../../../"))
 
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 from websocket_proxy.mapping import SymbolMapper
-from .samco_mapping import SamcoExchangeMapper, SamcoCapabilityRegistry
+
+from .samco_mapping import SamcoCapabilityRegistry, SamcoExchangeMapper
 
 
 class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
@@ -35,7 +35,9 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.running = False
         self.lock = threading.Lock()
 
-    def initialize(self, broker_name: str, user_id: str, auth_data: Optional[Dict[str, str]] = None) -> None:
+    def initialize(
+        self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
+    ) -> None:
         """
         Initialize connection with Samco WebSocket API
 
@@ -60,17 +62,14 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 raise ValueError(f"No authentication token found for user {user_id}")
         else:
             # Use provided tokens
-            session_token = auth_data.get('session_token') or auth_data.get('auth_token')
+            session_token = auth_data.get("session_token") or auth_data.get("auth_token")
 
             if not session_token:
                 self.logger.error("Missing required authentication data")
                 raise ValueError("Missing required authentication data (session_token)")
 
         # Create SamcoWebSocket instance
-        self.ws_client = SamcoWebSocket(
-            session_token=session_token,
-            user_id=user_id
-        )
+        self.ws_client = SamcoWebSocket(session_token=session_token, user_id=user_id)
 
         # Set callbacks
         self.ws_client.on_open = self._on_open
@@ -93,14 +92,18 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Connect to Samco WebSocket with retry logic"""
         while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
             try:
-                self.logger.info(f"Connecting to Samco WebSocket (attempt {self.reconnect_attempts + 1})")
+                self.logger.info(
+                    f"Connecting to Samco WebSocket (attempt {self.reconnect_attempts + 1})"
+                )
                 self.ws_client.connect()
                 self.reconnect_attempts = 0  # Reset attempts on successful connection
                 break
 
             except Exception as e:
                 self.reconnect_attempts += 1
-                delay = min(self.reconnect_delay * (2 ** self.reconnect_attempts), self.max_reconnect_delay)
+                delay = min(
+                    self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
+                )
                 self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
                 time.sleep(delay)
 
@@ -110,13 +113,15 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def disconnect(self) -> None:
         """Disconnect from Samco WebSocket"""
         self.running = False
-        if hasattr(self, 'ws_client') and self.ws_client:
+        if hasattr(self, "ws_client") and self.ws_client:
             self.ws_client.close_connection()
 
         # Clean up ZeroMQ resources
         self.cleanup_zmq()
 
-    def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> Dict[str, Any]:
+    def subscribe(
+        self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5
+    ) -> dict[str, Any]:
         """
         Subscribe to market data with Samco-specific implementation
 
@@ -131,22 +136,25 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         # Validate the mode
         if mode not in [1, 2, 3]:
-            return self._create_error_response("INVALID_MODE",
-                                               f"Invalid mode {mode}. Must be 1 (LTP), 2 (Quote), or 3 (Depth)")
+            return self._create_error_response(
+                "INVALID_MODE", f"Invalid mode {mode}. Must be 1 (LTP), 2 (Quote), or 3 (Depth)"
+            )
 
         # If depth mode, check if supported depth level
         if mode == 3 and depth_level not in [5]:
-            return self._create_error_response("INVALID_DEPTH",
-                                               f"Invalid depth level {depth_level}. Must be 5")
+            return self._create_error_response(
+                "INVALID_DEPTH", f"Invalid depth level {depth_level}. Must be 5"
+            )
 
         # Handle index symbols - fetch listingId from API
-        if exchange in ['NSE_INDEX', 'BSE_INDEX']:
+        if exchange in ["NSE_INDEX", "BSE_INDEX"]:
             try:
                 # Get auth token for API call
                 auth_token = get_auth_token(self.user_id)
                 if not auth_token:
-                    return self._create_error_response("AUTH_ERROR",
-                                                       f"No auth token found for user {self.user_id}")
+                    return self._create_error_response(
+                        "AUTH_ERROR", f"No auth token found for user {self.user_id}"
+                    )
 
                 # Create BrokerData instance and fetch listingId
                 broker_data = BrokerData(auth_token)
@@ -154,26 +162,32 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
                 # For index, use listingId as token (e.g., '-23' for NIFTY)
                 token = listing_id
-                brexchange = 'NSE' if exchange == 'NSE_INDEX' else 'BSE'
+                brexchange = "NSE" if exchange == "NSE_INDEX" else "BSE"
 
-                self.logger.info(f"Samco index subscribe: symbol={symbol}, exchange={exchange}, listingId={listing_id}")
+                self.logger.info(
+                    f"Samco index subscribe: symbol={symbol}, exchange={exchange}, listingId={listing_id}"
+                )
 
             except Exception as e:
                 self.logger.error(f"Error getting index listingId for {symbol}: {e}")
-                return self._create_error_response("INDEX_ERROR",
-                                                   f"Error getting index listingId: {str(e)}")
+                return self._create_error_response(
+                    "INDEX_ERROR", f"Error getting index listingId: {str(e)}"
+                )
         else:
             # Map symbol to token using symbol mapper for non-index symbols
             token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
             if not token_info:
-                return self._create_error_response("SYMBOL_NOT_FOUND",
-                                                   f"Symbol {symbol} not found for exchange {exchange}")
+                return self._create_error_response(
+                    "SYMBOL_NOT_FOUND", f"Symbol {symbol} not found for exchange {exchange}"
+                )
 
-            token = token_info['token']
-            brexchange = token_info['brexchange']
+            token = token_info["token"]
+            brexchange = token_info["brexchange"]
 
             # Debug log the token format
-            self.logger.info(f"Samco subscribe: symbol={symbol}, exchange={exchange}, token={token}, brexchange={brexchange}")
+            self.logger.info(
+                f"Samco subscribe: symbol={symbol}, exchange={exchange}, token={token}, brexchange={brexchange}"
+            )
 
         # Check if the requested depth level is supported for this exchange
         is_fallback = False
@@ -194,10 +208,9 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         # Create token list for Samco API
         # Samco uses symbol names with exchange
-        token_list = [{
-            "exchangeType": SamcoExchangeMapper.get_exchange_type(brexchange),
-            "tokens": [token]
-        }]
+        token_list = [
+            {"exchangeType": SamcoExchangeMapper.get_exchange_type(brexchange), "tokens": [token]}
+        ]
 
         # Generate unique correlation ID that includes mode to prevent overwriting
         correlation_id = f"{symbol}_{exchange}_{mode}"
@@ -207,15 +220,15 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Store subscription for reconnection
         with self.lock:
             self.subscriptions[correlation_id] = {
-                'symbol': symbol,
-                'exchange': exchange,
-                'brexchange': brexchange,
-                'token': token,
-                'mode': mode,
-                'depth_level': depth_level,
-                'actual_depth': actual_depth,
-                'token_list': token_list,
-                'is_fallback': is_fallback
+                "symbol": symbol,
+                "exchange": exchange,
+                "brexchange": brexchange,
+                "token": token,
+                "mode": mode,
+                "depth_level": depth_level,
+                "actual_depth": actual_depth,
+                "token_list": token_list,
+                "is_fallback": is_fallback,
             }
 
         # Subscribe if connected
@@ -228,16 +241,18 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         # Return success with capability info
         return self._create_success_response(
-            'Subscription requested' if not is_fallback else f"Using depth level {actual_depth} instead of requested {depth_level}",
+            "Subscription requested"
+            if not is_fallback
+            else f"Using depth level {actual_depth} instead of requested {depth_level}",
             symbol=symbol,
             exchange=exchange,
             mode=mode,
             requested_depth=depth_level,
             actual_depth=actual_depth,
-            is_fallback=is_fallback
+            is_fallback=is_fallback,
         )
 
-    def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> Dict[str, Any]:
+    def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> dict[str, Any]:
         """
         Unsubscribe from market data
 
@@ -250,36 +265,40 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
             Dict: Response with status
         """
         # Handle index symbols - need to use listingId for streaming
-        if exchange in ['NSE_INDEX', 'BSE_INDEX']:
+        if exchange in ["NSE_INDEX", "BSE_INDEX"]:
             try:
                 auth_token = get_auth_token(self.user_id)
                 if not auth_token:
-                    return self._create_error_response("AUTH_ERROR",
-                                                       "Authentication token not found")
+                    return self._create_error_response(
+                        "AUTH_ERROR", "Authentication token not found"
+                    )
                 broker_data = BrokerData(auth_token)
                 listing_id = broker_data.get_index_listing_id(symbol, exchange)
                 token = listing_id  # e.g., '-21' for NIFTY
-                brexchange = 'NSE' if exchange == 'NSE_INDEX' else 'BSE'
-                self.logger.info(f"Samco index unsubscribe: symbol={symbol}, exchange={exchange}, listingId={listing_id}")
+                brexchange = "NSE" if exchange == "NSE_INDEX" else "BSE"
+                self.logger.info(
+                    f"Samco index unsubscribe: symbol={symbol}, exchange={exchange}, listingId={listing_id}"
+                )
             except Exception as e:
                 self.logger.error(f"Error getting index listingId for unsubscribe: {e}")
-                return self._create_error_response("INDEX_ERROR",
-                                                   f"Failed to get index listingId: {str(e)}")
+                return self._create_error_response(
+                    "INDEX_ERROR", f"Failed to get index listingId: {str(e)}"
+                )
         else:
             # Map symbol to token for non-index symbols
             token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
             if not token_info:
-                return self._create_error_response("SYMBOL_NOT_FOUND",
-                                                   f"Symbol {symbol} not found for exchange {exchange}")
+                return self._create_error_response(
+                    "SYMBOL_NOT_FOUND", f"Symbol {symbol} not found for exchange {exchange}"
+                )
 
-            token = token_info['token']
-            brexchange = token_info['brexchange']
+            token = token_info["token"]
+            brexchange = token_info["brexchange"]
 
         # Create token list for Samco API
-        token_list = [{
-            "exchangeType": SamcoExchangeMapper.get_exchange_type(brexchange),
-            "tokens": [token]
-        }]
+        token_list = [
+            {"exchangeType": SamcoExchangeMapper.get_exchange_type(brexchange), "tokens": [token]}
+        ]
 
         # Generate correlation ID
         correlation_id = f"{symbol}_{exchange}_{mode}"
@@ -298,10 +317,7 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 return self._create_error_response("UNSUBSCRIPTION_ERROR", str(e))
 
         return self._create_success_response(
-            f"Unsubscribed from {symbol}.{exchange}",
-            symbol=symbol,
-            exchange=exchange,
-            mode=mode
+            f"Unsubscribed from {symbol}.{exchange}", symbol=symbol, exchange=exchange, mode=mode
         )
 
     def _on_open(self, wsapp) -> None:
@@ -326,8 +342,8 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     # Merge all tokens by exchange
                     merged_tokens = {}
                     for token_group in token_list:
-                        exchange = token_group.get('exchangeType', 'NSE')
-                        tokens = token_group.get('tokens', [])
+                        exchange = token_group.get("exchangeType", "NSE")
+                        tokens = token_group.get("tokens", [])
                         if exchange not in merged_tokens:
                             merged_tokens[exchange] = []
                         merged_tokens[exchange].extend(tokens)
@@ -339,7 +355,9 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     ]
 
                     self.ws_client.subscribe(f"batch_mode_{mode}", mode, merged_token_list)
-                    self.logger.info(f"Batch resubscribed mode {mode} with {len(merged_token_list)} exchange groups")
+                    self.logger.info(
+                        f"Batch resubscribed mode {mode} with {len(merged_token_list)} exchange groups"
+                    )
                 except Exception as e:
                     self.logger.error(f"Error batch resubscribing mode {mode}: {e}")
 
@@ -371,7 +389,7 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 return
 
             # Extract symbol from the message
-            symbol_key = message.get('symbol', '') or message.get('token', '')
+            symbol_key = message.get("symbol", "") or message.get("token", "")
 
             # Skip if no symbol (non-data message)
             if not symbol_key:
@@ -380,7 +398,7 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             # Get the message's subscription mode (from streaming_type)
             # Mode 2 = "quote" (LTP/Quote data), Mode 3 = "quote2" (Depth data)
-            msg_mode = message.get('subscription_mode', 2)
+            msg_mode = message.get("subscription_mode", 2)
 
             # Determine which subscription modes this message should go to
             # "quote" messages (mode 2) should go to LTP (1) and Quote (2) subscribers
@@ -395,11 +413,11 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
             with self.lock:
                 for sub in self.subscriptions.values():
                     # Check if mode is compatible
-                    if sub['mode'] not in target_modes:
+                    if sub["mode"] not in target_modes:
                         continue
 
                     # Match by token (may be "11536_NSE" or "11536")
-                    if sub['token'] == symbol_key or sub['symbol'] == symbol_key:
+                    if sub["token"] == symbol_key or sub["symbol"] == symbol_key:
                         matching_subscriptions.append(sub)
                         continue
 
@@ -410,39 +428,45 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         continue
 
                     # Try matching by extracting scripCode from symbol_key (handle "11536_NSE" -> "11536")
-                    if '_' in symbol_key:
-                        scripcode = symbol_key.split('_')[0]
-                        if sub['token'] == scripcode:
+                    if "_" in symbol_key:
+                        scripcode = symbol_key.split("_")[0]
+                        if sub["token"] == scripcode:
                             matching_subscriptions.append(sub)
                             continue
 
             if not matching_subscriptions:
-                self.logger.debug(f"No matching subscription for symbol: {symbol_key}, msg_mode: {msg_mode}")
+                self.logger.debug(
+                    f"No matching subscription for symbol: {symbol_key}, msg_mode: {msg_mode}"
+                )
                 return
 
             # Publish to all matching subscriptions
             for subscription in matching_subscriptions:
-                symbol = subscription['symbol']
-                exchange = subscription['exchange']
-                mode = subscription['mode']
+                symbol = subscription["symbol"]
+                exchange = subscription["exchange"]
+                mode = subscription["mode"]
 
                 # Use subscription mode for topic
-                mode_str = {1: 'LTP', 2: 'QUOTE', 3: 'DEPTH'}.get(mode, 'QUOTE')
+                mode_str = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}.get(mode, "QUOTE")
                 topic = f"{exchange}_{symbol}_{mode_str}"
 
                 # Normalize the data based on subscription mode
                 market_data = self._normalize_market_data(message, mode)
 
                 # Add metadata
-                market_data.update({
-                    'symbol': symbol,
-                    'exchange': exchange,
-                    'mode': mode,
-                    'timestamp': int(time.time() * 1000)  # Current timestamp in ms
-                })
+                market_data.update(
+                    {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "mode": mode,
+                        "timestamp": int(time.time() * 1000),  # Current timestamp in ms
+                    }
+                )
 
                 # Log the market data we're sending (DEBUG level to avoid flooding logs)
-                self.logger.debug(f"Publishing to topic {topic}: ltp={market_data.get('ltp')}, depth={bool(market_data.get('depth'))}")
+                self.logger.debug(
+                    f"Publishing to topic {topic}: ltp={market_data.get('ltp')}, depth={bool(market_data.get('depth'))}"
+                )
 
                 # Publish to ZeroMQ
                 self.publish_market_data(topic, market_data)
@@ -450,7 +474,7 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception as e:
             self.logger.error(f"Error processing market data: {e}", exc_info=True)
 
-    def _normalize_market_data(self, message, mode) -> Dict[str, Any]:
+    def _normalize_market_data(self, message, mode) -> dict[str, Any]:
         """
         Normalize broker-specific data format to a common format.
 
@@ -466,49 +490,49 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """
         if mode == 1:  # LTP mode
             return {
-                'ltp': message.get('last_traded_price', 0),
-                'ltt': message.get('exchange_timestamp', 0)
+                "ltp": message.get("last_traded_price", 0),
+                "ltt": message.get("exchange_timestamp", 0),
             }
         elif mode == 2:  # Quote mode
             return {
-                'ltp': message.get('last_traded_price', 0),
-                'ltt': message.get('exchange_timestamp', 0),
-                'volume': message.get('volume_trade_for_the_day', 0),
-                'open': message.get('open_price_of_the_day', 0),
-                'high': message.get('high_price_of_the_day', 0),
-                'low': message.get('low_price_of_the_day', 0),
-                'close': message.get('closed_price', 0),
-                'last_trade_quantity': message.get('last_traded_quantity', 0),
-                'change': message.get('change', 0),
-                'change_percentage': message.get('change_percentage', 0),
-                'best_bid_price': message.get('best_bid_price', 0),
-                'best_bid_quantity': message.get('best_bid_quantity', 0),
-                'best_ask_price': message.get('best_ask_price', 0),
-                'best_ask_quantity': message.get('best_ask_quantity', 0)
+                "ltp": message.get("last_traded_price", 0),
+                "ltt": message.get("exchange_timestamp", 0),
+                "volume": message.get("volume_trade_for_the_day", 0),
+                "open": message.get("open_price_of_the_day", 0),
+                "high": message.get("high_price_of_the_day", 0),
+                "low": message.get("low_price_of_the_day", 0),
+                "close": message.get("closed_price", 0),
+                "last_trade_quantity": message.get("last_traded_quantity", 0),
+                "change": message.get("change", 0),
+                "change_percentage": message.get("change_percentage", 0),
+                "best_bid_price": message.get("best_bid_price", 0),
+                "best_bid_quantity": message.get("best_bid_quantity", 0),
+                "best_ask_price": message.get("best_ask_price", 0),
+                "best_ask_quantity": message.get("best_ask_quantity", 0),
             }
         elif mode == 3:  # Snap Quote mode (includes depth data)
             result = {
-                'ltp': message.get('last_traded_price', 0),
-                'ltt': message.get('exchange_timestamp', 0),
-                'volume': message.get('volume_trade_for_the_day', 0),
-                'open': message.get('open_price_of_the_day', 0),
-                'high': message.get('high_price_of_the_day', 0),
-                'low': message.get('low_price_of_the_day', 0),
-                'close': message.get('closed_price', 0),
-                'last_quantity': message.get('last_traded_quantity', 0),
-                'change': message.get('change', 0),
-                'change_percentage': message.get('change_percentage', 0)
+                "ltp": message.get("last_traded_price", 0),
+                "ltt": message.get("exchange_timestamp", 0),
+                "volume": message.get("volume_trade_for_the_day", 0),
+                "open": message.get("open_price_of_the_day", 0),
+                "high": message.get("high_price_of_the_day", 0),
+                "low": message.get("low_price_of_the_day", 0),
+                "close": message.get("closed_price", 0),
+                "last_quantity": message.get("last_traded_quantity", 0),
+                "change": message.get("change", 0),
+                "change_percentage": message.get("change_percentage", 0),
             }
 
             # Pass through depth data from samcoWebSocket normalization
-            if 'depth' in message:
-                result['depth'] = message['depth']
+            if "depth" in message:
+                result["depth"] = message["depth"]
 
             return result
         else:
             return {}
 
-    def _extract_depth_data(self, message, is_buy: bool) -> List[Dict[str, Any]]:
+    def _extract_depth_data(self, message, is_buy: bool) -> list[dict[str, Any]]:
         """
         Extract depth data from Samco's message format
 
@@ -520,28 +544,26 @@ class SamcoWebSocketAdapter(BaseBrokerWebSocketAdapter):
             List: List of depth levels with price, quantity, and orders
         """
         depth = []
-        side_label = 'Buy' if is_buy else 'Sell'
+        side_label = "Buy" if is_buy else "Sell"
 
         # Get the appropriate depth data key
-        depth_key = 'best_5_buy_data' if is_buy else 'best_5_sell_data'
+        depth_key = "best_5_buy_data" if is_buy else "best_5_sell_data"
         depth_data = message.get(depth_key, [])
 
         self.logger.debug(f"Extracting {side_label} depth data: {len(depth_data)} levels")
 
         for level in depth_data:
             if isinstance(level, dict):
-                depth.append({
-                    'price': level.get('price', 0),
-                    'quantity': level.get('quantity', 0),
-                    'orders': level.get('no of orders', 0)
-                })
+                depth.append(
+                    {
+                        "price": level.get("price", 0),
+                        "quantity": level.get("quantity", 0),
+                        "orders": level.get("no of orders", 0),
+                    }
+                )
 
         # Pad to 5 levels if needed
         while len(depth) < 5:
-            depth.append({
-                'price': 0.0,
-                'quantity': 0,
-                'orders': 0
-            })
+            depth.append({"price": 0.0, "quantity": 0, "orders": 0})
 
         return depth

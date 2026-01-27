@@ -10,30 +10,30 @@ import sys
 
 # Service integrations to apply
 SERVICE_INTEGRATIONS = {
-    'positionbook_service.py': {
-        'function': 'get_positionbook_with_auth',
-        'sandbox_call': 'sandbox_get_positions',
-        'check_location': 'if get_analyze_mode():'
+    "positionbook_service.py": {
+        "function": "get_positionbook_with_auth",
+        "sandbox_call": "sandbox_get_positions",
+        "check_location": "if get_analyze_mode():",
     },
-    'holdings_service.py': {
-        'function': 'get_holdings_with_auth',
-        'sandbox_call': 'sandbox_get_holdings',
-        'check_location': 'if get_analyze_mode():'
+    "holdings_service.py": {
+        "function": "get_holdings_with_auth",
+        "sandbox_call": "sandbox_get_holdings",
+        "check_location": "if get_analyze_mode():",
     },
-    'tradebook_service.py': {
-        'function': 'get_tradebook_with_auth',
-        'sandbox_call': 'sandbox_get_tradebook',
-        'check_location': 'if get_analyze_mode():'
+    "tradebook_service.py": {
+        "function": "get_tradebook_with_auth",
+        "sandbox_call": "sandbox_get_tradebook",
+        "check_location": "if get_analyze_mode():",
     },
-    'funds_service.py': {
-        'function': 'get_funds_with_auth',
-        'sandbox_call': 'sandbox_get_funds',
-        'check_location': 'if get_analyze_mode():'
+    "funds_service.py": {
+        "function": "get_funds_with_auth",
+        "sandbox_call": "sandbox_get_funds",
+        "check_location": "if get_analyze_mode():",
     },
-    'close_position_service.py': {
-        'function': 'close_position_with_auth',
-        'sandbox_call': 'sandbox_close_position',
-        'check_location': 'if get_analyze_mode():'
+    "close_position_service.py": {
+        "function": "close_position_with_auth",
+        "sandbox_call": "sandbox_close_position",
+        "check_location": "if get_analyze_mode():",
     },
 }
 
@@ -53,9 +53,10 @@ SANDBOX_INTEGRATION_TEMPLATE = """
         return {sandbox_call}(api_key, original_data)
 """
 
+
 def integrate_service(service_file, config):
     """Add sandbox integration to a service file"""
-    filepath = os.path.join('services', service_file)
+    filepath = os.path.join("services", service_file)
 
     if not os.path.exists(filepath):
         print(f"⚠️  Service file not found: {filepath}")
@@ -63,24 +64,24 @@ def integrate_service(service_file, config):
 
     print(f"Processing {service_file}...")
 
-    with open(filepath, 'r') as f:
+    with open(filepath) as f:
         content = f.read()
 
     # Check if already integrated
-    if 'sandbox_service import' in content:
+    if "sandbox_service import" in content:
         print(f"✓ Already integrated: {service_file}")
         return True
 
     # Find the check location and insert sandbox routing
-    check_str = config['check_location']
+    check_str = config["check_location"]
 
     if check_str in content:
         print(f"✗ Service already has analyzer check but needs sandbox routing: {service_file}")
-        print(f"  Manual integration required - check contains logic that needs preservation")
+        print("  Manual integration required - check contains logic that needs preservation")
         return False
 
     # Find the function definition
-    function_name = config['function']
+    function_name = config["function"]
     func_pattern = f"def {function_name}"
 
     if func_pattern not in content:
@@ -93,55 +94,52 @@ def integrate_service(service_file, config):
 
     return True
 
+
 def main():
     """Main integration script"""
-    print("="*60)
+    print("=" * 60)
     print("Sandbox Service Integration Script")
-    print("="*60)
+    print("=" * 60)
     print()
 
-    services_dir = 'services'
+    services_dir = "services"
     if not os.path.exists(services_dir):
         print(f"Error: {services_dir} directory not found")
         print(f"Current directory: {os.getcwd()}")
         sys.exit(1)
 
-    results = {
-        'integrated': [],
-        'already_done': [],
-        'needs_manual': [],
-        'not_found': []
-    }
+    results = {"integrated": [], "already_done": [], "needs_manual": [], "not_found": []}
 
     for service_file, config in SERVICE_INTEGRATIONS.items():
         status = integrate_service(service_file, config)
 
         if status is True:
-            results['already_done'].append(service_file)
+            results["already_done"].append(service_file)
         elif status is False:
-            results['needs_manual'].append(service_file)
+            results["needs_manual"].append(service_file)
         else:
-            results['not_found'].append(service_file)
+            results["not_found"].append(service_file)
 
     print()
-    print("="*60)
+    print("=" * 60)
     print("Integration Summary")
-    print("="*60)
+    print("=" * 60)
     print(f"✓ Already integrated: {len(results['already_done'])}")
     print(f"⚠ Needs manual integration: {len(results['needs_manual'])}")
     print(f"✗ Not found: {len(results['not_found'])}")
 
-    if results['needs_manual']:
+    if results["needs_manual"]:
         print()
         print("Services requiring manual integration:")
-        for service in results['needs_manual']:
+        for service in results["needs_manual"]:
             print(f"  - {service}")
 
-    if results['not_found']:
+    if results["not_found"]:
         print()
         print("Services not found:")
-        for service in results['not_found']:
+        for service in results["not_found"]:
             print(f"  - {service}")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

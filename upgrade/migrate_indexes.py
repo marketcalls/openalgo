@@ -12,14 +12,16 @@ Usage:
 
 import os
 import sys
+
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import OperationalError
 
 # Set UTF-8 encoding for output to handle Unicode characters on Windows
-if sys.platform == 'win32':
+if sys.platform == "win32":
     import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,27 +30,30 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+
 def get_project_root():
     """Get project root directory"""
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-def get_database_url(env_var='DATABASE_URL'):
+
+def get_database_url(env_var="DATABASE_URL"):
     """Get database URL from environment"""
     from dotenv import load_dotenv
 
     project_root = get_project_root()
-    load_dotenv(os.path.join(project_root, '.env'))
+    load_dotenv(os.path.join(project_root, ".env"))
 
     database_url = os.getenv(env_var)
 
     # Convert relative SQLite paths to absolute paths
-    if database_url and database_url.startswith('sqlite:///'):
-        relative_path = database_url.replace('sqlite:///', '', 1)
+    if database_url and database_url.startswith("sqlite:///"):
+        relative_path = database_url.replace("sqlite:///", "", 1)
         if not os.path.isabs(relative_path):
             absolute_path = os.path.join(project_root, relative_path)
-            database_url = f'sqlite:///{absolute_path}'
+            database_url = f"sqlite:///{absolute_path}"
 
     return database_url
+
 
 def check_index_exists(engine, table_name, index_name):
     """Check if an index exists on a table"""
@@ -57,15 +62,17 @@ def check_index_exists(engine, table_name, index_name):
         if table_name not in inspector.get_table_names():
             return False
         indexes = inspector.get_indexes(table_name)
-        index_names = [idx['name'] for idx in indexes]
+        index_names = [idx["name"] for idx in indexes]
         return index_name in index_names
     except Exception:
         return False
+
 
 def check_table_exists(engine, table_name):
     """Check if a table exists"""
     inspector = inspect(engine)
     return table_name in inspector.get_table_names()
+
 
 def create_index(engine, table_name, index_name, columns, description=""):
     """Create an index if it doesn't exist"""
@@ -81,7 +88,7 @@ def create_index(engine, table_name, index_name, columns, description=""):
             return True
 
         # Create the index
-        column_list = ', '.join(columns) if isinstance(columns, list) else columns
+        column_list = ", ".join(columns) if isinstance(columns, list) else columns
         sql = f"CREATE INDEX {index_name} ON {table_name}({column_list})"
 
         with engine.connect() as conn:
@@ -96,6 +103,7 @@ def create_index(engine, table_name, index_name, columns, description=""):
         logger.error(f"  [X] Error creating {index_name}: {e}")
         return False
 
+
 def migrate_symtoken_indexes(engine):
     """Add indexes to symtoken table for FNO Discovery performance"""
     logger.info("")
@@ -104,20 +112,41 @@ def migrate_symtoken_indexes(engine):
 
     success = True
 
-    if check_table_exists(engine, 'symtoken'):
+    if check_table_exists(engine, "symtoken"):
         # Single column indexes for common filters
-        success &= create_index(engine, 'symtoken', 'idx_symtoken_name', 'name',
-                               'speeds up underlying lookups (FNO Discovery)')
-        success &= create_index(engine, 'symtoken', 'idx_symtoken_expiry', 'expiry',
-                               'speeds up expiry date lookups')
-        success &= create_index(engine, 'symtoken', 'idx_symtoken_instrumenttype', 'instrumenttype',
-                               'speeds up instrument type filtering')
+        success &= create_index(
+            engine,
+            "symtoken",
+            "idx_symtoken_name",
+            "name",
+            "speeds up underlying lookups (FNO Discovery)",
+        )
+        success &= create_index(
+            engine, "symtoken", "idx_symtoken_expiry", "expiry", "speeds up expiry date lookups"
+        )
+        success &= create_index(
+            engine,
+            "symtoken",
+            "idx_symtoken_instrumenttype",
+            "instrumenttype",
+            "speeds up instrument type filtering",
+        )
 
         # Composite indexes for FNO chain queries
-        success &= create_index(engine, 'symtoken', 'idx_symtoken_exchange_name', ['exchange', 'name'],
-                               'composite for FNO underlying + exchange')
-        success &= create_index(engine, 'symtoken', 'idx_symtoken_exchange_name_expiry', ['exchange', 'name', 'expiry'],
-                               'composite for FNO chain with expiry filter')
+        success &= create_index(
+            engine,
+            "symtoken",
+            "idx_symtoken_exchange_name",
+            ["exchange", "name"],
+            "composite for FNO underlying + exchange",
+        )
+        success &= create_index(
+            engine,
+            "symtoken",
+            "idx_symtoken_exchange_name_expiry",
+            ["exchange", "name", "expiry"],
+            "composite for FNO chain with expiry filter",
+        )
     else:
         logger.info("  - Skipping symtoken indexes: table not found")
 
@@ -133,37 +162,66 @@ def migrate_main_db_indexes(engine):
     success = True
 
     # Auth table indexes
-    if check_table_exists(engine, 'auth'):
-        success &= create_index(engine, 'auth', 'idx_auth_broker', 'broker',
-                               'speeds up broker lookups')
-        success &= create_index(engine, 'auth', 'idx_auth_user_id', 'user_id',
-                               'speeds up user_id lookups')
-        success &= create_index(engine, 'auth', 'idx_auth_is_revoked', 'is_revoked',
-                               'speeds up token validity checks')
+    if check_table_exists(engine, "auth"):
+        success &= create_index(
+            engine, "auth", "idx_auth_broker", "broker", "speeds up broker lookups"
+        )
+        success &= create_index(
+            engine, "auth", "idx_auth_user_id", "user_id", "speeds up user_id lookups"
+        )
+        success &= create_index(
+            engine, "auth", "idx_auth_is_revoked", "is_revoked", "speeds up token validity checks"
+        )
     else:
         logger.info("  - Skipping auth indexes: table not found")
 
     # ApiKeys table indexes
-    if check_table_exists(engine, 'api_keys'):
-        success &= create_index(engine, 'api_keys', 'idx_api_keys_order_mode', 'order_mode',
-                               'speeds up order mode filtering')
-        success &= create_index(engine, 'api_keys', 'idx_api_keys_created_at', 'created_at',
-                               'speeds up time-based queries')
+    if check_table_exists(engine, "api_keys"):
+        success &= create_index(
+            engine,
+            "api_keys",
+            "idx_api_keys_order_mode",
+            "order_mode",
+            "speeds up order mode filtering",
+        )
+        success &= create_index(
+            engine,
+            "api_keys",
+            "idx_api_keys_created_at",
+            "created_at",
+            "speeds up time-based queries",
+        )
     else:
         logger.info("  - Skipping api_keys indexes: table not found")
 
     # AnalyzerLog table indexes
-    if check_table_exists(engine, 'analyzer_logs'):
-        success &= create_index(engine, 'analyzer_logs', 'idx_analyzer_api_type', 'api_type',
-                               'speeds up API type filtering')
-        success &= create_index(engine, 'analyzer_logs', 'idx_analyzer_created_at', 'created_at',
-                               'speeds up time-based queries')
-        success &= create_index(engine, 'analyzer_logs', 'idx_analyzer_type_time', ['api_type', 'created_at'],
-                               'composite for API type + time range')
+    if check_table_exists(engine, "analyzer_logs"):
+        success &= create_index(
+            engine,
+            "analyzer_logs",
+            "idx_analyzer_api_type",
+            "api_type",
+            "speeds up API type filtering",
+        )
+        success &= create_index(
+            engine,
+            "analyzer_logs",
+            "idx_analyzer_created_at",
+            "created_at",
+            "speeds up time-based queries",
+        )
+        success &= create_index(
+            engine,
+            "analyzer_logs",
+            "idx_analyzer_type_time",
+            ["api_type", "created_at"],
+            "composite for API type + time range",
+        )
     else:
         logger.info("  - Skipping analyzer_logs indexes: table not found")
 
     return success
+
 
 def migrate_logs_db_indexes(engine):
     """Add indexes to logs database tables (traffic_logs, error_404_tracker, invalid_api_key_tracker)"""
@@ -174,43 +232,85 @@ def migrate_logs_db_indexes(engine):
     success = True
 
     # TrafficLog table indexes
-    if check_table_exists(engine, 'traffic_logs'):
-        success &= create_index(engine, 'traffic_logs', 'idx_traffic_timestamp', 'timestamp',
-                               'speeds up recent logs retrieval')
-        success &= create_index(engine, 'traffic_logs', 'idx_traffic_client_ip', 'client_ip',
-                               'speeds up IP-based filtering')
-        success &= create_index(engine, 'traffic_logs', 'idx_traffic_status_code', 'status_code',
-                               'speeds up error rate calculations')
-        success &= create_index(engine, 'traffic_logs', 'idx_traffic_user_id', 'user_id',
-                               'speeds up per-user analysis')
-        success &= create_index(engine, 'traffic_logs', 'idx_traffic_ip_timestamp', ['client_ip', 'timestamp'],
-                               'composite for IP + time range')
+    if check_table_exists(engine, "traffic_logs"):
+        success &= create_index(
+            engine,
+            "traffic_logs",
+            "idx_traffic_timestamp",
+            "timestamp",
+            "speeds up recent logs retrieval",
+        )
+        success &= create_index(
+            engine,
+            "traffic_logs",
+            "idx_traffic_client_ip",
+            "client_ip",
+            "speeds up IP-based filtering",
+        )
+        success &= create_index(
+            engine,
+            "traffic_logs",
+            "idx_traffic_status_code",
+            "status_code",
+            "speeds up error rate calculations",
+        )
+        success &= create_index(
+            engine, "traffic_logs", "idx_traffic_user_id", "user_id", "speeds up per-user analysis"
+        )
+        success &= create_index(
+            engine,
+            "traffic_logs",
+            "idx_traffic_ip_timestamp",
+            ["client_ip", "timestamp"],
+            "composite for IP + time range",
+        )
     else:
         logger.info("  - Skipping traffic_logs indexes: table not found")
 
     # Error404Tracker table indexes
-    if check_table_exists(engine, 'error_404_tracker'):
-        success &= create_index(engine, 'error_404_tracker', 'idx_404_error_count', 'error_count',
-                               'speeds up suspicious IP detection')
-        success &= create_index(engine, 'error_404_tracker', 'idx_404_first_error_at', 'first_error_at',
-                               'speeds up old entry cleanup')
+    if check_table_exists(engine, "error_404_tracker"):
+        success &= create_index(
+            engine,
+            "error_404_tracker",
+            "idx_404_error_count",
+            "error_count",
+            "speeds up suspicious IP detection",
+        )
+        success &= create_index(
+            engine,
+            "error_404_tracker",
+            "idx_404_first_error_at",
+            "first_error_at",
+            "speeds up old entry cleanup",
+        )
     else:
         logger.info("  - Skipping error_404_tracker indexes: table not found")
 
     # InvalidAPIKeyTracker table indexes
-    if check_table_exists(engine, 'invalid_api_key_tracker'):
-        success &= create_index(engine, 'invalid_api_key_tracker', 'idx_api_tracker_attempt_count', 'attempt_count',
-                               'speeds up suspicious user detection')
-        success &= create_index(engine, 'invalid_api_key_tracker', 'idx_api_tracker_first_attempt_at', 'first_attempt_at',
-                               'speeds up old entry cleanup')
+    if check_table_exists(engine, "invalid_api_key_tracker"):
+        success &= create_index(
+            engine,
+            "invalid_api_key_tracker",
+            "idx_api_tracker_attempt_count",
+            "attempt_count",
+            "speeds up suspicious user detection",
+        )
+        success &= create_index(
+            engine,
+            "invalid_api_key_tracker",
+            "idx_api_tracker_first_attempt_at",
+            "first_attempt_at",
+            "speeds up old entry cleanup",
+        )
     else:
         logger.info("  - Skipping invalid_api_key_tracker indexes: table not found")
 
     return success
 
+
 def verify_indexes(engine, db_name, expected_indexes):
     """Verify that indexes were created"""
-    logger.info(f"")
+    logger.info("")
     logger.info(f"Verifying {db_name} indexes...")
 
     all_found = True
@@ -225,6 +325,7 @@ def verify_indexes(engine, db_name, expected_indexes):
 
     return all_found
 
+
 def main():
     """Main migration function"""
     print("=" * 60)
@@ -237,7 +338,7 @@ def main():
     # ============================================
     # MAIN DATABASE (auth, api_keys, analyzer_logs, symtoken)
     # ============================================
-    database_url = get_database_url('DATABASE_URL')
+    database_url = get_database_url("DATABASE_URL")
     if database_url:
         logger.info(f"Main DB: {database_url}")
         try:
@@ -253,19 +354,19 @@ def main():
 
             # Verify main DB indexes
             main_indexes = [
-                ('auth', 'idx_auth_broker'),
-                ('auth', 'idx_auth_user_id'),
-                ('auth', 'idx_auth_is_revoked'),
-                ('api_keys', 'idx_api_keys_order_mode'),
-                ('api_keys', 'idx_api_keys_created_at'),
-                ('analyzer_logs', 'idx_analyzer_api_type'),
-                ('analyzer_logs', 'idx_analyzer_created_at'),
-                ('analyzer_logs', 'idx_analyzer_type_time'),
-                ('symtoken', 'idx_symtoken_name'),
-                ('symtoken', 'idx_symtoken_expiry'),
-                ('symtoken', 'idx_symtoken_instrumenttype'),
-                ('symtoken', 'idx_symtoken_exchange_name'),
-                ('symtoken', 'idx_symtoken_exchange_name_expiry'),
+                ("auth", "idx_auth_broker"),
+                ("auth", "idx_auth_user_id"),
+                ("auth", "idx_auth_is_revoked"),
+                ("api_keys", "idx_api_keys_order_mode"),
+                ("api_keys", "idx_api_keys_created_at"),
+                ("analyzer_logs", "idx_analyzer_api_type"),
+                ("analyzer_logs", "idx_analyzer_created_at"),
+                ("analyzer_logs", "idx_analyzer_type_time"),
+                ("symtoken", "idx_symtoken_name"),
+                ("symtoken", "idx_symtoken_expiry"),
+                ("symtoken", "idx_symtoken_instrumenttype"),
+                ("symtoken", "idx_symtoken_exchange_name"),
+                ("symtoken", "idx_symtoken_exchange_name_expiry"),
             ]
             verify_indexes(engine, "Main DB", main_indexes)
 
@@ -278,7 +379,7 @@ def main():
     # ============================================
     # LOGS DATABASE (traffic_logs, error trackers)
     # ============================================
-    logs_url = get_database_url('LOGS_DATABASE_URL')
+    logs_url = get_database_url("LOGS_DATABASE_URL")
     if not logs_url:
         # Default fallback
         logs_url = f"sqlite:///{os.path.join(get_project_root(), 'db', 'logs.db')}"
@@ -295,15 +396,15 @@ def main():
 
         # Verify logs DB indexes
         logs_indexes = [
-            ('traffic_logs', 'idx_traffic_timestamp'),
-            ('traffic_logs', 'idx_traffic_client_ip'),
-            ('traffic_logs', 'idx_traffic_status_code'),
-            ('traffic_logs', 'idx_traffic_user_id'),
-            ('traffic_logs', 'idx_traffic_ip_timestamp'),
-            ('error_404_tracker', 'idx_404_error_count'),
-            ('error_404_tracker', 'idx_404_first_error_at'),
-            ('invalid_api_key_tracker', 'idx_api_tracker_attempt_count'),
-            ('invalid_api_key_tracker', 'idx_api_tracker_first_attempt_at'),
+            ("traffic_logs", "idx_traffic_timestamp"),
+            ("traffic_logs", "idx_traffic_client_ip"),
+            ("traffic_logs", "idx_traffic_status_code"),
+            ("traffic_logs", "idx_traffic_user_id"),
+            ("traffic_logs", "idx_traffic_ip_timestamp"),
+            ("error_404_tracker", "idx_404_error_count"),
+            ("error_404_tracker", "idx_404_first_error_at"),
+            ("invalid_api_key_tracker", "idx_api_tracker_attempt_count"),
+            ("invalid_api_key_tracker", "idx_api_tracker_first_attempt_at"),
         ]
         verify_indexes(logs_engine, "Logs DB", logs_indexes)
 
@@ -325,10 +426,14 @@ def main():
         print("    - auth: broker, user_id, is_revoked")
         print("    - api_keys: order_mode, created_at")
         print("    - analyzer_logs: api_type, created_at, (api_type+created_at)")
-        print("    - symtoken: name, expiry, instrumenttype, (exchange+name), (exchange+name+expiry)")
+        print(
+            "    - symtoken: name, expiry, instrumenttype, (exchange+name), (exchange+name+expiry)"
+        )
         print()
         print("  Logs DB:")
-        print("    - traffic_logs: timestamp, client_ip, status_code, user_id, (client_ip+timestamp)")
+        print(
+            "    - traffic_logs: timestamp, client_ip, status_code, user_id, (client_ip+timestamp)"
+        )
         print("    - error_404_tracker: error_count, first_error_at")
         print("    - invalid_api_key_tracker: attempt_count, first_attempt_at")
         print()
@@ -346,6 +451,7 @@ def main():
         print()
 
     return success
+
 
 if __name__ == "__main__":
     success = main()

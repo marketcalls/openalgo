@@ -19,20 +19,24 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.pool import NullPool
 
+
 def get_database_url():
     """Get database URL from environment"""
     from dotenv import load_dotenv
+
     load_dotenv()
-    return os.getenv('DATABASE_URL', 'sqlite:///db/openalgo.db')
+    return os.getenv("DATABASE_URL", "sqlite:///db/openalgo.db")
+
 
 def table_exists(engine, table_name):
     """Check if a table exists in the database"""
     inspector = inspect(engine)
     return table_name in inspector.get_table_names()
 
+
 def create_flow_workflows_table(engine):
     """Create flow_workflows table"""
-    if table_exists(engine, 'flow_workflows'):
+    if table_exists(engine, "flow_workflows"):
         print("  [SKIP] flow_workflows table already exists")
         return True
 
@@ -40,7 +44,7 @@ def create_flow_workflows_table(engine):
 
     # Determine SQL based on database type
     db_url = str(engine.url)
-    if 'sqlite' in db_url:
+    if "sqlite" in db_url:
         sql = """
         CREATE TABLE flow_workflows (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,9 +89,10 @@ def create_flow_workflows_table(engine):
     print("  [OK] flow_workflows table created")
     return True
 
+
 def create_flow_workflow_executions_table(engine):
     """Create flow_workflow_executions table"""
-    if table_exists(engine, 'flow_workflow_executions'):
+    if table_exists(engine, "flow_workflow_executions"):
         print("  [SKIP] flow_workflow_executions table already exists")
         return True
 
@@ -95,7 +100,7 @@ def create_flow_workflow_executions_table(engine):
 
     # Determine SQL based on database type
     db_url = str(engine.url)
-    if 'sqlite' in db_url:
+    if "sqlite" in db_url:
         sql = """
         CREATE TABLE flow_workflow_executions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -130,6 +135,7 @@ def create_flow_workflow_executions_table(engine):
     print("  [OK] flow_workflow_executions table created")
     return True
 
+
 def create_indexes(engine):
     """Create indexes for Flow tables"""
     indexes = [
@@ -147,7 +153,7 @@ def create_indexes(engine):
         try:
             # Check if index already exists
             inspector = inspect(engine)
-            existing_indexes = [idx['name'] for idx in inspector.get_indexes(table_name)]
+            existing_indexes = [idx["name"] for idx in inspector.get_indexes(table_name)]
 
             if index_name in existing_indexes:
                 print(f"  [SKIP] Index {index_name} already exists")
@@ -165,6 +171,7 @@ def create_indexes(engine):
 
     return True
 
+
 def main():
     """Run the migration"""
     print()
@@ -177,7 +184,7 @@ def main():
         print(f"Database: {db_url.split('://')[0]}://...")
 
         # Create engine
-        if 'sqlite' in db_url:
+        if "sqlite" in db_url:
             engine = create_engine(db_url, poolclass=NullPool)
         else:
             engine = create_engine(db_url)
@@ -199,8 +206,10 @@ def main():
     except Exception as e:
         print(f"\n[ERROR] Migration failed: {e}")
         import traceback
+
         traceback.print_exc()
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

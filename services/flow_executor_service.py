@@ -4,19 +4,22 @@ Flow Workflow Executor Service
 Executes workflow nodes using internal OpenAlgo services (synchronous Flask version)
 """
 
-from datetime import datetime, time
-from typing import Optional, Dict, Any, List, Tuple
+import json
 import logging
 import re
-import json
-import time as time_module
 import threading
+import time as time_module
+from datetime import datetime, time
+from typing import Any, Dict, List, Optional, Tuple
 
 from database.flow_db import (
-    get_workflow, create_execution, update_execution_status,
-    add_execution_log, get_execution
+    add_execution_log,
+    create_execution,
+    get_execution,
+    get_workflow,
+    update_execution_status,
 )
-from services.flow_openalgo_client import get_flow_client, FlowOpenAlgoClient
+from services.flow_openalgo_client import FlowOpenAlgoClient, get_flow_client
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +28,7 @@ MAX_NODE_DEPTH = 100
 MAX_NODE_VISITS = 500
 
 # Execution locks to prevent concurrent execution
-_workflow_locks: Dict[int, threading.Lock] = {}
+_workflow_locks: dict[int, threading.Lock] = {}
 _locks_mutex = threading.Lock()
 
 
@@ -37,7 +40,9 @@ def get_workflow_lock(workflow_id: int) -> threading.Lock:
         return _workflow_locks[workflow_id]
 
 
-def parse_time_string(time_str: str, default_hour: int = 9, default_minute: int = 15) -> Tuple[int, int, int]:
+def parse_time_string(
+    time_str: str, default_hour: int = 9, default_minute: int = 15
+) -> tuple[int, int, int]:
     """Parse a time string in HH:MM or HH:MM:SS format"""
     if not time_str or not isinstance(time_str, str):
         return (default_hour, default_minute, 0)
@@ -64,8 +69,8 @@ class WorkflowContext:
     """Context for storing variables during workflow execution"""
 
     def __init__(self):
-        self.variables: Dict[str, Any] = {}
-        self.condition_results: Dict[str, bool] = {}
+        self.variables: dict[str, Any] = {}
+        self.condition_results: dict[str, bool] = {}
 
     def set_variable(self, name: str, value: Any):
         """Store a variable"""
@@ -79,11 +84,11 @@ class WorkflowContext:
         """Store a condition result for a node"""
         self.condition_results[node_id] = result
 
-    def get_condition_result(self, node_id: str) -> Optional[bool]:
+    def get_condition_result(self, node_id: str) -> bool | None:
         """Get the condition result for a node"""
         return self.condition_results.get(node_id)
 
-    def _get_builtin_variable(self, name: str) -> Optional[str]:
+    def _get_builtin_variable(self, name: str) -> str | None:
         """Get built-in system variables"""
         now = datetime.now()
         builtins = {
@@ -142,11 +147,9 @@ class NodeExecutor:
 
     def log(self, message: str, level: str = "info"):
         """Add log entry"""
-        self.logs.append({
-            "time": datetime.utcnow().isoformat(),
-            "message": message,
-            "level": level
-        })
+        self.logs.append(
+            {"time": datetime.utcnow().isoformat(), "message": message, "level": level}
+        )
         if level == "error":
             logger.error(message)
         else:
@@ -201,10 +204,18 @@ class NodeExecutor:
 
         self.log(f"Placing order: {symbol} {action} qty={quantity}")
         result = self.client.place_order(
-            symbol=symbol, exchange=exchange, action=action, quantity=quantity,
-            price_type=price_type, product_type=product, price=price, trigger_price=trigger_price
+            symbol=symbol,
+            exchange=exchange,
+            action=action,
+            quantity=quantity,
+            price_type=price_type,
+            product_type=product,
+            price=price,
+            trigger_price=trigger_price,
         )
-        self.log(f"Order result: {result}", "info" if result.get("status") == "success" else "error")
+        self.log(
+            f"Order result: {result}", "info" if result.get("status") == "success" else "error"
+        )
         self.store_output(node_data, result)
         return result
 
@@ -220,10 +231,18 @@ class NodeExecutor:
 
         self.log(f"Placing smart order: {symbol} {action}")
         result = self.client.place_smart_order(
-            symbol=symbol, exchange=exchange, action=action, quantity=quantity,
-            position_size=position_size, price_type=price_type, product_type=product
+            symbol=symbol,
+            exchange=exchange,
+            action=action,
+            quantity=quantity,
+            position_size=position_size,
+            price_type=price_type,
+            product_type=product,
         )
-        self.log(f"Smart order result: {result}", "info" if result.get("status") == "success" else "error")
+        self.log(
+            f"Smart order result: {result}",
+            "info" if result.get("status") == "success" else "error",
+        )
         self.store_output(node_data, result)
         return result
 
@@ -251,9 +270,14 @@ class NodeExecutor:
 
         # Get lot size (updated Jan 2026)
         lot_sizes = {
-            "NIFTY": 65, "BANKNIFTY": 30, "FINNIFTY": 65,
-            "MIDCPNIFTY": 120, "NIFTYNXT50": 25,
-            "SENSEX": 20, "BANKEX": 30, "SENSEX50": 25
+            "NIFTY": 65,
+            "BANKNIFTY": 30,
+            "FINNIFTY": 65,
+            "MIDCPNIFTY": 120,
+            "NIFTYNXT50": 25,
+            "SENSEX": 20,
+            "BANKEX": 30,
+            "SENSEX50": 25,
         }
         lot_size = lot_sizes.get(underlying, 75)
         total_quantity = quantity * lot_size
@@ -261,7 +285,10 @@ class NodeExecutor:
         # Resolve expiry date from expiry type
         expiry_date = self._resolve_expiry_date(underlying, fo_exchange, expiry_type)
         if not expiry_date:
-            error_result = {"status": "error", "message": f"Could not resolve expiry for {expiry_type}"}
+            error_result = {
+                "status": "error",
+                "message": f"Could not resolve expiry for {expiry_type}",
+            }
             self.log(f"Options order failed: {error_result['message']}", "error")
             return error_result
 
@@ -279,7 +306,10 @@ class NodeExecutor:
             product=product,
             splitsize=split_size,
         )
-        self.log(f"Options order result: {result}", "info" if result.get("status") == "success" else "error")
+        self.log(
+            f"Options order result: {result}",
+            "info" if result.get("status") == "success" else "error",
+        )
         self.store_output(node_data, result)
         return result
 
@@ -291,7 +321,9 @@ class NodeExecutor:
         underlying = self.get_str(node_data, "underlying", "NIFTY")
         expiry_type = self.get_str(node_data, "expiryType", "current_week")
         # Frontend uses "strategy" field, not "strategyType"
-        strategy_type = self.get_str(node_data, "strategy", "") or self.get_str(node_data, "strategyType", "custom")
+        strategy_type = self.get_str(node_data, "strategy", "") or self.get_str(
+            node_data, "strategyType", "custom"
+        )
         action = self.get_str(node_data, "action", "SELL")  # BUY or SELL for the strategy direction
         quantity_lots = self.get_int(node_data, "quantity", 1)  # Number of lots per leg
         product = self.get_str(node_data, "product", "MIS")
@@ -300,7 +332,9 @@ class NodeExecutor:
         # Check for custom legs data
         legs_data = node_data.get("legs", []) or node_data.get("orderLegs", [])
 
-        self.log(f"Strategy: {strategy_type}, Action: {action}, Quantity: {quantity_lots} lots, Product: {product}")
+        self.log(
+            f"Strategy: {strategy_type}, Action: {action}, Quantity: {quantity_lots} lots, Product: {product}"
+        )
 
         # Get the underlying exchange for index
         if underlying in ["SENSEX", "BANKEX", "SENSEX50"]:
@@ -312,9 +346,14 @@ class NodeExecutor:
 
         # Get lot size for quantity calculation
         lot_sizes = {
-            "NIFTY": 65, "BANKNIFTY": 30, "FINNIFTY": 65,
-            "MIDCPNIFTY": 120, "NIFTYNXT50": 25,
-            "SENSEX": 20, "BANKEX": 30, "SENSEX50": 25
+            "NIFTY": 65,
+            "BANKNIFTY": 30,
+            "FINNIFTY": 65,
+            "MIDCPNIFTY": 120,
+            "NIFTYNXT50": 25,
+            "SENSEX": 20,
+            "BANKEX": 30,
+            "SENSEX50": 25,
         }
         lot_size = lot_sizes.get(underlying, 65)
         total_quantity = quantity_lots * lot_size
@@ -322,7 +361,10 @@ class NodeExecutor:
         # Resolve expiry date
         expiry_date = self._resolve_expiry_date(underlying, fo_exchange, expiry_type)
         if not expiry_date:
-            error_result = {"status": "error", "message": f"Could not resolve expiry for {expiry_type}"}
+            error_result = {
+                "status": "error",
+                "message": f"Could not resolve expiry for {expiry_type}",
+            }
             self.log(f"Options multi-order failed: {error_result['message']}", "error")
             return error_result
 
@@ -347,16 +389,23 @@ class NodeExecutor:
                 legs.append(leg_entry)
         else:
             # Generate legs from predefined strategy type
-            legs = self._generate_strategy_legs(strategy_type, action, total_quantity, product, strangle_width)
+            legs = self._generate_strategy_legs(
+                strategy_type, action, total_quantity, product, strangle_width
+            )
 
         if not legs:
-            error_result = {"status": "error", "message": f"No legs generated for strategy: {strategy_type}"}
+            error_result = {
+                "status": "error",
+                "message": f"No legs generated for strategy: {strategy_type}",
+            }
             self.log(f"Options multi-order failed: {error_result['message']}", "error")
             return error_result
 
         self.log(f"Placing options multi-order: {underlying} {strategy_type} with {len(legs)} legs")
         for i, leg in enumerate(legs):
-            self.log(f"  Leg {i+1}: {leg['offset']} {leg['option_type']} {leg['action']} qty={leg['quantity']}")
+            self.log(
+                f"  Leg {i + 1}: {leg['offset']} {leg['option_type']} {leg['action']} qty={leg['quantity']}"
+            )
 
         result = self.client.options_multi_order(
             underlying=underlying,
@@ -364,11 +413,21 @@ class NodeExecutor:
             expiry_date=expiry_date,
             legs=legs,
         )
-        self.log(f"Options multi-order result: {result}", "info" if result.get("status") == "success" else "error")
+        self.log(
+            f"Options multi-order result: {result}",
+            "info" if result.get("status") == "success" else "error",
+        )
         self.store_output(node_data, result)
         return result
 
-    def _generate_strategy_legs(self, strategy_type: str, action: str, quantity: int, product: str, strangle_width: str = "OTM2") -> List[dict]:
+    def _generate_strategy_legs(
+        self,
+        strategy_type: str,
+        action: str,
+        quantity: int,
+        product: str,
+        strangle_width: str = "OTM2",
+    ) -> list[dict]:
         """Generate legs for predefined option strategies"""
         legs = []
 
@@ -423,10 +482,12 @@ class NodeExecutor:
 
         return legs
 
-    def _resolve_expiry_date(self, symbol: str, exchange: str, expiry_type: str) -> Optional[str]:
+    def _resolve_expiry_date(self, symbol: str, exchange: str, expiry_type: str) -> str | None:
         """Resolve expiry type to actual expiry date"""
         try:
-            response = self.client.get_expiry(symbol=symbol, exchange=exchange, instrumenttype="options")
+            response = self.client.get_expiry(
+                symbol=symbol, exchange=exchange, instrumenttype="options"
+            )
             if response.get("status") != "success":
                 self.log(f"Failed to fetch expiry: {response}", "error")
                 return None
@@ -437,7 +498,7 @@ class NodeExecutor:
                 return None
 
             # Parse and sort expiry dates
-            def parse_expiry(exp_str: str) -> Optional[datetime]:
+            def parse_expiry(exp_str: str) -> datetime | None:
                 """Parse expiry date string"""
                 if not exp_str or not isinstance(exp_str, str):
                     return None
@@ -516,15 +577,21 @@ class NodeExecutor:
         exchange = self.get_str(node_data, "exchange", "NSE")
         action = self.get_str(node_data, "action", "BUY")
         # Support both newQuantity (frontend) and quantity (legacy) field names
-        quantity = self.get_int(node_data, "newQuantity", 0) or self.get_int(node_data, "quantity", 1)
+        quantity = self.get_int(node_data, "newQuantity", 0) or self.get_int(
+            node_data, "quantity", 1
+        )
         price_type = self.get_str(node_data, "priceType", "LIMIT")
         product = self.get_str(node_data, "product", "MIS")
         # Support both newPrice (frontend) and price (legacy) field names
         price = self.get_float(node_data, "newPrice", 0) or self.get_float(node_data, "price", 0)
         # Support both newTriggerPrice (frontend) and triggerPrice (legacy) field names
-        trigger_price = self.get_float(node_data, "newTriggerPrice", 0) or self.get_float(node_data, "triggerPrice", 0)
+        trigger_price = self.get_float(node_data, "newTriggerPrice", 0) or self.get_float(
+            node_data, "triggerPrice", 0
+        )
 
-        self.log(f"Modifying order: {order_id} - {symbol} {action} qty={quantity} price={price} trigger={trigger_price}")
+        self.log(
+            f"Modifying order: {order_id} - {symbol} {action} qty={quantity} price={price} trigger={trigger_price}"
+        )
         result = self.client.modify_order(
             order_id=order_id,
             symbol=symbol,
@@ -534,9 +601,12 @@ class NodeExecutor:
             price_type=price_type,
             product_type=product,
             price=price,
-            trigger_price=trigger_price
+            trigger_price=trigger_price,
         )
-        self.log(f"Modify order result: {result}", "info" if result.get("status") == "success" else "error")
+        self.log(
+            f"Modify order result: {result}",
+            "info" if result.get("status") == "success" else "error",
+        )
         self.store_output(node_data, result)
         return result
 
@@ -545,21 +615,28 @@ class NodeExecutor:
         order_id = self.context.interpolate(str(node_data.get("orderId", "")))
         self.log(f"Cancelling order: {order_id}")
         result = self.client.cancel_order(order_id=order_id)
-        self.log(f"Cancel result: {result}", "info" if result.get("status") == "success" else "error")
+        self.log(
+            f"Cancel result: {result}", "info" if result.get("status") == "success" else "error"
+        )
         return result
 
     def execute_cancel_all_orders(self, node_data: dict) -> dict:
         """Execute Cancel All Orders node"""
         self.log("Cancelling all orders")
         result = self.client.cancel_all_orders()
-        self.log(f"Cancel all result: {result}", "info" if result.get("status") == "success" else "error")
+        self.log(
+            f"Cancel all result: {result}", "info" if result.get("status") == "success" else "error"
+        )
         return result
 
     def execute_close_positions(self, node_data: dict) -> dict:
         """Execute Close All Positions node - squares off all open positions"""
         self.log("Closing all positions")
         result = self.client.close_all_positions()
-        self.log(f"Close all positions result: {result}", "info" if result.get("status") == "success" else "error")
+        self.log(
+            f"Close all positions result: {result}",
+            "info" if result.get("status") == "success" else "error",
+        )
         return result
 
     def execute_basket_order(self, node_data: dict) -> dict:
@@ -572,11 +649,11 @@ class NodeExecutor:
         orders = []
         if isinstance(orders_raw, str):
             # Parse orders from CSV-like format: SYMBOL,EXCHANGE,ACTION,QTY per line
-            for line in orders_raw.strip().split('\n'):
+            for line in orders_raw.strip().split("\n"):
                 line = line.strip()
                 if not line:
                     continue
-                parts = [p.strip() for p in line.split(',')]
+                parts = [p.strip() for p in line.split(",")]
                 if len(parts) >= 4:
                     try:
                         order = {
@@ -585,13 +662,16 @@ class NodeExecutor:
                             "action": self.context.interpolate(parts[2]).upper(),
                             "quantity": int(self.context.interpolate(parts[3])),
                             "pricetype": price_type,
-                            "product": product
+                            "product": product,
                         }
                         orders.append(order)
                     except (ValueError, IndexError) as e:
                         self.log(f"Skipping invalid order line '{line}': {e}", "warning")
                 else:
-                    self.log(f"Skipping invalid order line '{line}': expected SYMBOL,EXCHANGE,ACTION,QTY", "warning")
+                    self.log(
+                        f"Skipping invalid order line '{line}': expected SYMBOL,EXCHANGE,ACTION,QTY",
+                        "warning",
+                    )
         elif isinstance(orders_raw, list):
             # Already a list of order dicts
             orders = orders_raw
@@ -603,10 +683,15 @@ class NodeExecutor:
 
         self.log(f"Placing basket order '{basket_name}' with {len(orders)} orders")
         for i, order in enumerate(orders):
-            self.log(f"  Order {i+1}: {order['symbol']} {order['exchange']} {order['action']} qty={order['quantity']}")
+            self.log(
+                f"  Order {i + 1}: {order['symbol']} {order['exchange']} {order['action']} qty={order['quantity']}"
+            )
 
         result = self.client.basket_order(orders=orders, strategy=basket_name)
-        self.log(f"Basket order result: {result}", "info" if result.get("status") == "success" else "error")
+        self.log(
+            f"Basket order result: {result}",
+            "info" if result.get("status") == "success" else "error",
+        )
         self.store_output(node_data, result)
         return result
 
@@ -622,10 +707,18 @@ class NodeExecutor:
 
         self.log(f"Placing split order: {symbol} qty={quantity} split={split_size}")
         result = self.client.split_order(
-            symbol=symbol, exchange=exchange, action=action, quantity=quantity,
-            split_size=split_size, price_type=price_type, product_type=product
+            symbol=symbol,
+            exchange=exchange,
+            action=action,
+            quantity=quantity,
+            split_size=split_size,
+            price_type=price_type,
+            product_type=product,
         )
-        self.log(f"Split order result: {result}", "info" if result.get("status") == "success" else "error")
+        self.log(
+            f"Split order result: {result}",
+            "info" if result.get("status") == "success" else "error",
+        )
         self.store_output(node_data, result)
         return result
 
@@ -656,7 +749,9 @@ class NodeExecutor:
         exchange = self.get_str(node_data, "exchange", "NSE")
         product = self.get_str(node_data, "product", "MIS")
         self.log(f"Getting open position for: {symbol}")
-        result = self.client.get_open_position(symbol=symbol, exchange=exchange, product_type=product)
+        result = self.client.get_open_position(
+            symbol=symbol, exchange=exchange, product_type=product
+        )
         self.store_output(node_data, result)
         return result
 
@@ -669,8 +764,11 @@ class NodeExecutor:
         end_date = self.get_str(node_data, "endDate", "")
         self.log(f"Getting history for: {symbol}")
         result = self.client.get_history(
-            symbol=symbol, exchange=exchange, interval=interval,
-            start_date=start_date, end_date=end_date
+            symbol=symbol,
+            exchange=exchange,
+            interval=interval,
+            start_date=start_date,
+            end_date=end_date,
         )
         self.store_output(node_data, result)
         return result
@@ -800,7 +898,9 @@ class NodeExecutor:
         message = self.context.interpolate(node_data.get("message", ""))
         self.log(f"Sending Telegram alert: {message}")
         result = self.client.telegram(message=message)
-        self.log(f"Telegram result: {result}", "info" if result.get("status") == "success" else "error")
+        self.log(
+            f"Telegram result: {result}", "info" if result.get("status") == "success" else "error"
+        )
         return result
 
     def execute_http_request(self, node_data: dict) -> dict:
@@ -886,7 +986,9 @@ class NodeExecutor:
         threshold = self.get_int(node_data, "threshold", 0)
 
         self.log(f"Checking position for: {symbol}")
-        result = self.client.get_open_position(symbol=symbol, exchange=exchange, product_type=product)
+        result = self.client.get_open_position(
+            symbol=symbol, exchange=exchange, product_type=product
+        )
         data = result.get("data") or {}
         quantity = int(data.get("quantity", 0) if data else 0)
         condition_met = self._evaluate_condition(quantity, operator, threshold)
@@ -961,7 +1063,9 @@ class NodeExecutor:
         else:
             condition_met = False
 
-        self.log(f"Time condition: {now.strftime('%H:%M')} {operator} {target_time_str} = {condition_met}")
+        self.log(
+            f"Time condition: {now.strftime('%H:%M')} {operator} {target_time_str} = {condition_met}"
+        )
         return {"status": "success", "condition": condition_met}
 
     def execute_price_alert(self, node_data: dict) -> dict:
@@ -1002,7 +1106,9 @@ class NodeExecutor:
 
     # === Streaming Nodes (WebSocket with REST API fallback) ===
 
-    def _get_websocket_data(self, symbol: str, exchange: str, mode: str, timeout: float = 5.0) -> Optional[dict]:
+    def _get_websocket_data(
+        self, symbol: str, exchange: str, mode: str, timeout: float = 5.0
+    ) -> dict | None:
         """
         Get market data via WebSocket subscription using callback approach.
 
@@ -1021,10 +1127,8 @@ class NodeExecutor:
         import threading
 
         try:
-            from database.auth_db import verify_api_key, get_broker_name
-            from services.websocket_service import (
-                get_websocket_connection, subscribe_to_symbols
-            )
+            from database.auth_db import get_broker_name, verify_api_key
+            from services.websocket_service import get_websocket_connection, subscribe_to_symbols
 
             # Get username from API key
             username = verify_api_key(self.client.api_key)
@@ -1054,25 +1158,29 @@ class NodeExecutor:
                 if captured_data["data"] is not None:
                     return  # Already captured
 
-                data_symbol = data.get('symbol', '')
-                data_exchange = data.get('exchange', '')
-                data_mode = data.get('mode')
+                data_symbol = data.get("symbol", "")
+                data_exchange = data.get("exchange", "")
+                data_mode = data.get("mode")
 
                 # Check if this is the data we're looking for
-                if data_symbol == symbol and data_exchange == exchange and data_mode == expected_mode_num:
+                if (
+                    data_symbol == symbol
+                    and data_exchange == exchange
+                    and data_mode == expected_mode_num
+                ):
                     # For Depth mode, verify we have actual depth data (not just empty init message)
                     if mode == "Depth":
-                        nested = data.get('data', {}) if isinstance(data.get('data'), dict) else {}
+                        nested = data.get("data", {}) if isinstance(data.get("data"), dict) else {}
                         # Check multiple possible structures:
                         # 1. Standard: bids/asks arrays
                         # 2. Fyers: depth.buy/depth.sell arrays
-                        bids = data.get('bids') or nested.get('bids') or []
-                        asks = data.get('asks') or nested.get('asks') or []
+                        bids = data.get("bids") or nested.get("bids") or []
+                        asks = data.get("asks") or nested.get("asks") or []
                         # Fyers format: depth: {buy: [], sell: []}
-                        depth_obj = data.get('depth', {}) or nested.get('depth', {})
+                        depth_obj = data.get("depth", {}) or nested.get("depth", {})
                         if isinstance(depth_obj, dict):
-                            bids = bids or depth_obj.get('buy', [])
-                            asks = asks or depth_obj.get('sell', [])
+                            bids = bids or depth_obj.get("buy", [])
+                            asks = asks or depth_obj.get("sell", [])
                         if not bids and not asks:
                             return  # Skip empty depth messages, wait for actual data
 
@@ -1080,7 +1188,7 @@ class NodeExecutor:
                     data_event.set()
 
             # Register callback before subscribing
-            ws_client.register_callback('market_data', on_market_data)
+            ws_client.register_callback("market_data", on_market_data)
 
             try:
                 # Subscribe to symbol
@@ -1099,7 +1207,7 @@ class NodeExecutor:
 
             finally:
                 # Always unregister callback
-                ws_client.unregister_callback('market_data', on_market_data)
+                ws_client.unregister_callback("market_data", on_market_data)
 
         except Exception as e:
             self.log(f"WebSocket error: {str(e)}", "warning")
@@ -1127,7 +1235,11 @@ class NodeExecutor:
         if ws_data:
             # LTP may be nested under 'data' or at top level
             nested_data = ws_data.get("data", {}) if isinstance(ws_data.get("data"), dict) else {}
-            ltp = nested_data.get("ltp") if nested_data.get("ltp") is not None else ws_data.get("ltp", 0)
+            ltp = (
+                nested_data.get("ltp")
+                if nested_data.get("ltp") is not None
+                else ws_data.get("ltp", 0)
+            )
 
             streaming_result = {
                 "status": "success",
@@ -1135,7 +1247,7 @@ class NodeExecutor:
                 "symbol": symbol,
                 "exchange": exchange,
                 "ltp": ltp,
-                "source": "websocket"
+                "source": "websocket",
             }
             self.log(f"LTP for {symbol}: {ltp} (via WebSocket)")
 
@@ -1160,7 +1272,7 @@ class NodeExecutor:
                     "symbol": symbol,
                     "exchange": exchange,
                     "ltp": ltp,
-                    "source": "rest_api"
+                    "source": "rest_api",
                 }
                 self.log(f"LTP for {symbol}: {ltp} (via REST API)")
 
@@ -1176,7 +1288,7 @@ class NodeExecutor:
                     "type": "ltp",
                     "symbol": symbol,
                     "exchange": exchange,
-                    "error": error_msg
+                    "error": error_msg,
                 }
 
         except Exception as e:
@@ -1186,7 +1298,7 @@ class NodeExecutor:
                 "type": "ltp",
                 "symbol": symbol,
                 "exchange": exchange,
-                "error": str(e)
+                "error": str(e),
             }
 
     def execute_subscribe_quote(self, node_data: dict) -> dict:
@@ -1214,13 +1326,17 @@ class NodeExecutor:
 
             # Extract from nested level first, fallback to top level
             quote_data = {
-                "ltp": nested_data.get("ltp") if nested_data.get("ltp") is not None else ws_data.get("ltp", 0),
+                "ltp": nested_data.get("ltp")
+                if nested_data.get("ltp") is not None
+                else ws_data.get("ltp", 0),
                 "open": nested_data.get("open") or ws_data.get("open", 0),
                 "high": nested_data.get("high") or ws_data.get("high", 0),
                 "low": nested_data.get("low") or ws_data.get("low", 0),
-                "close": nested_data.get("close") or nested_data.get("prev_close") or ws_data.get("close", ws_data.get("prev_close", 0)),
+                "close": nested_data.get("close")
+                or nested_data.get("prev_close")
+                or ws_data.get("close", ws_data.get("prev_close", 0)),
                 "volume": nested_data.get("volume") or ws_data.get("volume", 0),
-                "prev_close": nested_data.get("prev_close") or ws_data.get("prev_close", 0)
+                "prev_close": nested_data.get("prev_close") or ws_data.get("prev_close", 0),
             }
 
             streaming_result = {
@@ -1229,7 +1345,7 @@ class NodeExecutor:
                 "symbol": symbol,
                 "exchange": exchange,
                 "data": quote_data,
-                "source": "websocket"
+                "source": "websocket",
             }
             self.log(f"Quote for {symbol}: LTP={quote_data.get('ltp')} (via WebSocket)")
 
@@ -1247,15 +1363,19 @@ class NodeExecutor:
             if result.get("status") == "success":
                 data = result.get("data", {})
 
-                quote_data = {
-                    "ltp": data.get("ltp", 0),
-                    "open": data.get("open", 0),
-                    "high": data.get("high", 0),
-                    "low": data.get("low", 0),
-                    "close": data.get("close", data.get("prev_close", 0)),
-                    "volume": data.get("volume", 0),
-                    "prev_close": data.get("prev_close", 0)
-                } if data else {}
+                quote_data = (
+                    {
+                        "ltp": data.get("ltp", 0),
+                        "open": data.get("open", 0),
+                        "high": data.get("high", 0),
+                        "low": data.get("low", 0),
+                        "close": data.get("close", data.get("prev_close", 0)),
+                        "volume": data.get("volume", 0),
+                        "prev_close": data.get("prev_close", 0),
+                    }
+                    if data
+                    else {}
+                )
 
                 streaming_result = {
                     "status": "success",
@@ -1263,7 +1383,7 @@ class NodeExecutor:
                     "symbol": symbol,
                     "exchange": exchange,
                     "data": quote_data,
-                    "source": "rest_api"
+                    "source": "rest_api",
                 }
                 self.log(f"Quote for {symbol}: LTP={quote_data.get('ltp')} (via REST API)")
 
@@ -1279,7 +1399,7 @@ class NodeExecutor:
                     "type": "quote",
                     "symbol": symbol,
                     "exchange": exchange,
-                    "error": error_msg
+                    "error": error_msg,
                 }
 
         except Exception as e:
@@ -1289,7 +1409,7 @@ class NodeExecutor:
                 "type": "quote",
                 "symbol": symbol,
                 "exchange": exchange,
-                "error": str(e)
+                "error": str(e),
             }
 
     def execute_subscribe_depth(self, node_data: dict) -> dict:
@@ -1324,9 +1444,21 @@ class NodeExecutor:
                 asks = depth_obj.get("sell", [])
                 # Convert Fyers format (price/quantity) if needed
                 if bids and isinstance(bids[0], dict) and "price" in bids[0]:
-                    bids = [{"price": b.get("price", 0), "quantity": b.get("quantity", b.get("volume", 0))} for b in bids]
+                    bids = [
+                        {
+                            "price": b.get("price", 0),
+                            "quantity": b.get("quantity", b.get("volume", 0)),
+                        }
+                        for b in bids
+                    ]
                 if asks and isinstance(asks[0], dict) and "price" in asks[0]:
-                    asks = [{"price": a.get("price", 0), "quantity": a.get("quantity", a.get("volume", 0))} for a in asks]
+                    asks = [
+                        {
+                            "price": a.get("price", 0),
+                            "quantity": a.get("quantity", a.get("volume", 0)),
+                        }
+                        for a in asks
+                    ]
             else:
                 # Standard format
                 bids = nested_data.get("bids") or ws_data.get("bids", [])
@@ -1338,7 +1470,9 @@ class NodeExecutor:
                 "asks": asks,
                 "totalbuyqty": nested_data.get("totalbuyqty") or ws_data.get("totalbuyqty", 0),
                 "totalsellqty": nested_data.get("totalsellqty") or ws_data.get("totalsellqty", 0),
-                "ltp": nested_data.get("ltp") if nested_data.get("ltp") is not None else ws_data.get("ltp", 0)
+                "ltp": nested_data.get("ltp")
+                if nested_data.get("ltp") is not None
+                else ws_data.get("ltp", 0),
             }
 
             streaming_result = {
@@ -1347,14 +1481,16 @@ class NodeExecutor:
                 "symbol": symbol,
                 "exchange": exchange,
                 "data": depth_data,
-                "source": "websocket"
+                "source": "websocket",
             }
             # Log depth summary with top bid/ask prices
-            bids_list = depth_data.get('bids', [])
-            asks_list = depth_data.get('asks', [])
-            top_bid = bids_list[0].get('price', 0) if bids_list else 0
-            top_ask = asks_list[0].get('price', 0) if asks_list else 0
-            self.log(f"Depth for {symbol}: Bid={top_bid}, Ask={top_ask} ({len(bids_list)} bids, {len(asks_list)} asks) via WebSocket")
+            bids_list = depth_data.get("bids", [])
+            asks_list = depth_data.get("asks", [])
+            top_bid = bids_list[0].get("price", 0) if bids_list else 0
+            top_ask = asks_list[0].get("price", 0) if asks_list else 0
+            self.log(
+                f"Depth for {symbol}: Bid={top_bid}, Ask={top_ask} ({len(bids_list)} bids, {len(asks_list)} asks) via WebSocket"
+            )
 
             # Store in context variable
             self.context.set_variable(output_var, depth_data)
@@ -1370,13 +1506,17 @@ class NodeExecutor:
             if result.get("status") == "success":
                 data = result.get("data", {})
 
-                depth_data = {
-                    "bids": data.get("bids", []),
-                    "asks": data.get("asks", []),
-                    "totalbuyqty": data.get("totalbuyqty", 0),
-                    "totalsellqty": data.get("totalsellqty", 0),
-                    "ltp": data.get("ltp", 0)
-                } if data else {"bids": [], "asks": []}
+                depth_data = (
+                    {
+                        "bids": data.get("bids", []),
+                        "asks": data.get("asks", []),
+                        "totalbuyqty": data.get("totalbuyqty", 0),
+                        "totalsellqty": data.get("totalsellqty", 0),
+                        "ltp": data.get("ltp", 0),
+                    }
+                    if data
+                    else {"bids": [], "asks": []}
+                )
 
                 streaming_result = {
                     "status": "success",
@@ -1384,14 +1524,16 @@ class NodeExecutor:
                     "symbol": symbol,
                     "exchange": exchange,
                     "data": depth_data,
-                    "source": "rest_api"
+                    "source": "rest_api",
                 }
                 # Log depth summary with top bid/ask prices
-                bids_list = depth_data.get('bids', [])
-                asks_list = depth_data.get('asks', [])
-                top_bid = bids_list[0].get('price', 0) if bids_list else 0
-                top_ask = asks_list[0].get('price', 0) if asks_list else 0
-                self.log(f"Depth for {symbol}: Bid={top_bid}, Ask={top_ask} ({len(bids_list)} bids, {len(asks_list)} asks) via REST API")
+                bids_list = depth_data.get("bids", [])
+                asks_list = depth_data.get("asks", [])
+                top_bid = bids_list[0].get("price", 0) if bids_list else 0
+                top_ask = asks_list[0].get("price", 0) if asks_list else 0
+                self.log(
+                    f"Depth for {symbol}: Bid={top_bid}, Ask={top_ask} ({len(bids_list)} bids, {len(asks_list)} asks) via REST API"
+                )
 
                 # Store in context variable
                 self.context.set_variable(output_var, depth_data)
@@ -1405,7 +1547,7 @@ class NodeExecutor:
                     "type": "depth",
                     "symbol": symbol,
                     "exchange": exchange,
-                    "error": error_msg
+                    "error": error_msg,
                 }
 
         except Exception as e:
@@ -1415,7 +1557,7 @@ class NodeExecutor:
                 "type": "depth",
                 "symbol": symbol,
                 "exchange": exchange,
-                "error": str(e)
+                "error": str(e),
             }
 
     def execute_unsubscribe(self, node_data: dict) -> dict:
@@ -1430,9 +1572,11 @@ class NodeExecutor:
         self.log(f"Unsubscribing from {stream_type} stream: {symbol or 'all'} ({exchange})")
 
         try:
-            from database.auth_db import verify_api_key, get_broker_name
+            from database.auth_db import get_broker_name, verify_api_key
             from services.websocket_service import (
-                get_websocket_connection, unsubscribe_from_symbols, unsubscribe_all
+                get_websocket_connection,
+                unsubscribe_all,
+                unsubscribe_from_symbols,
             )
 
             # Get username from API key
@@ -1442,7 +1586,7 @@ class NodeExecutor:
                 return {
                     "status": "success",
                     "type": "unsubscribe",
-                    "message": "No active WebSocket connection"
+                    "message": "No active WebSocket connection",
                 }
 
             # Get broker name
@@ -1454,25 +1598,23 @@ class NodeExecutor:
                 return {
                     "status": "success",
                     "type": "unsubscribe",
-                    "message": "No active WebSocket connection"
+                    "message": "No active WebSocket connection",
                 }
 
             # Map stream_type to mode
-            mode_map = {
-                "ltp": "LTP",
-                "quote": "Quote",
-                "depth": "Depth"
-            }
+            mode_map = {"ltp": "LTP", "quote": "Quote", "depth": "Depth"}
 
             if stream_type.lower() == "all" or not symbol:
                 # Unsubscribe from all
                 unsub_success, unsub_result, _ = unsubscribe_all(username, broker)
-                self.log(f"Unsubscribed from all streams")
+                self.log("Unsubscribed from all streams")
             else:
                 # Unsubscribe from specific symbol/mode
                 mode = mode_map.get(stream_type.lower(), "Quote")
                 symbols = [{"symbol": symbol, "exchange": exchange}]
-                unsub_success, unsub_result, _ = unsubscribe_from_symbols(username, broker, symbols, mode)
+                unsub_success, unsub_result, _ = unsubscribe_from_symbols(
+                    username, broker, symbols, mode
+                )
                 self.log(f"Unsubscribed from {stream_type} for {symbol}")
 
             return {
@@ -1481,7 +1623,7 @@ class NodeExecutor:
                 "symbol": symbol,
                 "exchange": exchange,
                 "stream_type": stream_type,
-                "message": f"Unsubscribed from {stream_type} stream"
+                "message": f"Unsubscribed from {stream_type} stream",
             }
 
         except Exception as e:
@@ -1492,12 +1634,12 @@ class NodeExecutor:
                 "symbol": symbol,
                 "exchange": exchange,
                 "stream_type": stream_type,
-                "message": "Unsubscribe completed (with warnings)"
+                "message": "Unsubscribe completed (with warnings)",
             }
 
     # === Logic Gates ===
 
-    def execute_and_gate(self, node_data: dict, input_results: List[bool]) -> dict:
+    def execute_and_gate(self, node_data: dict, input_results: list[bool]) -> dict:
         """Execute AND Gate"""
         if not input_results:
             return {"status": "success", "condition": False}
@@ -1505,7 +1647,7 @@ class NodeExecutor:
         self.log(f"AND Gate: {input_results} -> {condition_met}")
         return {"status": "success", "condition": condition_met}
 
-    def execute_or_gate(self, node_data: dict, input_results: List[bool]) -> dict:
+    def execute_or_gate(self, node_data: dict, input_results: list[bool]) -> dict:
         """Execute OR Gate"""
         if not input_results:
             return {"status": "success", "condition": False}
@@ -1513,7 +1655,7 @@ class NodeExecutor:
         self.log(f"OR Gate: {input_results} -> {condition_met}")
         return {"status": "success", "condition": condition_met}
 
-    def execute_not_gate(self, node_data: dict, input_results: List[bool]) -> dict:
+    def execute_not_gate(self, node_data: dict, input_results: list[bool]) -> dict:
         """Execute NOT Gate"""
         input_value = input_results[0] if input_results else False
         condition_met = not input_value
@@ -1524,12 +1666,12 @@ class NodeExecutor:
 def execute_node_chain(
     node_id: str,
     nodes: list,
-    edge_map: Dict[str, List[dict]],
-    incoming_edge_map: Dict[str, List[dict]],
+    edge_map: dict[str, list[dict]],
+    incoming_edge_map: dict[str, list[dict]],
     executor: NodeExecutor,
     context: WorkflowContext,
-    visited_count: Dict[str, int],
-    depth: int = 0
+    visited_count: dict[str, int],
+    depth: int = 0,
 ):
     """Execute a chain of nodes"""
     if depth > MAX_NODE_DEPTH:
@@ -1675,18 +1817,30 @@ def execute_node_chain(
         target_id = edge.get("target")
         if target_id:
             execute_node_chain(
-                target_id, nodes, edge_map, incoming_edge_map, executor, context,
-                visited_count, depth + 1
+                target_id,
+                nodes,
+                edge_map,
+                incoming_edge_map,
+                executor,
+                context,
+                visited_count,
+                depth + 1,
             )
 
 
-def execute_workflow(workflow_id: int, webhook_data: Optional[Dict[str, Any]] = None, api_key: str = None) -> dict:
+def execute_workflow(
+    workflow_id: int, webhook_data: dict[str, Any] | None = None, api_key: str = None
+) -> dict:
     """Execute a workflow synchronously"""
     lock = get_workflow_lock(workflow_id)
 
     if lock.locked():
         logger.warning(f"Workflow {workflow_id} is already running")
-        return {"status": "error", "message": "Workflow is already running", "already_running": True}
+        return {
+            "status": "error",
+            "message": "Workflow is already running",
+            "already_running": True,
+        }
 
     with lock:
         workflow = get_workflow(workflow_id)
@@ -1723,8 +1877,8 @@ def execute_workflow(workflow_id: int, webhook_data: Optional[Dict[str, Any]] = 
                 raise Exception("No trigger node found")
 
             # Build edge maps
-            edge_map: Dict[str, List[dict]] = {}
-            incoming_edge_map: Dict[str, List[dict]] = {}
+            edge_map: dict[str, list[dict]] = {}
+            incoming_edge_map: dict[str, list[dict]] = {}
             for edge in edges:
                 source = edge["source"]
                 target = edge["target"]
@@ -1735,11 +1889,17 @@ def execute_workflow(workflow_id: int, webhook_data: Optional[Dict[str, Any]] = 
                     incoming_edge_map[target] = []
                 incoming_edge_map[target].append(edge)
 
-            visited_count: Dict[str, int] = {}
+            visited_count: dict[str, int] = {}
 
             execute_node_chain(
-                start_node["id"], nodes, edge_map, incoming_edge_map, executor, context,
-                visited_count, depth=0
+                start_node["id"],
+                nodes,
+                edge_map,
+                incoming_edge_map,
+                executor,
+                context,
+                visited_count,
+                depth=0,
             )
 
             update_execution_status(execution.id, "completed")
@@ -1747,15 +1907,22 @@ def execute_workflow(workflow_id: int, webhook_data: Optional[Dict[str, Any]] = 
                 "status": "success",
                 "message": "Workflow executed successfully",
                 "execution_id": execution.id,
-                "logs": logs
+                "logs": logs,
             }
 
         except Exception as e:
             logger.error(f"Workflow execution failed: {e}")
-            logs.append({
-                "time": datetime.utcnow().isoformat(),
-                "message": f"Error: {str(e)}",
-                "level": "error"
-            })
+            logs.append(
+                {
+                    "time": datetime.utcnow().isoformat(),
+                    "message": f"Error: {str(e)}",
+                    "level": "error",
+                }
+            )
             update_execution_status(execution.id, "failed", error=str(e))
-            return {"status": "error", "message": str(e), "execution_id": execution.id, "logs": logs}
+            return {
+                "status": "error",
+                "message": str(e),
+                "execution_id": execution.id,
+                "logs": logs,
+            }

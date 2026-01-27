@@ -2,22 +2,28 @@
 Debug script to check Telegram user linkage
 """
 
-import sys
 import os
+import sys
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database.telegram_db import get_all_telegram_users, get_telegram_user_by_username, get_bot_config
 from database.auth_db import get_username_by_apikey, verify_api_key
+from database.telegram_db import (
+    get_all_telegram_users,
+    get_bot_config,
+    get_telegram_user_by_username,
+)
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+
 def debug_telegram_users():
     """Check telegram user configuration"""
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TELEGRAM USER DEBUGGING")
-    print("="*60)
+    print("=" * 60)
 
     # Check bot configuration
     print("\n1. Bot Configuration:")
@@ -63,9 +69,9 @@ def debug_telegram_users():
 
         # Check if telegram users match
         for tg_user in users:
-            tg_username = tg_user.get('openalgo_username', '')
+            tg_username = tg_user.get("openalgo_username", "")
             # Remove @ if present for comparison
-            clean_tg_username = tg_username.replace('@', '')
+            clean_tg_username = tg_username.replace("@", "")
 
             # Check various formats
             matches = []
@@ -77,7 +83,7 @@ def debug_telegram_users():
                 print(f"   [OK] Telegram user '{tg_username}' matches auth user: {matches}")
             else:
                 print(f"   [ERROR] Telegram user '{tg_username}' has NO matching auth user!")
-                print(f"      This user won't receive alerts!")
+                print("      This user won't receive alerts!")
 
     except Exception as e:
         print(f"   Error checking auth users: {e}")
@@ -98,7 +104,7 @@ def debug_telegram_users():
             # Check if this user has telegram linked
             telegram_user = get_telegram_user_by_username(username)
             if telegram_user:
-                print(f"   [OK] Telegram linked:")
+                print("   [OK] Telegram linked:")
                 print(f"     - Telegram ID: {telegram_user['telegram_id']}")
                 print(f"     - Notifications: {telegram_user.get('notifications_enabled', False)}")
             else:
@@ -112,17 +118,17 @@ def debug_telegram_users():
 
     issues = []
 
-    if not bot_config.get('bot_token'):
+    if not bot_config.get("bot_token"):
         issues.append("Bot token not configured")
 
-    if not bot_config.get('is_active'):
+    if not bot_config.get("is_active"):
         issues.append("Bot is not active")
 
     if not users:
         issues.append("No users linked to Telegram")
     else:
         # Check for users without notifications
-        disabled_users = [u for u in users if not u.get('notifications_enabled')]
+        disabled_users = [u for u in users if not u.get("notifications_enabled")]
         if disabled_users:
             issues.append(f"{len(disabled_users)} users have notifications disabled")
 
@@ -141,7 +147,8 @@ def debug_telegram_users():
     print("   4. Verify bot token is correct in /telegram/config")
     print("   5. Check logs for 'Telegram alert' messages")
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
+
 
 if __name__ == "__main__":
     debug_telegram_users()

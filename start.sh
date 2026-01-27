@@ -191,6 +191,17 @@ export PYTHONDONTWRITEBYTECODE=1
 cd /app
 
 # ============================================
+# DATABASE MIGRATIONS
+# ============================================
+# Run migrations automatically on startup (idempotent - safe to run multiple times)
+if [ -f "/app/upgrade/migrate_all.py" ]; then
+    echo "[OpenAlgo] Running database migrations..."
+    /app/.venv/bin/python /app/upgrade/migrate_all.py || echo "[OpenAlgo] Migration completed (some may have been skipped)"
+else
+    echo "[OpenAlgo] No migrations found, skipping..."
+fi
+
+# ============================================
 # WEBSOCKET PROXY SERVER
 # ============================================
 echo "[OpenAlgo] Starting WebSocket proxy server on port 8765..."

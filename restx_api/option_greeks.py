@@ -1,26 +1,28 @@
-from flask_restx import Namespace, Resource
-from flask import request, jsonify, make_response
-from marshmallow import ValidationError
-from limiter import limiter
 import os
 
-from .data_schemas import OptionGreeksSchema
-from services.option_greeks_service import get_option_greeks
+from flask import jsonify, make_response, request
+from flask_restx import Namespace, Resource
+from marshmallow import ValidationError
+
 from database.auth_db import verify_api_key
+from limiter import limiter
+from services.option_greeks_service import get_option_greeks
 from utils.logging import get_logger
+
+from .data_schemas import OptionGreeksSchema
 
 logger = get_logger(__name__)
 
 # Rate limit for option greeks API
 GREEKS_RATE_LIMIT = os.getenv("GREEKS_RATE_LIMIT", "30 per minute")
 
-api = Namespace('optiongreeks', description='Option Greeks API')
+api = Namespace("optiongreeks", description="Option Greeks API")
 
 # Initialize schema
 option_greeks_schema = OptionGreeksSchema()
 
 
-@api.route('', strict_slashes=False)
+@api.route("", strict_slashes=False)
 class OptionGreeks(Resource):
     @limiter.limit(GREEKS_RATE_LIMIT)
     def post(self):
@@ -80,46 +82,50 @@ class OptionGreeks(Resource):
             data = request.json
 
             if data is None:
-                return make_response(jsonify({
-                    'status': 'error',
-                    'message': 'Request body is missing or invalid JSON'
-                }), 400)
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Request body is missing or invalid JSON"}
+                    ),
+                    400,
+                )
 
             # Validate request data
             try:
                 validated_data = option_greeks_schema.load(data)
             except ValidationError as err:
                 logger.warning(f"Validation error in option greeks request: {err.messages}")
-                return make_response(jsonify({
-                    'status': 'error',
-                    'message': 'Validation failed',
-                    'errors': err.messages
-                }), 400)
+                return make_response(
+                    jsonify(
+                        {"status": "error", "message": "Validation failed", "errors": err.messages}
+                    ),
+                    400,
+                )
 
             # Extract validated data
-            api_key = validated_data.get('apikey')
-            symbol = validated_data.get('symbol')
-            exchange = validated_data.get('exchange')
-            interest_rate = validated_data.get('interest_rate')
-            forward_price = validated_data.get('forward_price')
-            underlying_symbol = validated_data.get('underlying_symbol')
-            underlying_exchange = validated_data.get('underlying_exchange')
-            expiry_time = validated_data.get('expiry_time')
+            api_key = validated_data.get("apikey")
+            symbol = validated_data.get("symbol")
+            exchange = validated_data.get("exchange")
+            interest_rate = validated_data.get("interest_rate")
+            forward_price = validated_data.get("forward_price")
+            underlying_symbol = validated_data.get("underlying_symbol")
+            underlying_exchange = validated_data.get("underlying_exchange")
+            expiry_time = validated_data.get("expiry_time")
 
             # Verify API key
             if not verify_api_key(api_key):
                 logger.warning(f"Invalid API key used for option greeks: {api_key[:10]}...")
-                return make_response(jsonify({
-                    'status': 'error',
-                    'message': 'Invalid openalgo apikey'
-                }), 401)
+                return make_response(
+                    jsonify({"status": "error", "message": "Invalid openalgo apikey"}), 401
+                )
 
             # Get option Greeks
             logger.info(f"Calculating Greeks for {symbol} on {exchange}")
             if forward_price:
                 logger.info(f"Using custom forward price: {forward_price}")
             elif underlying_symbol:
-                logger.info(f"Using custom underlying: {underlying_symbol} on {underlying_exchange or 'auto-detected'}")
+                logger.info(
+                    f"Using custom underlying: {underlying_symbol} on {underlying_exchange or 'auto-detected'}"
+                )
             if expiry_time:
                 logger.info(f"Using custom expiry time: {expiry_time}")
 
@@ -131,7 +137,7 @@ class OptionGreeks(Resource):
                 underlying_symbol=underlying_symbol,
                 underlying_exchange=underlying_exchange,
                 expiry_time=expiry_time,
-                api_key=api_key
+                api_key=api_key,
             )
 
             if success:
@@ -143,7 +149,12 @@ class OptionGreeks(Resource):
 
         except Exception as e:
             logger.exception(f"Unexpected error in option greeks endpoint: {e}")
-            return make_response(jsonify({
-                'status': 'error',
-                'message': 'Internal server error while calculating option Greeks'
-            }), 500)
+            return make_response(
+                jsonify(
+                    {
+                        "status": "error",
+                        "message": "Internal server error while calculating option Greeks",
+                    }
+                ),
+                500,
+            )

@@ -1,8 +1,8 @@
-#Mapping OpenAlgo API Request https://openalgo.in/docs
-#Mapping MStock Type B Parameters https://tradingapi.mstock.com/docs/v1/typeB/Orders/
+# Mapping OpenAlgo API Request https://openalgo.in/docs
+# Mapping MStock Type B Parameters https://tradingapi.mstock.com/docs/v1/typeB/Orders/
 
-from database.token_db import get_br_symbol
 from database.symbol import SymToken
+from database.token_db import get_br_symbol
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -34,15 +34,15 @@ def get_mstock_symbol(symbol: str, exchange: str) -> str:
         # Multiple matches - prioritize -EQ over -BE and other suffixes
         # Priority order: -EQ > -BZ > -BE > others
         priority_order = {
-            'EQ': 1,   # Regular equity - highest priority
-            'BZ': 2,   # Z category
-            'BE': 3,   # Book entry - lower priority
+            "EQ": 1,  # Regular equity - highest priority
+            "BZ": 2,  # Z category
+            "BE": 3,  # Book entry - lower priority
         }
 
         def get_priority(brsymbol):
             """Extract suffix and return priority (lower number = higher priority)"""
-            if '-' in brsymbol:
-                suffix = brsymbol.split('-')[-1]
+            if "-" in brsymbol:
+                suffix = brsymbol.split("-")[-1]
                 return priority_order.get(suffix, 999)  # Unknown suffixes get lowest priority
             return 999  # No suffix gets lowest priority
 
@@ -57,6 +57,7 @@ def get_mstock_symbol(symbol: str, exchange: str) -> str:
         logger.error(f"Error in get_mstock_symbol for {symbol}-{exchange}: {e}")
         # Fallback to default behavior
         return get_br_symbol(symbol, exchange)
+
 
 def transform_data(data, token):
     """
@@ -92,7 +93,7 @@ def transform_data(data, token):
         "trailingStopLoss": "",
         "disclosedquantity": str(disclosed_qty),
         "duration": "DAY",
-        "ordertag": ""
+        "ordertag": "",
     }
 
     return transformed
@@ -130,7 +131,7 @@ def transform_modify_order_data(data, token):
         "price": str(data.get("price", "0")),
         "triggerprice": str(data.get("trigger_price", "0")),
         "disclosedquantity": str(disclosed_qty),
-        "modqty_remng": "0"
+        "modqty_remng": "0",
     }
 
 
@@ -144,7 +145,7 @@ def map_order_type(pricetype):
         "MARKET": "MARKET",
         "LIMIT": "LIMIT",
         "SL": "STOP_LOSS",
-        "SL-M": "STOPLOSS_MARKET"
+        "SL-M": "STOPLOSS_MARKET",
     }
     return order_type_mapping.get(pricetype, "MARKET")
 
@@ -169,12 +170,7 @@ def map_variety(pricetype):
 
     mStock Type B varieties: NORMAL, AMO, ROBO, STOPLOSS
     """
-    variety_mapping = {
-        "MARKET": "NORMAL",
-        "LIMIT": "NORMAL",
-        "SL": "STOPLOSS",
-        "SL-M": "STOPLOSS"
-    }
+    variety_mapping = {"MARKET": "NORMAL", "LIMIT": "NORMAL", "SL": "STOPLOSS", "SL-M": "STOPLOSS"}
     return variety_mapping.get(pricetype, "NORMAL")
 
 

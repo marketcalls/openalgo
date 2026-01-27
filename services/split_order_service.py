@@ -1,25 +1,26 @@
-import importlib
-import traceback
 import copy
-import time
+import importlib
 import os
-from typing import Tuple, Dict, Any, Optional, List
+import time
+import traceback
+from typing import Any, Dict, List, Optional, Tuple
 
-from database.auth_db import get_auth_token_broker
-from database.apilog_db import async_log_order, executor as log_executor
-from database.settings_db import get_analyze_mode
 from database.analyzer_db import async_log_analyzer
+from database.apilog_db import async_log_order
+from database.apilog_db import executor as log_executor
+from database.auth_db import get_auth_token_broker
+from database.settings_db import get_analyze_mode
 from extensions import socketio
+from services.telegram_alert_service import telegram_alert_service
 from utils.api_analyzer import analyze_request, generate_order_id
 from utils.constants import (
-    VALID_EXCHANGES,
+    REQUIRED_ORDER_FIELDS,
     VALID_ACTIONS,
+    VALID_EXCHANGES,
     VALID_PRICE_TYPES,
     VALID_PRODUCT_TYPES,
-    REQUIRED_ORDER_FIELDS
 )
 from utils.logging import get_logger
-from services.telegram_alert_service import telegram_alert_service
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -27,79 +28,74 @@ logger = get_logger(__name__)
 # Maximum number of orders allowed
 MAX_ORDERS = 100
 
+
 # Get rate limit from environment (default: 10 per second)
 def get_order_rate_limit():
     """Parse ORDER_RATE_LIMIT and return delay in seconds between orders"""
-    rate_limit_str = os.getenv('ORDER_RATE_LIMIT', '10 per second')
+    rate_limit_str = os.getenv("ORDER_RATE_LIMIT", "10 per second")
     try:
         rate = int(rate_limit_str.split()[0])
         return 1.0 / rate if rate > 0 else 0.1
     except (ValueError, IndexError):
         return 0.1  # Default 100ms delay
 
-def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dict[str, Any]:
+
+def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dict[str, Any]:
     """
     Helper function to emit analyzer error events
-    
+
     Args:
         request_data: Original request data
         error_message: Error message to emit
-        
+
     Returns:
         Error response dictionary
     """
-    error_response = {
-        'mode': 'analyze',
-        'status': 'error',
-        'message': error_message
-    }
-    
+    error_response = {"mode": "analyze", "status": "error", "message": error_message}
+
     # Store complete request data without apikey
     analyzer_request = request_data.copy()
-    if 'apikey' in analyzer_request:
-        del analyzer_request['apikey']
-    analyzer_request['api_type'] = 'splitorder'
-    
+    if "apikey" in analyzer_request:
+        del analyzer_request["apikey"]
+    analyzer_request["api_type"] = "splitorder"
+
     # Log to analyzer database
-    log_executor.submit(async_log_analyzer, analyzer_request, error_response, 'splitorder')
-    
+    log_executor.submit(async_log_analyzer, analyzer_request, error_response, "splitorder")
+
     # Emit socket event asynchronously (non-blocking)
     socketio.start_background_task(
-        socketio.emit,
-        'analyzer_update',
-        {
-        'request': analyzer_request,
-        'response': error_response
-    }
+        socketio.emit, "analyzer_update", {"request": analyzer_request, "response": error_response}
     )
-    
+
     return error_response
 
-def import_broker_module(broker_name: str) -> Optional[Any]:
+
+def import_broker_module(broker_name: str) -> Any | None:
     """
     Dynamically import the broker-specific order API module.
-    
+
     Args:
         broker_name: Name of the broker
-        
+
     Returns:
         The imported module or None if import fails
     """
     try:
-        module_path = f'broker.{broker_name}.api.order_api'
+        module_path = f"broker.{broker_name}.api.order_api"
         broker_module = importlib.import_module(module_path)
         return broker_module
     except ImportError as error:
         logger.error(f"Error importing broker module '{module_path}': {error}")
         return None
 
+
 def place_single_order(
-    order_data: Dict[str, Any],
+    order_data: dict[str, Any],
     broker_module: Any,
     auth_token: str,
     order_num: int,
-    total_orders: int
-) -> Dict[str, Any]:
+    total_orders: int,
+) -> dict[str, Any]:
     """
     Place a single order (no per-order event emission - summary event emitted at end)
 
@@ -120,44 +116,46 @@ def place_single_order(
         if res.status == 200:
             # No per-order event emission - a summary event is emitted at the end of all orders
             return {
-                'order_num': order_num,
-                'quantity': int(order_data['quantity']),
-                'status': 'success',
-                'orderid': order_id
+                "order_num": order_num,
+                "quantity": int(order_data["quantity"]),
+                "status": "success",
+                "orderid": order_id,
             }
         else:
-            message = response_data.get('message', 'Failed to place order') if isinstance(response_data, dict) else 'Failed to place order'
+            message = (
+                response_data.get("message", "Failed to place order")
+                if isinstance(response_data, dict)
+                else "Failed to place order"
+            )
             return {
-                'order_num': order_num,
-                'quantity': int(order_data['quantity']),
-                'status': 'error',
-                'message': message
+                "order_num": order_num,
+                "quantity": int(order_data["quantity"]),
+                "status": "error",
+                "message": message,
             }
 
     except Exception as e:
         logger.error(f"Error placing order {order_num}: {e}")
         return {
-            'order_num': order_num,
-            'quantity': int(order_data['quantity']),
-            'status': 'error',
-            'message': 'Failed to place order due to internal error'
+            "order_num": order_num,
+            "quantity": int(order_data["quantity"]),
+            "status": "error",
+            "message": "Failed to place order due to internal error",
         }
 
+
 def split_order_with_auth(
-    split_data: Dict[str, Any],
-    auth_token: str,
-    broker: str,
-    original_data: Dict[str, Any]
-) -> Tuple[bool, Dict[str, Any], int]:
+    split_data: dict[str, Any], auth_token: str, broker: str, original_data: dict[str, Any]
+) -> tuple[bool, dict[str, Any], int]:
     """
     Split a large order into multiple orders of specified size using provided auth token.
-    
+
     Args:
         split_data: Split order data
         auth_token: Authentication token for the broker API
         broker: Name of the broker
         original_data: Original request data for logging
-        
+
     Returns:
         Tuple containing:
         - Success status (bool)
@@ -165,19 +163,19 @@ def split_order_with_auth(
         - HTTP status code (int)
     """
     split_request_data = copy.deepcopy(original_data)
-    if 'apikey' in split_request_data:
-        split_request_data.pop('apikey', None)
-    
+    if "apikey" in split_request_data:
+        split_request_data.pop("apikey", None)
+
     # Validate quantities
     try:
-        split_size = int(split_data['splitsize'])
-        total_quantity = int(split_data['quantity'])
+        split_size = int(split_data["splitsize"])
+        total_quantity = int(split_data["quantity"])
         if split_size <= 0:
-            error_message = 'Split size must be greater than 0'
+            error_message = "Split size must be greater than 0"
             if get_analyze_mode():
                 return False, emit_analyzer_error(original_data, error_message), 400
-            error_response = {'status': 'error', 'message': error_message}
-            log_executor.submit(async_log_order, 'splitorder', original_data, error_response)
+            error_response = {"status": "error", "message": error_message}
+            log_executor.submit(async_log_order, "splitorder", original_data, error_response)
             return False, error_response, 400
 
         # Calculate number of full-size orders and remaining quantity
@@ -187,126 +185,131 @@ def split_order_with_auth(
         # Check if total number of orders exceeds limit
         total_orders = num_full_orders + (1 if remaining_qty > 0 else 0)
         if total_orders > MAX_ORDERS:
-            error_message = f'Total number of orders would exceed maximum limit of {MAX_ORDERS}'
+            error_message = f"Total number of orders would exceed maximum limit of {MAX_ORDERS}"
             if get_analyze_mode():
                 return False, emit_analyzer_error(original_data, error_message), 400
-            error_response = {'status': 'error', 'message': error_message}
-            log_executor.submit(async_log_order, 'splitorder', original_data, error_response)
+            error_response = {"status": "error", "message": error_message}
+            log_executor.submit(async_log_order, "splitorder", original_data, error_response)
             return False, error_response, 400
 
     except ValueError:
-        error_message = 'Invalid quantity or split size'
+        error_message = "Invalid quantity or split size"
         if get_analyze_mode():
             return False, emit_analyzer_error(original_data, error_message), 400
-        error_response = {'status': 'error', 'message': error_message}
-        log_executor.submit(async_log_order, 'splitorder', original_data, error_response)
+        error_response = {"status": "error", "message": error_message}
+        log_executor.submit(async_log_order, "splitorder", original_data, error_response)
         return False, error_response, 400
-    
+
     # If in analyze mode, route to sandbox for virtual trading
     if get_analyze_mode():
         from services.sandbox_service import sandbox_place_order
 
-        api_key = original_data.get('apikey')
+        api_key = original_data.get("apikey")
         if not api_key:
-            return False, emit_analyzer_error(original_data, 'API key required for sandbox mode'), 400
+            return (
+                False,
+                emit_analyzer_error(original_data, "API key required for sandbox mode"),
+                400,
+            )
 
         analyze_results = []
 
         # Place full-size orders in sandbox
         for i in range(num_full_orders):
             order_data = copy.deepcopy(split_data)
-            order_data['quantity'] = str(split_size)
-            order_data['apikey'] = api_key
+            order_data["quantity"] = str(split_size)
+            order_data["apikey"] = api_key
 
             # Place order in sandbox
             success, response, status_code = sandbox_place_order(
-                order_data,
-                api_key,
-                {'apikey': api_key, 'order_type': 'split'}
+                order_data, api_key, {"apikey": api_key, "order_type": "split"}
             )
 
             if success:
-                analyze_results.append({
-                    'order_num': i + 1,
-                    'quantity': split_size,
-                    'status': 'success',
-                    'orderid': response.get('orderid')
-                })
+                analyze_results.append(
+                    {
+                        "order_num": i + 1,
+                        "quantity": split_size,
+                        "status": "success",
+                        "orderid": response.get("orderid"),
+                    }
+                )
             else:
-                analyze_results.append({
-                    'order_num': i + 1,
-                    'quantity': split_size,
-                    'status': 'error',
-                    'message': response.get('message', 'Order placement failed')
-                })
+                analyze_results.append(
+                    {
+                        "order_num": i + 1,
+                        "quantity": split_size,
+                        "status": "error",
+                        "message": response.get("message", "Order placement failed"),
+                    }
+                )
 
         # Place remaining quantity order if any
         if remaining_qty > 0:
             order_data = copy.deepcopy(split_data)
-            order_data['quantity'] = str(remaining_qty)
-            order_data['apikey'] = api_key
+            order_data["quantity"] = str(remaining_qty)
+            order_data["apikey"] = api_key
 
             success, response, status_code = sandbox_place_order(
-                order_data,
-                api_key,
-                {'apikey': api_key, 'order_type': 'split'}
+                order_data, api_key, {"apikey": api_key, "order_type": "split"}
             )
 
             if success:
-                analyze_results.append({
-                    'order_num': num_full_orders + 1,
-                    'quantity': remaining_qty,
-                    'status': 'success',
-                    'orderid': response.get('orderid')
-                })
+                analyze_results.append(
+                    {
+                        "order_num": num_full_orders + 1,
+                        "quantity": remaining_qty,
+                        "status": "success",
+                        "orderid": response.get("orderid"),
+                    }
+                )
             else:
-                analyze_results.append({
-                    'order_num': num_full_orders + 1,
-                    'quantity': remaining_qty,
-                    'status': 'error',
-                    'message': response.get('message', 'Order placement failed')
-                })
+                analyze_results.append(
+                    {
+                        "order_num": num_full_orders + 1,
+                        "quantity": remaining_qty,
+                        "status": "error",
+                        "message": response.get("message", "Order placement failed"),
+                    }
+                )
 
         response_data = {
-            'mode': 'analyze',
-            'status': 'success',
-            'total_quantity': total_quantity,
-            'split_size': split_size,
-            'results': analyze_results
+            "mode": "analyze",
+            "status": "success",
+            "total_quantity": total_quantity,
+            "split_size": split_size,
+            "results": analyze_results,
         }
 
         # Store complete request data without apikey
         analyzer_request = split_request_data.copy()
-        analyzer_request['api_type'] = 'splitorder'
+        analyzer_request["api_type"] = "splitorder"
 
         # Log to analyzer database
-        log_executor.submit(async_log_analyzer, analyzer_request, response_data, 'splitorder')
+        log_executor.submit(async_log_analyzer, analyzer_request, response_data, "splitorder")
 
         # Emit socket event for toast notification asynchronously (non-blocking)
         socketio.start_background_task(
             socketio.emit,
-            'analyzer_update',
-            {
-            'request': analyzer_request,
-            'response': response_data
-        }
+            "analyzer_update",
+            {"request": analyzer_request, "response": response_data},
         )
 
         # Send Telegram alert in background task (non-blocking)
         socketio.start_background_task(
             telegram_alert_service.send_order_alert,
-            'splitorder', split_data, response_data, split_data.get('apikey')
+            "splitorder",
+            split_data,
+            response_data,
+            split_data.get("apikey"),
         )
         return True, response_data, 200
 
     # Live mode - process actual orders
     broker_module = import_broker_module(broker)
     if broker_module is None:
-        error_response = {
-            'status': 'error',
-            'message': 'Broker-specific module not found'
-        }
-        log_executor.submit(async_log_order, 'splitorder', original_data, error_response)
+        error_response = {"status": "error", "message": "Broker-specific module not found"}
+        log_executor.submit(async_log_order, "splitorder", original_data, error_response)
         return False, error_response, 404
 
     # Process orders sequentially with rate limiting
@@ -318,14 +321,8 @@ def split_order_with_auth(
         if i > 0:
             time.sleep(order_delay)  # Rate limit delay between orders
         order_data = copy.deepcopy(split_data)
-        order_data['quantity'] = str(split_size)
-        result = place_single_order(
-            order_data,
-            broker_module,
-            auth_token,
-            i + 1,
-            total_orders
-        )
+        order_data["quantity"] = str(split_size)
+        result = place_single_order(order_data, broker_module, auth_token, i + 1, total_orders)
         results.append(result)
 
     # Place remaining quantity order if any
@@ -333,67 +330,67 @@ def split_order_with_auth(
         if num_full_orders > 0:
             time.sleep(order_delay)  # Rate limit delay
         order_data = copy.deepcopy(split_data)
-        order_data['quantity'] = str(remaining_qty)
+        order_data["quantity"] = str(remaining_qty)
         result = place_single_order(
-            order_data,
-            broker_module,
-            auth_token,
-            total_orders,
-            total_orders
+            order_data, broker_module, auth_token, total_orders, total_orders
         )
         results.append(result)
 
     # Log the split order results
     response_data = {
-        'status': 'success',
-        'total_quantity': total_quantity,
-        'split_size': split_size,
-        'results': results
+        "status": "success",
+        "total_quantity": total_quantity,
+        "split_size": split_size,
+        "results": results,
     }
-    log_executor.submit(async_log_order, 'splitorder', split_request_data, response_data)
+    log_executor.submit(async_log_order, "splitorder", split_request_data, response_data)
 
     # Emit single summary order event at the end (page refreshes only once)
-    successful_orders = sum(1 for r in results if r.get('status') == 'success')
+    successful_orders = sum(1 for r in results if r.get("status") == "success")
     socketio.start_background_task(
         socketio.emit,
-        'order_event',
+        "order_event",
         {
-            'symbol': split_data.get('symbol', 'Split'),
-            'action': split_data.get('action', 'SPLIT'),
-            'orderid': f"{successful_orders}/{len(results)} orders",
-            'exchange': split_data.get('exchange', 'Unknown'),
-            'price_type': split_data.get('pricetype', 'MARKET'),
-            'product_type': split_data.get('product', 'MIS'),
-            'mode': 'live',
-            'batch_order': True,
-            'is_last_order': True
-        }
+            "symbol": split_data.get("symbol", "Split"),
+            "action": split_data.get("action", "SPLIT"),
+            "orderid": f"{successful_orders}/{len(results)} orders",
+            "exchange": split_data.get("exchange", "Unknown"),
+            "price_type": split_data.get("pricetype", "MARKET"),
+            "product_type": split_data.get("product", "MIS"),
+            "mode": "live",
+            "batch_order": True,
+            "is_last_order": True,
+        },
     )
 
     # Send Telegram alert in background task (non-blocking)
     socketio.start_background_task(
         telegram_alert_service.send_order_alert,
-        'splitorder', split_data, response_data, original_data.get('apikey')
+        "splitorder",
+        split_data,
+        response_data,
+        original_data.get("apikey"),
     )
 
     return True, response_data, 200
 
+
 def split_order(
-    split_data: Dict[str, Any],
-    api_key: Optional[str] = None,
-    auth_token: Optional[str] = None,
-    broker: Optional[str] = None
-) -> Tuple[bool, Dict[str, Any], int]:
+    split_data: dict[str, Any],
+    api_key: str | None = None,
+    auth_token: str | None = None,
+    broker: str | None = None,
+) -> tuple[bool, dict[str, Any], int]:
     """
     Split a large order into multiple orders of specified size.
     Supports both API-based authentication and direct internal calls.
-    
+
     Args:
         split_data: Split order data
         api_key: OpenAlgo API key (for API-based calls)
         auth_token: Direct broker authentication token (for internal calls)
         broker: Direct broker name (for internal calls)
-        
+
     Returns:
         Tuple containing:
         - Success status (bool)
@@ -402,39 +399,36 @@ def split_order(
     """
     original_data = copy.deepcopy(split_data)
     if api_key:
-        original_data['apikey'] = api_key
+        original_data["apikey"] = api_key
 
     # Add API key to split data if provided (needed for validation)
     if api_key:
-        split_data['apikey'] = api_key
+        split_data["apikey"] = api_key
 
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
         # Check if order should be routed to Action Center (semi-auto mode)
-        from services.order_router_service import should_route_to_pending, queue_order
+        from services.order_router_service import queue_order, should_route_to_pending
 
-        if should_route_to_pending(api_key, 'splitorder'):
-            return queue_order(api_key, original_data, 'splitorder')
+        if should_route_to_pending(api_key, "splitorder"):
+            return queue_order(api_key, original_data, "splitorder")
 
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
-            error_response = {
-                'status': 'error',
-                'message': 'Invalid openalgo apikey'
-            }
+            error_response = {"status": "error", "message": "Invalid openalgo apikey"}
             # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
 
         return split_order_with_auth(split_data, AUTH_TOKEN, broker_name, original_data)
-    
+
     # Case 2: Direct internal call with auth_token and broker
     elif auth_token and broker:
         return split_order_with_auth(split_data, auth_token, broker, original_data)
-    
+
     # Case 3: Invalid parameters
     else:
         error_response = {
-            'status': 'error',
-            'message': 'Either api_key or both auth_token and broker must be provided'
+            "status": "error",
+            "message": "Either api_key or both auth_token and broker must be provided",
         }
         return False, error_response, 400

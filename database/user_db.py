@@ -1,15 +1,17 @@
 # database/user_db.py
 
 import os
-from sqlalchemy import create_engine, Column, Integer, String, Boolean
-from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.pool import NullPool
-from cachetools import TTLCache
+
+import pyotp
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-import pyotp
+from cachetools import TTLCache
+from sqlalchemy import Boolean, Column, Integer, String, create_engine
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import scoped_session, sessionmaker
+from sqlalchemy.pool import NullPool
+
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -18,42 +20,35 @@ logger = get_logger(__name__)
 ph = PasswordHasher()
 
 # Database connection details
-DATABASE_URL = os.getenv('DATABASE_URL')
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Security: Require API_KEY_PEPPER environment variable (fail fast if missing)
 # Pepper must be at least 32 bytes (64 hex characters) for cryptographic security
-_pepper_value = os.getenv('API_KEY_PEPPER')
+_pepper_value = os.getenv("API_KEY_PEPPER")
 if not _pepper_value:
     raise RuntimeError(
         "CRITICAL: API_KEY_PEPPER environment variable is not set. "
         "This is required for secure password hashing. "
-        "Generate one using: python -c \"import secrets; print(secrets.token_hex(32))\""
+        'Generate one using: python -c "import secrets; print(secrets.token_hex(32))"'
     )
 if len(_pepper_value) < 32:
     raise RuntimeError(
         f"CRITICAL: API_KEY_PEPPER must be at least 32 characters (got {len(_pepper_value)}). "
-        "Generate a secure pepper using: python -c \"import secrets; print(secrets.token_hex(32))\""
+        'Generate a secure pepper using: python -c "import secrets; print(secrets.token_hex(32))"'
     )
 PASSWORD_PEPPER = _pepper_value
 
 # Engine and session setup
 # Conditionally create engine based on DB type
-if DATABASE_URL and 'sqlite' in DATABASE_URL:
+if DATABASE_URL and "sqlite" in DATABASE_URL:
     # SQLite: Use NullPool to prevent connection pool exhaustion
     engine = create_engine(
-        DATABASE_URL,
-        echo=False,
-        poolclass=NullPool,
-        connect_args={'check_same_thread': False}
+        DATABASE_URL, echo=False, poolclass=NullPool, connect_args={"check_same_thread": False}
     )
 else:
     # For other databases like PostgreSQL, use connection pooling
     engine = create_engine(
-        DATABASE_URL,
-        echo=False,
-        pool_size=50,
-        max_overflow=100,
-        pool_timeout=10
+        DATABASE_URL, echo=False, pool_size=50, max_overflow=100, pool_timeout=10
     )
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
@@ -62,8 +57,9 @@ Base.query = db_session.query_property()
 # Define a cache for the usernames with a max size and a 30-second TTL
 username_cache = TTLCache(maxsize=1024, ttl=30)
 
+
 class User(Base):
-    __tablename__ = 'users'
+    __tablename__ = "users"
     id = Column(Integer, primary_key=True)
     username = Column(String(80), unique=True, nullable=False)
     email = Column(String(120), unique=True, nullable=False)
@@ -88,33 +84,30 @@ class User(Base):
             return True
         except VerifyMismatchError:
             return False
-    
+
     def get_totp_uri(self):
         """Get the TOTP URI for QR code generation"""
         return pyotp.totp.TOTP(self.totp_secret).provisioning_uri(
-            name=self.email,
-            issuer_name="OpenAlgo"
+            name=self.email, issuer_name="OpenAlgo"
         )
-    
+
     def verify_totp(self, token):
         """Verify TOTP token"""
         totp = pyotp.TOTP(self.totp_secret)
         return totp.verify(token)
 
+
 def init_db():
     from database.db_init_helper import init_db_with_logging
+
     init_db_with_logging(Base, engine, "User DB", logger)
+
 
 def add_user(username, email, password, is_admin=False):
     try:
         # Generate TOTP secret for the user
         totp_secret = pyotp.random_base32()
-        user = User(
-            username=username, 
-            email=email, 
-            totp_secret=totp_secret,
-            is_admin=is_admin
-        )
+        user = User(username=username, email=email, totp_secret=totp_secret, is_admin=is_admin)
         user.set_password(password)
         db_session.add(user)
         db_session.commit()
@@ -122,6 +115,7 @@ def add_user(username, email, password, is_admin=False):
     except IntegrityError:
         db_session.rollback()
         return None  # Return None instead of False
+
 
 def authenticate_user(username, password):
     """Authenticate user with Argon2 hashed password"""
@@ -141,13 +135,16 @@ def authenticate_user(username, password):
             return True
         return False
 
+
 def find_user_by_email(email):
     """Find user by email for password reset"""
     return User.query.filter_by(email=email).first()
 
+
 def find_user_by_username():
     """Find admin user"""
     return User.query.filter_by(is_admin=True).first()
+
 
 def rehash_all_passwords():
     """
@@ -157,7 +154,7 @@ def rehash_all_passwords():
     """
     users = User.query.all()
     for user in users:
-        if user.password_hash.startswith('pbkdf2:sha256'):  # Old Werkzeug format
+        if user.password_hash.startswith("pbkdf2:sha256"):  # Old Werkzeug format
             # At this point, you would either:
             # 1. Have users reset their passwords
             # 2. Or if you have access to original passwords (during migration):

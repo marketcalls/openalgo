@@ -4,27 +4,30 @@ Flow Workflow Scheduler Service
 Handles scheduled workflow execution using APScheduler (Flask/sync version)
 """
 
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
-from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.date import DateTrigger
-from apscheduler.triggers.interval import IntervalTrigger
-from datetime import datetime
-from typing import Optional, Callable
 import logging
 import os
 import threading
+from collections.abc import Callable
+from datetime import datetime
+from typing import Optional
+
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 logger = logging.getLogger(__name__)
 
 
 class FlowScheduler:
     """Singleton scheduler for Flow workflows"""
+
     _instance: Optional["FlowScheduler"] = None
-    _scheduler: Optional[BackgroundScheduler] = None
+    _scheduler: BackgroundScheduler | None = None
     _lock = threading.Lock()
     _initialized = False
-    _api_key: Optional[str] = None
+    _api_key: str | None = None
 
     def __new__(cls):
         if cls._instance is None:
@@ -43,7 +46,7 @@ class FlowScheduler:
                 return
 
             if db_url is None:
-                db_url = os.getenv('DATABASE_URL', 'sqlite:///db/openalgo.db')
+                db_url = os.getenv("DATABASE_URL", "sqlite:///db/openalgo.db")
 
             self._api_key = api_key
 
@@ -53,11 +56,7 @@ class FlowScheduler:
                 }
                 self._scheduler = BackgroundScheduler(
                     jobstores=jobstores,
-                    job_defaults={
-                        'coalesce': True,
-                        'max_instances': 1,
-                        'misfire_grace_time': 60
-                    }
+                    job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 60},
                 )
                 self._scheduler.start()
                 self._initialized = True
@@ -78,7 +77,7 @@ class FlowScheduler:
         return self._scheduler
 
     @property
-    def api_key(self) -> Optional[str]:
+    def api_key(self) -> str | None:
         """Get the API key for workflow execution"""
         return self._api_key
 
@@ -87,11 +86,11 @@ class FlowScheduler:
         workflow_id: int,
         schedule_type: str,
         time_str: str = "09:15",
-        days: Optional[list] = None,
-        execute_at: Optional[str] = None,
-        interval_value: Optional[int] = None,
-        interval_unit: Optional[str] = None,
-        func: Callable = None
+        days: list | None = None,
+        execute_at: str | None = None,
+        interval_value: int | None = None,
+        interval_unit: str | None = None,
+        func: Callable = None,
     ) -> str:
         """Add a workflow job to the scheduler
 
@@ -156,7 +155,7 @@ class FlowScheduler:
                 logger.info(f"Creating weekly trigger: {day_of_week} at {time_str}")
             except (ValueError, KeyError) as e:
                 logger.error(f"Invalid weekly schedule config: {e}")
-                raise ValueError(f"Invalid weekly schedule configuration")
+                raise ValueError("Invalid weekly schedule configuration")
 
         else:
             raise ValueError(f"Invalid schedule configuration: type={schedule_type}")
@@ -167,7 +166,7 @@ class FlowScheduler:
             id=job_id,
             args=[workflow_id, self._api_key],
             replace_existing=True,
-            name=f"Workflow {workflow_id}"
+            name=f"Workflow {workflow_id}",
         )
 
         logger.info(f"Added job {job_id}")
@@ -196,7 +195,7 @@ class FlowScheduler:
         job_id = f"flow_workflow_{workflow_id}"
         return self.get_job(job_id)
 
-    def get_next_run_time(self, job_id: str) -> Optional[datetime]:
+    def get_next_run_time(self, job_id: str) -> datetime | None:
         """Get the next run time for a job"""
         job = self.get_job(job_id)
         if job:
@@ -245,7 +244,9 @@ def execute_workflow_scheduled(workflow_id: int, api_key: str = None):
 
     try:
         result = execute_workflow(workflow_id, api_key=api_key)
-        logger.info(f"Scheduled execution result for workflow {workflow_id}: {result.get('status')}")
+        logger.info(
+            f"Scheduled execution result for workflow {workflow_id}: {result.get('status')}"
+        )
     except Exception as e:
         logger.error(f"Scheduled execution failed for workflow {workflow_id}: {e}")
 

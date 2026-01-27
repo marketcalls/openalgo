@@ -223,6 +223,7 @@ If using ngrok temporarily for webhooks:
 | [file-operations.md](./file-operations.md) | File handling security |
 | [dependencies.md](./dependencies.md) | Third-party package security |
 | [recommendations.md](./recommendations.md) | Remaining improvements |
+| [ci-cd-audit.md](./ci-cd-audit.md) | CI/CD pipeline and code quality audit |
 
 ## Bottom Line
 

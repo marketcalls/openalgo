@@ -30,21 +30,23 @@ def transform_margin_position(position):
         Dict in Samco margin format or None if transformation fails
     """
     try:
-        symbol = position.get('symbol')
-        exchange = position.get('exchange')
-        quantity = position.get('quantity')
-        action = position.get('action', 'SELL').upper()
-        price = position.get('price', 0)
-        product = position.get('product', 'NRML').upper()
+        symbol = position.get("symbol")
+        exchange = position.get("exchange")
+        quantity = position.get("quantity")
+        action = position.get("action", "SELL").upper()
+        price = position.get("price", 0)
+        product = position.get("product", "NRML").upper()
 
         if not symbol or not exchange or not quantity:
             logger.warning(f"Missing required fields in position: {position}")
             return None
 
         # Validate exchange - spanMargin only works for derivatives
-        valid_exchanges = ['NFO', 'MCX', 'CDS', 'BFO', 'MFO']
+        valid_exchanges = ["NFO", "MCX", "CDS", "BFO", "MFO"]
         if exchange not in valid_exchanges:
-            logger.warning(f"Exchange {exchange} not valid for span margin. Valid: {valid_exchanges}")
+            logger.warning(
+                f"Exchange {exchange} not valid for span margin. Valid: {valid_exchanges}"
+            )
             return None
 
         # Get broker symbol (trading symbol)
@@ -55,14 +57,14 @@ def transform_margin_position(position):
 
         # Map product type to Samco format
         product_map = {
-            'NRML': 'NRML',
-            'MIS': 'MIS',
-            'CNC': 'CNC',
-            'INTRADAY': 'MIS',
-            'CARRYFORWARD': 'NRML',
-            'MARGIN': 'NRML'
+            "NRML": "NRML",
+            "MIS": "MIS",
+            "CNC": "CNC",
+            "INTRADAY": "MIS",
+            "CARRYFORWARD": "NRML",
+            "MARGIN": "NRML",
         }
-        samco_product = product_map.get(product, 'NRML')
+        samco_product = product_map.get(product, "NRML")
 
         # Build the transformed position
         transformed = {
@@ -70,7 +72,7 @@ def transform_margin_position(position):
             "tradingSymbol": br_symbol,
             "qty": str(int(quantity)),
             "productType": samco_product,
-            "orderType": "L"  # Limit order - mandatory field
+            "orderType": "L",  # Limit order - mandatory field
         }
 
         # Add optional fields
@@ -119,62 +121,59 @@ def parse_margin_response(response_data):
     """
     try:
         if not response_data or not isinstance(response_data, dict):
-            return {
-                'status': 'error',
-                'message': 'Invalid response from broker'
-            }
+            return {"status": "error", "message": "Invalid response from broker"}
 
         # Check for error response
-        if response_data.get('status') != 'Success':
-            error_message = response_data.get('statusMessage', 'Failed to calculate margin')
-            return {
-                'status': 'error',
-                'message': error_message
-            }
+        if response_data.get("status") != "Success":
+            error_message = response_data.get("statusMessage", "Failed to calculate margin")
+            return {"status": "error", "message": error_message}
 
         # Extract span details
-        span_details = response_data.get('spanDetails', {})
+        span_details = response_data.get("spanDetails", {})
 
         if span_details:
             # Samco returns: totalMargin, marginRequired, exposureMargin, spreadBenefit
             # totalMargin = marginRequired + exposureMargin
-            total_margin = safe_float(span_details.get('totalMargin', 0)) or safe_float(span_details.get('totalRequirement', 0))
-            span_margin = safe_float(span_details.get('marginRequired', 0)) or safe_float(span_details.get('spanRequirement', 0))
-            exposure_margin = safe_float(span_details.get('exposureMargin', 0))
-            spread_benefit = safe_float(span_details.get('spreadBenefit', 0))
+            total_margin = safe_float(span_details.get("totalMargin", 0)) or safe_float(
+                span_details.get("totalRequirement", 0)
+            )
+            span_margin = safe_float(span_details.get("marginRequired", 0)) or safe_float(
+                span_details.get("spanRequirement", 0)
+            )
+            exposure_margin = safe_float(span_details.get("exposureMargin", 0))
+            spread_benefit = safe_float(span_details.get("spreadBenefit", 0))
         else:
             # Single scrip response (fallback)
-            total_margin = safe_float(response_data.get('totalMargin', 0)) or safe_float(response_data.get('marginRequired', 0))
-            span_margin = safe_float(response_data.get('marginRequired', 0))
-            exposure_margin = safe_float(response_data.get('exposureMargin', 0))
+            total_margin = safe_float(response_data.get("totalMargin", 0)) or safe_float(
+                response_data.get("marginRequired", 0)
+            )
+            span_margin = safe_float(response_data.get("marginRequired", 0))
+            exposure_margin = safe_float(response_data.get("exposureMargin", 0))
             spread_benefit = 0
 
         # Return standardized format
         return {
-            'status': 'success',
-            'data': {
-                'total_margin_required': total_margin,
-                'span_margin': span_margin,
-                'exposure_margin': exposure_margin,
-                'spread_benefit': spread_benefit
-            }
+            "status": "success",
+            "data": {
+                "total_margin_required": total_margin,
+                "span_margin": span_margin,
+                "exposure_margin": exposure_margin,
+                "spread_benefit": spread_benefit,
+            },
         }
 
     except Exception as e:
         logger.error(f"Error parsing margin response: {e}")
-        return {
-            'status': 'error',
-            'message': f'Failed to parse margin response: {str(e)}'
-        }
+        return {"status": "error", "message": f"Failed to parse margin response: {str(e)}"}
 
 
 def safe_float(value, default=0):
     """Convert string to float, handling commas and empty values"""
-    if value is None or value == '':
+    if value is None or value == "":
         return default
     try:
         if isinstance(value, str):
-            value = value.replace(',', '')
+            value = value.replace(",", "")
         return float(value)
     except (ValueError, TypeError):
         return default

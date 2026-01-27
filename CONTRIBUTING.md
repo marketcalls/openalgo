@@ -309,24 +309,28 @@ git remote add upstream https://github.com/marketcalls/openalgo.git
 git remote -v
 ```
 
-### 2. Important: Exclude Frontend Build Assets
+### 2. Frontend Build Assets (Auto-Built by CI)
 
-The `/frontend/dist` folder contains pre-built frontend assets. **Do NOT include `/frontend/dist` changes in your PR.**
+The `/frontend/dist` folder contains pre-built frontend assets. **CI automatically rebuilds and commits these assets** when changes are merged to main.
 
-**Why?**
-- Community users clone and run directly without Node.js
-- They rely on the committed `/frontend/dist` for a working app
-- Multiple contributors building locally creates merge conflicts
-- Maintainers rebuild `/frontend/dist` after merging to ensure a verified build
+**How it works:**
+- PRs are tested with a fresh frontend build (but not committed)
+- When merged to main, CI automatically:
+  1. Builds the frontend (`npm run build`)
+  2. Commits the updated `/frontend/dist` to the repo
+  3. Pushes Docker image to Docker Hub
 
-**Setup (run once):**
+**For Contributors:**
+- You can include `/frontend/dist` changes in your PR, OR
+- Let CI auto-build after merge (recommended)
+- Focus on source code changes - CI handles the build
+
+**Setup (optional - to ignore local dist changes):**
 ```bash
 git update-index --skip-worktree frontend/dist/*
 ```
 
-This tells Git to ignore your local changes to `/frontend/dist` - nothing gets committed accidentally.
-
-> **Note:** PRs containing `/frontend/dist` changes will be asked to remove them.
+> **Note:** The CI uses `[skip ci]` when auto-committing dist to prevent infinite loops.
 
 ### 3. Create a Feature Branch
 

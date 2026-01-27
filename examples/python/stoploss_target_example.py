@@ -4,12 +4,13 @@ Stop Loss: 10 points | Target: 10 points
 """
 
 import time
+
 from openalgo import api
 
 # Configuration
-API_KEY = 'your-api-key-here'
-HOST = 'http://127.0.0.1:5000'
-WS_URL = 'ws://127.0.0.1:8765'
+API_KEY = "your-api-key-here"
+HOST = "http://127.0.0.1:5000"
+WS_URL = "ws://127.0.0.1:8765"
 
 SYMBOL = "CRUDEOIL16JAN26FUT"
 EXCHANGE = "MCX"
@@ -27,6 +28,7 @@ target = 0
 position_active = False
 client = None
 
+
 def place_entry_order():
     """Place market buy order"""
     response = client.placeorder(
@@ -36,26 +38,25 @@ def place_entry_order():
         exchange=EXCHANGE,
         price_type="MARKET",
         product=PRODUCT,
-        quantity=QUANTITY
+        quantity=QUANTITY,
     )
     print(f"Entry Order Response: {response}")
     return response
+
 
 def get_fill_price(order_id):
     """Get average fill price from order status"""
     # Wait a moment for order to fill
     time.sleep(1)
 
-    response = client.orderstatus(
-        order_id=order_id,
-        strategy=STRATEGY
-    )
+    response = client.orderstatus(order_id=order_id, strategy=STRATEGY)
     print(f"Order Status: {response}")
 
     # average_price is nested inside 'data'
-    data = response.get('data', {})
-    avg_price = float(data.get('average_price', 0))
+    data = response.get("data", {})
+    avg_price = float(data.get("average_price", 0))
     return avg_price
+
 
 def exit_position(reason):
     """Exit the position"""
@@ -68,11 +69,12 @@ def exit_position(reason):
         exchange=EXCHANGE,
         price_type="MARKET",
         product=PRODUCT,
-        quantity=QUANTITY
+        quantity=QUANTITY,
     )
     print(f"Exit Order Response: {response}")
     position_active = False
     return response
+
 
 def on_ltp_update(data):
     """Callback for LTP updates - check SL/Target"""
@@ -82,9 +84,12 @@ def on_ltp_update(data):
         return
 
     try:
-        ltp = float(data['data']['ltp'])
+        ltp = float(data["data"]["ltp"])
 
-        print(f"LTP: {ltp:.2f} | Entry: {entry_price:.2f} | SL: {stop_loss:.2f} | Target: {target:.2f}", end='\r')
+        print(
+            f"LTP: {ltp:.2f} | Entry: {entry_price:.2f} | SL: {stop_loss:.2f} | Target: {target:.2f}",
+            end="\r",
+        )
 
         # Check stop loss
         if ltp <= stop_loss:
@@ -97,16 +102,12 @@ def on_ltp_update(data):
     except Exception as e:
         print(f"Error processing update: {e}")
 
+
 def main():
     global client, entry_price, stop_loss, target, position_active
 
     # Initialize client with WebSocket
-    client = api(
-        api_key=API_KEY,
-        host=HOST,
-        ws_url=WS_URL,
-        verbose=True
-    )
+    client = api(api_key=API_KEY, host=HOST, ws_url=WS_URL, verbose=True)
 
     print("=" * 50)
     print("CRUDEOIL BUY - SL/Target Monitor")
@@ -117,11 +118,11 @@ def main():
     print("\nPlacing BUY order...")
     entry_response = place_entry_order()
 
-    if entry_response.get('status') != 'success':
+    if entry_response.get("status") != "success":
         print(f"Order failed: {entry_response}")
         return
 
-    order_id = entry_response.get('orderid')
+    order_id = entry_response.get("orderid")
     print(f"Order ID: {order_id}")
 
     # Step 2: Get fill price from order status
@@ -163,6 +164,7 @@ def main():
     client.unsubscribe_ltp(instruments)
     client.disconnect()
     print("Done.")
+
 
 if __name__ == "__main__":
     main()

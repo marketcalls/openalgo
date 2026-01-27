@@ -10,12 +10,11 @@ services:
       - "${FLASK_PORT:-5000}:5000"
       - "${WEBSOCKET_PORT:-8765}:8765"
 
-    # persistent DB, logs + mount the host .env read-only so dotenv can read it
+    # persistent DB, strategies, logs + mount the host .env read-only so dotenv can read it
     volumes:
       - openalgo_db:/app/db
-      - openalgo_logs:/app/logs          # Use named volume for logs
       - openalgo_log:/app/log            # Application logs (named volume)
-      - openalgo_strategies:/app/strategies  # Python strategies (named volume - fixes permission issues)
+      - openalgo_strategies:/app/strategies  # Python strategies (named volume)
       - openalgo_keys:/app/keys          # API keys/certificates (named volume)
       - ./.env:/app/.env:ro
 
@@ -26,11 +25,9 @@ services:
 
     restart: unless-stopped
 
-# Define named volumes for database and logs persistence
+# Define named volumes for persistence
 volumes:
   openalgo_db:
-    driver: local
-  openalgo_logs:
     driver: local
   openalgo_log:
     driver: local

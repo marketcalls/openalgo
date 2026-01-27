@@ -1,14 +1,16 @@
 # database/settings_db.py
 
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, MetaData, Text
-from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.pool import NullPool
-from cachetools import TTLCache
-import os
-from utils.logging import get_logger
-from cryptography.fernet import Fernet
 import base64
+import os
+
+from cachetools import TTLCache
+from cryptography.fernet import Fernet
+from sqlalchemy import Boolean, Column, Integer, MetaData, String, Text, create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import scoped_session, sessionmaker
+from sqlalchemy.pool import NullPool
+
+from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -16,31 +18,25 @@ logger = get_logger(__name__)
 # This cache significantly reduces DB queries since get_analyze_mode() is called on every request
 _settings_cache = TTLCache(maxsize=10, ttl=3600)  # 1 hour TTL
 
-DATABASE_URL = os.getenv('DATABASE_URL')
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Conditionally create engine based on DB type
-if DATABASE_URL and 'sqlite' in DATABASE_URL:
+if DATABASE_URL and "sqlite" in DATABASE_URL:
     # SQLite: Use NullPool to prevent connection pool exhaustion
     engine = create_engine(
-        DATABASE_URL,
-        poolclass=NullPool,
-        connect_args={'check_same_thread': False}
+        DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
     )
 else:
     # For other databases like PostgreSQL, use connection pooling
-    engine = create_engine(
-        DATABASE_URL,
-        pool_size=50,
-        max_overflow=100,
-        pool_timeout=10
-    )
+    engine = create_engine(DATABASE_URL, pool_size=50, max_overflow=100, pool_timeout=10)
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()
 
+
 class Settings(Base):
-    __tablename__ = 'settings'
+    __tablename__ = "settings"
     id = Column(Integer, primary_key=True)
     analyze_mode = Column(Boolean, default=False)  # Default to Live Mode
 
@@ -60,9 +56,11 @@ class Settings(Base):
     security_api_ban_duration = Column(Integer, default=48)  # Ban duration in hours
     security_repeat_offender_limit = Column(Integer, default=3)  # Bans before permanent ban
 
+
 def init_db():
     """Initialize the settings database"""
     from database.db_init_helper import init_db_with_logging
+
     init_db_with_logging(Base, engine, "Settings DB", logger)
 
     # Create default settings only if no settings exist (with race condition protection)
@@ -76,9 +74,10 @@ def init_db():
         db_session.rollback()
         logger.debug(f"Settings DB: Default config may already exist (race condition): {e}")
 
+
 def get_analyze_mode():
     """Get current analyze mode setting (cached for 1 hour)"""
-    cache_key = 'analyze_mode'
+    cache_key = "analyze_mode"
 
     # Check cache first
     if cache_key in _settings_cache:
@@ -95,6 +94,7 @@ def get_analyze_mode():
     _settings_cache[cache_key] = settings.analyze_mode
     return settings.analyze_mode
 
+
 def set_analyze_mode(mode: bool):
     """Set analyze mode setting"""
     settings = Settings.query.first()
@@ -106,16 +106,18 @@ def set_analyze_mode(mode: bool):
     db_session.commit()
 
     # Invalidate cache after update
-    if 'analyze_mode' in _settings_cache:
-        del _settings_cache['analyze_mode']
+    if "analyze_mode" in _settings_cache:
+        del _settings_cache["analyze_mode"]
+
 
 def _get_encryption_key():
     """Get or create encryption key for SMTP password"""
     # Use API_KEY_PEPPER as the base for encryption key
-    pepper = os.getenv('API_KEY_PEPPER', 'default-pepper-key')
+    pepper = os.getenv("API_KEY_PEPPER", "default-pepper-key")
     # Create a stable key from the pepper
     key = base64.urlsafe_b64encode(pepper.ljust(32)[:32].encode())
     return key
+
 
 def _encrypt_password(password: str) -> str:
     """Encrypt SMTP password"""
@@ -126,6 +128,7 @@ def _encrypt_password(password: str) -> str:
     encrypted = f.encrypt(password.encode())
     return encrypted.decode()
 
+
 def _decrypt_password(encrypted_password: str) -> str:
     """Decrypt SMTP password"""
     if not encrypted_password:
@@ -135,30 +138,41 @@ def _decrypt_password(encrypted_password: str) -> str:
     decrypted = f.decrypt(encrypted_password.encode())
     return decrypted.decode()
 
+
 def get_smtp_settings():
     """Get SMTP configuration"""
     settings = Settings.query.first()
     if not settings:
         return None
-    
+
     return {
-        'smtp_server': settings.smtp_server,
-        'smtp_port': settings.smtp_port,
-        'smtp_username': settings.smtp_username,
-        'smtp_password': _decrypt_password(settings.smtp_password_encrypted) if settings.smtp_password_encrypted else None,
-        'smtp_use_tls': settings.smtp_use_tls,
-        'smtp_from_email': settings.smtp_from_email,
-        'smtp_helo_hostname': settings.smtp_helo_hostname
+        "smtp_server": settings.smtp_server,
+        "smtp_port": settings.smtp_port,
+        "smtp_username": settings.smtp_username,
+        "smtp_password": _decrypt_password(settings.smtp_password_encrypted)
+        if settings.smtp_password_encrypted
+        else None,
+        "smtp_use_tls": settings.smtp_use_tls,
+        "smtp_from_email": settings.smtp_from_email,
+        "smtp_helo_hostname": settings.smtp_helo_hostname,
     }
 
-def set_smtp_settings(smtp_server=None, smtp_port=None, smtp_username=None, 
-                     smtp_password=None, smtp_use_tls=True, smtp_from_email=None, smtp_helo_hostname=None):
+
+def set_smtp_settings(
+    smtp_server=None,
+    smtp_port=None,
+    smtp_username=None,
+    smtp_password=None,
+    smtp_use_tls=True,
+    smtp_from_email=None,
+    smtp_helo_hostname=None,
+):
     """Set SMTP configuration"""
     settings = Settings.query.first()
     if not settings:
         settings = Settings(analyze_mode=False)
         db_session.add(settings)
-    
+
     if smtp_server is not None:
         settings.smtp_server = smtp_server
     if smtp_port is not None:
@@ -173,13 +187,14 @@ def set_smtp_settings(smtp_server=None, smtp_port=None, smtp_username=None,
         settings.smtp_from_email = smtp_from_email
     if smtp_helo_hostname is not None:
         settings.smtp_helo_hostname = smtp_helo_hostname
-    
+
     db_session.commit()
     logger.info("SMTP settings updated successfully")
 
+
 def get_security_settings():
     """Get security configuration (cached for 1 hour)"""
-    cache_key = 'security_settings'
+    cache_key = "security_settings"
 
     # Check cache first
     if cache_key in _settings_cache:
@@ -195,26 +210,31 @@ def get_security_settings():
             security_404_ban_duration=24,
             security_api_threshold=10,
             security_api_ban_duration=48,
-            security_repeat_offender_limit=3
+            security_repeat_offender_limit=3,
         )
         db_session.add(settings)
         db_session.commit()
 
     result = {
-        '404_threshold': settings.security_404_threshold or 20,
-        '404_ban_duration': settings.security_404_ban_duration or 24,
-        'api_threshold': settings.security_api_threshold or 10,
-        'api_ban_duration': settings.security_api_ban_duration or 48,
-        'repeat_offender_limit': settings.security_repeat_offender_limit or 3
+        "404_threshold": settings.security_404_threshold or 20,
+        "404_ban_duration": settings.security_404_ban_duration or 24,
+        "api_threshold": settings.security_api_threshold or 10,
+        "api_ban_duration": settings.security_api_ban_duration or 48,
+        "repeat_offender_limit": settings.security_repeat_offender_limit or 3,
     }
 
     # Store in cache
     _settings_cache[cache_key] = result
     return result
 
-def set_security_settings(threshold_404=None, ban_duration_404=None,
-                         threshold_api=None, ban_duration_api=None,
-                         repeat_offender_limit=None):
+
+def set_security_settings(
+    threshold_404=None,
+    ban_duration_404=None,
+    threshold_api=None,
+    ban_duration_api=None,
+    repeat_offender_limit=None,
+):
     """Set security configuration"""
     settings = Settings.query.first()
     if not settings:
@@ -236,8 +256,8 @@ def set_security_settings(threshold_404=None, ban_duration_404=None,
     logger.info("Security settings updated successfully")
 
     # Invalidate cache after update
-    if 'security_settings' in _settings_cache:
-        del _settings_cache['security_settings']
+    if "security_settings" in _settings_cache:
+        del _settings_cache["security_settings"]
 
 
 def clear_settings_cache():

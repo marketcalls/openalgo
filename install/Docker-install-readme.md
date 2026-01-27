@@ -1,6 +1,136 @@
-# OpenAlgo Docker Installation Script
+# OpenAlgo Docker Installation
 
-## Quick Start
+> **Advanced Users**: For multi-instance deployment with custom SSL (wildcard certificates) and Portainer, see [Docker-Multi-SSL-README.md](./Docker-Multi-SSL-README.md)
+
+## Desktop Installation (Windows/macOS/Linux)
+
+For **personal trading** on your desktop/laptop with Docker Desktop.
+
+### Prerequisites
+
+1. **Install Docker Desktop**
+   - Windows: https://docs.docker.com/desktop/install/windows-install/
+   - macOS: https://docs.docker.com/desktop/install/mac-install/
+   - Linux: https://docs.docker.com/desktop/install/linux-install/
+
+2. **Start Docker Desktop** and wait for it to fully initialize
+
+### Quick Start (2 Commands)
+
+#### Windows (PowerShell or Command Prompt)
+```powershell
+curl.exe -O https://raw.githubusercontent.com/marketcalls/openalgo/main/install/docker-run.bat
+docker-run.bat
+```
+
+#### macOS / Linux (Terminal)
+```bash
+curl -O https://raw.githubusercontent.com/marketcalls/openalgo/main/install/docker-run.sh
+chmod +x docker-run.sh
+./docker-run.sh
+```
+
+### What Happens
+
+1. Sets up in the **current directory** (where the script is located)
+2. Downloads configuration template from GitHub
+3. Generates secure APP_KEY and API_KEY_PEPPER
+4. Prompts for broker name (with validation)
+5. Prompts for API credentials
+6. For **XTS brokers** (fivepaisaxts, compositedge, ibulls, iifl, jainamxts, wisdom): prompts for market data credentials
+7. Pulls and starts the Docker container
+8. **Runs database migrations automatically** on startup
+
+### After Setup
+
+- **Web UI**: http://127.0.0.1:5000
+- **WebSocket**: ws://127.0.0.1:8765
+- **Config file**: `.env` (in script directory)
+- **Database**: `db/` (in script directory)
+- **Strategies**: `strategies/` (Python strategy scripts)
+- **Logs**: `log/` (application and strategy logs)
+
+### Management Commands
+
+```bash
+# Windows
+docker-run.bat start     # Start OpenAlgo
+docker-run.bat stop      # Stop OpenAlgo
+docker-run.bat restart   # Restart (pulls latest + auto-migrates)
+docker-run.bat logs      # View live logs
+docker-run.bat status    # Check if running
+docker-run.bat pull      # Pull latest image
+docker-run.bat migrate   # Run database migrations manually
+docker-run.bat shell     # Open bash shell in container
+docker-run.bat setup     # Re-run setup (regenerate keys)
+
+# macOS / Linux
+./docker-run.sh start
+./docker-run.sh stop
+./docker-run.sh restart
+./docker-run.sh logs
+./docker-run.sh status
+./docker-run.sh pull
+./docker-run.sh migrate
+./docker-run.sh shell
+./docker-run.sh setup
+```
+
+### Updating OpenAlgo
+
+Database migrations run **automatically** when the container starts.
+
+```bash
+# Windows - Pull latest and restart (auto-migrates)
+docker-run.bat restart
+
+# macOS/Linux - Pull latest and restart (auto-migrates)
+./docker-run.sh restart
+
+# Or step by step:
+docker-run.bat pull      # Pull latest image
+docker-run.bat restart   # Restart with new image
+
+# Manual migration (if needed)
+docker-run.bat migrate
+```
+
+### File Permissions
+
+The scripts automatically handle file permissions:
+
+- **db/** directory: Created with write access for the container
+- **strategies/** directory: Python strategy scripts (persisted locally)
+- **log/** directory: Application and strategy logs (persisted locally)
+- **.env** file: Read-only mount inside container (`:ro`)
+- **Container user**: Runs as non-root user `appuser` (UID 1000)
+
+If you encounter permission issues on Linux:
+```bash
+# Fix directory permissions
+sudo chown -R 1000:1000 db/ strategies/ log/
+chmod -R 755 db/ strategies/ log/
+```
+
+### XTS Brokers
+
+These brokers require **additional market data credentials**:
+- fivepaisaxts
+- compositedge
+- ibulls
+- iifl
+- jainamxts
+- wisdom
+
+The setup script will automatically prompt for these credentials when you select an XTS broker.
+
+---
+
+## Server Installation (Ubuntu/Debian with SSL)
+
+For **production deployment** on a cloud server with custom domain and SSL certificate.
+
+### Quick Start
 
 This script provides a simplified, automated installation of OpenAlgo using Docker on Ubuntu/Debian systems with custom domain and SSL.
 
@@ -127,13 +257,15 @@ sudo docker compose up -d
 | Installation | `/opt/openalgo` |
 | Configuration | `/opt/openalgo/.env` |
 | Database | Docker volume `openalgo_db` |
+| Strategies | Docker volume `openalgo_strategies` |
 | Application Logs | `/opt/openalgo/log` |
-| Broker Logs | `/opt/openalgo/logs` |
 | Nginx Config | `/etc/nginx/sites-available/yourdomain.com` |
 | SSL Certificates | `/etc/letsencrypt/live/yourdomain.com/` |
 | Backups | `/opt/openalgo-backups/` |
 
 ### Updating OpenAlgo
+
+Database migrations run **automatically** when the container starts.
 
 ```bash
 cd /opt/openalgo
@@ -147,12 +279,15 @@ sudo docker compose down
 # Pull latest code
 sudo git pull origin main
 
-# Rebuild and restart
+# Rebuild and restart (migrations run automatically)
 sudo docker compose build --no-cache
 sudo docker compose up -d
 
 # Verify
 openalgo-status
+
+# Manual migration (if needed)
+sudo docker compose exec web python /app/upgrade/migrate_all.py
 ```
 
 ### Troubleshooting
@@ -173,7 +308,7 @@ sudo docker inspect openalgo-web --format='{{.State.Health.Status}}'
 ```bash
 # Fix log directory permissions
 cd /opt/openalgo
-sudo chown -R 1000:1000 log logs
+sudo chown -R 1000:1000 log
 sudo docker compose restart
 ```
 
@@ -307,7 +442,7 @@ sudo docker compose stop
 sudo tar -xzf /opt/openalgo-backups/openalgo_backup_TIMESTAMP.tar.gz -C /opt/openalgo
 
 # Fix permissions
-sudo chown -R 1000:1000 log logs
+sudo chown -R 1000:1000 log
 
 # Start container
 sudo docker compose start
@@ -372,10 +507,13 @@ sudo rm -rf /var/lib/docker
 | IBulls | `ibulls` | Yes |
 | IIFL | `iifl` | Yes |
 | IndMoney | `indmoney` | No |
+| Jainam XTS | `jainamxts` | Yes |
 | Kotak | `kotak` | No |
 | Motilal Oswal | `motilal` | No |
+| MStock | `mstock` | No |
 | Paytm Money | `paytm` | No |
 | Pocketful | `pocketful` | No |
+| Samco | `samco` | No |
 | Shoonya | `shoonya` | No |
 | Tradejini | `tradejini` | No |
 | Upstox | `upstox` | No |

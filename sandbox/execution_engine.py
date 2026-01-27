@@ -13,22 +13,20 @@ Features:
 
 import os
 import sys
-from decimal import Decimal
-from datetime import datetime
-import pytz
 import time
 import uuid
+from datetime import datetime
+from decimal import Decimal
+
+import pytz
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database.sandbox_db import (
-    SandboxOrders, SandboxTrades, SandboxPositions,
-    db_session
-)
-from sandbox.fund_manager import FundManager, validate_margin_consistency, reconcile_margin
-from services.quotes_service import get_quotes, get_multiquotes
 from database.auth_db import get_auth_token_broker
+from database.sandbox_db import SandboxOrders, SandboxPositions, SandboxTrades, db_session
+from sandbox.fund_manager import FundManager, reconcile_margin, validate_margin_consistency
+from services.quotes_service import get_multiquotes, get_quotes
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -39,8 +37,8 @@ class ExecutionEngine:
 
     def __init__(self):
         # Read rate limits from .env (same as API protection)
-        self.order_rate_limit = int(os.getenv('ORDER_RATE_LIMIT', '10 per second').split()[0])
-        self.api_rate_limit = int(os.getenv('API_RATE_LIMIT', '50 per second').split()[0])
+        self.order_rate_limit = int(os.getenv("ORDER_RATE_LIMIT", "10 per second").split()[0])
+        self.api_rate_limit = int(os.getenv("API_RATE_LIMIT", "50 per second").split()[0])
         self.batch_delay = 1.0  # 1 second between batches
 
     def check_and_execute_pending_orders(self):
@@ -50,7 +48,7 @@ class ExecutionEngine:
         """
         try:
             # Get all pending orders
-            pending_orders = SandboxOrders.query.filter_by(order_status='open').all()
+            pending_orders = SandboxOrders.query.filter_by(order_status="open").all()
 
             if not pending_orders:
                 logger.debug("No pending orders to process")
@@ -75,11 +73,15 @@ class ExecutionEngine:
             quote_cache = self._fetch_quotes_batch(symbols_list)
 
             # Fallback: For any symbols that failed in batch, try individual fetch
-            failed_symbols = [s for s in symbols_list if s not in quote_cache or quote_cache[s] is None]
+            failed_symbols = [
+                s for s in symbols_list if s not in quote_cache or quote_cache[s] is None
+            ]
             if failed_symbols:
-                logger.debug(f"Fetching {len(failed_symbols)} symbols individually (multiquotes fallback)")
+                logger.debug(
+                    f"Fetching {len(failed_symbols)} symbols individually (multiquotes fallback)"
+                )
                 for i in range(0, len(failed_symbols), self.api_rate_limit):
-                    batch = failed_symbols[i:i + self.api_rate_limit]
+                    batch = failed_symbols[i : i + self.api_rate_limit]
                     for symbol, exchange in batch:
                         quote = self._fetch_quote(symbol, exchange)
                         if quote:
@@ -91,7 +93,7 @@ class ExecutionEngine:
             # Process orders in batches (respecting order rate limit of 10/second)
             orders_processed = 0
             for i in range(0, len(pending_orders), self.order_rate_limit):
-                batch = pending_orders[i:i + self.order_rate_limit]
+                batch = pending_orders[i : i + self.order_rate_limit]
 
                 for order in batch:
                     quote = quote_cache.get((order.symbol, order.exchange))
@@ -117,6 +119,7 @@ class ExecutionEngine:
         try:
             # Get any user's API key for fetching quotes
             from database.auth_db import ApiKeys, decrypt_token
+
             api_key_obj = ApiKeys.query.first()
 
             if not api_key_obj:
@@ -128,18 +131,18 @@ class ExecutionEngine:
 
             # Use quotes service with API key authentication
             success, response, status_code = get_quotes(
-                symbol=symbol,
-                exchange=exchange,
-                api_key=api_key
+                symbol=symbol, exchange=exchange, api_key=api_key
             )
 
-            if success and 'data' in response:
-                quote_data = response['data']
+            if success and "data" in response:
+                quote_data = response["data"]
                 logger.debug(f"Fetched quote for {symbol}: LTP={quote_data.get('ltp', 0)}")
                 return quote_data
             else:
                 # Log at debug level to avoid spam for permission errors
-                logger.debug(f"Could not fetch quote for {symbol}: {response.get('message', 'Unknown error')}")
+                logger.debug(
+                    f"Could not fetch quote for {symbol}: {response.get('message', 'Unknown error')}"
+                )
                 return None
 
         except Exception as e:
@@ -161,6 +164,7 @@ class ExecutionEngine:
         try:
             # Get any user's API key for fetching quotes
             from database.auth_db import ApiKeys, decrypt_token
+
             api_key_obj = ApiKeys.query.first()
 
             if not api_key_obj:
@@ -172,34 +176,34 @@ class ExecutionEngine:
 
             # Prepare symbols list for multiquotes API
             symbols_payload = [
-                {"symbol": symbol, "exchange": exchange}
-                for symbol, exchange in symbols_list
+                {"symbol": symbol, "exchange": exchange} for symbol, exchange in symbols_list
             ]
 
             # Use multiquotes service
             success, response, status_code = get_multiquotes(
-                symbols=symbols_payload,
-                api_key=api_key
+                symbols=symbols_payload, api_key=api_key
             )
 
-            if success and 'results' in response:
-                results = response['results']
+            if success and "results" in response:
+                results = response["results"]
                 successful_count = 0
 
                 for result in results:
-                    symbol = result.get('symbol')
-                    exchange = result.get('exchange')
+                    symbol = result.get("symbol")
+                    exchange = result.get("exchange")
 
                     # Check if this result has data or error
-                    if 'data' in result and result['data']:
-                        quote_data = result['data']
+                    if "data" in result and result["data"]:
+                        quote_data = result["data"]
                         quote_cache[(symbol, exchange)] = quote_data
                         logger.debug(f"Multiquotes: {symbol} LTP={quote_data.get('ltp', 0)}")
                         successful_count += 1
-                    elif 'error' in result:
+                    elif "error" in result:
                         logger.debug(f"Multiquotes error for {symbol}: {result['error']}")
 
-                logger.info(f"Multiquotes fetched {successful_count}/{len(symbols_list)} symbols successfully")
+                logger.info(
+                    f"Multiquotes fetched {successful_count}/{len(symbols_list)} symbols successfully"
+                )
             else:
                 logger.debug(f"Multiquotes failed: {response.get('message', 'Unknown error')}")
 
@@ -219,21 +223,25 @@ class ExecutionEngine:
             # but the order status hasn't been updated to 'complete' yet due to race condition
             existing_trade = SandboxTrades.query.filter_by(orderid=order.orderid).first()
             if existing_trade:
-                logger.debug(f"Order {order.orderid} already has trade {existing_trade.tradeid}, skipping execution")
+                logger.debug(
+                    f"Order {order.orderid} already has trade {existing_trade.tradeid}, skipping execution"
+                )
                 # Update order status to complete if it's still open (race condition cleanup)
-                if order.order_status == 'open':
-                    order.order_status = 'complete'
+                if order.order_status == "open":
+                    order.order_status = "complete"
                     order.average_price = existing_trade.price
                     order.filled_quantity = order.quantity
                     order.pending_quantity = 0
-                    order.update_timestamp = datetime.now(pytz.timezone('Asia/Kolkata'))
+                    order.update_timestamp = datetime.now(pytz.timezone("Asia/Kolkata"))
                     db_session.commit()
-                    logger.info(f"Updated order {order.orderid} status to complete (was in race condition)")
+                    logger.info(
+                        f"Updated order {order.orderid} status to complete (was in race condition)"
+                    )
                 return
 
-            ltp = Decimal(str(quote.get('ltp', 0)))
-            bid = Decimal(str(quote.get('bid', 0)))
-            ask = Decimal(str(quote.get('ask', 0)))
+            ltp = Decimal(str(quote.get("ltp", 0)))
+            bid = Decimal(str(quote.get("bid", 0)))
+            ask = Decimal(str(quote.get("ask", 0)))
 
             if ltp <= 0:
                 logger.warning(f"Invalid LTP for order {order.orderid}: {ltp}")
@@ -243,48 +251,52 @@ class ExecutionEngine:
             should_execute = False
             execution_price = None
 
-            if order.price_type == 'MARKET':
+            if order.price_type == "MARKET":
                 # Market orders execute immediately at bid/ask (more realistic)
                 # BUY: Execute at ask price (pay seller's asking price)
                 # SELL: Execute at bid price (receive buyer's bid price)
                 # If bid/ask is 0, fall back to LTP
                 should_execute = True
-                if order.action == 'BUY':
+                if order.action == "BUY":
                     execution_price = ask if ask > 0 else ltp
                 else:  # SELL
                     execution_price = bid if bid > 0 else ltp
 
-            elif order.price_type == 'LIMIT':
+            elif order.price_type == "LIMIT":
                 # Limit BUY: Execute if LTP <= Limit Price (you get filled at LTP or better)
                 # Limit SELL: Execute if LTP >= Limit Price (you get filled at LTP or better)
-                if order.action == 'BUY' and ltp <= order.price:
+                if order.action == "BUY" and ltp <= order.price:
                     should_execute = True
-                    execution_price = ltp  # Execute at current market price (LTP), which is better than limit
-                elif order.action == 'SELL' and ltp >= order.price:
+                    execution_price = (
+                        ltp  # Execute at current market price (LTP), which is better than limit
+                    )
+                elif order.action == "SELL" and ltp >= order.price:
                     should_execute = True
-                    execution_price = ltp  # Execute at current market price (LTP), which is better than limit
+                    execution_price = (
+                        ltp  # Execute at current market price (LTP), which is better than limit
+                    )
 
-            elif order.price_type == 'SL':
+            elif order.price_type == "SL":
                 # Stop Loss Limit order
                 # SL BUY: When LTP >= trigger price, order activates. Execute at LTP if LTP <= limit price
                 # SL SELL: When LTP <= trigger price, order activates. Execute at LTP if LTP >= limit price
-                if order.action == 'BUY' and ltp >= order.trigger_price:
+                if order.action == "BUY" and ltp >= order.trigger_price:
                     if ltp <= order.price:
                         should_execute = True
                         execution_price = ltp  # Execute at current market price (LTP)
-                elif order.action == 'SELL' and ltp <= order.trigger_price:
+                elif order.action == "SELL" and ltp <= order.trigger_price:
                     if ltp >= order.price:
                         should_execute = True
                         execution_price = ltp  # Execute at current market price (LTP)
 
-            elif order.price_type == 'SL-M':
+            elif order.price_type == "SL-M":
                 # Stop Loss Market order
                 # BUY: Execute at market when LTP >= trigger price
                 # SELL: Execute at market when LTP <= trigger price
-                if order.action == 'BUY' and ltp >= order.trigger_price:
+                if order.action == "BUY" and ltp >= order.trigger_price:
                     should_execute = True
                     execution_price = ltp
-                elif order.action == 'SELL' and ltp <= order.trigger_price:
+                elif order.action == "SELL" and ltp <= order.trigger_price:
                     should_execute = True
                     execution_price = ltp
 
@@ -300,7 +312,9 @@ class ExecutionEngine:
         Execute an order - create trade, update positions, release/adjust margin
         """
         try:
-            logger.info(f"Executing order {order.orderid}: {order.symbol} {order.action} {order.quantity} @ {execution_price}")
+            logger.info(
+                f"Executing order {order.orderid}: {order.symbol} {order.action} {order.quantity} @ {execution_price}"
+            )
 
             # Generate trade ID
             tradeid = self._generate_trade_id()
@@ -317,17 +331,17 @@ class ExecutionEngine:
                 price=execution_price,
                 product=order.product,
                 strategy=order.strategy,
-                trade_timestamp=datetime.now(pytz.timezone('Asia/Kolkata'))
+                trade_timestamp=datetime.now(pytz.timezone("Asia/Kolkata")),
             )
 
             db_session.add(trade)
 
             # Update order status
-            order.order_status = 'complete'
+            order.order_status = "complete"
             order.average_price = execution_price
             order.filled_quantity = order.quantity
             order.pending_quantity = 0
-            order.update_timestamp = datetime.now(pytz.timezone('Asia/Kolkata'))
+            order.update_timestamp = datetime.now(pytz.timezone("Asia/Kolkata"))
 
             db_session.commit()
 
@@ -342,9 +356,9 @@ class ExecutionEngine:
 
             # Mark order as rejected
             try:
-                order.order_status = 'rejected'
+                order.order_status = "rejected"
                 order.rejection_reason = f"Execution error: {str(e)}"
-                order.update_timestamp = datetime.now(pytz.timezone('Asia/Kolkata'))
+                order.update_timestamp = datetime.now(pytz.timezone("Asia/Kolkata"))
                 db_session.commit()
             except:
                 db_session.rollback()
@@ -366,34 +380,40 @@ class ExecutionEngine:
                 user_id=order.user_id,
                 symbol=order.symbol,
                 exchange=order.exchange,
-                product=order.product
+                product=order.product,
             ).first()
 
             if not position:
                 # Create new position
                 # Store the exact margin that was blocked at order placement time
-                order_margin = order.margin_blocked if hasattr(order, 'margin_blocked') and order.margin_blocked else Decimal('0.00')
+                order_margin = (
+                    order.margin_blocked
+                    if hasattr(order, "margin_blocked") and order.margin_blocked
+                    else Decimal("0.00")
+                )
                 position = SandboxPositions(
                     user_id=order.user_id,
                     symbol=order.symbol,
                     exchange=order.exchange,
                     product=order.product,
-                    quantity=order.quantity if order.action == 'BUY' else -order.quantity,
+                    quantity=order.quantity if order.action == "BUY" else -order.quantity,
                     average_price=execution_price,
                     ltp=execution_price,
-                    pnl=Decimal('0.00'),
-                    pnl_percent=Decimal('0.00'),
-                    accumulated_realized_pnl=Decimal('0.00'),
+                    pnl=Decimal("0.00"),
+                    pnl_percent=Decimal("0.00"),
+                    accumulated_realized_pnl=Decimal("0.00"),
                     margin_blocked=order_margin,  # Store exact margin from order
-                    created_at=datetime.now(pytz.timezone('Asia/Kolkata'))
+                    created_at=datetime.now(pytz.timezone("Asia/Kolkata")),
                 )
                 db_session.add(position)
-                logger.info(f"Created new position: {order.symbol} {order.action} {order.quantity} (margin blocked: ₹{order_margin})")
+                logger.info(
+                    f"Created new position: {order.symbol} {order.action} {order.quantity} (margin blocked: ₹{order_margin})"
+                )
 
             else:
                 # Update existing position (netting logic)
                 old_quantity = position.quantity
-                new_quantity = order.quantity if order.action == 'BUY' else -order.quantity
+                new_quantity = order.quantity if order.action == "BUY" else -order.quantity
                 final_quantity = old_quantity + new_quantity
 
                 # Special case: Reopening a closed position (old_quantity = 0)
@@ -402,52 +422,73 @@ class ExecutionEngine:
                     position.quantity = new_quantity
                     position.average_price = execution_price
                     position.ltp = execution_price
-                    position.pnl = Decimal('0.00')  # Reset current P&L (will be updated by MTM)
-                    position.pnl_percent = Decimal('0.00')
+                    position.pnl = Decimal("0.00")  # Reset current P&L (will be updated by MTM)
+                    position.pnl_percent = Decimal("0.00")
                     # accumulated_realized_pnl stays as is from previous closed trades
                     # today_realized_pnl: Keep current value (already reset at session boundary)
                     # Store the exact margin that was blocked at order placement time
-                    order_margin = order.margin_blocked if hasattr(order, 'margin_blocked') and order.margin_blocked else Decimal('0.00')
+                    order_margin = (
+                        order.margin_blocked
+                        if hasattr(order, "margin_blocked") and order.margin_blocked
+                        else Decimal("0.00")
+                    )
                     position.margin_blocked = order_margin
-                    logger.info(f"Reopened position: {order.symbol} {order.action} {order.quantity} (accumulated realized P&L: ₹{position.accumulated_realized_pnl}) (margin blocked: ₹{order_margin})")
+                    logger.info(
+                        f"Reopened position: {order.symbol} {order.action} {order.quantity} (accumulated realized P&L: ₹{position.accumulated_realized_pnl}) (margin blocked: ₹{order_margin})"
+                    )
 
                 elif final_quantity == 0:
                     # Position closed completely
                     # Calculate realized P&L
                     realized_pnl = self._calculate_realized_pnl(
-                        old_quantity, position.average_price,
-                        abs(new_quantity), execution_price
+                        old_quantity, position.average_price, abs(new_quantity), execution_price
                     )
 
                     # Release the EXACT margin that was stored in the position
                     # This prevents over-release when execution price differs from order placement price
-                    margin_to_release = position.margin_blocked if hasattr(position, 'margin_blocked') and position.margin_blocked else Decimal('0.00')
+                    margin_to_release = (
+                        position.margin_blocked
+                        if hasattr(position, "margin_blocked") and position.margin_blocked
+                        else Decimal("0.00")
+                    )
 
                     if margin_to_release > 0:
                         fund_manager.release_margin(
-                            margin_to_release,
-                            realized_pnl,
-                            f"Position closed: {order.symbol}"
+                            margin_to_release, realized_pnl, f"Position closed: {order.symbol}"
                         )
-                        logger.info(f"Released exact margin ₹{margin_to_release} for closed position (from position.margin_blocked)")
+                        logger.info(
+                            f"Released exact margin ₹{margin_to_release} for closed position (from position.margin_blocked)"
+                        )
 
                     # Keep position with 0 quantity to show it was closed
                     # Add realized P&L to accumulated realized P&L (all-time)
                     position.accumulated_realized_pnl += realized_pnl
                     # Add realized P&L to today's realized P&L (resets daily at session boundary)
-                    position.today_realized_pnl = (position.today_realized_pnl or Decimal('0.00')) + realized_pnl
+                    position.today_realized_pnl = (
+                        position.today_realized_pnl or Decimal("0.00")
+                    ) + realized_pnl
 
                     position.quantity = 0
-                    position.margin_blocked = Decimal('0.00')  # Reset margin to 0 when position fully closed
+                    position.margin_blocked = Decimal(
+                        "0.00"
+                    )  # Reset margin to 0 when position fully closed
                     position.ltp = execution_price
-                    position.pnl = position.today_realized_pnl  # Display today's realized P&L for closed positions
-                    position.pnl_percent = Decimal('0.00')
-                    logger.info(f"Position closed: {order.symbol}, Realized P&L: ₹{realized_pnl}, Today's Realized P&L: ₹{position.today_realized_pnl}")
+                    position.pnl = (
+                        position.today_realized_pnl
+                    )  # Display today's realized P&L for closed positions
+                    position.pnl_percent = Decimal("0.00")
+                    logger.info(
+                        f"Position closed: {order.symbol}, Realized P&L: ₹{realized_pnl}, Today's Realized P&L: ₹{position.today_realized_pnl}"
+                    )
 
-                elif (old_quantity > 0 and final_quantity > old_quantity) or (old_quantity < 0 and final_quantity < old_quantity):
+                elif (old_quantity > 0 and final_quantity > old_quantity) or (
+                    old_quantity < 0 and final_quantity < old_quantity
+                ):
                     # Adding to existing position (same direction, position size increasing)
                     # Calculate new average price
-                    total_value = (abs(old_quantity) * position.average_price) + (abs(new_quantity) * execution_price)
+                    total_value = (abs(old_quantity) * position.average_price) + (
+                        abs(new_quantity) * execution_price
+                    )
                     total_quantity = abs(old_quantity) + abs(new_quantity)
                     new_average_price = total_value / total_quantity
 
@@ -456,9 +497,19 @@ class ExecutionEngine:
                     position.ltp = execution_price
 
                     # Accumulate margin - add the margin blocked for this order to existing position margin
-                    order_margin = order.margin_blocked if hasattr(order, 'margin_blocked') and order.margin_blocked else Decimal('0.00')
-                    position.margin_blocked = (position.margin_blocked if hasattr(position, 'margin_blocked') and position.margin_blocked else Decimal('0.00')) + order_margin
-                    logger.info(f"Added to position: {order.symbol}, New qty: {final_quantity}, Avg: {new_average_price} (total margin blocked: ₹{position.margin_blocked})")
+                    order_margin = (
+                        order.margin_blocked
+                        if hasattr(order, "margin_blocked") and order.margin_blocked
+                        else Decimal("0.00")
+                    )
+                    position.margin_blocked = (
+                        position.margin_blocked
+                        if hasattr(position, "margin_blocked") and position.margin_blocked
+                        else Decimal("0.00")
+                    ) + order_margin
+                    logger.info(
+                        f"Added to position: {order.symbol}, New qty: {final_quantity}, Avg: {new_average_price} (total margin blocked: ₹{position.margin_blocked})"
+                    )
 
                 else:
                     # Reducing position (opposite direction) or position reversal
@@ -466,34 +517,43 @@ class ExecutionEngine:
 
                     # Calculate realized P&L for reduced portion
                     realized_pnl = self._calculate_realized_pnl(
-                        old_quantity, position.average_price,
-                        reduced_quantity, execution_price
+                        old_quantity, position.average_price, reduced_quantity, execution_price
                     )
 
                     # Add realized P&L to accumulated realized P&L (all-time)
                     # This tracks all partial closes
-                    position.accumulated_realized_pnl = (position.accumulated_realized_pnl or Decimal('0.00')) + realized_pnl
+                    position.accumulated_realized_pnl = (
+                        position.accumulated_realized_pnl or Decimal("0.00")
+                    ) + realized_pnl
                     # Add realized P&L to today's realized P&L (resets daily at session boundary)
-                    position.today_realized_pnl = (position.today_realized_pnl or Decimal('0.00')) + realized_pnl
+                    position.today_realized_pnl = (
+                        position.today_realized_pnl or Decimal("0.00")
+                    ) + realized_pnl
 
                     # Release margin PROPORTIONALLY for reduced quantity
                     # Use exact margin stored in position, release proportionally
-                    current_margin = position.margin_blocked if hasattr(position, 'margin_blocked') and position.margin_blocked else Decimal('0.00')
+                    current_margin = (
+                        position.margin_blocked
+                        if hasattr(position, "margin_blocked") and position.margin_blocked
+                        else Decimal("0.00")
+                    )
 
                     if abs(old_quantity) > 0:
                         # Calculate proportion of position being reduced
-                        reduction_proportion = Decimal(str(reduced_quantity)) / Decimal(str(abs(old_quantity)))
+                        reduction_proportion = Decimal(str(reduced_quantity)) / Decimal(
+                            str(abs(old_quantity))
+                        )
                         margin_to_release = current_margin * reduction_proportion
                     else:
-                        margin_to_release = Decimal('0.00')
+                        margin_to_release = Decimal("0.00")
 
                     if margin_to_release > 0:
                         fund_manager.release_margin(
-                            margin_to_release,
-                            realized_pnl,
-                            f"Position reduced: {order.symbol}"
+                            margin_to_release, realized_pnl, f"Position reduced: {order.symbol}"
                         )
-                        logger.info(f"Released proportional margin ₹{margin_to_release} for reduced position ({reduction_proportion*100:.1f}% of ₹{current_margin})")
+                        logger.info(
+                            f"Released proportional margin ₹{margin_to_release} for reduced position ({reduction_proportion * 100:.1f}% of ₹{current_margin})"
+                        )
 
                     # Update remaining margin after proportional release
                     remaining_margin = current_margin - margin_to_release
@@ -502,7 +562,9 @@ class ExecutionEngine:
                     if abs(new_quantity) > abs(old_quantity):
                         # Position reversed - remaining quantity creates opposite position
                         remaining_quantity = abs(new_quantity) - abs(old_quantity)
-                        position.quantity = remaining_quantity if order.action == 'BUY' else -remaining_quantity
+                        position.quantity = (
+                            remaining_quantity if order.action == "BUY" else -remaining_quantity
+                        )
                         position.average_price = execution_price
 
                         # For reversed position, the new margin comes from the excess quantity in the order
@@ -510,21 +572,33 @@ class ExecutionEngine:
                         # Note: order.margin_blocked contains margin for the FULL order quantity
                         # We need to calculate what portion corresponds to the excess quantity
                         if abs(new_quantity) > 0:
-                            excess_proportion = Decimal(str(remaining_quantity)) / Decimal(str(abs(new_quantity)))
-                            order_margin = order.margin_blocked if hasattr(order, 'margin_blocked') and order.margin_blocked else Decimal('0.00')
+                            excess_proportion = Decimal(str(remaining_quantity)) / Decimal(
+                                str(abs(new_quantity))
+                            )
+                            order_margin = (
+                                order.margin_blocked
+                                if hasattr(order, "margin_blocked") and order.margin_blocked
+                                else Decimal("0.00")
+                            )
                             new_position_margin = order_margin * excess_proportion
                             position.margin_blocked = new_position_margin
-                            logger.info(f"Position reversed: {order.symbol}, New qty: {position.quantity} (new margin: ₹{new_position_margin})")
+                            logger.info(
+                                f"Position reversed: {order.symbol}, New qty: {position.quantity} (new margin: ₹{new_position_margin})"
+                            )
                         else:
-                            position.margin_blocked = Decimal('0.00')
+                            position.margin_blocked = Decimal("0.00")
                     else:
                         # Position reduced but not reversed - keep remaining margin
                         position.quantity = final_quantity
                         position.margin_blocked = remaining_margin
-                        logger.info(f"Position reduced: {order.symbol}, New qty: {final_quantity}, Remaining margin: ₹{remaining_margin}")
+                        logger.info(
+                            f"Position reduced: {order.symbol}, New qty: {final_quantity}, Remaining margin: ₹{remaining_margin}"
+                        )
 
                     position.ltp = execution_price
-                    logger.info(f"Partial close: {order.symbol}, New qty: {final_quantity}, Realized P&L: ₹{realized_pnl}")
+                    logger.info(
+                        f"Partial close: {order.symbol}, New qty: {final_quantity}, Realized P&L: ₹{realized_pnl}"
+                    )
 
             db_session.commit()
 
@@ -561,12 +635,12 @@ class ExecutionEngine:
 
         except Exception as e:
             logger.error(f"Error calculating realized P&L: {e}")
-            return Decimal('0.00')
+            return Decimal("0.00")
 
     def _generate_trade_id(self):
         """Generate unique trade ID"""
-        now = datetime.now(pytz.timezone('Asia/Kolkata'))
-        timestamp = now.strftime('%Y%m%d-%H%M%S')
+        now = datetime.now(pytz.timezone("Asia/Kolkata"))
+        timestamp = now.strftime("%Y%m%d-%H%M%S")
         unique_id = str(uuid.uuid4())[:8]
         return f"TRADE-{timestamp}-{unique_id}"
 
@@ -577,15 +651,16 @@ def run_execution_engine_once():
     engine.check_and_execute_pending_orders()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     """Run execution engine in standalone mode for testing"""
     logger.info("Starting Sandbox Execution Engine")
 
     # Get check interval from config
     from database.sandbox_db import init_db
+
     init_db()
 
-    check_interval = int(get_config('order_check_interval', '5'))
+    check_interval = int(get_config("order_check_interval", "5"))
     logger.info(f"Order check interval: {check_interval} seconds")
 
     try:

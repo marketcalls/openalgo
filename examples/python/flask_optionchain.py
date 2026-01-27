@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, render_template_string
+from flask import Flask, jsonify, render_template_string, request
 from openalgo import api
 
 app = Flask(__name__)
@@ -6,7 +6,7 @@ app = Flask(__name__)
 # Initialize API client
 client = api(
     api_key="83ad96143dd5081d033abcfd20e9108daee5708fbea404121a762bed1e498dd0",
-    host="http://127.0.0.1:5000"
+    host="http://127.0.0.1:5000",
 )
 
 
@@ -36,20 +36,12 @@ def option_color(label):
 # -----------------------------------------------------
 @app.route("/")
 def optionchain_ui():
-
     # Fetch expiry list
-    expiry_data = client.expiry(
-        symbol="NIFTY",
-        exchange="NFO",
-        instrumenttype="options"
-    )
+    expiry_data = client.expiry(symbol="NIFTY", exchange="NFO", instrumenttype="options")
     expiry_list = expiry_data.get("data", [])
 
     # Selected expiry (default = first)
-    selected_expiry = request.args.get(
-        "expiry",
-        expiry_list[0] if expiry_list else None
-    )
+    selected_expiry = request.args.get("expiry", expiry_list[0] if expiry_list else None)
 
     # Strike count selector (default = 10)
     strike_count = request.args.get("count", default=10, type=int)
@@ -59,10 +51,7 @@ def optionchain_ui():
 
     # Fetch option chain
     chain = client.optionchain(
-        underlying="NIFTY",
-        exchange="NSE_INDEX",
-        expiry_date=api_expiry,
-        strike_count=strike_count
+        underlying="NIFTY", exchange="NSE_INDEX", expiry_date=api_expiry, strike_count=strike_count
     )
 
     # Template globals
@@ -70,7 +59,7 @@ def optionchain_ui():
         "option_color": option_color,
         "expiry_list": expiry_list,
         "selected_expiry": selected_expiry,
-        "strike_count": strike_count
+        "strike_count": strike_count,
     }
 
     # -----------------------------------------------------

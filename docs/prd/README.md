@@ -94,3 +94,9 @@ A unified API layer that:
 
 ### WebSocket Proxy
 - [WebSocket Proxy PRD](./websocket-proxy.md) - Real-time market data streaming
+
+### CI/CD Pipeline
+- [CI/CD PRD](./ci-cd.md) - Main product requirements
+- [Workflows Reference](./ci-cd-workflows.md) - Detailed job documentation
+- [Security Scanning](./ci-cd-security.md) - Security tools and configuration
+- [Local Development](./ci-cd-local-development.md) - Pre-commit setup guide

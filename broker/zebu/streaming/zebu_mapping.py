@@ -1,33 +1,35 @@
 """
 Zebu-specific mapping utilities for the WebSocket adapter
 """
-from typing import Dict, Set, Optional
+
+from typing import Dict, Optional, Set
+
 
 class ZebuExchangeMapper:
     """Maps between OpenAlgo exchange names and Zebu exchange codes"""
 
     # OpenAlgo to Zebu exchange mapping (same as Flattrade/Noren)
     EXCHANGE_MAP = {
-        'NSE': 'NSE',
-        'BSE': 'BSE',
-        'NFO': 'NFO',
-        'BFO': 'BFO',
-        'MCX': 'MCX',
-        'CDS': 'CDS',
-        'NSE_INDEX': 'NSE',  # Indices use base exchange
-        'BSE_INDEX': 'BSE'
+        "NSE": "NSE",
+        "BSE": "BSE",
+        "NFO": "NFO",
+        "BFO": "BFO",
+        "MCX": "MCX",
+        "CDS": "CDS",
+        "NSE_INDEX": "NSE",  # Indices use base exchange
+        "BSE_INDEX": "BSE",
     }
 
     # Reverse mapping
     ZEBU_TO_OPENALGO = {v: k for k, v in EXCHANGE_MAP.items()}
 
     @classmethod
-    def to_zebu_exchange(cls, oa_exchange: str) -> Optional[str]:
+    def to_zebu_exchange(cls, oa_exchange: str) -> str | None:
         """Convert OpenAlgo exchange to Zebu exchange format"""
         return cls.EXCHANGE_MAP.get(oa_exchange.upper())
 
     @classmethod
-    def to_oa_exchange(cls, zebu_exchange: str) -> Optional[str]:
+    def to_oa_exchange(cls, zebu_exchange: str) -> str | None:
         """Convert Zebu exchange to OpenAlgo exchange format"""
         return cls.ZEBU_TO_OPENALGO.get(zebu_exchange.upper())
 
@@ -63,11 +65,11 @@ class ZebuCapabilityRegistry:
         return 5
 
     @classmethod
-    def get_capabilities(cls) -> Dict[str, any]:
+    def get_capabilities(cls) -> dict[str, any]:
         """Get all capabilities"""
         return {
-            'supported_modes': list(cls.SUPPORTED_MODES),
-            'supported_depth_levels': list(cls.SUPPORTED_DEPTH_LEVELS),
-            'max_subscriptions': cls.MAX_SUBSCRIPTIONS,
-            'max_instruments_per_request': cls.MAX_INSTRUMENTS_PER_REQUEST
+            "supported_modes": list(cls.SUPPORTED_MODES),
+            "supported_depth_levels": list(cls.SUPPORTED_DEPTH_LEVELS),
+            "max_subscriptions": cls.MAX_SUBSCRIPTIONS,
+            "max_instruments_per_request": cls.MAX_INSTRUMENTS_PER_REQUEST,
         }

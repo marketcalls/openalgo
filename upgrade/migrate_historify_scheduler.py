@@ -15,17 +15,18 @@ Migration: 011
 Created: 2025-01-25
 """
 
-import sys
-import os
 import argparse
+import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.logging import get_logger
 from dotenv import load_dotenv
+
+from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -35,10 +36,10 @@ MIGRATION_VERSION = "011"
 
 # Load environment
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-load_dotenv(os.path.join(parent_dir, '.env'))
+load_dotenv(os.path.join(parent_dir, ".env"))
 
 # Database path
-HISTORIFY_DB_PATH = os.getenv('HISTORIFY_DATABASE_PATH', 'db/historify.duckdb')
+HISTORIFY_DB_PATH = os.getenv("HISTORIFY_DATABASE_PATH", "db/historify.duckdb")
 
 
 def get_db_path():
@@ -52,6 +53,7 @@ def check_duckdb_available():
     """Check if DuckDB is installed."""
     try:
         import duckdb
+
         logger.info(f"DuckDB version: {duckdb.__version__}")
         return True
     except ImportError:
@@ -86,7 +88,7 @@ def create_scheduler_tables():
 
     try:
         # Check if tables already exist
-        if table_exists(conn, 'historify_schedules'):
+        if table_exists(conn, "historify_schedules"):
             logger.info("historify_schedules table already exists - skipping")
         else:
             logger.info("Creating historify_schedules table...")
@@ -117,7 +119,7 @@ def create_scheduler_tables():
             """)
             logger.info("Created historify_schedules table")
 
-        if table_exists(conn, 'historify_schedule_executions'):
+        if table_exists(conn, "historify_schedule_executions"):
             logger.info("historify_schedule_executions table already exists - skipping")
         else:
             logger.info("Creating historify_schedule_executions table...")
@@ -178,6 +180,7 @@ def upgrade():
     except Exception as e:
         logger.error(f"Migration failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -206,7 +209,7 @@ def status():
 
         try:
             # Check scheduler tables exist
-            required_tables = ['historify_schedules', 'historify_schedule_executions']
+            required_tables = ["historify_schedules", "historify_schedule_executions"]
             missing_tables = []
 
             for table in required_tables:
@@ -225,7 +228,9 @@ def status():
                 SELECT COUNT(*) FROM historify_schedules
                 WHERE is_enabled = TRUE AND is_paused = FALSE
             """).fetchone()[0]
-            executions_count = conn.execute("SELECT COUNT(*) FROM historify_schedule_executions").fetchone()[0]
+            executions_count = conn.execute(
+                "SELECT COUNT(*) FROM historify_schedule_executions"
+            ).fetchone()[0]
 
             logger.info("Historify scheduler tables are configured")
             logger.info(f"   Total Schedules: {schedules_count}")
@@ -245,13 +250,12 @@ def status():
         return False
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description=f'Migration: {MIGRATION_NAME} (v{MIGRATION_VERSION})',
-        formatter_class=argparse.RawDescriptionHelpFormatter
+        description=f"Migration: {MIGRATION_NAME} (v{MIGRATION_VERSION})",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument('--status', action='store_true',
-                        help='Check migration status')
+    parser.add_argument("--status", action="store_true", help="Check migration status")
 
     args = parser.parse_args()
 

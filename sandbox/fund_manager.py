@@ -18,16 +18,20 @@ Auto-Reset:
 import os
 import sys
 import threading
-from decimal import Decimal
 from datetime import datetime, timedelta
+from decimal import Decimal
+
 import pytz
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.sandbox_db import (
-    SandboxFunds, SandboxPositions, SandboxHoldings,
-    db_session, get_config
+    SandboxFunds,
+    SandboxHoldings,
+    SandboxPositions,
+    db_session,
+    get_config,
 )
 from database.token_db import get_symbol_info
 from utils.logging import get_logger
@@ -37,15 +41,15 @@ logger = get_logger(__name__)
 
 def is_option(symbol, exchange):
     """Check if symbol is an option based on exchange and symbol suffix"""
-    if exchange in ['NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NCDEX']:
-        return symbol.endswith('CE') or symbol.endswith('PE')
+    if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"]:
+        return symbol.endswith("CE") or symbol.endswith("PE")
     return False
 
 
 def is_future(symbol, exchange):
     """Check if symbol is a future based on exchange and symbol suffix"""
-    if exchange in ['NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NCDEX']:
-        return symbol.endswith('FUT')
+    if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"]:
+        return symbol.endswith("FUT")
     return False
 
 
@@ -58,7 +62,7 @@ class FundManager:
 
     def __init__(self, user_id):
         self.user_id = user_id
-        self.starting_capital = Decimal(get_config('starting_capital', '10000000.00'))
+        self.starting_capital = Decimal(get_config("starting_capital", "10000000.00"))
 
     def initialize_funds(self):
         """Initialize funds for a new user"""
@@ -73,17 +77,19 @@ class FundManager:
                         user_id=self.user_id,
                         total_capital=self.starting_capital,
                         available_balance=self.starting_capital,
-                        used_margin=Decimal('0.00'),
-                        realized_pnl=Decimal('0.00'),
-                        today_realized_pnl=Decimal('0.00'),
-                        unrealized_pnl=Decimal('0.00'),
-                        total_pnl=Decimal('0.00'),
-                        last_reset_date=datetime.now(pytz.timezone('Asia/Kolkata')),
-                        reset_count=0
+                        used_margin=Decimal("0.00"),
+                        realized_pnl=Decimal("0.00"),
+                        today_realized_pnl=Decimal("0.00"),
+                        unrealized_pnl=Decimal("0.00"),
+                        total_pnl=Decimal("0.00"),
+                        last_reset_date=datetime.now(pytz.timezone("Asia/Kolkata")),
+                        reset_count=0,
                     )
                     db_session.add(funds)
                     db_session.commit()
-                    logger.info(f"Initialized funds for user {self.user_id} with ₹{self.starting_capital}")
+                    logger.info(
+                        f"Initialized funds for user {self.user_id} with ₹{self.starting_capital}"
+                    )
                     return True, "Funds initialized successfully"
                 else:
                     logger.debug(f"User {self.user_id} already has funds initialized")
@@ -112,17 +118,19 @@ class FundManager:
 
             # Return fund details
             return {
-                'availablecash': float(funds.available_balance),
-                'collateral': 0.00,  # No collateral in sandbox
-                'm2munrealized': float(funds.unrealized_pnl),
-                'm2mrealized': float(funds.today_realized_pnl or 0),  # Today's realized P&L (resets daily)
-                'total_realized_pnl': float(funds.realized_pnl),  # All-time realized P&L
-                'today_realized_pnl': float(funds.today_realized_pnl or 0),
-                'utiliseddebits': float(funds.used_margin),
-                'grossexposure': float(funds.used_margin),
-                'totalpnl': float(funds.total_pnl),
-                'last_reset': funds.last_reset_date.strftime('%Y-%m-%d %H:%M:%S'),
-                'reset_count': funds.reset_count
+                "availablecash": float(funds.available_balance),
+                "collateral": 0.00,  # No collateral in sandbox
+                "m2munrealized": float(funds.unrealized_pnl),
+                "m2mrealized": float(
+                    funds.today_realized_pnl or 0
+                ),  # Today's realized P&L (resets daily)
+                "total_realized_pnl": float(funds.realized_pnl),  # All-time realized P&L
+                "today_realized_pnl": float(funds.today_realized_pnl or 0),
+                "utiliseddebits": float(funds.used_margin),
+                "grossexposure": float(funds.used_margin),
+                "totalpnl": float(funds.total_pnl),
+                "last_reset": funds.last_reset_date.strftime("%Y-%m-%d %H:%M:%S"),
+                "reset_count": funds.reset_count,
             }
 
         except Exception as e:
@@ -133,11 +141,11 @@ class FundManager:
         """Check if funds need to be reset (every Sunday at midnight IST)"""
         try:
             # Check if auto-reset is disabled
-            reset_day = get_config('reset_day', 'Never')
-            if reset_day.lower() == 'never':
+            reset_day = get_config("reset_day", "Never")
+            if reset_day.lower() == "never":
                 return  # Skip reset check entirely
 
-            ist = pytz.timezone('Asia/Kolkata')
+            ist = pytz.timezone("Asia/Kolkata")
             now = datetime.now(ist)
             last_reset = funds.last_reset_date
 
@@ -146,15 +154,12 @@ class FundManager:
                 last_reset = ist.localize(last_reset)
 
             # Check if it's the configured reset day and we haven't reset today
-            reset_time_str = get_config('reset_time', '00:00')
+            reset_time_str = get_config("reset_time", "00:00")
 
-            if now.strftime('%A') == reset_day:
-                reset_hour, reset_minute = map(int, reset_time_str.split(':'))
+            if now.strftime("%A") == reset_day:
+                reset_hour, reset_minute = map(int, reset_time_str.split(":"))
                 reset_time_today = now.replace(
-                    hour=reset_hour,
-                    minute=reset_minute,
-                    second=0,
-                    microsecond=0
+                    hour=reset_hour, minute=reset_minute, second=0, microsecond=0
                 )
 
                 # If current time is past reset time and last reset was before today's reset time
@@ -173,12 +178,12 @@ class FundManager:
                 # Reset all fund values
                 funds.total_capital = self.starting_capital
                 funds.available_balance = self.starting_capital
-                funds.used_margin = Decimal('0.00')
-                funds.realized_pnl = Decimal('0.00')
-                funds.today_realized_pnl = Decimal('0.00')
-                funds.unrealized_pnl = Decimal('0.00')
-                funds.total_pnl = Decimal('0.00')
-                funds.last_reset_date = datetime.now(pytz.timezone('Asia/Kolkata'))
+                funds.used_margin = Decimal("0.00")
+                funds.realized_pnl = Decimal("0.00")
+                funds.today_realized_pnl = Decimal("0.00")
+                funds.unrealized_pnl = Decimal("0.00")
+                funds.total_pnl = Decimal("0.00")
+                funds.last_reset_date = datetime.now(pytz.timezone("Asia/Kolkata"))
                 funds.reset_count += 1
 
                 db_session.commit()
@@ -188,7 +193,9 @@ class FundManager:
                 SandboxHoldings.query.filter_by(user_id=self.user_id).delete()
                 db_session.commit()
 
-                logger.info(f"Funds reset successfully for user {self.user_id} (Reset #{funds.reset_count})")
+                logger.info(
+                    f"Funds reset successfully for user {self.user_id} (Reset #{funds.reset_count})"
+                )
 
             except Exception as e:
                 db_session.rollback()
@@ -208,7 +215,10 @@ class FundManager:
                 return True, "Sufficient margin available"
             else:
                 shortage = required_margin - funds.available_balance
-                return False, f"Insufficient funds. Required: ₹{required_margin}, Available: ₹{funds.available_balance}, Shortage: ₹{shortage}"
+                return (
+                    False,
+                    f"Insufficient funds. Required: ₹{required_margin}, Available: ₹{funds.available_balance}, Shortage: ₹{shortage}",
+                )
 
         except Exception as e:
             logger.error(f"Error checking margin for user {self.user_id}: {e}")
@@ -226,7 +236,10 @@ class FundManager:
                 amount = Decimal(str(amount))
 
                 if funds.available_balance < amount:
-                    return False, f"Insufficient funds. Required: ₹{amount}, Available: ₹{funds.available_balance}"
+                    return (
+                        False,
+                        f"Insufficient funds. Required: ₹{amount}, Available: ₹{funds.available_balance}",
+                    )
 
                 # Block the margin
                 funds.available_balance -= amount
@@ -262,12 +275,16 @@ class FundManager:
                 funds.available_balance += realized_pnl
                 funds.realized_pnl += realized_pnl
                 # Add to today's realized P&L (resets daily at session boundary)
-                funds.today_realized_pnl = (funds.today_realized_pnl or Decimal('0.00')) + realized_pnl
+                funds.today_realized_pnl = (
+                    funds.today_realized_pnl or Decimal("0.00")
+                ) + realized_pnl
                 funds.total_pnl = funds.realized_pnl + funds.unrealized_pnl
 
                 db_session.commit()
 
-                logger.info(f"Released ₹{amount} margin for user {self.user_id}. Realized P&L: ₹{realized_pnl}. {description}")
+                logger.info(
+                    f"Released ₹{amount} margin for user {self.user_id}. Realized P&L: ₹{realized_pnl}. {description}"
+                )
                 return True, f"Margin released: ₹{amount}, P&L: ₹{realized_pnl}"
 
             except Exception as e:
@@ -296,7 +313,9 @@ class FundManager:
 
                 db_session.commit()
 
-                logger.debug(f"Transferred ₹{amount} margin to holdings for user {self.user_id}. {description}")
+                logger.debug(
+                    f"Transferred ₹{amount} margin to holdings for user {self.user_id}. {description}"
+                )
                 return True, f"Margin transferred to holdings: ₹{amount}"
 
             except Exception as e:
@@ -323,7 +342,9 @@ class FundManager:
 
                 db_session.commit()
 
-                logger.info(f"Credited ₹{amount} sale proceeds for user {self.user_id}. {description}")
+                logger.info(
+                    f"Credited ₹{amount} sale proceeds for user {self.user_id}. {description}"
+                )
                 return True, f"Sale proceeds credited: ₹{amount}"
 
             except Exception as e:
@@ -379,7 +400,9 @@ class FundManager:
             # Calculate margin (always use leverage-based calculation)
             margin = trade_value / Decimal(str(leverage))
 
-            logger.debug(f"Margin for {symbol} {exchange} {product} {action}: ₹{margin} (Trade value: ₹{trade_value}, Leverage: {leverage}x)")
+            logger.debug(
+                f"Margin for {symbol} {exchange} {product} {action}: ₹{margin} (Trade value: ₹{trade_value}, Leverage: {leverage}x)"
+            )
 
             return margin, "Margin calculated successfully"
 
@@ -391,32 +414,32 @@ class FundManager:
         """Get leverage multiplier based on exchange, product, symbol type, and action"""
         try:
             # Equity exchanges
-            if exchange in ['NSE', 'BSE']:
-                if product == 'MIS':
-                    return Decimal(get_config('equity_mis_leverage', '5'))
-                elif product == 'CNC':
-                    return Decimal(get_config('equity_cnc_leverage', '1'))
+            if exchange in ["NSE", "BSE"]:
+                if product == "MIS":
+                    return Decimal(get_config("equity_mis_leverage", "5"))
+                elif product == "CNC":
+                    return Decimal(get_config("equity_cnc_leverage", "1"))
                 else:  # NRML
-                    return Decimal(get_config('equity_cnc_leverage', '1'))
+                    return Decimal(get_config("equity_cnc_leverage", "1"))
 
             # Futures (NFO, BFO, MCX, CDS, BCD, NCDEX exchanges with FUT suffix)
             elif is_future(symbol, exchange):
-                return Decimal(get_config('futures_leverage', '10'))
+                return Decimal(get_config("futures_leverage", "10"))
 
             # Options (NFO, BFO, MCX, CDS, BCD, NCDEX exchanges with CE/PE suffix)
             elif is_option(symbol, exchange):
                 # Options use different leverage based on BUY vs SELL
-                if action == 'BUY':
-                    return Decimal(get_config('option_buy_leverage', '1'))
+                if action == "BUY":
+                    return Decimal(get_config("option_buy_leverage", "1"))
                 else:  # SELL
-                    return Decimal(get_config('option_sell_leverage', '1'))
+                    return Decimal(get_config("option_sell_leverage", "1"))
 
             # Default to 1x leverage
-            return Decimal('1')
+            return Decimal("1")
 
         except Exception as e:
             logger.error(f"Error getting leverage: {e}")
-            return Decimal('1')
+            return Decimal("1")
 
 
 def get_user_funds(user_id):
@@ -492,7 +515,7 @@ def reconcile_margin(user_id, auto_fix=True):
         # Get current used_margin from funds
         funds = SandboxFunds.query.filter_by(user_id=user_id).first()
         if not funds:
-            return False, Decimal('0'), "No funds record found for user"
+            return False, Decimal("0"), "No funds record found for user"
 
         current_used_margin = Decimal(str(funds.used_margin or 0))
 
@@ -500,7 +523,7 @@ def reconcile_margin(user_id, auto_fix=True):
         discrepancy = current_used_margin - total_position_margin
 
         if discrepancy == 0:
-            return False, Decimal('0'), "No margin discrepancy detected"
+            return False, Decimal("0"), "No margin discrepancy detected"
 
         # Log the discrepancy
         logger.warning(
@@ -523,12 +546,16 @@ def reconcile_margin(user_id, auto_fix=True):
 
             return True, discrepancy, f"Margin reconciled. Released {discrepancy} stuck margin."
         else:
-            return True, discrepancy, f"Discrepancy of {discrepancy} detected but not fixed (auto_fix=False)"
+            return (
+                True,
+                discrepancy,
+                f"Discrepancy of {discrepancy} detected but not fixed (auto_fix=False)",
+            )
 
     except Exception as e:
         logger.error(f"Error reconciling margin for user {user_id}: {e}")
         db_session.rollback()
-        return False, Decimal('0'), f"Error during reconciliation: {str(e)}"
+        return False, Decimal("0"), f"Error during reconciliation: {str(e)}"
 
 
 def reconcile_all_users_margin():
@@ -549,7 +576,7 @@ def reconcile_all_users_margin():
 
         users_checked = 0
         discrepancies_found = 0
-        total_released = Decimal('0')
+        total_released = Decimal("0")
 
         for fund in all_funds:
             has_discrepancy, amount, message = reconcile_margin(fund.user_id, auto_fix=True)
@@ -569,7 +596,7 @@ def reconcile_all_users_margin():
         return {
             "users_checked": users_checked,
             "discrepancies_found": discrepancies_found,
-            "total_released": float(total_released)
+            "total_released": float(total_released),
         }
 
     except Exception as e:
@@ -597,7 +624,7 @@ def validate_margin_consistency(user_id):
         # Get current used_margin from funds
         funds = SandboxFunds.query.filter_by(user_id=user_id).first()
         if not funds:
-            return True, Decimal('0')  # No funds = no discrepancy to report
+            return True, Decimal("0")  # No funds = no discrepancy to report
 
         current_used_margin = Decimal(str(funds.used_margin or 0))
         discrepancy = current_used_margin - total_position_margin
@@ -610,8 +637,8 @@ def validate_margin_consistency(user_id):
             )
             return False, discrepancy
 
-        return True, Decimal('0')
+        return True, Decimal("0")
 
     except Exception as e:
         logger.error(f"Error validating margin for user {user_id}: {e}")
-        return True, Decimal('0')  # Don't block operations on validation error
+        return True, Decimal("0")  # Don't block operations on validation error

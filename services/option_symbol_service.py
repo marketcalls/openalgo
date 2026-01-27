@@ -33,10 +33,11 @@ Example Usage (OLD METHOD - Legacy):
         symbol: "NIFTY28OCT2523500CE"  (if ATM is 23600, ITM2 = 23600 - 2*50 = 23500)
 """
 
-import re
 import importlib
-from typing import Tuple, Dict, Any, Optional, List
+import re
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+
 from database.auth_db import get_auth_token_broker
 from database.symbol import SymToken, db_session
 from services.quotes_service import get_quotes
@@ -48,30 +49,32 @@ logger = get_logger(__name__)
 # STRIKES CACHE - In-Memory Cache for Ultra-Fast Lookups
 # ============================================================================
 # Cache structure: {(base_symbol, expiry, option_type, exchange): [sorted_strikes]}
-_STRIKES_CACHE: Dict[Tuple[str, str, str, str], List[float]] = {}
-_CACHE_STATS = {'hits': 0, 'misses': 0, 'total_queries': 0}
+_STRIKES_CACHE: dict[tuple[str, str, str, str], list[float]] = {}
+_CACHE_STATS = {"hits": 0, "misses": 0, "total_queries": 0}
+
 
 def get_strikes_cache_stats() -> dict:
     """Get cache statistics for monitoring"""
-    total = _CACHE_STATS['total_queries']
-    hit_rate = (_CACHE_STATS['hits'] / total * 100) if total > 0 else 0.0
+    total = _CACHE_STATS["total_queries"]
+    hit_rate = (_CACHE_STATS["hits"] / total * 100) if total > 0 else 0.0
     return {
-        'hits': _CACHE_STATS['hits'],
-        'misses': _CACHE_STATS['misses'],
-        'total_queries': _CACHE_STATS['total_queries'],
-        'hit_rate': f"{hit_rate:.2f}%",
-        'cached_entries': len(_STRIKES_CACHE)
+        "hits": _CACHE_STATS["hits"],
+        "misses": _CACHE_STATS["misses"],
+        "total_queries": _CACHE_STATS["total_queries"],
+        "hit_rate": f"{hit_rate:.2f}%",
+        "cached_entries": len(_STRIKES_CACHE),
     }
+
 
 def clear_strikes_cache():
     """Clear the strikes cache (call when master contracts are updated)"""
     global _STRIKES_CACHE, _CACHE_STATS
     _STRIKES_CACHE.clear()
-    _CACHE_STATS = {'hits': 0, 'misses': 0, 'total_queries': 0}
+    _CACHE_STATS = {"hits": 0, "misses": 0, "total_queries": 0}
     logger.info("Strikes cache cleared")
 
 
-def parse_underlying_symbol(underlying: str) -> Tuple[str, Optional[str]]:
+def parse_underlying_symbol(underlying: str) -> tuple[str, str | None]:
     """
     Parse underlying symbol to extract base symbol and expiry date if present.
 
@@ -84,13 +87,15 @@ def parse_underlying_symbol(underlying: str) -> Tuple[str, Optional[str]]:
     """
     # Pattern to match: SYMBOL + DDMMMYY + optional FUT
     # Examples: NIFTY28OCT25FUT, BANKNIFTY31JAN25FUT, RELIANCE28MAR24FUT
-    pattern = r'^([A-Z]+)(\d{2}[A-Z]{3}\d{2})(?:FUT)?$'
+    pattern = r"^([A-Z]+)(\d{2}[A-Z]{3}\d{2})(?:FUT)?$"
 
     match = re.match(pattern, underlying.upper())
     if match:
         base_symbol = match.group(1)
         expiry_date = match.group(2)
-        logger.info(f"Parsed underlying '{underlying}' -> base: '{base_symbol}', expiry: '{expiry_date}'")
+        logger.info(
+            f"Parsed underlying '{underlying}' -> base: '{base_symbol}', expiry: '{expiry_date}'"
+        )
         return base_symbol, expiry_date
 
     # If no pattern match, treat the entire string as base symbol
@@ -118,7 +123,9 @@ def get_atm_strike(ltp: float, strike_int: int) -> float:
     return atm_strike
 
 
-def calculate_offset_strike(atm_strike: float, offset: str, strike_int: int, option_type: str) -> float:
+def calculate_offset_strike(
+    atm_strike: float, offset: str, strike_int: int, option_type: str
+) -> float:
     """
     Calculate the target strike based on ATM and offset.
 
@@ -171,11 +178,15 @@ def calculate_offset_strike(atm_strike: float, offset: str, strike_int: int, opt
         logger.error(f"Invalid offset: {offset}")
         raise ValueError(f"Invalid offset: {offset}")
 
-    logger.info(f"Calculated target strike: ATM={atm_strike}, offset={offset}, type={option_type}, target={target_strike}")
+    logger.info(
+        f"Calculated target strike: ATM={atm_strike}, offset={offset}, type={option_type}, target={target_strike}"
+    )
     return target_strike
 
 
-def construct_option_symbol(base_symbol: str, expiry_date: str, strike: float, option_type: str) -> str:
+def construct_option_symbol(
+    base_symbol: str, expiry_date: str, strike: float, option_type: str
+) -> str:
     """
     Construct option symbol in OpenAlgo format.
 
@@ -205,7 +216,7 @@ def construct_option_symbol(base_symbol: str, expiry_date: str, strike: float, o
     return option_symbol
 
 
-def find_option_in_database(option_symbol: str, exchange: str) -> Optional[Dict[str, Any]]:
+def find_option_in_database(option_symbol: str, exchange: str) -> dict[str, Any] | None:
     """
     Find the option symbol in the database and return its details.
 
@@ -218,25 +229,26 @@ def find_option_in_database(option_symbol: str, exchange: str) -> Optional[Dict[
     """
     try:
         # Query the database
-        result = db_session.query(SymToken).filter(
-            SymToken.symbol == option_symbol,
-            SymToken.exchange == exchange
-        ).first()
+        result = (
+            db_session.query(SymToken)
+            .filter(SymToken.symbol == option_symbol, SymToken.exchange == exchange)
+            .first()
+        )
 
         if result:
             logger.info(f"Found option in database: {option_symbol} on {exchange}")
             return {
-                'symbol': result.symbol,
-                'brsymbol': result.brsymbol,
-                'name': result.name,
-                'exchange': result.exchange,
-                'brexchange': result.brexchange,
-                'token': result.token,
-                'expiry': result.expiry,
-                'strike': result.strike,
-                'lotsize': result.lotsize,
-                'instrumenttype': result.instrumenttype,
-                'tick_size': result.tick_size
+                "symbol": result.symbol,
+                "brsymbol": result.brsymbol,
+                "name": result.name,
+                "exchange": result.exchange,
+                "brexchange": result.brexchange,
+                "token": result.token,
+                "expiry": result.expiry,
+                "strike": result.strike,
+                "lotsize": result.lotsize,
+                "instrumenttype": result.instrumenttype,
+                "tick_size": result.tick_size,
             }
         else:
             logger.warning(f"Option symbol not found in database: {option_symbol} on {exchange}")
@@ -247,7 +259,9 @@ def find_option_in_database(option_symbol: str, exchange: str) -> Optional[Dict[
         return None
 
 
-def get_available_strikes(base_symbol: str, expiry_date: str, option_type: str, exchange: str) -> list:
+def get_available_strikes(
+    base_symbol: str, expiry_date: str, option_type: str, exchange: str
+) -> list:
     """
     Fetch all available strikes from cache or database for a given underlying, expiry, and option type.
     Uses in-memory cache for ultra-fast lookups (O(1) instead of database query).
@@ -269,20 +283,27 @@ def get_available_strikes(base_symbol: str, expiry_date: str, option_type: str, 
 
     try:
         # Normalize inputs for cache key
-        cache_key = (base_symbol.upper(), expiry_date.upper(), option_type.upper(), exchange.upper())
+        cache_key = (
+            base_symbol.upper(),
+            expiry_date.upper(),
+            option_type.upper(),
+            exchange.upper(),
+        )
 
         # Update query stats
-        _CACHE_STATS['total_queries'] += 1
+        _CACHE_STATS["total_queries"] += 1
 
         # Check cache first (O(1) lookup)
         if cache_key in _STRIKES_CACHE:
-            _CACHE_STATS['hits'] += 1
+            _CACHE_STATS["hits"] += 1
             strikes = _STRIKES_CACHE[cache_key]
-            logger.debug(f"Cache HIT: {len(strikes)} strikes for {base_symbol} {expiry_date} {option_type}")
+            logger.debug(
+                f"Cache HIT: {len(strikes)} strikes for {base_symbol} {expiry_date} {option_type}"
+            )
             return strikes
 
         # Cache miss - query database
-        _CACHE_STATS['misses'] += 1
+        _CACHE_STATS["misses"] += 1
         logger.debug(f"Cache MISS: Querying database for {base_symbol} {expiry_date} {option_type}")
 
         # Convert expiry from DDMMMYY to DD-MMM-YY format used in database
@@ -296,12 +317,18 @@ def get_available_strikes(base_symbol: str, expiry_date: str, option_type: str, 
 
         # Query database for all strikes matching the criteria
         # Using LIKE to match symbol pattern and filter by exchange and instrumenttype
-        results = db_session.query(SymToken.strike).filter(
-            SymToken.symbol.like(symbol_pattern),
-            SymToken.expiry == expiry_formatted.upper(),
-            SymToken.instrumenttype == option_type.upper(),
-            SymToken.exchange == exchange.upper()
-        ).distinct().order_by(SymToken.strike).all()
+        results = (
+            db_session.query(SymToken.strike)
+            .filter(
+                SymToken.symbol.like(symbol_pattern),
+                SymToken.expiry == expiry_formatted.upper(),
+                SymToken.instrumenttype == option_type.upper(),
+                SymToken.exchange == exchange.upper(),
+            )
+            .distinct()
+            .order_by(SymToken.strike)
+            .all()
+        )
 
         # Extract strike values and filter out None
         strikes = [result.strike for result in results if result.strike is not None]
@@ -309,7 +336,9 @@ def get_available_strikes(base_symbol: str, expiry_date: str, option_type: str, 
         # Store in cache for future requests
         _STRIKES_CACHE[cache_key] = strikes
 
-        logger.info(f"Cached {len(strikes)} strikes for {base_symbol} {expiry_date} {option_type} on {exchange}")
+        logger.info(
+            f"Cached {len(strikes)} strikes for {base_symbol} {expiry_date} {option_type} on {exchange}"
+        )
         if strikes:
             logger.info(f"Strike range: {strikes[0]} to {strikes[-1]}")
 
@@ -320,7 +349,7 @@ def get_available_strikes(base_symbol: str, expiry_date: str, option_type: str, 
         return []
 
 
-def find_atm_strike_from_actual(ltp: float, available_strikes: list) -> Optional[float]:
+def find_atm_strike_from_actual(ltp: float, available_strikes: list) -> float | None:
     """
     Find the ATM strike from actual available strikes based on LTP.
     ATM is the strike closest to the current LTP.
@@ -349,11 +378,8 @@ def find_atm_strike_from_actual(ltp: float, available_strikes: list) -> Optional
 
 
 def calculate_offset_strike_from_actual(
-    atm_strike: float,
-    offset: str,
-    option_type: str,
-    available_strikes: list
-) -> Optional[float]:
+    atm_strike: float, offset: str, option_type: str, available_strikes: list
+) -> float | None:
     """
     Calculate the target strike based on ATM and offset using actual available strikes.
 
@@ -422,11 +448,15 @@ def calculate_offset_strike_from_actual(
 
     # Check if target index is within bounds
     if target_index < 0 or target_index >= len(available_strikes):
-        logger.error(f"Offset {offset} out of range. ATM index: {atm_index}, Target index: {target_index}, Available strikes: {len(available_strikes)}")
+        logger.error(
+            f"Offset {offset} out of range. ATM index: {atm_index}, Target index: {target_index}, Available strikes: {len(available_strikes)}"
+        )
         return None
 
     target_strike = available_strikes[target_index]
-    logger.info(f"Target strike: {target_strike} (ATM: {atm_strike}, offset: {offset}, type: {option_type})")
+    logger.info(
+        f"Target strike: {target_strike} (ATM: {atm_strike}, offset: {offset}, type: {option_type})"
+    )
     return target_strike
 
 
@@ -448,29 +478,29 @@ def get_option_exchange(underlying_exchange: str) -> str:
     """
     underlying_exchange = underlying_exchange.upper()
 
-    if underlying_exchange in ['NSE', 'NSE_INDEX']:
-        return 'NFO'
-    elif underlying_exchange in ['BSE', 'BSE_INDEX']:
-        return 'BFO'
-    elif underlying_exchange == 'MCX':
-        return 'MCX'
-    elif underlying_exchange == 'CDS':
-        return 'CDS'
+    if underlying_exchange in ["NSE", "NSE_INDEX"]:
+        return "NFO"
+    elif underlying_exchange in ["BSE", "BSE_INDEX"]:
+        return "BFO"
+    elif underlying_exchange == "MCX":
+        return "MCX"
+    elif underlying_exchange == "CDS":
+        return "CDS"
     else:
         logger.warning(f"Unknown exchange mapping for: {underlying_exchange}, defaulting to NFO")
-        return 'NFO'
+        return "NFO"
 
 
 def get_option_symbol(
     underlying: str,
     exchange: str,
-    expiry_date: Optional[str],
-    strike_int: Optional[int],
+    expiry_date: str | None,
+    strike_int: int | None,
     offset: str,
     option_type: str,
     api_key: str,
-    underlying_ltp: Optional[float] = None
-) -> Tuple[bool, Dict[str, Any], int]:
+    underlying_ltp: float | None = None,
+) -> tuple[bool, dict[str, Any], int]:
     """
     Main function to get option symbol based on underlying and parameters.
 
@@ -495,23 +525,34 @@ def get_option_symbol(
         final_expiry = embedded_expiry or expiry_date
         if not final_expiry:
             logger.error("No expiry date provided or found in underlying symbol")
-            return False, {
-                'status': 'error',
-                'message': 'Expiry date required. Provide via expiry_date parameter or embed in underlying (e.g., NIFTY28OCT25FUT).'
-            }, 400
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": "Expiry date required. Provide via expiry_date parameter or embed in underlying (e.g., NIFTY28OCT25FUT).",
+                },
+                400,
+            )
 
         # Step 2: Determine the quote exchange (where to fetch LTP from)
         # If exchange is already NFO/BFO, we need to get LTP from index/equity exchange
         quote_exchange = exchange
-        if exchange.upper() in ['NFO', 'BFO']:
+        if exchange.upper() in ["NFO", "BFO"]:
             # User passed options exchange, need to map back to index/equity
-            if base_symbol in ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTYNXT50', 'INDIAVIX']:
-                quote_exchange = 'NSE_INDEX'
-            elif base_symbol in ['SENSEX', 'BANKEX', 'SENSEX50']:
-                quote_exchange = 'BSE_INDEX'
+            if base_symbol in [
+                "NIFTY",
+                "BANKNIFTY",
+                "FINNIFTY",
+                "MIDCPNIFTY",
+                "NIFTYNXT50",
+                "INDIAVIX",
+            ]:
+                quote_exchange = "NSE_INDEX"
+            elif base_symbol in ["SENSEX", "BANKEX", "SENSEX50"]:
+                quote_exchange = "BSE_INDEX"
             else:
                 # Assume it's an equity symbol
-                quote_exchange = 'NSE' if exchange.upper() == 'NFO' else 'BSE'
+                quote_exchange = "NSE" if exchange.upper() == "NFO" else "BSE"
 
         # Construct the symbol to fetch quotes for
         # If underlying already has expiry embedded, use base symbol only
@@ -529,26 +570,31 @@ def get_option_symbol(
             logger.info(f"Fetching LTP for: {quote_symbol} on {quote_exchange}")
 
             success, quote_response, status_code = get_quotes(
-                symbol=quote_symbol,
-                exchange=quote_exchange,
-                api_key=api_key
+                symbol=quote_symbol, exchange=quote_exchange, api_key=api_key
             )
 
             if not success:
-                logger.error(f"Failed to fetch quotes: {quote_response.get('message', 'Unknown error')}")
-                return False, {
-                    'status': 'error',
-                    'message': f"Failed to fetch LTP for {quote_symbol}. {quote_response.get('message', 'Unknown error')}"
-                }, status_code
+                logger.error(
+                    f"Failed to fetch quotes: {quote_response.get('message', 'Unknown error')}"
+                )
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": f"Failed to fetch LTP for {quote_symbol}. {quote_response.get('message', 'Unknown error')}",
+                    },
+                    status_code,
+                )
 
             # Extract LTP from quote response
-            ltp = quote_response.get('data', {}).get('ltp')
+            ltp = quote_response.get("data", {}).get("ltp")
             if ltp is None:
                 logger.error(f"LTP not found in quote response for {quote_symbol}")
-                return False, {
-                    'status': 'error',
-                    'message': f'Could not determine LTP for {quote_symbol}.'
-                }, 500
+                return (
+                    False,
+                    {"status": "error", "message": f"Could not determine LTP for {quote_symbol}."},
+                    500,
+                )
 
             logger.info(f"Got LTP: {ltp} for {quote_symbol}")
 
@@ -561,32 +607,52 @@ def get_option_symbol(
             logger.info("Using actual strikes method (strike_int not provided)")
 
             # Fetch all available strikes for this underlying and expiry
-            available_strikes = get_available_strikes(base_symbol, final_expiry, option_type, options_exchange)
+            available_strikes = get_available_strikes(
+                base_symbol, final_expiry, option_type, options_exchange
+            )
 
             if not available_strikes:
-                logger.error(f"No strikes found in database for {base_symbol} {final_expiry} {option_type} on {options_exchange}")
-                return False, {
-                    'status': 'error',
-                    'message': f'No strikes found for {base_symbol} expiring {final_expiry}. Please check expiry date or update master contract.'
-                }, 404
+                logger.error(
+                    f"No strikes found in database for {base_symbol} {final_expiry} {option_type} on {options_exchange}"
+                )
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": f"No strikes found for {base_symbol} expiring {final_expiry}. Please check expiry date or update master contract.",
+                    },
+                    404,
+                )
 
             # Find ATM from actual strikes
             atm_strike = find_atm_strike_from_actual(ltp, available_strikes)
             if atm_strike is None:
                 logger.error("Failed to determine ATM strike from available strikes")
-                return False, {
-                    'status': 'error',
-                    'message': 'Failed to determine ATM strike from available strikes.'
-                }, 500
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": "Failed to determine ATM strike from available strikes.",
+                    },
+                    500,
+                )
 
             # Calculate target strike using actual strikes
-            target_strike = calculate_offset_strike_from_actual(atm_strike, offset, option_type, available_strikes)
+            target_strike = calculate_offset_strike_from_actual(
+                atm_strike, offset, option_type, available_strikes
+            )
             if target_strike is None:
-                logger.error(f"Failed to calculate offset strike. Offset {offset} may be out of range.")
-                return False, {
-                    'status': 'error',
-                    'message': f'Offset {offset} is out of range for available strikes. Please use a smaller offset.'
-                }, 400
+                logger.error(
+                    f"Failed to calculate offset strike. Offset {offset} may be out of range."
+                )
+                return (
+                    False,
+                    {
+                        "status": "error",
+                        "message": f"Offset {offset} is out of range for available strikes. Please use a smaller offset.",
+                    },
+                    400,
+                )
 
         else:
             # OLD METHOD: Use strike_int for backward compatibility
@@ -599,42 +665,56 @@ def get_option_symbol(
             target_strike = calculate_offset_strike(atm_strike, offset, strike_int, option_type)
 
         # Step 6: Construct option symbol
-        option_symbol = construct_option_symbol(base_symbol, final_expiry, target_strike, option_type)
+        option_symbol = construct_option_symbol(
+            base_symbol, final_expiry, target_strike, option_type
+        )
 
         # Step 7: Find option in database
         option_details = find_option_in_database(option_symbol, options_exchange)
 
         if not option_details:
-            logger.warning(f"Option symbol {option_symbol} not found in database for {options_exchange}")
-            return False, {
-                'status': 'error',
-                'message': f'Option symbol {option_symbol} not found in {options_exchange}. Symbol may not exist or master contract needs update.'
-            }, 404
+            logger.warning(
+                f"Option symbol {option_symbol} not found in database for {options_exchange}"
+            )
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": f"Option symbol {option_symbol} not found in {options_exchange}. Symbol may not exist or master contract needs update.",
+                },
+                404,
+            )
 
         # Step 8: Get freeze quantity
         from database.qty_freeze_db import get_freeze_qty_for_option
-        freeze_qty = get_freeze_qty_for_option(option_details['symbol'], option_details['exchange'])
+
+        freeze_qty = get_freeze_qty_for_option(option_details["symbol"], option_details["exchange"])
 
         # Step 9: Return success response with simplified format
-        return True, {
-            'status': 'success',
-            'symbol': option_details['symbol'],
-            'exchange': option_details['exchange'],
-            'lotsize': option_details['lotsize'],
-            'tick_size': option_details['tick_size'],
-            'freeze_qty': freeze_qty,
-            'underlying_ltp': ltp
-        }, 200
+        return (
+            True,
+            {
+                "status": "success",
+                "symbol": option_details["symbol"],
+                "exchange": option_details["exchange"],
+                "lotsize": option_details["lotsize"],
+                "tick_size": option_details["tick_size"],
+                "freeze_qty": freeze_qty,
+                "underlying_ltp": ltp,
+            },
+            200,
+        )
 
     except ValueError as e:
         logger.error(f"Validation error in get_option_symbol: {e}")
-        return False, {
-            'status': 'error',
-            'message': str(e)
-        }, 400
+        return False, {"status": "error", "message": str(e)}, 400
     except Exception as e:
         logger.exception(f"Error in get_option_symbol: {e}")
-        return False, {
-            'status': 'error',
-            'message': f'An error occurred while processing option symbol request: {str(e)}'
-        }, 500
+        return (
+            False,
+            {
+                "status": "error",
+                "message": f"An error occurred while processing option symbol request: {str(e)}",
+            },
+            500,
+        )

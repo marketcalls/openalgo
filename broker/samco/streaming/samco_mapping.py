@@ -6,14 +6,14 @@ class SamcoExchangeMapper:
 
     # Exchange type mapping for Samco broker
     EXCHANGE_TYPES = {
-        'NSE': 'NSE',      # NSE Cash Market
-        'NFO': 'NFO',      # NSE Futures & Options
-        'BSE': 'BSE',      # BSE Cash Market
-        'BFO': 'BFO',      # BSE F&O
-        'MCX': 'MCX',      # MCX
-        'CDS': 'CDS',      # Currency derivatives
-        'NSE_INDEX': 'NSE',  # NSE Index
-        'BSE_INDEX': 'BSE'   # BSE Index
+        "NSE": "NSE",  # NSE Cash Market
+        "NFO": "NFO",  # NSE Futures & Options
+        "BSE": "BSE",  # BSE Cash Market
+        "BFO": "BFO",  # BSE F&O
+        "MCX": "MCX",  # MCX
+        "CDS": "CDS",  # Currency derivatives
+        "NSE_INDEX": "NSE",  # NSE Index
+        "BSE_INDEX": "BSE",  # BSE Index
     }
 
     @staticmethod
@@ -27,7 +27,7 @@ class SamcoExchangeMapper:
         Returns:
             str: Samco-specific exchange type
         """
-        return SamcoExchangeMapper.EXCHANGE_TYPES.get(exchange, 'NSE')  # Default to NSE
+        return SamcoExchangeMapper.EXCHANGE_TYPES.get(exchange, "NSE")  # Default to NSE
 
 
 class SamcoCapabilityRegistry:
@@ -37,17 +37,17 @@ class SamcoCapabilityRegistry:
     """
 
     # Samco broker capabilities
-    exchanges = ['NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS']
+    exchanges = ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS"]
     subscription_modes = [1, 2, 3]  # 1: LTP, 2: Quote, 3: Snap Quote (Depth)
 
     # Depth support per exchange
     depth_support = {
-        'NSE': [5],   # NSE supports 5 levels
-        'BSE': [5],   # BSE supports 5 levels
-        'NFO': [5],   # NFO supports 5 levels
-        'BFO': [5],   # BFO supports 5 levels
-        'MCX': [5],   # MCX supports 5 levels
-        'CDS': [5]    # CDS supports 5 levels
+        "NSE": [5],  # NSE supports 5 levels
+        "BSE": [5],  # BSE supports 5 levels
+        "NFO": [5],  # NFO supports 5 levels
+        "BFO": [5],  # BFO supports 5 levels
+        "MCX": [5],  # MCX supports 5 levels
+        "CDS": [5],  # CDS supports 5 levels
     }
 
     @classmethod

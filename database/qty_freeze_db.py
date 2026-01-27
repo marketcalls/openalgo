@@ -11,40 +11,35 @@ Currently supports:
 - BFO, CDS, MCX: Default value of 1 (to be implemented later)
 """
 
-from sqlalchemy import create_engine, Column, Integer, String, Index
-from sqlalchemy.orm import scoped_session, sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.pool import NullPool
-from typing import Dict, Optional
-import os
 import csv
+import os
+from typing import Dict, Optional
+
+from sqlalchemy import Column, Index, Integer, String, create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import scoped_session, sessionmaker
+from sqlalchemy.pool import NullPool
+
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
-DATABASE_URL = os.getenv('DATABASE_URL')
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Conditionally create engine based on DB type
-if DATABASE_URL and 'sqlite' in DATABASE_URL:
+if DATABASE_URL and "sqlite" in DATABASE_URL:
     engine = create_engine(
-        DATABASE_URL,
-        poolclass=NullPool,
-        connect_args={'check_same_thread': False}
+        DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
     )
 else:
-    engine = create_engine(
-        DATABASE_URL,
-        pool_size=50,
-        max_overflow=100,
-        pool_timeout=10
-    )
+    engine = create_engine(DATABASE_URL, pool_size=50, max_overflow=100, pool_timeout=10)
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
 Base.query = db_session.query_property()
 
 # In-memory cache for freeze quantities - always warm
-_freeze_qty_cache: Dict[str, int] = {}
+_freeze_qty_cache: dict[str, int] = {}
 _cache_loaded: bool = False
 
 
@@ -52,25 +47,25 @@ class QtyFreeze(Base):
     """
     Stores freeze quantity limits for F&O symbols
     """
-    __tablename__ = 'qty_freeze'
+
+    __tablename__ = "qty_freeze"
 
     id = Column(Integer, primary_key=True)
     exchange = Column(String(10), nullable=False, index=True)
     symbol = Column(String(50), nullable=False, index=True)
     freeze_qty = Column(Integer, nullable=False)
 
-    __table_args__ = (
-        Index('idx_exchange_symbol', 'exchange', 'symbol', unique=True),
-    )
+    __table_args__ = (Index("idx_exchange_symbol", "exchange", "symbol", unique=True),)
 
 
 def init_db():
     """Initialize the qty_freeze database table"""
     from database.db_init_helper import init_db_with_logging
+
     init_db_with_logging(Base, engine, "Qty Freeze DB", logger)
 
 
-def load_freeze_qty_from_csv(csv_path: str, exchange: str = 'NFO') -> bool:
+def load_freeze_qty_from_csv(csv_path: str, exchange: str = "NFO") -> bool:
     """
     Load freeze quantities from CSV file into database
 
@@ -91,7 +86,7 @@ def load_freeze_qty_from_csv(csv_path: str, exchange: str = 'NFO') -> bool:
         db_session.commit()
 
         # Read and insert CSV data
-        with open(csv_path, 'r') as f:
+        with open(csv_path) as f:
             reader = csv.DictReader(f)
             count = 0
 
@@ -102,19 +97,15 @@ def load_freeze_qty_from_csv(csv_path: str, exchange: str = 'NFO') -> bool:
 
                 for key in row.keys():
                     key_upper = key.upper().strip()
-                    if key_upper == 'SYMBOL':
+                    if key_upper == "SYMBOL":
                         symbol = row[key].strip()
-                    elif 'FRZ' in key_upper or key_upper == 'VOL_FRZ_QTY':
+                    elif "FRZ" in key_upper or key_upper == "VOL_FRZ_QTY":
                         freeze_qty_str = row[key].strip()
 
                 if symbol and freeze_qty_str:
                     try:
                         freeze_qty = int(freeze_qty_str)
-                        entry = QtyFreeze(
-                            exchange=exchange,
-                            symbol=symbol,
-                            freeze_qty=freeze_qty
-                        )
+                        entry = QtyFreeze(exchange=exchange, symbol=symbol, freeze_qty=freeze_qty)
                         db_session.add(entry)
                         count += 1
                     except ValueError:
@@ -185,7 +176,7 @@ def get_freeze_qty(symbol: str, exchange: str) -> int:
         load_freeze_qty_cache()
 
     # For non-NFO exchanges, return 1 as default (to be implemented later)
-    if exchange not in ['NFO']:
+    if exchange not in ["NFO"]:
         return 1
 
     # Look up in cache
@@ -217,7 +208,7 @@ def get_freeze_qty_for_option(option_symbol: str, exchange: str) -> int:
     import re
 
     # For non-NFO exchanges, return 1 as default
-    if exchange not in ['NFO']:
+    if exchange not in ["NFO"]:
         return 1
 
     # Extract underlying from option/futures symbol
@@ -225,13 +216,13 @@ def get_freeze_qty_for_option(option_symbol: str, exchange: str) -> int:
     # Examples: NIFTY24DEC24FUT, NIFTY24DEC2424000CE, RELIANCE24DEC241000PE
 
     # Try to match known index symbols first
-    index_symbols = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTYNXT50']
+    index_symbols = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"]
     for idx_sym in index_symbols:
         if option_symbol.upper().startswith(idx_sym):
             return get_freeze_qty(idx_sym, exchange)
 
     # For stock symbols, extract up to the first digit
-    match = re.match(r'^([A-Z&-]+)', option_symbol.upper())
+    match = re.match(r"^([A-Z&-]+)", option_symbol.upper())
     if match:
         underlying = match.group(1)
         # Handle special cases like M&M, BAJAJ-AUTO
@@ -240,7 +231,7 @@ def get_freeze_qty_for_option(option_symbol: str, exchange: str) -> int:
     return 1
 
 
-def get_all_freeze_qty(exchange: str = None) -> Dict[str, int]:
+def get_all_freeze_qty(exchange: str = None) -> dict[str, int]:
     """
     Get all freeze quantities, optionally filtered by exchange.
 
@@ -258,7 +249,7 @@ def get_all_freeze_qty(exchange: str = None) -> Dict[str, int]:
     if exchange:
         prefix = f"{exchange}:"
         return {
-            key.replace(prefix, ''): value
+            key.replace(prefix, ""): value
             for key, value in _freeze_qty_cache.items()
             if key.startswith(prefix)
         }
@@ -275,10 +266,10 @@ def ensure_qty_freeze_tables_exists():
         count = QtyFreeze.query.count()
         if count == 0:
             # Try to load from default CSV location
-            csv_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'qtyfreeze.csv')
+            csv_path = os.path.join(os.path.dirname(__file__), "..", "data", "qtyfreeze.csv")
             if os.path.exists(csv_path):
                 logger.info(f"Qty Freeze DB: Loading freeze quantities from {csv_path}")
-                load_freeze_qty_from_csv(csv_path, 'NFO')
+                load_freeze_qty_from_csv(csv_path, "NFO")
             else:
                 logger.debug("Qty Freeze DB: No CSV file found, table remains empty")
     except Exception as e:

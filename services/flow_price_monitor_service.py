@@ -8,11 +8,11 @@ Uses polling instead of WebSocket for simplicity in Flask context
 import logging
 import threading
 import time
-from typing import Dict, Any, Optional, Set
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any, Dict, Optional, Set
 
-from services.flow_openalgo_client import get_flow_client, FlowOpenAlgoClient
+from services.flow_openalgo_client import FlowOpenAlgoClient, get_flow_client
 
 logger = logging.getLogger(__name__)
 
@@ -20,18 +20,19 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PriceAlert:
     """Represents an active price alert"""
+
     workflow_id: int
     symbol: str
     exchange: str
     condition: str
     target_price: float
-    price_lower: Optional[float] = None
-    price_upper: Optional[float] = None
-    percentage: Optional[float] = None
-    last_price: Optional[float] = None
+    price_lower: float | None = None
+    price_upper: float | None = None
+    percentage: float | None = None
+    last_price: float | None = None
     triggered: bool = False
     created_at: datetime = field(default_factory=datetime.now)
-    api_key: Optional[str] = None
+    api_key: str | None = None
 
 
 class FlowPriceMonitor:
@@ -39,7 +40,8 @@ class FlowPriceMonitor:
     Singleton service that monitors prices using polling
     and triggers workflows when price conditions are met.
     """
-    _instance: Optional['FlowPriceMonitor'] = None
+
+    _instance: Optional["FlowPriceMonitor"] = None
     _lock = threading.Lock()
 
     def __new__(cls):
@@ -54,9 +56,9 @@ class FlowPriceMonitor:
             return
 
         self._initialized = True
-        self._alerts: Dict[int, PriceAlert] = {}
+        self._alerts: dict[int, PriceAlert] = {}
         self._running = False
-        self._monitor_thread: Optional[threading.Thread] = None
+        self._monitor_thread: threading.Thread | None = None
         self._poll_interval = 5  # seconds
         self._stop_event = threading.Event()
         logger.info("FlowPriceMonitor initialized")
@@ -68,10 +70,10 @@ class FlowPriceMonitor:
         exchange: str,
         condition: str,
         target_price: float,
-        price_lower: Optional[float] = None,
-        price_upper: Optional[float] = None,
-        percentage: Optional[float] = None,
-        api_key: Optional[str] = None
+        price_lower: float | None = None,
+        price_upper: float | None = None,
+        percentage: float | None = None,
+        api_key: str | None = None,
     ) -> bool:
         """Add a price alert for a workflow"""
         alert = PriceAlert(
@@ -83,11 +85,13 @@ class FlowPriceMonitor:
             price_lower=price_lower,
             price_upper=price_upper,
             percentage=percentage,
-            api_key=api_key
+            api_key=api_key,
         )
 
         self._alerts[workflow_id] = alert
-        logger.info(f"Added price alert for workflow {workflow_id}: {symbol}@{exchange} {condition} {target_price}")
+        logger.info(
+            f"Added price alert for workflow {workflow_id}: {symbol}@{exchange} {condition} {target_price}"
+        )
 
         if not self._running:
             self._start_monitoring()
@@ -107,7 +111,7 @@ class FlowPriceMonitor:
 
         return True
 
-    def get_alert(self, workflow_id: int) -> Optional[PriceAlert]:
+    def get_alert(self, workflow_id: int) -> PriceAlert | None:
         """Get alert for a workflow"""
         return self._alerts.get(workflow_id)
 
@@ -262,6 +266,7 @@ class FlowPriceMonitor:
 
     def _trigger_workflow(self, workflow_id: int, trigger_price: float, api_key: str):
         """Trigger workflow execution"""
+
         def run_workflow():
             try:
                 from services.flow_executor_service import execute_workflow
@@ -269,7 +274,7 @@ class FlowPriceMonitor:
                 webhook_data = {
                     "trigger_type": "price_alert",
                     "trigger_price": trigger_price,
-                    "triggered_at": datetime.now().isoformat()
+                    "triggered_at": datetime.now().isoformat(),
                 }
 
                 result = execute_workflow(workflow_id, webhook_data=webhook_data, api_key=api_key)
@@ -285,7 +290,7 @@ class FlowPriceMonitor:
         """Check if monitoring is active"""
         return self._running
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self) -> dict[str, Any]:
         """Get current monitor status"""
         return {
             "running": self._running,
@@ -299,10 +304,10 @@ class FlowPriceMonitor:
                     "condition": alert.condition,
                     "target_price": alert.target_price,
                     "last_price": alert.last_price,
-                    "triggered": alert.triggered
+                    "triggered": alert.triggered,
                 }
                 for alert in self._alerts.values()
-            ]
+            ],
         }
 
     def shutdown(self):

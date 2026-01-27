@@ -4,14 +4,15 @@ Historify Scheduler Service
 Handles scheduled historical data downloads using APScheduler (Flask/sync version)
 """
 
-from apscheduler.schedulers.background import BackgroundScheduler
+import os
+import threading
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
+
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List, Tuple
-import threading
-import os
 
 from utils.logging import get_logger
 
@@ -20,11 +21,12 @@ logger = get_logger(__name__)
 
 class HistorifyScheduler:
     """Singleton scheduler for Historify data downloads"""
+
     _instance: Optional["HistorifyScheduler"] = None
-    _scheduler: Optional[BackgroundScheduler] = None
+    _scheduler: BackgroundScheduler | None = None
     _lock = threading.Lock()
     _initialized = False
-    _api_key: Optional[str] = None
+    _api_key: str | None = None
     _socketio = None
 
     def __new__(cls):
@@ -44,7 +46,7 @@ class HistorifyScheduler:
                 return
 
             if db_url is None:
-                db_url = os.getenv('DATABASE_URL', 'sqlite:///db/openalgo.db')
+                db_url = os.getenv("DATABASE_URL", "sqlite:///db/openalgo.db")
 
             self._api_key = api_key
             self._socketio = socketio
@@ -52,17 +54,16 @@ class HistorifyScheduler:
             try:
                 jobstores = {
                     "default": SQLAlchemyJobStore(
-                        url=db_url,
-                        tablename="historify_apscheduler_jobs"
+                        url=db_url, tablename="historify_apscheduler_jobs"
                     )
                 }
                 self._scheduler = BackgroundScheduler(
                     jobstores=jobstores,
                     job_defaults={
-                        'coalesce': True,
-                        'max_instances': 1,
-                        'misfire_grace_time': 300  # 5 minutes grace for missed jobs
-                    }
+                        "coalesce": True,
+                        "max_instances": 1,
+                        "misfire_grace_time": 300,  # 5 minutes grace for missed jobs
+                    },
                 )
                 self._scheduler.start()
                 self._initialized = True
@@ -91,7 +92,7 @@ class HistorifyScheduler:
         return self._scheduler
 
     @property
-    def api_key(self) -> Optional[str]:
+    def api_key(self) -> str | None:
         """Get the API key for data downloads"""
         return self._api_key
 
@@ -129,7 +130,7 @@ class HistorifyScheduler:
         except Exception as e:
             logger.error(f"Error restoring schedules: {e}")
 
-    def _add_schedule_job(self, schedule: Dict[str, Any]) -> Optional[str]:
+    def _add_schedule_job(self, schedule: dict[str, Any]) -> str | None:
         """Add a schedule to APScheduler based on its configuration"""
         job_id = f"historify_schedule_{schedule['id']}"
 
@@ -138,25 +139,25 @@ class HistorifyScheduler:
             self.remove_job(job_id)
 
             trigger = None
-            schedule_type = schedule.get('schedule_type')
+            schedule_type = schedule.get("schedule_type")
 
-            if schedule_type == 'interval':
-                value = schedule.get('interval_value', 1)
-                unit = schedule.get('interval_unit', 'minutes')
+            if schedule_type == "interval":
+                value = schedule.get("interval_value", 1)
+                unit = schedule.get("interval_unit", "minutes")
 
-                if unit == 'hours':
+                if unit == "hours":
                     trigger = IntervalTrigger(hours=value)
                 else:  # minutes
                     trigger = IntervalTrigger(minutes=value)
 
                 logger.debug(f"Creating interval trigger: every {value} {unit}")
 
-            elif schedule_type == 'daily':
-                time_str = schedule.get('time_of_day', '09:15')
+            elif schedule_type == "daily":
+                time_str = schedule.get("time_of_day", "09:15")
                 try:
-                    hour, minute = map(int, time_str.split(':'))
+                    hour, minute = map(int, time_str.split(":"))
                     # Use IST timezone explicitly for Indian markets
-                    trigger = CronTrigger(hour=hour, minute=minute, timezone='Asia/Kolkata')
+                    trigger = CronTrigger(hour=hour, minute=minute, timezone="Asia/Kolkata")
                     logger.debug(f"Creating daily trigger at {time_str} IST")
                 except ValueError as e:
                     logger.error(f"Invalid time format: {time_str} - {e}")
@@ -172,19 +173,18 @@ class HistorifyScheduler:
                 execute_schedule,
                 trigger=trigger,
                 id=job_id,
-                args=[schedule['id']],
+                args=[schedule["id"]],
                 replace_existing=True,
-                name=f"Historify: {schedule['name']}"
+                name=f"Historify: {schedule['name']}",
             )
 
             # Update next_run_at in database
             job = self.scheduler.get_job(job_id)
             if job and job.next_run_time:
                 from database.historify_db import update_schedule
+
                 update_schedule(
-                    schedule['id'],
-                    next_run_at=job.next_run_time,
-                    apscheduler_job_id=job_id
+                    schedule["id"], next_run_at=job.next_run_time, apscheduler_job_id=job_id
                 )
 
             logger.info(f"Added schedule job: {job_id}")
@@ -200,12 +200,12 @@ class HistorifyScheduler:
         name: str,
         schedule_type: str,
         data_interval: str,
-        interval_value: Optional[int] = None,
-        interval_unit: Optional[str] = None,
-        time_of_day: Optional[str] = None,
+        interval_value: int | None = None,
+        interval_unit: str | None = None,
+        time_of_day: str | None = None,
         lookback_days: int = 1,
-        description: Optional[str] = None
-    ) -> Tuple[bool, str]:
+        description: str | None = None,
+    ) -> tuple[bool, str]:
         """
         Create a new schedule and add it to APScheduler.
 
@@ -235,9 +235,9 @@ class HistorifyScheduler:
                 interval_value=interval_value,
                 interval_unit=interval_unit,
                 time_of_day=time_of_day,
-                download_source='watchlist',
+                download_source="watchlist",
                 lookback_days=lookback_days,
-                description=description
+                description=description,
             )
 
             if not success:
@@ -254,7 +254,7 @@ class HistorifyScheduler:
                 return False, "Failed to add schedule to scheduler"
 
             # Emit Socket.IO event
-            self._emit_schedule_event('historify_schedule_created', schedule_id)
+            self._emit_schedule_event("historify_schedule_created", schedule_id)
 
             return True, f"Schedule '{name}' created successfully"
 
@@ -262,13 +262,10 @@ class HistorifyScheduler:
             logger.error(f"Error adding schedule: {e}")
             return False, str(e)
 
-    def update_schedule(
-        self,
-        schedule_id: str,
-        **kwargs
-    ) -> Tuple[bool, str]:
+    def update_schedule(self, schedule_id: str, **kwargs) -> tuple[bool, str]:
         """Update a schedule and refresh APScheduler job if needed"""
-        from database.historify_db import update_schedule as db_update_schedule, get_schedule
+        from database.historify_db import get_schedule
+        from database.historify_db import update_schedule as db_update_schedule
 
         try:
             # Update in database
@@ -282,14 +279,14 @@ class HistorifyScheduler:
                 return False, "Schedule not found"
 
             # Re-add to APScheduler if schedule config changed
-            config_fields = {'schedule_type', 'interval_value', 'interval_unit', 'time_of_day'}
+            config_fields = {"schedule_type", "interval_value", "interval_unit", "time_of_day"}
             if any(k in kwargs for k in config_fields):
                 job_id = self._add_schedule_job(schedule)
                 if not job_id:
                     return False, "Failed to update scheduler job"
 
             # Emit Socket.IO event
-            self._emit_schedule_event('historify_schedule_updated', schedule_id)
+            self._emit_schedule_event("historify_schedule_updated", schedule_id)
 
             return True, "Schedule updated successfully"
 
@@ -297,7 +294,7 @@ class HistorifyScheduler:
             logger.error(f"Error updating schedule: {e}")
             return False, str(e)
 
-    def delete_schedule(self, schedule_id: str) -> Tuple[bool, str]:
+    def delete_schedule(self, schedule_id: str) -> tuple[bool, str]:
         """Delete a schedule and remove from APScheduler"""
         from database.historify_db import delete_schedule as db_delete_schedule
 
@@ -313,7 +310,7 @@ class HistorifyScheduler:
                 return False, msg
 
             # Emit Socket.IO event
-            self._emit_schedule_event('historify_schedule_deleted', schedule_id)
+            self._emit_schedule_event("historify_schedule_deleted", schedule_id)
 
             return True, "Schedule deleted successfully"
 
@@ -321,9 +318,10 @@ class HistorifyScheduler:
             logger.error(f"Error deleting schedule: {e}")
             return False, str(e)
 
-    def enable_schedule(self, schedule_id: str) -> Tuple[bool, str]:
+    def enable_schedule(self, schedule_id: str) -> tuple[bool, str]:
         """Enable a schedule"""
-        from database.historify_db import update_schedule as db_update_schedule, get_schedule
+        from database.historify_db import get_schedule
+        from database.historify_db import update_schedule as db_update_schedule
 
         try:
             success, msg = db_update_schedule(schedule_id, is_enabled=True)
@@ -332,17 +330,17 @@ class HistorifyScheduler:
 
             # Get schedule and add to APScheduler
             schedule = get_schedule(schedule_id)
-            if schedule and not schedule.get('is_paused', False):
+            if schedule and not schedule.get("is_paused", False):
                 self._add_schedule_job(schedule)
 
-            self._emit_schedule_event('historify_schedule_updated', schedule_id)
+            self._emit_schedule_event("historify_schedule_updated", schedule_id)
             return True, "Schedule enabled"
 
         except Exception as e:
             logger.error(f"Error enabling schedule: {e}")
             return False, str(e)
 
-    def disable_schedule(self, schedule_id: str) -> Tuple[bool, str]:
+    def disable_schedule(self, schedule_id: str) -> tuple[bool, str]:
         """Disable a schedule"""
         from database.historify_db import update_schedule as db_update_schedule
 
@@ -354,14 +352,14 @@ class HistorifyScheduler:
             if not success:
                 return False, msg
 
-            self._emit_schedule_event('historify_schedule_updated', schedule_id)
+            self._emit_schedule_event("historify_schedule_updated", schedule_id)
             return True, "Schedule disabled"
 
         except Exception as e:
             logger.error(f"Error disabling schedule: {e}")
             return False, str(e)
 
-    def pause_schedule(self, schedule_id: str) -> Tuple[bool, str]:
+    def pause_schedule(self, schedule_id: str) -> tuple[bool, str]:
         """Pause a schedule"""
         from database.historify_db import update_schedule as db_update_schedule
 
@@ -373,16 +371,17 @@ class HistorifyScheduler:
             if not success:
                 return False, msg
 
-            self._emit_schedule_event('historify_schedule_updated', schedule_id)
+            self._emit_schedule_event("historify_schedule_updated", schedule_id)
             return True, "Schedule paused"
 
         except Exception as e:
             logger.error(f"Error pausing schedule: {e}")
             return False, str(e)
 
-    def resume_schedule(self, schedule_id: str) -> Tuple[bool, str]:
+    def resume_schedule(self, schedule_id: str) -> tuple[bool, str]:
         """Resume a paused schedule"""
-        from database.historify_db import update_schedule as db_update_schedule, get_schedule
+        from database.historify_db import get_schedule
+        from database.historify_db import update_schedule as db_update_schedule
 
         try:
             job_id = f"historify_schedule_{schedule_id}"
@@ -401,14 +400,14 @@ class HistorifyScheduler:
             if not success:
                 return False, msg
 
-            self._emit_schedule_event('historify_schedule_updated', schedule_id)
+            self._emit_schedule_event("historify_schedule_updated", schedule_id)
             return True, "Schedule resumed"
 
         except Exception as e:
             logger.error(f"Error resuming schedule: {e}")
             return False, str(e)
 
-    def trigger_schedule(self, schedule_id: str) -> Tuple[bool, str]:
+    def trigger_schedule(self, schedule_id: str) -> tuple[bool, str]:
         """Manually trigger a schedule execution"""
         try:
             from database.historify_db import get_schedule
@@ -420,11 +419,8 @@ class HistorifyScheduler:
             # Execute immediately in background thread
             # API key is retrieved dynamically at execution time
             import threading
-            thread = threading.Thread(
-                target=execute_schedule,
-                args=(schedule_id,),
-                daemon=True
-            )
+
+            thread = threading.Thread(target=execute_schedule, args=(schedule_id,), daemon=True)
             thread.start()
 
             return True, "Schedule triggered"
@@ -446,7 +442,7 @@ class HistorifyScheduler:
         """Get a job by ID"""
         return self.scheduler.get_job(job_id)
 
-    def get_next_run_time(self, schedule_id: str) -> Optional[datetime]:
+    def get_next_run_time(self, schedule_id: str) -> datetime | None:
         """Get the next run time for a schedule"""
         job_id = f"historify_schedule_{schedule_id}"
         job = self.get_job(job_id)
@@ -472,11 +468,11 @@ class HistorifyScheduler:
         except Exception:
             return False
 
-    def _emit_schedule_event(self, event: str, schedule_id: str, data: Dict = None):
+    def _emit_schedule_event(self, event: str, schedule_id: str, data: dict = None):
         """Emit a Socket.IO event for schedule updates"""
         if self._socketio:
             try:
-                payload = {'schedule_id': schedule_id}
+                payload = {"schedule_id": schedule_id}
                 if data:
                     payload.update(data)
                 self._socketio.emit(event, payload)
@@ -493,17 +489,18 @@ class HistorifyScheduler:
 
 def execute_schedule(schedule_id: str, api_key: str = None):
     """Execute a scheduled download (called by APScheduler)"""
-    from database.historify_db import (
-        get_schedule,
-        update_schedule,
-        get_watchlist,
-        create_schedule_execution,
-        update_schedule_execution,
-        increment_schedule_run_counts
-    )
+    from datetime import datetime
+
     from database.auth_db import get_first_available_api_key
+    from database.historify_db import (
+        create_schedule_execution,
+        get_schedule,
+        get_watchlist,
+        increment_schedule_run_counts,
+        update_schedule,
+        update_schedule_execution,
+    )
     from services.historify_service import create_and_start_job
-    from datetime import datetime, timedelta
 
     logger.info(f"Executing scheduled download: {schedule_id}")
 
@@ -516,12 +513,12 @@ def execute_schedule(schedule_id: str, api_key: str = None):
             logger.error(f"Schedule not found: {schedule_id}")
             return
 
-        if not schedule.get('is_enabled', False) or schedule.get('is_paused', False):
+        if not schedule.get("is_enabled", False) or schedule.get("is_paused", False):
             logger.info(f"Schedule {schedule_id} is disabled or paused, skipping")
             return
 
         # Update status to running
-        update_schedule(schedule_id, status='running')
+        update_schedule(schedule_id, status="running")
 
         # Get API key - prefer from parameter, then scheduler instance, then database
         effective_api_key = api_key
@@ -534,71 +531,69 @@ def execute_schedule(schedule_id: str, api_key: str = None):
             effective_api_key = get_first_available_api_key()
 
         if not effective_api_key:
-            logger.error(f"No API key available for schedule {schedule_id}. Please generate an API key first.")
-            update_schedule(schedule_id, status='idle', last_run_status='no_api_key')
+            logger.error(
+                f"No API key available for schedule {schedule_id}. Please generate an API key first."
+            )
+            update_schedule(schedule_id, status="idle", last_run_status="no_api_key")
             return
 
         # Get symbols from watchlist (scheduler only supports watchlist)
         watchlist = get_watchlist()
-        symbols = [{'symbol': item['symbol'], 'exchange': item['exchange']}
-                  for item in watchlist]
+        symbols = [{"symbol": item["symbol"], "exchange": item["exchange"]} for item in watchlist]
 
         if not symbols:
             logger.warning(f"No symbols found for schedule {schedule_id}")
-            update_schedule(schedule_id, status='idle', last_run_status='no_symbols')
+            update_schedule(schedule_id, status="idle", last_run_status="no_symbols")
             return
 
         # Calculate date range
-        lookback_days = schedule.get('lookback_days', 1)
-        end_date = datetime.now().strftime('%Y-%m-%d')
-        start_date = (datetime.now() - timedelta(days=lookback_days)).strftime('%Y-%m-%d')
+        lookback_days = schedule.get("lookback_days", 1)
+        end_date = datetime.now().strftime("%Y-%m-%d")
+        start_date = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
 
         # Create execution record
         execution_id = create_schedule_execution(schedule_id)
 
         # Create and start the download job (always incremental for scheduled downloads)
         success, response, status_code = create_and_start_job(
-            job_type='scheduled',
+            job_type="scheduled",
             symbols=symbols,
-            interval=schedule.get('data_interval', 'D'),
+            interval=schedule.get("data_interval", "D"),
             start_date=start_date,
             end_date=end_date,
             api_key=effective_api_key,
-            config={'schedule_id': schedule_id},
-            incremental=True
+            config={"schedule_id": schedule_id},
+            incremental=True,
         )
 
         if success:
-            job_id = response.get('job_id')
+            job_id = response.get("job_id")
             if execution_id:
                 update_schedule_execution(
-                    execution_id,
-                    download_job_id=job_id,
-                    symbols_processed=len(symbols)
+                    execution_id, download_job_id=job_id, symbols_processed=len(symbols)
                 )
-            update_schedule(schedule_id, status='idle', last_run_status='success')
+            update_schedule(schedule_id, status="idle", last_run_status="success")
             increment_schedule_run_counts(schedule_id, is_success=True)
             logger.info(f"Scheduled download started: {job_id} ({len(symbols)} symbols)")
 
             # Emit Socket.IO event
             scheduler = get_historify_scheduler()
             if scheduler.socketio:
-                scheduler.socketio.emit('historify_schedule_execution_started', {
-                    'schedule_id': schedule_id,
-                    'execution_id': execution_id,
-                    'job_id': job_id
-                })
+                scheduler.socketio.emit(
+                    "historify_schedule_execution_started",
+                    {"schedule_id": schedule_id, "execution_id": execution_id, "job_id": job_id},
+                )
 
         else:
-            error_msg = response.get('message', 'Unknown error')
+            error_msg = response.get("message", "Unknown error")
             if execution_id:
                 update_schedule_execution(
                     execution_id,
-                    status='failed',
+                    status="failed",
                     completed_at=datetime.now(),
-                    error_message=error_msg
+                    error_message=error_msg,
                 )
-            update_schedule(schedule_id, status='idle', last_run_status='failed')
+            update_schedule(schedule_id, status="idle", last_run_status="failed")
             increment_schedule_run_counts(schedule_id, is_success=False)
             logger.error(f"Scheduled download failed: {error_msg}")
 
@@ -606,12 +601,9 @@ def execute_schedule(schedule_id: str, api_key: str = None):
         logger.error(f"Error executing schedule {schedule_id}: {e}")
         if execution_id:
             update_schedule_execution(
-                execution_id,
-                status='failed',
-                completed_at=datetime.now(),
-                error_message=str(e)
+                execution_id, status="failed", completed_at=datetime.now(), error_message=str(e)
             )
-        update_schedule(schedule_id, status='idle', last_run_status='error')
+        update_schedule(schedule_id, status="idle", last_run_status="error")
         increment_schedule_run_counts(schedule_id, is_success=False)
 
 

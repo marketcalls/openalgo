@@ -5,11 +5,12 @@ Handles tunnel creation, cleanup, and graceful shutdown.
 Cross-platform compatible (Windows, Linux, macOS).
 """
 
-import os
 import atexit
+import os
 import signal
 import threading
 from urllib.parse import urlparse
+
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -26,6 +27,7 @@ def kill_existing_ngrok():
     """Kill any existing ngrok processes."""
     try:
         from pyngrok import ngrok
+
         ngrok.kill()
         logger.debug("Killed existing ngrok process")
         return True
@@ -84,7 +86,7 @@ def _signal_handler(signum, frame):
             raise KeyboardInterrupt
         else:
             raise KeyboardInterrupt
-    elif platform.system() != 'Windows' and signum == signal.SIGTERM:
+    elif platform.system() != "Windows" and signum == signal.SIGTERM:
         if _original_sigterm_handler and callable(_original_sigterm_handler):
             _original_sigterm_handler(signum, frame)
         elif _original_sigterm_handler == signal.SIG_DFL:
@@ -99,6 +101,7 @@ def _signal_handler(signum, frame):
 def setup_ngrok_handlers():
     """Register cleanup and signal handlers for ngrok. Works on Windows, Linux, and macOS."""
     import platform
+
     global _ngrok_initialized, _original_sigint_handler, _original_sigterm_handler
 
     if _ngrok_initialized:
@@ -115,7 +118,7 @@ def setup_ngrok_handlers():
     signal.signal(signal.SIGINT, _signal_handler)
 
     # SIGTERM is not available on Windows
-    if platform.system() != 'Windows':
+    if platform.system() != "Windows":
         _original_sigterm_handler = signal.getsignal(signal.SIGTERM)
         signal.signal(signal.SIGTERM, _signal_handler)
 
@@ -139,21 +142,26 @@ def start_ngrok_tunnel(port: int = 5000) -> str | None:
     # This ensures old tunnels are cleaned up when user disables ngrok
     kill_existing_ngrok()
 
-    if os.getenv('NGROK_ALLOW', 'FALSE').upper() != 'TRUE':
+    if os.getenv("NGROK_ALLOW", "FALSE").upper() != "TRUE":
         logger.debug("ngrok is disabled (NGROK_ALLOW != TRUE)")
         return None
 
     try:
-        from pyngrok import ngrok
         import time
+
+        from pyngrok import ngrok
 
         time.sleep(0.5)  # Brief wait for process to fully terminate
 
         # Extract domain from HOST_SERVER if provided
-        host_server_env = os.getenv('HOST_SERVER', '')
+        host_server_env = os.getenv("HOST_SERVER", "")
         ngrok_url = None
 
-        if host_server_env and 'localhost' not in host_server_env.lower() and '127.0.0.1' not in host_server_env:
+        if (
+            host_server_env
+            and "localhost" not in host_server_env.lower()
+            and "127.0.0.1" not in host_server_env
+        ):
             parsed = urlparse(host_server_env)
             domain = parsed.netloc or parsed.path
 
@@ -195,4 +203,4 @@ def get_ngrok_url() -> str | None:
 
 def is_ngrok_enabled() -> bool:
     """Check if ngrok is enabled in configuration."""
-    return os.getenv('NGROK_ALLOW', 'FALSE').upper() == 'TRUE'
+    return os.getenv("NGROK_ALLOW", "FALSE").upper() == "TRUE"

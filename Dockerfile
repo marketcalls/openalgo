@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir uv && \
 # ------------------------------ Production Stage --------------------------- #
 FROM python:3.12-slim-bullseye AS production
 # 0 – set timezone to IST (Asia/Kolkata)
-RUN apt-get update && apt-get install -y --no-install-recommends tzdata && \
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata curl && \
     ln -fs /usr/share/zoneinfo/Asia/Kolkata /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -28,9 +28,9 @@ COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
 COPY --chown=appuser:appuser . .
 # 3 – create required directories with proper ownership and permissions
 #     Also create empty .env file with write permissions for Railway deployment
-RUN mkdir -p /app/log /app/log/strategies /app/db /app/strategies /app/strategies/scripts /app/strategies/examples /app/keys /app/logs && \
-    chown -R appuser:appuser /app/log /app/db /app/strategies /app/keys /app/logs && \
-    chmod -R 755 /app/strategies /app/log && \
+RUN mkdir -p /app/log /app/log/strategies /app/db /app/tmp /app/strategies /app/strategies/scripts /app/strategies/examples /app/keys && \
+    chown -R appuser:appuser /app/log /app/db /app/tmp /app/strategies /app/keys && \
+    chmod -R 755 /app/strategies /app/log /app/tmp && \
     chmod 700 /app/keys && \
     touch /app/.env && chown appuser:appuser /app/.env && chmod 666 /app/.env
 # 4 – entrypoint script and fix line endings
