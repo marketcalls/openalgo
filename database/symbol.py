@@ -104,7 +104,7 @@ def enhanced_search_symbols(query: str, exchange: str = None) -> list[SymToken]:
         return results
 
     except Exception as e:
-        logger.error(f"Error in enhanced search: {str(e)}")
+        logger.exception(f"Error in enhanced search: {str(e)}")
         return []
 
 
@@ -257,7 +257,7 @@ def fno_search_symbols_db(
         return results_dicts
 
     except Exception as e:
-        logger.error(f"Error in FNO search: {str(e)}")
+        logger.exception(f"Error in FNO search: {str(e)}")
         return []
 
 
@@ -306,7 +306,7 @@ def get_distinct_expiries(exchange: str = None, underlying: str = None) -> list[
         return expiries
 
     except Exception as e:
-        logger.error(f"Error fetching distinct expiries: {str(e)}")
+        logger.exception(f"Error fetching distinct expiries: {str(e)}")
         return []
 
 
@@ -337,7 +337,7 @@ def get_distinct_underlyings(exchange: str = None) -> list[str]:
         return underlyings
 
     except Exception as e:
-        logger.error(f"Error fetching distinct underlyings: {str(e)}")
+        logger.exception(f"Error fetching distinct underlyings: {str(e)}")
         return []
 
 

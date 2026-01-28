@@ -97,7 +97,7 @@ def tradingview_json():
             return jsonify(json_data)
 
         except Exception as e:
-            logger.error(f"Error processing TradingView request: {str(e)}")
+            logger.exception(f"Error processing TradingView request: {str(e)}")
             return jsonify({"error": str(e)}), 500
 
     return render_template("tradingview.html", host=host)

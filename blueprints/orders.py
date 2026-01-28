@@ -376,7 +376,7 @@ def export_orderbook():
             headers={"Content-Disposition": "attachment; filename=orderbook.csv"},
         )
     except Exception as e:
-        logger.error(f"Error exporting orderbook: {str(e)}")
+        logger.exception(f"Error exporting orderbook: {str(e)}")
         return "Error exporting orderbook", 500
 
 
@@ -436,7 +436,7 @@ def export_tradebook():
             headers={"Content-Disposition": "attachment; filename=tradebook.csv"},
         )
     except Exception as e:
-        logger.error(f"Error exporting tradebook: {str(e)}")
+        logger.exception(f"Error exporting tradebook: {str(e)}")
         return "Error exporting tradebook", 500
 
 
@@ -496,7 +496,7 @@ def export_positions():
             headers={"Content-Disposition": "attachment; filename=positions.csv"},
         )
     except Exception as e:
-        logger.error(f"Error exporting positions: {str(e)}")
+        logger.exception(f"Error exporting positions: {str(e)}")
         return "Error exporting positions", 500
 
 
@@ -619,7 +619,7 @@ def close_position():
         return jsonify(response_data), status_code
 
     except Exception as e:
-        logger.error(f"Error in close_position endpoint: {str(e)}")
+        logger.exception(f"Error in close_position endpoint: {str(e)}")
         return jsonify({"status": "error", "message": f"An error occurred: {str(e)}"}), 500
 
 
@@ -664,7 +664,7 @@ def close_all_positions():
             return jsonify(response_data), status_code
 
     except Exception as e:
-        logger.error(f"Error in close_all_positions endpoint: {str(e)}")
+        logger.exception(f"Error in close_all_positions endpoint: {str(e)}")
         return jsonify({"status": "error", "message": f"An error occurred: {str(e)}"}), 500
 
 
@@ -720,7 +720,7 @@ def cancel_all_orders_ui():
             return jsonify(response_data), status_code
 
     except Exception as e:
-        logger.error(f"Error in cancel_all_orders_ui endpoint: {str(e)}")
+        logger.exception(f"Error in cancel_all_orders_ui endpoint: {str(e)}")
         return jsonify({"status": "error", "message": f"An error occurred: {str(e)}"}), 500
 
 
@@ -763,7 +763,7 @@ def cancel_order_ui():
         return jsonify(response_data), status_code
 
     except Exception as e:
-        logger.error(f"Error in cancel_order_ui endpoint: {str(e)}")
+        logger.exception(f"Error in cancel_order_ui endpoint: {str(e)}")
         return jsonify({"status": "error", "message": f"An error occurred: {str(e)}"}), 500
 
 
@@ -820,7 +820,7 @@ def modify_order_ui():
         return jsonify(response_data), status_code
 
     except Exception as e:
-        logger.error(f"Error in modify_order_ui endpoint: {str(e)}")
+        logger.exception(f"Error in modify_order_ui endpoint: {str(e)}")
         return jsonify({"status": "error", "message": f"An error occurred: {str(e)}"}), 500
 
 

@@ -295,7 +295,7 @@ class _PooledAdapterWrapper:
                 self.logger.debug(f"No cached auth data found for user {user_id}")
 
         except Exception as e:
-            self.logger.error(f"Error clearing auth cache for user {user_id}: {e}")
+            self.logger.exception(f"Error clearing auth cache for user {user_id}: {e}")
 
 
 def get_pool_stats(broker_name: str = None) -> dict:
@@ -321,5 +321,5 @@ def cleanup_all_pools():
         try:
             pool.disconnect()
         except Exception as e:
-            logger.error(f"Error cleaning up pool {pool_key}: {e}")
+            logger.exception(f"Error cleaning up pool {pool_key}: {e}")
     _POOLED_ADAPTERS.clear()

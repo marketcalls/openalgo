@@ -130,7 +130,7 @@ def _create_http_client() -> httpx.Client:
 
                 logger.debug(f"Request completed in {duration_ms:.2f}ms")
         except Exception as e:
-            logger.error(f"Error in response hook: {e}")
+            logger.exception(f"Error in response hook: {e}")
 
     try:
         # Detect if running in standalone mode (Docker/production) vs integrated mode (local dev)
@@ -164,7 +164,7 @@ def _create_http_client() -> httpx.Client:
         return client
 
     except Exception as e:
-        logger.error(f"Failed to create HTTP client: {e}")
+        logger.exception(f"Failed to create HTTP client: {e}")
         raise
 
 

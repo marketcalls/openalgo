@@ -108,7 +108,7 @@ class ExecutionEngine:
             logger.info(f"Processed {orders_processed} orders")
 
         except Exception as e:
-            logger.error(f"Error in execution engine: {e}")
+            logger.exception(f"Error in execution engine: {e}")
 
     def _fetch_quote(self, symbol, exchange):
         """
@@ -305,7 +305,7 @@ class ExecutionEngine:
                 self._execute_order(order, execution_price)
 
         except Exception as e:
-            logger.error(f"Error processing order {order.orderid}: {e}")
+            logger.exception(f"Error processing order {order.orderid}: {e}")
 
     def _execute_order(self, order, execution_price):
         """
@@ -352,7 +352,7 @@ class ExecutionEngine:
 
         except Exception as e:
             db_session.rollback()
-            logger.error(f"Error executing order {order.orderid}: {e}")
+            logger.exception(f"Error executing order {order.orderid}: {e}")
 
             # Mark order as rejected
             try:
@@ -614,7 +614,7 @@ class ExecutionEngine:
 
         except Exception as e:
             db_session.rollback()
-            logger.error(f"Error updating position for order {order.orderid}: {e}")
+            logger.exception(f"Error updating position for order {order.orderid}: {e}")
             raise
 
     def _calculate_realized_pnl(self, old_quantity, avg_price, close_quantity, close_price):
@@ -634,7 +634,7 @@ class ExecutionEngine:
             return pnl
 
         except Exception as e:
-            logger.error(f"Error calculating realized P&L: {e}")
+            logger.exception(f"Error calculating realized P&L: {e}")
             return Decimal("0.00")
 
     def _generate_trade_id(self):
@@ -670,4 +670,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Execution engine stopped by user")
     except Exception as e:
-        logger.error(f"Execution engine error: {e}")
+        logger.exception(f"Execution engine error: {e}")

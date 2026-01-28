@@ -195,7 +195,7 @@ class ConnectionHealthMonitor:
                     try:
                         self.on_connection_restored()
                     except Exception as e:
-                        logger.error(f"Error in connection restored callback: {e}")
+                        logger.exception(f"Error in connection restored callback: {e}")
 
     def set_connected(self, connected: bool, authenticated: bool = False):
         """Update connection status"""
@@ -214,7 +214,7 @@ class ConnectionHealthMonitor:
                         try:
                             self.on_connection_lost()
                         except Exception as e:
-                            logger.error(f"Error in connection lost callback: {e}")
+                            logger.exception(f"Error in connection lost callback: {e}")
 
     def get_health(self) -> dict[str, Any]:
         """Get current health status"""
@@ -261,9 +261,9 @@ class ConnectionHealthMonitor:
                                 try:
                                     self.on_data_stale()
                                 except Exception as e:
-                                    logger.error(f"Error in data stale callback: {e}")
+                                    logger.exception(f"Error in data stale callback: {e}")
             except Exception as e:
-                logger.error(f"Error in health check loop: {e}")
+                logger.exception(f"Error in health check loop: {e}")
 
     def stop(self):
         """Stop the health monitor"""
@@ -816,7 +816,7 @@ class MarketDataService:
             try:
                 self.process_market_data(data)
             except Exception as e:
-                logger.error(f"Error processing market data in callback: {e}")
+                logger.exception(f"Error processing market data in callback: {e}")
 
         return register_market_data_callback(username, user_callback)
 
@@ -882,7 +882,7 @@ class MarketDataService:
                     subscriber["callback"](data)
 
                 except Exception as e:
-                    logger.error(
+                    logger.exception(
                         f"Error in priority subscriber callback ({subscriber.get('name', 'unknown')}): {e}"
                     )
 
@@ -912,7 +912,7 @@ class MarketDataService:
                 # Call the callback
                 subscriber["callback"](data)
             except Exception as e:
-                logger.error(f"Error in subscriber callback: {e}")
+                logger.exception(f"Error in subscriber callback: {e}")
 
     def _on_connection_lost(self):
         """Handle connection lost event"""
@@ -974,7 +974,7 @@ class MarketDataService:
                     logger.info(f"Cleaned up {len(stale_symbols)} stale market data entries")
 
             except Exception as e:
-                logger.error(f"Error in cleanup loop: {e}")
+                logger.exception(f"Error in cleanup loop: {e}")
 
 
 # Global instance

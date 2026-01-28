@@ -292,7 +292,7 @@ def get_multiquotes_with_auth(
                         {"symbol": item["symbol"], "exchange": item["exchange"], "data": quote}
                     )
                 except Exception as e:
-                    logger.error(
+                    logger.exception(
                         f"Error fetching quote for {item['exchange']}:{item['symbol']}: {e}"
                     )
                     results.append(

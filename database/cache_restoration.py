@@ -87,7 +87,7 @@ def restore_symbol_cache() -> dict:
 
     except Exception as e:
         result["error"] = str(e)
-        logger.error(f"Error restoring symbol cache: {e}")
+        logger.exception(f"Error restoring symbol cache: {e}")
 
     result["time_ms"] = (time.time() - start_time) * 1000
     return result
@@ -159,7 +159,7 @@ def restore_auth_cache() -> dict:
 
     except Exception as e:
         result["error"] = str(e)
-        logger.error(f"Error restoring auth cache: {e}")
+        logger.exception(f"Error restoring auth cache: {e}")
 
     result["time_ms"] = (time.time() - start_time) * 1000
     return result

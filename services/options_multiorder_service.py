@@ -102,7 +102,7 @@ def get_underlying_ltp(
         return True, ltp, ""
 
     except Exception as e:
-        logger.error(f"Error fetching underlying LTP: {e}")
+        logger.exception(f"Error fetching underlying LTP: {e}")
         return False, None, str(e)
 
 
@@ -172,7 +172,7 @@ def place_single_split_order_for_leg(
                 "message": order_response.get("message", "Failed to place order"),
             }
     except Exception as e:
-        logger.error(f"Error placing split order {order_num} for leg: {e}")
+        logger.exception(f"Error placing split order {order_num} for leg: {e}")
         return {
             "order_num": order_num,
             "quantity": int(order_data["quantity"]),
@@ -382,7 +382,7 @@ def resolve_and_place_leg(
             }
 
     except Exception as e:
-        logger.error(f"Error processing leg {leg_index + 1}: {e}")
+        logger.exception(f"Error processing leg {leg_index + 1}: {e}")
         return {
             "leg": leg_index + 1,
             "offset": leg_data.get("offset", "Unknown"),

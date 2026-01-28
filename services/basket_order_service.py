@@ -164,7 +164,7 @@ def place_single_order(
             return {"symbol": order_data["symbol"], "status": "error", "message": message}
 
     except Exception as e:
-        logger.error(f"Error placing order for {order_data.get('symbol', 'Unknown')}: {e}")
+        logger.exception(f"Error placing order for {order_data.get('symbol', 'Unknown')}: {e}")
         return {
             "symbol": order_data.get("symbol", "Unknown"),
             "status": "error",

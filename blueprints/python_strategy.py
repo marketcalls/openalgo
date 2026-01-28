@@ -133,7 +133,7 @@ def load_configs():
                 STRATEGY_CONFIGS = json.load(f)
             logger.debug(f"Loaded {len(STRATEGY_CONFIGS)} strategy configurations")
         except Exception as e:
-            logger.error(f"Failed to load configs: {e}")
+            logger.exception(f"Failed to load configs: {e}")
             STRATEGY_CONFIGS = {}
 
 
@@ -145,7 +145,7 @@ def save_configs():
             json.dump(STRATEGY_CONFIGS, f, indent=2, default=str, ensure_ascii=False)
         logger.info("Configurations saved")
     except Exception as e:
-        logger.error(f"Failed to save configs: {e}")
+        logger.exception(f"Failed to save configs: {e}")
 
 
 def verify_strategy_ownership(strategy_id, user_id, return_config=False):
@@ -204,7 +204,7 @@ def ensure_directories():
             LOGS_DIR.mkdir(parents=True, exist_ok=True)
             logger.warning(f"Using temporary directories due to permission issues: {temp_base}")
     except Exception as e:
-        logger.error(f"Failed to create directories: {e}")
+        logger.exception(f"Failed to create directories: {e}")
         # Continue anyway, individual operations will handle missing directories
 
 
@@ -221,7 +221,7 @@ def get_active_broker():
             return auth_obj.broker
         return None
     except Exception as e:
-        logger.error(f"Error getting active broker: {e}")
+        logger.exception(f"Error getting active broker: {e}")
         return None
 
 
@@ -253,7 +253,7 @@ def check_master_contract_ready(skip_on_startup=False):
             return False, f"Master contracts not ready for broker: {broker}"
 
     except Exception as e:
-        logger.error(f"Error checking master contract readiness: {e}")
+        logger.exception(f"Error checking master contract readiness: {e}")
         return False, f"Error checking master contract readiness: {str(e)}"
 
 
@@ -436,7 +436,7 @@ def start_strategy_process(strategy_id):
                 logger.error(f"Permission denied creating log file: {e}")
                 return False, "Permission denied creating log file. Check directory permissions."
             except Exception as e:
-                logger.error(f"Error creating log file: {e}")
+                logger.exception(f"Error creating log file: {e}")
                 return False, f"Error creating log file: {str(e)}"
 
             # Write header with IST time
@@ -482,7 +482,7 @@ def start_strategy_process(strategy_id):
                     return False, f"OS error: {str(e)}"
             except Exception as e:
                 log_handle.close()
-                logger.error(f"Unexpected error starting process: {e}")
+                logger.exception(f"Unexpected error starting process: {e}")
                 return False, f"Failed to start process: {str(e)}"
 
             # Store process info
@@ -518,7 +518,7 @@ def start_strategy_process(strategy_id):
             )
 
         except Exception as e:
-            logger.error(f"Failed to start strategy {strategy_id}: {e}")
+            logger.exception(f"Failed to start strategy {strategy_id}: {e}")
             return False, f"Failed to start strategy: {str(e)}"
 
 
@@ -630,7 +630,7 @@ def stop_strategy_process(strategy_id):
             return True, f"Strategy stopped at {ist_now.strftime('%H:%M:%S IST')}"
 
         except Exception as e:
-            logger.error(f"Failed to stop strategy {strategy_id}: {e}")
+            logger.exception(f"Failed to stop strategy {strategy_id}: {e}")
             return False, f"Failed to stop strategy: {str(e)}"
 
 
@@ -661,7 +661,7 @@ def terminate_process_cross_platform(pid):
     except psutil.NoSuchProcess:
         pass  # Process already dead
     except Exception as e:
-        logger.error(f"Error terminating process {pid}: {e}")
+        logger.exception(f"Error terminating process {pid}: {e}")
 
 
 def check_process_status(pid):
@@ -783,7 +783,7 @@ def is_trading_day() -> bool:
 
         return True
     except Exception as e:
-        logger.error(f"Error checking trading day status: {e}")
+        logger.exception(f"Error checking trading day status: {e}")
         # On error, default to NOT running to be safe
         return False
 
@@ -800,7 +800,7 @@ def is_within_market_hours() -> bool:
         # Use the market calendar function which checks all exchanges
         return is_market_open()
     except Exception as e:
-        logger.error(f"Error checking market hours: {e}")
+        logger.exception(f"Error checking market hours: {e}")
         return False
 
 
@@ -858,7 +858,7 @@ def get_market_status() -> dict:
             }
 
     except Exception as e:
-        logger.error(f"Error getting market status: {e}")
+        logger.exception(f"Error getting market status: {e}")
         return {
             "is_open": False,
             "reason": "error",
@@ -1010,7 +1010,7 @@ def daily_trading_day_check():
             logger.debug("Daily cleanup: No scheduled strategies were running")
 
     except Exception as e:
-        logger.error(f"Error in daily trading day check: {e}")
+        logger.exception(f"Error in daily trading day check: {e}")
 
 
 def is_within_schedule_time(strategy_id: str) -> bool:
@@ -1049,7 +1049,7 @@ def is_within_schedule_time(strategy_id: str) -> bool:
         return start_time <= current_time <= stop_time
 
     except Exception as e:
-        logger.error(f"Error checking schedule time for {strategy_id}: {e}")
+        logger.exception(f"Error checking schedule time for {strategy_id}: {e}")
         return False
 
 
@@ -1162,7 +1162,7 @@ def market_hours_enforcer():
             logger.info(f"Trading day enforcer: Stopped {stopped_count} strategies ({message})")
 
     except Exception as e:
-        logger.error(f"Error in trading day enforcer: {e}")
+        logger.exception(f"Error in trading day enforcer: {e}")
 
 
 def cleanup_strategy_logs(strategy_id: str):
@@ -1202,7 +1202,7 @@ def cleanup_strategy_logs(strategy_id: str):
                     deleted_count += 1
                     logger.debug(f"Deleted old log file {log_file.name} ({file_age_days} days old)")
             except Exception as e:
-                logger.error(f"Error deleting old log {log_file.name}: {e}")
+                logger.exception(f"Error deleting old log {log_file.name}: {e}")
 
         # 2. Delete oldest files if exceeding max file count
         while len(log_files) > max_files:
@@ -1212,7 +1212,7 @@ def cleanup_strategy_logs(strategy_id: str):
                 deleted_count += 1
                 logger.debug(f"Deleted log file {oldest.name} (exceeds max files: {max_files})")
             except Exception as e:
-                logger.error(f"Error deleting log {oldest.name}: {e}")
+                logger.exception(f"Error deleting log {oldest.name}: {e}")
                 break
 
         # 3. Delete oldest files if exceeding max total size
@@ -1226,14 +1226,14 @@ def cleanup_strategy_logs(strategy_id: str):
                 deleted_count += 1
                 logger.debug(f"Deleted log file {oldest.name} (exceeds max size: {max_size_mb}MB)")
             except Exception as e:
-                logger.error(f"Error deleting log {oldest.name}: {e}")
+                logger.exception(f"Error deleting log {oldest.name}: {e}")
                 break
 
         if deleted_count > 0:
             logger.info(f"Cleaned up {deleted_count} log files for strategy {strategy_id}")
 
     except Exception as e:
-        logger.error(f"Error cleaning up logs for strategy {strategy_id}: {e}")
+        logger.exception(f"Error cleaning up logs for strategy {strategy_id}: {e}")
 
 
 def schedule_strategy(strategy_id, start_time, stop_time=None, days=None):
@@ -1430,7 +1430,7 @@ def new_strategy():
                     flash("Invalid file path", "error")
                     return redirect(request.url)
             except Exception as e:
-                logger.error(f"Error validating file path: {e}")
+                logger.exception(f"Error validating file path: {e}")
                 if is_ajax:
                     return jsonify({"status": "error", "message": "Invalid file path"}), 400
                 flash("Invalid file path", "error")
@@ -1744,7 +1744,7 @@ def delete_strategy(strategy_id):
                 try:
                     file_path.unlink()
                 except Exception as e:
-                    logger.error(f"Failed to delete file {file_path}: {e}")
+                    logger.exception(f"Failed to delete file {file_path}: {e}")
 
             # Remove from configs
             del STRATEGY_CONFIGS[strategy_id]
@@ -1783,7 +1783,7 @@ def view_logs(strategy_id):
                 }
             )
     except Exception as e:
-        logger.error(f"Error reading log files: {e}")
+        logger.exception(f"Error reading log files: {e}")
 
     # Sort by modified time (newest first)
     log_files.sort(key=lambda x: x["modified"], reverse=True)
@@ -1855,7 +1855,7 @@ def clear_logs(strategy_id):
                 cleared_count += 1
 
             except Exception as e:
-                logger.error(f"Error clearing log file {log_file.name}: {e}")
+                logger.exception(f"Error clearing log file {log_file.name}: {e}")
 
         if cleared_count > 0:
             size_mb = total_size / (1024 * 1024)
@@ -1874,7 +1874,7 @@ def clear_logs(strategy_id):
             return jsonify({"status": "error", "message": "No log files were cleared"}), 500
 
     except Exception as e:
-        logger.error(f"Error clearing logs for strategy {strategy_id}: {e}")
+        logger.exception(f"Error clearing logs for strategy {strategy_id}: {e}")
         return jsonify({"status": "error", "message": f"Error clearing logs: {str(e)}"}), 500
 
 
@@ -1912,7 +1912,7 @@ def clear_error_state(strategy_id):
         return jsonify({"status": "success", "message": "Error state cleared successfully"})
 
     except Exception as e:
-        logger.error(f"Failed to clear error state for {strategy_id}: {e}")
+        logger.exception(f"Failed to clear error state for {strategy_id}: {e}")
         return jsonify(
             {"status": "error", "message": f"Failed to clear error state: {str(e)}"}
         ), 500
@@ -1957,7 +1957,7 @@ def check_contracts():
         success, message = check_and_start_pending_strategies()
         return jsonify({"success": success, "message": message})
     except Exception as e:
-        logger.error(f"Error checking contracts: {e}")
+        logger.exception(f"Error checking contracts: {e}")
         return jsonify({"success": False, "message": f"Error checking contracts: {str(e)}"}), 500
 
 
@@ -2185,7 +2185,7 @@ def api_get_strategy_content(strategy_id):
             }
         )
     except Exception as e:
-        logger.error(f"Error reading strategy file: {e}")
+        logger.exception(f"Error reading strategy file: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -2215,7 +2215,7 @@ def api_get_log_files(strategy_id):
                 }
             )
     except Exception as e:
-        logger.error(f"Error listing log files for {strategy_id}: {e}")
+        logger.exception(f"Error listing log files for {strategy_id}: {e}")
 
     return jsonify({"logs": logs})
 
@@ -2252,7 +2252,7 @@ def api_get_log_content(strategy_id, log_name):
             logger.warning(f"Path traversal attempt detected: {log_name}")
             return jsonify({"status": "error", "message": "Invalid log file path"}), 403
     except Exception as e:
-        logger.error(f"Error resolving log path: {e}")
+        logger.exception(f"Error resolving log path: {e}")
         return jsonify({"status": "error", "message": "Invalid log file path"}), 400
 
     if not log_path.exists():
@@ -2272,7 +2272,7 @@ def api_get_log_content(strategy_id, log_name):
             }
         )
     except Exception as e:
-        logger.error(f"Error reading log file: {e}")
+        logger.exception(f"Error reading log file: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -2372,7 +2372,7 @@ def export_strategy(strategy_id):
         return response
 
     except Exception as e:
-        logger.error(f"Failed to export strategy {strategy_id}: {e}")
+        logger.exception(f"Failed to export strategy {strategy_id}: {e}")
         flash(f"Failed to export strategy: {str(e)}", "error")
         return redirect(url_for("python_strategy_bp.index"))
 
@@ -2434,7 +2434,7 @@ def save_strategy(strategy_id):
         )
 
     except Exception as e:
-        logger.error(f"Failed to save strategy {strategy_id}: {e}")
+        logger.exception(f"Failed to save strategy {strategy_id}: {e}")
         return jsonify({"status": "error", "message": f"Failed to save: {str(e)}"}), 500
 
 
@@ -2534,7 +2534,7 @@ def restore_strategy_states():
             except psutil.NoSuchProcess:
                 logger.debug(f"Process {pid} for strategy {strategy_id} no longer exists")
             except Exception as e:
-                logger.error(f"Error checking process {pid} for strategy {strategy_id}: {e}")
+                logger.exception(f"Error checking process {pid} for strategy {strategy_id}: {e}")
 
             # If strategy wasn't restored, try to restart it automatically
             if not strategy_restored:
@@ -2560,7 +2560,7 @@ def restore_strategy_states():
                     config["error_message"] = f"Restart exception: {str(e)}"
                     config["error_time"] = get_ist_time().isoformat()
                     config["pid"] = None
-                    logger.error(f"Exception restarting strategy {strategy_id}: {e}")
+                    logger.exception(f"Exception restarting strategy {strategy_id}: {e}")
                     error_count += 1
 
         # Clear error state for strategies that are not marked as running
@@ -2666,7 +2666,7 @@ def initialize_with_app_context():
                             f"Restored schedule for strategy {strategy_id} at {start_time} IST"
                         )
                     except Exception as e:
-                        logger.error(f"Failed to restore schedule for {strategy_id}: {e}")
+                        logger.exception(f"Failed to restore schedule for {strategy_id}: {e}")
 
         # Run immediate trading day check on startup
         # This stops any scheduled strategies if app starts on a weekend/holiday

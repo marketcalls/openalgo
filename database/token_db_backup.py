@@ -39,7 +39,7 @@ def get_token_dbquery(symbol, exchange):
         else:
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database: {e}")
+        logger.exception(f"Error while querying the database: {e}")
         return None
 
 
@@ -71,7 +71,7 @@ def get_symbol_dbquery(token, exchange):
         else:
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database: {e}")
+        logger.exception(f"Error while querying the database: {e}")
         return None
 
 
@@ -103,7 +103,7 @@ def get_oa_symbol_dbquery(symbol, exchange):
         else:
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database: {e}")
+        logger.exception(f"Error while querying the database: {e}")
         return None
 
 
@@ -115,7 +115,7 @@ def get_symbol_count():
         count = SymToken.query.count()
         return count
     except Exception as e:
-        logger.error(f"Error while counting symbols: {e}")
+        logger.exception(f"Error while counting symbols: {e}")
         return 0
 
 
@@ -147,7 +147,7 @@ def get_br_symbol_dbquery(symbol, exchange):
         else:
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database: {e}")
+        logger.exception(f"Error while querying the database: {e}")
         return None
 
 
@@ -179,5 +179,5 @@ def get_brexchange_dbquery(symbol, exchange):
         else:
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database: {e}")
+        logger.exception(f"Error while querying the database: {e}")
         return None

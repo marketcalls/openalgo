@@ -186,7 +186,7 @@ def parse_option_symbol(
         return base_symbol, expiry, strike, opt_type.upper()
 
     except Exception as e:
-        logger.error(f"Error parsing option symbol {symbol}: {e}")
+        logger.exception(f"Error parsing option symbol {symbol}: {e}")
         raise ValueError(f"Failed to parse option symbol {symbol}: {str(e)}")
 
 
@@ -373,7 +373,7 @@ def calculate_greeks(
             implied_volatility = implied_volatility_decimal * 100.0
 
         except Exception as e:
-            logger.error(f"Error calculating IV: {e}")
+            logger.exception(f"Error calculating IV: {e}")
             error_msg = str(e)
             # If IV calculation fails due to numerical issues, return theoretical deep ITM Greeks
             if (
@@ -468,7 +468,7 @@ def calculate_greeks(
             # - vega: already per 1% vol change (no conversion needed)
 
         except Exception as e:
-            logger.error(f"Error calculating Greeks: {e}")
+            logger.exception(f"Error calculating Greeks: {e}")
             return (
                 False,
                 {"status": "error", "message": f"Failed to calculate Greeks: {str(e)}"},
@@ -680,7 +680,7 @@ def get_multi_option_greeks(
                 "exchange": exchange,
             }
         except Exception as e:
-            logger.error(f"Error fetching Greeks for {symbol_request.get('symbol')}: {e}")
+            logger.exception(f"Error fetching Greeks for {symbol_request.get('symbol')}: {e}")
             return {
                 "success": False,
                 "response": {

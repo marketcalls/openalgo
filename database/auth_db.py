@@ -196,7 +196,7 @@ def decrypt_token(encrypted_token):
     try:
         return fernet.decrypt(encrypted_token.encode()).decode()
     except Exception as e:
-        logger.error(f"Error decrypting token: {e}")
+        logger.exception(f"Error decrypting token: {e}")
         return None
 
 
@@ -342,7 +342,7 @@ def get_auth_token_dbquery(name):
                 logger.warning(f"No valid auth token found for name '{name}'.")
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database for auth token: {e}")
+        logger.exception(f"Error while querying the database for auth token: {e}")
         return None
 
 
@@ -385,7 +385,7 @@ def get_feed_token_dbquery(name):
                 logger.warning(f"No valid feed token found for name '{name}'.")
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database for feed token: {e}")
+        logger.exception(f"Error while querying the database for feed token: {e}")
         return None
 
 
@@ -404,7 +404,7 @@ def get_user_id(name):
                 logger.warning(f"No valid user_id found for name '{name}'.")
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database for user_id: {e}")
+        logger.exception(f"Error while querying the database for user_id: {e}")
         return None
 
 
@@ -454,7 +454,7 @@ def get_api_key(user_id):
         api_key_obj = ApiKeys.query.filter_by(user_id=user_id).first()
         return api_key_obj is not None
     except Exception as e:
-        logger.error(f"Error while querying the database for API key: {e}")
+        logger.exception(f"Error while querying the database for API key: {e}")
         return None
 
 
@@ -466,7 +466,7 @@ def get_api_key_for_tradingview(user_id):
             return decrypt_token(api_key_obj.api_key_encrypted)
         return None
     except Exception as e:
-        logger.error(f"Error while querying the database for API key: {e}")
+        logger.exception(f"Error while querying the database for API key: {e}")
         return None
 
 
@@ -481,7 +481,7 @@ def get_first_available_api_key():
             return decrypt_token(api_key_obj.api_key_encrypted)
         return None
     except Exception as e:
-        logger.error(f"Error getting first available API key: {e}")
+        logger.exception(f"Error getting first available API key: {e}")
         return None
 
 
@@ -559,7 +559,7 @@ def verify_api_key(provided_api_key):
 
         return None
     except Exception as e:
-        logger.error(f"Error verifying API key: {e}")
+        logger.exception(f"Error verifying API key: {e}")
         return None
 
 
@@ -588,7 +588,7 @@ def get_broker_name(provided_api_key):
                 logger.warning(f"No valid broker found for user_id '{user_id}'.")
                 return None
         except Exception as e:
-            logger.error(f"Error while querying the database for broker name: {e}")
+            logger.exception(f"Error while querying the database for broker name: {e}")
             return None
     return None
 
@@ -624,7 +624,7 @@ def get_auth_token_broker(provided_api_key, include_feed_token=False):
                 logger.debug(f"Auth token retrieved from cache for user_id: {user_id}")
                 return cached_result
             except Exception as e:
-                logger.error(f"Error checking revocation status: {e}")
+                logger.exception(f"Error checking revocation status: {e}")
                 # On error, don't use cache
                 del auth_cache[cache_key]
 
@@ -652,7 +652,7 @@ def get_auth_token_broker(provided_api_key, include_feed_token=False):
                 logger.warning(f"No valid auth token or broker found for user_id '{user_id}'.")
                 return (None, None, None) if include_feed_token else (None, None)
         except Exception as e:
-            logger.error(f"Error while querying the database for auth token and broker: {e}")
+            logger.exception(f"Error while querying the database for auth token and broker: {e}")
             return (None, None, None) if include_feed_token else (None, None)
     else:
         return (None, None, None) if include_feed_token else (None, None)
@@ -674,7 +674,7 @@ def get_order_mode(user_id):
             return api_key_obj.order_mode
         return "auto"  # Default to auto mode
     except Exception as e:
-        logger.error(f"Error getting order mode for user {user_id}: {e}")
+        logger.exception(f"Error getting order mode for user {user_id}: {e}")
         return "auto"  # Default to auto on error
 
 
@@ -708,6 +708,6 @@ def update_order_mode(user_id, mode):
             logger.error(f"No API key found for user: {user_id}")
             return False
     except Exception as e:
-        logger.error(f"Error updating order mode: {e}")
+        logger.exception(f"Error updating order mode: {e}")
         db_session.rollback()
         return False

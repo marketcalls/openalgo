@@ -65,7 +65,7 @@ def get_chart_prefs(api_key):
         logger.debug(f"[ChartPrefsDB] get_chart_prefs: Found {len(result)} preferences")
         return result
     except Exception as e:
-        logger.error(f"[ChartPrefsDB] Error getting chart preferences: {e}")
+        logger.exception(f"[ChartPrefsDB] Error getting chart preferences: {e}")
         return None
 
 
@@ -98,7 +98,7 @@ def update_chart_prefs(api_key, data):
         logger.info(f"[ChartPrefsDB] Successfully saved {len(data)} preferences for user {user_id}")
         return True
     except Exception as e:
-        logger.error(f"[ChartPrefsDB] Error updating chart preferences: {e}")
+        logger.exception(f"[ChartPrefsDB] Error updating chart preferences: {e}")
         db_session.rollback()
         return False
 

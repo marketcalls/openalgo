@@ -386,7 +386,7 @@ def get_pnl_data():
                 trade["parsed_time"] = trade_time
                 symbol_trades[symbol_key].append(trade)
             except Exception as e:
-                logger.error(f"Error processing trade: {e}, trade: {trade}")
+                logger.exception(f"Error processing trade: {e}, trade: {trade}")
                 continue
 
         # Process each symbol's trades
@@ -639,7 +639,7 @@ def get_pnl_data():
                     logger.warning(f"Could not get historical data for {symbol}")
 
             except Exception as e:
-                logger.error(f"Error processing trades for {symbol}: {e}")
+                logger.exception(f"Error processing trades for {symbol}: {e}")
                 continue
 
         # If we have no portfolio data but have positions, fetch historical data for positions
@@ -732,7 +732,7 @@ def get_pnl_data():
                         logger.warning(f"Could not get historical data for position {symbol}")
 
                 except Exception as e:
-                    logger.error(f"Error processing position for {symbol}: {e}")
+                    logger.exception(f"Error processing position for {symbol}: {e}")
                     continue
 
             # If we still couldn't get any historical data, create a simple flat line
