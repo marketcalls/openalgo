@@ -285,7 +285,7 @@ if not exist "%OPENALGO_DIR%\%ENV_FILE%" (
     echo.
 )
 
-REM Create db, strategies, and log directories if not exist
+REM Create db, strategies, log, keys, and tmp directories if not exist
 if not exist "%OPENALGO_DIR%\db\" (
     echo [INFO] Creating database directory...
     md "%OPENALGO_DIR%\db" 2>nul
@@ -300,6 +300,14 @@ if not exist "%OPENALGO_DIR%\log\" (
     echo [INFO] Creating log directory...
     md "%OPENALGO_DIR%\log" 2>nul
     md "%OPENALGO_DIR%\log\strategies" 2>nul
+)
+if not exist "%OPENALGO_DIR%\keys\" (
+    echo [INFO] Creating keys directory...
+    md "%OPENALGO_DIR%\keys" 2>nul
+)
+if not exist "%OPENALGO_DIR%\tmp\" (
+    echo [INFO] Creating temp directory...
+    md "%OPENALGO_DIR%\tmp" 2>nul
 )
 
 REM Pull latest image
@@ -317,11 +325,14 @@ REM Run container
 echo [INFO] Starting container...
 docker run -d ^
     --name %CONTAINER% ^
+    --shm-size=2g ^
     -p 5000:5000 ^
     -p 8765:8765 ^
     -v "%OPENALGO_DIR%\db:/app/db" ^
     -v "%OPENALGO_DIR%\strategies:/app/strategies" ^
     -v "%OPENALGO_DIR%\log:/app/log" ^
+    -v "%OPENALGO_DIR%\keys:/app/keys" ^
+    -v "%OPENALGO_DIR%\tmp:/app/tmp" ^
     -v "%OPENALGO_DIR%\.env:/app/.env:ro" ^
     --restart unless-stopped ^
     %IMAGE%

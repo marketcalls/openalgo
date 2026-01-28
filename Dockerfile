@@ -24,8 +24,13 @@ RUN cd frontend && npm run build
 # --------------------------------------------------------------------------- #
 # ------------------------------ Production Stage --------------------------- #
 FROM python:3.12-slim-bullseye AS production
-# 0 – set timezone to IST (Asia/Kolkata)
-RUN apt-get update && apt-get install -y --no-install-recommends tzdata curl && \
+# 0 – set timezone to IST (Asia/Kolkata) & install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tzdata \
+    curl \
+    libopenblas0 \
+    libgomp1 \
+    libgfortran5 && \
     ln -fs /usr/share/zoneinfo/Asia/Kolkata /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -39,7 +44,7 @@ COPY --chown=appuser:appuser . .
 COPY --from=frontend-builder --chown=appuser:appuser /app/frontend/dist /app/frontend/dist
 # 4 – create required directories with proper ownership and permissions
 #     Also create empty .env file with write permissions for Railway deployment
-RUN mkdir -p /app/log /app/log/strategies /app/db /app/tmp /app/strategies /app/strategies/scripts /app/strategies/examples /app/keys && \
+RUN mkdir -p /app/log /app/log/strategies /app/db /app/tmp /app/tmp/numba_cache /app/tmp/matplotlib /app/strategies /app/strategies/scripts /app/strategies/examples /app/keys && \
     chown -R appuser:appuser /app/log /app/db /app/tmp /app/strategies /app/keys && \
     chmod -R 755 /app/strategies /app/log /app/tmp && \
     chmod 700 /app/keys && \
@@ -52,7 +57,10 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TZ=Asia/Kolkata \
-    APP_MODE=standalone
+    APP_MODE=standalone \
+    TMPDIR=/app/tmp \
+    NUMBA_CACHE_DIR=/app/tmp/numba_cache \
+    MPLCONFIGDIR=/app/tmp/matplotlib
 # --------------------------------------------------------------------------- #
 USER appuser
 EXPOSE 5000

@@ -824,16 +824,17 @@ services:
       - "127.0.0.1:${WS_PORT}:8765"
     volumes:
       - openalgo_db:/app/db
-      - openalgo_logs:/app/logs
       - openalgo_log:/app/log
       - openalgo_strategies:/app/strategies
       - openalgo_keys:/app/keys
+      - openalgo_tmp:/app/tmp
       - ./.env:/app/.env:ro
     environment:
       - FLASK_ENV=production
       - FLASK_DEBUG=0
       - APP_MODE=standalone
       - TZ=Asia/Kolkata
+    shm_size: '2gb'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:5000/auth/check-setup"]
       interval: 30s
@@ -845,13 +846,13 @@ services:
 volumes:
   openalgo_db:
     driver: local
-  openalgo_logs:
-    driver: local
   openalgo_log:
     driver: local
   openalgo_strategies:
     driver: local
   openalgo_keys:
+    driver: local
+  openalgo_tmp:
     driver: local
 EOF
 
