@@ -90,7 +90,7 @@ def get_watchlist() -> tuple[bool, dict[str, Any], int]:
         watchlist = db_get_watchlist()
         return True, {"status": "success", "data": watchlist, "count": len(watchlist)}, 200
     except Exception as e:
-        logger.error(f"Error getting watchlist: {e}")
+        logger.exception(f"Error getting watchlist: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -135,7 +135,7 @@ def add_to_watchlist(
             return False, {"status": "error", "message": msg}, 400
 
     except Exception as e:
-        logger.error(f"Error adding to watchlist: {e}")
+        logger.exception(f"Error adding to watchlist: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -162,7 +162,7 @@ def remove_from_watchlist(symbol: str, exchange: str) -> tuple[bool, dict[str, A
             return False, {"status": "error", "message": msg}, 400
 
     except Exception as e:
-        logger.error(f"Error removing from watchlist: {e}")
+        logger.exception(f"Error removing from watchlist: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -228,7 +228,7 @@ def bulk_add_to_watchlist(symbols: list[dict[str, str]]) -> tuple[bool, dict[str
         )
 
     except Exception as e:
-        logger.error(f"Error bulk adding to watchlist: {e}")
+        logger.exception(f"Error bulk adding to watchlist: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -326,7 +326,7 @@ def download_data(
         )
 
     except Exception as e:
-        logger.error(f"Error downloading data: {e}")
+        logger.exception(f"Error downloading data: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -394,7 +394,7 @@ def download_watchlist_data(
         )
 
     except Exception as e:
-        logger.error(f"Error downloading watchlist data: {e}")
+        logger.exception(f"Error downloading watchlist data: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -463,7 +463,7 @@ def get_chart_data(
         )
 
     except Exception as e:
-        logger.error(f"Error getting chart data: {e}")
+        logger.exception(f"Error getting chart data: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -491,7 +491,7 @@ def get_data_catalog() -> tuple[bool, dict[str, Any], int]:
         return True, {"status": "success", "data": catalog, "count": len(catalog)}, 200
 
     except Exception as e:
-        logger.error(f"Error getting data catalog: {e}")
+        logger.exception(f"Error getting data catalog: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -563,7 +563,7 @@ def get_symbol_data_info(
             )
 
     except Exception as e:
-        logger.error(f"Error getting symbol data info: {e}")
+        logger.exception(f"Error getting symbol data info: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -639,7 +639,7 @@ def export_data_to_csv(
             return False, {"status": "error", "message": msg}, 500
 
     except Exception as e:
-        logger.error(f"Error exporting to CSV: {e}")
+        logger.exception(f"Error exporting to CSV: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -731,7 +731,7 @@ def get_stats() -> tuple[bool, dict[str, Any], int]:
         stats = get_database_stats()
         return True, {"status": "success", "data": stats}, 200
     except Exception as e:
-        logger.error(f"Error getting stats: {e}")
+        logger.exception(f"Error getting stats: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -756,7 +756,7 @@ def delete_symbol_data(
         else:
             return False, {"status": "error", "message": msg}, 500
     except Exception as e:
-        logger.error(f"Error deleting data: {e}")
+        logger.exception(f"Error deleting data: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -772,7 +772,7 @@ def initialize_historify() -> tuple[bool, dict[str, Any], int]:
         init_database()
         return True, {"status": "success", "message": "Historify database initialized"}, 200
     except Exception as e:
-        logger.error(f"Error initializing Historify: {e}")
+        logger.exception(f"Error initializing Historify: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -872,7 +872,7 @@ def upload_csv_data(
             return False, {"status": "error", "message": msg}, 400
 
     except Exception as e:
-        logger.error(f"Error uploading CSV: {e}")
+        logger.exception(f"Error uploading CSV: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -939,7 +939,7 @@ def upload_parquet_data(
             return False, {"status": "error", "message": msg}, 400
 
     except Exception as e:
-        logger.error(f"Error uploading Parquet: {e}")
+        logger.exception(f"Error uploading Parquet: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -988,7 +988,7 @@ def get_fno_underlyings(exchange: str = None) -> tuple[bool, dict[str, Any], int
         )
 
     except Exception as e:
-        logger.error(f"Error getting FNO underlyings: {e}")
+        logger.exception(f"Error getting FNO underlyings: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -1034,7 +1034,7 @@ def get_fno_expiries(
         )
 
     except Exception as e:
-        logger.error(f"Error getting FNO expiries: {e}")
+        logger.exception(f"Error getting FNO expiries: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -1101,7 +1101,7 @@ def get_fno_chain(
         )
 
     except Exception as e:
-        logger.error(f"Error getting FNO chain: {e}")
+        logger.exception(f"Error getting FNO chain: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -1194,7 +1194,7 @@ def get_option_chain_symbols(
         )
 
     except Exception as e:
-        logger.error(f"Error getting option chain symbols: {e}")
+        logger.exception(f"Error getting option chain symbols: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -1251,7 +1251,7 @@ def cleanup_zombie_jobs():
             logger.info(f"Cleaned up {zombie_count} zombie job(s)")
 
     except Exception as e:
-        logger.error(f"Error cleaning up zombie jobs: {e}")
+        logger.exception(f"Error cleaning up zombie jobs: {e}")
 
 
 def create_and_start_job(
@@ -1330,7 +1330,7 @@ def create_and_start_job(
         )
 
     except Exception as e:
-        logger.error(f"Error creating job: {e}")
+        logger.exception(f"Error creating job: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -1571,7 +1571,7 @@ def _process_download_job(job_id: str, api_key: str):
                     failed += 1
 
             except Exception as e:
-                logger.error(f"Error downloading {item['symbol']}: {e}")
+                logger.exception(f"Error downloading {item['symbol']}: {e}")
                 update_job_item_status(item["id"], "error", 0, str(e))
                 failed += 1
 
@@ -1596,7 +1596,7 @@ def _process_download_job(job_id: str, api_key: str):
         _cleanup_job(job_id)
 
     except Exception as e:
-        logger.error(f"Error processing job {job_id}: {e}")
+        logger.exception(f"Error processing job {job_id}: {e}")
         update_job_status(job_id, "failed", str(e))
         _cleanup_job(job_id)
 
@@ -1691,7 +1691,7 @@ def get_job_status(job_id: str) -> tuple[bool, dict[str, Any], int]:
         return True, {"status": "success", "job": job, "items": items}, 200
 
     except Exception as e:
-        logger.error(f"Error getting job status: {e}")
+        logger.exception(f"Error getting job status: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -1714,7 +1714,7 @@ def get_all_jobs(status: str = None, limit: int = 50) -> tuple[bool, dict[str, A
         return True, {"status": "success", "data": jobs, "count": len(jobs)}, 200
 
     except Exception as e:
-        logger.error(f"Error getting jobs: {e}")
+        logger.exception(f"Error getting jobs: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -1766,7 +1766,7 @@ def cancel_job(job_id: str) -> tuple[bool, dict[str, Any], int]:
         return True, {"status": "success", "message": "Job cancelled"}, 200
 
     except Exception as e:
-        logger.error(f"Error cancelling job: {e}")
+        logger.exception(f"Error cancelling job: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -1812,7 +1812,7 @@ def pause_job(job_id: str) -> tuple[bool, dict[str, Any], int]:
                 return False, {"status": "error", "message": "Job not found in running jobs"}, 400
 
     except Exception as e:
-        logger.error(f"Error pausing job: {e}")
+        logger.exception(f"Error pausing job: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -1852,7 +1852,7 @@ def resume_job(job_id: str) -> tuple[bool, dict[str, Any], int]:
                 return False, {"status": "error", "message": "Job not found in running jobs"}, 400
 
     except Exception as e:
-        logger.error(f"Error resuming job: {e}")
+        logger.exception(f"Error resuming job: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -1888,7 +1888,7 @@ def delete_job(job_id: str) -> tuple[bool, dict[str, Any], int]:
             return False, {"status": "error", "message": msg}, 500
 
     except Exception as e:
-        logger.error(f"Error deleting job: {e}")
+        logger.exception(f"Error deleting job: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -1947,7 +1947,7 @@ def retry_failed_items(job_id: str, api_key: str) -> tuple[bool, dict[str, Any],
         )
 
     except Exception as e:
-        logger.error(f"Error retrying job: {e}")
+        logger.exception(f"Error retrying job: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -2013,7 +2013,7 @@ def enrich_and_save_metadata(symbols: list[dict[str, str]]) -> tuple[bool, dict[
         )
 
     except Exception as e:
-        logger.error(f"Error enriching metadata: {e}")
+        logger.exception(f"Error enriching metadata: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -2043,7 +2043,7 @@ def get_catalog_with_metadata_service() -> tuple[bool, dict[str, Any], int]:
         return True, {"status": "success", "data": catalog, "count": len(catalog)}, 200
 
     except Exception as e:
-        logger.error(f"Error getting catalog with metadata: {e}")
+        logger.exception(f"Error getting catalog with metadata: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -2086,7 +2086,7 @@ def get_catalog_grouped_service(group_by: str = "underlying") -> tuple[bool, dic
         )
 
     except Exception as e:
-        logger.error(f"Error getting grouped catalog: {e}")
+        logger.exception(f"Error getting grouped catalog: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -2099,4 +2099,4 @@ def get_catalog_grouped_service(group_by: str = "underlying") -> tuple[bool, dic
 try:
     cleanup_zombie_jobs()
 except Exception as e:
-    logger.error(f"Failed to cleanup zombie jobs on startup: {e}")
+    logger.exception(f"Failed to cleanup zombie jobs on startup: {e}")

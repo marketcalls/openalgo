@@ -72,7 +72,7 @@ class CacheInvalidationPublisher:
                 return True
 
             except Exception as e:
-                logger.error(f"Failed to initialize cache invalidation publisher: {e}")
+                logger.exception(f"Failed to initialize cache invalidation publisher: {e}")
                 return False
 
     def publish_invalidation(self, user_id: str, cache_type: str = ALL_CACHE_TYPE):
@@ -106,7 +106,7 @@ class CacheInvalidationPublisher:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to publish cache invalidation for user {user_id}: {e}")
+            logger.exception(f"Failed to publish cache invalidation for user {user_id}: {e}")
             return False
 
     def close(self):
@@ -119,7 +119,7 @@ class CacheInvalidationPublisher:
             self._initialized = False
             logger.debug("Cache invalidation publisher closed")
         except Exception as e:
-            logger.error(f"Error closing cache invalidation publisher: {e}")
+            logger.exception(f"Error closing cache invalidation publisher: {e}")
 
 
 def get_cache_invalidation_publisher() -> CacheInvalidationPublisher:

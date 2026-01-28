@@ -55,7 +55,7 @@ def generate_order_id():
             except (json.JSONDecodeError, ValueError):
                 pass
     except Exception as e:
-        logger.error(f"Error getting last order sequence: {e}")
+        logger.exception(f"Error getting last order sequence: {e}")
 
     # Increment sequence
     _order_sequence += 1
@@ -77,7 +77,7 @@ def check_rate_limits(user_id):
         ).count()
         return rate_limited > 0
     except Exception as e:
-        logger.error(f"Error checking rate limits: {str(e)}")
+        logger.exception(f"Error checking rate limits: {str(e)}")
         return False
 
 
@@ -90,7 +90,7 @@ def validate_symbol(symbol: str, exchange: str) -> bool:
         )
         return symbol_exists
     except Exception as e:
-        logger.error(f"Error validating symbol: {str(e)}")
+        logger.exception(f"Error validating symbol: {str(e)}")
         return False
 
 
@@ -173,7 +173,7 @@ def analyze_api_request(order_data):
             ):
                 warnings.append("High request frequency detected. Consider reducing request rate.")
         except Exception as e:
-            logger.error(f"Error checking rate limits: {str(e)}")
+            logger.exception(f"Error checking rate limits: {str(e)}")
             warnings.append("Unable to check rate limits")
 
         # Prepare response
@@ -186,7 +186,7 @@ def analyze_api_request(order_data):
         return response
 
     except Exception as e:
-        logger.error(f"Error analyzing API request: {str(e)}")
+        logger.exception(f"Error analyzing API request: {str(e)}")
         return {"status": "error", "message": "Internal error analyzing request", "warnings": []}
 
 
@@ -276,7 +276,7 @@ def analyze_smart_order_request(order_data):
             ):
                 warnings.append("High request frequency detected. Consider reducing request rate.")
         except Exception as e:
-            logger.error(f"Error checking rate limits: {str(e)}")
+            logger.exception(f"Error checking rate limits: {str(e)}")
             warnings.append("Unable to check rate limits")
 
         # Prepare response
@@ -289,7 +289,7 @@ def analyze_smart_order_request(order_data):
         return response
 
     except Exception as e:
-        logger.error(f"Error analyzing smart order request: {str(e)}")
+        logger.exception(f"Error analyzing smart order request: {str(e)}")
         return {"status": "error", "message": "Internal error analyzing request", "warnings": []}
 
 
@@ -316,7 +316,7 @@ def analyze_cancel_order_request(order_data):
             ):
                 warnings.append("High request frequency detected. Consider reducing request rate.")
         except Exception as e:
-            logger.error(f"Error checking rate limits: {str(e)}")
+            logger.exception(f"Error checking rate limits: {str(e)}")
             warnings.append("Unable to check rate limits")
 
         # Prepare response
@@ -329,7 +329,7 @@ def analyze_cancel_order_request(order_data):
         return response
 
     except Exception as e:
-        logger.error(f"Error analyzing cancel order request: {str(e)}")
+        logger.exception(f"Error analyzing cancel order request: {str(e)}")
         return {"status": "error", "message": "Internal error analyzing request", "warnings": []}
 
 
@@ -356,7 +356,7 @@ def analyze_cancel_all_order_request(order_data):
             ):
                 warnings.append("High request frequency detected. Consider reducing request rate.")
         except Exception as e:
-            logger.error(f"Error checking rate limits: {str(e)}")
+            logger.exception(f"Error checking rate limits: {str(e)}")
             warnings.append("Unable to check rate limits")
 
         # Prepare response
@@ -369,7 +369,7 @@ def analyze_cancel_all_order_request(order_data):
         return response
 
     except Exception as e:
-        logger.error(f"Error analyzing cancel all order request: {str(e)}")
+        logger.exception(f"Error analyzing cancel all order request: {str(e)}")
         return {"status": "error", "message": "Internal error analyzing request", "warnings": []}
 
 
@@ -396,7 +396,7 @@ def analyze_close_position_request(order_data):
             ):
                 warnings.append("High request frequency detected. Consider reducing request rate.")
         except Exception as e:
-            logger.error(f"Error checking rate limits: {str(e)}")
+            logger.exception(f"Error checking rate limits: {str(e)}")
             warnings.append("Unable to check rate limits")
 
         # Prepare response
@@ -409,7 +409,7 @@ def analyze_close_position_request(order_data):
         return response
 
     except Exception as e:
-        logger.error(f"Error analyzing close position request: {str(e)}")
+        logger.exception(f"Error analyzing close position request: {str(e)}")
         return {"status": "error", "message": "Internal error analyzing request", "warnings": []}
 
 
@@ -496,7 +496,7 @@ def analyze_modify_order_request(order_data):
             ):
                 warnings.append("High request frequency detected. Consider reducing request rate.")
         except Exception as e:
-            logger.error(f"Error checking rate limits: {str(e)}")
+            logger.exception(f"Error checking rate limits: {str(e)}")
             warnings.append("Unable to check rate limits")
 
         # Prepare response
@@ -509,7 +509,7 @@ def analyze_modify_order_request(order_data):
         return response
 
     except Exception as e:
-        logger.error(f"Error analyzing modify order request: {str(e)}")
+        logger.exception(f"Error analyzing modify order request: {str(e)}")
         return {"status": "error", "message": "Internal error analyzing request", "warnings": []}
 
 
@@ -534,7 +534,7 @@ def analyze_request(request_data, api_type="placeorder", should_log=False):
         return True, analysis
 
     except Exception as e:
-        logger.error(f"Error analyzing request: {str(e)}")
+        logger.exception(f"Error analyzing request: {str(e)}")
         error_response = {
             "status": "error",
             "message": "Internal error analyzing request",
@@ -599,7 +599,7 @@ def get_analyzer_stats():
                         stats["issues"]["by_type"]["other"] += 1
 
             except Exception as e:
-                logger.error(f"Error processing request: {str(e)}")
+                logger.exception(f"Error processing request: {str(e)}")
                 continue
 
         # Convert set to list for JSON serialization
@@ -607,7 +607,7 @@ def get_analyzer_stats():
         return stats
 
     except Exception as e:
-        logger.error(f"Error getting analyzer stats: {str(e)}")
+        logger.exception(f"Error getting analyzer stats: {str(e)}")
         return {
             "total_requests": 0,
             "sources": {},

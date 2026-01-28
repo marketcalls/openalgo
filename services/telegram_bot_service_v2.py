@@ -99,7 +99,7 @@ class TelegramBotService:
             return client
 
         except Exception as e:
-            logger.error(f'Error creating SDK client: {e}"')
+            logger.exception(f'Error creating SDK client: {e}"')
             return None
 
     async def _make_sdk_call(self, telegram_id: int, method: str, **kwargs) -> dict | None:
@@ -117,7 +117,7 @@ class TelegramBotService:
             return result
 
         except Exception as e:
-            logger.error(f"Error making SDK call: {e}")
+            logger.exception(f"Error making SDK call: {e}")
             return None
 
     async def _generate_intraday_chart(
@@ -212,7 +212,7 @@ class TelegramBotService:
             return img_bytes
 
         except Exception as e:
-            logger.error(f"Error generating intraday chart: {e}")
+            logger.exception(f"Error generating intraday chart: {e}")
             return None
 
     async def _generate_daily_chart(
@@ -350,7 +350,7 @@ class TelegramBotService:
             return img_bytes
 
         except Exception as e:
-            logger.error(f"Error generating daily chart: {e}")
+            logger.exception(f"Error generating daily chart: {e}")
             return None
 
     async def initialize_bot(self, token: str, webhook_url: str | None = None) -> tuple[bool, str]:
@@ -374,7 +374,7 @@ class TelegramBotService:
             return True, f"Bot initialized successfully: @{bot_info.username}"
 
         except Exception as e:
-            logger.error(f"Failed to initialize bot: {e}")
+            logger.exception(f"Failed to initialize bot: {e}")
             return False, str(e)
 
     def _run_bot_async(self):
@@ -432,7 +432,7 @@ class TelegramBotService:
                 await asyncio.sleep(1)
 
         except Exception as e:
-            logger.error(f"Error in bot operation: {e}")
+            logger.exception(f"Error in bot operation: {e}")
             self.is_running = False
             raise
 
@@ -463,7 +463,7 @@ class TelegramBotService:
                 return False, "Bot failed to start"
 
         except Exception as e:
-            logger.error(f"Failed to start bot: {e}")
+            logger.exception(f"Failed to start bot: {e}")
             return False, str(e)
 
     async def stop_bot(self) -> tuple[bool, str]:
@@ -484,7 +484,7 @@ class TelegramBotService:
             return True, "Bot stopped successfully"
 
         except Exception as e:
-            logger.error(f"Failed to stop bot: {e}")
+            logger.exception(f"Failed to stop bot: {e}")
             return False, str(e)
 
     # Command Handlers
@@ -600,7 +600,7 @@ class TelegramBotService:
                 )
 
         except Exception as e:
-            logger.error(f"Error linking account: {e}")
+            logger.exception(f"Error linking account: {e}")
             await update.message.reply_text(
                 f"❌ Failed to link account.\\nError: {str(e)}", parse_mode=ParseMode.MARKDOWN
             )
@@ -1094,7 +1094,7 @@ class TelegramBotService:
                 await update.message.reply_text(f"❌ Failed to generate charts for {symbol}")
 
         except Exception as e:
-            logger.error(f"Error generating charts: {e}")
+            logger.exception(f"Error generating charts: {e}")
             await loading_msg.delete()
             await update.message.reply_text(f"❌ Error generating charts: {str(e)}")
 

@@ -91,7 +91,7 @@ def place_single_split_order(
                 "message": order_response.get("message", "Failed to place order"),
             }
     except Exception as e:
-        logger.error(f"Error placing split order {order_num}: {e}")
+        logger.exception(f"Error placing split order {order_num}: {e}")
         return {
             "order_num": order_num,
             "quantity": int(order_data["quantity"]),

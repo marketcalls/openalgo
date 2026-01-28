@@ -159,7 +159,7 @@ class BaseBrokerWebSocketAdapter(ABC):
             self.connected = False
 
         except Exception as e:
-            self.logger.error(f"Error in BaseBrokerWebSocketAdapter init: {e}")
+            self.logger.exception(f"Error in BaseBrokerWebSocketAdapter init: {e}")
             raise
 
     def _initialize_shared_context(self):
@@ -372,7 +372,7 @@ class BaseBrokerWebSocketAdapter(ABC):
             from database.auth_db import get_auth_token
             return get_auth_token(user_id, bypass_cache=bypass_cache)
         except Exception as e:
-            self.logger.error(f"Error getting auth token for user {user_id}: {e}")
+            self.logger.exception(f"Error getting auth token for user {user_id}: {e}")
             return None
 
     def get_fresh_auth_token(self, user_id: str):
@@ -428,7 +428,7 @@ class BaseBrokerWebSocketAdapter(ABC):
                 self.logger.debug(f"No cached auth data found for user {user_id}")
 
         except Exception as e:
-            self.logger.error(f"Error clearing auth cache for user {user_id}: {e}")
+            self.logger.exception(f"Error clearing auth cache for user {user_id}: {e}")
 
     def is_auth_error(self, error_message: str) -> bool:
         """
@@ -497,5 +497,5 @@ class BaseBrokerWebSocketAdapter(ABC):
             return retry_func(fresh_token, *args, **kwargs)
 
         except Exception as e:
-            self.logger.error(f"Retry with fresh token failed for user {user_id}: {e}")
+            self.logger.exception(f"Retry with fresh token failed for user {user_id}: {e}")
             return None

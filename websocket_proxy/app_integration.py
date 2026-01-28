@@ -91,7 +91,7 @@ def cleanup_websocket_server():
                         logger.warning(f"Error terminating ZMQ context: {e}")
 
             except Exception as e:
-                logger.error(f"Error during WebSocket cleanup: {e}")
+                logger.exception(f"Error during WebSocket cleanup: {e}")
             finally:
                 _websocket_proxy_instance = None
 
@@ -105,7 +105,7 @@ def cleanup_websocket_server():
         logger.info("WebSocket server cleanup completed")
 
     except Exception as e:
-        logger.error(f"Error during WebSocket cleanup: {e}")
+        logger.exception(f"Error during WebSocket cleanup: {e}")
         # Last resort: force cleanup
         _websocket_proxy_instance = None
         _websocket_thread = None

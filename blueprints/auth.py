@@ -213,7 +213,7 @@ def reset_password():
                 logger.info(f"Password reset email sent to {email}")
 
             except Exception as e:
-                logger.error(f"Failed to send password reset email to {email}: {e}")
+                logger.exception(f"Failed to send password reset email to {email}: {e}")
                 return jsonify(
                     {
                         "status": "error",
@@ -314,7 +314,7 @@ def reset_password_email(token):
         return redirect(f"/reset-password?token={token}&email={reset_email}&verified=true")
 
     except Exception as e:
-        logger.error(f"Error processing email reset link: {e}")
+        logger.exception(f"Error processing email reset link: {e}")
         flash("Invalid or expired reset link.", "error")
         return redirect("/reset-password?error=processing_error")
 
@@ -423,7 +423,7 @@ def configure_smtp():
         flash("SMTP settings updated successfully.", "success")
 
     except Exception as e:
-        logger.error(f"Error updating SMTP settings: {str(e)}")
+        logger.exception(f"Error updating SMTP settings: {str(e)}")
         # For AJAX requests, return JSON
         if request.headers.get("X-Requested-With") == "XMLHttpRequest" or request.is_json:
             return jsonify(
@@ -468,7 +468,7 @@ def test_smtp():
 
     except Exception as e:
         error_msg = f"Error sending test email: {str(e)}"
-        logger.error(f"Test email error for user {session['user']}: {e}")
+        logger.exception(f"Test email error for user {session['user']}: {e}")
         return jsonify({"success": False, "message": error_msg}), 500
 
 
@@ -494,7 +494,7 @@ def debug_smtp():
 
     except Exception as e:
         error_msg = f"Error debugging SMTP: {str(e)}"
-        logger.error(f"SMTP debug error for user {session['user']}: {e}")
+        logger.exception(f"SMTP debug error for user {session['user']}: {e}")
         return jsonify(
             {"success": False, "message": error_msg, "details": [f"Unexpected error: {e}"]}
         ), 500
@@ -580,7 +580,7 @@ def get_analyzer_mode_status():
             }
         )
     except Exception as e:
-        logger.error(f"Error getting analyzer mode: {e}")
+        logger.exception(f"Error getting analyzer mode: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -620,7 +620,7 @@ def toggle_analyzer_mode_session():
                 catchup_missed_settlements()
                 logger.info("Catch-up settlement check completed")
             except Exception as e:
-                logger.error(f"Error in catch-up settlement: {e}")
+                logger.exception(f"Error in catch-up settlement: {e}")
 
             logger.info("Analyzer mode enabled - Execution engine and square-off scheduler started")
         else:
@@ -643,7 +643,7 @@ def toggle_analyzer_mode_session():
         )
 
     except Exception as e:
-        logger.error(f"Error toggling analyzer mode: {e}")
+        logger.exception(f"Error toggling analyzer mode: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -701,7 +701,7 @@ def get_dashboard_data():
         return jsonify({"status": "success", "data": margin_data})
 
     except Exception as e:
-        logger.error(f"Error fetching dashboard data: {e}")
+        logger.exception(f"Error fetching dashboard data: {e}")
         return jsonify({"status": "error", "message": "Internal server error"}), 500
 
 
@@ -727,7 +727,7 @@ def logout():
             clear_cache_on_logout()
             logger.info("Cleared symbol cache on logout")
         except Exception as cache_error:
-            logger.error(f"Error clearing symbol cache on logout: {cache_error}")
+            logger.exception(f"Error clearing symbol cache on logout: {cache_error}")
 
         # writing to database
         inserted_id = upsert_auth(username, "", "", revoke=True)
@@ -791,7 +791,7 @@ def get_profile_data():
                 qr_code = base64.b64encode(img_buffer.getvalue()).decode()
                 totp_secret = user.totp_secret
             except Exception as e:
-                logger.error(f"Error generating TOTP QR code: {e}")
+                logger.exception(f"Error generating TOTP QR code: {e}")
 
         return jsonify(
             {
@@ -806,7 +806,7 @@ def get_profile_data():
         )
 
     except Exception as e:
-        logger.error(f"Error getting profile data: {e}")
+        logger.exception(f"Error getting profile data: {e}")
         return jsonify({"status": "error", "message": "Failed to get profile data"}), 500
 
 
@@ -846,5 +846,5 @@ def change_password_api():
         logger.info(f"Password changed successfully for user: {username}")
         return jsonify({"status": "success", "message": "Password changed successfully"})
     except Exception as e:
-        logger.error(f"Error changing password: {e}")
+        logger.exception(f"Error changing password: {e}")
         return jsonify({"status": "error", "message": "Failed to change password"}), 500

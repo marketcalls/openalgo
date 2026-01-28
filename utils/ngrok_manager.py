@@ -185,7 +185,7 @@ def start_ngrok_tunnel(port: int = 5000) -> str | None:
 
     except Exception as e:
         print(f"Failed to start ngrok tunnel: {e}")
-        logger.error(f"Failed to start ngrok tunnel: {e}")
+        logger.exception(f"Failed to start ngrok tunnel: {e}")
 
     return None
 

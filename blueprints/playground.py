@@ -152,7 +152,7 @@ def parse_bru_file(filepath):
         return endpoint if "name" in endpoint and "path" in endpoint else None
 
     except Exception as e:
-        logger.error(f"Error parsing Bruno file {filepath}: {e}")
+        logger.exception(f"Error parsing Bruno file {filepath}: {e}")
         return None
 
 
@@ -353,5 +353,5 @@ def get_endpoints():
         )
 
     except Exception as e:
-        logger.error(f"Error loading endpoints: {e}")
+        logger.exception(f"Error loading endpoints: {e}")
         return jsonify({"error": "Failed to load endpoints"}), 500

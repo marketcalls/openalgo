@@ -150,7 +150,7 @@ class SharedZmqPublisher:
                     [topic.encode("utf-8"), json.dumps(data).encode("utf-8")]
                 )
             except Exception as e:
-                self.logger.error(f"Error publishing to ZMQ: {e}")
+                self.logger.exception(f"Error publishing to ZMQ: {e}")
 
     def cleanup(self):
         """Clean up ZeroMQ resources"""
@@ -163,7 +163,7 @@ class SharedZmqPublisher:
             self._initialized = False
             SharedZmqPublisher._instance = None
         except Exception as e:
-            self.logger.error(f"Error cleaning up shared ZMQ publisher: {e}")
+            self.logger.exception(f"Error cleaning up shared ZMQ publisher: {e}")
 
 
 class ConnectionPool:
@@ -385,7 +385,7 @@ class ConnectionPool:
                 return {"success": True, "message": "Connection pool initialized"}
 
             except Exception as e:
-                self.logger.error(f"Failed to initialize connection pool: {e}")
+                self.logger.exception(f"Failed to initialize connection pool: {e}")
                 return {"success": False, "error": str(e)}
 
     def connect(self) -> dict:
@@ -424,7 +424,7 @@ class ConnectionPool:
                     return {"success": False, "error": "No adapters available"}
 
             except Exception as e:
-                self.logger.error(f"Failed to connect: {e}")
+                self.logger.exception(f"Failed to connect: {e}")
                 return {"success": False, "error": str(e)}
 
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> dict:
@@ -498,7 +498,7 @@ class ConnectionPool:
                 # Max capacity reached
                 return {"status": "error", "code": "MAX_CAPACITY_REACHED", "message": str(e)}
             except Exception as e:
-                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
+                self.logger.exception(f"Error subscribing to {symbol}.{exchange}: {e}")
                 return {"status": "error", "code": "SUBSCRIPTION_ERROR", "message": str(e)}
 
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> dict:
@@ -541,7 +541,7 @@ class ConnectionPool:
                 return result
 
             except Exception as e:
-                self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
+                self.logger.exception(f"Error unsubscribing from {symbol}.{exchange}: {e}")
                 return {"status": "error", "code": "UNSUBSCRIPTION_ERROR", "message": str(e)}
 
     def unsubscribe_all(self):
@@ -596,7 +596,7 @@ class ConnectionPool:
 
                     self.logger.debug(f"Disconnected connection {idx + 1}")
                 except Exception as e:
-                    self.logger.error(f"Error disconnecting adapter {idx + 1}: {e}")
+                    self.logger.exception(f"Error disconnecting adapter {idx + 1}: {e}")
 
             self.adapters.clear()
             self.adapter_symbol_counts.clear()

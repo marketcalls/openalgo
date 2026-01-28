@@ -230,7 +230,7 @@ class BrokerSymbolCache:
             return True
 
         except Exception as e:
-            logger.error(f"Error loading symbols into cache: {e}")
+            logger.exception(f"Error loading symbols into cache: {e}")
             return False
 
     def _set_session_timing(self):
@@ -724,7 +724,7 @@ def get_token_dbquery(symbol: str, exchange: str) -> str | None:
         else:
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database: {e}")
+        logger.exception(f"Error while querying the database: {e}")
         return None
 
 
@@ -739,7 +739,7 @@ def get_symbol_dbquery(token: str, exchange: str) -> str | None:
         else:
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database: {e}")
+        logger.exception(f"Error while querying the database: {e}")
         return None
 
 
@@ -754,7 +754,7 @@ def get_br_symbol_dbquery(symbol: str, exchange: str) -> str | None:
         else:
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database: {e}")
+        logger.exception(f"Error while querying the database: {e}")
         return None
 
 
@@ -769,7 +769,7 @@ def get_oa_symbol_dbquery(brsymbol: str, exchange: str) -> str | None:
         else:
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database: {e}")
+        logger.exception(f"Error while querying the database: {e}")
         return None
 
 
@@ -784,7 +784,7 @@ def get_brexchange_dbquery(symbol: str, exchange: str) -> str | None:
         else:
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database: {e}")
+        logger.exception(f"Error while querying the database: {e}")
         return None
 
 
@@ -812,7 +812,7 @@ def get_symbol_info_dbquery(symbol: str, exchange: str) -> SymbolData | None:
         else:
             return None
     except Exception as e:
-        logger.error(f"Error while querying the database: {e}")
+        logger.exception(f"Error while querying the database: {e}")
         return None
 
 
@@ -824,7 +824,7 @@ def get_symbol_count() -> int:
         count = SymToken.query.count()
         return count
     except Exception as e:
-        logger.error(f"Error while counting symbols: {e}")
+        logger.exception(f"Error while counting symbols: {e}")
         return 0
 
 
@@ -924,7 +924,7 @@ def search_symbols(query: str, exchange: str | None = None, limit: int = 50) -> 
             for r in results
         ]
     except Exception as e:
-        logger.error(f"Error searching symbols: {e}")
+        logger.exception(f"Error searching symbols: {e}")
         return []
 
 
@@ -1008,7 +1008,7 @@ def fno_search_symbols(
             limit=limit,
         )
     except Exception as e:
-        logger.error(f"Error in FNO search fallback: {e}")
+        logger.exception(f"Error in FNO search fallback: {e}")
         return []
 
 
@@ -1057,7 +1057,7 @@ def get_distinct_expiries_cached(
 
         return get_distinct_expiries(exchange=exchange, underlying=underlying)
     except Exception as e:
-        logger.error(f"Error getting expiries: {e}")
+        logger.exception(f"Error getting expiries: {e}")
         return []
 
 
@@ -1086,5 +1086,5 @@ def get_distinct_underlyings_cached(exchange: str | None = None) -> list[str]:
 
         return get_distinct_underlyings(exchange=exchange)
     except Exception as e:
-        logger.error(f"Error getting underlyings: {e}")
+        logger.exception(f"Error getting underlyings: {e}")
         return []

@@ -67,7 +67,7 @@ def should_route_to_pending(api_key: str, api_type: str | None = None) -> bool:
         return is_semi_auto
 
     except Exception as e:
-        logger.error(f"Error checking order routing: {e}")
+        logger.exception(f"Error checking order routing: {e}")
         # Default to auto mode on error (execute immediately)
         return False
 
@@ -136,5 +136,5 @@ def queue_order(
             return False, {"status": "error", "message": "Failed to queue order"}, 500
 
     except Exception as e:
-        logger.error(f"Error queuing order: {e}")
+        logger.exception(f"Error queuing order: {e}")
         return False, {"status": "error", "message": f"Failed to queue order: {str(e)}"}, 500

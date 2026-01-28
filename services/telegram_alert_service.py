@@ -193,7 +193,7 @@ class TelegramAlertService:
             return "\n".join(details)
 
         except Exception as e:
-            logger.error(f"Error formatting order details: {e}")
+            logger.exception(f"Error formatting order details: {e}")
             return f"Order Type: {order_type}\nStatus: {response.get('status', 'unknown')}"
 
     def send_alert_sync(self, telegram_id: int, message: str) -> bool:
@@ -240,7 +240,7 @@ class TelegramAlertService:
                 return False
 
         except Exception as e:
-            logger.error(f"Error sending telegram alert: {e}")
+            logger.exception(f"Error sending telegram alert: {e}")
             # Add to queue on error
             add_notification(telegram_id, message, priority=8)
             return False
@@ -349,7 +349,7 @@ class TelegramAlertService:
                     alert_executor.submit(self._send_alert_sync_wrapper, telegram_id, message)
 
         except Exception as e:
-            logger.error(f"Error sending broadcast alert: {e}")
+            logger.exception(f"Error sending broadcast alert: {e}")
 
     def toggle_alerts(self, enabled: bool):
         """Enable or disable telegram alerts"""

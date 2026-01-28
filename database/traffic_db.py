@@ -91,7 +91,7 @@ class TrafficLog(LogBase):
             logs_session.commit()
             return True
         except Exception as e:
-            logger.error(f"Error logging traffic: {str(e)}")
+            logger.exception(f"Error logging traffic: {str(e)}")
             logs_session.rollback()
             return False
 
@@ -101,7 +101,7 @@ class TrafficLog(LogBase):
         try:
             return TrafficLog.query.order_by(TrafficLog.timestamp.desc()).limit(limit).all()
         except Exception as e:
-            logger.error(f"Error getting recent logs: {str(e)}")
+            logger.exception(f"Error getting recent logs: {str(e)}")
             return []
 
     @staticmethod
@@ -120,7 +120,7 @@ class TrafficLog(LogBase):
                 "avg_duration": round(float(avg_duration), 2),
             }
         except Exception as e:
-            logger.error(f"Error getting traffic stats: {str(e)}")
+            logger.exception(f"Error getting traffic stats: {str(e)}")
             return {"total_requests": 0, "error_requests": 0, "avg_duration": 0}
 
 
@@ -162,7 +162,7 @@ class IPBan(LogBase):
 
             return False
         except Exception as e:
-            logger.error(f"Error checking IP ban status: {e}")
+            logger.exception(f"Error checking IP ban status: {e}")
             logs_session.rollback()
             return False
 
@@ -216,7 +216,7 @@ class IPBan(LogBase):
             logger.info(f"IP {ip_address} banned: {reason}")
             return True
         except Exception as e:
-            logger.error(f"Error banning IP {ip_address}: {e}")
+            logger.exception(f"Error banning IP {ip_address}: {e}")
             logs_session.rollback()
             return False
 
@@ -232,7 +232,7 @@ class IPBan(LogBase):
                 return True
             return False
         except Exception as e:
-            logger.error(f"Error unbanning IP: {e}")
+            logger.exception(f"Error unbanning IP: {e}")
             logs_session.rollback()
             return False
 
@@ -253,7 +253,7 @@ class IPBan(LogBase):
             # Return active bans
             return IPBan.query.all()
         except Exception as e:
-            logger.error(f"Error getting IP bans: {e}")
+            logger.exception(f"Error getting IP bans: {e}")
             return []
 
 
@@ -336,7 +336,7 @@ class Error404Tracker(LogBase):
             return True
 
         except Exception as e:
-            logger.error(f"Error tracking 404: {e}")
+            logger.exception(f"Error tracking 404: {e}")
             logs_session.rollback()
             return False
 
@@ -362,7 +362,7 @@ class Error404Tracker(LogBase):
                 .all()
             )
         except Exception as e:
-            logger.error(f"Error getting suspicious IPs: {e}")
+            logger.exception(f"Error getting suspicious IPs: {e}")
             return []
 
 
@@ -455,7 +455,7 @@ class InvalidAPIKeyTracker(LogBase):
             return True
 
         except Exception as e:
-            logger.error(f"Error tracking invalid API key: {e}")
+            logger.exception(f"Error tracking invalid API key: {e}")
             logs_session.rollback()
             return False
 
@@ -483,7 +483,7 @@ class InvalidAPIKeyTracker(LogBase):
                 .all()
             )
         except Exception as e:
-            logger.error(f"Error getting suspicious API users: {e}")
+            logger.exception(f"Error getting suspicious API users: {e}")
             return []
 
 

@@ -254,7 +254,7 @@ def activate_workflow(workflow_id):
         )
 
     except Exception as e:
-        logger.error(f"Failed to activate workflow {workflow_id}: {e}")
+        logger.exception(f"Failed to activate workflow {workflow_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -291,7 +291,7 @@ def deactivate_workflow(workflow_id):
         return jsonify({"status": "success", "message": "Workflow deactivated"})
 
     except Exception as e:
-        logger.error(f"Failed to deactivate workflow {workflow_id}: {e}")
+        logger.exception(f"Failed to deactivate workflow {workflow_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -317,7 +317,7 @@ def execute_workflow_now(workflow_id):
         result = execute_workflow(workflow_id, api_key=api_key)
         return jsonify(result)
     except Exception as e:
-        logger.error(f"Failed to execute workflow {workflow_id}: {e}")
+        logger.exception(f"Failed to execute workflow {workflow_id}: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -589,7 +589,7 @@ def _execute_webhook(token, webhook_data=None, url_secret=None):
             }
         )
     except Exception as e:
-        logger.error(f"Webhook execution failed for workflow {workflow.id}: {e}")
+        logger.exception(f"Webhook execution failed for workflow {workflow.id}: {e}")
         return jsonify({"error": str(e)}), 500
 
 

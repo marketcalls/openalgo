@@ -79,7 +79,7 @@ def calculate_synthetic_future(
             atm_strike = float(strike_str)
             logger.info(f"Extracted ATM strike: {atm_strike}")
         except Exception as e:
-            logger.error(f"Failed to extract strike from {call_symbol}: {e}")
+            logger.exception(f"Failed to extract strike from {call_symbol}: {e}")
             return (
                 False,
                 {

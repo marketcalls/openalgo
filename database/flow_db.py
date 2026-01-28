@@ -150,7 +150,7 @@ def create_workflow(name, description=None, nodes=None, edges=None):
         logger.info(f"Created workflow: {name} (id={workflow.id})")
         return workflow
     except Exception as e:
-        logger.error(f"Error creating workflow: {str(e)}")
+        logger.exception(f"Error creating workflow: {str(e)}")
         db_session.rollback()
         return None
 
@@ -160,7 +160,7 @@ def get_workflow(workflow_id):
     try:
         return FlowWorkflow.query.get(workflow_id)
     except Exception as e:
-        logger.error(f"Error getting workflow {workflow_id}: {str(e)}")
+        logger.exception(f"Error getting workflow {workflow_id}: {str(e)}")
         return None
 
 
@@ -177,7 +177,7 @@ def get_workflow_by_webhook_token(webhook_token):
             _workflow_webhook_cache[webhook_token] = workflow
         return workflow
     except Exception as e:
-        logger.error(f"Error getting workflow by webhook token: {str(e)}")
+        logger.exception(f"Error getting workflow by webhook token: {str(e)}")
         return None
 
 
@@ -186,7 +186,7 @@ def get_all_workflows():
     try:
         return FlowWorkflow.query.order_by(FlowWorkflow.updated_at.desc()).all()
     except Exception as e:
-        logger.error(f"Error getting all workflows: {str(e)}")
+        logger.exception(f"Error getting all workflows: {str(e)}")
         return []
 
 
@@ -195,7 +195,7 @@ def get_active_workflows():
     try:
         return FlowWorkflow.query.filter_by(is_active=True).all()
     except Exception as e:
-        logger.error(f"Error getting active workflows: {str(e)}")
+        logger.exception(f"Error getting active workflows: {str(e)}")
         return []
 
 
@@ -232,7 +232,7 @@ def update_workflow(workflow_id, **kwargs):
         logger.info(f"Updated workflow {workflow_id}")
         return workflow
     except Exception as e:
-        logger.error(f"Error updating workflow {workflow_id}: {str(e)}")
+        logger.exception(f"Error updating workflow {workflow_id}: {str(e)}")
         db_session.rollback()
         return None
 
@@ -258,7 +258,7 @@ def delete_workflow(workflow_id):
         logger.info(f"Deleted workflow {workflow_id}")
         return True
     except Exception as e:
-        logger.error(f"Error deleting workflow {workflow_id}: {str(e)}")
+        logger.exception(f"Error deleting workflow {workflow_id}: {str(e)}")
         db_session.rollback()
         return False
 
@@ -294,7 +294,7 @@ def regenerate_webhook_token(workflow_id):
         logger.info(f"Regenerated webhook token for workflow {workflow_id}")
         return workflow.webhook_token
     except Exception as e:
-        logger.error(f"Error regenerating webhook token for workflow {workflow_id}: {str(e)}")
+        logger.exception(f"Error regenerating webhook token for workflow {workflow_id}: {str(e)}")
         db_session.rollback()
         return None
 
@@ -312,7 +312,7 @@ def regenerate_webhook_secret(workflow_id):
         logger.info(f"Regenerated webhook secret for workflow {workflow_id}")
         return workflow.webhook_secret
     except Exception as e:
-        logger.error(f"Error regenerating webhook secret for workflow {workflow_id}: {str(e)}")
+        logger.exception(f"Error regenerating webhook secret for workflow {workflow_id}: {str(e)}")
         db_session.rollback()
         return None
 
@@ -358,7 +358,7 @@ def ensure_webhook_credentials(workflow_id):
 
         return True
     except Exception as e:
-        logger.error(f"Error ensuring webhook credentials for workflow {workflow_id}: {str(e)}")
+        logger.exception(f"Error ensuring webhook credentials for workflow {workflow_id}: {str(e)}")
         db_session.rollback()
         return False
 
@@ -376,7 +376,7 @@ def set_schedule_job_id(workflow_id, job_id):
         logger.info(f"Set schedule job ID {job_id} for workflow {workflow_id}")
         return workflow
     except Exception as e:
-        logger.error(f"Error setting schedule job ID for workflow {workflow_id}: {str(e)}")
+        logger.exception(f"Error setting schedule job ID for workflow {workflow_id}: {str(e)}")
         db_session.rollback()
         return None
 
@@ -394,7 +394,7 @@ def create_execution(workflow_id, status="pending"):
         logger.info(f"Created execution for workflow {workflow_id} (id={execution.id})")
         return execution
     except Exception as e:
-        logger.error(f"Error creating execution for workflow {workflow_id}: {str(e)}")
+        logger.exception(f"Error creating execution for workflow {workflow_id}: {str(e)}")
         db_session.rollback()
         return None
 
@@ -404,7 +404,7 @@ def get_execution(execution_id):
     try:
         return FlowWorkflowExecution.query.get(execution_id)
     except Exception as e:
-        logger.error(f"Error getting execution {execution_id}: {str(e)}")
+        logger.exception(f"Error getting execution {execution_id}: {str(e)}")
         return None
 
 
@@ -418,7 +418,7 @@ def get_workflow_executions(workflow_id, limit=50):
             .all()
         )
     except Exception as e:
-        logger.error(f"Error getting executions for workflow {workflow_id}: {str(e)}")
+        logger.exception(f"Error getting executions for workflow {workflow_id}: {str(e)}")
         return []
 
 
@@ -443,7 +443,7 @@ def update_execution_status(execution_id, status, error=None):
         logger.info(f"Updated execution {execution_id} status to {status}")
         return execution
     except Exception as e:
-        logger.error(f"Error updating execution {execution_id}: {str(e)}")
+        logger.exception(f"Error updating execution {execution_id}: {str(e)}")
         db_session.rollback()
         return None
 
@@ -463,7 +463,7 @@ def add_execution_log(execution_id, log_entry):
         db_session.commit()
         return execution
     except Exception as e:
-        logger.error(f"Error adding log to execution {execution_id}: {str(e)}")
+        logger.exception(f"Error adding log to execution {execution_id}: {str(e)}")
         db_session.rollback()
         return None
 

@@ -621,7 +621,7 @@ def broker_callback(broker, para=None):
                     return jsonify({"status": "error", "message": error_msg}), 500
             except Exception as e:
                 error_msg = f"Error sending OTP: {str(e)}"
-                logger.error(f"Definedge OTP generation error: {e}")
+                logger.exception(f"Definedge OTP generation error: {e}")
                 return jsonify({"status": "error", "message": error_msg}), 500
 
         elif request.method == "POST":
@@ -644,7 +644,7 @@ def broker_callback(broker, para=None):
                     else:
                         return jsonify({"status": "error", "message": "Failed to resend OTP"})
                 except Exception as e:
-                    logger.error(f"Definedge OTP resend error: {e}")
+                    logger.exception(f"Definedge OTP resend error: {e}")
                     return jsonify({"status": "error", "message": str(e)})
 
             # Handle OTP verification
@@ -678,7 +678,7 @@ def broker_callback(broker, para=None):
                         session.pop("definedge_otp_token", None)
 
                 except Exception as e:
-                    logger.error(f"Definedge OTP verification error: {e}")
+                    logger.exception(f"Definedge OTP verification error: {e}")
                     auth_token = None
                     feed_token = None
                     user_id = None

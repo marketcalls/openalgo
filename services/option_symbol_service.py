@@ -255,7 +255,7 @@ def find_option_in_database(option_symbol: str, exchange: str) -> dict[str, Any]
             return None
 
     except Exception as e:
-        logger.error(f"Error querying database for option symbol: {e}")
+        logger.exception(f"Error querying database for option symbol: {e}")
         return None
 
 
@@ -345,7 +345,7 @@ def get_available_strikes(
         return strikes
 
     except Exception as e:
-        logger.error(f"Error fetching available strikes: {e}")
+        logger.exception(f"Error fetching available strikes: {e}")
         return []
 
 

@@ -129,12 +129,12 @@ def catch_up_mis_squareoff():
 
             except Exception as e:
                 db_session.rollback()
-                logger.error(f"Error settling stale MIS position {position.symbol}: {e}")
+                logger.exception(f"Error settling stale MIS position {position.symbol}: {e}")
 
         logger.info("Catch-up: Stale MIS positions settled")
 
     except Exception as e:
-        logger.error(f"Error in catch-up MIS square-off: {e}")
+        logger.exception(f"Error in catch-up MIS square-off: {e}")
 
 
 def catch_up_t1_settlement():
@@ -165,7 +165,7 @@ def catch_up_t1_settlement():
             logger.debug("Catch-up: No CNC positions pending T+1 settlement")
 
     except Exception as e:
-        logger.error(f"Error in catch-up T+1 settlement: {e}")
+        logger.exception(f"Error in catch-up T+1 settlement: {e}")
 
 
 def catch_up_daily_pnl_reset():
@@ -212,7 +212,7 @@ def catch_up_daily_pnl_reset():
             logger.debug("Catch-up: No stale today_realized_pnl found")
 
     except Exception as e:
-        logger.error(f"Error in catch-up daily PnL reset: {e}")
+        logger.exception(f"Error in catch-up daily PnL reset: {e}")
 
 
 def catch_up_daily_pnl_snapshot():
@@ -286,7 +286,7 @@ def catch_up_daily_pnl_snapshot():
         logger.info("Catch-up: Daily P&L snapshot backfill completed")
 
     except Exception as e:
-        logger.error(f"Error in catch-up daily P&L snapshot: {e}")
+        logger.exception(f"Error in catch-up daily P&L snapshot: {e}")
 
 
 def run_catch_up_tasks():
@@ -315,4 +315,4 @@ def run_catch_up_tasks():
         logger.info("Catch-up tasks completed")
 
     except Exception as e:
-        logger.error(f"Error running catch-up tasks: {e}")
+        logger.exception(f"Error running catch-up tasks: {e}")

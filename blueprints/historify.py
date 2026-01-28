@@ -823,7 +823,7 @@ def download_sample(format_type):
             ), 400
 
     except Exception as e:
-        logger.error(f"Error generating sample file: {e}")
+        logger.exception(f"Error generating sample file: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 

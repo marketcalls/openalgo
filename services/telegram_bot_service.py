@@ -94,7 +94,7 @@ class TelegramBotService:
             return client
 
         except Exception as e:
-            logger.error(f"Error creating SDK client: {e}")
+            logger.exception(f"Error creating SDK client: {e}")
             return None
 
     async def _make_sdk_call(self, telegram_id: int, method: str, **kwargs) -> dict | None:
@@ -112,7 +112,7 @@ class TelegramBotService:
             return result
 
         except Exception as e:
-            logger.error(f"Error making SDK call: {e}")
+            logger.exception(f"Error making SDK call: {e}")
             return None
 
     async def _generate_intraday_chart(
@@ -165,7 +165,7 @@ class TelegramBotService:
                         end_date=end_date.strftime("%Y-%m-%d"),
                     )
                 except Exception as e:
-                    logger.error(f"Synchronous history fetch failed: {e}")
+                    logger.exception(f"Synchronous history fetch failed: {e}")
                     return None
 
             # Check if we got data
@@ -278,7 +278,7 @@ class TelegramBotService:
             return img_bytes
 
         except Exception as e:
-            logger.error(f"Error generating intraday chart: {e}")
+            logger.exception(f"Error generating intraday chart: {e}")
             return None
 
     async def _generate_daily_chart(
@@ -332,7 +332,7 @@ class TelegramBotService:
                         end_date=end_date.strftime("%Y-%m-%d"),
                     )
                 except Exception as e:
-                    logger.error(f"Synchronous daily history fetch failed: {e}")
+                    logger.exception(f"Synchronous daily history fetch failed: {e}")
                     return None
 
             # Check if we got data
@@ -448,7 +448,7 @@ class TelegramBotService:
             return img_bytes
 
         except Exception as e:
-            logger.error(f"Error generating daily chart: {e}")
+            logger.exception(f"Error generating daily chart: {e}")
             return None
 
     async def initialize_bot(self, token: str) -> tuple[bool, str]:
@@ -479,7 +479,7 @@ class TelegramBotService:
             return True, f"Bot initialized successfully: @{bot_info.username}"
 
         except Exception as e:
-            logger.error(f"Failed to initialize bot: {e}")
+            logger.exception(f"Failed to initialize bot: {e}")
             return False, str(e)
 
     def initialize_bot_sync(self, token: str) -> tuple[bool, str]:
@@ -518,7 +518,7 @@ class TelegramBotService:
                     return False, f"HTTP {response.status_code}: Failed to validate token"
 
             except Exception as e:
-                logger.error(f"Sync initialization error: {e}")
+                logger.exception(f"Sync initialization error: {e}")
                 # Store token anyway for retry later
                 self.bot_token = token
                 return True, "Token stored (will validate on start)"
@@ -573,7 +573,7 @@ class TelegramBotService:
             # Run the bot
             loop.run_until_complete(self._start_bot_isolated())
         except Exception as e:
-            logger.error(f"Bot thread error: {e}")
+            logger.exception(f"Bot thread error: {e}")
         finally:
             # Cleanup
             try:
@@ -711,7 +711,7 @@ class TelegramBotService:
 
             except Exception as e:
                 # For non-network errors, log and stop
-                logger.error(f"Unexpected error in bot operation: {e}")
+                logger.exception(f"Unexpected error in bot operation: {e}")
                 self.is_running = False
                 break
 
@@ -758,7 +758,7 @@ class TelegramBotService:
             return False, "Bot failed to start within timeout"
 
         except Exception as e:
-            logger.error(f"Failed to start bot: {e}")
+            logger.exception(f"Failed to start bot: {e}")
             return False, str(e)
 
     def stop_bot(self) -> tuple[bool, str]:
@@ -790,7 +790,7 @@ class TelegramBotService:
             return True, "Bot stopped successfully"
 
         except Exception as e:
-            logger.error(f"Failed to stop bot: {e}")
+            logger.exception(f"Failed to stop bot: {e}")
             return False, str(e)
 
     # Alias for compatibility
@@ -897,7 +897,7 @@ class TelegramBotService:
                     openalgo_username = get_username_by_apikey(api_key)
                     logger.info(f"API key lookup returned: '{openalgo_username}'")
                 except Exception as e:
-                    logger.error(f"Error getting username from API key: {e}")
+                    logger.exception(f"Error getting username from API key: {e}")
 
                 # If we couldn't get username from API key, try to extract from response
                 if not openalgo_username and test_response.get("data"):
@@ -951,7 +951,7 @@ class TelegramBotService:
                 )
 
         except Exception as e:
-            logger.error(f"Error linking account: {e}")
+            logger.exception(f"Error linking account: {e}")
             await update.message.reply_text(
                 f"❌ Failed to link account.\nError: {str(e)}", parse_mode=ParseMode.MARKDOWN
             )
@@ -1714,7 +1714,7 @@ class TelegramBotService:
                 await update.message.reply_text(f"❌ Failed to generate charts for {symbol}")
 
         except Exception as e:
-            logger.error(f"Error generating charts: {e}")
+            logger.exception(f"Error generating charts: {e}")
             try:
                 await loading_msg.delete()
             except:
@@ -2005,7 +2005,7 @@ class TelegramBotService:
             log_command(user.id, callback_data, chat_id)
 
         except Exception as e:
-            logger.error(f"Error in button callback for {callback_data}: {e}")
+            logger.exception(f"Error in button callback for {callback_data}: {e}")
             await context.bot.send_message(
                 chat_id=chat_id, text="❌ Failed to fetch data. Please try again."
             )
@@ -2024,7 +2024,7 @@ class TelegramBotService:
             logger.debug(f"Notification sent to telegram_id: {telegram_id}")
             return True
         except Exception as e:
-            logger.error(f"Error sending notification to {telegram_id}: {str(e)}")
+            logger.exception(f"Error sending notification to {telegram_id}: {str(e)}")
             return False
 
     async def broadcast_message(self, message: str, filters: dict = None) -> tuple[int, int]:
@@ -2068,14 +2068,14 @@ class TelegramBotService:
                         # Add small delay to avoid rate limits
                         await asyncio.sleep(0.1)
                 except Exception as e:
-                    logger.error(f"Failed to send broadcast to {user.get('telegram_id')}: {str(e)}")
+                    logger.exception(f"Failed to send broadcast to {user.get('telegram_id')}: {str(e)}")
                     fail_count += 1
 
             logger.debug(f"Broadcast complete: {success_count} success, {fail_count} failed")
             return success_count, fail_count
 
         except Exception as e:
-            logger.error(f"Error in broadcast: {str(e)}")
+            logger.exception(f"Error in broadcast: {str(e)}")
             return 0, 0
 
 

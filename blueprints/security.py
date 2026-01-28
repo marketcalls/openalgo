@@ -87,7 +87,7 @@ def security_dashboard():
             security_settings=security_settings,
         )
     except Exception as e:
-        logger.error(f"Error loading security dashboard: {e}")
+        logger.exception(f"Error loading security dashboard: {e}")
         return render_template(
             "security/dashboard.html",
             banned_ips=[],
@@ -131,7 +131,7 @@ def ban_ip():
             return jsonify({"error": "Failed to ban IP"}), 500
 
     except Exception as e:
-        logger.error(f"Error banning IP: {e}")
+        logger.exception(f"Error banning IP: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -156,7 +156,7 @@ def unban_ip():
             return jsonify({"error": "IP not found in ban list"}), 404
 
     except Exception as e:
-        logger.error(f"Error unbanning IP: {e}")
+        logger.exception(f"Error unbanning IP: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -231,7 +231,7 @@ def ban_host():
         )
 
     except Exception as e:
-        logger.error(f"Error banning host: {e}")
+        logger.exception(f"Error banning host: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -257,7 +257,7 @@ def clear_404_tracker():
             return jsonify({"error": "No tracker found for this IP"}), 404
 
     except Exception as e:
-        logger.error(f"Error clearing 404 tracker: {e}")
+        logger.exception(f"Error clearing 404 tracker: {e}")
         logs_session.rollback()
         return jsonify({"error": str(e)}), 500
 
@@ -337,7 +337,7 @@ def security_data():
             }
         )
     except Exception as e:
-        logger.error(f"Error loading security data: {e}")
+        logger.exception(f"Error loading security data: {e}")
         return jsonify(
             {
                 "banned_ips": [],
@@ -378,7 +378,7 @@ def security_stats():
         )
 
     except Exception as e:
-        logger.error(f"Error getting security stats: {e}")
+        logger.exception(f"Error getting security stats: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -440,7 +440,7 @@ def update_security_settings():
         logger.error(f"Invalid value in security settings: {e}")
         return jsonify({"error": "Invalid numeric value provided"}), 400
     except Exception as e:
-        logger.error(f"Error updating security settings: {e}")
+        logger.exception(f"Error updating security settings: {e}")
         return jsonify({"error": str(e)}), 500
 
 

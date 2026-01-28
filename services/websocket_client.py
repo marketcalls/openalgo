@@ -386,7 +386,7 @@ class WebSocketClient:
                     try:
                         callback(data)
                     except Exception as e:
-                        logger.error(f"Error in auth callback: {e}")
+                        logger.exception(f"Error in auth callback: {e}")
 
             # Handle market data
             elif msg_type == "market_data":
@@ -404,7 +404,7 @@ class WebSocketClient:
                         try:
                             callback(data)
                         except Exception as e:
-                            logger.error(f"Error in market data callback: {e}")
+                            logger.exception(f"Error in market data callback: {e}")
 
             # Handle subscription responses
             elif msg_type == "subscribe":
@@ -412,7 +412,7 @@ class WebSocketClient:
                     try:
                         callback(data)
                     except Exception as e:
-                        logger.error(f"Error in subscribe callback: {e}")
+                        logger.exception(f"Error in subscribe callback: {e}")
 
             # Handle unsubscription responses
             elif msg_type == "unsubscribe":
@@ -420,7 +420,7 @@ class WebSocketClient:
                     try:
                         callback(data)
                     except Exception as e:
-                        logger.error(f"Error in unsubscribe callback: {e}")
+                        logger.exception(f"Error in unsubscribe callback: {e}")
 
             # Handle errors
             elif data.get("status") == "error":
@@ -429,7 +429,7 @@ class WebSocketClient:
                     try:
                         callback(data)
                     except Exception as e:
-                        logger.error(f"Error in error callback: {e}")
+                        logger.exception(f"Error in error callback: {e}")
 
         except json.JSONDecodeError:
             logger.error(f"Invalid JSON message: {message}")
@@ -475,5 +475,5 @@ def close_all_clients():
             try:
                 client.disconnect()
             except Exception as e:
-                logger.error(f"Error closing client for API key {api_key}: {e}")
+                logger.exception(f"Error closing client for API key {api_key}: {e}")
         _client_instances.clear()

@@ -79,7 +79,7 @@ def get_histogram_data(broker=None):
         return data
 
     except Exception as e:
-        logger.error(f"Error getting histogram data: {e}")
+        logger.exception(f"Error getting histogram data: {e}")
         return {"bins": [], "counts": [], "avg_rtt": 0, "min_rtt": 0, "max_rtt": 0}
 
 
@@ -201,7 +201,7 @@ def get_logs():
             ]
         )
     except Exception as e:
-        logger.error(f"Error fetching latency logs: {e}")
+        logger.exception(f"Error fetching latency logs: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -221,7 +221,7 @@ def get_stats():
         stats["broker_histograms"] = broker_histograms
         return jsonify(stats)
     except Exception as e:
-        logger.error(f"Error fetching latency stats: {e}")
+        logger.exception(f"Error fetching latency stats: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -240,7 +240,7 @@ def get_broker_stats(broker):
         broker_stats["histogram"] = get_histogram_data(broker)
         return jsonify(broker_stats)
     except Exception as e:
-        logger.error(f"Error fetching broker stats: {e}")
+        logger.exception(f"Error fetching broker stats: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -266,7 +266,7 @@ def export_logs():
         return response
 
     except Exception as e:
-        logger.error(f"Error exporting latency logs: {e}")
+        logger.exception(f"Error exporting latency logs: {e}")
         return jsonify({"error": str(e)}), 500
 
 

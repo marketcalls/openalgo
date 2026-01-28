@@ -120,7 +120,7 @@ def load_freeze_qty_from_csv(csv_path: str, exchange: str = "NFO") -> bool:
 
     except Exception as e:
         db_session.rollback()
-        logger.error(f"Error loading freeze quantities from CSV: {e}")
+        logger.exception(f"Error loading freeze quantities from CSV: {e}")
         return False
 
 
@@ -150,7 +150,7 @@ def load_freeze_qty_cache() -> bool:
         return True
 
     except Exception as e:
-        logger.error(f"Error loading freeze qty cache: {e}")
+        logger.exception(f"Error loading freeze qty cache: {e}")
         return False
 
 

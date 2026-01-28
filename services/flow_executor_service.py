@@ -1911,7 +1911,7 @@ def execute_workflow(
             }
 
         except Exception as e:
-            logger.error(f"Workflow execution failed: {e}")
+            logger.exception(f"Workflow execution failed: {e}")
             logs.append(
                 {
                     "time": datetime.utcnow().isoformat(),

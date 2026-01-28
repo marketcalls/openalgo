@@ -39,7 +39,7 @@ def get_ist_timestamp():
         ist_now = utc_now.astimezone(ist)
         return ist_now.strftime("%Y-%m-%d %H:%M:%S IST")
     except Exception as e:
-        logger.error(f"Error getting IST timestamp: {e}")
+        logger.exception(f"Error getting IST timestamp: {e}")
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S IST")
 
 
@@ -119,7 +119,7 @@ def create_pending_order(user_id, api_type, order_data):
         return pending_order.id
 
     except Exception as e:
-        logger.error(f"Error creating pending order: {e}")
+        logger.exception(f"Error creating pending order: {e}")
         db_session.rollback()
         return None
 
@@ -145,7 +145,7 @@ def get_pending_orders(user_id, status=None):
         return orders
 
     except Exception as e:
-        logger.error(f"Error getting pending orders: {e}")
+        logger.exception(f"Error getting pending orders: {e}")
         return []
 
 
@@ -162,7 +162,7 @@ def get_pending_order_by_id(order_id):
     try:
         return PendingOrder.query.filter_by(id=order_id).first()
     except Exception as e:
-        logger.error(f"Error getting pending order by ID: {e}")
+        logger.exception(f"Error getting pending order by ID: {e}")
         return None
 
 
@@ -199,7 +199,7 @@ def approve_pending_order(order_id, approved_by, user_id):
             return False
 
     except Exception as e:
-        logger.error(f"Error approving order: {e}")
+        logger.exception(f"Error approving order: {e}")
         db_session.rollback()
         return False
 
@@ -239,7 +239,7 @@ def reject_pending_order(order_id, reason, rejected_by, user_id):
             return False
 
     except Exception as e:
-        logger.error(f"Error rejecting order: {e}")
+        logger.exception(f"Error rejecting order: {e}")
         db_session.rollback()
         return False
 
@@ -273,7 +273,7 @@ def delete_pending_order(order_id, user_id):
             return False
 
     except Exception as e:
-        logger.error(f"Error deleting order: {e}")
+        logger.exception(f"Error deleting order: {e}")
         db_session.rollback()
         return False
 
@@ -307,7 +307,7 @@ def update_broker_status(pending_order_id, broker_order_id, broker_status):
             return False
 
     except Exception as e:
-        logger.error(f"Error updating broker status: {e}")
+        logger.exception(f"Error updating broker status: {e}")
         db_session.rollback()
         return False
 
@@ -326,5 +326,5 @@ def get_pending_count(user_id):
         count = PendingOrder.query.filter_by(user_id=user_id, status="pending").count()
         return count
     except Exception as e:
-        logger.error(f"Error getting pending count: {e}")
+        logger.exception(f"Error getting pending count: {e}")
         return 0
