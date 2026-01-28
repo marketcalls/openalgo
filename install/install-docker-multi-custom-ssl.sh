@@ -755,10 +755,30 @@ for i in "${!CONF_DOMAINS[@]}"; do
         # Only update connectivity settings if needed (in case domain changed)
         # These are safe to update without breaking authentication
         sed -i "s|WEBSOCKET_URL='.*'|WEBSOCKET_URL='wss://$DOMAIN/ws'|g" "$ENV_FILE"
-        sed -i "s|CORS_ALLOWED_ORIGINS = '.*'|CORS_ALLOWED_ORIGINS = 'https://$DOMAIN'|g" "$ENV_FILE"
-        sed -i "s|CSP_CONNECT_SRC = \"'self'.*\"|CSP_CONNECT_SRC = \"'self' wss://$DOMAIN https://$DOMAIN wss: ws: https://cdn.socket.io\"|g" "$ENV_FILE"
         
-        log "Updated connectivity settings only" "$GREEN"
+        # CORS: Add domain if not already present (preserves custom domains like chart.domain.com)
+        # NOTE: Flask-CORS expects comma-separated origins (see cors.py line 25)
+        if ! grep "CORS_ALLOWED_ORIGINS" "$ENV_FILE" | grep -q "https://$DOMAIN"; then
+            # Extract current CORS value and append new domain with comma
+            CURRENT_CORS=$(grep "CORS_ALLOWED_ORIGINS" "$ENV_FILE" | sed "s/.*= '\\(.*\\)'/\\1/")
+            if [ -n "$CURRENT_CORS" ]; then
+                NEW_CORS="$CURRENT_CORS,https://$DOMAIN"
+                # Remove duplicates while preserving comma format
+                NEW_CORS=$(echo "$NEW_CORS" | tr ',' '\n' | sort -u | tr '\n' ',' | sed 's/,$//')
+                sed -i "s|CORS_ALLOWED_ORIGINS = '.*'|CORS_ALLOWED_ORIGINS = '$NEW_CORS'|g" "$ENV_FILE"
+            fi
+        fi
+        
+        # CSP: Add domain if not already present (preserves custom domains)
+        if ! grep "CSP_CONNECT_SRC" "$ENV_FILE" | grep -q "https://$DOMAIN"; then
+            CURRENT_CSP=$(grep "CSP_CONNECT_SRC" "$ENV_FILE" | sed 's/.*= "\\(.*\\)"/\\1/')
+            if [ -n "$CURRENT_CSP" ] && ! echo "$CURRENT_CSP" | grep -q "https://$DOMAIN"; then
+                NEW_CSP="$CURRENT_CSP https://$DOMAIN wss://$DOMAIN"
+                sed -i "s|CSP_CONNECT_SRC = \".*\"|CSP_CONNECT_SRC = \"$NEW_CSP\"|g" "$ENV_FILE"
+            fi
+        fi
+        
+        log "Updated connectivity settings (preserved custom domains)" "$GREEN"
     else
         log "Creating new .env configuration..." "$YELLOW"
         cp "$INSTANCE_DIR/.sample.env" "$ENV_FILE"
@@ -815,10 +835,11 @@ services:
       - APP_MODE=standalone
       - TZ=Asia/Kolkata
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/login"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:5000/auth/check-setup"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 40s
     restart: unless-stopped
 
 volumes:
@@ -917,6 +938,7 @@ EOF
     
     # 8. Service Start
     log "Starting Container for $DOMAIN..." "$BLUE"
+    log "Building Docker image (includes automated frontend build, may take 2-5 minutes)..." "$YELLOW"
     cd "$INSTANCE_DIR"
     docker compose build
     docker compose up -d

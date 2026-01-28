@@ -1,0 +1,21 @@
+{
+    "extends": "./tsconfig.app.json",
+    "compilerOptions": {
+        "composite": true,
+        "lib": [
+            "ES2022",
+            "DOM",
+            "DOM.Iterable"
+        ],
+        "types": [
+            "vitest/globals",
+            "@testing-library/jest-dom"
+        ]
+    },
+    "include": [
+        "src/**/*.test.tsx",
+        "src/**/*.test.ts",
+        "src/test/**/*"
+    ],
+    "exclude": []
+}

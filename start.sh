@@ -234,7 +234,7 @@ exec /app/.venv/bin/gunicorn \
     --worker-class eventlet \
     --workers 1 \
     --bind 0.0.0.0:${APP_PORT} \
-    --timeout 120 \
+    --timeout 300 \
     --graceful-timeout 30 \
     --log-level warning \
     app:app
