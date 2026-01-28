@@ -6,6 +6,7 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+
 def transform_margin_positions(positions):
     """
     Transform OpenAlgo margin position format to Angel Broking margin format.
@@ -21,21 +22,21 @@ def transform_margin_positions(positions):
 
     for position in positions:
         try:
-            symbol = position['symbol']
-            exchange = position['exchange']
+            symbol = position["symbol"]
+            exchange = position["exchange"]
 
             # Get the token for the symbol
             token = get_token(symbol, exchange)
 
             # Validate token exists and is not None
-            if not token or token is None or str(token).lower() == 'none':
+            if not token or token is None or str(token).lower() == "none":
                 logger.warning(f"Token not found for symbol: {symbol} on exchange: {exchange}")
                 skipped_positions.append(f"{symbol} ({exchange})")
                 continue
 
             # Validate token is a valid number/string (Angel expects numeric token)
             token_str = str(token).strip()
-            if not token_str or not token_str.replace('.', '').replace('-', '').isdigit():
+            if not token_str or not token_str.replace(".", "").replace("-", "").isdigit():
                 logger.warning(f"Invalid token format for {symbol} ({exchange}): '{token_str}'")
                 skipped_positions.append(f"{symbol} ({exchange}) - invalid token: {token_str}")
                 continue
@@ -43,16 +44,18 @@ def transform_margin_positions(positions):
             # Transform the position
             transformed_position = {
                 "exchange": exchange,
-                "qty": int(position['quantity']),
-                "price": float(position.get('price', 0)),
-                "productType": map_product_type(position['product']),
+                "qty": int(position["quantity"]),
+                "price": float(position.get("price", 0)),
+                "productType": map_product_type(position["product"]),
                 "token": token_str,
-                "tradeType": position['action'].upper(),
-                "orderType": map_order_type(position['pricetype'])
+                "tradeType": position["action"].upper(),
+                "orderType": map_order_type(position["pricetype"]),
             }
 
             transformed_positions.append(transformed_position)
-            logger.debug(f"Successfully transformed position: {symbol} ({exchange}) with token: {token_str}")
+            logger.debug(
+                f"Successfully transformed position: {symbol} ({exchange}) with token: {token_str}"
+            )
 
         except Exception as e:
             logger.error(f"Error transforming position: {position}, Error: {e}")
@@ -61,12 +64,17 @@ def transform_margin_positions(positions):
 
     # Log summary
     if skipped_positions:
-        logger.warning(f"Skipped {len(skipped_positions)} position(s) due to missing/invalid tokens: {', '.join(skipped_positions)}")
+        logger.warning(
+            f"Skipped {len(skipped_positions)} position(s) due to missing/invalid tokens: {', '.join(skipped_positions)}"
+        )
 
     if transformed_positions:
-        logger.info(f"Successfully transformed {len(transformed_positions)} position(s) for margin calculation")
+        logger.info(
+            f"Successfully transformed {len(transformed_positions)} position(s) for margin calculation"
+        )
 
     return transformed_positions
+
 
 def map_product_type(product):
     """
@@ -82,6 +90,7 @@ def map_product_type(product):
     }
     return product_type_mapping.get(product, "INTRADAY")
 
+
 def map_order_type(pricetype):
     """
     Maps OpenAlgo price type to Angel Broking order type.
@@ -93,9 +102,10 @@ def map_order_type(pricetype):
         "MARKET": "MARKET",
         "LIMIT": "LIMIT",
         "SL": "STOPLOSS_LIMIT",
-        "SL-M": "STOPLOSS_MARKET"
+        "SL-M": "STOPLOSS_MARKET",
     }
     return order_type_mapping.get(pricetype, "MARKET")
+
 
 def parse_margin_response(response_data):
     """
@@ -109,42 +119,36 @@ def parse_margin_response(response_data):
     """
     try:
         if not response_data or not isinstance(response_data, dict):
-            return {
-                'status': 'error',
-                'message': 'Invalid response from broker'
-            }
+            return {"status": "error", "message": "Invalid response from broker"}
 
         # Check if the response has the expected structure
-        if response_data.get('status') is False:
+        if response_data.get("status") is False:
             return {
-                'status': 'error',
-                'message': response_data.get('message', 'Failed to calculate margin')
+                "status": "error",
+                "message": response_data.get("message", "Failed to calculate margin"),
             }
 
         # Extract margin data from Angel's margin calculator response
-        data = response_data.get('data', {})
-        margin_components = data.get('marginComponents', {})
+        data = response_data.get("data", {})
+        margin_components = data.get("marginComponents", {})
 
         # Extract values from Angel's response
-        total_margin_required = data.get('totalMarginRequired', 0)
-        span_margin = margin_components.get('spanMargin', 0)
+        total_margin_required = data.get("totalMarginRequired", 0)
+        span_margin = margin_components.get("spanMargin", 0)
 
         # Angel API doesn't provide exposure margin explicitly, so set it to 0
         exposure_margin = 0
 
         # Return standardized format matching OpenAlgo API specification
         return {
-            'status': 'success',
-            'data': {
-                'total_margin_required': total_margin_required,
-                'span_margin': span_margin,
-                'exposure_margin': exposure_margin
-            }
+            "status": "success",
+            "data": {
+                "total_margin_required": total_margin_required,
+                "span_margin": span_margin,
+                "exposure_margin": exposure_margin,
+            },
         }
 
     except Exception as e:
         logger.error(f"Error parsing margin response: {e}")
-        return {
-            'status': 'error',
-            'message': f'Failed to parse margin response: {str(e)}'
-        }
+        return {"status": "error", "message": f"Failed to parse margin response: {str(e)}"}

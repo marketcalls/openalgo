@@ -7,14 +7,14 @@ class PocketfulExchangeMapper:
     # Exchange type mapping for Pocketful broker
     # Based on Pocketful WebSocket API (matching data.py)
     EXCHANGE_TYPES = {
-        'NSE': 1,      # NSE Cash Market
-        'NFO': 2,      # NSE Futures & Options
-        'CDS': 3,      # Currency Derivatives
-        'MCX': 4,      # MCX
-        'BSE': 6,      # BSE Cash Market
-        'BFO': 7,      # BSE F&O
-        'NSE_INDEX': 1,  # NSE Index
-        'BSE_INDEX': 6   # BSE Index
+        "NSE": 1,  # NSE Cash Market
+        "NFO": 2,  # NSE Futures & Options
+        "CDS": 3,  # Currency Derivatives
+        "MCX": 4,  # MCX
+        "BSE": 6,  # BSE Cash Market
+        "BFO": 7,  # BSE F&O
+        "NSE_INDEX": 1,  # NSE Index
+        "BSE_INDEX": 6,  # BSE Index
     }
 
     @staticmethod
@@ -28,7 +28,9 @@ class PocketfulExchangeMapper:
         Returns:
             int: Pocketful-specific exchange type
         """
-        return PocketfulExchangeMapper.EXCHANGE_TYPES.get(exchange, 1)  # Default to NSE if not found
+        return PocketfulExchangeMapper.EXCHANGE_TYPES.get(
+            exchange, 1
+        )  # Default to NSE if not found
 
 
 class PocketfulCapabilityRegistry:
@@ -38,7 +40,7 @@ class PocketfulCapabilityRegistry:
     """
 
     # Pocketful broker capabilities
-    exchanges = ['NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'CDS']
+    exchanges = ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS"]
 
     # Subscription modes:
     # 1 - Detailed market data (full OHLC, OI, depth)
@@ -47,12 +49,12 @@ class PocketfulCapabilityRegistry:
     subscription_modes = [1, 2, 4]
 
     depth_support = {
-        'NSE': [5],   # NSE supports 5 levels
-        'BSE': [5],   # BSE supports 5 levels
-        'BFO': [5],   # BFO supports 5 levels
-        'NFO': [5],   # NFO supports 5 levels
-        'MCX': [5],   # MCX supports 5 levels
-        'CDS': [5]    # CDS supports 5 levels
+        "NSE": [5],  # NSE supports 5 levels
+        "BSE": [5],  # BSE supports 5 levels
+        "BFO": [5],  # BFO supports 5 levels
+        "NFO": [5],  # NFO supports 5 levels
+        "MCX": [5],  # MCX supports 5 levels
+        "CDS": [5],  # CDS supports 5 levels
     }
 
     @classmethod

@@ -1,91 +1,82 @@
+import copy
 import importlib
 import traceback
-import copy
-from typing import Tuple, Dict, Any, Optional
+from typing import Any, Dict, Optional, Tuple
 
-from database.auth_db import get_auth_token_broker
-from database.apilog_db import async_log_order, executor
-from database.settings_db import get_analyze_mode
 from database.analyzer_db import async_log_analyzer
+from database.apilog_db import async_log_order, executor
+from database.auth_db import get_auth_token_broker
+from database.settings_db import get_analyze_mode
 from extensions import socketio
+from services.telegram_alert_service import telegram_alert_service
 from utils.api_analyzer import analyze_request
 from utils.logging import get_logger
-from services.telegram_alert_service import telegram_alert_service
 
 # Initialize logger
 logger = get_logger(__name__)
 
-def emit_analyzer_error(request_data: Dict[str, Any], error_message: str) -> Dict[str, Any]:
+
+def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dict[str, Any]:
     """
     Helper function to emit analyzer error events
-    
+
     Args:
         request_data: Original request data
         error_message: Error message to emit
-        
+
     Returns:
         Error response dictionary
     """
-    error_response = {
-        'mode': 'analyze',
-        'status': 'error',
-        'message': error_message
-    }
-    
+    error_response = {"mode": "analyze", "status": "error", "message": error_message}
+
     # Store complete request data without apikey
     analyzer_request = request_data.copy()
-    if 'apikey' in analyzer_request:
-        del analyzer_request['apikey']
-    analyzer_request['api_type'] = 'closeposition'
-    
+    if "apikey" in analyzer_request:
+        del analyzer_request["apikey"]
+    analyzer_request["api_type"] = "closeposition"
+
     # Log to analyzer database
-    executor.submit(async_log_analyzer, analyzer_request, error_response, 'closeposition')
-    
+    executor.submit(async_log_analyzer, analyzer_request, error_response, "closeposition")
+
     # Emit socket event asynchronously (non-blocking)
     socketio.start_background_task(
-        socketio.emit,
-        'analyzer_update',
-        {
-        'request': analyzer_request,
-        'response': error_response
-    }
+        socketio.emit, "analyzer_update", {"request": analyzer_request, "response": error_response}
     )
-    
+
     return error_response
 
-def import_broker_module(broker_name: str) -> Optional[Any]:
+
+def import_broker_module(broker_name: str) -> Any | None:
     """
     Dynamically import the broker-specific order API module.
-    
+
     Args:
         broker_name: Name of the broker
-        
+
     Returns:
         The imported module or None if import fails
     """
     try:
-        module_path = f'broker.{broker_name}.api.order_api'
+        module_path = f"broker.{broker_name}.api.order_api"
         broker_module = importlib.import_module(module_path)
         return broker_module
     except ImportError as error:
         logger.error(f"Error importing broker module '{module_path}': {error}")
         return None
 
+
 def close_position_with_auth(
-    position_data: Dict[str, Any],
-    auth_token: str,
-    broker: str,
-    original_data: Dict[str, Any]
-) -> Tuple[bool, Dict[str, Any], int]:
+    position_data: dict[str, Any], auth_token: str, broker: str, original_data: dict[str, Any]
+) -> tuple[bool, dict[str, Any], int]:
     """
     Close all positions using provided auth token.
-    
+
     Args:
         position_data: Position data
         auth_token: Authentication token for the broker API
         broker: Name of the broker
         original_data: Original request data for logging
-        
+
     Returns:
         Tuple containing:
         - Success status (bool)
@@ -93,111 +84,109 @@ def close_position_with_auth(
         - HTTP status code (int)
     """
     position_request_data = copy.deepcopy(original_data)
-    if 'apikey' in position_request_data:
-        position_request_data.pop('apikey', None)
-    
+    if "apikey" in position_request_data:
+        position_request_data.pop("apikey", None)
+
     # If in analyze mode, route to sandbox for real position closing
     if get_analyze_mode():
         from services.sandbox_service import sandbox_close_position
 
-        api_key = original_data.get('apikey')
+        api_key = original_data.get("apikey")
         if not api_key:
-            return False, {
-                'status': 'error',
-                'message': 'API key required for sandbox mode',
-                'mode': 'analyze'
-            }, 400
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": "API key required for sandbox mode",
+                    "mode": "analyze",
+                },
+                400,
+            )
 
         # Convert position_data format if needed
         close_data = {
-            'symbol': position_data.get('symbol'),
-            'exchange': position_data.get('exchange'),
-            'product': position_data.get('product_type') or position_data.get('product')
+            "symbol": position_data.get("symbol"),
+            "exchange": position_data.get("exchange"),
+            "product": position_data.get("product_type") or position_data.get("product"),
         }
 
         return sandbox_close_position(close_data, api_key, original_data)
 
     # Existing broker logic below - keep the socketio.emit line
     if False:  # This will never execute but preserves the code structure
-        socketio.emit('analyzer_update', {
-            'request': analyzer_request,
-            'response': response_data
-        })
+        socketio.emit("analyzer_update", {"request": analyzer_request, "response": response_data})
 
         # Send Telegram alert for analyze mode
-        telegram_alert_service.send_order_alert('closeposition', position_data, response_data, position_data.get('apikey'))
+        telegram_alert_service.send_order_alert(
+            "closeposition", position_data, response_data, position_data.get("apikey")
+        )
         return True, response_data, 200
 
     broker_module = import_broker_module(broker)
     if broker_module is None:
-        error_response = {
-            'status': 'error',
-            'message': 'Broker-specific module not found'
-        }
-        executor.submit(async_log_order, 'closeposition', original_data, error_response)
+        error_response = {"status": "error", "message": "Broker-specific module not found"}
+        executor.submit(async_log_order, "closeposition", original_data, error_response)
         return False, error_response, 404
 
     try:
         # Use the dynamically imported module's function to close all positions
-        api_key = position_data.get('apikey', '')
+        api_key = position_data.get("apikey", "")
         response_code, status_code = broker_module.close_all_positions(api_key, auth_token)
     except Exception as e:
         logger.error(f"Error in broker_module.close_all_positions: {e}")
         traceback.print_exc()
         error_response = {
-            'status': 'error',
-            'message': 'Failed to close positions due to internal error'
+            "status": "error",
+            "message": "Failed to close positions due to internal error",
         }
-        executor.submit(async_log_order, 'closeposition', original_data, error_response)
+        executor.submit(async_log_order, "closeposition", original_data, error_response)
         return False, error_response, 500
 
     if status_code == 200:
-        response_data = {
-            'status': 'success',
-            'message': 'All Open Positions Squared Off'
-        }
+        response_data = {"status": "success", "message": "All Open Positions Squared Off"}
         # Emit SocketIO event asynchronously (non-blocking)
         socketio.start_background_task(
             socketio.emit,
-            'close_position_event',
-            {
-                'status': 'success',
-                'message': 'All Open Positions Squared Off',
-                'mode': 'live'
-            }
+            "close_position_event",
+            {"status": "success", "message": "All Open Positions Squared Off", "mode": "live"},
         )
-        executor.submit(async_log_order, 'closeposition', position_request_data, response_data)
+        executor.submit(async_log_order, "closeposition", position_request_data, response_data)
         # Send Telegram alert in background task (non-blocking)
         socketio.start_background_task(
             telegram_alert_service.send_order_alert,
-            'closeposition', position_data, response_data, original_data.get('apikey')
+            "closeposition",
+            position_data,
+            response_data,
+            original_data.get("apikey"),
         )
         return True, response_data, 200
     else:
-        message = response_code.get('message', 'Failed to close positions') if isinstance(response_code, dict) else 'Failed to close positions'
-        error_response = {
-            'status': 'error',
-            'message': message
-        }
-        executor.submit(async_log_order, 'closeposition', original_data, error_response)
+        message = (
+            response_code.get("message", "Failed to close positions")
+            if isinstance(response_code, dict)
+            else "Failed to close positions"
+        )
+        error_response = {"status": "error", "message": message}
+        executor.submit(async_log_order, "closeposition", original_data, error_response)
         return False, error_response, status_code
 
+
 def close_position(
-    position_data: Dict[str, Any] = None,
-    api_key: Optional[str] = None,
-    auth_token: Optional[str] = None,
-    broker: Optional[str] = None
-) -> Tuple[bool, Dict[str, Any], int]:
+    position_data: dict[str, Any] = None,
+    api_key: str | None = None,
+    auth_token: str | None = None,
+    broker: str | None = None,
+) -> tuple[bool, dict[str, Any], int]:
     """
     Close all open positions.
     Supports both API-based authentication and direct internal calls.
-    
+
     Args:
         position_data: Position data (optional, may contain additional parameters)
         api_key: OpenAlgo API key (for API-based calls)
         auth_token: Direct broker authentication token (for internal calls)
         broker: Direct broker name (for internal calls)
-        
+
     Returns:
         Tuple containing:
         - Success status (bool)
@@ -206,53 +195,50 @@ def close_position(
     """
     if position_data is None:
         position_data = {}
-    
+
     original_data = copy.deepcopy(position_data)
     if api_key:
-        original_data['apikey'] = api_key
-    
+        original_data["apikey"] = api_key
+
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
         # Check if user is in semi-auto mode (closeposition is blocked in semi-auto)
         # BUT allow execution in analyze/sandbox mode (virtual trading should always work)
-        from database.auth_db import verify_api_key, get_order_mode
+        from database.auth_db import get_order_mode, verify_api_key
 
         # Check analyze mode first - if in analyze mode, allow execution
         if not get_analyze_mode():
             user_id = verify_api_key(api_key)
             if user_id:
                 order_mode = get_order_mode(user_id)
-                if order_mode == 'semi_auto':
+                if order_mode == "semi_auto":
                     error_response = {
-                        'status': 'error',
-                        'message': 'Close position operation is not allowed in Semi-Auto mode. Please switch to Auto mode to close positions.'
+                        "status": "error",
+                        "message": "Close position operation is not allowed in Semi-Auto mode. Please switch to Auto mode to close positions.",
                     }
                     logger.warning(f"Close position blocked for user {user_id} (semi-auto mode)")
-                    executor.submit(async_log_order, 'closeposition', original_data, error_response)
+                    executor.submit(async_log_order, "closeposition", original_data, error_response)
                     return False, error_response, 403
 
         # Add API key to position data
-        position_data['apikey'] = api_key
+        position_data["apikey"] = api_key
 
         AUTH_TOKEN, broker_name = get_auth_token_broker(api_key)
         if AUTH_TOKEN is None:
-            error_response = {
-                'status': 'error',
-                'message': 'Invalid openalgo apikey'
-            }
+            error_response = {"status": "error", "message": "Invalid openalgo apikey"}
             # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
 
         return close_position_with_auth(position_data, AUTH_TOKEN, broker_name, original_data)
-    
+
     # Case 2: Direct internal call with auth_token and broker
     elif auth_token and broker:
         return close_position_with_auth(position_data, auth_token, broker, original_data)
-    
+
     # Case 3: Invalid parameters
     else:
         error_response = {
-            'status': 'error',
-            'message': 'Either api_key or both auth_token and broker must be provided'
+            "status": "error",
+            "message": "Either api_key or both auth_token and broker must be provided",
         }
         return False, error_response, 400

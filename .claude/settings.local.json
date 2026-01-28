@@ -34,7 +34,25 @@
       "Bash(tree:*)",
       "Bash(xargs basename:*)",
       "Bash(ls:*)",
-      "Bash(uv pip:*)"
+      "Bash(uv pip:*)",
+      "Bash(findstr:*)",
+      "Bash(uv add:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npm run test:run:*)",
+      "Bash(dir:*)",
+      "Bash(git reset:*)",
+      "Bash(gh run:*)",
+      "Bash(echo:*)",
+      "Bash(git pull:*)",
+      "Bash(git stash:*)",
+      "Bash(git stash pop:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh api:*)",
+      "Bash(uv sync:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(npm run build:*)"
     ]
   }
 }

@@ -463,10 +463,36 @@
   border-width: 2px;
   background: hsl(var(--foreground)) !important;
   border-color: hsl(var(--background)) !important;
+  transition: box-shadow 0.2s ease;
 }
 
+/* Multi-color neon glow on handle hover */
 .react-flow__handle:hover {
-  transform: scale(1.2);
+  box-shadow:
+    0 0 4px #e879f9,
+    0 0 8px #e879f9,
+    0 0 12px rgba(232, 121, 249, 0.6),
+    0 0 16px rgba(34, 211, 238, 0.3);
+}
+
+/* Glow during connection drag */
+.react-flow__handle.connectingto,
+.react-flow__handle.connectingfrom {
+  box-shadow:
+    0 0 4px #e879f9,
+    0 0 8px #e879f9,
+    0 0 12px rgba(232, 121, 249, 0.6),
+    0 0 16px rgba(34, 211, 238, 0.3);
+}
+
+/* Bright cyan glow when hovering over valid target */
+.react-flow__handle.valid {
+  background: #22d3ee !important;
+  box-shadow:
+    0 0 4px #22d3ee,
+    0 0 8px #22d3ee,
+    0 0 12px rgba(34, 211, 238, 0.6),
+    0 0 16px rgba(232, 121, 249, 0.3);
 }
 
 .react-flow__edge-path {
@@ -542,15 +568,28 @@
 
 /* Custom Workflow Node Styles */
 .workflow-node {
-  @apply rounded-lg border border-border bg-card transition-all duration-150;
+  @apply rounded-lg border border-border bg-card;
+  transition: box-shadow 0.3s ease, border-color 0.3s ease;
 }
 
 .workflow-node:hover {
-  @apply border-muted-foreground/50;
+  border-color: #e879f9;
+  box-shadow:
+    /* Pink/magenta - subtle outer glow */
+    0 0 3px #e879f9,
+    0 0 6px rgba(232, 121, 249, 0.5),
+    /* Cyan accent */
+    inset 0 0 2px rgba(34, 211, 238, 0.3);
 }
 
 .workflow-node.selected {
-  @apply border-foreground;
+  border-color: #22d3ee;
+  box-shadow:
+    /* Cyan - subtle outer glow */
+    0 0 3px #22d3ee,
+    0 0 6px rgba(34, 211, 238, 0.5),
+    /* Pink accent */
+    inset 0 0 2px rgba(232, 121, 249, 0.3);
 }
 
 /* Node type indicators */

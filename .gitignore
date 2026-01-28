@@ -58,13 +58,13 @@ node_modules/
 
 # Build output
 dist/
-!frontend/dist/
 build/
 .next/
 out/
 
 # Frontend specific
-# frontend/dist/ is INCLUDED - pre-built for community used
+# frontend/dist/ is built by CI/CD pipeline
+frontend/dist/
 frontend/.cache/
 *.local
 
@@ -76,3 +76,7 @@ frontend/.cache/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+#frontend/dist
+
+# Windows NUL file
+nul

@@ -3,12 +3,15 @@ Zebu WebSocket Client Implementation
 Handles connection to Zebu's market data streaming API
 Based on Noren WebSocket API (same as Flattrade)
 """
+
 import json
 import logging
 import threading
 import time
+from collections.abc import Callable
+from typing import Any, Dict, Optional
+
 import websocket
-from typing import Any, Callable, Dict, Optional
 
 
 class ZebuWebSocket:
@@ -42,11 +45,16 @@ class ZebuWebSocket:
     # Authentication response
     AUTH_SUCCESS = "Ok"
 
-    def __init__(self, user_id: str, actid: str, susertoken: str,
-                 on_message: Optional[Callable] = None,
-                 on_error: Optional[Callable] = None,
-                 on_close: Optional[Callable] = None,
-                 on_open: Optional[Callable] = None):
+    def __init__(
+        self,
+        user_id: str,
+        actid: str,
+        susertoken: str,
+        on_message: Callable | None = None,
+        on_error: Callable | None = None,
+        on_close: Callable | None = None,
+        on_open: Callable | None = None,
+    ):
         """
         Initialize Zebu WebSocket client
 
@@ -112,7 +120,7 @@ class ZebuWebSocket:
             on_open=self._on_open,
             on_message=self._on_message,
             on_error=self._on_error,
-            on_close=self._on_close
+            on_close=self._on_close,
         )
 
         self.ws_thread = threading.Thread(target=self._run_websocket, daemon=True)
@@ -140,10 +148,7 @@ class ZebuWebSocket:
     def _run_websocket(self) -> None:
         """Run the WebSocket connection with proper error handling"""
         try:
-            self.ws.run_forever(
-                ping_interval=self.PING_INTERVAL,
-                ping_timeout=self.PING_TIMEOUT
-            )
+            self.ws.run_forever(ping_interval=self.PING_INTERVAL, ping_timeout=self.PING_TIMEOUT)
         except Exception as e:
             self.logger.error(f"WebSocket run error: {e}")
         finally:
@@ -205,7 +210,7 @@ class ZebuWebSocket:
             "uid": self.user_id,
             "actid": self.actid,
             "source": "API",  # Source of login request
-            "susertoken": self.susertoken
+            "susertoken": self.susertoken,
         }
 
         # No vendor code needed in WebSocket auth for Zebu
@@ -213,7 +218,9 @@ class ZebuWebSocket:
         # Log the authentication message for debugging (mask the token)
         debug_msg = auth_msg.copy()
         if debug_msg.get("susertoken"):
-            debug_msg["susertoken"] = debug_msg["susertoken"][:10] + "..." if len(debug_msg["susertoken"]) > 10 else "***"
+            debug_msg["susertoken"] = (
+                debug_msg["susertoken"][:10] + "..." if len(debug_msg["susertoken"]) > 10 else "***"
+            )
         self.logger.info(f"Sending auth message: {debug_msg}")
 
         try:
@@ -245,7 +252,7 @@ class ZebuWebSocket:
         """
         try:
             data = json.loads(message)
-            msg_type = data.get('t')
+            msg_type = data.get("t")
 
             if msg_type == self.MSG_TYPE_AUTH_ACK:
                 return self._handle_auth_response(data)
@@ -259,7 +266,7 @@ class ZebuWebSocket:
 
         return False
 
-    def _handle_auth_response(self, data: Dict[str, Any]) -> bool:
+    def _handle_auth_response(self, data: dict[str, Any]) -> bool:
         """
         Handle authentication response
 
@@ -269,7 +276,7 @@ class ZebuWebSocket:
         Returns:
             bool: True (message handled)
         """
-        if data.get('s') == self.AUTH_SUCCESS:
+        if data.get("s") == self.AUTH_SUCCESS:
             self.logger.info("Authentication successful")
         else:
             self.logger.error(f"Authentication failed: {data}")
@@ -281,7 +288,7 @@ class ZebuWebSocket:
         self.logger.error(f"WebSocket error: {error}")
         self._call_external_callback(self.on_error, ws, error)
 
-    def _on_close(self, ws, close_status_code: Optional[int], close_msg: Optional[str]) -> None:
+    def _on_close(self, ws, close_status_code: int | None, close_msg: str | None) -> None:
         """Handle WebSocket connection close event"""
         self.connected = False
         self.logger.info(f"WebSocket closed: {close_status_code} - {close_msg}")
@@ -289,7 +296,7 @@ class ZebuWebSocket:
         self._stop_heartbeat()
         self._call_external_callback(self.on_close, ws, close_status_code, close_msg)
 
-    def _call_external_callback(self, callback: Optional[Callable], *args) -> None:
+    def _call_external_callback(self, callback: Callable | None, *args) -> None:
         """
         Safely call external callback with error handling
 
@@ -389,9 +396,7 @@ class ZebuWebSocket:
             bool: True if subscription sent successfully, False otherwise
         """
         return self._send_subscription_message(
-            self.MSG_TYPE_TOUCHLINE_SUB,
-            scrip_list,
-            "touchline subscription"
+            self.MSG_TYPE_TOUCHLINE_SUB, scrip_list, "touchline subscription"
         )
 
     def unsubscribe_touchline(self, scrip_list: str) -> bool:
@@ -405,9 +410,7 @@ class ZebuWebSocket:
             bool: True if unsubscription sent successfully, False otherwise
         """
         return self._send_subscription_message(
-            self.MSG_TYPE_TOUCHLINE_UNSUB,
-            scrip_list,
-            "touchline unsubscription"
+            self.MSG_TYPE_TOUCHLINE_UNSUB, scrip_list, "touchline unsubscription"
         )
 
     def subscribe_depth(self, scrip_list: str) -> bool:
@@ -421,9 +424,7 @@ class ZebuWebSocket:
             bool: True if subscription sent successfully, False otherwise
         """
         return self._send_subscription_message(
-            self.MSG_TYPE_DEPTH_SUB,
-            scrip_list,
-            "depth subscription"
+            self.MSG_TYPE_DEPTH_SUB, scrip_list, "depth subscription"
         )
 
     def unsubscribe_depth(self, scrip_list: str) -> bool:
@@ -437,12 +438,12 @@ class ZebuWebSocket:
             bool: True if unsubscription sent successfully, False otherwise
         """
         return self._send_subscription_message(
-            self.MSG_TYPE_DEPTH_UNSUB,
-            scrip_list,
-            "depth unsubscription"
+            self.MSG_TYPE_DEPTH_UNSUB, scrip_list, "depth unsubscription"
         )
 
-    def _send_subscription_message(self, msg_type: str, scrip_list: str, operation_name: str) -> bool:
+    def _send_subscription_message(
+        self, msg_type: str, scrip_list: str, operation_name: str
+    ) -> bool:
         """
         Send subscription/unsubscription message
 
@@ -457,7 +458,7 @@ class ZebuWebSocket:
         message_dict = {"t": msg_type, "k": scrip_list}
         return self._send_message(message_dict, operation_name)
 
-    def _send_message(self, message_dict: Dict[str, Any], operation_name: str) -> bool:
+    def _send_message(self, message_dict: dict[str, Any], operation_name: str) -> bool:
         """
         Send message with comprehensive error handling and validation
 
@@ -510,7 +511,7 @@ class ZebuWebSocket:
         """
         return self.connected and self.running
 
-    def get_connection_info(self) -> Dict[str, Any]:
+    def get_connection_info(self) -> dict[str, Any]:
         """
         Get connection information for debugging
 
@@ -518,12 +519,14 @@ class ZebuWebSocket:
             Dict: Connection state information
         """
         return {
-            'connected': self.connected,
-            'running': self.running,
-            'user_id': self.user_id,
-            'actid': self.actid,
-            'ws_url': self.WS_URL,
-            'last_message_time': self._last_message_time,
-            'heartbeat_thread_alive': self._heartbeat_thread.is_alive() if self._heartbeat_thread else False,
-            'ws_thread_alive': self.ws_thread.is_alive() if self.ws_thread else False
+            "connected": self.connected,
+            "running": self.running,
+            "user_id": self.user_id,
+            "actid": self.actid,
+            "ws_url": self.WS_URL,
+            "last_message_time": self._last_message_time,
+            "heartbeat_thread_alive": self._heartbeat_thread.is_alive()
+            if self._heartbeat_thread
+            else False,
+            "ws_thread_alive": self.ws_thread.is_alive() if self.ws_thread else False,
         }

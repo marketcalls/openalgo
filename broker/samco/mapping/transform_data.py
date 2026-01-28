@@ -1,7 +1,8 @@
-#Mapping OpenAlgo API Request https://openalgo.in/docs
-#Mapping Samco Parameters https://www.samco.in/stocknote-api-documentation
+# Mapping OpenAlgo API Request https://openalgo.in/docs
+# Mapping Samco Parameters https://www.samco.in/stocknote-api-documentation
 
 from database.token_db import get_br_symbol
+
 
 def transform_data(data, token):
     """
@@ -19,7 +20,7 @@ def transform_data(data, token):
         "disclosedQuantity": str(data.get("disclosed_quantity", "0")),
         "orderValidity": "DAY",
         "productType": map_product_type(data["product"]),
-        "afterMarketOrderFlag": "NO"
+        "afterMarketOrderFlag": "NO",
     }
 
     # Add price for LIMIT and SL orders
@@ -41,7 +42,7 @@ def transform_modify_order_data(data):
     transformed = {
         "orderType": map_order_type(data["pricetype"]),
         "quantity": str(data["quantity"]),
-        "orderValidity": "DAY"
+        "orderValidity": "DAY",
     }
 
     # Only add disclosedQuantity if provided and > 0 (must be min 10% of quantity)
@@ -64,12 +65,7 @@ def map_order_type(pricetype):
     """
     Maps OpenAlgo pricetype to Samco order type.
     """
-    order_type_mapping = {
-        "MARKET": "MKT",
-        "LIMIT": "L",
-        "SL": "SL",
-        "SL-M": "SL-M"
-    }
+    order_type_mapping = {"MARKET": "MKT", "LIMIT": "L", "SL": "SL", "SL-M": "SL-M"}
     return order_type_mapping.get(pricetype, "MKT")
 
 

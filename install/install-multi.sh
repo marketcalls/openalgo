@@ -483,6 +483,11 @@ server {
         proxy_connect_timeout 300s;
         proxy_send_timeout 300s;
 
+        # Increased buffer sizes for large headers (auth tokens, session cookies)
+        proxy_buffer_size 128k;
+        proxy_buffers 4 256k;
+        proxy_busy_buffers_size 256k;
+
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
@@ -512,11 +517,12 @@ ExecStart=/bin/bash -c 'source $VENV_PATH/bin/activate && $VENV_PATH/bin/gunicor
     --worker-class eventlet \\
     -w 1 \\
     --bind unix:$SOCKET_FILE \\
+    --timeout 300 \\
     --log-level info \\
     app:app'
 Restart=always
 RestartSec=5
-TimeoutSec=60
+TimeoutSec=300
 
 [Install]
 WantedBy=multi-user.target

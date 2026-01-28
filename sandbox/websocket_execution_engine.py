@@ -15,13 +15,13 @@ import sys
 import threading
 import time
 from decimal import Decimal
-from typing import Dict, List, Set, Optional
+from typing import Dict, List, Optional, Set
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.sandbox_db import SandboxOrders, db_session
-from services.market_data_service import get_market_data_service, SubscriberPriority
+from services.market_data_service import get_market_data_service
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -35,25 +35,26 @@ class WebSocketExecutionEngine:
 
     def __init__(self):
         self.market_data_service = get_market_data_service()
-        self._subscriber_id: Optional[str] = None
+        self._subscriber_id: str | None = None
         self._running = False
         self._lock = threading.Lock()
 
         # Index of pending orders by symbol key (exchange:symbol)
         # Maps symbol_key -> list of order IDs
-        self._pending_orders_index: Dict[str, List[str]] = {}
+        self._pending_orders_index: dict[str, list[str]] = {}
 
         # Track symbols we're monitoring
-        self._monitored_symbols: Set[str] = set()
+        self._monitored_symbols: set[str] = set()
 
         # Fallback settings
-        self.fallback_enabled = os.getenv('SANDBOX_ENGINE_FALLBACK', 'true').lower() == 'true'
+        self.fallback_enabled = os.getenv("SANDBOX_ENGINE_FALLBACK", "true").lower() == "true"
         self.stale_data_threshold = 30  # seconds
-        self._fallback_thread: Optional[threading.Thread] = None
+        self._fallback_thread: threading.Thread | None = None
         self._fallback_running = False
 
         # Import execution engine for order processing and fallback
         from sandbox.execution_engine import ExecutionEngine
+
         self._execution_engine = ExecutionEngine()
 
     def start(self):
@@ -70,16 +71,14 @@ class WebSocketExecutionEngine:
 
         # Subscribe to MarketDataService with CRITICAL priority for immediate processing
         try:
-            self._subscriber_id = self.market_data_service.subscribe(
-                data_type='ltp',
+            self._subscriber_id = self.market_data_service.subscribe_critical(
                 callback=self._on_market_data,
                 filter_symbols=None,  # All symbols - we filter in callback
-                priority=SubscriberPriority.CRITICAL,
-                name='sandbox_websocket_execution_engine'
+                name="sandbox_websocket_execution_engine",
             )
             logger.info(f"Subscribed to MarketDataService with ID: {self._subscriber_id}")
         except Exception as e:
-            logger.error(f"Failed to subscribe to MarketDataService: {e}")
+            logger.exception(f"Failed to subscribe to MarketDataService: {e}")
             self._running = False
             return
 
@@ -100,10 +99,10 @@ class WebSocketExecutionEngine:
         # Unsubscribe from MarketDataService
         if self._subscriber_id:
             try:
-                self.market_data_service.unsubscribe(self._subscriber_id)
+                self.market_data_service.unsubscribe_from_updates(self._subscriber_id)
                 logger.info("Unsubscribed from MarketDataService")
             except Exception as e:
-                logger.error(f"Error unsubscribing from MarketDataService: {e}")
+                logger.exception(f"Error unsubscribing from MarketDataService: {e}")
 
         self._subscriber_id = None
 
@@ -114,7 +113,7 @@ class WebSocketExecutionEngine:
             self._monitored_symbols.clear()
 
             try:
-                pending_orders = SandboxOrders.query.filter_by(order_status='open').all()
+                pending_orders = SandboxOrders.query.filter_by(order_status="open").all()
 
                 for order in pending_orders:
                     symbol_key = f"{order.exchange}:{order.symbol}"
@@ -123,10 +122,12 @@ class WebSocketExecutionEngine:
                     self._pending_orders_index[symbol_key].append(order.orderid)
                     self._monitored_symbols.add(symbol_key)
 
-                logger.info(f"Built order index: {len(pending_orders)} orders across {len(self._monitored_symbols)} symbols")
+                logger.info(
+                    f"Built order index: {len(pending_orders)} orders across {len(self._monitored_symbols)} symbols"
+                )
 
             except Exception as e:
-                logger.error(f"Error building order index: {e}")
+                logger.exception(f"Error building order index: {e}")
 
     def notify_order_placed(self, order):
         """Called when a new order is placed to update the index"""
@@ -163,10 +164,10 @@ class WebSocketExecutionEngine:
             return
 
         try:
-            symbol = data.get('symbol', '').upper()
-            exchange = data.get('exchange', '')
-            market_data = data.get('data', {})
-            ltp = market_data.get('ltp')
+            symbol = data.get("symbol", "").upper()
+            exchange = data.get("exchange", "")
+            market_data = data.get("data", {})
+            ltp = market_data.get("ltp")
 
             if not ltp or not symbol or not exchange:
                 return
@@ -185,10 +186,10 @@ class WebSocketExecutionEngine:
                 try:
                     self._check_and_execute_order(order_id, Decimal(str(ltp)))
                 except Exception as e:
-                    logger.error(f"Error processing order {order_id}: {e}")
+                    logger.exception(f"Error processing order {order_id}: {e}")
 
         except Exception as e:
-            logger.error(f"Error in market data callback: {e}")
+            logger.exception(f"Error in market data callback: {e}")
 
     def _check_and_execute_order(self, order_id: str, ltp: Decimal):
         """
@@ -196,7 +197,7 @@ class WebSocketExecutionEngine:
         """
         try:
             # Fetch the order from database
-            order = SandboxOrders.query.filter_by(orderid=order_id, order_status='open').first()
+            order = SandboxOrders.query.filter_by(orderid=order_id, order_status="open").first()
 
             if not order:
                 # Order no longer pending, remove from index
@@ -206,9 +207,9 @@ class WebSocketExecutionEngine:
 
             # Create a mock quote for the execution engine's _process_order method
             quote = {
-                'ltp': float(ltp),
-                'bid': float(ltp),  # Use LTP as bid/ask fallback
-                'ask': float(ltp),
+                "ltp": float(ltp),
+                "bid": float(ltp),  # Use LTP as bid/ask fallback
+                "ask": float(ltp),
             }
 
             # Use the existing execution engine's order processing logic
@@ -217,20 +218,23 @@ class WebSocketExecutionEngine:
             # If order was executed, remove from index
             # Refresh the order to check status
             db_session.refresh(order)
-            if order.order_status != 'open':
+            if order.order_status != "open":
                 symbol_key = f"{order.exchange}:{order.symbol}"
                 self.notify_order_completed(order_id, symbol_key)
 
         except Exception as e:
-            logger.error(f"Error checking/executing order {order_id}: {e}")
+            logger.exception(f"Error checking/executing order {order_id}: {e}")
 
     def _start_health_monitor(self):
         """Start a thread to monitor WebSocket health and trigger fallback if needed"""
+
         def monitor():
             while self._running:
                 try:
                     # Check if market data is fresh
-                    is_fresh = self.market_data_service.is_data_fresh(max_age_seconds=self.stale_data_threshold)
+                    is_fresh = self.market_data_service.is_data_fresh(
+                        max_age_seconds=self.stale_data_threshold
+                    )
 
                     if not is_fresh and self.fallback_enabled and not self._fallback_running:
                         logger.warning("WebSocket data is stale, starting polling fallback")
@@ -240,11 +244,13 @@ class WebSocketExecutionEngine:
                         self._stop_fallback()
 
                 except Exception as e:
-                    logger.error(f"Error in health monitor: {e}")
+                    logger.exception(f"Error in health monitor: {e}")
 
                 time.sleep(5)  # Check every 5 seconds
 
-        monitor_thread = threading.Thread(target=monitor, daemon=True, name="WSExecEngine-HealthMonitor")
+        monitor_thread = threading.Thread(
+            target=monitor, daemon=True, name="WSExecEngine-HealthMonitor"
+        )
         monitor_thread.start()
         logger.debug("Started health monitor thread")
 
@@ -256,17 +262,17 @@ class WebSocketExecutionEngine:
         self._fallback_running = True
 
         def fallback_loop():
-            from sandbox.execution_engine import run_execution_engine_once
             from database.sandbox_db import get_config
+            from sandbox.execution_engine import run_execution_engine_once
 
-            check_interval = int(get_config('order_check_interval', '5'))
+            check_interval = int(get_config("order_check_interval", "5"))
             logger.info(f"Fallback polling started with {check_interval}s interval")
 
             while self._fallback_running and self._running:
                 try:
                     run_execution_engine_once()
                 except Exception as e:
-                    logger.error(f"Error in fallback polling: {e}")
+                    logger.exception(f"Error in fallback polling: {e}")
 
                 # Sleep in small increments for quick shutdown
                 for _ in range(check_interval):
@@ -276,7 +282,9 @@ class WebSocketExecutionEngine:
 
             logger.info("Fallback polling stopped")
 
-        self._fallback_thread = threading.Thread(target=fallback_loop, daemon=True, name="WSExecEngine-Fallback")
+        self._fallback_thread = threading.Thread(
+            target=fallback_loop, daemon=True, name="WSExecEngine-Fallback"
+        )
         self._fallback_thread.start()
 
     def _stop_fallback(self):
@@ -289,7 +297,7 @@ class WebSocketExecutionEngine:
 
 
 # Global instance for singleton access
-_websocket_execution_engine: Optional[WebSocketExecutionEngine] = None
+_websocket_execution_engine: WebSocketExecutionEngine | None = None
 _engine_lock = threading.Lock()
 
 

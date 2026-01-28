@@ -2,14 +2,21 @@
 """
 Test script to verify bot starts properly from web UI
 """
+
 import time
-from services.telegram_bot_service import init_bot_sync, start_bot_sync, stop_bot_sync, get_telegram_bot
+
 from database.telegram_db import get_bot_config
+from services.telegram_bot_service import (
+    get_telegram_bot,
+    init_bot_sync,
+    start_bot_sync,
+    stop_bot_sync,
+)
 
 # Get config
 config = get_bot_config()
 
-if not config.get('token'):
+if not config.get("token"):
     print("[ERROR] No bot token configured")
     exit(1)
 
@@ -17,7 +24,7 @@ print(f"[INFO] Bot token found: {config['token'][:10]}...")
 
 # Initialize bot
 print("[INFO] Initializing bot...")
-success, message = init_bot_sync(config['token'], None)
+success, message = init_bot_sync(config["token"], None)
 
 if not success:
     print(f"[ERROR] Failed to initialize: {message}")

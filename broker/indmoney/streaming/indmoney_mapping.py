@@ -1,20 +1,21 @@
 import logging
 
+
 class IndmoneyExchangeMapper:
     """Maps OpenAlgo exchange codes to INDmoney-specific segment codes"""
 
     # Exchange segment mapping for INDmoney broker
     # Format: SEGMENT:TOKEN (e.g., NSE:2885, BSE:500325)
     EXCHANGE_SEGMENTS = {
-        'NSE': 'NSE',       # NSE Cash Market
-        'NFO': 'NFO',       # NSE Futures & Options
-        'BSE': 'BSE',       # BSE Cash Market
-        'BFO': 'BFO',       # BSE F&O
-        'MCX': 'MCX',       # MCX
-        'NCX': 'NCX',       # NCDEX
-        'CDS': 'CDS',       # Currency derivatives
-        'NSE_INDEX': 'NIDX', # NSE Index
-        'BSE_INDEX': 'BIDX'  # BSE Index
+        "NSE": "NSE",  # NSE Cash Market
+        "NFO": "NFO",  # NSE Futures & Options
+        "BSE": "BSE",  # BSE Cash Market
+        "BFO": "BFO",  # BSE F&O
+        "MCX": "MCX",  # MCX
+        "NCX": "NCX",  # NCDEX
+        "CDS": "CDS",  # Currency derivatives
+        "NSE_INDEX": "NIDX",  # NSE Index
+        "BSE_INDEX": "BIDX",  # BSE Index
     }
 
     @staticmethod
@@ -28,7 +29,7 @@ class IndmoneyExchangeMapper:
         Returns:
             str: INDmoney-specific segment code
         """
-        return IndmoneyExchangeMapper.EXCHANGE_SEGMENTS.get(exchange, 'NSE')  # Default to NSE
+        return IndmoneyExchangeMapper.EXCHANGE_SEGMENTS.get(exchange, "NSE")  # Default to NSE
 
     @staticmethod
     def create_instrument_token(exchange, token):
@@ -51,15 +52,12 @@ class IndmoneyModeMapper:
 
     # Mode mapping: OpenAlgo mode number -> INDmoney mode string
     MODE_MAP = {
-        1: 'ltp',    # LTP (Last Traded Price)
-        2: 'quote'   # Quote (Full quote data)
+        1: "ltp",  # LTP (Last Traded Price)
+        2: "quote",  # Quote (Full quote data)
     }
 
     # Reverse mapping for mode validation
-    REVERSE_MODE_MAP = {
-        'ltp': 1,
-        'quote': 2
-    }
+    REVERSE_MODE_MAP = {"ltp": 1, "quote": 2}
 
     @staticmethod
     def get_indmoney_mode(mode):
@@ -72,7 +70,7 @@ class IndmoneyModeMapper:
         Returns:
             str: INDmoney mode string ('ltp' or 'quote')
         """
-        return IndmoneyModeMapper.MODE_MAP.get(mode, 'ltp')
+        return IndmoneyModeMapper.MODE_MAP.get(mode, "ltp")
 
     @staticmethod
     def get_openalgo_mode(indmoney_mode):
@@ -95,7 +93,7 @@ class IndmoneyCapabilityRegistry:
     """
 
     # INDmoney broker capabilities
-    exchanges = ['NSE', 'BSE', 'NFO', 'BFO', 'MCX', 'NCX', 'CDS']
+    exchanges = ["NSE", "BSE", "NFO", "BFO", "MCX", "NCX", "CDS"]
 
     # INDmoney supports only 2 modes: ltp and quote
     # Mode 1: LTP, Mode 2: Quote
@@ -104,13 +102,13 @@ class IndmoneyCapabilityRegistry:
     # INDmoney does not provide explicit market depth data
     # The quote mode provides best bid/ask but not full depth
     depth_support = {
-        'NSE': [1],    # Basic depth only (best bid/ask)
-        'BSE': [1],
-        'NFO': [1],
-        'BFO': [1],
-        'MCX': [1],
-        'NCX': [1],
-        'CDS': [1]
+        "NSE": [1],  # Basic depth only (best bid/ask)
+        "BSE": [1],
+        "NFO": [1],
+        "BFO": [1],
+        "MCX": [1],
+        "NCX": [1],
+        "CDS": [1],
     }
 
     @classmethod
