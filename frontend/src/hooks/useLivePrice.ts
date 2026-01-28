@@ -147,11 +147,11 @@ export function useLivePrice<T extends PriceableItem>(
   }, [enabled, items.length, useMultiQuotesFallback, fetchMultiQuotes, multiQuotesRefreshInterval])
 
   /**
-   * Enhance items with real-time LTP and calculated average_price
+   * Enhance items with real-time LTP and recalculated P&L
    * Priority: WebSocket (fresh + market open) → MultiQuotes → REST API
    *
-   * Note: pnl and pnlpercent always come from REST API (not recalculated)
-   * average_price is calculated backwards from: avgPrice = currentLtp - (pnl / qty)
+   * For open positions (qty != 0): P&L and P&L% are recalculated using live LTP
+   * For closed positions (qty = 0): P&L and P&L% from REST API (realized values)
    */
   const enhancedData = useMemo(() => {
     return items.map((item) => {
@@ -160,7 +160,7 @@ export function useLivePrice<T extends PriceableItem>(
       const mqData = multiQuotes.get(key)
 
       const qty = item.quantity || 0
-      const originalPnl = item.pnl || 0
+      const avgPrice = item.average_price || 0
 
       // Check if market is open for this exchange
       const exchangeMarketOpen = isMarketOpen(item.exchange)
@@ -190,29 +190,40 @@ export function useLivePrice<T extends PriceableItem>(
         dataSource = 'rest'
       }
 
-      // For closed positions (qty=0), preserve all REST API values
+      // For closed positions (qty=0), preserve ALL REST API values including LTP
+      // This ensures P&L% calculation remains stable (realized values don't change)
       if (qty === 0) {
         return {
           ...item,
-          ltp: currentLtp,
-          _dataSource: dataSource,
+          // Keep item.ltp from REST API - don't update with live data
+          // This prevents P&L% from recalculating with changing LTP
+          _dataSource: 'rest',
         } as T & { _dataSource: string }
       }
 
-      // Calculate average price from REST data if not provided
-      // Formula: AvgPrice = LTP - (PnL / Qty)
-      let avgPrice = item.average_price
-      if (!avgPrice && currentLtp && qty !== 0) {
-        avgPrice = currentLtp - originalPnl / qty
+      // For open positions: recalculate P&L and P&L% using live LTP
+      // This ensures real-time updates as LTP changes
+      let calculatedPnl = item.pnl || 0
+      let calculatedPnlPercent = item.pnlpercent || 0
+
+      if (currentLtp && avgPrice > 0) {
+        // Calculate P&L based on position direction
+        // Long (qty > 0): profit when ltp > avgPrice
+        // Short (qty < 0): profit when ltp < avgPrice
+        if (qty > 0) {
+          calculatedPnl = (currentLtp - avgPrice) * qty
+          calculatedPnlPercent = ((currentLtp - avgPrice) / avgPrice) * 100
+        } else {
+          calculatedPnl = (avgPrice - currentLtp) * Math.abs(qty)
+          calculatedPnlPercent = ((avgPrice - currentLtp) / avgPrice) * 100
+        }
       }
 
-      // Return with updated LTP and calculated avgPrice
-      // pnl and pnlpercent always from REST API
       return {
         ...item,
         ltp: currentLtp,
-        average_price: avgPrice,
-        // pnl and pnlpercent preserved from REST API via spread
+        pnl: calculatedPnl,
+        pnlpercent: calculatedPnlPercent,
         _dataSource: dataSource,
       } as T & { _dataSource: string }
     })

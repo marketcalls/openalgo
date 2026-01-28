@@ -184,7 +184,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add frontend/dist/ static/css/main.css
+          git add -f frontend/dist/ static/css/main.css
           git diff --staged --quiet || git commit -m "chore: auto-build frontend dist [skip ci]"
           git push
 

@@ -388,9 +388,10 @@ User=www-data
 Group=www-data
 WorkingDirectory=$BASE_PATH
 Environment="PATH=$VENV_PATH/bin"
-ExecStart=$VENV_PATH/bin/gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:80 --timeout 120 app:app
+ExecStart=$VENV_PATH/bin/gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:80 --timeout 300 app:app
 Restart=always
 RestartSec=5
+TimeoutSec=300
 StandardOutput=journal
 StandardError=journal
 
