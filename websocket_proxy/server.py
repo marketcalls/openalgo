@@ -592,9 +592,15 @@ class WebSocketProxy:
                         self._clear_auth_cache_for_user(user_id)
                         adapter.clear_auth_cache_for_user(user_id)
 
-                        # Re-initialize with fresh credentials from database (force=True to override existing)
+                        # Re-initialize with fresh credentials from database
+                        # Use force=True for pooled adapters to override existing initialization
                         logger.info(f"Re-initializing adapter for user {user_id} with fresh token")
-                        init_retry_result = adapter.initialize(broker_name, user_id, force=True)
+                        try:
+                            # Try with force parameter (supported by _PooledAdapterWrapper)
+                            init_retry_result = adapter.initialize(broker_name, user_id, force=True)
+                        except TypeError:
+                            # Fallback for raw adapters that don't support force parameter
+                            init_retry_result = adapter.initialize(broker_name, user_id)
                         # Handle both response formats
                         init_is_error = (
                             (init_retry_result and init_retry_result.get("status") == "error") or
@@ -646,18 +652,34 @@ class WebSocketProxy:
                         # Retry adapter creation
                         adapter = create_broker_adapter(broker_name)
                         if adapter:
+                            # Clear cache on the new adapter as well
+                            if hasattr(adapter, 'clear_auth_cache_for_user'):
+                                adapter.clear_auth_cache_for_user(user_id)
+
                             initialization_result = adapter.initialize(broker_name, user_id)
-                            if initialization_result and initialization_result.get("status") != "error":
+                            # Handle both response formats
+                            init_is_error = (
+                                (initialization_result and initialization_result.get("status") == "error") or
+                                (initialization_result and initialization_result.get("success") == False)
+                            )
+                            if not init_is_error:
                                 connect_result = adapter.connect()
-                                if connect_result and connect_result.get("status") != "error":
+                                # Handle both response formats
+                                connect_is_error = (
+                                    (connect_result and connect_result.get("status") == "error") or
+                                    (connect_result and connect_result.get("success") == False)
+                                )
+                                if not connect_is_error:
                                     self.broker_adapters[user_id] = adapter
                                     logger.info(f"Successfully connected {broker_name} adapter for user {user_id} after retry")
                                     # Fall through to success response
                                 else:
-                                    await self.send_error(client_id, "BROKER_CONNECTION_ERROR", "Failed to connect after retry")
+                                    error_msg = connect_result.get("message", connect_result.get("error", "Failed to connect after retry"))
+                                    await self.send_error(client_id, "BROKER_CONNECTION_ERROR", error_msg)
                                     return
                             else:
-                                await self.send_error(client_id, "BROKER_INIT_ERROR", "Failed to initialize after retry")
+                                error_msg = initialization_result.get("message", initialization_result.get("error", "Failed to initialize after retry"))
+                                await self.send_error(client_id, "BROKER_INIT_ERROR", error_msg)
                                 return
                         else:
                             await self.send_error(client_id, "BROKER_ERROR", f"Failed to create adapter for {broker_name}")

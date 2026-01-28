@@ -338,22 +338,21 @@ class ConnectionPool:
         if self.initialized and not force:
             return {"success": True, "message": "Already initialized"}
 
-        # If forcing re-initialization, clean up existing adapters first
-        if force and self.initialized:
-            self.logger.info(f"Force re-initializing pool for {self.broker_name} with fresh credentials")
-            # Disconnect existing adapters
-            for adapter in self.adapters:
-                try:
-                    adapter.disconnect()
-                except Exception as e:
-                    self.logger.warning(f"Error disconnecting adapter during re-init: {e}")
-            self.adapters.clear()
-            self.adapter_symbol_counts.clear()
-            self.subscription_map.clear()
-            self.connected = False
-            self.initialized = False
-
         with self.lock:
+            # If forcing re-initialization, clean up existing adapters first (inside lock to prevent race conditions)
+            if force and self.initialized:
+                self.logger.info(f"Force re-initializing pool for {self.broker_name} with fresh credentials")
+                # Disconnect existing adapters
+                for adapter in self.adapters:
+                    try:
+                        adapter.disconnect()
+                    except Exception as e:
+                        self.logger.warning(f"Error disconnecting adapter during re-init: {e}")
+                self.adapters.clear()
+                self.adapter_symbol_counts.clear()
+                self.subscription_map.clear()
+                self.connected = False
+                self.initialized = False
             try:
                 # Use provided values or defaults
                 self.broker_name = broker_name or self.broker_name
