@@ -16,12 +16,16 @@ services:
       - openalgo_log:/app/log            # Application logs (named volume)
       - openalgo_strategies:/app/strategies  # Python strategies (named volume)
       - openalgo_keys:/app/keys          # API keys/certificates (named volume)
+      - openalgo_tmp:/app/tmp            # Temporary directory for numba/scipy (named volume)
       - ./.env:/app/.env:ro
 
     # (optional) extra env-vars that are NOT in .env
     environment:
       - FLASK_ENV=${FLASK_ENV:-production}
       - FLASK_DEBUG=${FLASK_DEBUG:-0}
+
+    # Shared memory for scipy/numba operations
+    shm_size: '2gb'
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:5000/auth/check-setup"]
@@ -41,4 +45,6 @@ volumes:
   openalgo_strategies:
     driver: local
   openalgo_keys:
+    driver: local
+  openalgo_tmp:
     driver: local

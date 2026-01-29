@@ -206,7 +206,8 @@ log_message "\n=== INSTALLING SYSTEM PACKAGES ===" "$YELLOW"
 sudo apt-get update && sudo apt-get upgrade -y
 check_status "Failed to update system"
 
-sudo apt-get install -y python3 python3-venv python3-pip python3-full nginx git software-properties-common snapd ufw certbot python3-certbot-nginx
+sudo apt-get install -y python3 python3-venv python3-pip python3-full nginx git software-properties-common snapd ufw certbot python3-certbot-nginx \
+    libopenblas0 libgomp1 libgfortran5
 check_status "Failed to install packages"
 
 # Install uv
@@ -353,7 +354,8 @@ for ((i=1; i<=INSTANCES; i++)); do
     # Set permissions
     log_message "Setting permissions..." "$BLUE"
     sudo mkdir -p "$INSTANCE_DIR/db"
-    sudo mkdir -p "$INSTANCE_DIR/tmp"
+    sudo mkdir -p "$INSTANCE_DIR/tmp/numba_cache"
+    sudo mkdir -p "$INSTANCE_DIR/tmp/matplotlib"
     # Create directories for Python strategy feature
     sudo mkdir -p "$INSTANCE_DIR/strategies/scripts"
     sudo mkdir -p "$INSTANCE_DIR/strategies/examples"
@@ -513,6 +515,10 @@ After=network.target
 User=www-data
 Group=www-data
 WorkingDirectory=$INSTANCE_DIR
+# Environment variables for numba/scipy support
+Environment="TMPDIR=$INSTANCE_DIR/tmp"
+Environment="NUMBA_CACHE_DIR=$INSTANCE_DIR/tmp/numba_cache"
+Environment="MPLCONFIGDIR=$INSTANCE_DIR/tmp/matplotlib"
 ExecStart=/bin/bash -c 'source $VENV_PATH/bin/activate && $VENV_PATH/bin/gunicorn \\
     --worker-class eventlet \\
     -w 1 \\
