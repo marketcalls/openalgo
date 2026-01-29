@@ -1,0 +1,38 @@
+{
+    "API_KEY": "a7fe7bcf5bf525f89222914d8c08189336bf17035a8e67c1f8f10468b0030409",
+    "HOST": "http://127.0.0.1:3301",
+    "STRATEGY_NAME": "SENSEX_STRATEGY_SURU",
+    "LOTS": 5,
+    "LOT_SIZE": 20,
+    "SL_PERCENT": 0.05,
+    "REENTRY_LIMIT": 4,
+    "UNDERLYING": "SENSEX",
+    "UNDERLYING_EXCHANGE": "BSE_INDEX",
+    "OPTIONS_EXCHANGE": "BFO",
+    "EXPIRY_DATE": "29JAN26",
+    "PRODUCT": "NRML",
+    "POLL_INTERVAL": 5,
+    "DETAILED_LOGGING": true,
+    "PERSIST_CYCLES": 10,
+    "USE_WEBSOCKET": true,
+    "legs": [
+        {
+            "name": "CE_LEG",
+            "ce_sell_offset": "ATM",
+            "ce_buy_offset": "OTM4",
+            "sl_percent": 0.1,
+            "reentry_limit": 4,
+            "target_percent": 0.1,
+            "reexecute_limit": 2
+        },
+        {
+            "name": "PE_LEG",
+            "pe_sell_offset": "ATM",
+            "pe_buy_offset": "OTM4",
+            "sl_percent": 0.1,
+            "reentry_limit": 4,
+            "target_percent": 0.1,
+            "reexecute_limit": 2
+        }
+    ]
+}

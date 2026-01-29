@@ -1,3 +1,11 @@
+import os
+from flask import session, redirect, url_for, jsonify, request
+from flask import current_app as app
+from threading import Thread
+from utils.session import get_session_expiry_time, set_session_login_time
+from database.auth_db import upsert_auth, get_feed_token as db_get_feed_token
+from database.master_contract_status_db import init_broker_status, update_status
+from extensions import socketio
 import importlib
 import re
 from threading import Thread
@@ -154,12 +162,67 @@ def async_master_contract_download(broker):
 
     return master_contract_status
 
+def run_share_credentials(user_id):
+    """
+    Run the share_credentials script to export broker credentials to a shared file.
+    Only runs if BROKER_USER_ID environment variable is set.
+
+    Args:
+        user_id: The user ID to fetch credentials for
+
+    Returns:
+        tuple: (success: bool, message: str or None)
+    """
+    # Check if BROKER_USER_ID is configured - skip silently if not set
+    broker_user_id = os.environ.get('BROKER_USER_ID')
+    if not broker_user_id:
+        logger.debug("BROKER_USER_ID not set, skipping share_credentials")
+        return None, None  # None indicates "skipped" - no toast needed
+
+    try:
+        # Import and run the share_credentials script
+        from scripts.share_credentials import main as share_credentials_main
+        share_credentials_main()
+        logger.info("Successfully ran share_credentials script")
+        return True, "Credentials shared successfully"
+    except Exception as e:
+        logger.error(f"Failed to run share_credentials script: {e}")
+        return False, f"Failed to share credentials: {str(e)}"
+
+
+def async_post_login_tasks(broker, user_session_key):
+    """
+    Asynchronously run post-login tasks after a small delay to allow
+    the dashboard page to load and connect to SocketIO.
+
+    Tasks:
+    1. Share credentials (if BROKER_USER_ID is configured)
+    2. Download master contract
+    """
+    import time
+
+    # Wait for dashboard page to load and connect to SocketIO
+    time.sleep(2)
+
+    # Run share_credentials script (if BROKER_USER_ID is configured)
+    share_success, share_message = run_share_credentials(user_session_key)
+    if share_success is not None:  # None means skipped (BROKER_USER_ID not set)
+        # Emit SocketIO event for toast notification in React frontend
+        socketio.emit('share_credentials_status', {
+            'status': 'success' if share_success else 'error',
+            'message': share_message
+        })
+
+    # Download master contract
+    async_master_contract_download(broker)
+
 
 def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, user_id=None):
     """
     Handles common tasks after successful authentication.
     - Sets session parameters
     - Stores auth token in the database
+    - Runs share_credentials script (if BROKER_USER_ID is configured)
     - Initiates asynchronous master contract download
     """
     # Set session parameters
@@ -185,9 +248,13 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
     )
     if inserted_id:
         logger.info(f"Database record upserted with ID: {inserted_id}")
+
         # Initialize master contract status for this broker
         init_broker_status(broker)
-        thread = Thread(target=async_master_contract_download, args=(broker,))
+
+        # Run share_credentials and master contract download in async thread
+        # This ensures the dashboard page loads and connects to SocketIO before events are emitted
+        thread = Thread(target=async_post_login_tasks, args=(broker, user_session_key))
         thread.start()
         # Return JSON for AJAX requests (React), redirect for OAuth callbacks
         if is_ajax_request():

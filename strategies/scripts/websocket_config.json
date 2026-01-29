@@ -1,0 +1,12 @@
+{
+    "api_key": "b0b33f31812c948e90620949200ff0542c2a6432b409a07a4495daebd91b549f",
+    "host": "http://127.0.0.1:3301",
+    "ws_url": "ws://127.0.0.1:8765",
+    "service_port": 9999,
+    "service_host": "0.0.0.0",
+    "reconnect_max_attempts": -1,
+    "reconnect_base_delay": 1,
+    "reconnect_max_delay": 60,
+    "heartbeat_interval": 30,
+    "log_level": "INFO"
+}
