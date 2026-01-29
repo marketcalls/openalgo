@@ -214,34 +214,18 @@ After upgrading, systemd service files and Nginx configuration revert to old tim
 
 #### How It Works
 The migration automatically runs during every upgrade:
-1. Reads timeout values from `config/timeout.conf`
-2. Updates all systemd service files (`/etc/systemd/system/openalgo*.service`)
-3. Updates Nginx configuration (`/etc/nginx/sites-enabled/openalgo`)
-4. Reloads systemd daemon
-5. Restarts services with new timeouts
+1. Finds all OpenAlgo systemd services (`openalgo.service`, `openalgo1.service`, etc.)
+2. Updates Gunicorn `--timeout` values to 300 seconds
+3. Updates systemd `TimeoutSec` to 300 seconds
+4. Updates Nginx proxy timeouts to 300 seconds
+5. Reloads systemd daemon and restarts services
 
-#### Configuration
-Edit `config/timeout.conf` to customize timeouts:
-```ini
-GUNICORN_WORKER_TIMEOUT=300      # Increase to 600 for Kotak/mStock
-SYSTEMD_TIMEOUT=300              # Must match GUNICORN_WORKER_TIMEOUT
-NGINX_PROXY_READ_TIMEOUT=300
-NGINX_PROXY_CONNECT_TIMEOUT=300
-NGINX_PROXY_SEND_TIMEOUT=300
-```
-
-#### For Slow Brokers (Kotak, mStock)
-```bash
-# Edit config/timeout.conf and set:
-GUNICORN_WORKER_TIMEOUT=600
-SYSTEMD_TIMEOUT=600
-NGINX_PROXY_READ_TIMEOUT=600
-NGINX_PROXY_CONNECT_TIMEOUT=600
-NGINX_PROXY_SEND_TIMEOUT=600
-
-# Manual application (without waiting for upgrade):
-sudo python3 scripts/configure_timeouts.py
-```
+#### What It Does
+- Updates `--timeout 300` in Gunicorn ExecStart
+- Adds/updates `TimeoutSec=300` in [Service] section
+- Updates `proxy_read_timeout 300s` in Nginx
+- Updates `proxy_connect_timeout 300s` in Nginx
+- Updates `proxy_send_timeout 300s` in Nginx
 
 #### Verify Changes Applied
 ```bash
@@ -250,16 +234,28 @@ systemctl cat openalgo | grep TimeoutSec
 
 # Check Gunicorn command
 ps aux | grep gunicorn | grep -v grep
-# Should show: --timeout 600 (or your configured value)
+# Should show: --timeout 300
 ```
 
 #### Migration Features
 - **Idempotent**: Safe to run multiple times
 - **Persistent**: Changes survive application upgrades
-- **Flexible**: Easy to customize via `config/timeout.conf`
 - **Automatic**: Runs with every upgrade
+- **Safe**: Gracefully handles missing files and non-Linux systems
 
-For complete details, see [TIMEOUT_CONFIGURATION.md](../docs/TIMEOUT_CONFIGURATION.md)
+#### For Custom Timeouts
+To use timeouts other than 300 seconds, manually edit the systemd service file:
+```bash
+sudo systemctl edit openalgo
+# Change --timeout 300 to your desired value (e.g., 600 for slow brokers)
+```
+
+Then restart the service:
+```bash
+sudo systemctl restart openalgo
+```
+
+Note: If you need persistent custom timeouts, you'll need to update the systemd file again after future upgrades that set it back to 300 seconds.
 
 ---
 
