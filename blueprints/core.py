@@ -26,7 +26,16 @@ def health():
         return jsonify({"status": "ok", "database": "connected"}), 200
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}")
-        return jsonify({"status": "error", "database": "disconnected", "error": str(e)}), 503
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "database": "disconnected",
+                    "error": "Health check failed internal error",
+                }
+            ),
+            503,
+        )
 
 
 # Note: GET /setup is served by react_bp (React frontend)
