@@ -270,6 +270,26 @@ export async function importWorkflow(data: WorkflowExportData): Promise<{ id: nu
 }
 
 // =============================================================================
+// Index Symbols Types & API
+// =============================================================================
+
+export interface IndexSymbolInfo {
+  value: string
+  label: string
+  exchange: string
+  lotSize: number
+}
+
+/**
+ * Get lot sizes for index symbols from master contract database
+ * Returns dynamic lot sizes instead of hardcoded values
+ */
+export async function getIndexSymbolsLotSizes(): Promise<IndexSymbolInfo[]> {
+  const response = await webClient.get(`${FLOW_API_BASE}/index-symbols`)
+  return response.data.data || []
+}
+
+// =============================================================================
 // React Query Keys
 // =============================================================================
 
@@ -279,4 +299,5 @@ export const flowQueryKeys = {
   workflow: (id: number) => [...flowQueryKeys.workflows(), id] as const,
   executions: (id: number) => [...flowQueryKeys.workflow(id), 'executions'] as const,
   webhook: (id: number) => [...flowQueryKeys.workflow(id), 'webhook'] as const,
+  indexSymbols: () => [...flowQueryKeys.all, 'index-symbols'] as const,
 }
