@@ -7,7 +7,7 @@ import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { X, Trash2, Settings2, Info, Copy, Eye, EyeOff, Loader2 } from 'lucide-react'
 import { useFlowWorkflowStore } from '@/stores/flowWorkflowStore'
-import { getWebhookInfo, flowQueryKeys } from '@/api/flow'
+import { getWebhookInfo, getIndexSymbolsLotSizes, flowQueryKeys } from '@/api/flow'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -145,6 +145,19 @@ export function ConfigPanel() {
     enabled: isWebhookTrigger && !!workflowId,
   })
 
+  // Fetch dynamic lot sizes for index symbols from master contract DB
+  const indexSymbolsQuery = useQuery({
+    queryKey: flowQueryKeys.indexSymbols(),
+    queryFn: getIndexSymbolsLotSizes,
+    staleTime: 1000 * 60 * 60, // Cache for 1 hour (lot sizes don't change often)
+  })
+
+  // Helper to get lot size from DB for a given underlying
+  const getLotSizeFromDb = (underlying: string): number | null => {
+    const dbSymbol = indexSymbolsQuery.data?.find(s => s.value === underlying)
+    return dbSymbol?.lotSize || null
+  }
+
   const handleDataChange = useCallback((key: string, value: unknown) => {
     if (selectedNodeId) updateNodeData(selectedNodeId, { [key]: value })
   }, [selectedNodeId, updateNodeData])
@@ -251,12 +264,12 @@ export function ConfigPanel() {
 
           {/* ===== OPTIONS ORDER ===== */}
           {nodeType === 'optionsOrder' && (<>
-            <div className="space-y-2"><Label className="text-xs">Underlying</Label><Select value={(nodeData.underlying as string) || 'NIFTY'} onValueChange={(v) => { handleDataChange('underlying', v); const s = INDEX_SYMBOLS.find(x => x.value === v); if (s) { handleDataChange('quantity', s.lotSize); handleDataChange('exchange', s.exchange) } }}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent>{INDEX_SYMBOLS.map((s) => (<SelectItem key={s.value} value={s.value}>{s.label} ({s.exchange}, Lot: {s.lotSize})</SelectItem>))}</SelectContent></Select></div>
+            <div className="space-y-2"><Label className="text-xs">Underlying</Label><Select value={(nodeData.underlying as string) || 'NIFTY'} onValueChange={(v) => { handleDataChange('underlying', v); const s = INDEX_SYMBOLS.find(x => x.value === v); if (s) { handleDataChange('exchange', s.exchange) } const lotSize = getLotSizeFromDb(v); if (lotSize) { handleDataChange('quantity', lotSize) } }}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent>{INDEX_SYMBOLS.map((s) => (<SelectItem key={s.value} value={s.value}>{s.label} ({s.exchange})</SelectItem>))}</SelectContent></Select></div>
             <div className="space-y-2"><Label className="text-xs">Expiry</Label><Select value={(nodeData.expiryType as string) || 'current_week'} onValueChange={(v) => handleDataChange('expiryType', v)}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent>{EXPIRY_TYPES.map((e) => (<SelectItem key={e.value} value={e.value}>{e.label}</SelectItem>))}</SelectContent></Select></div>
             <div className="space-y-2"><Label className="text-xs">Strike Offset</Label><Select value={(nodeData.offset as string) || 'ATM'} onValueChange={(v) => handleDataChange('offset', v)}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent>{STRIKE_OFFSETS.map((o) => (<SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>))}</SelectContent></Select></div>
             <div className="space-y-2"><Label className="text-xs">Option Type</Label><div className="grid grid-cols-2 gap-2">{OPTION_TYPES.map((o) => (<button key={o.value} type="button" onClick={() => handleDataChange('optionType', o.value)} className={cn('rounded-lg border py-2 text-sm font-semibold', nodeData.optionType === o.value ? o.value === 'CE' ? 'bg-green-500/20 border-green-500 text-green-600' : 'bg-red-500/20 border-red-500 text-red-600' : 'border-border bg-muted')}>{o.label}</button>))}</div></div>
             <div className="space-y-2"><Label className="text-xs">Action</Label><div className="grid grid-cols-2 gap-2">{ORDER_ACTIONS.map((a) => (<button key={a.value} type="button" onClick={() => handleDataChange('action', a.value)} className={cn('rounded-lg border py-2 text-sm font-semibold', nodeData.action === a.value ? a.value === 'BUY' ? 'bg-green-500/20 border-green-500 text-green-600' : 'bg-red-500/20 border-red-500 text-red-600' : 'border-border bg-muted')}>{a.label}</button>))}</div></div>
-            <div className="space-y-2"><Label className="text-xs">Quantity (Lots)</Label><Input type="number" min={1} className="h-8" value={(nodeData.quantity as number) || 75} onChange={(e) => handleDataChange('quantity', parseInt(e.target.value, 10) || 1)} /></div>
+            <div className="space-y-2"><Label className="text-xs">Quantity (Lots)</Label><Input type="number" min={1} className="h-8" value={(nodeData.quantity as number) || 1} onChange={(e) => handleDataChange('quantity', parseInt(e.target.value, 10) || 1)} /></div>
             <div className="space-y-2"><Label className="text-xs">Product</Label><Select value={(nodeData.product as string) || 'MIS'} onValueChange={(v) => handleDataChange('product', v)}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="MIS">MIS</SelectItem><SelectItem value="NRML">NRML</SelectItem></SelectContent></Select></div>
             <div className="space-y-2"><Label className="text-xs">Output Variable</Label><Input className="h-8" placeholder="optionOrder" value={(nodeData.outputVariable as string) || ''} onChange={(e) => handleDataChange('outputVariable', e.target.value)} /></div>
           </>)}
@@ -264,7 +277,7 @@ export function ConfigPanel() {
           {/* ===== OPTIONS MULTI ORDER ===== */}
           {nodeType === 'optionsMultiOrder' && (<>
             <div className="space-y-2"><Label className="text-xs">Strategy</Label><Select value={(nodeData.strategy as string) || 'straddle'} onValueChange={(v) => handleDataChange('strategy', v)}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent>{OPTION_STRATEGIES.map((s) => (<SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>))}</SelectContent></Select></div>
-            <div className="space-y-2"><Label className="text-xs">Underlying</Label><Select value={(nodeData.underlying as string) || 'NIFTY'} onValueChange={(v) => { handleDataChange('underlying', v); const s = INDEX_SYMBOLS.find(x => x.value === v); if (s) handleDataChange('exchange', s.exchange) }}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent>{INDEX_SYMBOLS.map((s) => (<SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>))}</SelectContent></Select></div>
+            <div className="space-y-2"><Label className="text-xs">Underlying</Label><Select value={(nodeData.underlying as string) || 'NIFTY'} onValueChange={(v) => { handleDataChange('underlying', v); const s = INDEX_SYMBOLS.find(x => x.value === v); if (s) handleDataChange('exchange', s.exchange) }}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent>{INDEX_SYMBOLS.map((s) => (<SelectItem key={s.value} value={s.value}>{s.label} ({s.exchange})</SelectItem>))}</SelectContent></Select></div>
             <div className="space-y-2"><Label className="text-xs">Expiry</Label><Select value={(nodeData.expiryType as string) || 'current_week'} onValueChange={(v) => handleDataChange('expiryType', v)}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent>{EXPIRY_TYPES.map((e) => (<SelectItem key={e.value} value={e.value}>{e.label}</SelectItem>))}</SelectContent></Select></div>
             <div className="space-y-2"><Label className="text-xs">Action</Label><div className="grid grid-cols-2 gap-2">{ORDER_ACTIONS.map((a) => (<button key={a.value} type="button" onClick={() => handleDataChange('action', a.value)} className={cn('rounded-lg border py-2 text-sm font-semibold', nodeData.action === a.value ? a.value === 'BUY' ? 'bg-green-500/20 border-green-500 text-green-600' : 'bg-red-500/20 border-red-500 text-red-600' : 'border-border bg-muted')}>{a.label}</button>))}</div><p className="text-[10px] text-muted-foreground">{nodeData.action === 'BUY' ? 'Long strategy' : 'Short strategy'}</p></div>
             <div className="space-y-2"><Label className="text-xs">Quantity (Lots)</Label><Input type="number" min={1} className="h-8" value={(nodeData.quantity as number) || 1} onChange={(e) => handleDataChange('quantity', parseInt(e.target.value, 10) || 1)} /></div>

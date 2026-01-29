@@ -98,31 +98,32 @@ export const OPTION_STRATEGIES = [
 // =============================================================================
 
 export const NSE_INDEX_SYMBOLS = [
-  { value: 'NIFTY', label: 'NIFTY 50', lotSize: 65 },
-  { value: 'BANKNIFTY', label: 'Bank NIFTY', lotSize: 30 },
-  { value: 'FINNIFTY', label: 'Fin NIFTY', lotSize: 65 },
-  { value: 'MIDCPNIFTY', label: 'Midcap NIFTY', lotSize: 120 },
-  { value: 'NIFTYNXT50', label: 'NIFTY Next 50', lotSize: 25 },
+  { value: 'NIFTY', label: 'NIFTY 50' },
+  { value: 'BANKNIFTY', label: 'Bank NIFTY' },
+  { value: 'FINNIFTY', label: 'Fin NIFTY' },
+  { value: 'MIDCPNIFTY', label: 'Midcap NIFTY' },
+  { value: 'NIFTYNXT50', label: 'NIFTY Next 50' },
 ] as const
 
 export const BSE_INDEX_SYMBOLS = [
-  { value: 'SENSEX', label: 'SENSEX', lotSize: 20 },
-  { value: 'BANKEX', label: 'BANKEX', lotSize: 30 },
-  { value: 'SENSEX50', label: 'SENSEX 50', lotSize: 25 },
+  { value: 'SENSEX', label: 'SENSEX' },
+  { value: 'BANKEX', label: 'BANKEX' },
+  { value: 'SENSEX50', label: 'SENSEX 50' },
 ] as const
 
 // Combined index symbols with exchange info (for options trading)
+// Lot sizes are fetched dynamically from master contract database
 export const INDEX_SYMBOLS = [
-  // NSE Indices (lot sizes updated Jan 2026)
-  { value: 'NIFTY', label: 'NIFTY', exchange: 'NFO', lotSize: 65 },
-  { value: 'BANKNIFTY', label: 'BANKNIFTY', exchange: 'NFO', lotSize: 30 },
-  { value: 'FINNIFTY', label: 'FINNIFTY', exchange: 'NFO', lotSize: 65 },
-  { value: 'MIDCPNIFTY', label: 'MIDCPNIFTY', exchange: 'NFO', lotSize: 120 },
-  { value: 'NIFTYNXT50', label: 'NIFTYNXT50', exchange: 'NFO', lotSize: 25 },
+  // NSE Indices
+  { value: 'NIFTY', label: 'NIFTY', exchange: 'NFO' },
+  { value: 'BANKNIFTY', label: 'BANKNIFTY', exchange: 'NFO' },
+  { value: 'FINNIFTY', label: 'FINNIFTY', exchange: 'NFO' },
+  { value: 'MIDCPNIFTY', label: 'MIDCPNIFTY', exchange: 'NFO' },
+  { value: 'NIFTYNXT50', label: 'NIFTYNXT50', exchange: 'NFO' },
   // BSE Indices
-  { value: 'SENSEX', label: 'SENSEX', exchange: 'BFO', lotSize: 20 },
-  { value: 'BANKEX', label: 'BANKEX', exchange: 'BFO', lotSize: 30 },
-  { value: 'SENSEX50', label: 'SENSEX50', exchange: 'BFO', lotSize: 25 },
+  { value: 'SENSEX', label: 'SENSEX', exchange: 'BFO' },
+  { value: 'BANKEX', label: 'BANKEX', exchange: 'BFO' },
+  { value: 'SENSEX50', label: 'SENSEX50', exchange: 'BFO' },
 ] as const
 
 // =============================================================================
@@ -489,7 +490,7 @@ export const DEFAULT_NODE_DATA = {
     offset: 'ATM',
     optionType: 'CE' as const,
     action: 'BUY' as const,
-    quantity: 75,
+    quantity: 1,
     priceType: 'MARKET' as const,
     product: 'MIS' as const,
   },
