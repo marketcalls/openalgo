@@ -80,6 +80,11 @@ export function useLivePrice<T extends PriceableItem>(
   const { isMarketOpen, isAnyMarketOpen } = useMarketStatus()
   const anyMarketOpen = isAnyMarketOpen()
 
+  const debugLivePrice =
+    typeof window !== 'undefined' &&
+    (window.localStorage.getItem('debug_live_price') === '1' ||
+      window.localStorage.getItem('debug_live_price') === 'true')
+
   // State for MultiQuotes fallback data
   const [multiQuotes, setMultiQuotes] = useState<Map<string, QuotesData>>(new Map())
 
@@ -115,7 +120,23 @@ export function useLivePrice<T extends PriceableItem>(
         exchange: item.exchange,
       }))
 
+      if (debugLivePrice) {
+        console.debug('[useLivePrice] MultiQuotes request', {
+          count: symbolsList.length,
+          sample: symbolsList.slice(0, 5),
+        })
+      }
+
       const response = await tradingApi.getMultiQuotes(apiKey, symbolsList)
+
+      if (debugLivePrice) {
+        console.debug('[useLivePrice] MultiQuotes response', {
+          status: response.status,
+          resultsCount: response.results?.length ?? 0,
+          message: response.message,
+          sampleKeys: response.results?.slice(0, 5).map((r) => `${r.exchange}:${r.symbol}`) ?? [],
+        })
+      }
 
       if (response.status === 'success' && response.results) {
         const quotesMap = new Map<string, QuotesData>()
@@ -125,17 +146,35 @@ export function useLivePrice<T extends PriceableItem>(
             quotesMap.set(key, result.data)
           }
         })
+
+        if (debugLivePrice) {
+          console.debug('[useLivePrice] MultiQuotes mapped', {
+            mappedCount: quotesMap.size,
+          })
+        }
+
         setMultiQuotes(quotesMap)
       }
-    } catch {
+    } catch (err) {
       // Silently fail - MultiQuotes is a fallback mechanism
-      console.debug('MultiQuotes fetch failed, using cached/REST data')
+      if (debugLivePrice) {
+        console.debug('[useLivePrice] MultiQuotes fetch failed', err)
+      }
     }
   }, [apiKey, items, useMultiQuotesFallback])
 
   // Fetch MultiQuotes on mount and when items change
   useEffect(() => {
     if (!enabled || items.length === 0 || !useMultiQuotesFallback) return
+
+    if (debugLivePrice) {
+      console.debug('[useLivePrice] enabled', {
+        enabled,
+        itemsCount: items.length,
+        apiKeyPresent: Boolean(apiKey),
+        useMultiQuotesFallback,
+      })
+    }
 
     // Initial fetch
     fetchMultiQuotes()
@@ -154,11 +193,21 @@ export function useLivePrice<T extends PriceableItem>(
    * For closed positions (qty = 0): P&L and P&L% from REST API (realized values)
    */
   const enhancedData = useMemo(() => {
+    if (debugLivePrice && enabled && items.length > 0) {
+      console.debug('[useLivePrice] enhance items', {
+        itemsCount: items.length,
+        wsConnected,
+        marketDataKeysSample: Array.from(marketData.keys()).slice(0, 5),
+        multiQuotesKeysSample: Array.from(multiQuotes.keys()).slice(0, 5),
+      })
+    }
+
     return items.map((item) => {
       const key = `${item.exchange}:${item.symbol}`
       const wsData = marketData.get(key)
       const mqData = multiQuotes.get(key)
 
+      const hasQuantity = item.quantity !== undefined && item.quantity !== null
       const qty = item.quantity || 0
       const avgPrice = item.average_price || 0
 
@@ -179,6 +228,10 @@ export function useLivePrice<T extends PriceableItem>(
       let currentLtp: number | undefined
       let dataSource: 'websocket' | 'multiquotes' | 'rest' = 'rest'
 
+      const wsAgeMs = wsData?.lastUpdate ? Date.now() - wsData.lastUpdate : null
+      const wsLtp = wsData?.data?.ltp
+      const mqLtp = mqData?.ltp
+
       if (hasWsData && wsData?.data?.ltp) {
         currentLtp = wsData.data.ltp
         dataSource = 'websocket'
@@ -190,9 +243,34 @@ export function useLivePrice<T extends PriceableItem>(
         dataSource = 'rest'
       }
 
-      // For closed positions (qty=0), preserve ALL REST API values including LTP
-      // This ensures P&L% calculation remains stable (realized values don't change)
-      if (qty === 0) {
+      if (debugLivePrice) {
+        // Log decision inputs for debugging tick issues (limited to first 5 items to reduce noise)
+        const idx = items.indexOf(item)
+        if (idx > -1 && idx < 5) {
+          console.debug('[useLivePrice] decision', {
+            key,
+            exchange: item.exchange,
+            exchangeMarketOpen,
+            staleThreshold,
+            wsConnected,
+            wsHasData: Boolean(wsData),
+            wsLtp,
+            wsAgeMs,
+            mqHasData: Boolean(mqData),
+            mqLtp,
+            hasWsData,
+            hasMqData,
+            selectedSource: dataSource,
+            selectedLtp: currentLtp,
+          })
+        }
+      }
+
+      // For closed positions (qty=0), preserve ALL REST API values including LTP.
+      // IMPORTANT: only do this when `quantity` is explicitly present on the item.
+      // Some screens (e.g. strategy legs) use this hook for live LTP only and do not
+      // provide quantity/avgPrice; for those, we still want live LTP updates.
+      if (hasQuantity && qty === 0) {
         return {
           ...item,
           // Keep item.ltp from REST API - don't update with live data

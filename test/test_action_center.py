@@ -8,6 +8,7 @@ import json
 
 import pytest
 
+from blueprints.strategy_state import compute_strategy_state_summary
 from database.action_center_db import (
     approve_pending_order,
     create_pending_order,
@@ -18,13 +19,19 @@ from database.action_center_db import (
     reject_pending_order,
     update_broker_status,
 )
-from database.auth_db import get_order_mode, update_order_mode
+from database.auth_db import get_order_mode, update_order_mode, upsert_api_key
 from services.action_center_service import get_action_center_data
 from services.order_router_service import queue_order, should_route_to_pending
 
 
 class TestOrderModeDatabase:
     """Test order mode database functions"""
+
+    @staticmethod
+    def _ensure_api_key(user_id: str = "test_user") -> None:
+        # update_order_mode() now requires an existing api_keys row
+        # so create one for test isolation.
+        upsert_api_key(user_id, "test-api-key")
 
     def test_get_order_mode_default(self):
         """Test default order mode is 'auto'"""
@@ -33,6 +40,7 @@ class TestOrderModeDatabase:
 
     def test_update_order_mode_to_semi_auto(self):
         """Test updating order mode to semi_auto"""
+        self._ensure_api_key("test_user")
         success = update_order_mode("test_user", "semi_auto")
         assert success is True, "Should successfully update to semi_auto"
 
@@ -41,6 +49,7 @@ class TestOrderModeDatabase:
 
     def test_update_order_mode_to_auto(self):
         """Test updating order mode back to auto"""
+        self._ensure_api_key("test_user")
         update_order_mode("test_user", "semi_auto")
         success = update_order_mode("test_user", "auto")
         assert success is True, "Should successfully update to auto"
@@ -97,7 +106,7 @@ class TestPendingOrdersDatabase:
         order_data = {"symbol": "HDFC", "action": "BUY"}
         order_id = create_pending_order("test_user", "placeorder", order_data)
 
-        success = approve_pending_order(order_id, approved_by="test_approver")
+        success = approve_pending_order(order_id, approved_by="test_approver", user_id="test_user")
         assert success is True, "Should successfully approve order"
 
         order = get_pending_order_by_id(order_id)
@@ -111,7 +120,7 @@ class TestPendingOrdersDatabase:
         order_id = create_pending_order("test_user", "placeorder", order_data)
 
         reason = "Market conditions unfavorable"
-        success = reject_pending_order(order_id, reason, rejected_by="test_rejector")
+        success = reject_pending_order(order_id, reason, rejected_by="test_rejector", user_id="test_user")
         assert success is True, "Should successfully reject order"
 
         order = get_pending_order_by_id(order_id)
@@ -126,10 +135,10 @@ class TestPendingOrdersDatabase:
         order_id = create_pending_order("test_user", "placeorder", order_data)
 
         # Approve first
-        approve_pending_order(order_id, approved_by="test_user")
+        approve_pending_order(order_id, approved_by="test_user", user_id="test_user")
 
         # Delete
-        success = delete_pending_order(order_id)
+        success = delete_pending_order(order_id, user_id="test_user")
         assert success is True, "Should successfully delete approved order"
 
         order = get_pending_order_by_id(order_id)
@@ -140,7 +149,7 @@ class TestPendingOrdersDatabase:
         order_data = {"symbol": "WIPRO", "action": "BUY"}
         order_id = create_pending_order("test_user", "placeorder", order_data)
 
-        success = delete_pending_order(order_id)
+        success = delete_pending_order(order_id, user_id="test_user")
         assert success is False, "Should not delete order in pending status"
 
     def test_update_broker_status(self):
@@ -148,7 +157,7 @@ class TestPendingOrdersDatabase:
         order_data = {"symbol": "TCS", "action": "BUY"}
         order_id = create_pending_order("test_user", "placeorder", order_data)
 
-        approve_pending_order(order_id, approved_by="test_user")
+        approve_pending_order(order_id, approved_by="test_user", user_id="test_user")
 
         success = update_broker_status(order_id, "BROKER123456", "open")
         assert success is True, "Should successfully update broker status"
@@ -263,6 +272,47 @@ class TestISTTimestamps:
         assert order.created_at_ist is not None, "IST timestamp should be set"
         assert "IST" in order.created_at_ist, "Timestamp should contain 'IST'"
         assert len(order.created_at_ist) > 10, "Timestamp should be formatted"
+
+
+class TestStrategyStateSummaryPnL:
+    def test_summary_does_not_double_count_realized_pnl(self):
+        """Realized P&L must come exclusively from trade_history."""
+        state = {
+            'legs': {
+                # This leg is NOT open; any realized pnl here must not be counted.
+                'LEG1': {'status': 'DONE', 'realized_pnl': 100.0, 'unrealized_pnl': 0.0},
+                # This leg is open; unrealized should count.
+                'LEG2': {'status': 'IN_POSITION', 'realized_pnl': 50.0, 'unrealized_pnl': 12.5},
+            },
+            'trade_history': [
+                {'pnl': 100.0},
+                {'pnl': -10.0},
+            ],
+        }
+
+        summary = compute_strategy_state_summary(state)
+
+        assert summary['total_realized_pnl'] == 90.0
+        assert summary['trade_history_pnl'] == 90.0
+        assert summary['total_unrealized_pnl'] == 12.5
+        assert summary['total_pnl'] == 102.5
+
+    def test_summary_counts_open_and_idle_positions(self):
+        state = {
+            'legs': {
+                'A': {'status': 'IN_POSITION', 'unrealized_pnl': 1},
+                'B': {'status': 'PENDING_ENTRY', 'unrealized_pnl': 2},
+                'C': {'status': 'PENDING_EXIT', 'unrealized_pnl': 3},
+                'D': {'status': 'IDLE', 'unrealized_pnl': 999},
+                'E': {'status': 'DONE', 'unrealized_pnl': 999},
+            },
+            'trade_history': [],
+        }
+
+        summary = compute_strategy_state_summary(state)
+        assert summary['open_positions_count'] == 3
+        assert summary['idle_positions_count'] == 1
+        assert summary['total_unrealized_pnl'] == 6.0
 
 
 if __name__ == "__main__":

@@ -198,6 +198,8 @@ known-first-party = ["broker", "blueprints", "database", "services", "utils", "r
 testpaths = ["test"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+# Ensure local imports like `import database` work under pytest.
+pythonpath = ["."]
 addopts = "-v --timeout=60"
 filterwarnings = [
     "ignore::DeprecationWarning",

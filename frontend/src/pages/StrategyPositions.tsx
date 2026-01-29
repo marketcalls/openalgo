@@ -7,7 +7,7 @@ import {
   TrendingDown,
   TrendingUp,
 } from 'lucide-react'
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
   AlertDialog,
@@ -39,6 +39,8 @@ import { createStrategyOverride, deleteStrategyState, getStrategyStates } from '
 import { useLivePrice } from '@/hooks/useLivePrice'
 import type { LegState, LegStatus, StrategyState, TradeHistoryRecord, ExitType, OverrideType } from '@/types/strategy-state'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 
 // Status badge colors
 const statusColors: Record<string, string> = {
@@ -110,7 +112,7 @@ function formatTime(isoString: string | null | undefined): string {
 
 // P&L display component
 function PnLDisplay({ value, showIcon = true }: { value: number | null | undefined; showIcon?: boolean }) {
-  if (value === null || value === undefined) return <span className="text-muted-foreground">—</span>
+  if (value === null || value === undefined) return <span className="text-muted-foreground">-</span>
   const isPositive = value >= 0
   const color = isPositive ? 'text-green-600' : 'text-red-600'
   return (
@@ -119,6 +121,25 @@ function PnLDisplay({ value, showIcon = true }: { value: number | null | undefin
       {formatCurrency(value)}
     </span>
   )
+}
+
+function computeUnrealizedPnlForLeg(leg: LegState, ltp: number | undefined): number | null {
+  const entry = leg.entry_price
+  const qty = leg.quantity
+  const side = leg.side
+
+  if (ltp === null || ltp === undefined) return null
+  if (entry === null || entry === undefined || qty === null || qty === undefined || !side) return null
+
+  if (side === 'BUY') return (ltp - entry) * qty
+  if (side === 'SELL') return (entry - ltp) * qty
+
+  return null
+}
+
+function sumTradeHistoryPnl(trades: TradeHistoryRecord[] | null | undefined): number {
+  if (!trades || trades.length === 0) return 0
+  return trades.reduce((sum, t) => sum + (t.pnl || 0), 0)
 }
 
 // Editable Price Cell for SL/Target inline editing
@@ -288,12 +309,17 @@ function CurrentPositionsTable({
 
   const legEntries = Object.entries(legs)
   
-  // Separate open and idle positions.
+  // Separate open positions vs pending/planned (waiting-to-enter) positions.
   // Exited trades should be represented in Trade History (trade_history), not here.
   const openPositions = legEntries.filter(([_, leg]) =>
-    ['IN_POSITION', 'PENDING_ENTRY', 'PENDING_EXIT'].includes(leg.status)
+    ['IN_POSITION', 'PENDING_EXIT'].includes(leg.status)
   )
-  const idlePositions = legEntries.filter(([_, leg]) => leg.status === 'IDLE')
+
+  const pendingPlannedPositions = legEntries.filter(([_, leg]) =>
+    ['IDLE', 'PENDING_ENTRY', 'EXITED_WAITING_REENTRY', 'EXITED_WAITING_REEXECUTE'].includes(leg.status)
+  )
+
+  const donePositions = legEntries.filter(([_, leg]) => leg.status === 'DONE')
 
   if (legEntries.length === 0) {
     return <p className="text-muted-foreground text-sm py-4">No positions found</p>
@@ -349,7 +375,9 @@ function CurrentPositionsTable({
                     <TableCell className="text-right">{leg.quantity}</TableCell>
                     <TableCell className="text-right">{formatPrice(leg.entry_price)}</TableCell>
                     <TableCell className="text-right">
-                      {formatPrice(liveLtpByLegKey?.[legKey] ?? leg.current_ltp ?? leg.entry_price)}
+                      {liveLtpByLegKey?.[legKey] === null || liveLtpByLegKey?.[legKey] === undefined
+                        ? '-'
+                        : formatPrice(liveLtpByLegKey?.[legKey])}
                     </TableCell>
                     <TableCell className="text-right">
                       <EditablePriceCell
@@ -377,7 +405,7 @@ function CurrentPositionsTable({
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                      <PnLDisplay value={leg.unrealized_pnl} />
+                      <PnLDisplay value={computeUnrealizedPnlForLeg(leg, liveLtpByLegKey?.[legKey])} />
                     </TableCell>
                     <TableCell className="text-right">
                       {leg.reentry_count ?? 0}/{leg.reentry_limit ?? '∞'}
@@ -390,12 +418,12 @@ function CurrentPositionsTable({
         </div>
       )}
 
-      {/* IDLE Positions (waiting to enter) */}
-      {idlePositions.length > 0 && (
+      {/* Pending / Planned Trades */}
+      {pendingPlannedPositions.length > 0 && (
         <div>
           <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
             <CircleDot className="h-4 w-4 text-yellow-500" />
-            IDLE Positions (Waiting to Enter) ({idlePositions.length})
+            Pending / Planned Trades ({pendingPlannedPositions.length})
           </h4>
           <div className="rounded-md border overflow-x-auto">
             <Table>
@@ -405,6 +433,7 @@ function CurrentPositionsTable({
                   <TableHead>Symbol</TableHead>
                   <TableHead>Side</TableHead>
                   <TableHead className="text-right">Qty</TableHead>
+                  <TableHead className="text-right">LTP</TableHead>
                   <TableHead className="text-right">Planned SL</TableHead>
                   <TableHead className="text-right">Planned Target</TableHead>
                   <TableHead>Status</TableHead>
@@ -413,7 +442,7 @@ function CurrentPositionsTable({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {idlePositions.map(([legKey, leg]) => (
+                {pendingPlannedPositions.map(([legKey, leg]) => (
                   <TableRow key={legKey}>
                     <TableCell className="font-medium">
                       <div className="flex flex-col">
@@ -434,10 +463,15 @@ function CurrentPositionsTable({
                       )}
                     </TableCell>
                     <TableCell className="text-right">{leg.quantity}</TableCell>
+                    <TableCell className="text-right">
+                      {liveLtpByLegKey?.[legKey] === null || liveLtpByLegKey?.[legKey] === undefined
+                        ? '-'
+                        : formatPrice(liveLtpByLegKey?.[legKey])}
+                    </TableCell>
                     <TableCell className="text-right">{formatPrice(leg.sl_price)}</TableCell>
                     <TableCell className="text-right">{formatPrice(leg.target_price)}</TableCell>
                     <TableCell>
-                      <Badge className={legStatusColors[leg.status]} variant="secondary">
+                      <Badge className={legStatusColors[leg.status] || 'bg-gray-400'} variant="secondary">
                         {leg.status.replace(/_/g, ' ')}
                       </Badge>
                     </TableCell>
@@ -446,6 +480,74 @@ function CurrentPositionsTable({
                     </TableCell>
                     <TableCell className="text-right">
                       {leg.reexecute_count ?? 0}/{leg.reexecute_limit ?? '∞'}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+      )}
+
+      {/* Done Legs */}
+      {donePositions.length > 0 && (
+        <div>
+          <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
+            <CircleDot className="h-4 w-4 text-gray-500" />
+            Done Legs ({donePositions.length})
+          </h4>
+          <div className="rounded-md border overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Leg</TableHead>
+                  <TableHead>Symbol</TableHead>
+                  <TableHead>Side</TableHead>
+                  <TableHead className="text-right">Qty</TableHead>
+                  <TableHead className="text-right">Entry</TableHead>
+                  <TableHead className="text-right">Realized P&L</TableHead>
+                  <TableHead className="text-right">Total P&L</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {donePositions.map(([legKey, leg]) => (
+                  <TableRow key={legKey}>
+                    <TableCell className="font-medium">
+                      <div className="flex flex-col">
+                        <span>{leg.leg_pair_name || legKey}</span>
+                        {leg.is_main_leg && (
+                          <span className="text-xs text-muted-foreground">Main</span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">{leg.symbol}</TableCell>
+                    <TableCell>
+                      {leg.side ? (
+                        <Badge variant={leg.side === 'SELL' ? 'destructive' : 'default'}>
+                          {leg.side}
+                        </Badge>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">{leg.quantity}</TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex flex-col">
+                        <span>{formatPrice(leg.entry_price)}</span>
+                        <span className="text-xs text-muted-foreground">{formatTime(leg.entry_time)}</span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <PnLDisplay value={leg.realized_pnl} />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <PnLDisplay value={leg.total_pnl ?? leg.realized_pnl} />
+                    </TableCell>
+                    <TableCell>
+                      <Badge className={legStatusColors[leg.status] || 'bg-gray-400'} variant="secondary">
+                        {leg.status.replace(/_/g, ' ')}
+                      </Badge>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -466,7 +568,8 @@ function TradeHistoryTable({ trades }: { trades: TradeHistoryRecord[] | null | u
 
   return (
     <div className="rounded-md border overflow-x-auto">
-      <Table>
+      <div className="max-h-[50vh] overflow-y-auto">
+        <Table>
         <TableHeader>
           <TableRow>
             <TableHead>#</TableHead>
@@ -476,6 +579,8 @@ function TradeHistoryTable({ trades }: { trades: TradeHistoryRecord[] | null | u
             <TableHead className="text-right">Qty</TableHead>
             <TableHead className="text-right">Entry</TableHead>
             <TableHead className="text-right">Exit</TableHead>
+            <TableHead className="text-right">SL</TableHead>
+            <TableHead className="text-right">Target</TableHead>
             <TableHead>Exit Type</TableHead>
             <TableHead className="text-right">P&L</TableHead>
           </TableRow>
@@ -511,6 +616,8 @@ function TradeHistoryTable({ trades }: { trades: TradeHistoryRecord[] | null | u
                   <span className="text-xs text-muted-foreground">{formatTime(trade.exit_time)}</span>
                 </div>
               </TableCell>
+              <TableCell className="text-right">{formatPrice(trade.sl_price)}</TableCell>
+              <TableCell className="text-right">{formatPrice(trade.target_price)}</TableCell>
               <TableCell>
                 {trade.exit_type && (
                   <Badge className={exitTypeColors[trade.exit_type]} variant="secondary">
@@ -525,82 +632,46 @@ function TradeHistoryTable({ trades }: { trades: TradeHistoryRecord[] | null | u
           ))}
         </TableBody>
       </Table>
+      </div>
     </div>
   )
 }
 
 // Strategy Accordion Item
-function StrategyAccordionItem({ 
-  strategy, 
+function StrategyAccordionItem({
+  strategy,
   onDelete,
-  onRefresh
-}: { 
+  onRefresh,
+  liveLtpByLegKey,
+}: {
   strategy: StrategyState
   onDelete: (instanceId: string, strategyName: string) => void
   onRefresh: () => void
+  liveLtpByLegKey: Record<string, number | undefined>
 }) {
-  // Use live LTP for open legs (WebSocket-first with REST fallback)
-  type LegPriceItem = {
-    legKey: string
-    symbol: string
-    exchange: string
-    ltp?: number
-  }
-
-  const optionExchange = strategy.config?.exchange || 'NFO'
-
-  const openLegPriceItems: LegPriceItem[] = useMemo(() => {
-    const legs = strategy.legs || {}
-    return Object.entries(legs)
-      .filter(([_, leg]) => ['IN_POSITION', 'PENDING_ENTRY', 'PENDING_EXIT'].includes(leg.status))
-      .map(([legKey, leg]) => {
-        const raw = (leg.symbol || '').trim()
-        if (!raw) {
-          return {
-            legKey,
-            symbol: '',
-            exchange: optionExchange,
-          }
-        }
-
-        // Strategy may persist either `NFO:NIFTY...` or only `NIFTY...`
-        if (raw.includes(':')) {
-          const [exchange, symbol] = raw.split(':', 2)
-          return {
-            legKey,
-            symbol,
-            exchange: exchange || optionExchange,
-          }
-        }
-
-        return {
-          legKey,
-          symbol: raw,
-          exchange: optionExchange,
-        }
-      })
-      .filter((i) => i.symbol.length > 0)
-  }, [strategy.legs, optionExchange])
-
-  const { data: openLegsWithLivePrice } = useLivePrice(openLegPriceItems, {
-    enabled: openLegPriceItems.length > 0,
-    useMultiQuotesFallback: true,
-  })
-
-  const liveLtpByLegKey = useMemo(() => {
-    const map: Record<string, number | undefined> = {}
-    for (const item of openLegsWithLivePrice) {
-      map[item.legKey] = item.ltp
-    }
-    return map
-  }, [openLegsWithLivePrice])
   const [isOpen, setIsOpen] = useState(true)
+  const [isLegPnlOpen, setIsLegPnlOpen] = useState(false)
   const config = strategy.config
-  
+
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation() // Prevent accordion toggle
     onDelete(strategy.instance_id, strategy.strategy_name)
   }
+
+  const legs = strategy.legs || {}
+  const realizedPnl = useMemo(() => sumTradeHistoryPnl(strategy.trade_history), [strategy.trade_history])
+
+  const unrealizedPnl = useMemo(() => {
+    let total = 0
+    for (const [legKey, leg] of Object.entries(legs)) {
+      if (!['IN_POSITION', 'PENDING_EXIT'].includes(leg.status)) continue
+      const pnl = computeUnrealizedPnlForLeg(leg, liveLtpByLegKey?.[legKey])
+      if (pnl !== null) total += pnl
+    }
+    return total
+  }, [legs, liveLtpByLegKey])
+
+  const totalPnl = realizedPnl + unrealizedPnl
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -630,7 +701,7 @@ function StrategyAccordionItem({
               <div className="flex items-center gap-4">
                 <div className="text-right">
                   <p className="text-sm text-muted-foreground">Total P&L</p>
-                  <PnLDisplay value={strategy.summary?.total_pnl} />
+                  <PnLDisplay value={totalPnl} />
                 </div>
                 <Badge className={statusColors[strategy.status] || 'bg-gray-400'}>
                   {strategy.status}
@@ -654,25 +725,107 @@ function StrategyAccordionItem({
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4 p-4 bg-muted/30 rounded-lg">
               <div>
                 <p className="text-xs text-muted-foreground">Open Positions</p>
-                <p className="text-lg font-semibold">{strategy.summary?.open_positions_count ?? 0}</p>
+                <p className="text-lg font-semibold">
+                  {Object.values(strategy.legs || {}).filter((leg) =>
+                    ['IN_POSITION', 'PENDING_EXIT'].includes(leg.status)
+                  ).length}
+                </p>
               </div>
               <div>
-                <p className="text-xs text-muted-foreground">IDLE Positions</p>
-                <p className="text-lg font-semibold">{strategy.summary?.idle_positions_count ?? 0}</p>
+                <p className="text-xs text-muted-foreground">Pending / Planned</p>
+                <p className="text-lg font-semibold">
+                  {Object.values(strategy.legs || {}).filter((leg) =>
+                    ['IDLE', 'PENDING_ENTRY', 'EXITED_WAITING_REENTRY', 'EXITED_WAITING_REEXECUTE'].includes(leg.status)
+                  ).length}
+                </p>
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Total Trades</p>
-                <p className="text-lg font-semibold">{strategy.summary?.total_trades ?? 0}</p>
+                <p className="text-lg font-semibold">{strategy.trade_history?.length ?? 0}</p>
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Realized P&L</p>
-                <PnLDisplay value={strategy.summary?.total_realized_pnl} showIcon={false} />
+                <PnLDisplay value={realizedPnl} showIcon={false} />
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Unrealized P&L</p>
-                <PnLDisplay value={strategy.summary?.total_unrealized_pnl} showIcon={false} />
+                <PnLDisplay value={unrealizedPnl} showIcon={false} />
               </div>
             </div>
+
+            {/* Leg P&L Breakdown (collapsed by default) */}
+            <Collapsible open={isLegPnlOpen} onOpenChange={setIsLegPnlOpen}>
+              <div className="flex items-center justify-between">
+                <h3 className="text-md font-semibold">Leg P&L</h3>
+                <CollapsibleTrigger asChild>
+                  <Button variant="ghost" size="sm" className="h-8 px-2">
+                    {isLegPnlOpen ? (
+                      <ChevronDown className="h-4 w-4 mr-2" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4 mr-2" />
+                    )}
+                    {isLegPnlOpen ? 'Hide' : 'Show'}
+                  </Button>
+                </CollapsibleTrigger>
+              </div>
+              <CollapsibleContent>
+                <div className="rounded-md border overflow-x-auto mt-2">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Leg</TableHead>
+                        <TableHead>Symbol</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Realized P&L</TableHead>
+                        <TableHead className="text-right">Unrealized P&L</TableHead>
+                        <TableHead className="text-right">Total P&L</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {Object.entries(legs).map(([legKey, leg]) => {
+                        const unreal = ['IN_POSITION', 'PENDING_EXIT'].includes(leg.status)
+                          ? computeUnrealizedPnlForLeg(leg, liveLtpByLegKey?.[legKey])
+                          : 0
+                        const realized = leg.realized_pnl ?? 0
+                        const total = (leg.total_pnl ?? null) !== null && leg.total_pnl !== undefined
+                          ? leg.total_pnl
+                          : unreal === null
+                            ? null
+                            : realized + unreal
+
+                        return (
+                          <TableRow key={legKey}>
+                            <TableCell className="font-medium">
+                              <div className="flex flex-col">
+                                <span>{leg.leg_pair_name || legKey}</span>
+                                {leg.is_main_leg && (
+                                  <span className="text-xs text-muted-foreground">Main</span>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell className="font-mono text-xs">{leg.symbol}</TableCell>
+                            <TableCell>
+                              <Badge className={legStatusColors[leg.status] || 'bg-gray-400'} variant="secondary">
+                                {leg.status.replace(/_/g, ' ')}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <PnLDisplay value={leg.realized_pnl} showIcon={false} />
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <PnLDisplay value={unreal} showIcon={false} />
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <PnLDisplay value={total} showIcon={false} />
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
 
             {/* Last Updated */}
             {strategy.last_updated && (
@@ -710,6 +863,13 @@ export default function StrategyPositions() {
   const [strategies, setStrategies] = useState<StrategyState[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
+
+  const AUTO_REFRESH_ENABLED_KEY = 'strategy_positions_auto_refresh_enabled'
+  const AUTO_REFRESH_SECONDS_KEY = 'strategy_positions_auto_refresh_seconds'
+
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true)
+  const [autoRefreshSeconds, setAutoRefreshSeconds] = useState(10)
+  const isRefreshingRef = useRef(false)
   const [deleteDialog, setDeleteDialog] = useState<{
     open: boolean
     instanceId: string
@@ -731,6 +891,7 @@ export default function StrategyPositions() {
     } finally {
       setIsLoading(false)
       setIsRefreshing(false)
+      isRefreshingRef.current = false
     }
   }
 
@@ -760,11 +921,123 @@ export default function StrategyPositions() {
 
   const isDeleteConfirmValid = deleteConfirmText === deleteDialog.strategyName
 
+  // Load auto-refresh prefs
   useEffect(() => {
+    try {
+      const savedEnabled = window.localStorage.getItem(AUTO_REFRESH_ENABLED_KEY)
+      if (savedEnabled !== null) {
+        setAutoRefreshEnabled(savedEnabled === '1' || savedEnabled === 'true')
+      }
+
+      const savedSeconds = window.localStorage.getItem(AUTO_REFRESH_SECONDS_KEY)
+      if (savedSeconds) {
+        const parsed = Number.parseInt(savedSeconds, 10)
+        if (!Number.isNaN(parsed)) {
+          // Clamp to 5–300 seconds
+          const clamped = Math.min(300, Math.max(5, parsed))
+          setAutoRefreshSeconds(clamped)
+        }
+      }
+    } catch (e) {
+      console.error('Error loading strategy positions auto-refresh preferences:', e)
+    }
+
     fetchData()
   }, [])
 
+  // Persist auto-refresh prefs
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(AUTO_REFRESH_ENABLED_KEY, autoRefreshEnabled ? '1' : '0')
+      window.localStorage.setItem(AUTO_REFRESH_SECONDS_KEY, String(autoRefreshSeconds))
+    } catch (e) {
+      console.error('Error saving strategy positions auto-refresh preferences:', e)
+    }
+  }, [autoRefreshEnabled, autoRefreshSeconds])
+
+  // Auto-refresh timer (silent)
+  useEffect(() => {
+    if (!autoRefreshEnabled) return
+
+    // Avoid extremely low / invalid values
+    const intervalSeconds = Math.min(300, Math.max(5, autoRefreshSeconds))
+
+    const id = window.setInterval(() => {
+      // Don't overlap requests
+      if (isRefreshingRef.current) return
+      isRefreshingRef.current = true
+      setIsRefreshing(true)
+      fetchData(false)
+    }, intervalSeconds * 1000)
+
+    return () => window.clearInterval(id)
+  }, [autoRefreshEnabled, autoRefreshSeconds])
+
+  // ---- Live prices (single subscription for all strategies) ----
+  type StrategyLegPriceItem = {
+    instanceId: string
+    legKey: string
+    symbol: string
+    exchange: string
+    // Baseline LTP for initial render (matches /positions behavior)
+    ltp?: number
+  }
+
+  const allLegPriceItems: StrategyLegPriceItem[] = useMemo(() => {
+    const items: StrategyLegPriceItem[] = []
+
+    for (const strategy of strategies) {
+      const optionExchange = strategy.config?.exchange || 'NFO'
+      const legs = strategy.legs || {}
+
+      for (const [legKey, leg] of Object.entries(legs)) {
+        if (!['IN_POSITION', 'PENDING_EXIT', 'PENDING_ENTRY', 'IDLE', 'EXITED_WAITING_REENTRY', 'EXITED_WAITING_REEXECUTE'].includes(leg.status)) continue
+
+        const raw = (leg.symbol || '').trim()
+        if (!raw) continue
+
+        // Strategy may persist either `NFO:NIFTY...` or only `NIFTY...`
+        if (raw.includes(':')) {
+          const [exchange, symbol] = raw.split(':', 2)
+          if (!symbol) continue
+          items.push({
+            instanceId: strategy.instance_id,
+            legKey,
+            symbol,
+            exchange: exchange || optionExchange,
+            ltp: (leg as any).current_ltp ?? (leg as any).entry_price,
+          })
+        } else {
+          items.push({
+            instanceId: strategy.instance_id,
+            legKey,
+            symbol: raw,
+            exchange: optionExchange,
+            ltp: (leg as any).current_ltp ?? (leg as any).entry_price,
+          })
+        }
+      }
+    }
+
+    return items
+  }, [strategies])
+
+  const { data: allOpenLegsWithLivePrice } = useLivePrice(allLegPriceItems, {
+    enabled: allLegPriceItems.length > 0,
+    useMultiQuotesFallback: true,
+  })
+
+  const liveLtpByInstanceAndLegKey = useMemo(() => {
+    const map: Record<string, Record<string, number | undefined>> = {}
+    for (const item of allOpenLegsWithLivePrice) {
+      if (!map[item.instanceId]) map[item.instanceId] = {}
+      map[item.instanceId][item.legKey] = item.ltp
+    }
+    return map
+  }, [allOpenLegsWithLivePrice])
+
   const handleRefresh = () => {
+    isRefreshingRef.current = true
     setIsRefreshing(true)
     fetchData(true)
   }
@@ -772,22 +1045,55 @@ export default function StrategyPositions() {
   return (
     <div className="container mx-auto py-6 px-4 max-w-7xl">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-start justify-between gap-4 mb-6">
         <div>
           <h1 className="text-2xl font-bold">Strategy Positions</h1>
           <p className="text-muted-foreground">
             View positions and trade history for Python strategies
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleRefresh}
-          disabled={isRefreshing}
-        >
-          <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
+
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <Label className="text-xs text-muted-foreground">Auto refresh</Label>
+              <Switch checked={autoRefreshEnabled} onCheckedChange={setAutoRefreshEnabled} />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Label className="text-xs text-muted-foreground">Every (s)</Label>
+              <Input
+                type="number"
+                min={5}
+                max={300}
+                step={1}
+                value={autoRefreshSeconds}
+                onChange={(e) => {
+                  const raw = Number.parseInt(e.target.value, 10)
+                  if (Number.isNaN(raw)) return
+                  const clamped = Math.min(300, Math.max(5, raw))
+                  setAutoRefreshSeconds(clamped)
+                }}
+                className="h-8 w-20"
+                disabled={!autoRefreshEnabled}
+              />
+            </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+          </div>
+
+          <p className="text-[11px] text-muted-foreground">
+            Range: 5–300 seconds (saved locally)
+          </p>
+        </div>
       </div>
 
       {/* Content */}
@@ -807,11 +1113,12 @@ export default function StrategyPositions() {
       ) : (
         <div>
           {strategies.map((strategy) => (
-            <StrategyAccordionItem 
-              key={strategy.instance_id} 
-              strategy={strategy} 
+            <StrategyAccordionItem
+              key={strategy.instance_id}
+              strategy={strategy}
               onDelete={handleDeleteRequest}
               onRefresh={() => fetchData(false)}
+              liveLtpByLegKey={liveLtpByInstanceAndLegKey[strategy.instance_id] || {}}
             />
           ))}
         </div>

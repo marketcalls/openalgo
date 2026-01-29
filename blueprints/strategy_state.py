@@ -6,21 +6,69 @@ Provides read-only access to Python strategy execution states and positions.
 """
 
 from flask import Blueprint, jsonify, request
+
 from database.strategy_state_db import (
-    get_all_strategy_states,
-    get_strategy_state_by_instance_id,
-    delete_strategy_state,
-    create_strategy_override,
+    StrategyStateDbError,
     StrategyStateDbNotFoundError,
     StrategyStateNotFoundError,
-    StrategyStateDbError,
+    create_strategy_override,
+    delete_strategy_state,
+    get_all_strategy_states,
+    get_strategy_state_by_instance_id,
 )
-from utils.session import check_session_validity
 from utils.logging import get_logger
+from utils.session import check_session_validity
 
 logger = get_logger(__name__)
 
 strategy_state_bp = Blueprint('strategy_state_bp', __name__, url_prefix='/api')
+
+
+OPEN_LEG_STATUSES = {'IN_POSITION', 'PENDING_ENTRY', 'PENDING_EXIT'}
+
+
+def compute_strategy_state_summary(state: dict) -> dict:
+    """Compute summary metrics for a strategy state.
+
+    P&L aggregation rules (to avoid double-counting):
+      - Realized P&L is derived exclusively from `trade_history`.
+      - Unrealized P&L is derived exclusively from legs that are currently open.
+
+    Args:
+        state: Strategy state dictionary as returned by `database.strategy_state_db`.
+
+    Returns:
+        Summary dictionary.
+    """
+
+    legs = state.get('legs', {}) or {}
+    trade_history = state.get('trade_history', []) or []
+
+    total_unrealized_pnl = 0.0
+    open_positions_count = 0
+    idle_positions_count = 0
+
+    for _, leg in legs.items():
+        leg_status = (leg or {}).get('status', '')
+
+        if leg_status in OPEN_LEG_STATUSES:
+            open_positions_count += 1
+            total_unrealized_pnl += float((leg or {}).get('unrealized_pnl', 0) or 0)
+        elif leg_status == 'IDLE':
+            idle_positions_count += 1
+
+    total_realized_pnl = sum(float((t or {}).get('pnl', 0) or 0) for t in trade_history)
+
+    return {
+        'total_realized_pnl': total_realized_pnl,
+        'total_unrealized_pnl': total_unrealized_pnl,
+        'total_pnl': total_realized_pnl + total_unrealized_pnl,
+        # Backwards-compatible field name; now it equals realized P&L by design.
+        'trade_history_pnl': total_realized_pnl,
+        'open_positions_count': open_positions_count,
+        'idle_positions_count': idle_positions_count,
+        'total_trades': len(trade_history),
+    }
 
 
 @strategy_state_bp.route('/strategy-state', methods=['GET'])
@@ -40,42 +88,7 @@ def get_strategy_states():
         # Calculate summary statistics for each strategy
         # Summary counts must match the Strategy Positions UI logic.
         for state in states:
-            total_realized_pnl = 0
-            total_unrealized_pnl = 0
-
-            # UI sections:
-            # - Open Positions: IN_POSITION, PENDING_ENTRY, PENDING_EXIT
-            # - IDLE Positions (waiting to enter): IDLE
-            # Exited trades are derived from trade_history (not from legs).
-            open_positions_count = 0
-            idle_positions_count = 0
-
-            legs = state.get('legs', {})
-            for _, leg in legs.items():
-                realized = leg.get('realized_pnl', 0) or 0
-                unrealized = leg.get('unrealized_pnl', 0) or 0
-                total_realized_pnl += realized
-                total_unrealized_pnl += unrealized
-
-                leg_status = leg.get('status', '')
-                if leg_status in ['IN_POSITION', 'PENDING_ENTRY', 'PENDING_EXIT']:
-                    open_positions_count += 1
-                elif leg_status == 'IDLE':
-                    idle_positions_count += 1
-
-            # Exited trades: show trade history entries (main + hedge legs)
-            trade_history = state.get('trade_history', [])
-            trade_history_pnl = sum(t.get('pnl', 0) or 0 for t in trade_history)
-
-            state['summary'] = {
-                'total_realized_pnl': total_realized_pnl,
-                'total_unrealized_pnl': total_unrealized_pnl,
-                'total_pnl': total_realized_pnl + total_unrealized_pnl + trade_history_pnl,
-                'trade_history_pnl': trade_history_pnl,
-                'open_positions_count': open_positions_count,
-                'idle_positions_count': idle_positions_count,
-                'total_trades': len(trade_history)
-            }
+            state['summary'] = compute_strategy_state_summary(state)
 
         return jsonify({
             'status': 'success',
@@ -110,6 +123,9 @@ def get_strategy_state(instance_id):
                 'status': 'error',
                 'message': f'Strategy state not found: {instance_id}'
             }), 404
+
+        # Keep response consistent with list endpoint by including computed summary.
+        state['summary'] = compute_strategy_state_summary(state)
 
         return jsonify({
             'status': 'success',
