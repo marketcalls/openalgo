@@ -11,11 +11,9 @@ import ssl
 import struct
 import threading
 import time
-from collections.abc import Callable
-from datetime import datetime
-from typing import Any, Dict, List, Optional
 
 import websocket
+
 
 
 class FyersHSMWebSocket:
@@ -25,6 +23,10 @@ class FyersHSMWebSocket:
     """
 
     HSM_URL = "wss://socket.fyers.in/hsm/v1-5/prod"
+
+    # Reconnection settings (consistent with Zerodha adapter)
+    RECONNECT_MAX_DELAY = 60   # Maximum delay between reconnection attempts
+    RECONNECT_MAX_TRIES = 50   # Maximum number of reconnection attempts
     SYMBOLS_TOKEN_API = "https://api-t1.fyers.in/data/symbol-token"
 
     # Data field mappings (from official library map.json)
@@ -163,6 +165,15 @@ class FyersHSMWebSocket:
         # Source identifier
         self.source = "OpenAlgo-HSM"
         self.mode = "P"  # Production mode
+
+        # Reconnection state (Zerodha-consistent)
+        self.reconnect_enabled = True
+        self.reconnect_attempts = 0
+        self.reconnect_delay = 2
+        self.max_reconnect_attempts = self.RECONNECT_MAX_TRIES
+        self.max_reconnect_delay = self.RECONNECT_MAX_DELAY
+        self._pending_symbols = []
+        self._pending_mappings = {}
 
     def _extract_hsm_key(self, access_token: str) -> str | None:
         """
@@ -750,12 +761,25 @@ class FyersHSMWebSocket:
     def _on_ws_open(self, ws):
         """Handle WebSocket open event"""
         self.connected = True
-        # self.logger.info("HSM WebSocket connected")
+        self.reconnect_attempts = 0
+        self.reconnect_delay = 2
 
         # Send authentication message
         auth_msg = self._create_auth_message()
         ws.send(auth_msg, opcode=websocket.ABNF.OPCODE_BINARY)
-        # self.logger.info(f"Sent HSM authentication ({len(auth_msg)} bytes)")
+
+        # Resubscribe after reconnection
+        if self._pending_symbols:
+            self.logger.info(f"Resubscribing to {len(self._pending_symbols)} symbols after reconnect")
+            threading.Timer(0.5, self._resubscribe_pending).start()
+
+    def _resubscribe_pending(self):
+        """Resubscribe to symbols after reconnection"""
+        try:
+            if self._pending_symbols and self.authenticated:
+                self.subscribe_symbols(self._pending_symbols, self._pending_mappings)
+        except Exception as e:
+            self.logger.error(f"Error resubscribing after reconnect: {e}")
 
     def _on_ws_message(self, ws, message):
         """Handle WebSocket message event"""
@@ -785,24 +809,11 @@ class FyersHSMWebSocket:
             return
 
         self.running = True
-
-        self.ws = websocket.WebSocketApp(
-            self.HSM_URL,
-            on_open=self._on_ws_open,
-            on_message=self._on_ws_message,
-            on_error=self._on_ws_error,
-            on_close=self._on_ws_close,
-            header={"Authorization": self.access_token, "User-Agent": f"{self.source}/1.0"},
-        )
-
-        # Run in separate thread
-        self.ws_thread = threading.Thread(
-            target=self.ws.run_forever, kwargs={"sslopt": {"cert_reqs": ssl.CERT_NONE}}
-        )
-        self.ws_thread.daemon = True
+        self.reconnect_enabled = True
+        self.ws_thread = threading.Thread(target=self._run_websocket, daemon=True)
         self.ws_thread.start()
 
-        # Wait for connection
+        # Wait for initial connection
         timeout = 10
         start_time = time.time()
         while not self.connected and time.time() - start_time < timeout:
@@ -813,10 +824,55 @@ class FyersHSMWebSocket:
 
         self.logger.info("HSM WebSocket connection established")
 
+    def _run_websocket(self):
+        """Run WebSocket with automatic reconnection"""
+        while self.running:
+            try:
+                self.ws = websocket.WebSocketApp(
+                    self.HSM_URL,
+                    on_open=self._on_ws_open,
+                    on_message=self._on_ws_message,
+                    on_error=self._on_ws_error,
+                    on_close=self._on_ws_close,
+                    header={"Authorization": self.access_token, "User-Agent": f"{self.source}/1.0"},
+                )
+                self.ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
+
+            except Exception as e:
+                self.logger.error(f"HSM WebSocket error: {e}")
+                self.connected = False
+
+            # Handle reconnection if still running
+            if self.running and self.reconnect_enabled:
+                if not self._handle_reconnect():
+                    break
+            else:
+                break
+
+    def _handle_reconnect(self) -> bool:
+        """Handle reconnection with exponential backoff (Zerodha-consistent)"""
+        if self.reconnect_attempts >= self.max_reconnect_attempts:
+            self.logger.error(f"Max reconnect attempts ({self.max_reconnect_attempts}) reached")
+            self.running = False
+            return False
+
+        self.reconnect_attempts += 1
+        self.reconnect_delay = min(self.reconnect_delay * 1.5, self.max_reconnect_delay)
+
+        self.logger.warning(
+            f"HSM WebSocket reconnecting in {self.reconnect_delay:.1f}s "
+            f"(attempt {self.reconnect_attempts}/{self.max_reconnect_attempts})"
+        )
+        time.sleep(self.reconnect_delay)
+        return True
+
     def disconnect(self):
         """Disconnect from HSM WebSocket and cleanup all resources"""
         try:
             self.logger.info("Starting HSM WebSocket disconnect and cleanup...")
+
+            # Disable reconnection during shutdown
+            self.reconnect_enabled = False
 
             # Set running flag to false to stop operations
             self.running = False
@@ -876,6 +932,11 @@ class FyersHSMWebSocket:
             hsm_symbols: List of HSM tokens (e.g., ["sf|bse_cm|500325"])
             symbol_mappings: Dict mapping HSM tokens to original symbols
         """
+        # Store for reconnection
+        self._pending_symbols = hsm_symbols
+        if symbol_mappings:
+            self._pending_mappings = symbol_mappings
+
         if not self.authenticated:
             raise ConnectionError("Not authenticated to HSM WebSocket")
 
