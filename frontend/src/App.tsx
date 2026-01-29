@@ -138,6 +138,9 @@ function App() {
                 <Route path="/sandbox/mypnl" element={<SandboxPnL />} />
                 <Route path="/analyzer" element={<Analyzer />} />
                 <Route path="/websocket/test" element={<WebSocketTest />} />
+                <Route path="/websocket/test/20" element={<WebSocketTest depthLevel={20} />} />
+                <Route path="/websocket/test/30" element={<WebSocketTest depthLevel={30} />} />
+                <Route path="/websocket/test/50" element={<WebSocketTest depthLevel={50} />} />
                 {/* Phase 6: Webhook Strategies */}
                 <Route path="/strategy" element={<StrategyIndex />} />
                 <Route path="/strategy/new" element={<NewStrategy />} />
