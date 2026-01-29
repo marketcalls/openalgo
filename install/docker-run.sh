@@ -338,7 +338,7 @@ do_start() {
         echo ""
     fi
 
-    # Create db, strategies, and log directories if not exist
+    # Create db, strategies, log, keys, and tmp directories if not exist
     if [ ! -d "$OPENALGO_DIR/db" ]; then
         log_info "Creating database directory..."
         mkdir -p "$OPENALGO_DIR/db"
@@ -351,6 +351,14 @@ do_start() {
     if [ ! -d "$OPENALGO_DIR/log" ]; then
         log_info "Creating log directory..."
         mkdir -p "$OPENALGO_DIR/log/strategies"
+    fi
+    if [ ! -d "$OPENALGO_DIR/keys" ]; then
+        log_info "Creating keys directory..."
+        mkdir -p "$OPENALGO_DIR/keys"
+    fi
+    if [ ! -d "$OPENALGO_DIR/tmp" ]; then
+        log_info "Creating temp directory..."
+        mkdir -p "$OPENALGO_DIR/tmp"
     fi
 
     # Pull latest image
@@ -367,11 +375,14 @@ do_start() {
     log_info "Starting container..."
     if docker run -d \
         --name "$CONTAINER" \
+        --shm-size=2g \
         -p 5000:5000 \
         -p 8765:8765 \
         -v "$OPENALGO_DIR/db:/app/db" \
         -v "$OPENALGO_DIR/strategies:/app/strategies" \
         -v "$OPENALGO_DIR/log:/app/log" \
+        -v "$OPENALGO_DIR/keys:/app/keys" \
+        -v "$OPENALGO_DIR/tmp:/app/tmp" \
         -v "$OPENALGO_DIR/.env:/app/.env:ro" \
         --restart unless-stopped \
         "$IMAGE"; then
