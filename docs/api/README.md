@@ -115,6 +115,13 @@ Real-time market data streaming.
 | [Quote](./websocket-streaming/quote.md) | Subscribe to quote updates |
 | [Depth](./websocket-streaming/depth.md) | Subscribe to market depth |
 
+### System Services
+System-level operations and monitoring.
+
+| Endpoint | Description |
+|----------|-------------|
+| [Health](system-services/health.md) | Check application health and DB connectivity |
+
 ## Order Constants
 
 ### Exchange Codes
