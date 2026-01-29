@@ -29,6 +29,9 @@ cp .sample.env .env
 # Generate new APP_KEY and API_KEY_PEPPER:
 uv run python -c "import secrets; print(secrets.token_hex(32))"
 
+# Build React frontend (required - not tracked in git)
+cd frontend && npm install && npm run build && cd ..
+
 # Run application (uv automatically handles virtual env and dependencies)
 uv run app.py
 ```
@@ -205,6 +208,22 @@ npm run build
 # These are served by Flask via blueprints/react_app.py
 ```
 
+### Important: Frontend Build (CI/CD)
+
+**`frontend/dist/` is NOT tracked in git.** The CI/CD pipeline builds it automatically on each push.
+
+For local development after cloning:
+```bash
+cd frontend
+npm install
+npm run build
+```
+
+This is required before running the application locally. The build artifacts are gitignored to:
+- Prevent merge conflicts on hash-named files
+- Keep the repository size smaller
+- Ensure fresh builds via CI/CD
+
 ## Key Architectural Concepts
 
 ### Plugin System for Brokers
@@ -367,3 +386,11 @@ const { data, isLoading, error } = useQuery({
 1. Ensure Node.js version matches `frontend/package.json` engines
 2. Delete `frontend/node_modules` and run `npm install`
 3. Check for TypeScript errors: `npm run build`
+
+## Claude Code Instructions
+
+### Frontend Build Process
+When building the React frontend locally:
+- Run `cd frontend && npm run build` (build only, no tests)
+- Tests are handled by CI/CD pipeline, not required for local builds
+- The `frontend/dist/` directory is gitignored and built by GitHub Actions

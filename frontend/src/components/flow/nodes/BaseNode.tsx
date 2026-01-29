@@ -88,7 +88,7 @@ export const BaseNode = memo(function BaseNode({
         <Handle
           type="target"
           position={Position.Top}
-          className="!top-0 !h-2.5 !w-2.5 !-translate-y-1/2 !rounded-full !border-2 !border-background !bg-muted-foreground"
+          className="!top-0 !h-3 !w-3 !-translate-y-1/2 !rounded-full !border-2 !border-background !bg-muted-foreground"
         />
       )}
 
@@ -128,21 +128,21 @@ export const BaseNode = memo(function BaseNode({
             type="source"
             position={Position.Bottom}
             id="true"
-            className="!bottom-0 !left-1/4 !h-2.5 !w-2.5 !translate-y-1/2 !rounded-full !border-2 !border-background !bg-buy"
+            className="!bottom-0 !left-1/4 !h-3 !w-3 !translate-y-1/2 !rounded-full !border-2 !border-background !bg-buy"
           />
           {/* False output (right) */}
           <Handle
             type="source"
             position={Position.Bottom}
             id="false"
-            className="!bottom-0 !left-3/4 !h-2.5 !w-2.5 !translate-y-1/2 !rounded-full !border-2 !border-background !bg-sell"
+            className="!bottom-0 !left-3/4 !h-3 !w-3 !translate-y-1/2 !rounded-full !border-2 !border-background !bg-sell"
           />
         </>
       ) : hasOutput ? (
         <Handle
           type="source"
           position={Position.Bottom}
-          className="!bottom-0 !h-2.5 !w-2.5 !translate-y-1/2 !rounded-full !border-2 !border-background !bg-muted-foreground"
+          className="!bottom-0 !h-3 !w-3 !translate-y-1/2 !rounded-full !border-2 !border-background !bg-muted-foreground"
         />
       ) : null}
     </div>

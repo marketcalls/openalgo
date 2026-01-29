@@ -108,7 +108,7 @@ def validate_and_adjust_date_range(start_date, end_date, interval):
         return start_date, end_date, False
 
     except Exception as e:
-        logger.error(f"Error in date range validation: {e}")
+        logger.exception(f"Error in date range validation: {e}")
         # Return original dates if parsing fails
         return start_date, end_date, False
 

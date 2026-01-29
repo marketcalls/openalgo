@@ -21,7 +21,7 @@ from typing import Dict, List, Optional, Set
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.sandbox_db import SandboxOrders, db_session
-from services.market_data_service import SubscriberPriority, get_market_data_service
+from services.market_data_service import get_market_data_service
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -71,16 +71,14 @@ class WebSocketExecutionEngine:
 
         # Subscribe to MarketDataService with CRITICAL priority for immediate processing
         try:
-            self._subscriber_id = self.market_data_service.subscribe(
-                data_type="ltp",
+            self._subscriber_id = self.market_data_service.subscribe_critical(
                 callback=self._on_market_data,
                 filter_symbols=None,  # All symbols - we filter in callback
-                priority=SubscriberPriority.CRITICAL,
                 name="sandbox_websocket_execution_engine",
             )
             logger.info(f"Subscribed to MarketDataService with ID: {self._subscriber_id}")
         except Exception as e:
-            logger.error(f"Failed to subscribe to MarketDataService: {e}")
+            logger.exception(f"Failed to subscribe to MarketDataService: {e}")
             self._running = False
             return
 
@@ -101,10 +99,10 @@ class WebSocketExecutionEngine:
         # Unsubscribe from MarketDataService
         if self._subscriber_id:
             try:
-                self.market_data_service.unsubscribe(self._subscriber_id)
+                self.market_data_service.unsubscribe_from_updates(self._subscriber_id)
                 logger.info("Unsubscribed from MarketDataService")
             except Exception as e:
-                logger.error(f"Error unsubscribing from MarketDataService: {e}")
+                logger.exception(f"Error unsubscribing from MarketDataService: {e}")
 
         self._subscriber_id = None
 
@@ -129,7 +127,7 @@ class WebSocketExecutionEngine:
                 )
 
             except Exception as e:
-                logger.error(f"Error building order index: {e}")
+                logger.exception(f"Error building order index: {e}")
 
     def notify_order_placed(self, order):
         """Called when a new order is placed to update the index"""
@@ -188,10 +186,10 @@ class WebSocketExecutionEngine:
                 try:
                     self._check_and_execute_order(order_id, Decimal(str(ltp)))
                 except Exception as e:
-                    logger.error(f"Error processing order {order_id}: {e}")
+                    logger.exception(f"Error processing order {order_id}: {e}")
 
         except Exception as e:
-            logger.error(f"Error in market data callback: {e}")
+            logger.exception(f"Error in market data callback: {e}")
 
     def _check_and_execute_order(self, order_id: str, ltp: Decimal):
         """
@@ -225,7 +223,7 @@ class WebSocketExecutionEngine:
                 self.notify_order_completed(order_id, symbol_key)
 
         except Exception as e:
-            logger.error(f"Error checking/executing order {order_id}: {e}")
+            logger.exception(f"Error checking/executing order {order_id}: {e}")
 
     def _start_health_monitor(self):
         """Start a thread to monitor WebSocket health and trigger fallback if needed"""
@@ -246,7 +244,7 @@ class WebSocketExecutionEngine:
                         self._stop_fallback()
 
                 except Exception as e:
-                    logger.error(f"Error in health monitor: {e}")
+                    logger.exception(f"Error in health monitor: {e}")
 
                 time.sleep(5)  # Check every 5 seconds
 
@@ -274,7 +272,7 @@ class WebSocketExecutionEngine:
                 try:
                     run_execution_engine_once()
                 except Exception as e:
-                    logger.error(f"Error in fallback polling: {e}")
+                    logger.exception(f"Error in fallback polling: {e}")
 
                 # Sleep in small increments for quick shutdown
                 for _ in range(check_interval):

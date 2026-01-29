@@ -119,6 +119,7 @@ def get_all_strategy_states():
                 'version': state.version,
                 'pid': state.pid,
                 'state_data': None,
+                'is_state_data_malformed': False,
                 'config': None,
                 'legs': {},
                 'trade_history': [],
@@ -135,6 +136,7 @@ def get_all_strategy_states():
                     state_dict['trade_history'] = parsed_state.get('trade_history', [])
                     state_dict['orchestrator'] = parsed_state.get('orchestrator', {})
                 except json.JSONDecodeError as e:
+                    state_dict['is_state_data_malformed'] = True
                     logger.error(f"Error parsing state_data for {state.instance_id}: {e}")
             
             # Parse metadata JSON - always include key for consistent schema
@@ -189,6 +191,7 @@ def get_strategy_state_by_instance_id(instance_id: str):
             'version': state.version,
             'pid': state.pid,
             'state_data': None,
+            'is_state_data_malformed': False,
             'config': None,
             'legs': {},
             'trade_history': [],
@@ -204,6 +207,7 @@ def get_strategy_state_by_instance_id(instance_id: str):
                 state_dict['trade_history'] = parsed_state.get('trade_history', [])
                 state_dict['orchestrator'] = parsed_state.get('orchestrator', {})
             except json.JSONDecodeError as e:
+                state_dict['is_state_data_malformed'] = True
                 logger.error(f"Error parsing state_data for {instance_id}: {e}")
         
         # Parse metadata JSON - always include key for consistent schema
@@ -272,10 +276,12 @@ def init_db() -> None:
     Safe to call multiple times.
     """
     try:
-        if not os.path.exists(DB_PATH):
-            # Do not create the DB file implicitly; caller decides lifecycle.
-            logger.warning("Strategy State DB: database file not found; skipping table initialization")
-            return
+        # Ensure the parent directory exists before attempting to create/connect.
+        # If the DB file doesn't exist, SQLite will create it when the first connection
+        # is made during table creation.
+        db_dir = os.path.dirname(DB_PATH)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
 
         StrategyExecutionState.__table__.create(engine, checkfirst=True)
         StrategyOverride.__table__.create(engine, checkfirst=True)

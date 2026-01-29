@@ -327,7 +327,7 @@ class WebhookHandler(Resource):
             return make_response("", 200)
 
         except Exception as e:
-            logger.error(f"Error processing webhook: {str(e)}")
+            logger.exception(f"Error processing webhook: {str(e)}")
             # Still return 200 to avoid Telegram retries for processing errors
             return make_response("", 200)
 

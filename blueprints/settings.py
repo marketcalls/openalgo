@@ -19,7 +19,7 @@ def get_mode():
     try:
         return jsonify({"analyze_mode": get_analyze_mode()})
     except Exception as e:
-        logger.error(f"Error getting analyze mode: {str(e)}")
+        logger.exception(f"Error getting analyze mode: {str(e)}")
         return jsonify({"error": "Failed to get analyze mode"}), 500
 
 
@@ -55,5 +55,5 @@ def set_mode(mode):
             }
         )
     except Exception as e:
-        logger.error(f"Error setting analyze mode: {str(e)}")
+        logger.exception(f"Error setting analyze mode: {str(e)}")
         return jsonify({"error": "Failed to set analyze mode"}), 500

@@ -48,7 +48,7 @@ class TrafficLoggerMiddleware:
                     user_id=getattr(g, "user_id", None),
                 )
             except Exception as e:
-                logger.error(f"Error logging traffic: {e}")
+                logger.exception(f"Error logging traffic: {e}")
             finally:
                 logs_session.remove()
 
@@ -58,7 +58,7 @@ class TrafficLoggerMiddleware:
             try:
                 log_request(status_code)
             except Exception as e:
-                logger.error(f"Error in custom_start_response: {e}")
+                logger.exception(f"Error in custom_start_response: {e}")
             return start_response(status, headers, exc_info)
 
         # Process the request
@@ -69,7 +69,7 @@ class TrafficLoggerMiddleware:
             try:
                 log_request(500, str(e))
             except Exception as log_error:
-                logger.error(f"Error logging exception: {log_error}")
+                logger.exception(f"Error logging exception: {log_error}")
             raise
 
 

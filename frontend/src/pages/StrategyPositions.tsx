@@ -7,7 +7,7 @@ import {
   TrendingDown,
   TrendingUp,
 } from 'lucide-react'
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import {
   AlertDialog,
@@ -36,6 +36,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { createStrategyOverride, deleteStrategyState, getStrategyStates } from '@/api/strategy-state'
+import { useLivePrice } from '@/hooks/useLivePrice'
 import type { LegState, LegStatus, StrategyState, TradeHistoryRecord, ExitType, OverrideType } from '@/types/strategy-state'
 import { Input } from '@/components/ui/input'
 
@@ -273,34 +274,26 @@ function EditablePriceCell({
 function CurrentPositionsTable({ 
   legs, 
   instanceId,
-  onRefresh 
+  onRefresh,
+  liveLtpByLegKey,
 }: { 
   legs: Record<string, LegState> | null | undefined
   instanceId: string
   onRefresh: () => void
+  liveLtpByLegKey?: Record<string, number | undefined>
 }) {
-  console.log('[STRATPOS_DEBUG] CurrentPositionsTable legs:', { 
-    legs, 
-    type: typeof legs,
-    is_null: legs === null,
-    is_undefined: legs === undefined,
-  })
-  
   if (!legs) {
-    console.log('[STRATPOS_DEBUG] CurrentPositionsTable: legs is null/undefined, returning early')
     return <p className="text-muted-foreground text-sm py-4">No positions found</p>
   }
-  
+
   const legEntries = Object.entries(legs)
-  console.log('[STRATPOS_DEBUG] CurrentPositionsTable legEntries:', legEntries)
   
-  // Separate open and closed positions
-  const openPositions = legEntries.filter(([_, leg]) => 
+  // Separate open and idle positions.
+  // Exited trades should be represented in Trade History (trade_history), not here.
+  const openPositions = legEntries.filter(([_, leg]) =>
     ['IN_POSITION', 'PENDING_ENTRY', 'PENDING_EXIT'].includes(leg.status)
   )
-  const closedPositions = legEntries.filter(([_, leg]) => 
-    ['DONE', 'EXITED_WAITING_REENTRY', 'EXITED_WAITING_REEXECUTE', 'IDLE'].includes(leg.status)
-  )
+  const idlePositions = legEntries.filter(([_, leg]) => leg.status === 'IDLE')
 
   if (legEntries.length === 0) {
     return <p className="text-muted-foreground text-sm py-4">No positions found</p>
@@ -356,8 +349,7 @@ function CurrentPositionsTable({
                     <TableCell className="text-right">{leg.quantity}</TableCell>
                     <TableCell className="text-right">{formatPrice(leg.entry_price)}</TableCell>
                     <TableCell className="text-right">
-                      {/* TODO: Replace with real-time LTP from WebSocket/Quotes API */}
-                      {formatPrice(leg.current_ltp ?? leg.entry_price)}
+                      {formatPrice(liveLtpByLegKey?.[legKey] ?? leg.current_ltp ?? leg.entry_price)}
                     </TableCell>
                     <TableCell className="text-right">
                       <EditablePriceCell
@@ -398,12 +390,12 @@ function CurrentPositionsTable({
         </div>
       )}
 
-      {/* Closed/Waiting Positions */}
-      {closedPositions.length > 0 && (
+      {/* IDLE Positions (waiting to enter) */}
+      {idlePositions.length > 0 && (
         <div>
           <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
-            <CircleDot className="h-4 w-4 text-gray-400" />
-            Exited/Waiting Positions ({closedPositions.length})
+            <CircleDot className="h-4 w-4 text-yellow-500" />
+            IDLE Positions (Waiting to Enter) ({idlePositions.length})
           </h4>
           <div className="rounded-md border overflow-x-auto">
             <Table>
@@ -413,15 +405,15 @@ function CurrentPositionsTable({
                   <TableHead>Symbol</TableHead>
                   <TableHead>Side</TableHead>
                   <TableHead className="text-right">Qty</TableHead>
-                  <TableHead className="text-right">Entry</TableHead>
+                  <TableHead className="text-right">Planned SL</TableHead>
+                  <TableHead className="text-right">Planned Target</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Realized P&L</TableHead>
                   <TableHead className="text-right">Reentry</TableHead>
                   <TableHead className="text-right">Reexec</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {closedPositions.map(([legKey, leg]) => (
+                {idlePositions.map(([legKey, leg]) => (
                   <TableRow key={legKey}>
                     <TableCell className="font-medium">
                       <div className="flex flex-col">
@@ -442,14 +434,12 @@ function CurrentPositionsTable({
                       )}
                     </TableCell>
                     <TableCell className="text-right">{leg.quantity}</TableCell>
-                    <TableCell className="text-right">{formatPrice(leg.entry_price)}</TableCell>
+                    <TableCell className="text-right">{formatPrice(leg.sl_price)}</TableCell>
+                    <TableCell className="text-right">{formatPrice(leg.target_price)}</TableCell>
                     <TableCell>
                       <Badge className={legStatusColors[leg.status]} variant="secondary">
                         {leg.status.replace(/_/g, ' ')}
                       </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <PnLDisplay value={leg.realized_pnl} />
                     </TableCell>
                     <TableCell className="text-right">
                       {leg.reentry_count ?? 0}/{leg.reentry_limit ?? '∞'}
@@ -470,17 +460,7 @@ function CurrentPositionsTable({
 
 // Trade History Table
 function TradeHistoryTable({ trades }: { trades: TradeHistoryRecord[] | null | undefined }) {
-  console.log('[STRATPOS_DEBUG] TradeHistoryTable trades:', { 
-    trades, 
-    type: typeof trades,
-    is_null: trades === null,
-    is_undefined: trades === undefined,
-    is_array: Array.isArray(trades),
-    length: Array.isArray(trades) ? trades.length : 'N/A',
-  })
-  
   if (!trades || trades.length === 0) {
-    console.log('[STRATPOS_DEBUG] TradeHistoryTable: trades is empty/null, returning early')
     return <p className="text-muted-foreground text-sm py-4">No trade history</p>
   }
 
@@ -559,16 +539,64 @@ function StrategyAccordionItem({
   onDelete: (instanceId: string, strategyName: string) => void
   onRefresh: () => void
 }) {
+  // Use live LTP for open legs (WebSocket-first with REST fallback)
+  type LegPriceItem = {
+    legKey: string
+    symbol: string
+    exchange: string
+    ltp?: number
+  }
+
+  const optionExchange = strategy.config?.exchange || 'NFO'
+
+  const openLegPriceItems: LegPriceItem[] = useMemo(() => {
+    const legs = strategy.legs || {}
+    return Object.entries(legs)
+      .filter(([_, leg]) => ['IN_POSITION', 'PENDING_ENTRY', 'PENDING_EXIT'].includes(leg.status))
+      .map(([legKey, leg]) => {
+        const raw = (leg.symbol || '').trim()
+        if (!raw) {
+          return {
+            legKey,
+            symbol: '',
+            exchange: optionExchange,
+          }
+        }
+
+        // Strategy may persist either `NFO:NIFTY...` or only `NIFTY...`
+        if (raw.includes(':')) {
+          const [exchange, symbol] = raw.split(':', 2)
+          return {
+            legKey,
+            symbol,
+            exchange: exchange || optionExchange,
+          }
+        }
+
+        return {
+          legKey,
+          symbol: raw,
+          exchange: optionExchange,
+        }
+      })
+      .filter((i) => i.symbol.length > 0)
+  }, [strategy.legs, optionExchange])
+
+  const { data: openLegsWithLivePrice } = useLivePrice(openLegPriceItems, {
+    enabled: openLegPriceItems.length > 0,
+    useMultiQuotesFallback: true,
+  })
+
+  const liveLtpByLegKey = useMemo(() => {
+    const map: Record<string, number | undefined> = {}
+    for (const item of openLegsWithLivePrice) {
+      map[item.legKey] = item.ltp
+    }
+    return map
+  }, [openLegsWithLivePrice])
   const [isOpen, setIsOpen] = useState(true)
   const config = strategy.config
   
-  console.log('[STRATPOS_DEBUG] Rendering StrategyAccordionItem:', {
-    strategy_name: strategy?.strategy_name,
-    legs: strategy?.legs,
-    trade_history: strategy?.trade_history,
-    summary: strategy?.summary,
-  })
-
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation() // Prevent accordion toggle
     onDelete(strategy.instance_id, strategy.strategy_name)
@@ -623,10 +651,14 @@ function StrategyAccordionItem({
         <CollapsibleContent>
           <CardContent className="pt-0 space-y-6">
             {/* Summary Stats */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-muted/30 rounded-lg">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 p-4 bg-muted/30 rounded-lg">
               <div>
                 <p className="text-xs text-muted-foreground">Open Positions</p>
                 <p className="text-lg font-semibold">{strategy.summary?.open_positions_count ?? 0}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">IDLE Positions</p>
+                <p className="text-lg font-semibold">{strategy.summary?.idle_positions_count ?? 0}</p>
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Total Trades</p>
@@ -657,6 +689,7 @@ function StrategyAccordionItem({
                 legs={strategy.legs} 
                 instanceId={strategy.instance_id}
                 onRefresh={onRefresh}
+                liveLtpByLegKey={liveLtpByLegKey}
               />
             </div>
 
@@ -687,36 +720,13 @@ export default function StrategyPositions() {
 
   const fetchData = async (showToast = false) => {
     try {
-      console.log('[STRATPOS_DEBUG] Fetching strategy states...')
       const data = await getStrategyStates()
-      console.log('[STRATPOS_DEBUG] Raw API response:', JSON.stringify(data, null, 2))
-      console.log('[STRATPOS_DEBUG] Data type:', typeof data)
-      console.log('[STRATPOS_DEBUG] Is array:', Array.isArray(data))
-      if (data && Array.isArray(data)) {
-        data.forEach((strategy, idx) => {
-          console.log(`[STRATPOS_DEBUG] Strategy ${idx}:`, {
-            strategy_name: strategy?.strategy_name,
-            status: strategy?.status,
-            legs_type: typeof strategy?.legs,
-            legs_is_null: strategy?.legs === null,
-            legs_is_undefined: strategy?.legs === undefined,
-            legs: strategy?.legs,
-            trade_history_type: typeof strategy?.trade_history,
-            trade_history_is_null: strategy?.trade_history === null,
-            trade_history_is_undefined: strategy?.trade_history === undefined,
-            trade_history_is_array: Array.isArray(strategy?.trade_history),
-            trade_history: strategy?.trade_history,
-            summary: strategy?.summary,
-            config: strategy?.config,
-          })
-        })
-      }
       setStrategies(data)
       if (showToast) {
         toast.success('Data refreshed')
       }
     } catch (error) {
-      console.error('[STRATPOS_DEBUG] Error fetching strategy states:', error)
+      console.error('Error fetching strategy states:', error)
       toast.error('Failed to fetch strategy positions')
     } finally {
       setIsLoading(false)
@@ -739,7 +749,7 @@ export default function StrategyPositions() {
       // Remove from local state
       setStrategies(prev => prev.filter(s => s.instance_id !== deleteDialog.instanceId))
     } catch (error) {
-      console.error('[STRATPOS_DEBUG] Error deleting strategy:', error)
+      console.error('Error deleting strategy:', error)
       toast.error('Failed to delete strategy')
     } finally {
       setIsDeleting(false)

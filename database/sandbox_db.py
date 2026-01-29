@@ -381,7 +381,7 @@ def init_default_config():
             logger.debug(f"Config already exists: {config['config_key']}")
         except Exception as e:
             db_session.rollback()
-            logger.error(f"Error adding config {config['config_key']}: {e}")
+            logger.exception(f"Error adding config {config['config_key']}: {e}")
 
 
 def get_config(config_key, default=None):
@@ -392,7 +392,7 @@ def get_config(config_key, default=None):
             return config.config_value
         return default
     except Exception as e:
-        logger.error(f"Error fetching config {config_key}: {e}")
+        logger.exception(f"Error fetching config {config_key}: {e}")
         return default
 
 
@@ -414,7 +414,7 @@ def set_config(config_key, config_value, description=None):
         return True
     except Exception as e:
         db_session.rollback()
-        logger.error(f"Error setting config {config_key}: {e}")
+        logger.exception(f"Error setting config {config_key}: {e}")
         return False
 
 
@@ -427,5 +427,5 @@ def get_all_configs():
             for config in configs
         }
     except Exception as e:
-        logger.error(f"Error fetching all configs: {e}")
+        logger.exception(f"Error fetching all configs: {e}")
         return {}

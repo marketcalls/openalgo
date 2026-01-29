@@ -22,7 +22,7 @@ def get_master_contract_status():
         return jsonify(status_data), 200
 
     except Exception as e:
-        logger.error(f"Error getting master contract status: {str(e)}")
+        logger.exception(f"Error getting master contract status: {str(e)}")
         return jsonify({"status": "error", "message": "Failed to get master contract status"}), 500
 
 
@@ -46,7 +46,7 @@ def check_master_contract_ready():
         ), 200
 
     except Exception as e:
-        logger.error(f"Error checking master contract readiness: {str(e)}")
+        logger.exception(f"Error checking master contract readiness: {str(e)}")
         return jsonify(
             {"ready": False, "message": "Failed to check master contract readiness"}
         ), 500
@@ -68,7 +68,7 @@ def get_cache_status():
             {"status": "not_available", "message": "Enhanced cache module not available"}
         ), 200
     except Exception as e:
-        logger.error(f"Error getting cache status: {str(e)}")
+        logger.exception(f"Error getting cache status: {str(e)}")
         return jsonify({"status": "error", "message": f"Failed to get cache status: {str(e)}"}), 500
 
 
@@ -91,7 +91,7 @@ def get_cache_health():
             }
         ), 200
     except Exception as e:
-        logger.error(f"Error getting cache health: {str(e)}")
+        logger.exception(f"Error getting cache health: {str(e)}")
         return jsonify(
             {
                 "health_score": 0,
@@ -129,7 +129,7 @@ def reload_cache():
             {"status": "error", "message": "Cache reload functionality not available"}
         ), 501
     except Exception as e:
-        logger.error(f"Error reloading cache: {str(e)}")
+        logger.exception(f"Error reloading cache: {str(e)}")
         return jsonify({"status": "error", "message": f"Failed to reload cache: {str(e)}"}), 500
 
 
@@ -149,5 +149,5 @@ def clear_cache():
             {"status": "error", "message": "Cache clear functionality not available"}
         ), 501
     except Exception as e:
-        logger.error(f"Error clearing cache: {str(e)}")
+        logger.exception(f"Error clearing cache: {str(e)}")
         return jsonify({"status": "error", "message": f"Failed to clear cache: {str(e)}"}), 500

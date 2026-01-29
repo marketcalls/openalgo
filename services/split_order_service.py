@@ -135,7 +135,7 @@ def place_single_order(
             }
 
     except Exception as e:
-        logger.error(f"Error placing order {order_num}: {e}")
+        logger.exception(f"Error placing order {order_num}: {e}")
         return {
             "order_num": order_num,
             "quantity": int(order_data["quantity"]),

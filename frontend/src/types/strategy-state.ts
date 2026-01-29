@@ -10,6 +10,8 @@ export interface StrategyConfig {
   reexecute_limit?: number
   underlying: string
   expiry_date: string
+  /** Options exchange for the strategy (e.g., NFO, BFO). Persisted by python strategies as `exchange`. */
+  exchange?: string
 }
 
 export type LegStatus =
@@ -87,7 +89,7 @@ export interface StrategySummary {
   total_pnl: number
   trade_history_pnl: number
   open_positions_count: number
-  exited_positions_count: number
+  idle_positions_count: number
   total_trades: number
 }
 

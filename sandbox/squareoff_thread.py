@@ -72,7 +72,7 @@ def _schedule_square_off_jobs(scheduler):
             logger.debug(f"  {config_name}: {time_str} IST (Job ID: {job.id})")
 
         except Exception as e:
-            logger.error(f"Failed to schedule square-off for {config_name}: {e}")
+            logger.exception(f"Failed to schedule square-off for {config_name}: {e}")
 
     # Add a backup job that runs every minute to catch any missed executions
     # This provides a safety net in case:
@@ -113,7 +113,7 @@ def _schedule_square_off_jobs(scheduler):
         logger.debug(f"  T+1 Settlement: 00:00 IST (Job ID: {settlement_job.id})")
 
     except Exception as e:
-        logger.error(f"Failed to schedule T+1 settlement: {e}")
+        logger.exception(f"Failed to schedule T+1 settlement: {e}")
 
     # Schedule auto-reset job based on configured reset day and time
     # This resets all user funds to starting capital on the configured day/time
@@ -159,7 +159,7 @@ def _schedule_square_off_jobs(scheduler):
             logger.debug(f"  Auto-Reset: {reset_day} {reset_time_str} IST (Job ID: {reset_job.id})")
 
     except Exception as e:
-        logger.error(f"Failed to schedule auto-reset: {e}")
+        logger.exception(f"Failed to schedule auto-reset: {e}")
 
     # Schedule daily P&L snapshot at 23:59 IST (before session boundary reset)
     # This captures the end-of-day P&L for historical reporting
@@ -247,7 +247,7 @@ def _schedule_square_off_jobs(scheduler):
 
             except Exception as e:
                 db_session.rollback()
-                logger.error(f"Error capturing daily P&L snapshot: {e}")
+                logger.exception(f"Error capturing daily P&L snapshot: {e}")
 
         # Schedule snapshot at 23:59 IST (before midnight reset)
         snapshot_trigger = CronTrigger(hour=23, minute=59, timezone=IST)
@@ -264,7 +264,7 @@ def _schedule_square_off_jobs(scheduler):
         logger.debug(f"  Daily PnL Snapshot: 23:59 IST (Job ID: {snapshot_job.id})")
 
     except Exception as e:
-        logger.error(f"Failed to schedule daily PnL snapshot: {e}")
+        logger.exception(f"Failed to schedule daily PnL snapshot: {e}")
 
     # Schedule daily P&L reset at SESSION_EXPIRY_TIME (default 03:00 IST)
     # This resets today_realized_pnl for all users at session boundary
@@ -290,7 +290,7 @@ def _schedule_square_off_jobs(scheduler):
 
             except Exception as e:
                 db_session.rollback()
-                logger.error(f"Error in daily P&L reset: {e}")
+                logger.exception(f"Error in daily P&L reset: {e}")
 
         # Get reset time from SESSION_EXPIRY_TIME env variable
         session_expiry_str = os.getenv("SESSION_EXPIRY_TIME", "03:00")
@@ -310,7 +310,7 @@ def _schedule_square_off_jobs(scheduler):
         logger.debug(f"  Daily PnL Reset: {session_expiry_str} IST (Job ID: {pnl_reset_job.id})")
 
     except Exception as e:
-        logger.error(f"Failed to schedule daily PnL reset: {e}")
+        logger.exception(f"Failed to schedule daily PnL reset: {e}")
 
 
 def start_squareoff_scheduler():
@@ -346,7 +346,7 @@ def start_squareoff_scheduler():
             return True, "Square-off scheduler started"
 
         except Exception as e:
-            logger.error(f"Failed to start square-off scheduler: {e}")
+            logger.exception(f"Failed to start square-off scheduler: {e}")
             return False, f"Failed to start square-off scheduler: {str(e)}"
 
 
@@ -369,7 +369,7 @@ def stop_squareoff_scheduler():
             return True, "Square-off scheduler stopped"
 
         except Exception as e:
-            logger.error(f"Error stopping square-off scheduler: {e}")
+            logger.exception(f"Error stopping square-off scheduler: {e}")
             return False, f"Error stopping square-off scheduler: {str(e)}"
 
 
@@ -424,5 +424,5 @@ def reload_squareoff_schedule():
         return True, "Schedule reloaded"
 
     except Exception as e:
-        logger.error(f"Error reloading schedule: {e}")
+        logger.exception(f"Error reloading schedule: {e}")
         return False, f"Error reloading schedule: {str(e)}"

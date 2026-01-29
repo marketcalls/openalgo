@@ -77,6 +77,10 @@ def revoke_user_tokens(revoke_db_tokens=True):
     """
     Revoke auth tokens for the current user when session expires.
 
+    Also publishes cache invalidation events via ZeroMQ for multi-process deployments.
+    This ensures WebSocket proxy and other processes clear their stale cached tokens.
+    See GitHub issue #765 for details on the cross-process cache synchronization problem.
+
     Args:
         revoke_db_tokens (bool): If True, revokes the token in the database (Invalidates API Key).
                                  If False, only clears local caches (Preserves API Key).
@@ -94,13 +98,23 @@ def revoke_user_tokens(revoke_db_tokens=True):
             if cache_key_feed in feed_token_cache:
                 del feed_token_cache[cache_key_feed]
 
+            # Publish cache invalidation event via ZeroMQ for other processes
+            # This notifies WebSocket proxy and other processes to clear their stale caches
+            try:
+                from database.cache_invalidation import publish_all_cache_invalidation
+                publish_all_cache_invalidation(username)
+                logger.debug(f"Published cache invalidation for user: {username}")
+            except Exception as invalidation_error:
+                # Don't fail logout if cache invalidation fails
+                logger.warning(f"Failed to publish cache invalidation for user {username}: {invalidation_error}")
+
             # Clear symbol cache on logout/session expiry
             try:
                 from database.master_contract_cache_hook import clear_cache_on_logout
 
                 clear_cache_on_logout()
             except Exception as cache_error:
-                logger.error(f"Error clearing symbol cache: {cache_error}")
+                logger.exception(f"Error clearing symbol cache: {cache_error}")
 
             # Clear settings cache on logout/session expiry
             try:
@@ -108,7 +122,7 @@ def revoke_user_tokens(revoke_db_tokens=True):
 
                 clear_settings_cache()
             except Exception as cache_error:
-                logger.error(f"Error clearing settings cache: {cache_error}")
+                logger.exception(f"Error clearing settings cache: {cache_error}")
 
             # Clear strategy cache on logout/session expiry
             try:
@@ -116,7 +130,7 @@ def revoke_user_tokens(revoke_db_tokens=True):
 
                 clear_strategy_cache()
             except Exception as cache_error:
-                logger.error(f"Error clearing strategy cache: {cache_error}")
+                logger.exception(f"Error clearing strategy cache: {cache_error}")
 
             # Clear telegram cache on logout/session expiry
             try:
@@ -124,7 +138,7 @@ def revoke_user_tokens(revoke_db_tokens=True):
 
                 clear_telegram_cache()
             except Exception as cache_error:
-                logger.error(f"Error clearing telegram cache: {cache_error}")
+                logger.exception(f"Error clearing telegram cache: {cache_error}")
 
             if revoke_db_tokens:
                 # Revoke the auth token in database
@@ -139,7 +153,7 @@ def revoke_user_tokens(revoke_db_tokens=True):
                 )
 
         except Exception as e:
-            logger.error(f"Error revoking tokens during auto-expiry for user {username}: {e}")
+            logger.exception(f"Error revoking tokens during auto-expiry for user {username}: {e}")
 
 
 def check_session_validity(f):

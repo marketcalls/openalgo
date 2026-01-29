@@ -565,7 +565,7 @@ class FlowOpenAlgoClient:
             return {"status": "success", "data": {"message": "Alert queued successfully"}}
 
         except Exception as e:
-            logger.error(f"Error sending Telegram alert: {e}")
+            logger.exception(f"Error sending Telegram alert: {e}")
             return {"status": "error", "error": str(e)}
 
     # --- Additional Data Services ---

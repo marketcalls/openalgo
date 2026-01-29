@@ -72,6 +72,6 @@ def async_log_order(api_type, request_data, response_data):
         db_session.add(order_log)
         db_session.commit()
     except Exception as e:
-        logger.error(f"Error saving order log: {e}")
+        logger.exception(f"Error saving order log: {e}")
     finally:
         db_session.remove()

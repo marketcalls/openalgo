@@ -51,7 +51,7 @@ class SquareOffManager:
             hour, minute = map(int, time_str.split(":"))
             return time(hour=hour, minute=minute)
         except Exception as e:
-            logger.error(f"Error parsing time '{time_str}': {e}")
+            logger.exception(f"Error parsing time '{time_str}': {e}")
             return time(15, 15)  # Default to 3:15 PM
 
     def check_and_square_off(self):
@@ -99,7 +99,7 @@ class SquareOffManager:
                 logger.debug(f"No positions due for square-off at {current_time.strftime('%H:%M')}")
 
         except Exception as e:
-            logger.error(f"Error checking square-off conditions: {e}")
+            logger.exception(f"Error checking square-off conditions: {e}")
 
     def _cancel_open_mis_orders(self, current_time):
         """Cancel all open MIS orders past their exchange's square-off time"""
@@ -139,7 +139,7 @@ class SquareOffManager:
                             )
 
                     except Exception as e:
-                        logger.error(f"Error cancelling MIS order {order.orderid}: {e}")
+                        logger.exception(f"Error cancelling MIS order {order.orderid}: {e}")
 
             if cancelled_count > 0:
                 logger.info(
@@ -147,7 +147,7 @@ class SquareOffManager:
                 )
 
         except Exception as e:
-            logger.error(f"Error in _cancel_open_mis_orders: {e}")
+            logger.exception(f"Error in _cancel_open_mis_orders: {e}")
 
     def _square_off_positions(self, positions):
         """Square-off a list of positions"""
@@ -175,7 +175,7 @@ class SquareOffManager:
                     error_count += 1
 
             except Exception as e:
-                logger.error(f"Error squaring-off position {position.symbol}: {e}")
+                logger.exception(f"Error squaring-off position {position.symbol}: {e}")
                 error_count += 1
 
         logger.info(f"Square-off completed: {success_count} successful, {error_count} failed")
@@ -199,7 +199,7 @@ class SquareOffManager:
             return True, f"Force square-off initiated for {len(mis_positions)} positions"
 
         except Exception as e:
-            logger.error(f"Error force squaring-off positions: {e}")
+            logger.exception(f"Error force squaring-off positions: {e}")
             return False, f"Error: {str(e)}"
 
     def get_time_to_square_off(self, exchange):
@@ -224,7 +224,7 @@ class SquareOffManager:
             return time_diff.total_seconds()
 
         except Exception as e:
-            logger.error(f"Error calculating time to square-off: {e}")
+            logger.exception(f"Error calculating time to square-off: {e}")
             return None
 
     def get_square_off_status(self):
@@ -248,7 +248,7 @@ class SquareOffManager:
             return status
 
         except Exception as e:
-            logger.error(f"Error getting square-off status: {e}")
+            logger.exception(f"Error getting square-off status: {e}")
             return {}
 
 
@@ -286,4 +286,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Square-off manager stopped by user")
     except Exception as e:
-        logger.error(f"Square-off manager error: {e}")
+        logger.exception(f"Square-off manager error: {e}")

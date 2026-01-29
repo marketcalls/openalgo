@@ -51,7 +51,8 @@
       "Bash(gh api:*)",
       "Bash(uv sync:*)",
       "Bash(gh pr view:*)",
-      "Bash(gh pr diff:*)"
+      "Bash(gh pr diff:*)",
+      "Bash(npm run build:*)"
     ]
   }
 }

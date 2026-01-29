@@ -74,7 +74,7 @@ def format_request(req, ist):
 
         return formatted_request
     except Exception as e:
-        logger.error(f"Error formatting request {req.id}: {str(e)}")
+        logger.exception(f"Error formatting request {req.id}: {str(e)}")
         return None
 
 
@@ -92,7 +92,7 @@ def get_recent_requests():
 
         return requests
     except Exception as e:
-        logger.error(f"Error getting recent requests: {str(e)}")
+        logger.exception(f"Error getting recent requests: {str(e)}")
         return []
 
 
@@ -128,7 +128,7 @@ def get_filtered_requests(start_date=None, end_date=None):
 
         return requests
     except Exception as e:
-        logger.error(f"Error getting filtered requests: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error getting filtered requests: {str(e)}\n{traceback.format_exc()}")
         return []
 
 
@@ -173,7 +173,7 @@ def generate_csv(requests):
 
         return output.getvalue()
     except Exception as e:
-        logger.error(f"Error generating CSV: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error generating CSV: {str(e)}\n{traceback.format_exc()}")
         return ""
 
 
@@ -216,7 +216,7 @@ def analyzer():
             end_date=end_date,
         )
     except Exception as e:
-        logger.error(f"Error rendering analyzer: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error rendering analyzer: {str(e)}\n{traceback.format_exc()}")
         flash("Error loading analyzer dashboard", "error")
         return redirect(url_for("core_bp.home"))
 
@@ -268,7 +268,7 @@ def api_get_data():
             {"status": "success", "data": {"stats": stats_transformed, "requests": requests_data}}
         )
     except Exception as e:
-        logger.error(f"Error getting analyzer data: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error getting analyzer data: {str(e)}\n{traceback.format_exc()}")
         return jsonify(
             {"status": "error", "message": f"Error loading analyzer data: {str(e)}"}
         ), 500
@@ -282,7 +282,7 @@ def get_stats():
         stats = get_analyzer_stats()
         return jsonify(stats)
     except Exception as e:
-        logger.error(f"Error getting analyzer stats: {str(e)}")
+        logger.exception(f"Error getting analyzer stats: {str(e)}")
         return jsonify(
             {
                 "total_requests": 0,
@@ -310,7 +310,7 @@ def get_requests():
         requests = get_recent_requests()
         return jsonify({"requests": requests})
     except Exception as e:
-        logger.error(f"Error getting analyzer requests: {str(e)}")
+        logger.exception(f"Error getting analyzer requests: {str(e)}")
         return jsonify({"requests": []}), 500
 
 
@@ -325,7 +325,7 @@ def clear_logs():
         db_session.commit()
         flash("Analyzer logs cleared successfully", "success")
     except Exception as e:
-        logger.error(f"Error clearing analyzer logs: {str(e)}")
+        logger.exception(f"Error clearing analyzer logs: {str(e)}")
         flash("Error clearing analyzer logs", "error")
 
     return redirect(url_for("analyzer_bp.analyzer"))
@@ -352,6 +352,6 @@ def export_requests():
         )
         return output
     except Exception as e:
-        logger.error(f"Error exporting requests: {str(e)}\n{traceback.format_exc()}")
+        logger.exception(f"Error exporting requests: {str(e)}\n{traceback.format_exc()}")
         flash("Error exporting requests", "error")
         return redirect(url_for("analyzer_bp.analyzer"))

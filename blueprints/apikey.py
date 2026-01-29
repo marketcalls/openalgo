@@ -127,5 +127,5 @@ def update_api_key_mode():
             return jsonify({"error": "Failed to update order mode"}), 500
 
     except Exception as e:
-        logger.error(f"Error updating order mode: {e}")
+        logger.exception(f"Error updating order mode: {e}")
         return jsonify({"error": "An error occurred while updating order mode"}), 500

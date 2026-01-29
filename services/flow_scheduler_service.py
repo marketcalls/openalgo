@@ -62,7 +62,7 @@ class FlowScheduler:
                 self._initialized = True
                 logger.debug("Flow Scheduler initialized and started")
             except Exception as e:
-                logger.error(f"Failed to initialize Flow Scheduler: {e}")
+                logger.exception(f"Failed to initialize Flow Scheduler: {e}")
                 raise
 
     def set_api_key(self, api_key: str):
@@ -248,7 +248,7 @@ def execute_workflow_scheduled(workflow_id: int, api_key: str = None):
             f"Scheduled execution result for workflow {workflow_id}: {result.get('status')}"
         )
     except Exception as e:
-        logger.error(f"Scheduled execution failed for workflow {workflow_id}: {e}")
+        logger.exception(f"Scheduled execution failed for workflow {workflow_id}: {e}")
 
 
 # Global scheduler instance

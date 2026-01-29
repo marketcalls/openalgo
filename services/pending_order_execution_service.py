@@ -167,7 +167,7 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
                             f"Order executed successfully: pending_order_id={pending_order_id}, broker_order_id={broker_order_id}"
                         )
                 except Exception as e:
-                    logger.error(f"Error checking order status: {e}")
+                    logger.exception(f"Error checking order status: {e}")
                     # Fallback to 'open' on error
                     update_broker_status(pending_order_id, broker_order_id, "open")
                     logger.info(
@@ -182,10 +182,10 @@ def execute_approved_order(pending_order_id: int) -> tuple[bool, dict[str, Any],
             return success, response_data, status_code
 
         except Exception as e:
-            logger.error(f"Error executing order via service: {e}")
+            logger.exception(f"Error executing order via service: {e}")
             update_broker_status(pending_order_id, None, "rejected")
             return False, {"status": "error", "message": f"Order execution failed: {str(e)}"}, 500
 
     except Exception as e:
-        logger.error(f"Error in execute_approved_order: {e}")
+        logger.exception(f"Error in execute_approved_order: {e}")
         return False, {"status": "error", "message": f"Failed to execute order: {str(e)}"}, 500

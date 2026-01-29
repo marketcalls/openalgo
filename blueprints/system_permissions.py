@@ -99,7 +99,7 @@ def get_unix_permissions(path: str) -> dict:
             "group_gid": st.st_gid,
         }
     except Exception as e:
-        logger.error(f"Error getting permissions for {path}: {e}")
+        logger.exception(f"Error getting permissions for {path}: {e}")
         return None
 
 
@@ -130,7 +130,7 @@ def get_windows_permissions(path: str) -> dict:
             "executable": executable,
         }
     except Exception as e:
-        logger.error(f"Error getting Windows permissions for {path}: {e}")
+        logger.exception(f"Error getting Windows permissions for {path}: {e}")
         return None
 
 
@@ -253,7 +253,7 @@ def get_permissions():
             }
         )
     except Exception as e:
-        logger.error(f"Error checking permissions: {e}")
+        logger.exception(f"Error checking permissions: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -346,5 +346,5 @@ def fix_permissions():
             }
         )
     except Exception as e:
-        logger.error(f"Error fixing permissions: {e}")
+        logger.exception(f"Error fixing permissions: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500

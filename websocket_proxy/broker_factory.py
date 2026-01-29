@@ -156,10 +156,17 @@ class _PooledAdapterWrapper:
 
         return self._pool
 
-    def initialize(self, broker_name: str, user_id: str, auth_data: dict = None):
-        """Initialize the pool with user credentials"""
+    def initialize(self, broker_name: str, user_id: str, auth_data: dict = None, force: bool = False):
+        """Initialize the pool with user credentials
+
+        Args:
+            broker_name: The broker name
+            user_id: The user ID
+            auth_data: Optional authentication data
+            force: If True, force re-initialization with fresh credentials (issue #765)
+        """
         pool = self._ensure_pool(user_id)
-        return pool.initialize(broker_name, user_id, auth_data)
+        return pool.initialize(broker_name, user_id, auth_data, force=force)
 
     def connect(self):
         """Connect the pool"""
@@ -217,6 +224,77 @@ class _PooledAdapterWrapper:
         if self._pool:
             self._pool.publish_market_data(topic, data)
 
+    # =========================================================================
+    # Authentication Helper Methods (Issue #765 - Stale Token Handling)
+    # =========================================================================
+    # These methods delegate to the underlying adapter or implement the logic
+    # directly for handling stale auth tokens in multi-process deployments.
+
+    def is_auth_error(self, error_message: str) -> bool:
+        """
+        Check if an error message indicates an authentication failure.
+
+        Args:
+            error_message: The error message string
+
+        Returns:
+            True if the error indicates authentication failure (401/403)
+        """
+        if not error_message:
+            return False
+
+        error_lower = str(error_message).lower()
+        auth_error_indicators = [
+            "401",
+            "403",
+            "unauthorized",
+            "forbidden",
+            "authentication failed",
+            "auth failed",
+            "invalid token",
+            "token expired",
+            "access denied",
+            "invalid credentials",
+            "session expired",
+        ]
+        return any(indicator in error_lower for indicator in auth_error_indicators)
+
+    def clear_auth_cache_for_user(self, user_id: str):
+        """
+        Clear all cached authentication data for a user.
+
+        Call this when you detect stale credentials (e.g., 403 error from broker).
+
+        Args:
+            user_id: The user's ID
+        """
+        try:
+            from database.auth_db import (
+                auth_cache,
+                feed_token_cache,
+            )
+
+            cache_key_auth = f"auth-{user_id}"
+            cache_key_feed = f"feed-{user_id}"
+
+            caches_cleared = []
+            if cache_key_auth in auth_cache:
+                del auth_cache[cache_key_auth]
+                caches_cleared.append("auth_cache")
+            if cache_key_feed in feed_token_cache:
+                del feed_token_cache[cache_key_feed]
+                caches_cleared.append("feed_token_cache")
+            # Note: broker_cache is keyed by API key, not user_id, so we skip it here
+            # It only caches broker names which don't affect auth token validation
+
+            if caches_cleared:
+                self.logger.info(f"Cleared auth caches for user {user_id}: {', '.join(caches_cleared)}")
+            else:
+                self.logger.debug(f"No cached auth data found for user {user_id}")
+
+        except Exception as e:
+            self.logger.exception(f"Error clearing auth cache for user {user_id}: {e}")
+
 
 def get_pool_stats(broker_name: str = None) -> dict:
     """
@@ -241,5 +319,5 @@ def cleanup_all_pools():
         try:
             pool.disconnect()
         except Exception as e:
-            logger.error(f"Error cleaning up pool {pool_key}: {e}")
+            logger.exception(f"Error cleaning up pool {pool_key}: {e}")
     _POOLED_ADAPTERS.clear()

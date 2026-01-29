@@ -38,7 +38,7 @@ def get_user_id_from_apikey(api_key: str) -> str | None:
         user_id = verify_api_key(api_key)
         return user_id
     except Exception as e:
-        logger.error(f"Error getting user ID from API key: {e}")
+        logger.exception(f"Error getting user ID from API key: {e}")
         return None
 
 
@@ -107,7 +107,7 @@ def sandbox_place_order(
         return success, response, status_code
 
     except Exception as e:
-        logger.error(f"Error in sandbox_place_order: {e}")
+        logger.exception(f"Error in sandbox_place_order: {e}")
         return (
             False,
             {
@@ -157,7 +157,7 @@ def sandbox_modify_order(
         return success, response, status_code
 
     except Exception as e:
-        logger.error(f"Error in sandbox_modify_order: {e}")
+        logger.exception(f"Error in sandbox_modify_order: {e}")
         return (
             False,
             {
@@ -198,7 +198,7 @@ def sandbox_cancel_order(
         return success, response, status_code
 
     except Exception as e:
-        logger.error(f"Error in sandbox_cancel_order: {e}")
+        logger.exception(f"Error in sandbox_cancel_order: {e}")
         return (
             False,
             {
@@ -225,7 +225,7 @@ def sandbox_get_orderbook(
         return success, response, status_code
 
     except Exception as e:
-        logger.error(f"Error in sandbox_get_orderbook: {e}")
+        logger.exception(f"Error in sandbox_get_orderbook: {e}")
         return (
             False,
             {"status": "error", "message": f"Error getting orderbook: {str(e)}", "mode": "analyze"},
@@ -250,7 +250,7 @@ def sandbox_get_order_status(
         return success, response, status_code
 
     except Exception as e:
-        logger.error(f"Error in sandbox_get_order_status: {e}")
+        logger.exception(f"Error in sandbox_get_order_status: {e}")
         return (
             False,
             {
@@ -277,7 +277,7 @@ def sandbox_get_positions(
         return success, response, status_code
 
     except Exception as e:
-        logger.error(f"Error in sandbox_get_positions: {e}")
+        logger.exception(f"Error in sandbox_get_positions: {e}")
         return (
             False,
             {"status": "error", "message": f"Error getting positions: {str(e)}", "mode": "analyze"},
@@ -300,7 +300,7 @@ def sandbox_get_holdings(
         return success, response, status_code
 
     except Exception as e:
-        logger.error(f"Error in sandbox_get_holdings: {e}")
+        logger.exception(f"Error in sandbox_get_holdings: {e}")
         return (
             False,
             {"status": "error", "message": f"Error getting holdings: {str(e)}", "mode": "analyze"},
@@ -323,7 +323,7 @@ def sandbox_get_tradebook(
         return success, response, status_code
 
     except Exception as e:
-        logger.error(f"Error in sandbox_get_tradebook: {e}")
+        logger.exception(f"Error in sandbox_get_tradebook: {e}")
         return (
             False,
             {"status": "error", "message": f"Error getting tradebook: {str(e)}", "mode": "analyze"},
@@ -352,7 +352,7 @@ def sandbox_get_funds(
             )
 
     except Exception as e:
-        logger.error(f"Error in sandbox_get_funds: {e}")
+        logger.exception(f"Error in sandbox_get_funds: {e}")
         return (
             False,
             {"status": "error", "message": f"Error getting funds: {str(e)}", "mode": "analyze"},
@@ -436,7 +436,7 @@ def sandbox_close_position(
             return success, response, status_code
 
     except Exception as e:
-        logger.error(f"Error in sandbox_close_position: {e}")
+        logger.exception(f"Error in sandbox_close_position: {e}")
         return (
             False,
             {"status": "error", "message": f"Error closing position: {str(e)}", "mode": "analyze"},
@@ -535,7 +535,7 @@ def sandbox_place_smart_order(
         return success, response, status_code
 
     except Exception as e:
-        logger.error(f"Error in sandbox_place_smart_order: {e}")
+        logger.exception(f"Error in sandbox_place_smart_order: {e}")
         return (
             False,
             {
@@ -613,7 +613,7 @@ def sandbox_cancel_all_orders(
         )
 
     except Exception as e:
-        logger.error(f"Error in sandbox_cancel_all_orders: {e}")
+        logger.exception(f"Error in sandbox_cancel_all_orders: {e}")
         return (
             False,
             {
@@ -663,7 +663,7 @@ def sandbox_reload_squareoff_schedule() -> tuple[bool, dict[str, Any], int]:
             return False, {"status": "error", "message": message, "mode": "analyze"}, 500
 
     except Exception as e:
-        logger.error(f"Error reloading square-off schedule: {e}")
+        logger.exception(f"Error reloading square-off schedule: {e}")
         return (
             False,
             {
@@ -693,7 +693,7 @@ def sandbox_get_squareoff_status() -> tuple[bool, dict[str, Any], int]:
         return True, {"status": "success", "data": status, "mode": "analyze"}, 200
 
     except Exception as e:
-        logger.error(f"Error getting square-off status: {e}")
+        logger.exception(f"Error getting square-off status: {e}")
         return (
             False,
             {"status": "error", "message": f"Error getting status: {str(e)}", "mode": "analyze"},
@@ -761,7 +761,7 @@ def sandbox_get_pnl_symbols(
         )
 
     except Exception as e:
-        logger.error(f"Error in sandbox_get_pnl_symbols: {e}")
+        logger.exception(f"Error in sandbox_get_pnl_symbols: {e}")
         return (
             False,
             {

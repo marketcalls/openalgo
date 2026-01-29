@@ -54,7 +54,7 @@ def get_analyzer_status_with_auth(
         return True, response_data, 200
 
     except Exception as e:
-        logger.error(f"Error getting analyzer status: {e}")
+        logger.exception(f"Error getting analyzer status: {e}")
         error_response = {"status": "error", "message": str(e)}
         log_executor.submit(async_log_order, "analyzer_status", original_data, error_response)
         return False, error_response, 500
@@ -105,7 +105,7 @@ def toggle_analyzer_mode_with_auth(
                 catchup_missed_settlements()
                 logger.info("Catch-up settlement check completed")
             except Exception as e:
-                logger.error(f"Error in catch-up settlement: {e}")
+                logger.exception(f"Error in catch-up settlement: {e}")
 
             logger.info("Analyzer mode enabled - Execution engine and square-off scheduler started")
         else:
@@ -133,7 +133,7 @@ def toggle_analyzer_mode_with_auth(
         return True, response_data, 200
 
     except Exception as e:
-        logger.error(f"Error toggling analyzer mode: {e}")
+        logger.exception(f"Error toggling analyzer mode: {e}")
         error_response = {"status": "error", "message": str(e)}
         log_executor.submit(async_log_order, "analyzer_toggle", original_data, error_response)
         return False, error_response, 500

@@ -116,7 +116,7 @@ def api_stats():
             {"status": "success", "freeze_count": freeze_count, "holiday_count": holiday_count}
         )
     except Exception as e:
-        logger.error(f"Error fetching admin stats: {e}")
+        logger.exception(f"Error fetching admin stats: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -147,7 +147,7 @@ def api_freeze_list():
             }
         )
     except Exception as e:
-        logger.error(f"Error fetching freeze data: {e}")
+        logger.exception(f"Error fetching freeze data: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -193,7 +193,7 @@ def api_freeze_add():
         )
     except Exception as e:
         freeze_db_session.rollback()
-        logger.error(f"Error adding freeze qty: {e}")
+        logger.exception(f"Error adding freeze qty: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -231,7 +231,7 @@ def api_freeze_edit(id):
         return jsonify({"status": "error", "message": "No freeze_qty provided"}), 400
     except Exception as e:
         freeze_db_session.rollback()
-        logger.error(f"Error editing freeze qty: {e}")
+        logger.exception(f"Error editing freeze qty: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -253,7 +253,7 @@ def api_freeze_delete(id):
         return jsonify({"status": "success", "message": f"Deleted freeze qty for {symbol}"})
     except Exception as e:
         freeze_db_session.rollback()
-        logger.error(f"Error deleting freeze qty: {e}")
+        logger.exception(f"Error deleting freeze qty: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -297,7 +297,7 @@ def api_freeze_upload():
             return jsonify({"status": "error", "message": "Error loading CSV file"}), 500
 
     except Exception as e:
-        logger.error(f"Error uploading freeze qty CSV: {e}")
+        logger.exception(f"Error uploading freeze qty CSV: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -359,7 +359,7 @@ def api_holidays_list():
             }
         )
     except Exception as e:
-        logger.error(f"Error fetching holidays: {e}")
+        logger.exception(f"Error fetching holidays: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -411,7 +411,7 @@ def api_holiday_add():
         )
     except Exception as e:
         calendar_db_session.rollback()
-        logger.error(f"Error adding holiday: {e}")
+        logger.exception(f"Error adding holiday: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -434,7 +434,7 @@ def api_holiday_delete(id):
         return jsonify({"status": "success", "message": f"Deleted holiday: {description}"})
     except Exception as e:
         calendar_db_session.rollback()
-        logger.error(f"Error deleting holiday: {e}")
+        logger.exception(f"Error deleting holiday: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -454,7 +454,7 @@ def api_timings_list():
         today = date.today()
         today_timings = get_market_timings_for_date(today)
 
-        # Convert epoch to readable time for today's timings
+        # Convert epoch to readable time for today's timings (for display)
         today_timings_formatted = []
         for t in today_timings:
             start_dt = datetime.fromtimestamp(t["start_time"] / 1000)
@@ -470,14 +470,17 @@ def api_timings_list():
         return jsonify(
             {
                 "status": "success",
+                # data: admin config data with HH:MM strings (for admin UI)
                 "data": timings_data,
+                # market_status: epoch-based timings for frontend market status checks
+                "market_status": today_timings,
                 "today_timings": today_timings_formatted,
                 "today": today.strftime("%Y-%m-%d"),
                 "exchanges": SUPPORTED_EXCHANGES,
             }
         )
     except Exception as e:
-        logger.error(f"Error fetching timings: {e}")
+        logger.exception(f"Error fetching timings: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -516,7 +519,7 @@ def api_timings_edit(exchange):
             ), 500
 
     except Exception as e:
-        logger.error(f"Error editing timing: {e}")
+        logger.exception(f"Error editing timing: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -550,5 +553,5 @@ def api_timings_check():
 
         return jsonify({"status": "success", "date": date_str, "timings": result_timings})
     except Exception as e:
-        logger.error(f"Error checking timings: {e}")
+        logger.exception(f"Error checking timings: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500

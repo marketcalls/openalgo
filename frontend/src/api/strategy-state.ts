@@ -37,11 +37,9 @@ export async function getStrategyStateById(instanceId: string): Promise<Strategy
  * Note: webClient interceptor automatically handles CSRF token
  */
 export async function deleteStrategyState(instanceId: string): Promise<void> {
-  console.log('[STRATPOS_DEBUG] Deleting strategy:', instanceId)
   const response = await webClient.delete<{ status: string; message?: string }>(
     `/api/strategy-state/${encodeURIComponent(instanceId)}`
   )
-  console.log('[STRATPOS_DEBUG] Delete response:', response.data)
   if (response.data.status === 'error') {
     throw new Error(response.data.message || 'Failed to delete strategy state')
   }

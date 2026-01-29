@@ -97,7 +97,7 @@ class OrderLatency(LatencyBase):
             latency_session.commit()
             return True
         except Exception as e:
-            logger.error(f"Error logging latency: {str(e)}")
+            logger.exception(f"Error logging latency: {str(e)}")
             latency_session.rollback()
             return False
 
@@ -107,7 +107,7 @@ class OrderLatency(LatencyBase):
         try:
             return OrderLatency.query.order_by(OrderLatency.timestamp.desc()).limit(limit).all()
         except Exception as e:
-            logger.error(f"Error getting recent latency logs: {str(e)}")
+            logger.exception(f"Error getting recent latency logs: {str(e)}")
             return []
 
     @staticmethod
@@ -252,7 +252,7 @@ class OrderLatency(LatencyBase):
                 "broker_stats": broker_stats,
             }
         except Exception as e:
-            logger.error(f"Error getting latency stats: {str(e)}")
+            logger.exception(f"Error getting latency stats: {str(e)}")
             return {
                 "total_orders": 0,
                 "failed_orders": 0,
@@ -319,6 +319,6 @@ def purge_old_data_logs(days=7):
         logger.debug(f"Purged {deleted} old data endpoint latency logs (older than {days} days)")
         return deleted
     except Exception as e:
-        logger.error(f"Error purging old latency logs: {str(e)}")
+        logger.exception(f"Error purging old latency logs: {str(e)}")
         latency_session.rollback()
         return 0

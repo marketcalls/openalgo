@@ -203,7 +203,7 @@ def init_db():
             db_session.add(default_config)
             db_session.commit()
     except Exception as e:
-        logger.error(f"Telegram DB: Failed to initialize: {str(e)}")
+        logger.exception(f"Telegram DB: Failed to initialize: {str(e)}")
         db_session.rollback()
     finally:
         db_session.remove()
@@ -248,7 +248,7 @@ def get_telegram_user(telegram_id: int) -> dict | None:
             return result
         return None
     except Exception as e:
-        logger.error(f"Failed to get telegram user: {str(e)}")
+        logger.exception(f"Failed to get telegram user: {str(e)}")
         return None
     finally:
         db_session.remove()
@@ -289,7 +289,7 @@ def get_telegram_user_by_username(username: str) -> dict | None:
             return result
         return None
     except Exception as e:
-        logger.error(f"Failed to get telegram user by username: {str(e)}")
+        logger.exception(f"Failed to get telegram user by username: {str(e)}")
         return None
     finally:
         db_session.remove()
@@ -362,7 +362,7 @@ def create_or_update_telegram_user(
         return True
 
     except Exception as e:
-        logger.error(f"Failed to create/update telegram user: {str(e)}")
+        logger.exception(f"Failed to create/update telegram user: {str(e)}")
         db_session.rollback()
         return False
     finally:
@@ -400,7 +400,7 @@ def delete_telegram_user(telegram_id: int) -> bool:
         return False
 
     except Exception as e:
-        logger.error(f"Failed to delete telegram user: {str(e)}")
+        logger.exception(f"Failed to delete telegram user: {str(e)}")
         db_session.rollback()
         return False
     finally:
@@ -437,7 +437,7 @@ def get_all_telegram_users(filters: dict | None = None) -> list[dict]:
         ]
 
     except Exception as e:
-        logger.error(f"Failed to get all telegram users: {str(e)}")
+        logger.exception(f"Failed to get all telegram users: {str(e)}")
         return []
     finally:
         db_session.remove()
@@ -476,7 +476,7 @@ def get_bot_config() -> dict:
         }
 
     except Exception as e:
-        logger.error(f"Failed to get bot config: {str(e)}")
+        logger.exception(f"Failed to get bot config: {str(e)}")
         return {}
     finally:
         db_session.remove()
@@ -504,7 +504,7 @@ def update_bot_config(config: dict) -> bool:
         return True
 
     except Exception as e:
-        logger.error(f"Failed to update bot config: {str(e)}")
+        logger.exception(f"Failed to update bot config: {str(e)}")
         db_session.rollback()
         return False
     finally:
@@ -533,7 +533,7 @@ def log_command(telegram_id: int, command: str, chat_id: int = None, parameters:
         db_session.commit()
 
     except Exception as e:
-        logger.error(f"Failed to log command: {str(e)}")
+        logger.exception(f"Failed to log command: {str(e)}")
         db_session.rollback()
     finally:
         db_session.remove()
@@ -589,7 +589,7 @@ def get_command_stats(days: int = 7) -> dict:
         }
 
     except Exception as e:
-        logger.error(f"Failed to get command stats: {str(e)}")
+        logger.exception(f"Failed to get command stats: {str(e)}")
         return {
             "total_commands": 0,
             "commands_by_type": {},
@@ -642,7 +642,7 @@ def get_user_preferences(telegram_id: int) -> dict:
         return result
 
     except Exception as e:
-        logger.error(f"Failed to get user preferences: {str(e)}")
+        logger.exception(f"Failed to get user preferences: {str(e)}")
         return {}
     finally:
         db_session.remove()
@@ -673,7 +673,7 @@ def update_user_preferences(telegram_id: int, preferences: dict) -> bool:
         return True
 
     except Exception as e:
-        logger.error(f"Failed to update user preferences: {str(e)}")
+        logger.exception(f"Failed to update user preferences: {str(e)}")
         db_session.rollback()
         return False
     finally:
@@ -694,7 +694,7 @@ def add_notification(telegram_id: int, message: str, priority: int = 5) -> bool:
         return True
 
     except Exception as e:
-        logger.error(f"Failed to add notification: {str(e)}")
+        logger.exception(f"Failed to add notification: {str(e)}")
         db_session.rollback()
         return False
     finally:
@@ -725,7 +725,7 @@ def get_pending_notifications(limit: int = 100) -> list[dict]:
         ]
 
     except Exception as e:
-        logger.error(f"Failed to get pending notifications: {str(e)}")
+        logger.exception(f"Failed to get pending notifications: {str(e)}")
         return []
     finally:
         db_session.remove()
@@ -743,7 +743,7 @@ def mark_notification_sent(notification_id: int, success: bool = True, error_mes
             db_session.commit()
 
     except Exception as e:
-        logger.error(f"Failed to update notification status: {str(e)}")
+        logger.exception(f"Failed to update notification status: {str(e)}")
         db_session.rollback()
     finally:
         db_session.remove()
@@ -764,7 +764,7 @@ def get_decrypted_api_key(telegram_id: int) -> str | None:
             return decrypted_key
         return None
     except Exception as e:
-        logger.error(f"Failed to decrypt API key: {str(e)}")
+        logger.exception(f"Failed to decrypt API key: {str(e)}")
         return None
     finally:
         db_session.remove()
@@ -791,7 +791,7 @@ def get_user_credentials(telegram_id: int) -> dict | None:
                 try:
                     api_key = fernet.decrypt(user.encrypted_api_key.encode()).decode()
                 except Exception as e:
-                    logger.error(f"Failed to decrypt API key: {str(e)}")
+                    logger.exception(f"Failed to decrypt API key: {str(e)}")
 
             result = {
                 "username": user.openalgo_username,
@@ -804,7 +804,7 @@ def get_user_credentials(telegram_id: int) -> dict | None:
             return result
         return None
     except Exception as e:
-        logger.error(f"Failed to get user credentials: {str(e)}")
+        logger.exception(f"Failed to get user credentials: {str(e)}")
         return None
     finally:
         db_session.remove()

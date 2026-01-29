@@ -150,7 +150,7 @@ class SharedZmqPublisher:
                     [topic.encode("utf-8"), json.dumps(data).encode("utf-8")]
                 )
             except Exception as e:
-                self.logger.error(f"Error publishing to ZMQ: {e}")
+                self.logger.exception(f"Error publishing to ZMQ: {e}")
 
     def cleanup(self):
         """Clean up ZeroMQ resources"""
@@ -163,7 +163,7 @@ class SharedZmqPublisher:
             self._initialized = False
             SharedZmqPublisher._instance = None
         except Exception as e:
-            self.logger.error(f"Error cleaning up shared ZMQ publisher: {e}")
+            self.logger.exception(f"Error cleaning up shared ZMQ publisher: {e}")
 
 
 class ConnectionPool:
@@ -320,7 +320,7 @@ class ConnectionPool:
             return len(self.adapters) - 1, adapter
 
     def initialize(
-        self, broker_name: str = None, user_id: str = None, auth_data: dict = None
+        self, broker_name: str = None, user_id: str = None, auth_data: dict = None, force: bool = False
     ) -> dict:
         """
         Initialize the connection pool with the first adapter.
@@ -329,14 +329,30 @@ class ConnectionPool:
             broker_name: Optional broker name override
             user_id: Optional user ID override
             auth_data: Optional authentication data
+            force: If True, force re-initialization even if already initialized.
+                   Used for retrying with fresh credentials after auth errors (issue #765).
 
         Returns:
             Initialization result dict
         """
-        if self.initialized:
+        if self.initialized and not force:
             return {"success": True, "message": "Already initialized"}
 
         with self.lock:
+            # If forcing re-initialization, clean up existing adapters first (inside lock to prevent race conditions)
+            if force and self.initialized:
+                self.logger.info(f"Force re-initializing pool for {self.broker_name} with fresh credentials")
+                # Disconnect existing adapters
+                for adapter in self.adapters:
+                    try:
+                        adapter.disconnect()
+                    except Exception as e:
+                        self.logger.warning(f"Error disconnecting adapter during re-init: {e}")
+                self.adapters.clear()
+                self.adapter_symbol_counts.clear()
+                self.subscription_map.clear()
+                self.connected = False
+                self.initialized = False
             try:
                 # Use provided values or defaults
                 self.broker_name = broker_name or self.broker_name
@@ -349,8 +365,17 @@ class ConnectionPool:
                 adapter = self._create_adapter()
                 result = adapter.initialize(self.broker_name, self.user_id, auth_data)
 
-                if result and not result.get("success", True):
-                    return result
+                # Handle both response formats from adapters:
+                # - {"success": False, "error": "..."} (ConnectionPool format)
+                # - {"status": "error", "code": "...", "message": "..."} (Adapter format)
+                is_error = (
+                    (result and result.get("success") == False) or
+                    (result and result.get("status") == "error")
+                )
+                if is_error:
+                    error_msg = result.get("message", result.get("error", "Initialization failed"))
+                    self.logger.error(f"Adapter initialization failed: {error_msg}")
+                    return {"success": False, "error": error_msg}
 
                 self.adapters.append(adapter)
                 self.adapter_symbol_counts.append(0)
@@ -360,7 +385,7 @@ class ConnectionPool:
                 return {"success": True, "message": "Connection pool initialized"}
 
             except Exception as e:
-                self.logger.error(f"Failed to initialize connection pool: {e}")
+                self.logger.exception(f"Failed to initialize connection pool: {e}")
                 return {"success": False, "error": str(e)}
 
     def connect(self) -> dict:
@@ -381,15 +406,25 @@ class ConnectionPool:
             try:
                 if self.adapters:
                     result = self.adapters[0].connect()
-                    if result and not result.get("success", True):
-                        return result
+                    # Handle both response formats from adapters:
+                    # - {"success": False, "error": "..."} (ConnectionPool format)
+                    # - {"status": "error", "code": "...", "message": "..."} (Adapter format)
+                    is_error = (
+                        (result and result.get("success") == False) or
+                        (result and result.get("status") == "error")
+                    )
+                    if is_error:
+                        # Convert to consistent format and return error
+                        error_msg = result.get("message", result.get("error", "Connection failed"))
+                        self.logger.error(f"Adapter connection failed: {error_msg}")
+                        return {"success": False, "error": error_msg}
                     self.connected = True
                     return {"success": True, "message": "Connected"}
                 else:
                     return {"success": False, "error": "No adapters available"}
 
             except Exception as e:
-                self.logger.error(f"Failed to connect: {e}")
+                self.logger.exception(f"Failed to connect: {e}")
                 return {"success": False, "error": str(e)}
 
     def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> dict:
@@ -463,7 +498,7 @@ class ConnectionPool:
                 # Max capacity reached
                 return {"status": "error", "code": "MAX_CAPACITY_REACHED", "message": str(e)}
             except Exception as e:
-                self.logger.error(f"Error subscribing to {symbol}.{exchange}: {e}")
+                self.logger.exception(f"Error subscribing to {symbol}.{exchange}: {e}")
                 return {"status": "error", "code": "SUBSCRIPTION_ERROR", "message": str(e)}
 
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> dict:
@@ -506,7 +541,7 @@ class ConnectionPool:
                 return result
 
             except Exception as e:
-                self.logger.error(f"Error unsubscribing from {symbol}.{exchange}: {e}")
+                self.logger.exception(f"Error unsubscribing from {symbol}.{exchange}: {e}")
                 return {"status": "error", "code": "UNSUBSCRIPTION_ERROR", "message": str(e)}
 
     def unsubscribe_all(self):
@@ -561,7 +596,7 @@ class ConnectionPool:
 
                     self.logger.debug(f"Disconnected connection {idx + 1}")
                 except Exception as e:
-                    self.logger.error(f"Error disconnecting adapter {idx + 1}: {e}")
+                    self.logger.exception(f"Error disconnecting adapter {idx + 1}: {e}")
 
             self.adapters.clear()
             self.adapter_symbol_counts.clear()
