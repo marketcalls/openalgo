@@ -268,7 +268,8 @@ check_status "Failed to update system"
 # Install essential packages
 log_message "Installing essential packages..." "$BLUE"
 wait_for_apt
-sudo apt-get install -y python3 python3-venv python3-pip python3-full git ufw fail2ban snapd software-properties-common
+sudo apt-get install -y python3 python3-venv python3-pip python3-full git ufw fail2ban snapd software-properties-common \
+    libopenblas0 libgomp1 libgfortran5
 check_status "Failed to install packages"
 
 # Install uv using snap for faster package installation
@@ -388,6 +389,10 @@ User=www-data
 Group=www-data
 WorkingDirectory=$BASE_PATH
 Environment="PATH=$VENV_PATH/bin"
+# Environment variables for numba/scipy support
+Environment="TMPDIR=$BASE_PATH/tmp"
+Environment="NUMBA_CACHE_DIR=$BASE_PATH/tmp/numba_cache"
+Environment="MPLCONFIGDIR=$BASE_PATH/tmp/matplotlib"
 ExecStart=$VENV_PATH/bin/gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:80 --timeout 300 app:app
 Restart=always
 RestartSec=5
@@ -403,7 +408,8 @@ check_status "Failed to create service"
 # Create required directories for all features
 log_message "Creating required directories..." "$BLUE"
 sudo mkdir -p $BASE_PATH/db
-sudo mkdir -p $BASE_PATH/tmp
+sudo mkdir -p $BASE_PATH/tmp/numba_cache
+sudo mkdir -p $BASE_PATH/tmp/matplotlib
 # Create directories for Python strategy feature
 sudo mkdir -p $BASE_PATH/strategies/scripts
 sudo mkdir -p $BASE_PATH/strategies/examples
