@@ -46,11 +46,6 @@ export const GetOrderStatusNode = memo(({ data, selected }: GetOrderStatusNodePr
               {data.orderId ? `...${data.orderId.slice(-6)}` : '-'}
             </span>
           </div>
-          {data.waitForCompletion && (
-            <div className="text-center text-[9px] text-muted-foreground">
-              Wait for completion
-            </div>
-          )}
         </div>
       </div>
       <Handle
