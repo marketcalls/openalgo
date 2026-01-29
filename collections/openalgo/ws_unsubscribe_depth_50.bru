@@ -1,0 +1,30 @@
+meta {
+  name: Unsubscribe Depth 50 Levels (Mode 3)
+  type: websocket
+  seq: 12
+}
+
+websocket {
+  url: ws://127.0.0.1:8765
+  description: Unsubscribe from 50-level Market Depth (broker dependent)
+}
+
+message:json {
+  {
+    "action": "unsubscribe",
+    "symbol": "RELIANCE:50",
+    "exchange": "NSE",
+    "mode": 3,
+    "depth": 50
+  }
+}
+
+docs {
+  Unsubscribe from 50-level Market Depth (TBT) data for a specific symbol.
+  Use the :50 suffix on the symbol for 50-level depth subscriptions.
+
+  Server responds with:
+  {"type": "unsubscribe", "status": "success", "symbol": "RELIANCE:50", "exchange": "NSE"}
+
+  Note: This is for brokers that support 50-level depth (Fyers TBT, etc.)
+}
