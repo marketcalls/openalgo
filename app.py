@@ -54,6 +54,7 @@ from blueprints.search import search_bp
 from blueprints.security import security_bp  # Import the security blueprint
 from blueprints.settings import settings_bp  # Import the settings blueprint
 from blueprints.strategy import strategy_bp  # Import the strategy blueprint
+from blueprints.strategy_state import strategy_state_bp  # Import the strategy state blueprint
 from blueprints.system_permissions import (
     system_permissions_bp,  # Import the system permissions blueprint
 )
@@ -74,6 +75,7 @@ from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
 from database.strategy_db import init_db as ensure_strategy_tables_exists
+from database.strategy_state_db import init_db as ensure_strategy_state_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.telegram_db import get_bot_config
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
@@ -98,64 +100,6 @@ from utils.version import get_version  # Import version management
 
 # Import WebSocket proxy server - using relative import to avoid @ symbol issues
 from websocket_proxy.app_integration import start_websocket_proxy
-
-from blueprints.auth import auth_bp
-from blueprints.dashboard import dashboard_bp
-from blueprints.orders import orders_bp
-from blueprints.search import search_bp
-from blueprints.apikey import api_key_bp
-from blueprints.log import log_bp
-from blueprints.tv_json import tv_json_bp
-from blueprints.gc_json import gc_json_bp
-from blueprints.platforms import platforms_bp
-from blueprints.brlogin import brlogin_bp
-from blueprints.core import core_bp
-from blueprints.analyzer import analyzer_bp  # Import the analyzer blueprint
-from blueprints.settings import settings_bp  # Import the settings blueprint
-from blueprints.chartink import chartink_bp  # Import the chartink blueprint
-from blueprints.traffic import traffic_bp  # Import the traffic blueprint
-from blueprints.latency import latency_bp  # Import the latency blueprint
-from blueprints.strategy import strategy_bp  # Import the strategy blueprint
-from blueprints.master_contract_status import master_contract_status_bp  # Import the master contract status blueprint
-from blueprints.websocket_example import websocket_bp  # Import the websocket example blueprint
-from blueprints.pnltracker import pnltracker_bp  # Import the pnl tracker blueprint
-from blueprints.python_strategy import python_strategy_bp  # Import the python strategy blueprint
-from blueprints.telegram import telegram_bp  # Import the telegram blueprint
-from blueprints.security import security_bp  # Import the security blueprint
-from blueprints.sandbox import sandbox_bp  # Import the sandbox blueprint
-from blueprints.logging import logging_bp  # Import the logging blueprint
-from blueprints.playground import playground_bp  # Import the API playground blueprint
-from blueprints.admin import admin_bp  # Import the admin blueprint
-from blueprints.react_app import react_bp, is_react_frontend_available, serve_react_app  # Import React frontend blueprint
-from blueprints.historify import historify_bp  # Import the historify blueprint
-from blueprints.flow import flow_bp  # Import the flow blueprint
-from blueprints.broker_credentials import broker_credentials_bp  # Import the broker credentials blueprint
-from blueprints.system_permissions import system_permissions_bp  # Import the system permissions blueprint
-from blueprints.strategy_state import strategy_state_bp  # Import the strategy state blueprint
-from services.telegram_bot_service import telegram_bot_service
-from database.telegram_db import get_bot_config
-
-from restx_api import api_v1_bp, api
-
-from database.auth_db import init_db as ensure_auth_tables_exists
-from database.user_db import init_db as ensure_user_tables_exists
-from database.symbol import init_db as ensure_master_contract_tables_exists
-from database.apilog_db import init_db as ensure_api_log_tables_exists
-from database.analyzer_db import init_db as ensure_analyzer_tables_exists
-from database.settings_db import init_db as ensure_settings_tables_exists
-from database.chartink_db import init_db as ensure_chartink_tables_exists
-from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
-from database.latency_db import init_latency_db as ensure_latency_tables_exists
-from database.strategy_db import init_db as ensure_strategy_tables_exists
-from database.sandbox_db import init_db as ensure_sandbox_tables_exists
-from database.action_center_db import init_db as ensure_action_center_tables_exists
-from database.historify_db import init_database as ensure_historify_tables_exists
-from database.flow_db import init_db as ensure_flow_tables_exists
-from database.strategy_state_db import init_db as ensure_strategy_state_tables_exists
-
-from utils.plugin_loader import load_broker_auth_functions
-
-import os
 
 # Initialize logger
 logger = get_logger(__name__)
