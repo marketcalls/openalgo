@@ -169,9 +169,9 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
         session["FEED_TOKEN"] = feed_token  # Store feed token in session if available
     if user_id:
         session["USER_ID"] = user_id  # Store user ID in session if available
+    session["user"] = user_session_key  # Used for session revocation on daily expiry
     session["user_session_key"] = user_session_key
     session["broker"] = broker
-
     # Set session expiry and login time
     app.config["PERMANENT_SESSION_LIFETIME"] = get_session_expiry_time()
     session.permanent = True
