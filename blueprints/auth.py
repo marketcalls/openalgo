@@ -707,39 +707,46 @@ def get_dashboard_data():
 
 @auth_bp.route("/logout", methods=["GET", "POST"])
 def logout():
-    if session.get("logged_in"):
-        username = session["user"]
+    try:
+        if session.get("logged_in"):
+            username = session.get("user") or session.get("user_session_key")
 
-        # Clear cache entries before database update to prevent stale data access
-        cache_key_auth = f"auth-{username}"
-        cache_key_feed = f"feed-{username}"
-        if cache_key_auth in auth_cache:
-            del auth_cache[cache_key_auth]
-            logger.info(f"Cleared auth cache for user: {username}")
-        if cache_key_feed in feed_token_cache:
-            del feed_token_cache[cache_key_feed]
-            logger.info(f"Cleared feed token cache for user: {username}")
+            if username:
+                # Clear cache entries before database update to prevent stale data access
+                cache_key_auth = f"auth-{username}"
+                cache_key_feed = f"feed-{username}"
+                if cache_key_auth in auth_cache:
+                    del auth_cache[cache_key_auth]
+                    logger.info(f"Cleared auth cache for user: {username}")
+                if cache_key_feed in feed_token_cache:
+                    del feed_token_cache[cache_key_feed]
+                    logger.info(f"Cleared feed token cache for user: {username}")
 
-        # Clear symbol cache on logout
-        try:
-            from database.master_contract_cache_hook import clear_cache_on_logout
+                # Clear symbol cache on logout
+                try:
+                    from database.master_contract_cache_hook import clear_cache_on_logout
 
-            clear_cache_on_logout()
-            logger.info("Cleared symbol cache on logout")
-        except Exception as cache_error:
-            logger.exception(f"Error clearing symbol cache on logout: {cache_error}")
+                    clear_cache_on_logout()
+                    logger.info("Cleared symbol cache on logout")
+                except Exception as cache_error:
+                    logger.exception(f"Error clearing symbol cache on logout: {cache_error}")
 
-        # writing to database
-        inserted_id = upsert_auth(username, "", "", revoke=True)
-        if inserted_id is not None:
-            logger.info(f"Database Upserted record with ID: {inserted_id}")
-            logger.info(f"Auth Revoked in the Database for user: {username}")
-        else:
-            logger.error(f"Failed to upsert auth token for user: {username}")
+                # writing to database
+                inserted_id = upsert_auth(username, "", "", revoke=True)
+                if inserted_id is not None:
+                    logger.info(f"Database Upserted record with ID: {inserted_id}")
+                    logger.info(f"Auth Revoked in the Database for user: {username}")
+                else:
+                    logger.error(f"Failed to upsert auth token for user: {username}")
 
         # Clear entire session to ensure complete logout
         session.clear()
-        logger.info(f"Session cleared for user: {username}")
+        logger.info("Session cleared on logout")
+
+    except Exception as e:
+        logger.exception(f"Error during logout: {e}")
+        # Continue with session cleanup even if there's an error
+        session.clear()
 
     # For POST requests (AJAX from React), return JSON
     if request.method == "POST":
