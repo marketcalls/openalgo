@@ -6,12 +6,27 @@ from flask import Blueprint, flash, redirect, request, session, url_for
 
 from blueprints.apikey import generate_api_key
 from database.auth_db import upsert_api_key
-from database.user_db import add_user, find_user_by_username
+from database.user_db import add_user, db_session, find_user_by_username
+from sqlalchemy import text
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 core_bp = Blueprint("core_bp", __name__)
+
+
+@core_bp.route("/health")
+def health():
+    """Health check endpoint for monitoring/AWS EB"""
+    from flask import jsonify
+
+    try:
+        # Check database connection
+        db_session.execute(text("SELECT 1"))
+        return jsonify({"status": "ok", "database": "connected"}), 200
+    except Exception as e:
+        logger.error(f"Health check failed: {str(e)}")
+        return jsonify({"status": "error", "database": "disconnected", "error": str(e)}), 503
 
 
 # Note: GET /setup is served by react_bp (React frontend)
