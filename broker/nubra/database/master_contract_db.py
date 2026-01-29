@@ -281,58 +281,6 @@ def process_nubra_indexes(path):
     # Use broker symbol as token
     df['token'] = df['brsymbol'].astype(str)
     
-    # Standardize common index symbols to OpenAlgo format (referencing Angel broker)
-    # Handle all variations including spaces, underscores, and different cases
-    # First strip whitespace to ensure clean matching
-    df['symbol'] = df['symbol'].str.strip()
-    
-    df['symbol'] = df['symbol'].replace({
-        # NSE Indexes - standardize to common OpenAlgo format
-        'Nifty 50': 'NIFTY',
-        'NIFTY 50': 'NIFTY',
-        'NIFTY_50': 'NIFTY',
-        'Nifty_50': 'NIFTY',
-        'Nifty Next 50': 'NIFTYNXT50',
-        'NIFTY NEXT 50': 'NIFTYNXT50',
-        'NIFTY_NEXT_50': 'NIFTYNXT50',
-        'Nifty Next50': 'NIFTYNXT50',
-        'NIFTYNEXT50': 'NIFTYNXT50',
-        'Nifty Fin Service': 'FINNIFTY',
-        'NIFTY FIN SERVICE': 'FINNIFTY',
-        'NIFTY_FIN_SERVICE': 'FINNIFTY',
-        'Nifty Financial Services': 'FINNIFTY',
-        'NIFTY FINANCIAL SERVICES': 'FINNIFTY',
-        'Nifty Bank': 'BANKNIFTY',
-        'NIFTY BANK': 'BANKNIFTY',
-        'NIFTY_BANK': 'BANKNIFTY',
-        'NIFTY MID SELECT': 'MIDCPNIFTY',
-        'Nifty Midcap Select': 'MIDCPNIFTY',
-        'Nifty MidCap Select': 'MIDCPNIFTY',
-        'NIFTY_MIDCAP_SELECT': 'MIDCPNIFTY',
-        'India VIX': 'INDIAVIX',
-        'INDIA VIX': 'INDIAVIX',
-        'INDIA_VIX': 'INDIAVIX',
-        'India_VIX': 'INDIAVIX',
-        'INDIAVIX': 'INDIAVIX',
-        # BSE Indexes - standardize to common OpenAlgo format
-        'S&P BSE SENSEX': 'SENSEX',
-        'BSE SENSEX': 'SENSEX',
-        'Bse Sensex': 'SENSEX',
-        'BSE_SENSEX': 'SENSEX',
-        'SENSEX': 'SENSEX',
-        'BSE BANKEX': 'BANKEX',
-        'Bse Bankex': 'BANKEX',
-        'BSE_BANKEX': 'BANKEX',
-        'BANKEX': 'BANKEX',
-        'SNSX50': 'SENSEX50',
-        'BSE SENSEX 50': 'SENSEX50',
-        'Bse Sensex 50': 'SENSEX50',
-        'BSE_SENSEX_50': 'SENSEX50',
-        'SENSEX 50': 'SENSEX50',
-        'SENSEX_50': 'SENSEX50',
-        'SENSEX50': 'SENSEX50',
-    })
-    
     # Map to OpenAlgo index exchange format
     # NSE indexes → NSE_INDEX, BSE indexes → BSE_INDEX
     df['exchange'] = df['brexchange'].apply(
@@ -342,6 +290,11 @@ def process_nubra_indexes(path):
             else x + '_INDEX'
         )
     )
+    
+    # Common Index Symbol Formats 
+    df['symbol'] = df['symbol'].replace({
+        'INDIA_VIX': 'INDIAVIX',
+    })
     
     # Index-specific fields
     df['instrumenttype'] = 'INDEX'
