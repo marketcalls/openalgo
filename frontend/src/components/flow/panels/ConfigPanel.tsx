@@ -108,7 +108,7 @@ const NODE_TITLES: Record<string, string> = {
   placeOrder: 'Place Order', smartOrder: 'Smart Order', optionsOrder: 'Options Order',
   optionsMultiOrder: 'Multi-Leg Options', basketOrder: 'Basket Order', splitOrder: 'Split Order',
   cancelOrder: 'Cancel Order', cancelAllOrders: 'Cancel All Orders', closePositions: 'Close Positions',
-  modifyOrder: 'Modify Order', getQuote: 'Get Quote', getDepth: 'Get Depth',
+  modifyOrder: 'Modify Order', getQuote: 'Get Quote', getDepth: 'Get Depth', getOrderStatus: 'Order Status',
   openPosition: 'Open Position', history: 'History Data', expiry: 'Get Expiry',
   multiQuotes: 'Multi Quotes', symbol: 'Symbol Info', optionSymbol: 'Option Symbol',
   orderBook: 'Order Book', tradeBook: 'Trade Book', positionBook: 'Position Book',
@@ -346,6 +346,12 @@ export function ConfigPanel() {
             <div className="space-y-2"><Label className="text-xs">Symbol</Label><Input className="h-8" placeholder="SBIN" value={(nodeData.symbol as string) || ''} onChange={(e) => handleDataChange('symbol', e.target.value)} /></div>
             <div className="space-y-2"><Label className="text-xs">Exchange</Label><Select value={(nodeData.exchange as string) || 'NSE'} onValueChange={(v) => handleDataChange('exchange', v)}><SelectTrigger className="h-8"><SelectValue /></SelectTrigger><SelectContent>{EXCHANGES.map((e) => (<SelectItem key={e.value} value={e.value}>{e.label}</SelectItem>))}</SelectContent></Select></div>
             <div className="space-y-2"><Label className="text-xs">Output Variable</Label><Input className="h-8" placeholder="depth" value={(nodeData.outputVariable as string) || ''} onChange={(e) => handleDataChange('outputVariable', e.target.value)} /><p className="text-[10px] text-muted-foreground">Use {`{{depth.data.bids[0].price}}`}</p></div>
+          </>)}
+
+          {/* ===== GET ORDER STATUS ===== */}
+          {nodeType === 'getOrderStatus' && (<>
+            <div className="space-y-2"><Label className="text-xs">Order ID</Label><Input className="h-8" placeholder="{{orderResult.orderid}}" value={(nodeData.orderId as string) || ''} onChange={(e) => handleDataChange('orderId', e.target.value)} /><p className="text-[10px] text-muted-foreground">Use variable from Place Order node</p></div>
+            <div className="space-y-2"><Label className="text-xs">Output Variable</Label><Input className="h-8" placeholder="orderStatus" value={(nodeData.outputVariable as string) || ''} onChange={(e) => handleDataChange('outputVariable', e.target.value)} /><p className="text-[10px] text-muted-foreground">Use {`{{orderStatus.data.order_status}}`}</p></div>
           </>)}
 
           {nodeType === 'openPosition' && (<>
