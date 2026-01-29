@@ -157,6 +157,7 @@ When you first use the feature, these will be created automatically:
 - **migrate_sandbox.py** - Sandbox mode database setup
 - **migrate_order_mode.py** - Order mode and Action Center
 - **migrate_indexes.py** - Adds performance indexes to all database tables
+- **migrate_systemd_timeout.py** - Updates systemd and Nginx timeout settings
 
 ---
 
@@ -199,6 +200,66 @@ The `migrate_indexes.py` script adds performance indexes across all databases:
 - **Non-destructive**: Skips existing indexes
 - **Multi-database**: Handles main DB and logs DB automatically
 - **Verification**: Confirms all indexes after creation
+
+---
+
+### Systemd Timeout Configuration Migration (v2.2.0)
+**System Configuration** - Updates timeout settings that persist through upgrades
+
+#### Problem This Solves
+After upgrading, systemd service files and Nginx configuration revert to old timeout values, causing worker timeouts during slow broker API calls:
+```
+[CRITICAL] WORKER TIMEOUT (pid:XXXXX)
+```
+
+#### How It Works
+The migration automatically runs during every upgrade:
+1. Reads timeout values from `config/timeout.conf`
+2. Updates all systemd service files (`/etc/systemd/system/openalgo*.service`)
+3. Updates Nginx configuration (`/etc/nginx/sites-enabled/openalgo`)
+4. Reloads systemd daemon
+5. Restarts services with new timeouts
+
+#### Configuration
+Edit `config/timeout.conf` to customize timeouts:
+```ini
+GUNICORN_WORKER_TIMEOUT=300      # Increase to 600 for Kotak/mStock
+SYSTEMD_TIMEOUT=300              # Must match GUNICORN_WORKER_TIMEOUT
+NGINX_PROXY_READ_TIMEOUT=300
+NGINX_PROXY_CONNECT_TIMEOUT=300
+NGINX_PROXY_SEND_TIMEOUT=300
+```
+
+#### For Slow Brokers (Kotak, mStock)
+```bash
+# Edit config/timeout.conf and set:
+GUNICORN_WORKER_TIMEOUT=600
+SYSTEMD_TIMEOUT=600
+NGINX_PROXY_READ_TIMEOUT=600
+NGINX_PROXY_CONNECT_TIMEOUT=600
+NGINX_PROXY_SEND_TIMEOUT=600
+
+# Manual application (without waiting for upgrade):
+sudo python3 scripts/configure_timeouts.py
+```
+
+#### Verify Changes Applied
+```bash
+# Check systemd timeout
+systemctl cat openalgo | grep TimeoutSec
+
+# Check Gunicorn command
+ps aux | grep gunicorn | grep -v grep
+# Should show: --timeout 600 (or your configured value)
+```
+
+#### Migration Features
+- **Idempotent**: Safe to run multiple times
+- **Persistent**: Changes survive application upgrades
+- **Flexible**: Easy to customize via `config/timeout.conf`
+- **Automatic**: Runs with every upgrade
+
+For complete details, see [TIMEOUT_CONFIGURATION.md](../docs/TIMEOUT_CONFIGURATION.md)
 
 ---
 

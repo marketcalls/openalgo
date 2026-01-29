@@ -52,6 +52,8 @@ MIGRATIONS = [
     ("migrate_historify.py", "Historify DuckDB Setup"),
     ("migrate_historify_scheduler.py", "Historify Scheduler Tables"),
     ("migrate_flow.py", "Flow Workflow Automation"),
+    # System configuration migrations
+    ("migrate_systemd_timeout.py", "Systemd Service Timeout Configuration"),
 ]
 
 
