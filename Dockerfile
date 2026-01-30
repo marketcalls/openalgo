@@ -60,6 +60,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     APP_MODE=standalone \
     TMPDIR=/app/tmp \
     NUMBA_CACHE_DIR=/app/tmp/numba_cache \
+    LLVMLITE_TMPDIR=/app/tmp \
     MPLCONFIGDIR=/app/tmp/matplotlib
 # --------------------------------------------------------------------------- #
 USER appuser
