@@ -105,6 +105,7 @@ class BaseBrokerWebSocketAdapter(ABC):
     _port_lock = threading.Lock()
     _shared_context = None
     _context_lock = threading.Lock()
+    _instance_count = 0  # Track active adapter instances for cleanup decisions
 
     def __init__(self, use_shared_zmq: bool = False, shared_publisher=None):
         """
@@ -117,6 +118,11 @@ class BaseBrokerWebSocketAdapter(ABC):
         """
         self.logger = get_logger("broker_adapter")
         self.logger.info("BaseBrokerWebSocketAdapter initializing")
+
+        # Track instance count for shared context cleanup decisions
+        with self._context_lock:
+            BaseBrokerWebSocketAdapter._instance_count += 1
+            self.logger.debug(f"Adapter instance count: {BaseBrokerWebSocketAdapter._instance_count}")
 
         # Check if being created within a ConnectionPool context
         # This handles the case where broker adapters don't forward kwargs to super().__init__()
@@ -185,7 +191,8 @@ class BaseBrokerWebSocketAdapter(ABC):
 
     def _bind_to_available_port(self):
         """
-        Find an available port and bind the socket to it
+        Find an available port and bind the socket to it.
+        If binding fails, closes the socket to prevent FD leak.
         """
         with self._port_lock:
             # Try default port from environment first
@@ -216,6 +223,15 @@ class BaseBrokerWebSocketAdapter(ABC):
                 except zmq.ZMQError as e:
                     self.logger.warning(f"Failed to bind to port {port}: {e}")
                     continue
+
+            # All binding attempts failed - clean up socket to prevent FD leak
+            try:
+                if hasattr(self, "socket") and self.socket:
+                    self.socket.close(linger=0)
+                    self.socket = None
+                    self.logger.warning("Closed socket after failed binding attempts")
+            except Exception as cleanup_err:
+                self.logger.warning(f"Error closing socket after bind failure: {cleanup_err}")
 
             raise RuntimeError("Could not bind to any available ZMQ port after multiple attempts")
 
@@ -280,10 +296,21 @@ class BaseBrokerWebSocketAdapter(ABC):
         """
         Properly clean up ZeroMQ resources and release bound ports.
         Skips cleanup if using shared ZeroMQ publisher (connection pooling mode).
+        Also manages shared context lifecycle based on instance count.
+
+        This method is idempotent - calling it multiple times is safe.
         """
+        # Prevent double cleanup (e.g., explicit cleanup followed by __del__)
+        if hasattr(self, "_zmq_cleaned_up") and self._zmq_cleaned_up:
+            return
+        self._zmq_cleaned_up = True
+
         # Skip cleanup if using shared ZMQ (managed by ConnectionPool)
         if hasattr(self, "_uses_shared_zmq") and self._uses_shared_zmq:
             self.logger.debug("Skipping ZMQ cleanup - using shared publisher")
+            # Still decrement instance count (only once due to _zmq_cleaned_up flag)
+            with self._context_lock:
+                BaseBrokerWebSocketAdapter._instance_count = max(0, BaseBrokerWebSocketAdapter._instance_count - 1)
             return
 
         try:
@@ -296,7 +323,23 @@ class BaseBrokerWebSocketAdapter(ABC):
             # Close the socket
             if hasattr(self, "socket") and self.socket:
                 self.socket.close(linger=0)  # Don't linger on close
+                self.socket = None
                 self.logger.info("ZeroMQ socket closed")
+
+            # Decrement instance count and cleanup shared context if last instance
+            with self._context_lock:
+                BaseBrokerWebSocketAdapter._instance_count = max(0, BaseBrokerWebSocketAdapter._instance_count - 1)
+                self.logger.debug(f"Adapter instance count after cleanup: {BaseBrokerWebSocketAdapter._instance_count}")
+
+                # If this was the last instance, clean up shared context
+                if BaseBrokerWebSocketAdapter._instance_count == 0 and BaseBrokerWebSocketAdapter._shared_context:
+                    self.logger.info("Last adapter instance - cleaning up shared ZMQ context")
+                    try:
+                        BaseBrokerWebSocketAdapter._shared_context.term()
+                    except Exception as ctx_err:
+                        self.logger.warning(f"Error terminating shared context: {ctx_err}")
+                    finally:
+                        BaseBrokerWebSocketAdapter._shared_context = None
 
         except Exception as e:
             self.logger.exception(f"Error cleaning up ZeroMQ resources: {e}")
@@ -311,6 +354,50 @@ class BaseBrokerWebSocketAdapter(ABC):
             # Can't use self.logger here as it might be gone during destruction
             logger.exception(f"Error in __del__ cleaning up ZMQ resources: {e}")
             pass
+
+    @classmethod
+    def cleanup_shared_context(cls):
+        """
+        Force cleanup of shared ZeroMQ context.
+
+        Call this during app shutdown or restart to ensure all ZMQ resources
+        are released, even if individual adapters weren't properly cleaned up.
+        This is useful for scenarios where the app restarts without a full
+        process exit.
+        """
+        with cls._context_lock:
+            if cls._shared_context:
+                try:
+                    logger.info("Force cleaning up shared ZMQ context")
+                    cls._shared_context.term()
+                except Exception as e:
+                    logger.warning(f"Error during forced context cleanup: {e}")
+                finally:
+                    cls._shared_context = None
+                    cls._instance_count = 0
+
+            # Also clear bound ports registry
+            with cls._port_lock:
+                if cls._bound_ports:
+                    logger.info(f"Clearing {len(cls._bound_ports)} bound ports from registry")
+                    cls._bound_ports.clear()
+
+    @classmethod
+    def get_resource_stats(cls) -> dict:
+        """
+        Get statistics about ZMQ resources for health monitoring.
+
+        Returns:
+            dict: Resource statistics including instance count and bound ports
+        """
+        with cls._context_lock:
+            with cls._port_lock:
+                return {
+                    "active_adapter_instances": cls._instance_count,
+                    "bound_ports_count": len(cls._bound_ports),
+                    "bound_ports": list(cls._bound_ports),
+                    "shared_context_active": cls._shared_context is not None,
+                }
 
     def publish_market_data(self, topic, data):
         """

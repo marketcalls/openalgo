@@ -15,6 +15,7 @@ export interface PriceableItem {
   pnlpercent?: number
   quantity?: number
   average_price?: number
+  today_realized_pnl?: number  // Sandbox: today's realized P&L from closed partial trades
 }
 
 /**
@@ -284,17 +285,27 @@ export function useLivePrice<T extends PriceableItem>(
       let calculatedPnl = item.pnl || 0
       let calculatedPnlPercent = item.pnlpercent || 0
 
+      // Get today's realized P&L if available (from sandbox mode)
+      // This ensures cumulative P&L (realized + unrealized) is shown correctly
+      const todayRealizedPnl = item.today_realized_pnl || 0
+
       if (currentLtp && avgPrice > 0) {
-        // Calculate P&L based on position direction
+        // Calculate unrealized P&L based on position direction
         // Long (qty > 0): profit when ltp > avgPrice
         // Short (qty < 0): profit when ltp < avgPrice
+        let unrealizedPnl: number
         if (qty > 0) {
-          calculatedPnl = (currentLtp - avgPrice) * qty
-          calculatedPnlPercent = ((currentLtp - avgPrice) / avgPrice) * 100
+          unrealizedPnl = (currentLtp - avgPrice) * qty
         } else {
-          calculatedPnl = (avgPrice - currentLtp) * Math.abs(qty)
-          calculatedPnlPercent = ((avgPrice - currentLtp) / avgPrice) * 100
+          unrealizedPnl = (avgPrice - currentLtp) * Math.abs(qty)
         }
+
+        // Total P&L = today's realized (from partial closes) + current unrealized
+        calculatedPnl = todayRealizedPnl + unrealizedPnl
+
+        // P&L% based on total P&L and investment
+        const investment = Math.abs(avgPrice * qty)
+        calculatedPnlPercent = investment > 0 ? (calculatedPnl / investment) * 100 : 0
       }
 
       return {

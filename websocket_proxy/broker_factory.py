@@ -321,3 +321,42 @@ def cleanup_all_pools():
         except Exception as e:
             logger.exception(f"Error cleaning up pool {pool_key}: {e}")
     _POOLED_ADAPTERS.clear()
+
+
+def get_resource_health() -> dict:
+    """
+    Get comprehensive health statistics for all WebSocket proxy resources.
+
+    This is useful for monitoring file descriptors, memory usage, and
+    connection health across all broker adapters and pools.
+
+    Returns:
+        dict: Health statistics including:
+            - adapter_resources: ZMQ socket and context stats
+            - registered_adapters: Count of registered broker adapters
+            - active_pools: Stats for each active connection pool
+    """
+    try:
+        adapter_stats = BaseBrokerWebSocketAdapter.get_resource_stats()
+    except Exception as e:
+        logger.warning(f"Error getting adapter stats: {e}")
+        adapter_stats = {"error": str(e)}
+
+    pool_stats = {}
+    for pool_key, pool in _POOLED_ADAPTERS.items():
+        try:
+            pool_stats[pool_key] = pool.get_stats()
+        except Exception as e:
+            pool_stats[pool_key] = {"error": str(e)}
+
+    return {
+        "adapter_resources": adapter_stats,
+        "registered_adapters": {
+            "count": len(BROKER_ADAPTERS),
+            "brokers": list(BROKER_ADAPTERS.keys()),
+        },
+        "active_pools": {
+            "count": len(_POOLED_ADAPTERS),
+            "pools": pool_stats,
+        },
+    }

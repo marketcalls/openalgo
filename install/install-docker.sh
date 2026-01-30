@@ -294,9 +294,17 @@ fi
 
 check_status "Environment configuration failed"
 
+# Calculate dynamic shm_size based on available RAM (25% of total, min 256m, max 2g)
+TOTAL_RAM_MB=$(($(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024))
+SHM_SIZE_MB=$((TOTAL_RAM_MB / 4))
+# Clamp between 256MB and 2048MB
+[ $SHM_SIZE_MB -lt 256 ] && SHM_SIZE_MB=256
+[ $SHM_SIZE_MB -gt 2048 ] && SHM_SIZE_MB=2048
+log "System RAM: ${TOTAL_RAM_MB}MB, SHM size: ${SHM_SIZE_MB}MB" "$BLUE"
+
 # Create docker-compose.yaml
 log "\n=== Creating Docker Compose Configuration ===" "$BLUE"
-$SUDO tee docker-compose.yaml > /dev/null << 'EOF'
+$SUDO tee docker-compose.yaml > /dev/null << EOF
 services:
   openalgo:
     image: openalgo:latest
@@ -324,8 +332,8 @@ services:
       - FLASK_DEBUG=0
       - APP_MODE=standalone
 
-    # Shared memory for scipy/numba operations
-    shm_size: '2gb'
+    # Shared memory for scipy/numba operations (dynamic: 25% of RAM, min 256m, max 2g)
+    shm_size: '${SHM_SIZE_MB}m'
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:5000/auth/check-setup"]

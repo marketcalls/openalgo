@@ -329,6 +329,10 @@ export default function Historify() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{ symbol: string; exchange: string; interval?: string } | null>(null)
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false)
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false)
+  const [bulkWatchlistDeleteDialogOpen, setBulkWatchlistDeleteDialogOpen] = useState(false)
+  const [isBulkWatchlistDeleting, setIsBulkWatchlistDeleting] = useState(false)
 
   // Export dialog state
   const [exportDialogOpen, setExportDialogOpen] = useState(false)
@@ -1208,6 +1212,73 @@ export default function Historify() {
     }
   }
 
+  // Bulk delete data
+  const handleBulkDeleteData = async () => {
+    if (catalogSelectedSymbols.size === 0) return
+    setIsBulkDeleting(true)
+    try {
+      const csrfToken = await fetchCSRFToken()
+      const symbols = Array.from(catalogSelectedSymbols).map((key) => {
+        const [symbol, exchange] = key.split(':')
+        return { symbol, exchange }
+      })
+      const response = await fetch('/historify/api/delete/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+        credentials: 'include',
+        body: JSON.stringify({ symbols }),
+      })
+      const data = await response.json()
+      if (data.status === 'success') {
+        toast.success(data.message)
+        setCatalogSelectedSymbols(new Set())
+        loadCatalog()
+        loadStats()
+      } else {
+        toast.error(data.message || 'Failed to delete data')
+      }
+    } catch (error) {
+      console.error('Error bulk deleting data:', error)
+      toast.error('Failed to delete data')
+    } finally {
+      setIsBulkDeleting(false)
+      setBulkDeleteDialogOpen(false)
+    }
+  }
+
+  // Bulk delete watchlist
+  const handleBulkWatchlistDelete = async () => {
+    if (watchlistSelectedSymbols.size === 0) return
+    setIsBulkWatchlistDeleting(true)
+    try {
+      const csrfToken = await fetchCSRFToken()
+      const symbols = Array.from(watchlistSelectedSymbols).map((key) => {
+        const [symbol, exchange] = key.split(':')
+        return { symbol, exchange }
+      })
+      const response = await fetch('/historify/api/watchlist/bulk/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+        credentials: 'include',
+        body: JSON.stringify({ symbols }),
+      })
+      const data = await response.json()
+      if (data.status === 'success') {
+        toast.success(data.message)
+        setWatchlistSelectedSymbols(new Set())
+        loadWatchlist()
+      } else {
+        toast.error(data.message || 'Failed to remove from watchlist')
+      }
+    } catch (error) {
+      console.error('Error bulk removing from watchlist:', error)
+      toast.error('Failed to remove from watchlist')
+    } finally {
+      setIsBulkWatchlistDeleting(false)
+      setBulkWatchlistDeleteDialogOpen(false)
+    }
+  }
+
   // CSV Upload
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -1660,6 +1731,17 @@ export default function Historify() {
                         </SelectContent>
                       </Select>
                       <div className="flex gap-2">
+                        {catalogSelectedSymbols.size > 0 && (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => setBulkDeleteDialogOpen(true)}
+                            className="h-9"
+                          >
+                            <Trash2 className="h-4 w-4 mr-1" />
+                            Delete ({catalogSelectedSymbols.size})
+                          </Button>
+                        )}
                         <Button
                           variant="outline"
                           size="sm"
@@ -1984,6 +2066,16 @@ export default function Historify() {
                         )}
                       </CardTitle>
                       <div className="flex gap-2">
+                        {watchlistSelectedSymbols.size > 0 && (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => setBulkWatchlistDeleteDialogOpen(true)}
+                          >
+                            <Trash2 className="h-4 w-4 mr-1" />
+                            Delete ({watchlistSelectedSymbols.size})
+                          </Button>
+                        )}
                         <Button
                           variant="outline"
                           size="sm"
@@ -2976,6 +3068,82 @@ NIFTY24DEC25000CE,NFO"
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleDeleteData} className="bg-destructive text-destructive-foreground">
               Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Bulk Delete Confirmation Dialog */}
+      <AlertDialog open={bulkDeleteDialogOpen} onOpenChange={setBulkDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {catalogSelectedSymbols.size} Symbol(s)</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete all data for the selected symbols? This will remove all historical data for:
+              <div className="mt-2 max-h-32 overflow-y-auto text-sm">
+                {Array.from(catalogSelectedSymbols).slice(0, 10).map((key) => (
+                  <div key={key} className="text-foreground">{key.replace(':', ' - ')}</div>
+                ))}
+                {catalogSelectedSymbols.size > 10 && (
+                  <div className="text-muted-foreground">...and {catalogSelectedSymbols.size - 10} more</div>
+                )}
+              </div>
+              <div className="mt-2 font-medium text-destructive">This action cannot be undone.</div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isBulkDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleBulkDeleteData}
+              className="bg-destructive text-destructive-foreground"
+              disabled={isBulkDeleting}
+            >
+              {isBulkDeleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                `Delete ${catalogSelectedSymbols.size} Symbol(s)`
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Bulk Watchlist Delete Confirmation Dialog */}
+      <AlertDialog open={bulkWatchlistDeleteDialogOpen} onOpenChange={setBulkWatchlistDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove {watchlistSelectedSymbols.size} Symbol(s) from Watchlist</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to remove the selected symbols from your watchlist?
+              <div className="mt-2 max-h-32 overflow-y-auto text-sm">
+                {Array.from(watchlistSelectedSymbols).slice(0, 10).map((key) => (
+                  <div key={key} className="text-foreground">{key.replace(':', ' - ')}</div>
+                ))}
+                {watchlistSelectedSymbols.size > 10 && (
+                  <div className="text-muted-foreground">...and {watchlistSelectedSymbols.size - 10} more</div>
+                )}
+              </div>
+              <div className="mt-2 text-muted-foreground text-sm">This will not delete any downloaded historical data.</div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isBulkWatchlistDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleBulkWatchlistDelete}
+              className="bg-destructive text-destructive-foreground"
+              disabled={isBulkWatchlistDeleting}
+            >
+              {isBulkWatchlistDeleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Removing...
+                </>
+              ) : (
+                `Remove ${watchlistSelectedSymbols.size} Symbol(s)`
+              )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

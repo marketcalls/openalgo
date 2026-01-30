@@ -371,11 +371,23 @@ do_start() {
     docker stop "$CONTAINER" >/dev/null 2>&1
     docker rm "$CONTAINER" >/dev/null 2>&1
 
+    # Calculate dynamic shm_size based on available RAM (25% of total, min 256m, max 2g)
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        TOTAL_RAM_MB=$(($(sysctl -n hw.memsize) / 1024 / 1024))
+    else
+        TOTAL_RAM_MB=$(($(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024))
+    fi
+    SHM_SIZE_MB=$((TOTAL_RAM_MB / 4))
+    # Clamp between 256MB and 2048MB
+    [ $SHM_SIZE_MB -lt 256 ] && SHM_SIZE_MB=256
+    [ $SHM_SIZE_MB -gt 2048 ] && SHM_SIZE_MB=2048
+    log_info "System RAM: ${TOTAL_RAM_MB}MB, SHM size: ${SHM_SIZE_MB}MB"
+
     # Run container
     log_info "Starting container..."
     if docker run -d \
         --name "$CONTAINER" \
-        --shm-size=2g \
+        --shm-size=${SHM_SIZE_MB}m \
         -p 5000:5000 \
         -p 8765:8765 \
         -v "$OPENALGO_DIR/db:/app/db" \

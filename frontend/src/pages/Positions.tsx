@@ -105,7 +105,6 @@ function calculatePnlPercent(position: Position): number {
   const avgPrice = Number(position.average_price) || 0
   const qty = Number(position.quantity) || 0
   const pnl = Number(position.pnl) || 0
-  const ltp = Number(position.ltp) || 0
 
   // Use API-provided pnlpercent if available
   if (position.pnlpercent !== undefined && position.pnlpercent !== null) {
@@ -120,23 +119,9 @@ function calculatePnlPercent(position: Position): number {
     return investment > 0 ? (pnl / investment) * 100 : 0
   }
 
-  // For flat positions (qty=0), derive from P&L and price movement
-  // If we have P&L and price difference, calculate the implied percentage
-  if (ltp > 0 && pnl !== 0) {
-    const priceDiff = ltp - avgPrice
-    if (priceDiff !== 0) {
-      // Derive implied quantity from P&L and price difference
-      const impliedQty = Math.abs(pnl / priceDiff)
-      const investment = avgPrice * impliedQty
-      return investment > 0 ? (pnl / investment) * 100 : 0
-    }
-  }
-
-  // Fallback: price change percentage
-  if (ltp > 0) {
-    return ((ltp - avgPrice) / avgPrice) * 100
-  }
-
+  // For closed positions (qty=0), return 0% like Zerodha
+  // We cannot reliably calculate P&L% without knowing the original quantity
+  // The P&L amount is still shown correctly from the API
   return 0
 }
 
