@@ -34,6 +34,7 @@ from blueprints.flow import flow_bp  # Import the flow blueprint
 from blueprints.gc_json import gc_json_bp
 from blueprints.historify import historify_bp  # Import the historify blueprint
 from blueprints.latency import latency_bp  # Import the latency blueprint
+from blueprints.health import health_bp  # Import the health monitoring blueprint
 from blueprints.log import log_bp
 from blueprints.logging import logging_bp  # Import the logging blueprint
 from blueprints.master_contract_status import (
@@ -83,6 +84,7 @@ from limiter import limiter  # Import the Limiter instance
 from restx_api import api, api_v1_bp
 from services.telegram_bot_service import telegram_bot_service
 from utils.latency_monitor import init_latency_monitoring  # Import latency monitoring
+from utils.health_monitor import init_health_monitoring  # Import health monitoring
 from utils.logging import (  # Import centralized logging
     get_logger,
     highlight_url,
@@ -221,6 +223,7 @@ def create_app():
     app.register_blueprint(chartink_bp)
     app.register_blueprint(traffic_bp)
     app.register_blueprint(latency_bp)
+    app.register_blueprint(health_bp)  # Register Health monitoring blueprint
     app.register_blueprint(strategy_bp)
     app.register_blueprint(master_contract_status_bp)
     app.register_blueprint(websocket_bp)  # Register WebSocket example blueprint
@@ -251,8 +254,15 @@ def create_app():
         # Exempt logout endpoint from CSRF protection (safe - only destroys session)
         csrf.exempt(app.view_functions["auth.logout"])
 
+        # Exempt health check endpoints from CSRF (for AWS ELB, K8s probes)
+        csrf.exempt(app.view_functions["health_bp.simple_health"])
+        csrf.exempt(app.view_functions["health_bp.detailed_health_check"])
+
         # Initialize latency monitoring (after registering API blueprint)
         init_latency_monitoring(app)
+
+        # Initialize health monitoring (background daemon thread)
+        init_health_monitoring(app)
 
         # Auto-start Telegram bot if it was active (non-blocking)
         try:
@@ -607,6 +617,41 @@ with app.app_context():
             logger.debug(f"Services started in parallel ({startup_time:.0f}ms)")
     except Exception as e:
         logger.error(f"Error checking analyzer mode on startup: {e}")
+
+# Database session cleanup (teardown handler)
+@app.teardown_appcontext
+def shutdown_database_sessions(exception=None):
+    """Remove scoped sessions after each request to prevent FD leaks"""
+    try:
+        from database.auth_db import db_session
+        db_session.remove()
+    except Exception as e:
+        logger.error(f"Error removing auth db_session: {e}")
+
+    try:
+        from database.traffic_db import logs_session
+        logs_session.remove()
+    except Exception as e:
+        logger.error(f"Error removing logs_session: {e}")
+
+    try:
+        from database.apilog_db import db_session as apilog_session
+        apilog_session.remove()
+    except Exception as e:
+        logger.error(f"Error removing apilog_session: {e}")
+
+    try:
+        from database.latency_db import latency_session
+        latency_session.remove()
+    except Exception as e:
+        logger.error(f"Error removing latency_session: {e}")
+
+    try:
+        from database.health_db import health_session
+        health_session.remove()
+    except Exception as e:
+        logger.error(f"Error removing health_session: {e}")
+
 
 # Integrate the WebSocket proxy server with the Flask app
 # Check if running in Docker (standalone mode) or local (integrated mode)
