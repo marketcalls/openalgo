@@ -680,3 +680,76 @@ def import_workflow():
     if workflow:
         return jsonify({"status": "success", "workflow_id": workflow.id}), 201
     return jsonify({"error": "Failed to import workflow"}), 500
+
+
+# === Index Symbols Lot Size Routes ===
+
+
+@flow_bp.route("/api/index-symbols", methods=["GET"])
+@check_session_validity
+def get_index_symbols_lot_sizes():
+    """
+    Get lot sizes for index symbols from master contract database.
+    Returns lot sizes for NSE and BSE index options (NIFTY, BANKNIFTY, etc.)
+    """
+    from sqlalchemy import distinct, func
+
+    from database.symbol import SymToken, db_session
+
+    # Define index symbols to look up
+    nse_indices = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"]
+    bse_indices = ["SENSEX", "BANKEX", "SENSEX50"]
+
+    results = []
+
+    try:
+        # Get lot sizes for NSE indices (from NFO exchange)
+        for index_name in nse_indices:
+            # Query for any option symbol with this underlying name
+            record = (
+                db_session.query(SymToken.name, SymToken.lotsize)
+                .filter(
+                    SymToken.name == index_name,
+                    SymToken.exchange == "NFO",
+                    SymToken.lotsize.isnot(None),
+                )
+                .first()
+            )
+
+            if record and record.lotsize:
+                results.append(
+                    {
+                        "value": index_name,
+                        "label": index_name,
+                        "exchange": "NFO",
+                        "lotSize": record.lotsize,
+                    }
+                )
+
+        # Get lot sizes for BSE indices (from BFO exchange)
+        for index_name in bse_indices:
+            record = (
+                db_session.query(SymToken.name, SymToken.lotsize)
+                .filter(
+                    SymToken.name == index_name,
+                    SymToken.exchange == "BFO",
+                    SymToken.lotsize.isnot(None),
+                )
+                .first()
+            )
+
+            if record and record.lotsize:
+                results.append(
+                    {
+                        "value": index_name,
+                        "label": index_name,
+                        "exchange": "BFO",
+                        "lotSize": record.lotsize,
+                    }
+                )
+
+        return jsonify({"status": "success", "data": results})
+
+    except Exception as e:
+        logger.exception(f"Error fetching index symbols lot sizes: {e}")
+        return jsonify({"error": "Failed to fetch lot sizes"}), 500

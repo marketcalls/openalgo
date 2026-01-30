@@ -1,7 +1,7 @@
 {
-    "API_KEY": "a7fe7bcf5bf525f89222914d8c08189336bf17035a8e67c1f8f10468b0030409",
-    "HOST": "http://127.0.0.1:3301",
-    "STRATEGY_NAME": "SENSEX_STRATEGY_SURU",
+    "API_KEY": "b0b33f31812c948e90620949200ff0542c2a6432b409a07a4495daebd91b549f",
+    "HOST": "http://127.0.0.1:3300",
+    "STRATEGY_NAME": "SENSEX_WT_STRATEGY",
     "LOTS": 5,
     "LOT_SIZE": 20,
     "SL_PERCENT": 0.05,
@@ -11,28 +11,28 @@
     "OPTIONS_EXCHANGE": "BFO",
     "EXPIRY_DATE": "29JAN26",
     "PRODUCT": "NRML",
-    "POLL_INTERVAL": 5,
+    "POLL_INTERVAL": 1,
     "DETAILED_LOGGING": true,
-    "PERSIST_CYCLES": 10,
+    "PERSIST_CYCLES": 5,
     "USE_WEBSOCKET": true,
     "legs": [
         {
             "name": "CE_LEG",
             "ce_sell_offset": "ATM",
-            "ce_buy_offset": "OTM4",
-            "sl_percent": 0.1,
+            "wait_trade_percentage": 0.10,
+            "sl_percent": 1,
             "reentry_limit": 4,
-            "target_percent": 0.1,
-            "reexecute_limit": 2
+            "target_percent": 0.5,
+            "reexecute_limit": 4
         },
         {
             "name": "PE_LEG",
             "pe_sell_offset": "ATM",
-            "pe_buy_offset": "OTM4",
-            "sl_percent": 0.1,
+            "wait_trade_percentage": 0.10,
+            "sl_percent": 1,
             "reentry_limit": 4,
-            "target_percent": 0.1,
-            "reexecute_limit": 2
+            "target_percent": 0.5,
+            "reexecute_limit": 4
         }
     ]
 }

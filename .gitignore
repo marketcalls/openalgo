@@ -43,14 +43,14 @@ db/strategy_encryption.key
 !all_symbols.csv
 !data/qtyfreeze.csv
 
-# Environments 
-.env 
-.venv 
-env/ 
-venv/ 
-ENV/ 
-env.bak/ 
-venv.bak/ 
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
 
 # Node modules (all directories)
 node_modules/
@@ -76,6 +76,9 @@ frontend/.cache/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+#frontend/dist
+frontend/dist/
 #frontend/dist
 
 # Windows NUL file

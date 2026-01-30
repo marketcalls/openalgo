@@ -4,6 +4,32 @@ This file provides guidance for AI agents and developers working with code in th
 
 ## Project Overview
 
+## Notes
+
+### Diagnosing Very Slow Broker HTTP Calls (60–180s)
+
+If broker requests (especially Zerodha/Kite `api.kite.trade`) occasionally take 60–180 seconds, it may be **TCP connect stalling** (often due to broken/blocked IPv6 paths, VPN tunnels like `utun*`, or ISP routing), not slow broker processing.
+
+Quick diagnosis (no code changes required):
+
+- Compare IPv4 vs IPv6 from the same machine:
+  - `curl -v -4 https://api.kite.trade`
+  - `curl -v -6 https://api.kite.trade --max-time 10`
+  - If `-4` is fast and `-6` times out, IPv6 is likely the cause.
+
+Interpreting low-level traces:
+
+- When using `httpcore` tracing, a large gap between `connect_tcp.started` and `connect_tcp.complete` indicates a network/connectivity problem (connect phase), not broker latency.
+
+Mitigation guidance:
+
+- Prefer fixing the environment (disable IPv6 on the host/network or fix IPv6 routing).
+- For latency-sensitive endpoints (quotes/ltp), consider enforcing **short connect timeouts** so requests fail fast instead of hanging for minutes.
+
+### Avoid Startup Breakage When Modifying Logging
+
+`setup_logging()` runs at import time. When adding logs inside it, always use a defined logger (e.g., `logging.getLogger(__name__)`) and avoid referencing undefined variables; otherwise the app can fail to start.
+
 **OpenAlgo** is a production-ready algorithmic trading platform built with Flask (backend) and React
 19 (frontend). It provides a unified API layer across 24+ Indian brokers, enabling seamless
 integration with TradingView, Amibroker, Excel, Python, and AI agents.

@@ -17,6 +17,11 @@ These files are additions that don't exist in upstream. They will **never confli
 | `docs/PYVOLLIB_FIX.md` | Documentation for fixing py_vollib compatibility with Python 3.14 |
 | `FORK.md` | This file - tracks fork-specific changes |
 | `AGENTS.md` | AI agent guidance file (may eventually exist in upstream, but content differs) |
+| `database/strategy_state_db.py` | Database access layer for `strategy_state.db` - queries Python strategy execution states |
+| `blueprints/strategy_state.py` | Flask blueprint providing `/api/strategy-state` endpoints (GET all, GET by ID, DELETE) |
+| `frontend/src/types/strategy-state.ts` | TypeScript interfaces for strategy state data structures |
+| `frontend/src/api/strategy-state.ts` | API client for strategy state endpoints |
+| `frontend/src/pages/StrategyPositions.tsx` | React page component - displays strategy positions in accordion format with delete confirmation |
 
 ---
 
@@ -96,6 +101,129 @@ socket.on('share_credentials_status', (data: { status: string; message: string }
 ```
 
 **Resolution Strategy**: This is a simple addition. Re-add the event listener if it gets removed during merge.
+
+---
+
+### `app.py`
+**Change Type**: Feature addition  
+**Conflict Risk**: Low  
+**Description**: Registered Strategy State blueprint
+
+**Specific Changes**:
+1. Added import:
+   ```python
+   from blueprints.strategy_state import strategy_state_bp
+   ```
+
+2. Added blueprint registration in `create_app()`:
+   ```python
+   app.register_blueprint(strategy_state_bp)
+   ```
+
+**Resolution Strategy**: If upstream modifies blueprint registrations, re-add these two lines.
+
+---
+
+### `frontend/src/App.tsx`
+**Change Type**: Feature addition  
+**Conflict Risk**: Low  
+**Description**: Added route for Strategy Positions page
+
+**Specific Changes**:
+1. Added lazy import:
+   ```typescript
+   const StrategyPositions = lazy(() => import('@/pages/StrategyPositions'))
+   ```
+
+2. Added route:
+   ```typescript
+   <Route path="/strategy-positions" element={<StrategyPositions />} />
+   ```
+
+**Resolution Strategy**: Re-add the lazy import and route if removed during merge.
+
+---
+
+### `frontend/src/config/navigation.ts`
+**Change Type**: Feature addition  
+**Conflict Risk**: Low  
+**Description**: Added Strategy Positions to profile menu navigation
+
+**Specific Changes**:
+1. Added `LineChart` to lucide-react imports
+2. Added menu item to `profileMenuItems` array:
+   ```typescript
+   { href: '/strategy-positions', label: 'Strategy Positions', icon: LineChart },
+   ```
+
+**Resolution Strategy**: Re-add the import and menu item if removed during merge.
+
+---
+
+### `frontend/src/hooks/useLivePrice.ts`
+**Change Type**: Bug fix  
+**Conflict Risk**: Medium  
+**Description**: Improved live LTP selection logic for screens that do not provide quantity/avg price
+
+**Specific Changes**:
+1. Adjusted LTP selection logic to better handle screens that *do not* provide `quantity`/`average_price` (e.g., Strategy legs).
+2. Added a safeguard: when an item explicitly has `quantity` and `quantity === 0`, preserve REST values (avoid updating LTP / recalculating P&L for closed positions).
+
+**Resolution Strategy**: If upstream touches this hook, re-apply the `quantity === 0` REST-preservation guard and the LTP selection tweaks.
+
+---
+
+### `frontend/src/pages/StrategyPositions.tsx`
+**Change Type**: Feature enhancement  
+**Conflict Risk**: Medium  
+**Description**: Expanded Strategy Positions UI (live LTP, auto-refresh preferences, leg breakdown, inline SL/Target editing, planned entry price)
+
+**Specific Changes** (high level):
+- Added auto-refresh toggle + interval (5–300s) persisted in localStorage
+- Added a single `useLivePrice()` subscription for all active legs (shows live LTP)
+- Added unrealized/realized/total P&L computation and a per-leg P&L breakdown
+- Added inline editing for `sl_price` / `target_price` (calls `createStrategyOverride`)
+- Added planned entry price calculation for wait-and-trade legs
+- Improved delete confirmation by requiring typing the strategy name
+
+**Resolution Strategy**: If upstream changes this page, re-apply the above feature blocks (especially the live-price subscription, planned entry price, and auto-refresh prefs).
+
+---
+
+### `frontend/src/types/strategy-state.ts`
+**Change Type**: Feature addition  
+**Conflict Risk**: Low  
+**Description**: Added wait-and-trade entry metadata to strategy leg types
+
+**Specific Changes**:
+- Added `wait_baseline_price`, `wait_trade_percent`, and `wait_trigger_price` fields to `LegState`.
+
+**Resolution Strategy**: Re-add these fields if upstream modifies the strategy-state types.
+
+---
+
+### `strategies/scripts/strategy_config.json`
+**Change Type**: Configuration update  
+**Conflict Risk**: Low  
+**Description**: Updated sample strategy configuration for wait-and-trade legs
+
+**Specific Changes**:
+- Updated the sample strategy name and leg parameters (wait trade percentage, SL/target, and re-execute limits).
+
+**Resolution Strategy**: Re-apply these sample config tweaks after syncing with upstream if needed.
+
+---
+
+### `frontend/dist/index.html`
+**Change Type**: Build artifact update  
+**Conflict Risk**: Low  
+**Description**: Vite build output changed hashed asset filenames.
+
+**Notes**:
+- This file is generated by `frontend` build (`npm run build`), so it will naturally change when bundling changes.
+- Avoid hand-editing.
+
+**Resolution Strategy**: Treat as generated output; regenerate via `npm run build` after resolving merges.
 
 ---
 
@@ -197,4 +325,69 @@ When running multiple OpenAlgo instances (e.g., different machines, different st
 
 ---
 
-*Last updated: 2026-01-26*
+## Feature: Strategy Positions Viewer
+
+### Problem Solved
+When running Python trading strategies with state persistence (`strategy_state.db`), users had no way to view their strategy positions, trade history, and P&L through the UI. This feature provides:
+- **Visual dashboard** for all Python strategies with state persistence
+- **Position tracking** showing open and exited positions per strategy
+- **Trade history** with entry/exit prices, times, and P&L
+- **Strategy management** with delete functionality
+
+### How It Works
+
+1. Navigate to **Profile Menu → Strategy Positions** (or `/strategy-positions`)
+2. View all strategies in accordion format with:
+   - Strategy name, status (RUNNING/COMPLETED/etc.), underlying, expiry
+   - Summary stats: Open positions count, total trades, realized/unrealized P&L
+   - **Current Positions table**: Leg, Symbol, Side, Qty, Entry Price, LTP, SL, Target, Status, P&L
+   - **Trade History table**: Entry/Exit prices and times, Exit type (SL_HIT/TARGET_HIT), P&L
+3. Delete strategies by clicking the trash icon and typing the strategy name to confirm
+
+### Live SL/Target Override (UI Integration)
+
+For positions with `IN_POSITION` status, users can **inline edit** Stop Loss and Target prices:
+
+1. **Click** on the SL or Target cell in the Current Positions table
+2. **Enter** the new value in the input field
+3. Press **Enter** to save (or **Escape** to cancel)
+4. A toast notification confirms: "Sl Price override created. Will be applied within 5 seconds."
+
+**Validation Rules:**
+- For **BUY** positions: SL must be below entry price, Target must be above entry price
+- For **SELL** positions: SL must be above entry price, Target must be below entry price
+
+**How It Works (Backend):**
+- UI creates a record in the `strategy_overrides` table with `applied=FALSE`
+- The running Python strategy polls `get_pending_overrides()` within its `POLL_INTERVAL` (default 5s)
+- Strategy applies the override with its own validation and calls `mark_override_applied()`
+
+**`strategy_overrides` Table Schema:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER | Primary key (auto-increment) |
+| instance_id | VARCHAR(100) | Strategy instance ID |
+| leg_key | VARCHAR(100) | Leg identifier (e.g., "CE_SPREAD_CE_SELL") |
+| override_type | VARCHAR(20) | `sl_price` or `target_price` |
+| new_value | FLOAT | New price value |
+| applied | BOOLEAN | Whether applied (default: FALSE) |
+| created_at | DATETIME | When override was created |
+| applied_at | DATETIME | When override was applied |
+
+### Files Involved
+- `database/strategy_state_db.py` - Database queries for `strategy_state.db`
+- `blueprints/strategy_state.py` - REST API endpoints
+- `frontend/src/pages/StrategyPositions.tsx` - Main UI component
+- `frontend/src/api/strategy-state.ts` - API client
+- `frontend/src/types/strategy-state.ts` - TypeScript types
+- `app.py` - Blueprint registration (modified)
+- `frontend/src/App.tsx` - Route registration (modified)
+- `frontend/src/config/navigation.ts` - Navigation menu (modified)
+
+### TODO
+- **LTP Integration**: Currently using entry_price as placeholder for LTP. Future enhancement to fetch real-time LTP via WebSocket or Quotes API.
+
+---
+
+*Last updated: 2026-01-29*
