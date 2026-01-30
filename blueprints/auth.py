@@ -503,7 +503,10 @@ def debug_smtp():
 @auth_bp.route("/session-status", methods=["GET"])
 def get_session_status():
     """Return current session status for React SPA."""
-    if "user" not in session:
+    # Check if user session exists (either 'user' or 'user_session_key')
+    username = session.get("user") or session.get("user_session_key")
+
+    if not username:
         # Return 200 with authenticated: false instead of 401
         # This prevents unnecessary console errors in the browser
         return jsonify(
@@ -514,10 +517,10 @@ def get_session_status():
     if session.get("logged_in") and session.get("broker"):
         from database.auth_db import get_api_key_for_tradingview, get_auth_token
 
-        auth_token = get_auth_token(session.get("user"))
+        auth_token = get_auth_token(username)
         if auth_token is None:
             logger.warning(
-                f"Session status: stale session detected for user {session.get('user')} - no auth token"
+                f"Session status: stale session detected for user {username} - no auth token"
             )
             # Clear the stale session
             session.clear()
@@ -526,26 +529,29 @@ def get_session_status():
             ), 200
 
         # Get API key for the user
-        api_key = get_api_key_for_tradingview(session.get("user"))
+        api_key = get_api_key_for_tradingview(username)
 
         return jsonify(
             {
                 "status": "success",
                 "authenticated": True,
                 "logged_in": session.get("logged_in", False),
-                "user": session.get("user"),
+                "user": username,
                 "broker": session.get("broker"),
                 "api_key": api_key,
             }
         )
 
+    # If user exists in session but not logged in with broker, clear stale session
+    # This fixes the auto-login issue where frontend shows authenticated but no broker
+    logger.info(f"Clearing stale session for user {username} - logged_in flag is False")
+    session.clear()
     return jsonify(
         {
             "status": "success",
-            "authenticated": True,
-            "logged_in": session.get("logged_in", False),
-            "user": session.get("user"),
-            "broker": session.get("broker"),
+            "message": "Session incomplete - please login again",
+            "authenticated": False,
+            "logged_in": False,
         }
     )
 
@@ -708,7 +714,16 @@ def get_dashboard_data():
 @auth_bp.route("/logout", methods=["GET", "POST"])
 def logout():
     if session.get("logged_in"):
-        username = session["user"]
+        # Use fallback for username - check both possible session keys
+        username = session.get("user") or session.get("user_session_key")
+        broker = session.get("broker")
+
+        if not username:
+            logger.warning("Logout called without valid user session key")
+            session.clear()
+            if request.method == "POST":
+                return jsonify({"status": "success", "message": "Session cleared"})
+            return redirect(url_for("auth.login"))
 
         # Clear cache entries before database update to prevent stale data access
         cache_key_auth = f"auth-{username}"
@@ -728,6 +743,16 @@ def logout():
             logger.info("Cleared symbol cache on logout")
         except Exception as cache_error:
             logger.exception(f"Error clearing symbol cache on logout: {cache_error}")
+
+        # Reset master contract status for the broker on logout
+        if broker:
+            try:
+                from database.master_contract_status_db import update_status
+
+                update_status(broker, "pending", "User logged out - master contract needs re-download")
+                logger.info(f"Reset master contract status for broker {broker} on logout")
+            except Exception as status_error:
+                logger.exception(f"Error resetting master contract status on logout: {status_error}")
 
         # writing to database
         inserted_id = upsert_auth(username, "", "", revoke=True)

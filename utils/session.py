@@ -85,12 +85,38 @@ def revoke_user_tokens(revoke_db_tokens=True):
         revoke_db_tokens (bool): If True, revokes the token in the database (Invalidates API Key).
                                  If False, only clears local caches (Preserves API Key).
     """
-    if "user" in session:
-        username = session.get("user")
+    # Use fallback for username - check both possible session keys
+    username = session.get("user") or session.get("user_session_key")
+    broker = session.get("broker")
+
+    if username:
         try:
             from database.auth_db import auth_cache, feed_token_cache, upsert_auth
 
-            # Clear cache entries first to prevent stale data access
+            # Reset master contract status for the broker on session expiry
+            if broker:
+                try:
+                    from database.master_contract_status_db import update_status
+
+                    update_status(broker, "pending", "Session expired - master contract needs re-download")
+                    logger.info(f"Reset master contract status for broker {broker} on session expiry")
+                except Exception as status_error:
+                    logger.exception(f"Error resetting master contract status on expiry: {status_error}")
+
+            if revoke_db_tokens:
+                # Revoke the auth token in database FIRST (atomic operation)
+                # This prevents race condition where cache is cleared but token is still valid in DB
+                inserted_id = upsert_auth(username, "", "", revoke=True)
+                if inserted_id is not None:
+                    logger.info(f"Auto-expiry: Revoked auth tokens for user: {username}")
+                else:
+                    logger.error(f"Auto-expiry: Failed to revoke auth tokens for user: {username}")
+            else:
+                logger.info(
+                    f"Auto-expiry: Skipped DB revocation for user: {username} (Preserving API access)"
+                )
+
+            # Clear cache entries AFTER database update to prevent race condition
             cache_key_auth = f"auth-{username}"
             cache_key_feed = f"feed-{username}"
             if cache_key_auth in auth_cache:
@@ -139,18 +165,6 @@ def revoke_user_tokens(revoke_db_tokens=True):
                 clear_telegram_cache()
             except Exception as cache_error:
                 logger.exception(f"Error clearing telegram cache: {cache_error}")
-
-            if revoke_db_tokens:
-                # Revoke the auth token in database
-                inserted_id = upsert_auth(username, "", "", revoke=True)
-                if inserted_id is not None:
-                    logger.info(f"Auto-expiry: Revoked auth tokens for user: {username}")
-                else:
-                    logger.error(f"Auto-expiry: Failed to revoke auth tokens for user: {username}")
-            else:
-                logger.info(
-                    f"Auto-expiry: Skipped DB revocation for user: {username} (Preserving API access)"
-                )
 
         except Exception as e:
             logger.exception(f"Error revoking tokens during auto-expiry for user {username}: {e}")
