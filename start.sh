@@ -230,11 +230,16 @@ trap cleanup SIGTERM SIGINT
 APP_PORT="${PORT:-5000}"
 
 echo "[OpenAlgo] Starting application on port ${APP_PORT} with eventlet..."
+
+# Create gunicorn worker temp directory (must be inside container, not mounted volume)
+mkdir -p /tmp/gunicorn_workers
+
 exec /app/.venv/bin/gunicorn \
     --worker-class eventlet \
     --workers 1 \
     --bind 0.0.0.0:${APP_PORT} \
     --timeout 300 \
     --graceful-timeout 30 \
+    --worker-tmp-dir /tmp/gunicorn_workers \
     --log-level warning \
     app:app
