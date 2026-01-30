@@ -90,20 +90,21 @@ def revoke_user_tokens(revoke_db_tokens=True):
     broker = session.get("broker")
 
     if username:
-        try:
-            from database.auth_db import auth_cache, feed_token_cache, upsert_auth
+        from database.auth_db import auth_cache, feed_token_cache, upsert_auth
 
-            # Reset master contract status for the broker on session expiry
-            if broker:
-                try:
-                    from database.master_contract_status_db import update_status
+        # Reset master contract status for the broker on session expiry
+        if broker:
+            try:
+                from database.master_contract_status_db import update_status
 
-                    update_status(broker, "pending", "Session expired - master contract needs re-download")
-                    logger.info(f"Reset master contract status for broker {broker} on session expiry")
-                except Exception as status_error:
-                    logger.exception(f"Error resetting master contract status on expiry: {status_error}")
+                update_status(broker, "pending", "Session expired - master contract needs re-download")
+                logger.info(f"Reset master contract status for broker {broker} on session expiry")
+            except Exception as status_error:
+                logger.exception(f"Error resetting master contract status on expiry: {status_error}")
 
-            if revoke_db_tokens:
+        # Database revocation - wrapped separately to ensure cache cleanup always happens
+        if revoke_db_tokens:
+            try:
                 # Revoke the auth token in database FIRST (atomic operation)
                 # This prevents race condition where cache is cleared but token is still valid in DB
                 inserted_id = upsert_auth(username, "", "", revoke=True)
@@ -111,12 +112,18 @@ def revoke_user_tokens(revoke_db_tokens=True):
                     logger.info(f"Auto-expiry: Revoked auth tokens for user: {username}")
                 else:
                     logger.error(f"Auto-expiry: Failed to revoke auth tokens for user: {username}")
-            else:
-                logger.info(
-                    f"Auto-expiry: Skipped DB revocation for user: {username} (Preserving API access)"
-                )
+            except Exception as db_error:
+                # Log DB error but continue with cache cleanup (defensive)
+                # Cache cleanup must happen even if DB fails to prevent stale cached tokens
+                logger.exception(f"Database revocation failed for user {username}, continuing with cache cleanup: {db_error}")
+        else:
+            logger.info(
+                f"Auto-expiry: Skipped DB revocation for user: {username} (Preserving API access)"
+            )
 
-            # Clear cache entries AFTER database update to prevent race condition
+        # Clear cache entries AFTER database update attempt
+        # CRITICAL: This must run even if DB update fails to prevent stale tokens
+        try:
             cache_key_auth = f"auth-{username}"
             cache_key_feed = f"feed-{username}"
             if cache_key_auth in auth_cache:
@@ -133,41 +140,33 @@ def revoke_user_tokens(revoke_db_tokens=True):
             except Exception as invalidation_error:
                 # Don't fail logout if cache invalidation fails
                 logger.warning(f"Failed to publish cache invalidation for user {username}: {invalidation_error}")
+        except Exception as cache_error:
+            logger.exception(f"Error during cache cleanup for user {username}: {cache_error}")
 
-            # Clear symbol cache on logout/session expiry
-            try:
-                from database.master_contract_cache_hook import clear_cache_on_logout
+        # Clear other caches - each in separate try-except for isolation
+        try:
+            from database.master_contract_cache_hook import clear_cache_on_logout
+            clear_cache_on_logout()
+        except Exception as cache_error:
+            logger.exception(f"Error clearing symbol cache: {cache_error}")
 
-                clear_cache_on_logout()
-            except Exception as cache_error:
-                logger.exception(f"Error clearing symbol cache: {cache_error}")
+        try:
+            from database.settings_db import clear_settings_cache
+            clear_settings_cache()
+        except Exception as cache_error:
+            logger.exception(f"Error clearing settings cache: {cache_error}")
 
-            # Clear settings cache on logout/session expiry
-            try:
-                from database.settings_db import clear_settings_cache
+        try:
+            from database.strategy_db import clear_strategy_cache
+            clear_strategy_cache()
+        except Exception as cache_error:
+            logger.exception(f"Error clearing strategy cache: {cache_error}")
 
-                clear_settings_cache()
-            except Exception as cache_error:
-                logger.exception(f"Error clearing settings cache: {cache_error}")
-
-            # Clear strategy cache on logout/session expiry
-            try:
-                from database.strategy_db import clear_strategy_cache
-
-                clear_strategy_cache()
-            except Exception as cache_error:
-                logger.exception(f"Error clearing strategy cache: {cache_error}")
-
-            # Clear telegram cache on logout/session expiry
-            try:
-                from database.telegram_db import clear_telegram_cache
-
-                clear_telegram_cache()
-            except Exception as cache_error:
-                logger.exception(f"Error clearing telegram cache: {cache_error}")
-
-        except Exception as e:
-            logger.exception(f"Error revoking tokens during auto-expiry for user {username}: {e}")
+        try:
+            from database.telegram_db import clear_telegram_cache
+            clear_telegram_cache()
+        except Exception as cache_error:
+            logger.exception(f"Error clearing telegram cache: {cache_error}")
 
 
 def check_session_validity(f):

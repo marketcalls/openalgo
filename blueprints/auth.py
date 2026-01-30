@@ -542,16 +542,60 @@ def get_session_status():
             }
         )
 
-    # If user exists in session but not logged in with broker, clear stale session
-    # This fixes the auto-login issue where frontend shows authenticated but no broker
-    logger.info(f"Clearing stale session for user {username} - logged_in flag is False")
-    session.clear()
+    # If user exists but not logged in with broker, this is the normal multi-step login flow:
+    # Step 1: User logs in with username/password (session["user"] set, logged_in=False)
+    # Step 2: User selects broker and authenticates (logged_in=True)
+    #
+    # We should only clear the session if it's genuinely stale (old session from previous day)
+    # Check if login_time exists - if not, this is a legitimate in-progress login
+    if "login_time" not in session:
+        # This is a legitimate in-progress login (just completed app login, choosing broker)
+        logger.debug(f"Session in progress for user {username} - awaiting broker selection")
+        return jsonify(
+            {
+                "status": "success",
+                "authenticated": True,  # User authenticated with app
+                "logged_in": False,     # But not yet connected to broker
+                "user": username,
+                "broker": session.get("broker"),
+            }
+        )
+
+    # If login_time exists but logged_in is False, check if session is stale
+    # This could be from a previous session where user logged out from broker but session persisted
+    from datetime import datetime
+    import pytz
+
+    try:
+        login_time = datetime.fromisoformat(session["login_time"])
+        now_utc = datetime.now(pytz.timezone("UTC"))
+        now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
+
+        # If login was more than 24 hours ago, consider it stale
+        time_since_login = now_ist - login_time
+        if time_since_login.total_seconds() > 86400:  # 24 hours
+            logger.info(f"Clearing stale session for user {username} - login was {time_since_login.total_seconds()/3600:.1f} hours ago")
+            session.clear()
+            return jsonify(
+                {
+                    "status": "success",
+                    "message": "Session expired - please login again",
+                    "authenticated": False,
+                    "logged_in": False,
+                }
+            )
+    except Exception as e:
+        logger.warning(f"Error checking session staleness for user {username}: {e}")
+
+    # Session has login_time and is recent, but user isn't logged in with broker
+    # This is normal during broker selection - return authenticated but not logged_in
     return jsonify(
         {
             "status": "success",
-            "message": "Session incomplete - please login again",
-            "authenticated": False,
+            "authenticated": True,
             "logged_in": False,
+            "user": username,
+            "broker": session.get("broker"),
         }
     )
 

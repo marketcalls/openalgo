@@ -95,7 +95,7 @@ if not username:
 
 ---
 
-### Fix 2: Session Status Endpoint Logic
+### Fix 2: Session Status Endpoint Logic (Multi-Step Login Aware)
 **File:** `blueprints/auth.py`
 
 **Changes:**
@@ -103,38 +103,55 @@ if not username:
 # Check both session keys
 username = session.get("user") or session.get("user_session_key")
 
-# If user exists but not logged in with broker, clear stale session
-if not session.get("logged_in"):
-    logger.info(f"Clearing stale session for user {username}")
+# Distinguish between in-progress login and stale session
+if "login_time" not in session:
+    # Legitimate in-progress login (app login → broker selection)
+    return jsonify({"authenticated": True, "logged_in": False})
+
+# Check if session is stale (>24 hours old)
+if time_since_login > 86400:
     session.clear()
     return jsonify({"authenticated": False, "logged_in": False})
+
+# Recent session, awaiting broker connection
+return jsonify({"authenticated": True, "logged_in": False})
 ```
 
 **Benefits:**
-- Fixes auto-login issue
-- Clears stale sessions immediately
-- Prevents unauthorized access
+- Fixes auto-login issue while preserving multi-step login flow
+- Only clears genuinely stale sessions (>24 hours old)
+- Allows normal flow: Login → Broker Selection → Broker Auth
+- Prevents kicking users back to login during broker selection
 
 ---
 
-### Fix 3: Atomic Token Revocation
+### Fix 3: Atomic Token Revocation (With DB Error Resilience)
 **File:** `utils/session.py`
 
 **Changes:**
 ```python
 # Revoke token in database FIRST (atomic operation)
 if revoke_db_tokens:
-    inserted_id = upsert_auth(username, "", "", revoke=True)
+    try:
+        inserted_id = upsert_auth(username, "", "", revoke=True)
+    except Exception as db_error:
+        # Log but continue - cache cleanup must happen even if DB fails
+        logger.exception(f"Database revocation failed, continuing with cache cleanup")
 
-# Clear cache AFTER database update (prevents race condition)
-del auth_cache[cache_key_auth]
-del feed_token_cache[cache_key_feed]
+# Clear cache AFTER database update attempt
+# CRITICAL: Must run even if DB fails to prevent stale cached tokens
+try:
+    del auth_cache[cache_key_auth]
+    del feed_token_cache[cache_key_feed]
+except Exception as cache_error:
+    logger.exception(f"Error during cache cleanup")
 ```
 
 **Benefits:**
-- Eliminates race condition
-- Ensures token is revoked before cache clear
-- Prevents stale token reuse
+- Eliminates race condition (DB before cache)
+- Cache cleanup happens even during DB outages (defensive)
+- Prevents stale token reuse in all scenarios
+- Graceful degradation during failures
 
 ---
 
@@ -313,6 +330,52 @@ If issues occur after deployment:
 
 ---
 
+## Critical Bug Fixes (Post-Initial Implementation)
+
+### Issue: Cache Cleanup Skipped on DB Error (P2)
+**Discovered:** Post-implementation review
+**Location:** `utils/session.py:109`
+
+**Problem:**
+- Original atomic ordering placed cache cleanup inside the same try-except as DB revocation
+- If `upsert_auth()` raised an exception, cache cleanup was skipped
+- Left stale tokens cached during DB outages
+
+**Fix:**
+- Wrapped DB revocation in separate try-except
+- Cache cleanup now runs even if DB operation fails
+- Each cache operation isolated in its own try-except
+- Defensive programming for graceful degradation
+
+**Impact:** Prevents stale token caching during DB failures
+
+---
+
+### Issue: Multi-Step Login Flow Broken (P1 - Critical)
+**Discovered:** Post-implementation review
+**Location:** `blueprints/auth.py` (session-status endpoint)
+
+**Problem:**
+- Original fix cleared session when `logged_in=False`
+- Broke normal login flow: App Login → Broker Selection → Broker Auth
+- Users had `session["user"]` set but `logged_in=False` during broker selection
+- Session status endpoint would clear session and kick user back to login
+
+**Fix:**
+- Check if `login_time` exists to distinguish in-progress vs stale sessions
+- If no `login_time`: legitimate in-progress login (return `authenticated=True, logged_in=False`)
+- If `login_time` exists: check age
+  - Older than 24 hours: clear stale session
+  - Recent: allow broker selection (return `authenticated=True, logged_in=False`)
+- Preserves multi-step login flow while still catching stale sessions
+
+**Impact:**
+- Fixes broken broker selection flow
+- Prevents user frustration during normal login
+- Still clears genuinely stale sessions
+
+---
+
 ## Version History
 
 - **2026-01-30:** Initial fixes applied
@@ -321,3 +384,8 @@ If issues occur after deployment:
   - Master contract status reset
   - Kotak baseUrl validation
   - Stale session cleanup
+
+- **2026-01-30:** Critical bug fixes (post-review)
+  - Cache cleanup resilience during DB errors
+  - Multi-step login flow preservation
+  - 24-hour staleness threshold for session cleanup
