@@ -169,7 +169,10 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
         session["FEED_TOKEN"] = feed_token  # Store feed token in session if available
     if user_id:
         session["USER_ID"] = user_id  # Store user ID in session if available
-    session["user_session_key"] = user_session_key
+    # IMPORTANT: Set both session keys to ensure consistency across logout/session-status
+    # This fixes the auto-login and logout hanging issues
+    session["user"] = user_session_key  # Primary key used by logout and session-status
+    session["user_session_key"] = user_session_key  # Secondary key for backward compatibility
     session["broker"] = broker
 
     # Set session expiry and login time
