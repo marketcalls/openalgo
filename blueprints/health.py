@@ -2,9 +2,9 @@
 Health Monitoring Blueprint
 
 Industry-standard health check endpoints:
-- GET /health - Simple 200 OK for AWS ELB, K8s probes
-- GET /health/check - DB connectivity + detailed status
-- GET /health/api/* - Metrics API endpoints
+- GET /health/status - Simple 200 OK for AWS ELB, K8s probes (unauthenticated)
+- GET /health/check - DB connectivity + detailed status (unauthenticated)
+- GET /health/api/* - Metrics API endpoints (authenticated)
 
 Dashboard UI is served by React at /health (see frontend/src/pages/HealthMonitor.tsx)
 
@@ -52,12 +52,15 @@ def format_ist_time(timestamp):
 # ============================================================================
 
 
-@health_bp.route("", methods=["GET"])
+@health_bp.route("/status", methods=["GET"])
 @limiter.limit("300/minute")  # High limit for load balancer polling
 def simple_health():
     """
     Simple health check endpoint for AWS ELB, Kubernetes probes, Docker healthcheck.
     Returns instant 200 OK if service is running.
+
+    Use /health/status for load balancers (unauthenticated JSON response).
+    Use /health for the React dashboard UI.
 
     This endpoint uses cached metrics (ZERO latency impact).
     Does not require authentication.

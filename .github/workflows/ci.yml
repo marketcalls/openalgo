@@ -192,6 +192,8 @@ jobs:
   docker-build:
     runs-on: ubuntu-latest
     needs: [backend-lint, backend-test, frontend-build, security-scan]
+    # Skip for fork PRs (secrets not available)
+    if: github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'push'
     steps:
       - uses: actions/checkout@v6
 
