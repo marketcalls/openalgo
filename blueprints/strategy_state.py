@@ -158,11 +158,36 @@ def delete_strategy_state_endpoint(instance_id):
     """
     try:
         logger.debug(f"DELETE request for instance_id: {instance_id}")
+        
+        # Verify ownership before proceeding
+        user_id = session.get("user")
+        if not user_id:
+            return jsonify({
+                'status': 'error',
+                'message': 'User not authenticated'
+            }), 401
+        
+        # Get the strategy state to verify ownership
+        state = get_strategy_state_by_instance_id(instance_id)
+        if not state:
+            return jsonify({
+                'status': 'error',
+                'message': f'Strategy state not found: {instance_id}'
+            }), 404
+        
+        # Check if the strategy belongs to the current user
+        if state.get('user_id') != user_id:
+            logger.warning(f"Unauthorized delete attempt by {user_id} to strategy {instance_id} owned by {state.get('user_id')}")
+            return jsonify({
+                'status': 'error',
+                'message': 'Unauthorized: You do not have permission to delete this strategy'
+            }), 403
 
         try:
             delete_strategy_state(instance_id)
         except StrategyStateNotFoundError:
-            logger.warning(f"Strategy state not found: {instance_id}")
+            # This should not happen since we already verified existence above
+            logger.warning(f"Strategy state not found during delete: {instance_id}")
             return jsonify({
                 'status': 'error',
                 'message': f'Strategy state not found: {instance_id}'
@@ -216,6 +241,31 @@ def create_manual_leg_endpoint(instance_id):
     """
     try:
         logger.info(f"POST /api/strategy-state/{instance_id}/manual-leg called")
+        
+        # Verify ownership before proceeding
+        user_id = session.get("user")
+        if not user_id:
+            return jsonify({
+                'status': 'error',
+                'message': 'User not authenticated'
+            }), 401
+        
+        # Get the strategy state to verify ownership
+        state = get_strategy_state_by_instance_id(instance_id)
+        if not state:
+            return jsonify({
+                'status': 'error',
+                'message': f'Strategy state not found: {instance_id}'
+            }), 404
+        
+        # Check if the strategy belongs to the current user
+        if state.get('user_id') != user_id:
+            logger.warning(f"Unauthorized access attempt by {user_id} to strategy {instance_id} owned by {state.get('user_id')}")
+            return jsonify({
+                'status': 'error',
+                'message': 'Unauthorized: You do not have permission to modify this strategy'
+            }), 403
+        
         data = request.get_json()
         logger.debug(f"Request data: {data}")
 
@@ -236,7 +286,6 @@ def create_manual_leg_endpoint(instance_id):
         target_percent = data.get('target_percent')
         leg_pair_name = data.get('leg_pair_name')
         is_main_leg = data.get('is_main_leg')
-        reentry_limit = data.get('reentry_limit')
         reentry_limit = data.get('reentry_limit')
         reexecute_limit = data.get('reexecute_limit')
         mode = data.get('mode', 'TRACK')  # TRACK or NEW
@@ -425,6 +474,30 @@ def create_strategy_override_endpoint(instance_id):
         JSON response with created override or error
     """
     try:
+        # Verify ownership before proceeding
+        user_id = session.get("user")
+        if not user_id:
+            return jsonify({
+                'status': 'error',
+                'message': 'User not authenticated'
+            }), 401
+        
+        # Get the strategy state to verify ownership
+        state = get_strategy_state_by_instance_id(instance_id)
+        if not state:
+            return jsonify({
+                'status': 'error',
+                'message': f'Strategy state not found: {instance_id}'
+            }), 404
+        
+        # Check if the strategy belongs to the current user
+        if state.get('user_id') != user_id:
+            logger.warning(f"Unauthorized access attempt by {user_id} to strategy {instance_id} owned by {state.get('user_id')}")
+            return jsonify({
+                'status': 'error',
+                'message': 'Unauthorized: You do not have permission to modify this strategy'
+            }), 403
+        
         data = request.get_json()
 
         if not data:
@@ -476,15 +549,7 @@ def create_strategy_override_endpoint(instance_id):
                 'message': 'new_value must be non-negative'
             }), 400
 
-        # Verify the strategy instance exists
-        state = get_strategy_state_by_instance_id(instance_id)
-        if not state:
-            return jsonify({
-                'status': 'error',
-                'message': f'Strategy state not found: {instance_id}'
-            }), 404
-
-        # Verify the leg exists in the strategy
+        # Verify the leg exists in the strategy (state already fetched during ownership check)
         legs = state.get('legs', {})
         if leg_key not in legs:
             return jsonify({
