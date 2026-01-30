@@ -473,6 +473,11 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Connect to TBT
                 if not self.tbt_client.connect():
                     self.logger.error("Failed to connect to TBT WebSocket")
+                    # Clean up properly before setting to None to prevent FD leak
+                    try:
+                        self.tbt_client.disconnect()
+                    except Exception as cleanup_err:
+                        self.logger.warning(f"Error cleaning up failed TBT client: {cleanup_err}")
                     self.tbt_client = None
                     return False
 
@@ -672,8 +677,13 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Disconnect from TBT WebSocket and cleanup"""
         try:
             if self.tbt_client:
-                self.tbt_client.disconnect()
-                self.tbt_client = None
+                try:
+                    self.tbt_client.disconnect()
+                except Exception as e:
+                    self.logger.warning(f"Error during TBT disconnect: {e}")
+                finally:
+                    # Always set to None to prevent repeated cleanup attempts
+                    self.tbt_client = None
 
             # Clear TBT tracking
             self.tbt_subscriptions.clear()

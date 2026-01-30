@@ -571,3 +571,54 @@ class FyersAdapter:
     def is_connected(self) -> bool:
         """Check if adapter is connected and ready"""
         return self.connected and (self.ws_client.is_connected() if self.ws_client else False)
+
+    def __del__(self):
+        """
+        Destructor to ensure proper cleanup when FyersAdapter is destroyed.
+        This is critical for preventing FD leaks when objects are garbage collected.
+        """
+        try:
+            if hasattr(self, "logger"):
+                self.logger.debug("FyersAdapter destructor called")
+            self.disconnect(clear_mappings=True)
+        except Exception as e:
+            # Fallback logging if self.logger is not available
+            import logging
+
+            logger = logging.getLogger("fyers_adapter")
+            logger.error(f"Error in FyersAdapter destructor: {e}")
+
+    def force_cleanup(self):
+        """
+        Force cleanup all resources (for emergency cleanup)
+        """
+        try:
+            # Force stop all operations
+            self.connected = False
+            self.connecting = False
+
+            # Force clear data structures
+            if hasattr(self, "active_subscriptions"):
+                self.active_subscriptions.clear()
+            if hasattr(self, "subscription_callbacks"):
+                self.subscription_callbacks.clear()
+            if hasattr(self, "symbol_to_hsm"):
+                self.symbol_to_hsm.clear()
+            if hasattr(self, "hsm_to_symbol"):
+                self.hsm_to_symbol.clear()
+            if hasattr(self, "last_data"):
+                self.last_data.clear()
+
+            # Force cleanup WebSocket client
+            if hasattr(self, "ws_client") and self.ws_client:
+                try:
+                    if hasattr(self.ws_client, "force_cleanup"):
+                        self.ws_client.force_cleanup()
+                    else:
+                        self.ws_client.disconnect()
+                except Exception:
+                    pass
+                self.ws_client = None
+
+        except Exception:
+            pass  # Suppress all errors in force cleanup
