@@ -972,6 +972,7 @@ WorkingDirectory=$OPENALGO_PATH
 # Environment variables for numba/scipy support
 Environment="TMPDIR=$OPENALGO_PATH/tmp"
 Environment="NUMBA_CACHE_DIR=$OPENALGO_PATH/tmp/numba_cache"
+Environment="LLVMLITE_TMPDIR=$OPENALGO_PATH/tmp"
 Environment="MPLCONFIGDIR=$OPENALGO_PATH/tmp/matplotlib"
 # Simplified approach to ensure Python environment is properly loaded
 ExecStart=/bin/bash -c 'source $VENV_PATH/bin/activate && $VENV_PATH/bin/gunicorn \

@@ -518,6 +518,7 @@ WorkingDirectory=$INSTANCE_DIR
 # Environment variables for numba/scipy support
 Environment="TMPDIR=$INSTANCE_DIR/tmp"
 Environment="NUMBA_CACHE_DIR=$INSTANCE_DIR/tmp/numba_cache"
+Environment="LLVMLITE_TMPDIR=$INSTANCE_DIR/tmp"
 Environment="MPLCONFIGDIR=$INSTANCE_DIR/tmp/matplotlib"
 ExecStart=/bin/bash -c 'source $VENV_PATH/bin/activate && $VENV_PATH/bin/gunicorn \\
     --worker-class eventlet \\

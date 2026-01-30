@@ -392,6 +392,7 @@ Environment="PATH=$VENV_PATH/bin"
 # Environment variables for numba/scipy support
 Environment="TMPDIR=$BASE_PATH/tmp"
 Environment="NUMBA_CACHE_DIR=$BASE_PATH/tmp/numba_cache"
+Environment="LLVMLITE_TMPDIR=$BASE_PATH/tmp"
 Environment="MPLCONFIGDIR=$BASE_PATH/tmp/matplotlib"
 ExecStart=$VENV_PATH/bin/gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:80 --timeout 300 app:app
 Restart=always
