@@ -5,12 +5,16 @@ Blueprint for Strategy State API endpoints.
 Provides read-only access to Python strategy execution states and positions.
 """
 
+from datetime import datetime
+
 from flask import Blueprint, jsonify, request
 
 from database.strategy_state_db import (
     StrategyStateDbError,
     StrategyStateDbNotFoundError,
+    StrategyStateDuplicateLegError,
     StrategyStateNotFoundError,
+    add_manual_strategy_leg,
     create_strategy_override,
     delete_strategy_state,
     get_all_strategy_states,
@@ -188,6 +192,216 @@ def delete_strategy_state_endpoint(instance_id):
             'status': 'error',
             'message': str(e)
         }), 500
+
+
+@strategy_state_bp.route('/strategy-state/<path:instance_id>/manual-leg', methods=['POST'])
+@check_session_validity
+def create_manual_leg_endpoint(instance_id):
+    """Add a manual open position leg to the strategy state.
+
+    Request body:
+        {
+            "leg_key": "MANUAL_1",
+            "symbol": "SENSEX05FEB2682200CE",
+            "exchange": "BFO",
+            "product": "NRML",
+            "quantity": 200,
+            "side": "SELL",
+            "entry_price": 733.05,
+            "sl_percent": 0.05,
+            "target_percent": 0.1,
+            "leg_pair_name": "Manual Hedge",
+            "is_main_leg": false
+        }
+    """
+    try:
+        logger.info(f"POST /api/strategy-state/{instance_id}/manual-leg called")
+        data = request.get_json()
+        logger.debug(f"Request data: {data}")
+
+        if not data:
+            return jsonify({
+                'status': 'error',
+                'message': 'Request body is required'
+            }), 400
+
+        leg_key = data.get('leg_key')
+        symbol = data.get('symbol')
+        exchange = data.get('exchange')
+        product = data.get('product')
+        quantity = data.get('quantity')
+        side = data.get('side')
+        entry_price = data.get('entry_price')
+        sl_percent = data.get('sl_percent')
+        target_percent = data.get('target_percent')
+        leg_pair_name = data.get('leg_pair_name')
+        is_main_leg = data.get('is_main_leg')
+        reentry_limit = data.get('reentry_limit')
+        reentry_limit = data.get('reentry_limit')
+        reexecute_limit = data.get('reexecute_limit')
+        mode = data.get('mode', 'TRACK')  # TRACK or NEW
+        wait_trade_percent = data.get('wait_trade_percent')
+        wait_baseline_price = data.get('wait_baseline_price')
+
+        if not leg_key:
+            return jsonify({'status': 'error', 'message': 'leg_key is required'}), 400
+        if not symbol:
+            return jsonify({'status': 'error', 'message': 'symbol is required'}), 400
+        if not exchange:
+            return jsonify({'status': 'error', 'message': 'exchange is required'}), 400
+        if not product:
+            return jsonify({'status': 'error', 'message': 'product is required'}), 400
+        if quantity is None:
+            return jsonify({'status': 'error', 'message': 'quantity is required'}), 400
+        if not side:
+            return jsonify({'status': 'error', 'message': 'side is required'}), 400
+        if is_main_leg is None:
+            return jsonify({'status': 'error', 'message': 'is_main_leg is required'}), 400
+
+        if mode == 'NEW':
+            # For new trades, entry_price is optional (will be determined on fill)
+            if entry_price is not None:
+                try:
+                    entry_price = float(entry_price)
+                except (TypeError, ValueError):
+                    return jsonify({'status': 'error', 'message': 'entry_price must be a number'}), 400
+        else:
+            # For tracking existing trades, entry_price is required
+            if entry_price is None:
+                return jsonify({'status': 'error', 'message': 'entry_price is required'}), 400
+            try:
+                entry_price = float(entry_price)
+            except (TypeError, ValueError):
+                return jsonify({'status': 'error', 'message': 'entry_price must be a number'}), 400
+
+        side = side.upper()
+        if side not in ('BUY', 'SELL'):
+            return jsonify({'status': 'error', 'message': 'side must be BUY or SELL'}), 400
+
+        # Determine status and wait params
+        status = 'IN_POSITION'
+        if mode == 'NEW':
+            status = 'PENDING_ENTRY'
+            if wait_trade_percent is not None:
+                try:
+                    wait_trade_percent = float(wait_trade_percent)
+                    if wait_trade_percent <= 0:
+                         return jsonify({'status': 'error', 'message': 'wait_trade_percent must be positive'}), 400
+                    
+                    if wait_baseline_price is None:
+                        return jsonify({'status': 'error', 'message': 'wait_baseline_price is required for wait entry'}), 400
+                    wait_baseline_price = float(wait_baseline_price)
+                except (TypeError, ValueError):
+                     return jsonify({'status': 'error', 'message': 'Invalid wait parameters'}), 400
+            else:
+                 # Immediate execution (wait_trade_percent is None)
+                 pass
+
+        sl_value = None
+        target_value = None
+        
+        # Calculate SL/Target values only if entry_price is available
+        if entry_price is not None:
+            if sl_percent is not None:
+                try:
+                    sl_percent = float(sl_percent)
+                except (TypeError, ValueError):
+                    return jsonify({'status': 'error', 'message': 'sl_percent must be a number'}), 400
+                if sl_percent <= 0:
+                    return jsonify({'status': 'error', 'message': 'sl_percent must be positive'}), 400
+                if side == 'BUY':
+                    sl_value = entry_price * (1 - sl_percent)
+                else:
+                    sl_value = entry_price * (1 + sl_percent)
+        elif sl_percent is not None:
+             # Validate percent even if no entry price
+             try:
+                 sl_percent = float(sl_percent)
+                 if sl_percent <= 0: raise ValueError
+             except:
+                 return jsonify({'status': 'error', 'message': 'sl_percent must be positive'}), 400
+
+        if target_percent is not None and entry_price is not None:
+            try:
+                target_percent = float(target_percent)
+            except (TypeError, ValueError):
+                return jsonify({'status': 'error', 'message': 'target_percent must be a number'}), 400
+            if target_percent <= 0:
+                return jsonify({'status': 'error', 'message': 'target_percent must be positive'}), 400
+            if side == 'BUY':
+                target_value = entry_price * (1 + target_percent)
+            else:
+                target_value = entry_price * (1 - target_percent)
+        elif target_percent is not None:
+             try:
+                 target_percent = float(target_percent)
+                 if target_percent <= 0: raise ValueError
+             except:
+                 return jsonify({'status': 'error', 'message': 'target_percent must be positive'}), 400
+
+        # Validate reentry_limit and reexecute_limit if provided
+        if reentry_limit is not None:
+            try:
+                reentry_limit = int(reentry_limit)
+            except (TypeError, ValueError):
+                return jsonify({'status': 'error', 'message': 'reentry_limit must be an integer'}), 400
+            if reentry_limit < 0:
+                return jsonify({'status': 'error', 'message': 'reentry_limit must be non-negative'}), 400
+
+        if reexecute_limit is not None:
+            try:
+                reexecute_limit = int(reexecute_limit)
+            except (TypeError, ValueError):
+                return jsonify({'status': 'error', 'message': 'reexecute_limit must be an integer'}), 400
+            if reexecute_limit < 0:
+                return jsonify({'status': 'error', 'message': 'reexecute_limit must be non-negative'}), 400
+
+        try:
+            logger.info(f"Calling add_manual_strategy_leg for instance {instance_id}, leg_key {leg_key}")
+            result = add_manual_strategy_leg(
+                instance_id=instance_id,
+                leg_key=leg_key,
+                symbol=symbol,
+                exchange=exchange,
+                product=product,
+                quantity=quantity,
+                side=side,
+                entry_price=entry_price,
+                entry_time=datetime.utcnow(),
+                sl_price=sl_value,
+                target_price=target_value,
+                leg_pair_name=leg_pair_name,
+                is_main_leg=bool(is_main_leg),
+                sl_percent=sl_percent,
+                target_percent=target_percent,
+                reentry_limit=reentry_limit,
+                reexecute_limit=reexecute_limit,
+                status=status,
+                wait_trade_percent=wait_trade_percent,
+                wait_baseline_price=wait_baseline_price,
+            )
+            logger.info(f"Manual leg added successfully to {instance_id}")
+        except StrategyStateDuplicateLegError as exc:
+            logger.warning(f"Duplicate leg detected: {exc}")
+            return jsonify({'status': 'warning', 'message': str(exc)}), 409
+        except StrategyStateNotFoundError:
+            return jsonify({'status': 'error', 'message': f'Strategy state not found: {instance_id}'}), 404
+        except StrategyStateDbNotFoundError as exc:
+            logger.error(f"Strategy State DB missing: {exc}")
+            return jsonify({'status': 'error', 'message': str(exc)}), 500
+        except StrategyStateDbError as exc:
+            logger.error(f"Strategy State DB error adding manual leg: {exc}")
+            return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+        return jsonify({
+            'status': 'success',
+            'message': 'Manual leg added successfully',
+            'data': result,
+        })
+
+    except Exception as exc:
+        logger.error(f"Error in create_manual_leg_endpoint: {exc}")
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
 
 
 @strategy_state_bp.route('/strategy-state/<path:instance_id>/override', methods=['POST'])

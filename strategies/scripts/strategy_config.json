@@ -19,7 +19,6 @@
         {
             "name": "CE_LEG",
             "ce_sell_offset": "OTM2",
-            "wait_trade_percentage": 0.15,
             "sl_percent": 0.1,
             "reentry_limit": 4,
             "target_percent": 0.25,
