@@ -62,8 +62,15 @@ def update_file(file_path):
         },
         pool_pre_ping=True'''
             
-            content = re.sub(nullpool_pattern, replacement, content)
-            modified = True
+            new_content = re.sub(nullpool_pattern, replacement, content)
+            
+            # Verify the replacement was successful
+            if 'poolclass=StaticPool' in new_content and 'poolclass=NullPool' not in new_content:
+                content = new_content
+                modified = True
+            else:
+                print(f"  ⚠ Warning: SQLite pool replacement may have failed in {file_path}")
+                print(f"    Pattern matched but verification failed. Manual review recommended.")
         
         # 3. Update PostgreSQL pool sizes (reduce from 50/100 to 10/20)
         pg_pattern = r'pool_size=50,\s*max_overflow=100,\s*pool_timeout=10'
@@ -75,8 +82,15 @@ def update_file(file_path):
         pool_recycle=3600,
         pool_pre_ping=True'''
             
-            content = re.sub(pg_pattern, replacement, content)
-            modified = True
+            new_content = re.sub(pg_pattern, replacement, content)
+            
+            # Verify the replacement was successful
+            if 'pool_size=10' in new_content and 'pool_size=50' not in new_content:
+                content = new_content
+                modified = True
+            else:
+                print(f"  ⚠ Warning: PostgreSQL pool replacement may have failed in {file_path}")
+                print(f"    Pattern matched but verification failed. Manual review recommended.")
         
         # Write back if modified
         if modified:
@@ -111,6 +125,7 @@ def main():
     print()
     
     updated_count = 0
+    skipped_count = 0
     failed_count = 0
     
     for db_file in DB_FILES:
@@ -118,23 +133,33 @@ def main():
         
         if not file_path.exists():
             print(f"⚠ File not found: {db_file}")
+            failed_count += 1
             continue
         
         # Backup original
         import shutil
         backup_path = backup_dir / Path(db_file).name
-        shutil.copy2(file_path, backup_path)
+        try:
+            shutil.copy2(file_path, backup_path)
+        except Exception as e:
+            print(f"  ✗ Failed to backup {db_file}: {e}")
+            failed_count += 1
+            continue
         
         # Update the file
-        if update_file(file_path):
+        result = update_file(file_path)
+        if result is True:
             updated_count += 1
-        else:
+        elif result is False:
+            skipped_count += 1
+        else:  # None or error
             failed_count += 1
     
     print()
     print("=" * 60)
     print(f"✓ Updated: {updated_count} files")
-    print(f"- Skipped: {failed_count} files")
+    print(f"- Skipped (no changes needed): {skipped_count} files")
+    print(f"✗ Failed: {failed_count} files")
     print(f"Backups saved to: {backup_dir}")
     print("=" * 60)
     print()
