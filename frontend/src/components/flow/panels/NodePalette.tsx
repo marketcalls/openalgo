@@ -470,14 +470,14 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
 
   return (
     <div className="flex h-full flex-col border-r border-border bg-card">
-      <div className="border-b border-border p-3">
+      <div className="shrink-0 border-b border-border p-3">
         <h2 className="text-sm font-semibold">Nodes</h2>
         <p className="text-[10px] text-muted-foreground">
           Drag nodes to the canvas
         </p>
       </div>
-      <Tabs defaultValue="triggers" className="flex-1 flex flex-col">
-        <div className="border-b border-border px-1 py-1.5">
+      <Tabs defaultValue="triggers" className="flex-1 flex flex-col min-h-0">
+        <div className="shrink-0 border-b border-border px-1 py-1.5">
           <TabsList className="h-7 w-full">
             <TabsTrigger value="triggers" className="flex-1 text-[8px] px-0.5">
               Trigger
@@ -499,74 +499,86 @@ export function NodePalette({ onDragStart }: NodePaletteProps) {
             </TabsTrigger>
           </TabsList>
         </div>
-        <ScrollArea className="flex-1">
-          <TabsContent value="triggers" className="m-0 p-2">
-            <div className="space-y-1.5">
-              {triggers.map((node) => (
-                <NodeItem
-                  key={node.type}
-                  {...node}
-                  onDragStart={onDragStart}
-                />
-              ))}
-            </div>
+        <div className="flex-1 min-h-0 relative">
+          <TabsContent value="triggers" className="m-0 absolute inset-0">
+            <ScrollArea className="h-full">
+              <div className="space-y-1.5 p-2">
+                {triggers.map((node) => (
+                  <NodeItem
+                    key={node.type}
+                    {...node}
+                    onDragStart={onDragStart}
+                  />
+                ))}
+              </div>
+            </ScrollArea>
           </TabsContent>
-          <TabsContent value="actions" className="m-0 p-2">
-            <div className="space-y-1.5">
-              {actions.map((node) => (
-                <NodeItem
-                  key={node.type}
-                  {...node}
-                  onDragStart={onDragStart}
-                />
-              ))}
-            </div>
+          <TabsContent value="actions" className="m-0 absolute inset-0">
+            <ScrollArea className="h-full">
+              <div className="space-y-1.5 p-2">
+                {actions.map((node) => (
+                  <NodeItem
+                    key={node.type}
+                    {...node}
+                    onDragStart={onDragStart}
+                  />
+                ))}
+              </div>
+            </ScrollArea>
           </TabsContent>
-          <TabsContent value="data" className="m-0 p-2">
-            <div className="space-y-1.5">
-              {data.map((node) => (
-                <NodeItem
-                  key={node.type}
-                  {...node}
-                  onDragStart={onDragStart}
-                />
-              ))}
-            </div>
+          <TabsContent value="data" className="m-0 absolute inset-0">
+            <ScrollArea className="h-full">
+              <div className="space-y-1.5 p-2">
+                {data.map((node) => (
+                  <NodeItem
+                    key={node.type}
+                    {...node}
+                    onDragStart={onDragStart}
+                  />
+                ))}
+              </div>
+            </ScrollArea>
           </TabsContent>
-          <TabsContent value="stream" className="m-0 p-2">
-            <div className="space-y-1.5">
-              {streaming.map((node) => (
-                <NodeItem
-                  key={node.type}
-                  {...node}
-                  onDragStart={onDragStart}
-                />
-              ))}
-            </div>
+          <TabsContent value="stream" className="m-0 absolute inset-0">
+            <ScrollArea className="h-full">
+              <div className="space-y-1.5 p-2">
+                {streaming.map((node) => (
+                  <NodeItem
+                    key={node.type}
+                    {...node}
+                    onDragStart={onDragStart}
+                  />
+                ))}
+              </div>
+            </ScrollArea>
           </TabsContent>
-          <TabsContent value="conditions" className="m-0 p-2">
-            <div className="space-y-1.5">
-              {conditions.map((node) => (
-                <NodeItem
-                  key={node.type}
-                  {...node}
-                  onDragStart={onDragStart}
-                />
-              ))}
-            </div>
+          <TabsContent value="conditions" className="m-0 absolute inset-0">
+            <ScrollArea className="h-full">
+              <div className="space-y-1.5 p-2">
+                {conditions.map((node) => (
+                  <NodeItem
+                    key={node.type}
+                    {...node}
+                    onDragStart={onDragStart}
+                  />
+                ))}
+              </div>
+            </ScrollArea>
           </TabsContent>
-          <TabsContent value="utilities" className="m-0 p-2">
-            <div className="space-y-1.5">
-              {utilities.map((node) => (
-                <NodeItem
-                  key={node.type}
-                  {...node}
-                  onDragStart={onDragStart}
-                />
-              ))}
-            </div>
+          <TabsContent value="utilities" className="m-0 absolute inset-0">
+            <ScrollArea className="h-full">
+              <div className="space-y-1.5 p-2">
+                {utilities.map((node) => (
+                  <NodeItem
+                    key={node.type}
+                    {...node}
+                    onDragStart={onDragStart}
+                  />
+                ))}
+              </div>
+            </ScrollArea>
           </TabsContent>
-        </ScrollArea>
+        </div>
       </Tabs>
     </div>
   )

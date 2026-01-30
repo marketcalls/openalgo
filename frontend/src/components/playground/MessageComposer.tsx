@@ -115,7 +115,7 @@ const MESSAGE_TEMPLATES: CategorizedTemplate[] = [
     description: 'Full Depth - 50 levels (broker dependent)',
     template: {
       action: 'subscribe',
-      symbol: 'RELIANCE',
+      symbol: 'RELIANCE:50',
       exchange: 'NSE',
       mode: 3,
       depth: 50,
@@ -156,6 +156,19 @@ const MESSAGE_TEMPLATES: CategorizedTemplate[] = [
       symbol: 'RELIANCE',
       exchange: 'NSE',
       mode: 3,
+    },
+    category: 'unsubscribe',
+  },
+  {
+    key: 'unsubscribe_depth_50',
+    label: 'Unsubscribe Depth 50',
+    description: 'Unsubscribe from 50-level Depth (broker dependent)',
+    template: {
+      action: 'unsubscribe',
+      symbol: 'RELIANCE:50',
+      exchange: 'NSE',
+      mode: 3,
+      depth: 50,
     },
     category: 'unsubscribe',
   },
