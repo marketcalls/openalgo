@@ -7,6 +7,7 @@ export interface Position {
   ltp: number
   pnl: number
   pnlpercent: number
+  today_realized_pnl?: number  // Sandbox: today's realized P&L from closed partial trades
 }
 
 export interface Order {
