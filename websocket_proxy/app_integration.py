@@ -97,10 +97,18 @@ def cleanup_websocket_server():
 
         if _websocket_thread and _websocket_thread.is_alive():
             logger.info("Waiting for WebSocket thread to finish...")
-            _websocket_thread.join(timeout=3.0)  # Reduced timeout for faster shutdown
+            _websocket_thread.join(timeout=5.0)  # Increased timeout for slow broker disconnects
             if _websocket_thread.is_alive():
                 logger.warning("WebSocket thread did not finish gracefully")
             _websocket_thread = None
+
+        # Clean up shared ZMQ context (handles app restart without process exit)
+        try:
+            from .base_adapter import BaseBrokerWebSocketAdapter
+            BaseBrokerWebSocketAdapter.cleanup_shared_context()
+            logger.info("Shared ZMQ context cleaned up")
+        except Exception as e:
+            logger.warning(f"Error cleaning up shared ZMQ context: {e}")
 
         logger.info("WebSocket server cleanup completed")
 
