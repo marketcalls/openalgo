@@ -332,20 +332,23 @@ def add_manual_strategy_leg(
 
         legs = parsed_state.get('legs') or {}
 
+        # Check for duplicate legs with same characteristics
         for existing_leg in legs.values():
-            if (existing_leg or {}).get('status') != 'IN_POSITION':
+            # Skip if leg data is None or not a dict
+            if not existing_leg:
                 continue
-            if (existing_leg or {}).get('exchange') != exchange:
+            
+            # Only check legs that are in position
+            if existing_leg.get('status') != 'IN_POSITION':
                 continue
-            if (existing_leg or {}).get('symbol') != symbol:
-                continue
-            if (existing_leg or {}).get('product') != product:
-                continue
-            if (existing_leg or {}).get('side') != side:
-                continue
-            if int((existing_leg or {}).get('quantity') or 0) != int(quantity):
-                continue
-            raise StrategyStateDuplicateLegError('Similar open position already exists in this strategy')
+            
+            # Check if all characteristics match
+            if (existing_leg.get('exchange') == exchange and
+                existing_leg.get('symbol') == symbol and
+                existing_leg.get('product') == product and
+                existing_leg.get('side') == side and
+                int(existing_leg.get('quantity') or 0) == int(quantity)):
+                raise StrategyStateDuplicateLegError('Similar open position already exists in this strategy')
 
         legs[leg_key] = {
             'leg_type': 'MANUAL',
