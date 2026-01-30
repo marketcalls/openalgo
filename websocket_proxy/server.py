@@ -79,6 +79,13 @@ class WebSocketProxy:
         # PERFORMANCE OPTIMIZATION 3: Pre-compute mode mappings
         self.MODE_MAP = {"LTP": 1, "QUOTE": 2, "DEPTH": 3}
 
+        # RESOURCE MONITORING: Track metrics for health checks
+        self._stats_lock = aio.Lock() if hasattr(aio, 'Lock') else None
+        self._messages_processed = 0
+        self._last_cleanup_time = time.time()
+        self._cleanup_interval = 300  # Clean stale entries every 5 minutes
+        self._throttle_entry_max_age = 60  # Remove throttle entries older than 60 seconds
+
         # ZeroMQ context for subscribing to broker adapters
         self.context = zmq.asyncio.Context()
         self.socket = self.context.socket(zmq.SUB)
@@ -285,6 +292,97 @@ class WebSocketProxy:
             self._cleanup_zmq_sync()
         except Exception:
             pass  # Cannot raise in __del__
+
+    def get_health_stats(self) -> dict:
+        """
+        Get health statistics for monitoring file descriptors and resources.
+
+        Returns:
+            dict: Health statistics including connection counts, subscription metrics,
+                  and resource usage information.
+        """
+        try:
+            # Get base adapter stats if available
+            from .base_adapter import BaseBrokerWebSocketAdapter
+            adapter_stats = BaseBrokerWebSocketAdapter.get_resource_stats()
+        except Exception:
+            adapter_stats = {}
+
+        # Calculate subscription index stats
+        total_subscriptions = len(self.subscription_index)
+        total_client_subscriptions = sum(len(clients) for clients in self.subscription_index.values())
+        throttle_entries = len(self.last_message_time)
+
+        return {
+            "server": {
+                "running": self.running,
+                "host": self.host,
+                "port": self.port,
+            },
+            "clients": {
+                "connected_count": len(self.clients),
+                "user_mappings": len(self.user_mapping),
+            },
+            "subscriptions": {
+                "unique_symbols": total_subscriptions,
+                "total_client_subscriptions": total_client_subscriptions,
+                "per_client_counts": {
+                    str(client_id): len(subs)
+                    for client_id, subs in self.subscriptions.items()
+                },
+            },
+            "broker_adapters": {
+                "active_count": len(self.broker_adapters),
+                "brokers": list(self.user_broker_mapping.values()),
+            },
+            "performance": {
+                "throttle_entries": throttle_entries,
+                "messages_processed": self._messages_processed,
+                "last_cleanup_time": self._last_cleanup_time,
+            },
+            "zmq_resources": adapter_stats,
+        }
+
+    def _cleanup_stale_throttle_entries(self):
+        """
+        Remove stale entries from last_message_time dict.
+
+        This prevents unbounded memory growth from symbols that were
+        subscribed to but are no longer active.
+        """
+        current_time = time.time()
+
+        # Only run cleanup periodically
+        if current_time - self._last_cleanup_time < self._cleanup_interval:
+            return
+
+        self._last_cleanup_time = current_time
+        initial_count = len(self.last_message_time)
+
+        # Find and remove stale entries
+        stale_keys = [
+            key for key, timestamp in self.last_message_time.items()
+            if current_time - timestamp > self._throttle_entry_max_age
+        ]
+
+        for key in stale_keys:
+            del self.last_message_time[key]
+
+        if stale_keys:
+            logger.info(
+                f"Cleaned up {len(stale_keys)} stale throttle entries "
+                f"(was {initial_count}, now {len(self.last_message_time)})"
+            )
+
+        # Log subscription index stats periodically
+        total_subs = len(self.subscription_index)
+        total_clients = len(self.clients)
+        if total_subs > 0 or total_clients > 0:
+            logger.debug(
+                f"Resource stats: {total_clients} clients, "
+                f"{total_subs} unique subscriptions, "
+                f"{len(self.last_message_time)} throttle entries"
+            )
 
     async def handle_client(self, websocket):
         """
@@ -1343,6 +1441,9 @@ class WebSocketProxy:
                 if not self.running:
                     break
 
+                # RESOURCE CLEANUP: Periodically clean stale throttle entries
+                self._cleanup_stale_throttle_entries()
+
                 # OPTIMIZATION 1: Increased timeout to reduce busy-waiting
                 try:
                     [topic, data] = await aio.wait_for(
@@ -1493,6 +1594,9 @@ class WebSocketProxy:
                 # Send all messages in parallel (non-blocking)
                 if send_tasks:
                     await aio.gather(*send_tasks, return_exceptions=True)
+
+                # METRICS: Track message count for health monitoring
+                self._messages_processed += 1
 
             except Exception as e:
                 logger.exception(f"Error in ZeroMQ listener: {e}")
