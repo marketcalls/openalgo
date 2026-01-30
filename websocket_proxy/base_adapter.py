@@ -297,11 +297,18 @@ class BaseBrokerWebSocketAdapter(ABC):
         Properly clean up ZeroMQ resources and release bound ports.
         Skips cleanup if using shared ZeroMQ publisher (connection pooling mode).
         Also manages shared context lifecycle based on instance count.
+
+        This method is idempotent - calling it multiple times is safe.
         """
+        # Prevent double cleanup (e.g., explicit cleanup followed by __del__)
+        if hasattr(self, "_zmq_cleaned_up") and self._zmq_cleaned_up:
+            return
+        self._zmq_cleaned_up = True
+
         # Skip cleanup if using shared ZMQ (managed by ConnectionPool)
         if hasattr(self, "_uses_shared_zmq") and self._uses_shared_zmq:
             self.logger.debug("Skipping ZMQ cleanup - using shared publisher")
-            # Still decrement instance count
+            # Still decrement instance count (only once due to _zmq_cleaned_up flag)
             with self._context_lock:
                 BaseBrokerWebSocketAdapter._instance_count = max(0, BaseBrokerWebSocketAdapter._instance_count - 1)
             return
