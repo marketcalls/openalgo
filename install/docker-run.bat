@@ -321,11 +321,19 @@ REM Stop and remove existing container if exists
 docker stop %CONTAINER% >nul 2>&1
 docker rm %CONTAINER% >nul 2>&1
 
+REM Calculate dynamic shm_size based on available RAM (25% of total, min 256m, max 2g)
+for /f "tokens=2 delims==" %%i in ('wmic computersystem get TotalPhysicalMemory /value ^| findstr TotalPhysicalMemory') do set TOTAL_RAM_BYTES=%%i
+set /a TOTAL_RAM_MB=%TOTAL_RAM_BYTES:~0,-6%
+set /a SHM_SIZE_MB=%TOTAL_RAM_MB% / 4
+if %SHM_SIZE_MB% LSS 256 set SHM_SIZE_MB=256
+if %SHM_SIZE_MB% GTR 2048 set SHM_SIZE_MB=2048
+echo [INFO] System RAM: %TOTAL_RAM_MB%MB, SHM size: %SHM_SIZE_MB%MB
+
 REM Run container
 echo [INFO] Starting container...
 docker run -d ^
     --name %CONTAINER% ^
-    --shm-size=2g ^
+    --shm-size=%SHM_SIZE_MB%m ^
     -p 5000:5000 ^
     -p 8765:8765 ^
     -v "%OPENALGO_DIR%\db:/app/db" ^
