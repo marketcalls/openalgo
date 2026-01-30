@@ -1,0 +1,23 @@
+# Test requirements for OpenAlgo Event Publisher
+# Install with: pip install -r test_requirements.txt
+
+# Testing framework
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-mock>=3.11.1
+pytest-xdist>=3.3.1  # For parallel test execution
+pytest-timeout>=2.1.0  # For timeout handling
+
+# Code coverage
+coverage>=7.3.0
+
+# Mocking and test utilities
+mock>=5.1.0
+
+# Optional: For testing with real Kafka (if needed)
+# kafka-python==2.0.2
+
+# Code quality
+black>=23.7.0  # Code formatting
+flake8>=6.1.0  # Linting
+mypy>=1.5.0  # Type checking
