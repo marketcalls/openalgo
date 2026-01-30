@@ -1,11 +1,11 @@
 import {
   Activity,
   ArrowRight,
-  BookOpen,
   ClipboardList,
   Clock,
   FileText,
   FlaskConical,
+  HeartPulse,
   Shield,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -55,13 +55,12 @@ export default function LogsIndex() {
       countLabel: 'security',
     },
     {
-      title: 'Documentation',
-      description: 'Access guides, API references, and troubleshooting tips',
-      icon: BookOpen,
-      href: 'https://docs.openalgo.in',
+      title: 'Health Monitor',
+      description: 'Track system health, file descriptors, memory, and connections',
+      icon: HeartPulse,
+      href: '/health',
       color: 'bg-green-500',
-      countLabel: 'docs',
-      isExternal: true,
+      countLabel: 'health',
     },
   ]
 
@@ -80,39 +79,32 @@ export default function LogsIndex() {
 
       {/* Log Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {logCards.map((card) => {
-          const CardWrapper = card.isExternal ? 'a' : Link
-          const linkProps = card.isExternal
-            ? { href: card.href, target: '_blank', rel: 'noopener noreferrer' }
-            : { to: card.href }
-
-          return (
-            <CardWrapper key={card.href} {...(linkProps as any)}>
-              <Card className="h-full hover:shadow-lg transition-shadow cursor-pointer group">
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <div
-                      className={`w-10 h-10 rounded-lg ${card.color} flex items-center justify-center`}
-                    >
-                      <card.icon className="h-5 w-5 text-white" />
-                    </div>
-                    <Badge variant="secondary">{card.countLabel}</Badge>
+        {logCards.map((card) => (
+          <Link key={card.href} to={card.href}>
+            <Card className="h-full hover:shadow-lg transition-shadow cursor-pointer group">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div
+                    className={`w-10 h-10 rounded-lg ${card.color} flex items-center justify-center`}
+                  >
+                    <card.icon className="h-5 w-5 text-white" />
                   </div>
-                  <CardTitle className="flex items-center gap-2 group-hover:text-primary transition-colors">
-                    {card.title}
-                    <ArrowRight className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity" />
-                  </CardTitle>
-                  <CardDescription>{card.description}</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="text-sm text-muted-foreground">
-                    Click to view {card.title.toLowerCase()}
-                  </div>
-                </CardContent>
-              </Card>
-            </CardWrapper>
-          )
-        })}
+                  <Badge variant="secondary">{card.countLabel}</Badge>
+                </div>
+                <CardTitle className="flex items-center gap-2 group-hover:text-primary transition-colors">
+                  {card.title}
+                  <ArrowRight className="h-4 w-4 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </CardTitle>
+                <CardDescription>{card.description}</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="text-sm text-muted-foreground">
+                  Click to view {card.title.toLowerCase()}
+                </div>
+              </CardContent>
+            </Card>
+          </Link>
+        ))}
       </div>
     </div>
   )
