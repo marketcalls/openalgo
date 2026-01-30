@@ -249,6 +249,43 @@ class WebSocketProxy:
         except Exception as e:
             logger.exception(f"Error during WebSocket server stop: {e}")
 
+    def _cleanup_zmq_sync(self):
+        """
+        Synchronous cleanup of ZeroMQ resources.
+        Called from __del__ to ensure resources are freed even if stop() is never called.
+        """
+        try:
+            if hasattr(self, "socket") and self.socket:
+                try:
+                    self.socket.setsockopt(zmq.LINGER, 0)
+                    self.socket.close()
+                except Exception:
+                    pass  # Ignore errors during cleanup
+                finally:
+                    self.socket = None
+
+            if hasattr(self, "context") and self.context:
+                try:
+                    self.context.term()
+                except Exception:
+                    pass  # Ignore errors during cleanup
+                finally:
+                    self.context = None
+        except Exception:
+            pass  # Suppress all errors in cleanup
+
+    def __del__(self):
+        """
+        Destructor to ensure ZeroMQ resources are cleaned up.
+        This is a safety net for cases where stop() is never called
+        (e.g., exception during start() or unexpected termination).
+        """
+        try:
+            self.running = False
+            self._cleanup_zmq_sync()
+        except Exception:
+            pass  # Cannot raise in __del__
+
     async def handle_client(self, websocket):
         """
         Handle a client connection
