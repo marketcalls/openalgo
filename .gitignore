@@ -21,6 +21,10 @@ config.ini
 
 #DB Files, CSV Files and Log/Tmp Files
 
+# Numba/LLVMLITE cache directories (auto-created on Linux)
+.numba_cache/
+.llvm_tmp/
+
 *.egg-info/
 *.db
 *.duckdb
