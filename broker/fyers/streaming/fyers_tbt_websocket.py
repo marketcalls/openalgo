@@ -208,21 +208,24 @@ class FyersTbtWebSocket:
     def _on_open(self, ws):
         """Handle WebSocket connection open"""
         self.ws = ws
-        self.connected = True
         self.reconnect_attempts = 0
         self.reconnect_delay = 0
 
         # Stop existing ping thread before creating new one (prevents thread accumulation)
+        # Keep connected=False until the old thread has exited to prevent it from continuing
         # This is critical to prevent FD leaks from accumulated threads
+        self.connected = False  # Ensure old ping thread exits its loop
         if self.ping_thread and self.ping_thread.is_alive():
-            # Wait briefly for old thread to exit (it checks self.connected in loop)
-            # The old thread should have exited when _on_close set connected=False
             try:
-                self.ping_thread.join(timeout=1.0)
+                # Wait long enough for the 10s sleep in _ping_loop to finish
+                self.ping_thread.join(timeout=11.0)
                 if self.ping_thread.is_alive():
                     self.logger.warning("Old ping thread still alive during reconnect")
             except Exception as e:
                 self.logger.debug(f"Error joining old ping thread: {e}")
+
+        # Now safe to set connected=True and start new ping thread
+        self.connected = True
 
         # Start new ping thread
         self.ping_thread = threading.Thread(target=self._ping_loop, daemon=True)
