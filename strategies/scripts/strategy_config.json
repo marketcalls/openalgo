@@ -1,7 +1,7 @@
 {
     "API_KEY": "b0b33f31812c948e90620949200ff0542c2a6432b409a07a4495daebd91b549f",
     "HOST": "http://127.0.0.1:3300",
-    "STRATEGY_NAME": "SENSEX_STRATEGY",
+    "STRATEGY_NAME": "SENSEX_WT_STRATEGY",
     "LOTS": 5,
     "LOT_SIZE": 20,
     "SL_PERCENT": 0.05,
@@ -19,19 +19,20 @@
         {
             "name": "CE_LEG",
             "ce_sell_offset": "ATM",
-            "ce_buy_offset": "OTM5",
-            "sl_percent": 0.1,
+            "wait_trade_percentage": 0.10,
+            "sl_percent": 1,
             "reentry_limit": 4,
-            "target_percent": 0.2,
-            "reexecute_limit": 2
+            "target_percent": 0.5,
+            "reexecute_limit": 4
         },
         {
             "name": "PE_LEG",
             "pe_sell_offset": "ATM",
-            "pe_buy_offset": "OTM5",
+            "wait_trade_percentage": 0.10,
+            "sl_percent": 1,
             "reentry_limit": 4,
-            "target_percent": 0.2,
-            "reexecute_limit": 2
+            "target_percent": 0.5,
+            "reexecute_limit": 4
         }
     ]
 }

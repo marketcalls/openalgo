@@ -88,6 +88,25 @@ function formatPrice(value: number | null | undefined): string {
   return value.toFixed(2)
 }
 
+function computePlannedEntryPrice(leg: LegState): number | null {
+  if (leg.wait_trigger_price) {
+    return leg.wait_trigger_price;
+  }
+  const baseline = leg.wait_baseline_price
+  const pct = leg.wait_trade_percent
+
+  if (baseline === null || baseline === undefined) return null
+  if (pct === null || pct === undefined) return null
+  if (!leg.side) return null
+
+  // BUY: enter when LTP >= baseline * (1 + pct)
+  // SELL: enter when LTP <= baseline * (1 - pct)
+  if (leg.side === 'BUY') return baseline * (1 + pct)
+  if (leg.side === 'SELL') return baseline * (1 - pct)
+
+  return null
+}
+
 // Format datetime
 function formatDateTime(isoString: string | null | undefined): string {
   if (!isoString) return '—'
@@ -217,7 +236,7 @@ function EditablePriceCell({
 
   const handleSubmit = async () => {
     const newValue = Number.parseFloat(editValue)
-    
+
     // Validate
     const error = validateValue(newValue)
     if (error) {
@@ -280,8 +299,8 @@ function EditablePriceCell({
       onKeyDown={(e) => e.key === 'Enter' && handleStartEdit()}
       tabIndex={canEdit ? 0 : undefined}
       role={canEdit ? 'button' : undefined}
-      className={canEdit 
-        ? 'cursor-pointer hover:bg-muted px-1 py-0.5 rounded transition-colors' 
+      className={canEdit
+        ? 'cursor-pointer hover:bg-muted px-1 py-0.5 rounded transition-colors'
         : ''
       }
       title={canEdit ? 'Click to edit' : undefined}
@@ -292,12 +311,12 @@ function EditablePriceCell({
 }
 
 // Current Positions Table
-function CurrentPositionsTable({ 
-  legs, 
+function CurrentPositionsTable({
+  legs,
   instanceId,
   onRefresh,
   liveLtpByLegKey,
-}: { 
+}: {
   legs: Record<string, LegState> | null | undefined
   instanceId: string
   onRefresh: () => void
@@ -308,7 +327,7 @@ function CurrentPositionsTable({
   }
 
   const legEntries = Object.entries(legs)
-  
+
   // Separate open positions vs pending/planned (waiting-to-enter) positions.
   // Exited trades should be represented in Trade History (trade_history), not here.
   const openPositions = legEntries.filter(([_, leg]) =>
@@ -434,6 +453,7 @@ function CurrentPositionsTable({
                   <TableHead>Side</TableHead>
                   <TableHead className="text-right">Qty</TableHead>
                   <TableHead className="text-right">LTP</TableHead>
+                  <TableHead className="text-right">Planned Entry</TableHead>
                   <TableHead className="text-right">Planned SL</TableHead>
                   <TableHead className="text-right">Planned Target</TableHead>
                   <TableHead>Status</TableHead>
@@ -468,6 +488,7 @@ function CurrentPositionsTable({
                         ? '-'
                         : formatPrice(liveLtpByLegKey?.[legKey])}
                     </TableCell>
+                    <TableCell className="text-right">{formatPrice(computePlannedEntryPrice(leg))}</TableCell>
                     <TableCell className="text-right">{formatPrice(leg.sl_price)}</TableCell>
                     <TableCell className="text-right">{formatPrice(leg.target_price)}</TableCell>
                     <TableCell>
@@ -690,7 +711,7 @@ function StrategyAccordionItem({
                   <p className="text-sm text-muted-foreground mt-1">
                     {config && (
                       <>
-                        {config.underlying} | Expiry: {config.expiry_date} | 
+                        {config.underlying} | Expiry: {config.expiry_date} |
                         Lots: {config.lots} × {config.lot_size}
                       </>
                     )}
@@ -838,8 +859,8 @@ function StrategyAccordionItem({
             {/* Current Positions */}
             <div>
               <h3 className="text-md font-semibold mb-3">📊 Current Positions</h3>
-              <CurrentPositionsTable 
-                legs={strategy.legs} 
+              <CurrentPositionsTable
+                legs={strategy.legs}
                 instanceId={strategy.instance_id}
                 onRefresh={onRefresh}
                 liveLtpByLegKey={liveLtpByLegKey}
@@ -902,7 +923,7 @@ export default function StrategyPositions() {
 
   const handleDeleteConfirm = async () => {
     if (!deleteDialog.instanceId) return
-    
+
     setIsDeleting(true)
     try {
       await deleteStrategyState(deleteDialog.instanceId)
@@ -1042,6 +1063,28 @@ export default function StrategyPositions() {
     fetchData(true)
   }
 
+  const sortedStrategies = useMemo(() => {
+    // Sort to keep UI stable even if backend response order changes.
+    // Primary: strategy_name (case-insensitive)
+    // Tie-breaker: created_at (oldest first)
+    // Final: instance_id (stable)
+    return [...strategies].sort((a, b) => {
+      const nameA = (a.strategy_name || '').toLocaleLowerCase()
+      const nameB = (b.strategy_name || '').toLocaleLowerCase()
+
+      if (nameA < nameB) return -1
+      if (nameA > nameB) return 1
+
+      const timeA = a.created_at ? new Date(a.created_at).getTime() : Number.POSITIVE_INFINITY
+      const timeB = b.created_at ? new Date(b.created_at).getTime() : Number.POSITIVE_INFINITY
+
+      if (timeA !== timeB) return timeA - timeB
+
+      // Stable fallback for identical name+created_at
+      return (a.instance_id || '').localeCompare(b.instance_id || '')
+    })
+  }, [strategies])
+
   return (
     <div className="container mx-auto py-6 px-4 max-w-7xl">
       {/* Header */}
@@ -1101,7 +1144,7 @@ export default function StrategyPositions() {
         <div className="flex items-center justify-center py-12">
           <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
         </div>
-      ) : strategies.length === 0 ? (
+      ) : sortedStrategies.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">
             <p className="text-muted-foreground">No strategy states found</p>
@@ -1112,7 +1155,7 @@ export default function StrategyPositions() {
         </Card>
       ) : (
         <div>
-          {strategies.map((strategy) => (
+          {sortedStrategies.map((strategy) => (
             <StrategyAccordionItem
               key={strategy.instance_id}
               strategy={strategy}
@@ -1125,8 +1168,8 @@ export default function StrategyPositions() {
       )}
 
       {/* Delete Confirmation Dialog */}
-      <AlertDialog 
-        open={deleteDialog.open} 
+      <AlertDialog
+        open={deleteDialog.open}
         onOpenChange={(open) => {
           if (!isDeleting) {
             setDeleteDialog(prev => ({ ...prev, open }))

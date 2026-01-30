@@ -45,6 +45,15 @@ export interface LegState {
   target_percent?: number
   reexecute_limit?: number
   current_ltp?: number // TODO: Fetch via WebSocket/Quotes API
+
+  /**
+   * Used by wait-and-trade entry logic for PENDING_ENTRY (and may remain populated for other pending states).
+   * Baseline price captured when the leg moved into waiting state.
+   */
+  wait_baseline_price?: number | null
+  /** Percent (e.g., 0.01 for 1%) used to compute planned entry trigger from baseline. */
+  wait_trade_percent?: number | null
+  wait_trigger_price?: number | null
 }
 
 export type ExitType =

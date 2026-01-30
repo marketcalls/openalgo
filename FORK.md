@@ -161,32 +161,56 @@ socket.on('share_credentials_status', (data: { status: string; message: string }
 ---
 
 ### `frontend/src/hooks/useLivePrice.ts`
-**Change Type**: Bug fix + diagnostic improvements  
+**Change Type**: Bug fix  
 **Conflict Risk**: Medium  
-**Description**: Improved live LTP selection logic and added optional debug logging
+**Description**: Improved live LTP selection logic for screens that do not provide quantity/avg price
 
 **Specific Changes**:
-1. Added `debug_live_price` localStorage flag to emit detailed `console.debug` logs for MultiQuotes requests/responses and LTP source selection.
-2. Adjusted LTP selection logic to better handle screens that *do not* provide `quantity`/`average_price` (e.g., Strategy legs).
-3. Added a safeguard: when an item explicitly has `quantity` and `quantity === 0`, preserve REST values (avoid updating LTP / recalculating P&L for closed positions).
+1. Adjusted LTP selection logic to better handle screens that *do not* provide `quantity`/`average_price` (e.g., Strategy legs).
+2. Added a safeguard: when an item explicitly has `quantity` and `quantity === 0`, preserve REST values (avoid updating LTP / recalculating P&L for closed positions).
 
-**Resolution Strategy**: If upstream touches this hook, re-apply the debug flag + the `quantity === 0` REST-preservation guard.
+**Resolution Strategy**: If upstream touches this hook, re-apply the `quantity === 0` REST-preservation guard and the LTP selection tweaks.
 
 ---
 
 ### `frontend/src/pages/StrategyPositions.tsx`
 **Change Type**: Feature enhancement  
 **Conflict Risk**: Medium  
-**Description**: Expanded Strategy Positions UI (live LTP, auto-refresh preferences, leg breakdown, inline SL/Target editing)
+**Description**: Expanded Strategy Positions UI (live LTP, auto-refresh preferences, leg breakdown, inline SL/Target editing, planned entry price)
 
 **Specific Changes** (high level):
 - Added auto-refresh toggle + interval (5–300s) persisted in localStorage
 - Added a single `useLivePrice()` subscription for all active legs (shows live LTP)
 - Added unrealized/realized/total P&L computation and a per-leg P&L breakdown
 - Added inline editing for `sl_price` / `target_price` (calls `createStrategyOverride`)
+- Added planned entry price calculation for wait-and-trade legs
 - Improved delete confirmation by requiring typing the strategy name
 
-**Resolution Strategy**: If upstream changes this page, re-apply the above feature blocks (especially the live-price subscription and auto-refresh prefs).
+**Resolution Strategy**: If upstream changes this page, re-apply the above feature blocks (especially the live-price subscription, planned entry price, and auto-refresh prefs).
+
+---
+
+### `frontend/src/types/strategy-state.ts`
+**Change Type**: Feature addition  
+**Conflict Risk**: Low  
+**Description**: Added wait-and-trade entry metadata to strategy leg types
+
+**Specific Changes**:
+- Added `wait_baseline_price`, `wait_trade_percent`, and `wait_trigger_price` fields to `LegState`.
+
+**Resolution Strategy**: Re-add these fields if upstream modifies the strategy-state types.
+
+---
+
+### `strategies/scripts/strategy_config.json`
+**Change Type**: Configuration update  
+**Conflict Risk**: Low  
+**Description**: Updated sample strategy configuration for wait-and-trade legs
+
+**Specific Changes**:
+- Updated the sample strategy name and leg parameters (wait trade percentage, SL/target, and re-execute limits).
+
+**Resolution Strategy**: Re-apply these sample config tweaks after syncing with upstream if needed.
 
 ---
 
