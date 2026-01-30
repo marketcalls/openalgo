@@ -392,7 +392,12 @@ function CurrentPositionsTable({
                       )}
                     </TableCell>
                     <TableCell className="text-right">{leg.quantity}</TableCell>
-                    <TableCell className="text-right">{formatPrice(leg.entry_price)}</TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex flex-col">
+                        <span>{formatPrice(leg.entry_price)}</span>
+                        <span className="text-xs text-muted-foreground">{formatTime(leg.entry_time)}</span>
+                      </div>
+                    </TableCell>
                     <TableCell className="text-right">
                       {liveLtpByLegKey?.[legKey] === null || liveLtpByLegKey?.[legKey] === undefined
                         ? '-'
