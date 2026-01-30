@@ -144,12 +144,16 @@ class FyersTbtWebSocket:
             except Exception as e:
                 self.logger.debug(f"Error closing WebSocket: {e}")
 
-        # Wait for threads to finish
+        # Wait for threads to finish with longer timeout for Docker/Linux environments
         if self.ws_thread and self.ws_thread.is_alive():
-            self.ws_thread.join(timeout=2)
+            self.ws_thread.join(timeout=5)
+            if self.ws_thread.is_alive():
+                self.logger.warning("WebSocket thread did not terminate within 5 seconds")
 
         if self.ping_thread and self.ping_thread.is_alive():
-            self.ping_thread.join(timeout=2)
+            self.ping_thread.join(timeout=3)
+            if self.ping_thread.is_alive():
+                self.logger.warning("Ping thread did not terminate within 3 seconds")
 
         # Clear subscriptions
         self.subscriptions.clear()
@@ -204,11 +208,26 @@ class FyersTbtWebSocket:
     def _on_open(self, ws):
         """Handle WebSocket connection open"""
         self.ws = ws
-        self.connected = True
         self.reconnect_attempts = 0
         self.reconnect_delay = 0
 
-        # Start ping thread
+        # Stop existing ping thread before creating new one (prevents thread accumulation)
+        # Keep connected=False until the old thread has exited to prevent it from continuing
+        # This is critical to prevent FD leaks from accumulated threads
+        self.connected = False  # Ensure old ping thread exits its loop
+        if self.ping_thread and self.ping_thread.is_alive():
+            try:
+                # Wait long enough for the 10s sleep in _ping_loop to finish
+                self.ping_thread.join(timeout=11.0)
+                if self.ping_thread.is_alive():
+                    self.logger.warning("Old ping thread still alive during reconnect")
+            except Exception as e:
+                self.logger.debug(f"Error joining old ping thread: {e}")
+
+        # Now safe to set connected=True and start new ping thread
+        self.connected = True
+
+        # Start new ping thread
         self.ping_thread = threading.Thread(target=self._ping_loop, daemon=True)
         self.ping_thread.start()
 
@@ -604,3 +623,54 @@ class FyersTbtWebSocket:
     def get_subscription_count(self) -> int:
         """Get total number of subscribed symbols"""
         return sum(len(symbols) for symbols in self.subscriptions.values())
+
+    def __del__(self):
+        """
+        Destructor to ensure proper cleanup when TBT WebSocket is destroyed.
+        This is critical for preventing FD leaks when objects are garbage collected.
+        """
+        try:
+            if hasattr(self, "logger"):
+                self.logger.debug("FyersTbtWebSocket destructor called")
+            self.disconnect()
+        except Exception as e:
+            # Fallback logging if self.logger is not available
+            import logging
+
+            logger = logging.getLogger("fyers_tbt_websocket")
+            logger.error(f"Error in TBT WebSocket destructor: {e}")
+
+    def force_cleanup(self):
+        """
+        Force cleanup all resources (for emergency cleanup)
+        """
+        try:
+            # Force stop all operations
+            self.running = False
+            self.connected = False
+            self.reconnect_enabled = False
+
+            # Force clear data structures
+            if hasattr(self, "subscriptions"):
+                self.subscriptions.clear()
+            if hasattr(self, "active_channels"):
+                self.active_channels.clear()
+            if hasattr(self, "depth_data"):
+                self.depth_data.clear()
+
+            # Force close WebSocket
+            if hasattr(self, "ws") and self.ws:
+                try:
+                    self.ws.close()
+                except Exception:
+                    pass
+                self.ws = None
+
+            # Reset thread references
+            if hasattr(self, "ws_thread"):
+                self.ws_thread = None
+            if hasattr(self, "ping_thread"):
+                self.ping_thread = None
+
+        except Exception:
+            pass  # Suppress all errors in force cleanup

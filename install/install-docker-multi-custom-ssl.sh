@@ -429,6 +429,14 @@ done
 
 log "\n=== Starting Deployment ===" "$BLUE"
 
+# Calculate dynamic shm_size based on available RAM (25% of total, min 256m, max 2g)
+TOTAL_RAM_MB=$(($(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024))
+SHM_SIZE_MB=$((TOTAL_RAM_MB / 4))
+# Clamp between 256MB and 2048MB
+[ $SHM_SIZE_MB -lt 256 ] && SHM_SIZE_MB=256
+[ $SHM_SIZE_MB -gt 2048 ] && SHM_SIZE_MB=2048
+log "System RAM: ${TOTAL_RAM_MB}MB, SHM size: ${SHM_SIZE_MB}MB" "$BLUE"
+
 # Base Dir
 mkdir -p "$INSTALL_BASE"
 chmod 755 "$INSTALL_BASE"
@@ -834,7 +842,7 @@ services:
       - FLASK_DEBUG=0
       - APP_MODE=standalone
       - TZ=Asia/Kolkata
-    shm_size: '2gb'
+    shm_size: '${SHM_SIZE_MB}m'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:5000/auth/check-setup"]
       interval: 30s

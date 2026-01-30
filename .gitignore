@@ -17,12 +17,18 @@ instance/
 Thumbs.db
 .vscode/
 .idea/
+.claude/settings.json
+.claude/settings.local.json
 .python-version
 config.ini
 .venvv
 .cloudflared/*.json
 
 #DB Files, CSV Files and Log/Tmp Files
+
+# Numba/LLVMLITE cache directories (auto-created on Linux)
+.numba_cache/
+.llvm_tmp/
 
 *.egg-info/
 *.db

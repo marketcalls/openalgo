@@ -1027,3 +1027,30 @@ class ZerodhaWebSocket:
     def wait_for_connection(self, timeout: float = 10.0) -> bool:
         """Wait for connection to be established"""
         return self._connection_ready.wait(timeout)
+
+    def __del__(self):
+        """
+        Safety net destructor to ensure resources are cleaned up.
+        Called when the object is garbage collected if stop() wasn't called explicitly.
+        """
+        try:
+            if self.running:
+                # Set flags to signal shutdown
+                self.running = False
+                self._stop_event.set()
+
+                # Try to close websocket if loop is available
+                if self.loop and not self.loop.is_closed():
+                    try:
+                        # Schedule disconnect in the event loop
+                        future = asyncio.run_coroutine_threadsafe(self._async_stop(), self.loop)
+                        future.result(timeout=2)  # Short timeout in destructor
+                    except Exception:
+                        pass
+
+                # Wait briefly for thread to finish
+                if self.ws_thread and self.ws_thread.is_alive():
+                    self.ws_thread.join(timeout=1)
+        except Exception:
+            # Can't reliably log in __del__, just ensure we don't raise
+            pass
