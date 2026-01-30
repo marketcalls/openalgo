@@ -13,13 +13,13 @@ _cache_lock = threading.Lock()
 def _load_shared_credentials_from_file(shared_credentials_file):
     """
     Internal function to load credentials from file.
-    
+
     Args:
         shared_credentials_file (str): Path to the shared credentials JSON file.
-    
+
     Returns:
         dict: Dictionary with 'api_key' and 'access_token' keys.
-    
+
     Raises:
         FileNotFoundError: If the file doesn't exist.
         ValueError: If the file contains invalid/empty credentials.
@@ -58,7 +58,7 @@ def get_shared_credentials(default_api_key, default_access_token):
         IOError: If the shared credentials file cannot be read.
     """
     global _credentials_cache
-    
+
     shared_credentials_file = os.getenv('SHARED_CREDENTIALS_FILE')
 
     if not shared_credentials_file:
@@ -86,16 +86,16 @@ def get_shared_credentials(default_api_key, default_access_token):
             access_token = _credentials_cache['access_token']
 
             # Log comparison for debugging
-            if default_access_token == access_token:
-                logger.info("TOKEN CHECK: SAME - Default access token matches shared access token")
-            else:
-                logger.critical(
-                    "\n" + "!"*50 + "\n"
-                    "NOT SAME - Default access token DOES NOT match shared access token!\n"
-                    f"Default: {default_access_token}\n"
-                    f"Shared : {access_token}\n"
-                    + "!"*50
-                )
+            # if default_access_token == access_token:
+            #     logger.info("TOKEN CHECK: SAME - Default access token matches shared access token")
+            # else:
+            #     logger.critical(
+            #         "\n" + "!"*50 + "\n"
+            #         "NOT SAME - Default access token DOES NOT match shared access token!\n"
+            #         f"Default: {default_access_token}\n"
+            #         f"Shared : {access_token}\n"
+            #         + "!"*50
+            #     )
 
             return api_key, access_token
 
@@ -120,7 +120,7 @@ def get_shared_auth_token(default_auth_token):
         IOError: If the shared credentials file cannot be read.
     """
     global _credentials_cache
-    
+
     shared_credentials_file = os.getenv('SHARED_CREDENTIALS_FILE')
 
     if not shared_credentials_file:
