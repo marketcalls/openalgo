@@ -14,6 +14,8 @@ instance/
 Thumbs.db
 .vscode/
 .idea/
+.claude/settings.json
+.claude/settings.local.json
 .python-version
 config.ini
 .venvv
