@@ -153,17 +153,30 @@ class SharedZmqPublisher:
                 self.logger.exception(f"Error publishing to ZMQ: {e}")
 
     def cleanup(self):
-        """Clean up ZeroMQ resources"""
+        """Clean up ZeroMQ resources with separate error handling for each step"""
+        # Close socket first (separate try/except to ensure context.term() is attempted)
         try:
             if self.socket:
                 self.socket.close(linger=0)
+        except Exception as e:
+            self.logger.warning(f"Error closing shared ZMQ socket: {e}")
+        finally:
+            self.socket = None
+
+        # Terminate context (always attempt even if socket.close() failed)
+        try:
             if self.context:
                 self.context.term()
-            self._bound = False
-            self._initialized = False
-            SharedZmqPublisher._instance = None
         except Exception as e:
-            self.logger.exception(f"Error cleaning up shared ZMQ publisher: {e}")
+            self.logger.warning(f"Error terminating shared ZMQ context: {e}")
+        finally:
+            self.context = None
+
+        # Reset state
+        self._bound = False
+        self._initialized = False
+        SharedZmqPublisher._instance = None
+        self.logger.info("Shared ZMQ publisher cleaned up")
 
 
 class ConnectionPool:
@@ -585,11 +598,12 @@ class ConnectionPool:
             self.logger.info("[POOL] ==========================================")
 
             for idx, adapter in enumerate(self.adapters):
+                original_cleanup = None
                 try:
                     # Skip ZMQ cleanup for adapters using shared publisher
                     if hasattr(adapter, "_uses_shared_zmq") and adapter._uses_shared_zmq:
                         # Temporarily disable ZMQ cleanup
-                        original_cleanup = adapter.cleanup_zmq
+                        original_cleanup = getattr(adapter, "cleanup_zmq", None)
                         adapter.cleanup_zmq = lambda: None
 
                     adapter.disconnect()
@@ -597,6 +611,13 @@ class ConnectionPool:
                     self.logger.debug(f"Disconnected connection {idx + 1}")
                 except Exception as e:
                     self.logger.exception(f"Error disconnecting adapter {idx + 1}: {e}")
+                finally:
+                    # Always restore original cleanup method to prevent resource leaks
+                    if original_cleanup is not None:
+                        try:
+                            adapter.cleanup_zmq = original_cleanup
+                        except Exception:
+                            pass  # Adapter may already be in bad state
 
             self.adapters.clear()
             self.adapter_symbol_counts.clear()

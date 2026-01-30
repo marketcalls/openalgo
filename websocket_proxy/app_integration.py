@@ -131,6 +131,7 @@ def start_websocket_server():
     def run_websocket_server():
         """Run the WebSocket server in an event loop"""
         global _websocket_proxy_instance
+        loop = None
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -155,6 +156,21 @@ def start_websocket_server():
         except Exception as e:
             logger.exception(f"Error in WebSocket server thread: {e}")
             _websocket_proxy_instance = None
+        finally:
+            # Always close the event loop to prevent FD leak
+            if loop is not None:
+                try:
+                    # Cancel all pending tasks
+                    pending = asyncio.all_tasks(loop)
+                    for task in pending:
+                        task.cancel()
+                    # Run until all tasks are cancelled
+                    if pending:
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                    loop.close()
+                    logger.debug("Event loop closed successfully")
+                except Exception as loop_err:
+                    logger.warning(f"Error closing event loop: {loop_err}")
 
     # Start the WebSocket server in a daemon thread
     _websocket_thread = threading.Thread(

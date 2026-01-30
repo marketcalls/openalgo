@@ -185,7 +185,8 @@ class BaseBrokerWebSocketAdapter(ABC):
 
     def _bind_to_available_port(self):
         """
-        Find an available port and bind the socket to it
+        Find an available port and bind the socket to it.
+        If binding fails, closes the socket to prevent FD leak.
         """
         with self._port_lock:
             # Try default port from environment first
@@ -216,6 +217,15 @@ class BaseBrokerWebSocketAdapter(ABC):
                 except zmq.ZMQError as e:
                     self.logger.warning(f"Failed to bind to port {port}: {e}")
                     continue
+
+            # All binding attempts failed - clean up socket to prevent FD leak
+            try:
+                if hasattr(self, "socket") and self.socket:
+                    self.socket.close(linger=0)
+                    self.socket = None
+                    self.logger.warning("Closed socket after failed binding attempts")
+            except Exception as cleanup_err:
+                self.logger.warning(f"Error closing socket after bind failure: {cleanup_err}")
 
             raise RuntimeError("Could not bind to any available ZMQ port after multiple attempts")
 
