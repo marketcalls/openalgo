@@ -79,6 +79,27 @@ def remove_watchlist():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@historify_bp.route("/api/watchlist/bulk/delete", methods=["POST"])
+@check_session_validity
+def bulk_remove_watchlist():
+    """Remove multiple symbols from the watchlist."""
+    try:
+        from services.historify_service import bulk_remove_from_watchlist
+
+        data = request.get_json()
+        symbols = data.get("symbols", [])
+
+        if not symbols:
+            return jsonify({"status": "error", "message": "No symbols provided"}), 400
+
+        success, response, status_code = bulk_remove_from_watchlist(symbols)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error bulk removing from watchlist: {e}")
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 @historify_bp.route("/api/watchlist/bulk", methods=["POST"])
 @check_session_validity
 def bulk_add_watchlist():
@@ -685,6 +706,27 @@ def delete_data():
         return jsonify(response), status_code
     except Exception as e:
         logger.error(f"Error deleting data: {e}")
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@historify_bp.route("/api/delete/bulk", methods=["POST"])
+@check_session_validity
+def bulk_delete_data():
+    """Delete data for multiple symbols in bulk."""
+    try:
+        from services.historify_service import bulk_delete_symbol_data
+
+        data = request.get_json()
+        symbols = data.get("symbols", [])
+
+        if not symbols:
+            return jsonify({"status": "error", "message": "No symbols provided"}), 400
+
+        success, response, status_code = bulk_delete_symbol_data(symbols)
+        return jsonify(response), status_code
+    except Exception as e:
+        logger.error(f"Error bulk deleting data: {e}")
         traceback.print_exc()
         return jsonify({"status": "error", "message": str(e)}), 500
 

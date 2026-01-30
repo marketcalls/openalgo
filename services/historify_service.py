@@ -36,6 +36,8 @@ from database.historify_db import get_watchlist as db_get_watchlist
 from database.historify_db import import_from_csv as db_import_from_csv
 from database.historify_db import import_from_parquet as db_import_from_parquet
 from database.historify_db import remove_from_watchlist as db_remove_from_watchlist
+from database.historify_db import bulk_remove_from_watchlist as db_bulk_remove_from_watchlist
+from database.historify_db import bulk_delete_market_data as db_bulk_delete_market_data
 from database.token_db_enhanced import get_symbol_info
 from services.history_service import get_history
 from services.intervals_service import get_intervals
@@ -163,6 +165,49 @@ def remove_from_watchlist(symbol: str, exchange: str) -> tuple[bool, dict[str, A
 
     except Exception as e:
         logger.exception(f"Error removing from watchlist: {e}")
+        return False, {"status": "error", "message": str(e)}, 500
+
+
+def bulk_remove_from_watchlist(
+    symbols: list[dict[str, str]],
+) -> tuple[bool, dict[str, Any], int]:
+    """
+    Remove multiple symbols from the watchlist in a single bulk operation.
+
+    Args:
+        symbols: List of dicts with 'symbol' and 'exchange' keys
+
+    Returns:
+        Tuple of (success, response_data, status_code)
+    """
+    try:
+        if not symbols:
+            return False, {"status": "error", "message": "No symbols provided"}, 400
+
+        removed, skipped, failed = db_bulk_remove_from_watchlist(symbols)
+
+        total = len(symbols)
+        message = f"Removed {removed} symbol(s) from watchlist"
+        if skipped > 0:
+            message += f", {skipped} not found"
+        if failed:
+            message += f", {len(failed)} failed"
+
+        return (
+            True,
+            {
+                "status": "success",
+                "message": message,
+                "removed": removed,
+                "skipped": skipped,
+                "failed": failed,
+                "total": total,
+            },
+            200,
+        )
+
+    except Exception as e:
+        logger.exception(f"Error bulk removing from watchlist: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
@@ -757,6 +802,49 @@ def delete_symbol_data(
             return False, {"status": "error", "message": msg}, 500
     except Exception as e:
         logger.exception(f"Error deleting data: {e}")
+        return False, {"status": "error", "message": str(e)}, 500
+
+
+def bulk_delete_symbol_data(
+    symbols: list[dict[str, str]],
+) -> tuple[bool, dict[str, Any], int]:
+    """
+    Delete market data for multiple symbols in a single bulk operation.
+
+    Args:
+        symbols: List of dicts with 'symbol' and 'exchange' keys
+
+    Returns:
+        Tuple of (success, response_data, status_code)
+    """
+    try:
+        if not symbols:
+            return False, {"status": "error", "message": "No symbols provided"}, 400
+
+        deleted, skipped, failed = db_bulk_delete_market_data(symbols)
+
+        total = len(symbols)
+        message = f"Deleted {deleted} symbol(s)"
+        if skipped > 0:
+            message += f", {skipped} had no data"
+        if failed:
+            message += f", {len(failed)} failed"
+
+        return (
+            True,
+            {
+                "status": "success",
+                "message": message,
+                "deleted": deleted,
+                "skipped": skipped,
+                "failed": failed,
+                "total": total,
+            },
+            200,
+        )
+
+    except Exception as e:
+        logger.exception(f"Error bulk deleting data: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 
