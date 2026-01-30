@@ -468,18 +468,33 @@ class PositionManager:
                 total_today_realized_pnl += today_realized
                 total_pnl_today += position_total_pnl_today
 
+                # Calculate P&L% based on total P&L (realized + unrealized) for the day
+                # For open positions: % based on total investment
+                # For closed positions (qty=0): 0% (like Zerodha - avg resets to 0, can't calculate)
+                if position.quantity != 0:
+                    investment = abs(Decimal(str(position.average_price)) * Decimal(str(position.quantity)))
+                    if investment > 0:
+                        calculated_pnl_percent = (position_total_pnl_today / investment) * Decimal("100")
+                    else:
+                        calculated_pnl_percent = Decimal("0.00")
+                    display_avg_price = float(position.average_price)
+                else:
+                    # Closed position - show 0% and avg=0 (like Zerodha)
+                    calculated_pnl_percent = Decimal("0.00")
+                    display_avg_price = 0.0  # Reset to 0 for display (like Zerodha)
+
                 positions_list.append(
                     {
                         "symbol": position.symbol,
                         "exchange": position.exchange,
                         "product": position.product,
                         "quantity": position.quantity,
-                        "average_price": float(position.average_price),
+                        "average_price": display_avg_price,  # 0 for closed positions (like Zerodha)
                         "ltp": float(position.ltp) if position.ltp else 0.0,
                         "pnl": float(
                             position_total_pnl_today
                         ),  # Today's total P&L (realized + unrealized)
-                        "pnl_percent": float(position.pnl_percent),
+                        "pnlpercent": float(calculated_pnl_percent),  # Fixed: use pnlpercent (no underscore) to match frontend
                         "unrealized_pnl": float(unrealized_pnl),  # Unrealized only (for reference)
                         "today_realized_pnl": float(today_realized),
                         "total_pnl_today": float(position_total_pnl_today),
