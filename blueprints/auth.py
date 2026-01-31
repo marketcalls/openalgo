@@ -503,7 +503,10 @@ def debug_smtp():
 @auth_bp.route("/session-status", methods=["GET"])
 def get_session_status():
     """Return current session status for React SPA."""
-    if "user" not in session:
+    # Check if user session exists (either 'user' or 'user_session_key')
+    username = session.get("user") or session.get("user_session_key")
+
+    if not username:
         # Return 200 with authenticated: false instead of 401
         # This prevents unnecessary console errors in the browser
         return jsonify(
@@ -514,10 +517,10 @@ def get_session_status():
     if session.get("logged_in") and session.get("broker"):
         from database.auth_db import get_api_key_for_tradingview, get_auth_token
 
-        auth_token = get_auth_token(session.get("user"))
+        auth_token = get_auth_token(username)
         if auth_token is None:
             logger.warning(
-                f"Session status: stale session detected for user {session.get('user')} - no auth token"
+                f"Session status: stale session detected for user {username} - no auth token"
             )
             # Clear the stale session
             session.clear()
@@ -526,25 +529,72 @@ def get_session_status():
             ), 200
 
         # Get API key for the user
-        api_key = get_api_key_for_tradingview(session.get("user"))
+        api_key = get_api_key_for_tradingview(username)
 
         return jsonify(
             {
                 "status": "success",
                 "authenticated": True,
                 "logged_in": session.get("logged_in", False),
-                "user": session.get("user"),
+                "user": username,
                 "broker": session.get("broker"),
                 "api_key": api_key,
             }
         )
 
+    # If user exists but not logged in with broker, this is the normal multi-step login flow:
+    # Step 1: User logs in with username/password (session["user"] set, logged_in=False)
+    # Step 2: User selects broker and authenticates (logged_in=True)
+    #
+    # We should only clear the session if it's genuinely stale (old session from previous day)
+    # Check if login_time exists - if not, this is a legitimate in-progress login
+    if "login_time" not in session:
+        # This is a legitimate in-progress login (just completed app login, choosing broker)
+        logger.debug(f"Session in progress for user {username} - awaiting broker selection")
+        return jsonify(
+            {
+                "status": "success",
+                "authenticated": True,  # User authenticated with app
+                "logged_in": False,     # But not yet connected to broker
+                "user": username,
+                "broker": session.get("broker"),
+            }
+        )
+
+    # If login_time exists but logged_in is False, check if session is stale
+    # This could be from a previous session where user logged out from broker but session persisted
+    from datetime import datetime
+    import pytz
+
+    try:
+        login_time = datetime.fromisoformat(session["login_time"])
+        now_utc = datetime.now(pytz.timezone("UTC"))
+        now_ist = now_utc.astimezone(pytz.timezone("Asia/Kolkata"))
+
+        # If login was more than 24 hours ago, consider it stale
+        time_since_login = now_ist - login_time
+        if time_since_login.total_seconds() > 86400:  # 24 hours
+            logger.info(f"Clearing stale session for user {username} - login was {time_since_login.total_seconds()/3600:.1f} hours ago")
+            session.clear()
+            return jsonify(
+                {
+                    "status": "success",
+                    "message": "Session expired - please login again",
+                    "authenticated": False,
+                    "logged_in": False,
+                }
+            )
+    except Exception as e:
+        logger.warning(f"Error checking session staleness for user {username}: {e}")
+
+    # Session has login_time and is recent, but user isn't logged in with broker
+    # This is normal during broker selection - return authenticated but not logged_in
     return jsonify(
         {
             "status": "success",
             "authenticated": True,
-            "logged_in": session.get("logged_in", False),
-            "user": session.get("user"),
+            "logged_in": False,
+            "user": username,
             "broker": session.get("broker"),
         }
     )
@@ -708,7 +758,16 @@ def get_dashboard_data():
 @auth_bp.route("/logout", methods=["GET", "POST"])
 def logout():
     if session.get("logged_in"):
-        username = session["user"]
+        # Use fallback for username - check both possible session keys
+        username = session.get("user") or session.get("user_session_key")
+        broker = session.get("broker")
+
+        if not username:
+            logger.warning("Logout called without valid user session key")
+            session.clear()
+            if request.method == "POST":
+                return jsonify({"status": "success", "message": "Session cleared"})
+            return redirect(url_for("auth.login"))
 
         # Clear cache entries before database update to prevent stale data access
         cache_key_auth = f"auth-{username}"
@@ -728,6 +787,16 @@ def logout():
             logger.info("Cleared symbol cache on logout")
         except Exception as cache_error:
             logger.exception(f"Error clearing symbol cache on logout: {cache_error}")
+
+        # Reset master contract status for the broker on logout
+        if broker:
+            try:
+                from database.master_contract_status_db import update_status
+
+                update_status(broker, "pending", "User logged out - master contract needs re-download")
+                logger.info(f"Reset master contract status for broker {broker} on logout")
+            except Exception as status_error:
+                logger.exception(f"Error resetting master contract status on logout: {status_error}")
 
         # writing to database
         inserted_id = upsert_auth(username, "", "", revoke=True)

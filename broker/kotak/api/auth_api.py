@@ -134,8 +134,11 @@ def authenticate_broker(mobile_number, totp, mpin):
         trading_sid = data_dict["data"]["sid"]
         base_url = data_dict["data"].get("baseUrl", "")
 
+        # CRITICAL: Kotak requires baseUrl for all API calls
+        # Without it, orders, positions, and master contract downloads will fail
         if not base_url:
-            logger.warning("baseUrl not found in MPIN validation response, API calls may fail")
+            logger.error("CRITICAL: baseUrl not found in MPIN validation response - authentication incomplete")
+            return None, "Authentication incomplete: baseUrl not received from Kotak. Please try again or contact support."
 
         logger.info("Kotak TOTP authentication completed successfully")
         logger.debug(f"Base URL for API calls: {base_url}")
