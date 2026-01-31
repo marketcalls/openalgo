@@ -103,6 +103,7 @@ function formatTime(timestamp?: string): string {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
+    timeZone: 'Asia/Kolkata',
   })
 }
 
@@ -250,12 +251,12 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
 
   // Logging
   const logEvent = useCallback((message: string, type: LogEntry['type'] = 'info') => {
-    const timestamp = new Date().toLocaleTimeString('en-IN', { hour12: false })
+    const timestamp = new Date().toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' })
     setLogs((prev) => [...prev.slice(-199), { timestamp, message, type }])
   }, [])
 
   const logRaw = useCallback((data: string) => {
-    const timestamp = new Date().toLocaleTimeString('en-IN', { hour12: false })
+    const timestamp = new Date().toLocaleTimeString('en-IN', { hour12: false, timeZone: 'Asia/Kolkata' })
     setRawMessages((prev) => [...prev.slice(-99), `[${timestamp}] ${data}`])
   }, [])
 

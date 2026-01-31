@@ -1,0 +1,13 @@
+{
+  "config": "strategy_config.json",
+  "start_date": "2026-01-05",
+  "end_date": "2026-01-05",
+  "interval": "1m",
+  "entry_time": "09:20",
+  "exit_time": "15:25",
+  "iv": 0.10,
+  "risk_free_rate": 0.06,
+  "slippage_bps": 5,
+  "out_dir": "tmp/backtest_out",
+  "strike_distance": 100
+}

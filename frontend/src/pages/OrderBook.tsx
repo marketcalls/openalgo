@@ -59,11 +59,38 @@ function formatCurrency(value: number): string {
 
 function formatTime(timestamp: string): string {
   try {
-    return new Date(timestamp).toLocaleTimeString('en-IN', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    })
+    const date = new Date(timestamp)
+    
+    // Get today's date in IST
+    const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }))
+    const todayStart = new Date(nowIST.getFullYear(), nowIST.getMonth(), nowIST.getDate())
+    
+    // Get the entry date in IST
+    const entryIST = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }))
+    const entryStart = new Date(entryIST.getFullYear(), entryIST.getMonth(), entryIST.getDate())
+    
+    // Check if it's today
+    const isToday = todayStart.getTime() === entryStart.getTime()
+    
+    if (isToday) {
+      // Today: show time only
+      return date.toLocaleTimeString('en-IN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        timeZone: 'Asia/Kolkata',
+      })
+    } else {
+      // Older: show date + time
+      return date.toLocaleString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        timeZone: 'Asia/Kolkata',
+      })
+    }
   } catch {
     return timestamp
   }

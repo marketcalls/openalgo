@@ -33,6 +33,10 @@ class StrategyStateDbError(StrategyStateError):
     """Raised for unexpected database errors."""
 
 
+class StrategyStateDuplicateLegError(StrategyStateError):
+    """Raised when a duplicate leg is detected for a strategy state."""
+
+
 # Strategy state database path
 DEFAULT_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'db', 'strategy_state.db')
 DB_PATH = os.getenv('STRATEGY_STATE_DB_PATH', DEFAULT_DB_PATH)
@@ -265,6 +269,152 @@ def delete_strategy_state(instance_id: str) -> None:
         db_session.remove()
 
 
+def add_manual_strategy_leg(
+    *,
+    instance_id: str,
+    leg_key: str,
+    symbol: str,
+    exchange: str,
+    product: str,
+    quantity: int,
+    side: str,
+    entry_price: float | None,
+    entry_time: datetime | None,
+    sl_price: float | None,
+    target_price: float | None,
+    leg_pair_name: str | None,
+    is_main_leg: bool,
+    sl_percent: float | None,
+    target_percent: float | None,
+    reentry_limit: int | None = None,
+    reexecute_limit: int | None = None,
+    status: str = "IN_POSITION",
+    wait_trade_percent: float | None = None,
+    wait_baseline_price: float | None = None,
+) -> dict:
+    """Append a manual leg to a strategy state.
+
+    Args:
+        instance_id: Strategy instance identifier.
+        leg_key: Unique leg key for the strategy.
+        symbol: Symbol without exchange prefix.
+        exchange: Exchange name.
+        product: Product type (MIS/NRML/CNC).
+        quantity: Position quantity (positive integer).
+        side: BUY or SELL.
+        entry_price: Entry price from broker position.
+        entry_time: Entry timestamp.
+        sl_price: Computed stop loss price.
+        target_price: Computed target price.
+        leg_pair_name: Optional leg pair name.
+        is_main_leg: True if main leg.
+        sl_percent: Optional SL percent.
+        target_percent: Optional target percent.
+
+    Returns:
+        dict: Updated strategy state data.
+    """
+    try:
+        if not os.path.exists(DB_PATH):
+            raise StrategyStateDbNotFoundError('Strategy state database not found')
+
+        state = StrategyExecutionState.query.filter_by(instance_id=instance_id).first()
+        if not state:
+            raise StrategyStateNotFoundError('Strategy state not found')
+
+        if not state.state_data:
+            raise StrategyStateDbError('Strategy state data is empty')
+
+        try:
+            parsed_state = json.loads(state.state_data)
+        except json.JSONDecodeError as exc:
+            raise StrategyStateDbError('Strategy state data is malformed') from exc
+
+        legs = parsed_state.get('legs') or {}
+
+        # Check for duplicate legs with same characteristics
+        for existing_leg in legs.values():
+            # Skip if leg data is None or not a dict
+            if not existing_leg:
+                continue
+            
+            # Only check legs that are in position
+            if existing_leg.get('status') != 'IN_POSITION':
+                continue
+            
+            # Check if all characteristics match
+            if (existing_leg.get('exchange') == exchange and
+                existing_leg.get('symbol') == symbol and
+                existing_leg.get('product') == product and
+                existing_leg.get('side') == side and
+                int(existing_leg.get('quantity') or 0) == int(quantity)):
+                raise StrategyStateDuplicateLegError('Similar open position already exists in this strategy')
+
+        legs[leg_key] = {
+            'leg_type': 'MANUAL',
+            'status': status,
+            'symbol': symbol,
+            'exchange': exchange,
+            'product': product,
+            'entry_price': entry_price,
+            'entry_time': entry_time.isoformat() if entry_time else None,
+            'sl_price': sl_price,
+            'target_price': target_price,
+            'reentry_count': 0,
+            'reexecute_count': 0,
+            'quantity': quantity,
+            'realized_pnl': 0,
+            'unrealized_pnl': 0,
+            'total_pnl': 0,
+            'leg_pair_name': leg_pair_name,
+            'side': side,
+            'is_main_leg': is_main_leg,
+            'sl_percent': sl_percent,
+            'target_percent': target_percent,
+            'reentry_limit': reentry_limit,
+            'reexecute_limit': reexecute_limit,
+            'wait_trade_percent': wait_trade_percent,
+            'wait_baseline_price': wait_baseline_price,
+        }
+
+        parsed_state['legs'] = legs
+        state.state_data = json.dumps(parsed_state)
+        state.last_updated = datetime.utcnow()
+        
+        # Force SQLAlchemy to detect the change
+        from sqlalchemy.orm import attributes
+        attributes.flag_modified(state, 'state_data')
+        
+        # Create a MANUAL_SYNC override to notify the running strategy
+        sync_override = StrategyOverride(
+            instance_id=instance_id,
+            leg_key=leg_key,
+            override_type='MANUAL_SYNC',
+            new_value=0.0,
+            applied=False,
+            created_at=datetime.utcnow()
+        )
+        db_session.add(sync_override)
+        
+        db_session.flush()
+        db_session.commit()
+        db_session.refresh(state)
+        
+        logger.info(f"Successfully added manual leg {leg_key} to strategy {instance_id}")
+
+        return parsed_state
+
+    except (StrategyStateDbNotFoundError, StrategyStateNotFoundError, StrategyStateDuplicateLegError):
+        db_session.rollback()
+        raise
+    except Exception as exc:
+        logger.error(f"Error adding manual leg for {instance_id}: {exc}")
+        db_session.rollback()
+        raise StrategyStateDbError(f"Database error: {str(exc)}") from exc
+    finally:
+        db_session.remove()
+
+
 # ============================================================================
 # Database Initialization
 # ============================================================================
@@ -430,5 +580,121 @@ def mark_override_applied(override_id: int) -> bool:
         logger.error(f"Error marking override as applied {override_id}: {e}")
         db_session.rollback()
         return False
+    finally:
+        db_session.remove()
+
+
+def manual_exit_strategy_leg(
+    *,
+    instance_id: str,
+    leg_key: str,
+    exit_price: float,
+    exit_status: str,
+    exit_time: datetime
+) -> dict:
+    """
+    Manually exit a strategy leg and update status to SL_HIT or TARGET_HIT.
+    Moves the leg to trade history and updates P&L.
+    
+    Args:
+        instance_id: Strategy instance identifier.
+        leg_key: Unique leg key for the strategy.
+        exit_price: Manual exit price provided by user.
+        exit_status: Either 'SL_HIT' or 'TARGET_HIT'.
+        exit_time: Exit timestamp.
+    
+    Returns:
+        dict: Updated strategy state data.
+    
+    Raises:
+        StrategyStateDbNotFoundError: If DB file is missing.
+        StrategyStateNotFoundError: If strategy or leg not found.
+        StrategyStateDbError: For other DB errors.
+    """
+    try:
+        if not os.path.exists(DB_PATH):
+            raise StrategyStateDbNotFoundError('Strategy state database not found')
+        
+        state = StrategyExecutionState.query.filter_by(instance_id=instance_id).first()
+        if not state:
+            raise StrategyStateNotFoundError('Strategy state not found')
+        
+        if not state.state_data:
+            raise StrategyStateDbError('Strategy state data is empty')
+        
+        try:
+            parsed_state = json.loads(state.state_data)
+        except json.JSONDecodeError as exc:
+            raise StrategyStateDbError('Strategy state data is malformed') from exc
+        
+        legs = parsed_state.get('legs') or {}
+        
+        if leg_key not in legs:
+            raise StrategyStateNotFoundError(f'Leg {leg_key} not found in strategy')
+        
+        leg = legs[leg_key]
+        
+        # Calculate P&L
+        entry_price = leg.get('entry_price', 0)
+        quantity = leg.get('quantity', 0)
+        side = leg.get('side', 'BUY')
+        
+        if side == 'BUY':
+            pnl = (exit_price - entry_price) * quantity
+        else:  # SELL
+            pnl = (entry_price - exit_price) * quantity
+        
+        # Update leg status and exit details
+        leg['status'] = exit_status
+        leg['exit_price'] = exit_price
+        leg['exit_time'] = exit_time.isoformat() if exit_time else None
+        leg['realized_pnl'] = pnl
+        leg['unrealized_pnl'] = 0  # No longer unrealized
+        leg['total_pnl'] = pnl
+        
+        # Add to trade history
+        trade_history = parsed_state.get('trade_history') or []
+        trade_history_entry = {
+            'leg_key': leg_key,
+            'symbol': leg.get('symbol'),
+            'exchange': leg.get('exchange'),
+            'product': leg.get('product'),
+            'quantity': quantity,
+            'side': side,
+            'entry_price': entry_price,
+            'entry_time': leg.get('entry_time'),
+            'exit_price': exit_price,
+            'exit_time': exit_time.isoformat() if exit_time else None,
+            'exit_reason': exit_status,
+            'pnl': pnl,
+            'leg_pair_name': leg.get('leg_pair_name'),
+            'is_main_leg': leg.get('is_main_leg'),
+        }
+        trade_history.append(trade_history_entry)
+        parsed_state['trade_history'] = trade_history
+        
+        # Save updated state
+        state.state_data = json.dumps(parsed_state)
+        state.last_updated = datetime.utcnow()
+        
+        # Force SQLAlchemy to detect the change
+        from sqlalchemy.orm import attributes
+        attributes.flag_modified(state, 'state_data')
+        
+        db_session.flush()
+        db_session.commit()
+        db_session.refresh(state)
+        
+        logger.info(f"Successfully exited leg {leg_key} from strategy {instance_id} with status {exit_status}")
+        
+        return parsed_state
+    
+    except (StrategyStateDbNotFoundError, StrategyStateNotFoundError):
+        db_session.rollback()
+        raise
+    except Exception as exc:
+        logger.error(f"Error manually exiting leg {leg_key} for {instance_id}: {exc}")
+        db_session.rollback()
+        raise StrategyStateDbError(f"Database error: {str(exc)}") from exc
     finally:
         db_session.remove()

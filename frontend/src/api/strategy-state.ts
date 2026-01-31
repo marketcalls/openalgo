@@ -1,10 +1,10 @@
 // API client for Strategy State endpoints
 
-import type { 
-  StrategyState, 
-  StrategyStateResponse, 
+import type {
+  StrategyState,
+  StrategyStateResponse,
   OverrideType,
-  StrategyOverrideResponse 
+  StrategyOverrideResponse
 } from '@/types/strategy-state'
 import { webClient } from './client'
 
@@ -67,4 +67,83 @@ export async function createStrategyOverride(
     throw new Error(response.data.message || 'Failed to create strategy override')
   }
   return { message: response.data.message || 'Override created successfully' }
+}
+
+export interface ManualLegRequest {
+  leg_key: string
+  symbol: string
+  exchange: string
+  product: string
+  quantity: number
+  side: 'BUY' | 'SELL'
+  entry_price?: number
+  sl_percent?: number | null
+  target_percent?: number | null
+  leg_pair_name?: string | null
+  is_main_leg: boolean
+  reentry_limit?: number | null
+  reexecute_limit?: number | null
+  mode?: 'TRACK' | 'NEW'
+  wait_trade_percent?: number | null
+  wait_baseline_price?: number | null
+}
+
+export async function createManualStrategyLeg(
+  instanceId: string,
+  payload: ManualLegRequest
+): Promise<{ message: string }> {
+  try {
+    const response = await webClient.post<{ status: string; message?: string }>(
+      `/api/strategy-state/${encodeURIComponent(instanceId)}/manual-leg`,
+      payload
+    )
+    if (response.data.status === 'error') {
+      throw new Error(response.data.message || 'Failed to add manual position')
+    }
+    return { message: response.data.message || 'Manual position added successfully' }
+  } catch (error) {
+    // Extract user-friendly message from backend response if available
+    if (error && typeof error === 'object' && 'response' in error) {
+      const axiosError = error as { response?: { data?: { message?: string; status?: string } } }
+      const backendMessage = axiosError.response?.data?.message
+      if (backendMessage) {
+        throw new Error(backendMessage)
+      }
+    }
+    throw error
+  }
+}
+
+/**
+ * Manually exit a leg position
+ */
+export async function manualExitLeg(
+  instanceId: string,
+  legKey: string,
+  exitPrice: number,
+  exitStatus: 'SL_HIT' | 'TARGET_HIT'
+): Promise<{ message: string }> {
+  try {
+    const response = await webClient.post<{ status: string; message?: string }>(
+      `/api/strategy-state/${encodeURIComponent(instanceId)}/leg/${encodeURIComponent(legKey)}/manual-exit`,
+      {
+        exit_price: exitPrice,
+        exit_status: exitStatus
+      }
+    )
+    if (response.data.status === 'error') {
+      throw new Error(response.data.message || 'Failed to exit position')
+    }
+    return { message: response.data.message || 'Position exited successfully' }
+  } catch (error) {
+    // Extract user-friendly message from backend response if available
+    if (error && typeof error === 'object' && 'response' in error) {
+      const axiosError = error as { response?: { data?: { message?: string; status?: string } } }
+      const backendMessage = axiosError.response?.data?.message
+      if (backendMessage) {
+        throw new Error(backendMessage)
+      }
+    }
+    throw error
+  }
 }
