@@ -147,7 +147,7 @@ def start_execution_engine(engine_type: str = None):
                             f"Failed to start WebSocket engine: {message}, falling back to polling"
                         )
                 else:
-                    logger.warning("WebSocket proxy not healthy, falling back to polling engine")
+                    logger.debug("WebSocket proxy not healthy, falling back to polling engine")
 
                 # Fallback to polling
                 engine_type = "polling"
