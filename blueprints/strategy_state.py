@@ -388,7 +388,7 @@ def create_manual_leg_endpoint(instance_id):
             logger.info(f"Manual leg added successfully to {instance_id}")
         except StrategyStateDuplicateLegError as exc:
             logger.warning(f"Duplicate leg detected: {exc}")
-            return jsonify({'status': 'warning', 'message': str(exc)}), 409
+            return jsonify({'status': 'error', 'message': str(exc)}), 409
         except StrategyStateNotFoundError:
             return jsonify({'status': 'error', 'message': f'Strategy state not found: {instance_id}'}), 404
         except StrategyStateDbNotFoundError as exc:
