@@ -466,6 +466,20 @@ def serve_logo():
     return send_from_directory(FRONTEND_DIST, "logo.png")
 
 
+@react_bp.route("/whiteMode.jpeg")
+def serve_white_mode():
+    if not is_react_frontend_available():
+        return "Not found", 404
+    return send_from_directory(FRONTEND_DIST, "whiteMode.jpeg")
+
+
+@react_bp.route("/darkMode.png")
+def serve_dark_mode():
+    if not is_react_frontend_available():
+        return "Not found", 404
+    return send_from_directory(FRONTEND_DIST, "darkMode.png")
+
+
 @react_bp.route("/apple-touch-icon.png")
 def serve_apple_touch_icon():
     """Serve Apple touch icon."""
