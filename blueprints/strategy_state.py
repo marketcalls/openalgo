@@ -158,7 +158,7 @@ def delete_strategy_state_endpoint(instance_id):
     """
     try:
         logger.debug(f"DELETE request for instance_id: {instance_id}")
-        
+
         try:
             delete_strategy_state(instance_id)
         except StrategyStateNotFoundError:
@@ -217,7 +217,7 @@ def create_manual_leg_endpoint(instance_id):
     """
     try:
         logger.info(f"POST /api/strategy-state/{instance_id}/manual-leg called")
-        
+
         data = request.get_json()
         logger.debug(f"Request data: {data}")
 
@@ -248,20 +248,20 @@ def create_manual_leg_endpoint(instance_id):
         if mode not in ('TRACK', 'NEW'):
             return jsonify({'status': 'error', 'message': 'mode must be TRACK or NEW'}), 400
 
-        if not leg_key:
-            return jsonify({'status': 'error', 'message': 'leg_key is required'}), 400
-        if not symbol:
-            return jsonify({'status': 'error', 'message': 'symbol is required'}), 400
-        if not exchange:
-            return jsonify({'status': 'error', 'message': 'exchange is required'}), 400
-        if not product:
-            return jsonify({'status': 'error', 'message': 'product is required'}), 400
-        if quantity is None:
-            return jsonify({'status': 'error', 'message': 'quantity is required'}), 400
-        if not side:
-            return jsonify({'status': 'error', 'message': 'side is required'}), 400
-        if is_main_leg is None:
-            return jsonify({'status': 'error', 'message': 'is_main_leg is required'}), 400
+        required_fields = {
+            'leg_key': 'leg_key is required',
+            'symbol': 'symbol is required',
+            'exchange': 'exchange is required',
+            'product': 'product is required',
+            'quantity': 'quantity is required',
+            'side': 'side is required',
+            'is_main_leg': 'is_main_leg is required',
+        }
+
+        for field, message in required_fields.items():
+            # Note: `is_main_leg` can be `False`, so check for `is None`
+            if data.get(field) is None:
+                return jsonify({'status': 'error', 'message': message}), 400
 
         if mode == 'NEW':
             # For new trades, entry_price is optional (will be determined on fill)
@@ -292,7 +292,7 @@ def create_manual_leg_endpoint(instance_id):
                     wait_trade_percent = float(wait_trade_percent)
                     if wait_trade_percent <= 0:
                          return jsonify({'status': 'error', 'message': 'wait_trade_percent must be positive'}), 400
-                    
+
                     if wait_baseline_price is None:
                         return jsonify({'status': 'error', 'message': 'wait_baseline_price is required for wait entry'}), 400
                     wait_baseline_price = float(wait_baseline_price)
@@ -304,7 +304,7 @@ def create_manual_leg_endpoint(instance_id):
 
         sl_value = None
         target_value = None
-        
+
         # Calculate SL/Target values only if entry_price is available
         if entry_price is not None:
             if sl_percent is not None:
@@ -323,7 +323,7 @@ def create_manual_leg_endpoint(instance_id):
              try:
                  sl_percent = float(sl_percent)
                  if sl_percent <= 0: raise ValueError
-             except:
+             except (TypeError, ValueError):
                  return jsonify({'status': 'error', 'message': 'sl_percent must be positive'}), 400
 
         if target_percent is not None and entry_price is not None:
@@ -341,7 +341,7 @@ def create_manual_leg_endpoint(instance_id):
              try:
                  target_percent = float(target_percent)
                  if target_percent <= 0: raise ValueError
-             except:
+             except (TypeError, ValueError):
                  return jsonify({'status': 'error', 'message': 'target_percent must be positive'}), 400
 
         # Validate reentry_limit and reexecute_limit if provided
@@ -414,54 +414,54 @@ def create_manual_leg_endpoint(instance_id):
 def manual_exit_leg_endpoint(instance_id, leg_key):
     """
     Manually exit a leg position and mark it with SL_HIT or TARGET_HIT status.
-    
+
     Args:
         instance_id: The unique instance identifier
         leg_key: The leg key to exit
-    
+
     Request body:
         {
             "exit_price": 123.45,
             "exit_status": "SL_HIT" | "TARGET_HIT"
         }
-    
+
     Returns:
         JSON response with updated strategy state or error
     """
     try:
         logger.info(f"POST /api/strategy-state/{instance_id}/leg/{leg_key}/manual-exit called")
-        
+
         data = request.get_json()
-        
+
         if not data:
             return jsonify({
                 'status': 'error',
                 'message': 'Request body is required'
             }), 400
-        
+
         exit_price = data.get('exit_price')
         exit_status = data.get('exit_status')
-        
+
         # Validate required fields
         if exit_price is None:
             return jsonify({
                 'status': 'error',
                 'message': 'exit_price is required'
             }), 400
-        
+
         if not exit_status:
             return jsonify({
                 'status': 'error',
                 'message': 'exit_status is required'
             }), 400
-        
+
         # Validate exit_status
         if exit_status not in ('SL_HIT', 'TARGET_HIT'):
             return jsonify({
                 'status': 'error',
                 'message': 'exit_status must be SL_HIT or TARGET_HIT'
             }), 400
-        
+
         # Validate exit_price is a number
         try:
             exit_price = float(exit_price)
@@ -470,13 +470,13 @@ def manual_exit_leg_endpoint(instance_id, leg_key):
                 'status': 'error',
                 'message': 'exit_price must be a valid number'
             }), 400
-        
+
         if exit_price <= 0:
             return jsonify({
                 'status': 'error',
                 'message': 'exit_price must be positive'
             }), 400
-        
+
         # Get the strategy state
         state = get_strategy_state_by_instance_id(instance_id)
         if not state:
@@ -484,27 +484,27 @@ def manual_exit_leg_endpoint(instance_id, leg_key):
                 'status': 'error',
                 'message': f'Strategy state not found: {instance_id}'
             }), 404
-        
+
         legs = state.get('legs', {})
         if leg_key not in legs:
             return jsonify({
                 'status': 'error',
                 'message': f'Leg not found: {leg_key}'
             }), 404
-        
+
         leg = legs[leg_key]
-        
+
         # Verify the leg is in ACTIVE status
         if leg.get('status') != 'IN_POSITION':
             return jsonify({
                 'status': 'error',
                 'message': f'Can only exit legs with IN_POSITION status. Current status: {leg.get("status")}'
             }), 400
-        
+
         # Validate exit price based on side and exit_status
         entry_price = leg.get('entry_price')
         side = leg.get('side')
-        
+
         if entry_price and side:
             if exit_status == 'TARGET_HIT':
                 if side == 'BUY' and exit_price <= entry_price:
@@ -517,7 +517,7 @@ def manual_exit_leg_endpoint(instance_id, leg_key):
                         'status': 'error',
                         'message': f'For SELL positions with TARGET_HIT, exit price must be less than entry price ({entry_price})'
                     }), 400
-            
+
             elif exit_status == 'SL_HIT':
                 if side == 'BUY' and exit_price >= entry_price:
                     return jsonify({
@@ -529,7 +529,7 @@ def manual_exit_leg_endpoint(instance_id, leg_key):
                         'status': 'error',
                         'message': f'For SELL positions with SL_HIT, exit price must be greater than entry price ({entry_price})'
                     }), 400
-        
+
         # Update the leg in database
         from database.strategy_state_db import manual_exit_strategy_leg
         try:
@@ -540,15 +540,15 @@ def manual_exit_leg_endpoint(instance_id, leg_key):
                 exit_status=exit_status,
                 exit_time=datetime.now(timezone.utc)
             )
-            
+
             logger.info(f"Manually exited leg {leg_key} in strategy {instance_id} with status {exit_status}")
-            
+
             return jsonify({
                 'status': 'success',
                 'message': f'Position exited successfully with status {exit_status}',
                 'data': result
             })
-        
+
         except StrategyStateNotFoundError:
             return jsonify({'status': 'error', 'message': f'Strategy state not found: {instance_id}'}), 404
         except StrategyStateDbNotFoundError as exc:
@@ -557,7 +557,7 @@ def manual_exit_leg_endpoint(instance_id, leg_key):
         except StrategyStateDbError as exc:
             logger.error(f"Strategy State DB error during manual exit: {exc}")
             return jsonify({'status': 'error', 'message': str(exc)}), 500
-    
+
     except Exception as exc:
         logger.error(f"Error in manual_exit_leg_endpoint: {exc}")
         return jsonify({'status': 'error', 'message': str(exc)}), 500
