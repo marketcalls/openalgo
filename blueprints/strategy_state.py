@@ -5,9 +5,9 @@ Blueprint for Strategy State API endpoints.
 Provides read-only access to Python strategy execution states and positions.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, session
 
 from database.strategy_state_db import (
     StrategyStateDbError,
@@ -159,30 +159,6 @@ def delete_strategy_state_endpoint(instance_id):
     try:
         logger.debug(f"DELETE request for instance_id: {instance_id}")
         
-        # Verify ownership before proceeding
-        user_id = session.get("user")
-        if not user_id:
-            return jsonify({
-                'status': 'error',
-                'message': 'User not authenticated'
-            }), 401
-        
-        # Get the strategy state to verify ownership
-        state = get_strategy_state_by_instance_id(instance_id)
-        if not state:
-            return jsonify({
-                'status': 'error',
-                'message': f'Strategy state not found: {instance_id}'
-            }), 404
-        
-        # Check if the strategy belongs to the current user
-        if state.get('user_id') != user_id:
-            logger.warning(f"Unauthorized delete attempt by {user_id} to strategy {instance_id} owned by {state.get('user_id')}")
-            return jsonify({
-                'status': 'error',
-                'message': 'Unauthorized: You do not have permission to delete this strategy'
-            }), 403
-
         try:
             delete_strategy_state(instance_id)
         except StrategyStateNotFoundError:
@@ -242,30 +218,6 @@ def create_manual_leg_endpoint(instance_id):
     try:
         logger.info(f"POST /api/strategy-state/{instance_id}/manual-leg called")
         
-        # Verify ownership before proceeding
-        user_id = session.get("user")
-        if not user_id:
-            return jsonify({
-                'status': 'error',
-                'message': 'User not authenticated'
-            }), 401
-        
-        # Get the strategy state to verify ownership
-        state = get_strategy_state_by_instance_id(instance_id)
-        if not state:
-            return jsonify({
-                'status': 'error',
-                'message': f'Strategy state not found: {instance_id}'
-            }), 404
-        
-        # Check if the strategy belongs to the current user
-        if state.get('user_id') != user_id:
-            logger.warning(f"Unauthorized access attempt by {user_id} to strategy {instance_id} owned by {state.get('user_id')}")
-            return jsonify({
-                'status': 'error',
-                'message': 'Unauthorized: You do not have permission to modify this strategy'
-            }), 403
-        
         data = request.get_json()
         logger.debug(f"Request data: {data}")
 
@@ -291,6 +243,10 @@ def create_manual_leg_endpoint(instance_id):
         mode = data.get('mode', 'TRACK')  # TRACK or NEW
         wait_trade_percent = data.get('wait_trade_percent')
         wait_baseline_price = data.get('wait_baseline_price')
+
+        # Validate mode
+        if mode not in ('TRACK', 'NEW'):
+            return jsonify({'status': 'error', 'message': 'mode must be TRACK or NEW'}), 400
 
         if not leg_key:
             return jsonify({'status': 'error', 'message': 'leg_key is required'}), 400
@@ -416,7 +372,7 @@ def create_manual_leg_endpoint(instance_id):
                 quantity=quantity,
                 side=side,
                 entry_price=entry_price,
-                entry_time=datetime.utcnow(),
+                entry_time=datetime.now(timezone.utc),
                 sl_price=sl_value,
                 target_price=target_value,
                 leg_pair_name=leg_pair_name,
@@ -453,6 +409,160 @@ def create_manual_leg_endpoint(instance_id):
         return jsonify({'status': 'error', 'message': str(exc)}), 500
 
 
+@strategy_state_bp.route('/strategy-state/<path:instance_id>/leg/<path:leg_key>/manual-exit', methods=['POST'])
+@check_session_validity
+def manual_exit_leg_endpoint(instance_id, leg_key):
+    """
+    Manually exit a leg position and mark it with SL_HIT or TARGET_HIT status.
+    
+    Args:
+        instance_id: The unique instance identifier
+        leg_key: The leg key to exit
+    
+    Request body:
+        {
+            "exit_price": 123.45,
+            "exit_status": "SL_HIT" | "TARGET_HIT"
+        }
+    
+    Returns:
+        JSON response with updated strategy state or error
+    """
+    try:
+        logger.info(f"POST /api/strategy-state/{instance_id}/leg/{leg_key}/manual-exit called")
+        
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'status': 'error',
+                'message': 'Request body is required'
+            }), 400
+        
+        exit_price = data.get('exit_price')
+        exit_status = data.get('exit_status')
+        
+        # Validate required fields
+        if exit_price is None:
+            return jsonify({
+                'status': 'error',
+                'message': 'exit_price is required'
+            }), 400
+        
+        if not exit_status:
+            return jsonify({
+                'status': 'error',
+                'message': 'exit_status is required'
+            }), 400
+        
+        # Validate exit_status
+        if exit_status not in ('SL_HIT', 'TARGET_HIT'):
+            return jsonify({
+                'status': 'error',
+                'message': 'exit_status must be SL_HIT or TARGET_HIT'
+            }), 400
+        
+        # Validate exit_price is a number
+        try:
+            exit_price = float(exit_price)
+        except (TypeError, ValueError):
+            return jsonify({
+                'status': 'error',
+                'message': 'exit_price must be a valid number'
+            }), 400
+        
+        if exit_price <= 0:
+            return jsonify({
+                'status': 'error',
+                'message': 'exit_price must be positive'
+            }), 400
+        
+        # Get the strategy state
+        state = get_strategy_state_by_instance_id(instance_id)
+        if not state:
+            return jsonify({
+                'status': 'error',
+                'message': f'Strategy state not found: {instance_id}'
+            }), 404
+        
+        legs = state.get('legs', {})
+        if leg_key not in legs:
+            return jsonify({
+                'status': 'error',
+                'message': f'Leg not found: {leg_key}'
+            }), 404
+        
+        leg = legs[leg_key]
+        
+        # Verify the leg is in ACTIVE status
+        if leg.get('status') != 'IN_POSITION':
+            return jsonify({
+                'status': 'error',
+                'message': f'Can only exit legs with IN_POSITION status. Current status: {leg.get("status")}'
+            }), 400
+        
+        # Validate exit price based on side and exit_status
+        entry_price = leg.get('entry_price')
+        side = leg.get('side')
+        
+        if entry_price and side:
+            if exit_status == 'TARGET_HIT':
+                if side == 'BUY' and exit_price <= entry_price:
+                    return jsonify({
+                        'status': 'error',
+                        'message': f'For BUY positions with TARGET_HIT, exit price must be greater than entry price ({entry_price})'
+                    }), 400
+                elif side == 'SELL' and exit_price >= entry_price:
+                    return jsonify({
+                        'status': 'error',
+                        'message': f'For SELL positions with TARGET_HIT, exit price must be less than entry price ({entry_price})'
+                    }), 400
+            
+            elif exit_status == 'SL_HIT':
+                if side == 'BUY' and exit_price >= entry_price:
+                    return jsonify({
+                        'status': 'error',
+                        'message': f'For BUY positions with SL_HIT, exit price must be less than entry price ({entry_price})'
+                    }), 400
+                elif side == 'SELL' and exit_price <= entry_price:
+                    return jsonify({
+                        'status': 'error',
+                        'message': f'For SELL positions with SL_HIT, exit price must be greater than entry price ({entry_price})'
+                    }), 400
+        
+        # Update the leg in database
+        from database.strategy_state_db import manual_exit_strategy_leg
+        try:
+            result = manual_exit_strategy_leg(
+                instance_id=instance_id,
+                leg_key=leg_key,
+                exit_price=exit_price,
+                exit_status=exit_status,
+                exit_time=datetime.now(timezone.utc)
+            )
+            
+            logger.info(f"Manually exited leg {leg_key} in strategy {instance_id} with status {exit_status}")
+            
+            return jsonify({
+                'status': 'success',
+                'message': f'Position exited successfully with status {exit_status}',
+                'data': result
+            })
+        
+        except StrategyStateNotFoundError:
+            return jsonify({'status': 'error', 'message': f'Strategy state not found: {instance_id}'}), 404
+        except StrategyStateDbNotFoundError as exc:
+            logger.error(f"Strategy State DB missing: {exc}")
+            return jsonify({'status': 'error', 'message': str(exc)}), 500
+        except StrategyStateDbError as exc:
+            logger.error(f"Strategy State DB error during manual exit: {exc}")
+            return jsonify({'status': 'error', 'message': str(exc)}), 500
+    
+    except Exception as exc:
+        logger.error(f"Error in manual_exit_leg_endpoint: {exc}")
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
 @strategy_state_bp.route('/strategy-state/<path:instance_id>/override', methods=['POST'])
 @check_session_validity
 def create_strategy_override_endpoint(instance_id):
@@ -474,30 +584,6 @@ def create_strategy_override_endpoint(instance_id):
         JSON response with created override or error
     """
     try:
-        # Verify ownership before proceeding
-        user_id = session.get("user")
-        if not user_id:
-            return jsonify({
-                'status': 'error',
-                'message': 'User not authenticated'
-            }), 401
-        
-        # Get the strategy state to verify ownership
-        state = get_strategy_state_by_instance_id(instance_id)
-        if not state:
-            return jsonify({
-                'status': 'error',
-                'message': f'Strategy state not found: {instance_id}'
-            }), 404
-        
-        # Check if the strategy belongs to the current user
-        if state.get('user_id') != user_id:
-            logger.warning(f"Unauthorized access attempt by {user_id} to strategy {instance_id} owned by {state.get('user_id')}")
-            return jsonify({
-                'status': 'error',
-                'message': 'Unauthorized: You do not have permission to modify this strategy'
-            }), 403
-        
         data = request.get_json()
 
         if not data:
@@ -549,7 +635,14 @@ def create_strategy_override_endpoint(instance_id):
                 'message': 'new_value must be non-negative'
             }), 400
 
-        # Verify the leg exists in the strategy (state already fetched during ownership check)
+        # Verify the leg exists in the strategy and is in position
+        state = get_strategy_state_by_instance_id(instance_id)
+        if not state:
+            return jsonify({
+                'status': 'error',
+                'message': f'Strategy state not found: {instance_id}'
+            }), 404
+
         legs = state.get('legs', {})
         if leg_key not in legs:
             return jsonify({

@@ -92,12 +92,58 @@ export async function createManualStrategyLeg(
   instanceId: string,
   payload: ManualLegRequest
 ): Promise<{ message: string }> {
-  const response = await webClient.post<{ status: string; message?: string }>(
-    `/api/strategy-state/${encodeURIComponent(instanceId)}/manual-leg`,
-    payload
-  )
-  if (response.data.status === 'error') {
-    throw new Error(response.data.message || 'Failed to add manual position')
+  try {
+    const response = await webClient.post<{ status: string; message?: string }>(
+      `/api/strategy-state/${encodeURIComponent(instanceId)}/manual-leg`,
+      payload
+    )
+    if (response.data.status === 'error') {
+      throw new Error(response.data.message || 'Failed to add manual position')
+    }
+    return { message: response.data.message || 'Manual position added successfully' }
+  } catch (error) {
+    // Extract user-friendly message from backend response if available
+    if (error && typeof error === 'object' && 'response' in error) {
+      const axiosError = error as { response?: { data?: { message?: string; status?: string } } }
+      const backendMessage = axiosError.response?.data?.message
+      if (backendMessage) {
+        throw new Error(backendMessage)
+      }
+    }
+    throw error
   }
-  return { message: response.data.message || 'Manual position added successfully' }
+}
+
+/**
+ * Manually exit a leg position
+ */
+export async function manualExitLeg(
+  instanceId: string,
+  legKey: string,
+  exitPrice: number,
+  exitStatus: 'SL_HIT' | 'TARGET_HIT'
+): Promise<{ message: string }> {
+  try {
+    const response = await webClient.post<{ status: string; message?: string }>(
+      `/api/strategy-state/${encodeURIComponent(instanceId)}/leg/${encodeURIComponent(legKey)}/manual-exit`,
+      {
+        exit_price: exitPrice,
+        exit_status: exitStatus
+      }
+    )
+    if (response.data.status === 'error') {
+      throw new Error(response.data.message || 'Failed to exit position')
+    }
+    return { message: response.data.message || 'Position exited successfully' }
+  } catch (error) {
+    // Extract user-friendly message from backend response if available
+    if (error && typeof error === 'object' && 'response' in error) {
+      const axiosError = error as { response?: { data?: { message?: string; status?: string } } }
+      const backendMessage = axiosError.response?.data?.message
+      if (backendMessage) {
+        throw new Error(backendMessage)
+      }
+    }
+    throw error
+  }
 }

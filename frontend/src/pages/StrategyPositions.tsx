@@ -54,7 +54,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { createManualStrategyLeg, createStrategyOverride, deleteStrategyState, getStrategyStates } from '@/api/strategy-state'
+import { createManualStrategyLeg, createStrategyOverride, deleteStrategyState, getStrategyStates, manualExitLeg } from '@/api/strategy-state'
 import { tradingApi } from '@/api/trading'
 import { useAuthStore } from '@/stores/authStore'
 import { useLivePrice } from '@/hooks/useLivePrice'
@@ -136,17 +136,43 @@ function formatDateTime(isoString: string | null | undefined): string {
     month: 'short',
     hour: '2-digit',
     minute: '2-digit',
+    timeZone: 'Asia/Kolkata',
   })
 }
 
-// Format time only
+// Format time only for today, date + time for older entries
 function formatTime(isoString: string | null | undefined): string {
   if (!isoString) return '—'
   const date = new Date(isoString)
-  return date.toLocaleTimeString('en-IN', {
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  
+  // Get today's date in IST
+  const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }))
+  const todayStart = new Date(nowIST.getFullYear(), nowIST.getMonth(), nowIST.getDate())
+  
+  // Get the entry date in IST
+  const entryIST = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }))
+  const entryStart = new Date(entryIST.getFullYear(), entryIST.getMonth(), entryIST.getDate())
+  
+  // Check if it's today
+  const isToday = todayStart.getTime() === entryStart.getTime()
+  
+  if (isToday) {
+    // Today: show time only
+    return date.toLocaleTimeString('en-IN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'Asia/Kolkata',
+    })
+  } else {
+    // Older: show date + time
+    return date.toLocaleString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'Asia/Kolkata',
+    })
+  }
 }
 
 // P&L display component
@@ -336,11 +362,13 @@ function CurrentPositionsTable({
   instanceId,
   onRefresh,
   liveLtpByLegKey,
+  onExitLeg,
 }: {
   legs: Record<string, LegState> | null | undefined
   instanceId: string
   onRefresh: () => void
   liveLtpByLegKey?: Record<string, number | undefined>
+  onExitLeg: (legKey: string, leg: LegState) => void
 }) {
   if (!legs) {
     return <p className="text-muted-foreground text-sm py-4">No positions found</p>
@@ -388,6 +416,7 @@ function CurrentPositionsTable({
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Unreal P&L</TableHead>
                   <TableHead className="text-right">Reentry</TableHead>
+                  <TableHead className="text-center">Action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -455,6 +484,18 @@ function CurrentPositionsTable({
                       {(leg.reentry_limit === null || leg.reentry_limit === undefined)
                         ? '-'
                         : `${leg.reentry_count ?? 0}/${leg.reentry_limit}`}
+                    </TableCell>
+                    <TableCell className="text-center">
+                      {leg.status === 'IN_POSITION' && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onExitLeg(legKey, leg)}
+                          className="h-7 px-2 text-xs"
+                        >
+                          Exit
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -696,12 +737,14 @@ function StrategyAccordionItem({
   onRefresh,
   liveLtpByLegKey,
   onAddManualLeg,
+  onExitLeg,
 }: {
   strategy: StrategyState
   onDelete: (instanceId: string, strategyName: string) => void
   onRefresh: () => void
   liveLtpByLegKey: Record<string, number | undefined>
   onAddManualLeg: (strategy: StrategyState) => void
+  onExitLeg: (instanceId: string, legKey: string, leg: LegState) => void
 }) {
   const [isOpen, setIsOpen] = useState(true)
   const [isLegPnlOpen, setIsLegPnlOpen] = useState(false)
@@ -909,6 +952,7 @@ function StrategyAccordionItem({
                 instanceId={strategy.instance_id}
                 onRefresh={onRefresh}
                 liveLtpByLegKey={liveLtpByLegKey}
+                onExitLeg={(legKey, leg) => onExitLeg(strategy.instance_id, legKey, leg)}
               />
             </div>
 
@@ -968,6 +1012,17 @@ export default function StrategyPositions() {
   const [isDeleting, setIsDeleting] = useState(false)
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
 
+  // Exit dialog state
+  const [exitDialog, setExitDialog] = useState<{
+    open: boolean
+    instanceId: string
+    legKey: string
+    leg: LegState | null
+  }>({ open: false, instanceId: '', legKey: '', leg: null })
+  const [exitPrice, setExitPrice] = useState('')
+  const [exitStatus, setExitStatus] = useState<'SL_HIT' | 'TARGET_HIT'>('SL_HIT')
+  const [isExiting, setIsExiting] = useState(false)
+
   const fetchData = async (showToast = false) => {
     try {
       const data = await getStrategyStates()
@@ -1010,6 +1065,62 @@ export default function StrategyPositions() {
   }
 
   const isDeleteConfirmValid = deleteConfirmText === deleteDialog.strategyName
+
+  const handleExitRequest = (instanceId: string, legKey: string, leg: LegState) => {
+    setExitDialog({ open: true, instanceId, legKey, leg })
+    setExitPrice('')
+    setExitStatus('SL_HIT')
+  }
+
+  const handleExitConfirm = async () => {
+    if (!exitDialog.instanceId || !exitDialog.legKey || !exitDialog.leg) return
+
+    const price = parseFloat(exitPrice)
+    if (isNaN(price) || price <= 0) {
+      toast.error('Please enter a valid exit price')
+      return
+    }
+
+    // Validate exit price based on side and status
+    const entryPrice = exitDialog.leg.entry_price
+    const side = exitDialog.leg.side
+
+    if (entryPrice && side) {
+      if (exitStatus === 'TARGET_HIT') {
+        if (side === 'BUY' && price <= entryPrice) {
+          toast.error(`For BUY positions with TARGET_HIT, exit price must be greater than entry price (${entryPrice.toFixed(2)})`)
+          return
+        }
+        if (side === 'SELL' && price >= entryPrice) {
+          toast.error(`For SELL positions with TARGET_HIT, exit price must be less than entry price (${entryPrice.toFixed(2)})`)
+          return
+        }
+      } else if (exitStatus === 'SL_HIT') {
+        if (side === 'BUY' && price >= entryPrice) {
+          toast.error(`For BUY positions with SL_HIT, exit price must be less than entry price (${entryPrice.toFixed(2)})`)
+          return
+        }
+        if (side === 'SELL' && price <= entryPrice) {
+          toast.error(`For SELL positions with SL_HIT, exit price must be greater than entry price (${entryPrice.toFixed(2)})`)
+          return
+        }
+      }
+    }
+
+    setIsExiting(true)
+    try {
+      const result = await manualExitLeg(exitDialog.instanceId, exitDialog.legKey, price, exitStatus)
+      toast.success(result.message)
+      setExitDialog({ open: false, instanceId: '', legKey: '', leg: null })
+      setExitPrice('')
+      fetchData(false)
+    } catch (error) {
+      console.error('Error exiting position:', error)
+      toast.error(error instanceof Error ? error.message : 'Failed to exit position')
+    } finally {
+      setIsExiting(false)
+    }
+  }
 
   // Load auto-refresh prefs
   useEffect(() => {
@@ -1205,6 +1316,19 @@ export default function StrategyPositions() {
       return
     }
 
+    // Validation: If Main Leg is not selected, check if leg pair has at least one main leg
+    if (!manualIsMainLeg && manualLegPairName.trim()) {
+      const legPairName = manualLegPairName.trim()
+      const strategy = manualDialogStrategy
+      const existingMainLeg = strategy?.legs && Object.values(strategy.legs).some(
+        leg => leg.leg_pair_name === legPairName && leg.is_main_leg === true
+      )
+      if (!existingMainLeg) {
+        toast.error(`Leg Pair '${legPairName}' must have at least one Main Leg trade. Please mark this as Main Leg or add a Main Leg trade first.`)
+        return
+      }
+    }
+
     let payload: any = {
       leg_key: `MANUAL_${Date.now()}`,
       sl_percent: slPercent,
@@ -1264,7 +1388,7 @@ export default function StrategyPositions() {
         product: manualNewProduct,
         quantity: qty,
         side: manualNewSide,
-        is_main_leg: true, // Always main leg for new trades
+        is_main_leg: manualIsMainLeg,
         wait_trade_percent: waitPct,
         wait_baseline_price: waitBase,
       }
@@ -1384,6 +1508,7 @@ export default function StrategyPositions() {
               onRefresh={() => fetchData(false)}
               liveLtpByLegKey={liveLtpByInstanceAndLegKey[strategy.instance_id] || {}}
               onAddManualLeg={handleOpenManualDialog}
+              onExitLeg={handleExitRequest}
             />
           ))}
         </div>
@@ -1560,16 +1685,14 @@ export default function StrategyPositions() {
                     onChange={(event) => setManualLegPairName(event.target.value)}
                   />
                 </div>
-                {manualMode === 'TRACK' && (
-                  <div className="flex items-center gap-3 pt-6">
-                    <Switch
-                      checked={manualIsMainLeg}
-                      onCheckedChange={setManualIsMainLeg}
-                      id="manual-is-main-leg"
-                    />
-                    <Label htmlFor="manual-is-main-leg">Main Leg</Label>
-                  </div>
-                )}
+                <div className="flex items-center gap-3 pt-6">
+                  <Switch
+                    checked={manualIsMainLeg}
+                    onCheckedChange={setManualIsMainLeg}
+                    id="manual-is-main-leg"
+                  />
+                  <Label htmlFor="manual-is-main-leg">Main Leg</Label>
+                </div>
               </div>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
@@ -1656,6 +1779,68 @@ export default function StrategyPositions() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Exit Position Dialog */}
+      <Dialog open={exitDialog.open} onOpenChange={(open) => {
+        if (!isExiting) {
+          setExitDialog(prev => ({ ...prev, open }))
+          if (!open) {
+            setExitPrice('')
+            setExitStatus('SL_HIT')
+          }
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Exit Position</DialogTitle>
+            <DialogDescription>
+              Manually exit position for {exitDialog.leg?.symbol} ({exitDialog.leg?.side} {exitDialog.leg?.quantity})
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="exit-price">Exit Price *</Label>
+              <Input
+                id="exit-price"
+                type="number"
+                step="0.05"
+                placeholder="Enter exit price"
+                value={exitPrice}
+                onChange={(e) => setExitPrice(e.target.value)}
+                disabled={isExiting}
+              />
+              {exitDialog.leg?.entry_price && (
+                <p className="text-xs text-muted-foreground">
+                  Entry Price: {formatPrice(exitDialog.leg.entry_price)}
+                </p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="exit-status">Exit Status *</Label>
+              <Select value={exitStatus} onValueChange={(v) => setExitStatus(v as 'SL_HIT' | 'TARGET_HIT')} disabled={isExiting}>
+                <SelectTrigger id="exit-status">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="SL_HIT">SL Hit</SelectItem>
+                  <SelectItem value="TARGET_HIT">Target Hit</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Select the exit reason for this position
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setExitDialog({ open: false, instanceId: '', legKey: '', leg: null })} disabled={isExiting}>
+              Cancel
+            </Button>
+            <Button onClick={handleExitConfirm} disabled={isExiting || !exitPrice}>
+              {isExiting ? 'Exiting...' : 'Exit Position'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
