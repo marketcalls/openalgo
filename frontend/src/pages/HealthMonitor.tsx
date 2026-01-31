@@ -63,6 +63,9 @@ import {
 } from 'lightweight-charts'
 
 const AUTO_REFRESH_INTERVAL = 10000 // 10 seconds
+const HISTORY_HOURS = 24
+const CHART_HOURS = 6
+const MAX_CHART_POINTS = 1200
 
 interface MetricCardProps {
   title: string
@@ -153,6 +156,7 @@ export default function HealthMonitor() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [autoRefresh, setAutoRefresh] = useState(true)
+  const [tabVisible, setTabVisible] = useState(true)
 
   // Chart refs
   const fdChartContainerRef = useRef<HTMLDivElement>(null)
@@ -169,8 +173,8 @@ export default function HealthMonitor() {
 
       const [metricsData, historyData, statsData, alertsData] = await Promise.all([
         getCurrentMetrics(),
-        getMetricsHistory(24),
-        getHealthStats(24),
+        getMetricsHistory(CHART_HOURS),
+        getHealthStats(HISTORY_HOURS),
         getActiveAlerts(),
       ])
 
@@ -198,14 +202,25 @@ export default function HealthMonitor() {
 
   // Auto-refresh
   useEffect(() => {
-    if (!autoRefresh) return
+    if (!autoRefresh || !tabVisible) return
 
     const interval = setInterval(() => {
       fetchData()
     }, AUTO_REFRESH_INTERVAL)
 
     return () => clearInterval(interval)
-  }, [autoRefresh])
+  }, [autoRefresh, tabVisible])
+
+  // Pause refresh when tab is hidden
+  useEffect(() => {
+    const handleVisibility = () => {
+      setTabVisible(!document.hidden)
+    }
+
+    handleVisibility()
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
+  }, [])
 
   // Initialize charts with theme-aware colors
   useEffect(() => {
@@ -288,15 +303,24 @@ export default function HealthMonitor() {
 
     // Update chart data
     if (fdSeriesRef.current && memorySeriesRef.current) {
-      const fdData = historicalMetrics.map((m) => ({
+      const rawData = historicalMetrics.map((m) => ({
         time: Math.floor(new Date(m.timestamp).getTime() / 1000) as UTCTimestamp,
-        value: m.fd_count,
+        fd: m.fd_count,
+        mem: m.memory_rss_mb,
       }))
 
-      const memoryData = historicalMetrics.map((m) => ({
-        time: Math.floor(new Date(m.timestamp).getTime() / 1000) as UTCTimestamp,
-        value: m.memory_rss_mb,
-      }))
+      const downsampleFactor =
+        rawData.length > MAX_CHART_POINTS
+          ? Math.ceil(rawData.length / MAX_CHART_POINTS)
+          : 1
+
+      const fdData = []
+      const memoryData = []
+      for (let i = 0; i < rawData.length; i += downsampleFactor) {
+        const point = rawData[i]
+        fdData.push({ time: point.time, value: point.fd })
+        memoryData.push({ time: point.time, value: point.mem })
+      }
 
       fdSeriesRef.current.setData(fdData)
       memorySeriesRef.current.setData(memoryData)
@@ -463,8 +487,8 @@ export default function HealthMonitor() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">File Descriptors (24h)</CardTitle>
-            <CardDescription>Historical FD usage over the last 24 hours</CardDescription>
+            <CardTitle className="text-lg">File Descriptors (6h)</CardTitle>
+            <CardDescription>Historical FD usage over the last 6 hours</CardDescription>
           </CardHeader>
           <CardContent>
             <div ref={fdChartContainerRef} className="w-full h-[300px]" />
@@ -473,8 +497,8 @@ export default function HealthMonitor() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Memory Usage (24h)</CardTitle>
-            <CardDescription>Historical memory consumption in MB</CardDescription>
+            <CardTitle className="text-lg">Memory Usage (6h)</CardTitle>
+            <CardDescription>Historical memory consumption in MB over the last 6 hours</CardDescription>
           </CardHeader>
           <CardContent>
             <div ref={memoryChartContainerRef} className="w-full h-[300px]" />
