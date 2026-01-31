@@ -182,6 +182,23 @@ def detailed_health_check():
                 }
             ]
 
+        # Include WebSocket proxy resource health if available (best-effort)
+        try:
+            from websocket_proxy import get_resource_health
+
+            ws_health = get_resource_health()
+            checks["websocket:proxy"] = [
+                {
+                    "componentId": "websocket_proxy",
+                    "status": "pass",
+                    "observedValue": ws_health.get("active_pools", {}).get("count", 0),
+                    "observedUnit": "count",
+                    "time": datetime.utcnow().isoformat() + "Z",
+                }
+            ]
+        except Exception:
+            pass
+
         # Overall status (worst of all checks)
         overall_status = "pass"
         if db_check["status"] == "fail":
@@ -259,6 +276,8 @@ def get_current_metrics():
                     "rss_mb": metric.memory_rss_mb,
                     "vms_mb": metric.memory_vms_mb,
                     "percent": metric.memory_percent,
+                    "available_mb": metric.memory_available_mb,
+                    "swap_mb": metric.memory_swap_mb,
                     "status": metric.memory_status,
                 },
                 "database": {
@@ -276,7 +295,9 @@ def get_current_metrics():
                     "count": metric.thread_count,
                     "stuck": metric.stuck_threads,
                     "status": metric.thread_status,
+                    "details": metric.thread_details,
                 },
+                "processes": metric.process_details or [],
                 "overall_status": metric.overall_status,
             }
         )
