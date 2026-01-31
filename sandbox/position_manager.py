@@ -1342,7 +1342,7 @@ def catchup_missed_settlements():
     try:
         # First, clean up expired F&O contracts
         # This is important to do first so users don't see stale contracts
-        logger.info("Running expired contract cleanup...")
+        logger.debug("Running expired contract cleanup...")
         cleanup_expired_contracts()
 
         # Then handle CNC T+1 settlement

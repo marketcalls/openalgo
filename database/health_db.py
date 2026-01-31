@@ -88,6 +88,9 @@ class HealthMetric(HealthBase):
     thread_details = Column(JSON)  # List of thread info
     thread_status = Column(String(20))  # pass | warn | fail
 
+    # Process Usage (top memory consumers)
+    process_details = Column(JSON)  # List of process info
+
     # Overall Health (following draft-inadarei-api-health-check)
     overall_status = Column(String(20))  # pass | warn | fail
 
@@ -98,6 +101,7 @@ class HealthMetric(HealthBase):
         db_metrics=None,
         ws_metrics=None,
         thread_metrics=None,
+        process_metrics=None,
     ):
         """Log health metrics (background thread only - zero API latency impact)"""
         try:
@@ -153,6 +157,8 @@ class HealthMetric(HealthBase):
                 stuck_threads=thread_metrics.get("stuck_count") if thread_metrics else None,
                 thread_details=thread_metrics.get("threads") if thread_metrics else None,
                 thread_status=thread_metrics.get("status") if thread_metrics else "unknown",
+                # Processes
+                process_details=process_metrics if process_metrics else None,
                 # Overall
                 overall_status=overall_status,
             )
@@ -221,6 +227,7 @@ class HealthMetric(HealthBase):
                     "database": {},
                     "websocket": {},
                     "threads": {},
+                    "status": {},
                 }
 
             # Calculate statistics
@@ -239,6 +246,14 @@ class HealthMetric(HealthBase):
             fd_warn_count = sum(1 for m in metrics if m.fd_status == "warn")
             memory_fail_count = sum(1 for m in metrics if m.memory_status == "fail")
             memory_warn_count = sum(1 for m in metrics if m.memory_status == "warn")
+            db_fail_count = sum(1 for m in metrics if m.db_status == "fail")
+            db_warn_count = sum(1 for m in metrics if m.db_status == "warn")
+            ws_fail_count = sum(1 for m in metrics if m.ws_status == "fail")
+            ws_warn_count = sum(1 for m in metrics if m.ws_status == "warn")
+            thread_fail_count = sum(1 for m in metrics if m.thread_status == "fail")
+            thread_warn_count = sum(1 for m in metrics if m.thread_status == "warn")
+            overall_fail_count = sum(1 for m in metrics if m.overall_status == "fail")
+            overall_warn_count = sum(1 for m in metrics if m.overall_status == "warn")
 
             return {
                 "total_samples": len(metrics),
@@ -276,6 +291,18 @@ class HealthMetric(HealthBase):
                     "avg": sum(threads) / len(threads) if threads else 0,
                     "min": min(threads) if threads else 0,
                     "max": max(threads) if threads else 0,
+                },
+                "status": {
+                    "overall": {
+                        "pass": len(metrics) - (overall_warn_count + overall_fail_count),
+                        "warn": overall_warn_count,
+                        "fail": overall_fail_count,
+                    },
+                    "fd": {"warn": fd_warn_count, "fail": fd_fail_count},
+                    "memory": {"warn": memory_warn_count, "fail": memory_fail_count},
+                    "database": {"warn": db_warn_count, "fail": db_fail_count},
+                    "websocket": {"warn": ws_warn_count, "fail": ws_fail_count},
+                    "threads": {"warn": thread_warn_count, "fail": thread_fail_count},
                 },
             }
         except Exception as e:

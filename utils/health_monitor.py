@@ -356,25 +356,24 @@ def get_websocket_metrics():
         total_connections = 0
         total_symbols = 0
 
-        # Try to import and check WebSocket proxy
+        # Try to import and check WebSocket proxy connection pools
         try:
-            from websocket_proxy.broker_factory import get_all_pools
+            from websocket_proxy.broker_factory import get_pool_stats
 
-            pools = get_all_pools()
+            pool_stats = get_pool_stats()
 
-            for broker, pool in pools.items():
-                if hasattr(pool, "connections"):
-                    conn_count = len(pool.connections)
-                    symbols_count = 0
+            for pool_key, stats in pool_stats.items():
+                conn_count = stats.get("active_connections", 0)
+                symbols_count = stats.get("total_subscriptions", 0)
+                broker_name = stats.get("broker") or pool_key
 
-                    # Count subscribed symbols
-                    for conn in pool.connections:
-                        if hasattr(conn, "subscribed_symbols"):
-                            symbols_count += len(conn.subscribed_symbols)
-
-                    connections[broker] = {"count": conn_count, "symbols": symbols_count}
-                    total_connections += conn_count
-                    total_symbols += symbols_count
+                connections[pool_key] = {
+                    "broker": broker_name,
+                    "count": conn_count,
+                    "symbols": symbols_count,
+                }
+                total_connections += conn_count
+                total_symbols += symbols_count
 
         except ImportError:
             pass  # WebSocket proxy not available
@@ -479,6 +478,39 @@ def get_thread_metrics():
         return {"count": 0, "stuck_count": 0, "threads": [], "status": "unknown"}
 
 
+def get_process_metrics(limit: int = 5):
+    """Get top memory-consuming processes (best-effort, may skip inaccessible processes)"""
+    processes = []
+    try:
+        for proc in psutil.process_iter(attrs=["pid", "name", "memory_info", "memory_percent"]):
+            try:
+                info = proc.info
+                mem_info = info.get("memory_info")
+                if not mem_info:
+                    mem_info = proc.memory_info()
+
+                rss_mb = mem_info.rss / (1024 * 1024)
+                vms_mb = mem_info.vms / (1024 * 1024)
+
+                processes.append(
+                    {
+                        "pid": info.get("pid"),
+                        "name": info.get("name") or "unknown",
+                        "rss_mb": rss_mb,
+                        "vms_mb": vms_mb,
+                        "memory_percent": info.get("memory_percent") or 0,
+                    }
+                )
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+
+        processes.sort(key=lambda p: p.get("rss_mb", 0), reverse=True)
+        return processes[:limit]
+    except Exception as e:
+        logger.error(f"Error getting process metrics: {e}")
+        return []
+
+
 def collect_metrics():
     """
     Collect all metrics and log to database.
@@ -493,6 +525,7 @@ def collect_metrics():
         db_metrics = get_database_metrics()
         ws_metrics = get_websocket_metrics()
         thread_metrics = get_thread_metrics()
+        process_metrics = get_process_metrics()
 
         # Log to database
         HealthMetric.log_metrics(
@@ -501,6 +534,7 @@ def collect_metrics():
             db_metrics=db_metrics,
             ws_metrics=ws_metrics,
             thread_metrics=thread_metrics,
+            process_metrics=process_metrics,
         )
 
         # Update cache for fast access
@@ -522,6 +556,7 @@ def collect_metrics():
                     "database": db_metrics,
                     "websocket": ws_metrics,
                     "threads": thread_metrics,
+                    "processes": process_metrics,
                 }
             )
 
@@ -538,7 +573,7 @@ def _collector_loop():
     """Background collector loop (daemon thread, low priority)"""
     global _collector_running
 
-    logger.info(f"Health monitoring collector started (interval: {HEALTH_SAMPLE_INTERVAL}s)")
+    logger.debug(f"Health monitoring collector started (interval: {HEALTH_SAMPLE_INTERVAL}s)")
 
     while _collector_running:
         try:
@@ -579,7 +614,7 @@ def start_health_collector(interval=None):
             target=_collector_loop, name="HealthCollector", daemon=True  # Daemon = zero impact
         )
         _collector_thread.start()
-        logger.info("Started health monitoring collector (background daemon thread)")
+        logger.debug("Started health monitoring collector (background daemon thread)")
 
 
 def stop_health_collector():
@@ -615,6 +650,6 @@ def init_health_monitoring(app):
         # Start collector (background daemon thread)
         start_health_collector()
 
-        logger.info("Health monitoring initialized successfully (background mode)")
+        logger.debug("Health monitoring initialized successfully (background mode)")
     except Exception as e:
         logger.exception(f"Error initializing health monitoring: {e}")

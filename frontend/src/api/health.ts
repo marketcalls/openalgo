@@ -48,6 +48,8 @@ export interface CurrentMetrics {
     rss_mb: number
     vms_mb: number
     percent: number
+    available_mb: number
+    swap_mb: number
     status: 'pass' | 'warn' | 'fail'
   }
   database: {
@@ -64,8 +66,16 @@ export interface CurrentMetrics {
   threads: {
     count: number
     stuck: number
+    details?: Array<{ id: number | null; name: string; daemon: boolean; alive: boolean }>
     status: 'pass' | 'warn' | 'fail'
   }
+  processes?: Array<{
+    pid: number | null
+    name: string
+    rss_mb: number
+    vms_mb: number
+    memory_percent: number
+  }>
   overall_status: 'pass' | 'warn' | 'fail'
 }
 
@@ -115,6 +125,14 @@ export interface HealthStats {
     avg: number
     min: number
     max: number
+  }
+  status?: {
+    overall?: { pass: number; warn: number; fail: number }
+    fd?: { warn: number; fail: number }
+    memory?: { warn: number; fail: number }
+    database?: { warn: number; fail: number }
+    websocket?: { warn: number; fail: number }
+    threads?: { warn: number; fail: number }
   }
 }
 

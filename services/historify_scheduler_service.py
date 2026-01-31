@@ -67,7 +67,7 @@ class HistorifyScheduler:
                 )
                 self._scheduler.start()
                 self._initialized = True
-                logger.info("Historify Scheduler initialized and started")
+                logger.debug("Historify Scheduler initialized and started")
 
                 # Restore schedules from database on startup
                 self._restore_schedules()

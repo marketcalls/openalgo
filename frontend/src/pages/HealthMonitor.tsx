@@ -63,6 +63,9 @@ import {
 } from 'lightweight-charts'
 
 const AUTO_REFRESH_INTERVAL = 10000 // 10 seconds
+const HISTORY_HOURS = 24
+const CHART_HOURS = 6
+const MAX_CHART_POINTS = 1200
 
 interface MetricCardProps {
   title: string
@@ -118,6 +121,28 @@ function StatusIcon({ status }: { status: 'pass' | 'warn' | 'fail' | 'unknown' }
   return <WifiOff className="h-4 w-4 text-muted-foreground" />
 }
 
+const IST_TIME_ZONE = 'Asia/Kolkata'
+
+function formatIstDateTime(timestamp: string, options?: Intl.DateTimeFormatOptions): string {
+  const date = new Date(timestamp)
+  if (Number.isNaN(date.getTime())) return '-'
+  return new Intl.DateTimeFormat('en-IN', {
+    timeZone: IST_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+    ...options,
+  }).format(date)
+}
+
+function formatIstTime(timestamp: string): string {
+  return formatIstDateTime(timestamp, { year: undefined, month: undefined, day: undefined })
+}
+
 // Check if dark mode is active
 function isDarkMode(): boolean {
   return document.documentElement.classList.contains('dark')
@@ -131,6 +156,7 @@ export default function HealthMonitor() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [autoRefresh, setAutoRefresh] = useState(true)
+  const [tabVisible, setTabVisible] = useState(true)
 
   // Chart refs
   const fdChartContainerRef = useRef<HTMLDivElement>(null)
@@ -147,8 +173,8 @@ export default function HealthMonitor() {
 
       const [metricsData, historyData, statsData, alertsData] = await Promise.all([
         getCurrentMetrics(),
-        getMetricsHistory(24),
-        getHealthStats(24),
+        getMetricsHistory(CHART_HOURS),
+        getHealthStats(HISTORY_HOURS),
         getActiveAlerts(),
       ])
 
@@ -176,14 +202,25 @@ export default function HealthMonitor() {
 
   // Auto-refresh
   useEffect(() => {
-    if (!autoRefresh) return
+    if (!autoRefresh || !tabVisible) return
 
     const interval = setInterval(() => {
       fetchData()
     }, AUTO_REFRESH_INTERVAL)
 
     return () => clearInterval(interval)
-  }, [autoRefresh])
+  }, [autoRefresh, tabVisible])
+
+  // Pause refresh when tab is hidden
+  useEffect(() => {
+    const handleVisibility = () => {
+      setTabVisible(!document.hidden)
+    }
+
+    handleVisibility()
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
+  }, [])
 
   // Initialize charts with theme-aware colors
   useEffect(() => {
@@ -266,15 +303,24 @@ export default function HealthMonitor() {
 
     // Update chart data
     if (fdSeriesRef.current && memorySeriesRef.current) {
-      const fdData = historicalMetrics.map((m) => ({
+      const rawData = historicalMetrics.map((m) => ({
         time: Math.floor(new Date(m.timestamp).getTime() / 1000) as UTCTimestamp,
-        value: m.fd_count,
+        fd: m.fd_count,
+        mem: m.memory_rss_mb,
       }))
 
-      const memoryData = historicalMetrics.map((m) => ({
-        time: Math.floor(new Date(m.timestamp).getTime() / 1000) as UTCTimestamp,
-        value: m.memory_rss_mb,
-      }))
+      const downsampleFactor =
+        rawData.length > MAX_CHART_POINTS
+          ? Math.ceil(rawData.length / MAX_CHART_POINTS)
+          : 1
+
+      const fdData = []
+      const memoryData = []
+      for (let i = 0; i < rawData.length; i += downsampleFactor) {
+        const point = rawData[i]
+        fdData.push({ time: point.time, value: point.fd })
+        memoryData.push({ time: point.time, value: point.mem })
+      }
 
       fdSeriesRef.current.setData(fdData)
       memorySeriesRef.current.setData(memoryData)
@@ -387,7 +433,7 @@ export default function HealthMonitor() {
               System Status: {currentMetrics.overall_status.toUpperCase()}
             </p>
             <p className="text-sm text-muted-foreground">
-              Last updated: {new Date(currentMetrics.timestamp).toLocaleString()}
+              Last updated (IST): {formatIstDateTime(currentMetrics.timestamp)}
             </p>
           </div>
         </div>
@@ -437,56 +483,12 @@ export default function HealthMonitor() {
         />
       </div>
 
-      {/* Active Alerts */}
-      {alerts.length > 0 && (
-        <Card className="border-destructive/50">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-destructive">
-              <AlertCircle className="h-5 w-5" />
-              Active Alerts ({alerts.length})
-            </CardTitle>
-            <CardDescription>System health alerts requiring attention</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {alerts.map((alert) => (
-                <div
-                  key={alert.id}
-                  className={cn(
-                    'rounded-lg border p-3 flex items-start justify-between gap-4',
-                    alert.severity === 'fail' && 'border-red-500/50 bg-red-500/10',
-                    alert.severity === 'warn' && 'border-yellow-500/50 bg-yellow-500/10'
-                  )}
-                >
-                  <div className="flex items-start gap-3">
-                    <StatusIcon status={alert.severity} />
-                    <div>
-                      <p className="font-medium">{alert.alert_type.replace(/_/g, ' ').toUpperCase()}</p>
-                      <p className="text-sm text-muted-foreground">{alert.message}</p>
-                    </div>
-                  </div>
-                  {!alert.acknowledged && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleAcknowledgeAlert(alert.id)}
-                    >
-                      Acknowledge
-                    </Button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Charts */}
+      {/* Charts - Placed above Top Memory Processes */}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">File Descriptors (24h)</CardTitle>
-            <CardDescription>Historical FD usage over the last 24 hours</CardDescription>
+            <CardTitle className="text-lg">File Descriptors (6h)</CardTitle>
+            <CardDescription>Historical FD usage over the last 6 hours</CardDescription>
           </CardHeader>
           <CardContent>
             <div ref={fdChartContainerRef} className="w-full h-[300px]" />
@@ -495,8 +497,8 @@ export default function HealthMonitor() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Memory Usage (24h)</CardTitle>
-            <CardDescription>Historical memory consumption in MB</CardDescription>
+            <CardTitle className="text-lg">Memory Usage (6h)</CardTitle>
+            <CardDescription>Historical memory consumption in MB over the last 6 hours</CardDescription>
           </CardHeader>
           <CardContent>
             <div ref={memoryChartContainerRef} className="w-full h-[300px]" />
@@ -504,9 +506,9 @@ export default function HealthMonitor() {
         </Card>
       </div>
 
-      {/* Statistics */}
+      {/* Statistics - 2x2 grid for balanced layout */}
       {stats && (
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base">File Descriptor Stats</CardTitle>
@@ -596,7 +598,163 @@ export default function HealthMonitor() {
               </dl>
             </CardContent>
           </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Status Summary</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <dl className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">Overall (Pass/Warn/Fail):</dt>
+                  <dd className="font-medium">
+                    {stats.status?.overall
+                      ? `${stats.status.overall.pass}/${stats.status.overall.warn}/${stats.status.overall.fail}`
+                      : '-'}
+                  </dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">DB Warn/Fail:</dt>
+                  <dd className="font-medium">
+                    {stats.status?.database
+                      ? `${stats.status.database.warn}/${stats.status.database.fail}`
+                      : '-'}
+                  </dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">WS Warn/Fail:</dt>
+                  <dd className="font-medium">
+                    {stats.status?.websocket
+                      ? `${stats.status.websocket.warn}/${stats.status.websocket.fail}`
+                      : '-'}
+                  </dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">Threads Warn/Fail:</dt>
+                  <dd className="font-medium">
+                    {stats.status?.threads
+                      ? `${stats.status.threads.warn}/${stats.status.threads.fail}`
+                      : '-'}
+                  </dd>
+                </div>
+              </dl>
+            </CardContent>
+          </Card>
         </div>
+      )}
+
+      {/* Top Memory Processes */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Top Memory Processes</CardTitle>
+          <CardDescription>Highest RSS memory usage across the host</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {currentMetrics?.processes && currentMetrics.processes.length > 0 ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Process</TableHead>
+                  <TableHead className="text-right">PID</TableHead>
+                  <TableHead className="text-right">RSS (MB)</TableHead>
+                  <TableHead className="text-right">VMS (MB)</TableHead>
+                  <TableHead className="text-right">Mem %</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {currentMetrics.processes.map((proc) => (
+                  <TableRow key={`${proc.pid}-${proc.name}`}>
+                    <TableCell className="font-medium">{proc.name}</TableCell>
+                    <TableCell className="text-right font-mono text-xs">{proc.pid ?? '-'}</TableCell>
+                    <TableCell className="text-right">{proc.rss_mb.toFixed(1)}</TableCell>
+                    <TableCell className="text-right">{proc.vms_mb.toFixed(1)}</TableCell>
+                    <TableCell className="text-right">{proc.memory_percent.toFixed(2)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <div className="text-sm text-muted-foreground">No process data available.</div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Thread Details */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Thread Details</CardTitle>
+          <CardDescription>Recent thread snapshot from the application</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {currentMetrics?.threads.details && currentMetrics.threads.details.length > 0 ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Thread</TableHead>
+                  <TableHead className="text-right">ID</TableHead>
+                  <TableHead className="text-right">Daemon</TableHead>
+                  <TableHead className="text-right">Alive</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {currentMetrics.threads.details.map((thread) => (
+                  <TableRow key={`${thread.id}-${thread.name}`}>
+                    <TableCell className="font-medium">{thread.name}</TableCell>
+                    <TableCell className="text-right font-mono text-xs">{thread.id ?? '-'}</TableCell>
+                    <TableCell className="text-right">{thread.daemon ? 'Yes' : 'No'}</TableCell>
+                    <TableCell className="text-right">{thread.alive ? 'Yes' : 'No'}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <div className="text-sm text-muted-foreground">No thread details available.</div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Active Alerts */}
+      {alerts.length > 0 && (
+        <Card className="border-destructive/50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-destructive">
+              <AlertCircle className="h-5 w-5" />
+              Active Alerts ({alerts.length})
+            </CardTitle>
+            <CardDescription>System health alerts requiring attention</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {alerts.map((alert) => (
+                <div
+                  key={alert.id}
+                  className={cn(
+                    'rounded-lg border p-3 flex items-start justify-between gap-4',
+                    alert.severity === 'fail' && 'border-red-500/50 bg-red-500/10',
+                    alert.severity === 'warn' && 'border-yellow-500/50 bg-yellow-500/10'
+                  )}
+                >
+                  <div className="flex items-start gap-3">
+                    <StatusIcon status={alert.severity} />
+                    <div>
+                      <p className="font-medium">{alert.alert_type.replace(/_/g, ' ').toUpperCase()}</p>
+                      <p className="text-sm text-muted-foreground">{alert.message}</p>
+                    </div>
+                  </div>
+                  {!alert.acknowledged && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleAcknowledgeAlert(alert.id)}
+                    >
+                      Acknowledge
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Recent Metrics Table */}
@@ -619,10 +777,10 @@ export default function HealthMonitor() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {historicalMetrics.slice(0, 20).reverse().map((metric, idx) => (
+              {historicalMetrics.slice(-20).reverse().map((metric, idx) => (
                 <TableRow key={idx}>
                   <TableCell className="font-mono text-xs">
-                    {new Date(metric.timestamp).toLocaleTimeString()}
+                    {formatIstTime(metric.timestamp)}
                   </TableCell>
                   <TableCell className="text-right">{metric.fd_count}</TableCell>
                   <TableCell className="text-right">{metric.memory_rss_mb.toFixed(1)}</TableCell>

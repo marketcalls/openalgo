@@ -776,9 +776,6 @@ def is_trading_day() -> bool:
 
         # Check using market calendar service (includes weekend check)
         if is_market_holiday(today, exchange="NSE"):
-            logger.info(
-                f"Today ({today}) is a market holiday or weekend - skipping scheduled strategy"
-            )
             return False
 
         return True
