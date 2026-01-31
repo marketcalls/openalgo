@@ -1141,7 +1141,7 @@ export default function ProfilePage() {
             <FolderCheck className="h-4 w-4" />
             <AlertTitle>File Permissions Monitor</AlertTitle>
             <AlertDescription>
-              Check file and directory permissions for OpenAlgo components. Incorrect permissions may cause
+              Check file and directory permissions for Zenxo components. Incorrect permissions may cause
               the application to malfunction.
             </AlertDescription>
           </Alert>

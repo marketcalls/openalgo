@@ -1,6 +1,5 @@
 import {
   BarChart3,
-  Bell,
   BookOpen,
   ClipboardList,
   Code2,
@@ -9,7 +8,6 @@ import {
   FileText,
   FlaskConical,
   Key,
-  Layers,
   LayoutDashboard,
   type LucideIcon,
   MessageSquare,
@@ -32,9 +30,9 @@ export const navItems: NavItem[] = [
   { href: '/orderbook', label: 'Orderbook', icon: ClipboardList },
   { href: '/tradebook', label: 'Tradebook', icon: FileText },
   { href: '/positions', label: 'Positions', icon: TrendingUp },
-  { href: '/action-center', label: 'Action Center', icon: Bell },
-  { href: '/platforms', label: 'Platforms', icon: Layers },
-  { href: '/strategy', label: 'Strategy', icon: Code2 },
+  // { href: '/action-center', label: 'Action Center', icon: Bell },
+  // { href: '/platforms', label: 'Platforms', icon: Layers },
+  { href: '/trading', label: 'Zenxo Strategy', icon: Code2 },
   { href: '/logs', label: 'Logs', icon: FileBarChart },
 ]
 

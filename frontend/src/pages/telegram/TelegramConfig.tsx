@@ -202,7 +202,7 @@ export default function TelegramConfig() {
           target="_blank"
           rel="noopener noreferrer"
         >
-          <Button variant="outline" className="w-full sm:w-auto">
+          {/* <Button variant="outline" className="w-full sm:w-auto">
             <svg
               xmlns="http://www.w3.org/2000/svg"
               className="h-4 w-4 mr-2"
@@ -212,7 +212,7 @@ export default function TelegramConfig() {
               <path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V12a1 1 0 11-2 0V4.804z" />
             </svg>
             View Documentation
-          </Button>
+          </Button> */}
         </a>
         <Button onClick={handleSave} disabled={isSaving}>
           <Save className="h-4 w-4 mr-2" />
@@ -226,7 +226,7 @@ export default function TelegramConfig() {
           <CardTitle>Quick Setup Guide</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
+          {/* <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4">
             <p className="text-sm">
               <span className="font-semibold">Need detailed instructions?</span> Visit our complete{' '}
               <a
@@ -239,7 +239,7 @@ export default function TelegramConfig() {
               </a>{' '}
               for step-by-step instructions with screenshots.
             </p>
-          </div>
+          </div> */}
 
           <div className="prose prose-sm dark:prose-invert max-w-none">
             <h4 className="text-base font-semibold mb-2">Quick Steps:</h4>

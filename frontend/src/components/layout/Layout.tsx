@@ -26,7 +26,7 @@ export function Layout() {
         <main className="container mx-auto px-4 py-6 pb-24 md:pb-6 flex-1">
           <Outlet />
         </main>
-        <Footer className="hidden md:block" />
+        <Footer />
         <MobileBottomNav />
       </div>
     </SocketProvider>

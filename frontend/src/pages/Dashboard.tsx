@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, FileText, MessageCircle, Search, Zap } from 'lucide-react'
+import { BarChart3, FileText, Zap } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
@@ -62,7 +62,7 @@ export default function Dashboard() {
   const [marginData, setMarginData] = useState<MarginData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [masterContract, setMasterContract] = useState<MasterContractStatus>({
+  const [_masterContract, setMasterContract] = useState<MasterContractStatus>({
     status: 'pending',
   })
   const [isAuthenticated, setIsAuthenticated] = useState(true) // Assume authenticated initially
@@ -150,58 +150,58 @@ export default function Dashboard() {
   }, [checkMasterContractStatus])
 
   // Master Contract LED color
-  const getMasterContractLedColor = () => {
-    switch (masterContract.status) {
-      case 'success':
-        return 'bg-green-500'
-      case 'downloading':
-        return 'bg-yellow-500 animate-pulse'
-      case 'error':
-        return 'bg-red-500'
-      default:
-        return 'bg-gray-400 animate-pulse'
-    }
-  }
+  // const getMasterContractLedColor = () => {
+  //   switch (masterContract.status) {
+  //     case 'success':
+  //       return 'bg-green-500'
+  //     case 'downloading':
+  //       return 'bg-yellow-500 animate-pulse'
+  //     case 'error':
+  //       return 'bg-red-500'
+  //     default:
+  //       return 'bg-gray-400 animate-pulse'
+  //   }
+  // }
 
-  const getMasterContractStatusText = () => {
-    switch (masterContract.status) {
-      case 'success':
-        return masterContract.total_symbols
-          ? `Ready (${masterContract.total_symbols} symbols)`
-          : 'Ready'
-      case 'downloading':
-        return 'Downloading...'
-      case 'error':
-        return 'Error'
-      default:
-        return 'Checking...'
-    }
-  }
+  // const getMasterContractStatusText = () => {
+  //   switch (masterContract.status) {
+  //     case 'success':
+  //       return masterContract.total_symbols
+  //         ? `Ready (${masterContract.total_symbols} symbols)`
+  //         : 'Ready'
+  //     case 'downloading':
+  //       return 'Downloading...'
+  //     case 'error':
+  //       return 'Error'
+  //     default:
+  //       return 'Checking...'
+  //   }
+  // }
 
-  const getMasterContractTextColor = () => {
-    switch (masterContract.status) {
-      case 'success':
-        return 'text-green-600 dark:text-green-400'
-      case 'downloading':
-        return 'text-yellow-600 dark:text-yellow-400'
-      case 'error':
-        return 'text-red-600 dark:text-red-400'
-      default:
-        return 'text-muted-foreground'
-    }
-  }
+  // const getMasterContractTextColor = () => {
+  //   switch (masterContract.status) {
+  //     case 'success':
+  //       return 'text-green-600 dark:text-green-400'
+  //     case 'downloading':
+  //       return 'text-yellow-600 dark:text-yellow-400'
+  //     case 'error':
+  //       return 'text-red-600 dark:text-red-400'
+  //     default:
+  //       return 'text-muted-foreground'
+  //   }
+  // }
 
   const quickAccessCards = [
-    {
-      href: '/search',
-      label: 'OpenAlgo Symbols',
-      description: 'Universal symbology across brokers',
-      icon: Search,
-      gradient: 'from-primary/10 to-primary/5 hover:from-primary/20 hover:to-primary/10',
-      iconBg: 'bg-primary/20',
-      iconColor: 'text-primary',
-      borderColor: 'border-primary/20 hover:border-primary/40',
-    },
+    // {
+    //   href: '/search',
+    //   label: 'OpenAlgo Symbols',
+    //   description: 'Universal symbology across brokers',
+    //   icon: Search,
+    //   gradient: 'from-primary/10 to-primary/5 hover:from-primary/20 hover:to-primary/10',
+    //   iconBg: 'bg-primary/20',
+    //   iconColor: 'text-primary',
+    //   borderColor: 'border-primary/20 hover:border-primary/40',
+    // },
     {
       href: '/logs',
       label: 'Live Logs',
@@ -213,17 +213,17 @@ export default function Dashboard() {
       iconColor: 'text-violet-500',
       borderColor: 'border-violet-500/20 hover:border-violet-500/40',
     },
-    {
-      href: 'https://docs.openalgo.in',
-      label: 'Documentation',
-      description: 'Tutorials, API docs & features',
-      icon: BookOpen,
-      gradient: 'from-cyan-500/10 to-cyan-500/5 hover:from-cyan-500/20 hover:to-cyan-500/10',
-      iconBg: 'bg-cyan-500/20',
-      iconColor: 'text-cyan-500',
-      borderColor: 'border-cyan-500/20 hover:border-cyan-500/40',
-      external: true,
-    },
+    // {
+    //   href: 'https://docs.openalgo.in',
+    //   label: 'Documentation',
+    //   description: 'Tutorials, API docs & features',
+    //   icon: BookOpen,
+    //   gradient: 'from-cyan-500/10 to-cyan-500/5 hover:from-cyan-500/20 hover:to-cyan-500/10',
+    //   iconBg: 'bg-cyan-500/20',
+    //   iconColor: 'text-cyan-500',
+    //   borderColor: 'border-cyan-500/20 hover:border-cyan-500/40',
+    //   external: true,
+    // },
     {
       href: '/pnl-tracker',
       label: 'P&L Tracker',
@@ -234,16 +234,16 @@ export default function Dashboard() {
       iconColor: 'text-green-500',
       borderColor: 'border-green-500/20 hover:border-green-500/40',
     },
-    {
-      href: '/telegram',
-      label: 'Telegram Alerts',
-      description: 'Configure telegram notifications',
-      icon: MessageCircle,
-      gradient: 'from-blue-500/10 to-blue-500/5 hover:from-blue-500/20 hover:to-blue-500/10',
-      iconBg: 'bg-blue-500/20',
-      iconColor: 'text-blue-500',
-      borderColor: 'border-blue-500/20 hover:border-blue-500/40',
-    },
+    // {
+    //   href: '/telegram',
+    //   label: 'Telegram Alerts',
+    //   description: 'Configure telegram notifications',
+    //   icon: MessageCircle,
+    //   gradient: 'from-blue-500/10 to-blue-500/5 hover:from-blue-500/20 hover:to-blue-500/10',
+    //   iconBg: 'bg-blue-500/20',
+    //   iconColor: 'text-blue-500',
+    //   borderColor: 'border-blue-500/20 hover:border-blue-500/40',
+    // },
     {
       href: '/logs/latency',
       label: 'Latency Monitor',
@@ -281,7 +281,7 @@ export default function Dashboard() {
           </p>
         </div>
         {/* Master Contract Status Indicator */}
-        <div className="flex items-center gap-2 md:gap-3 bg-muted rounded-lg px-3 md:px-4 py-2 md:py-3 w-fit lg:ml-auto lg:self-start">
+        {/* <div className="flex items-center gap-2 md:gap-3 bg-muted rounded-lg px-3 md:px-4 py-2 md:py-3 w-fit lg:ml-auto lg:self-start">
           <span className="text-xs md:text-sm font-medium whitespace-nowrap">Master Contract:</span>
           <div className="flex items-center gap-2">
             <div
@@ -294,7 +294,7 @@ export default function Dashboard() {
               {getMasterContractStatusText()}
             </span>
           </div>
-        </div>
+        </div> */}
       </div>
 
       {/* Stats Grid */}
@@ -448,19 +448,19 @@ export default function Dashboard() {
               </div>
             )
 
-            if (card.external) {
-              return (
-                <a
-                  key={card.href}
-                  href={card.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={cardClasses}
-                >
-                  {cardContent}
-                </a>
-              )
-            }
+            // if (card.external) {
+            //   return (
+            //     <a
+            //       key={card.href}
+            //       href={card.href}
+            //       target="_blank"
+            //       rel="noopener noreferrer"
+            //       className={cardClasses}
+            //     >
+            //       {cardContent}
+            //     </a>
+            //   )
+            // }
 
             return (
               <Link key={card.href} to={card.href} className={cardClasses}>

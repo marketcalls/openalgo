@@ -5,6 +5,7 @@ import { AuthSync } from '@/components/auth/AuthSync'
 import { FullWidthLayout } from '@/components/layout/FullWidthLayout'
 import { Layout } from '@/components/layout/Layout'
 import { PageLoader } from '@/components/ui/page-loader'
+import Trading from './pages/Trading'
 
 // Lazy load all pages for code splitting
 // Public pages
@@ -123,6 +124,9 @@ function App() {
                 <Route path="/orderbook" element={<OrderBook />} />
                 <Route path="/tradebook" element={<TradeBook />} />
                 <Route path="/holdings" element={<Holdings />} />
+
+                <Route path="/trading" element={<Trading />} />
+
                 {/* Search routes - match Flask /search/* routes */}
                 <Route path="/search/token" element={<Token />} />
                 <Route path="/search" element={<Search />} />

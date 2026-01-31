@@ -161,7 +161,7 @@ export default function Setup() {
                 Initial <span className="text-primary">Setup</span>
               </h1>
               <p className="text-lg lg:text-xl text-muted-foreground leading-relaxed">
-                Welcome to OpenAlgo! Create your administrator account to get started with
+                Welcome to zenxo! Create your administrator account to get started with
                 algorithmic trading. This account will have full access to manage the platform.
               </p>
             </div>

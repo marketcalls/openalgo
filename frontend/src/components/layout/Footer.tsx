@@ -1,121 +1,354 @@
-import { Github } from 'lucide-react'
-import { useEffect, useState } from 'react'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
+import { useThemeStore } from '@/stores/themeStore';
+import React, { useState, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import type { Components } from 'react-markdown';
 
-interface FooterProps {
-  className?: string
-}
+type FooterLink = 'terms' | 'disclaimer';
 
-export function Footer({ className }: FooterProps) {
-  const [version, setVersion] = useState<string>('')
+const footerFiles: Record<FooterLink, string> = {
+    terms: '/docs/terms.md',
+    disclaimer: '/docs/disclaimer.md',
+};
 
-  useEffect(() => {
-    const fetchVersion = async () => {
-      try {
-        const response = await fetch('/auth/app-info')
-        const data = await response.json()
-        if (data.status === 'success') {
-          setVersion(data.version)
+const footerTitles: Record<FooterLink, string> = {
+    terms: 'Terms & Conditions',
+    disclaimer: 'Disclaimer',
+};
+
+const tooltipText: Record<FooterLink, string> = {
+    terms: 'Click here to know more about company terms and conditions',
+    disclaimer: 'Click here to know more about company disclaimer',
+};
+
+/**
+ * The .md files use plain text lines instead of proper markdown syntax.
+ * This function converts them into well-structured markdown so ReactMarkdown
+ * can render headings, bullet lists, and paragraphs correctly.
+ */
+function preprocessMarkdown(raw: string): string {
+    const lines = raw.split('\n');
+    const result: string[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const trimmed = line.trim();
+
+        // Skip empty lines — we'll add spacing via markdown structure
+        if (!trimmed) {
+            result.push('');
+            continue;
         }
-      } catch (error) {
-        console.error('Failed to fetch version:', error)
-      }
+
+        // Main document title (first non-empty line or specific titles)
+        if (
+            trimmed === 'Terms and Conditions' ||
+            trimmed === 'Risk Disclaimer & Legal Notice'
+        ) {
+            result.push(`# ${trimmed}`);
+            continue;
+        }
+
+        // Subtitle line (platform name line right after title)
+        if (trimmed.startsWith('Zenxo.ai - ')) {
+            result.push(`*${trimmed}*`);
+            continue;
+        }
+
+        // Effective/Updated date line
+        if (trimmed.startsWith('Effective Date:') || trimmed.startsWith('Last Updated:')) {
+            result.push(`> ${trimmed}`);
+            continue;
+        }
+
+        // Section headings like "1\. Introduction and Acceptance" or "10\. Changes"
+        if (/^\d+\\?\.\s+/.test(trimmed)) {
+            const heading = trimmed.replace(/^(\d+)\\\./, '$1.');
+            result.push(`## ${heading}`);
+            continue;
+        }
+
+        // Sub-section headings like "1.1 Agreement to Terms"
+        if (/^\d+\.\d+\s+/.test(trimmed)) {
+            result.push(`### ${trimmed}`);
+            continue;
+        }
+
+        // Category sub-headings (like "Market Risks", "AI and Strategy Risks")
+        // These are standalone short lines followed by bullet-like items
+        const nextNonEmpty = lines.slice(i + 1).find((l) => l.trim() !== '');
+        if (
+            trimmed.length < 60 &&
+            !trimmed.endsWith('.') &&
+            !trimmed.endsWith(':') &&
+            !trimmed.startsWith('—') &&
+            !trimmed.startsWith('-') &&
+            !/^\d/.test(trimmed) &&
+            !trimmed.startsWith('You ') &&
+            !trimmed.startsWith('We ') &&
+            !trimmed.startsWith('Our ') &&
+            !trimmed.startsWith('Any ') &&
+            !trimmed.startsWith('All ') &&
+            !trimmed.startsWith('Be ') &&
+            !trimmed.startsWith('Have ') &&
+            !trimmed.startsWith('Not ') &&
+            !trimmed.startsWith('If ') &&
+            !trimmed.startsWith('In ') &&
+            !trimmed.startsWith('The ') &&
+            !trimmed.startsWith('To ') &&
+            !trimmed.startsWith('No ') &&
+            !trimmed.startsWith('TRADE') &&
+            !trimmed.startsWith('BY ') &&
+            !trimmed.startsWith('PLEASE') &&
+            !trimmed.startsWith('THE ') &&
+            !trimmed.startsWith('ZENXO') &&
+            !trimmed.startsWith('TO THE') &&
+            nextNonEmpty &&
+            /^[A-Z]/.test(trimmed) &&
+            // Check if next line looks like a list item (short, no period, or starts with a known pattern)
+            nextNonEmpty.trim().length < 80
+        ) {
+            // Check if this looks like a category label above list items
+            const nextTrimmed = nextNonEmpty.trim();
+            if (
+                !nextTrimmed.startsWith('#') &&
+                !/^\d+[\\.]/.test(nextTrimmed) &&
+                trimmed !== 'Important Notice' &&
+                trimmed !== 'Summary of Key Points' &&
+                !trimmed.startsWith('Risk Category')
+            ) {
+                // Only make it a bold label if it's clearly a sub-category
+                if (
+                    trimmed === 'Market Risks' ||
+                    trimmed === 'Algorithmic Trading Risks' ||
+                    trimmed === 'AI and Strategy Risks' ||
+                    trimmed === 'Broker and Execution Risks'
+                ) {
+                    result.push(`**${trimmed}**`);
+                    continue;
+                }
+            }
+        }
+
+        // "Important Notice" and "Summary of Key Points" as H2
+        if (trimmed === 'Important Notice' || trimmed === 'Summary of Key Points') {
+            result.push(`## ${trimmed}`);
+            continue;
+        }
+
+        // Lines that are short, don't end with period, and appear to be list items
+        // (standalone lines between blank lines that aren't headings)
+        const prevLine = i > 0 ? lines[i - 1].trim() : '';
+        const nextLine = i < lines.length - 1 ? lines[i + 1].trim() : '';
+
+        if (
+            prevLine === '' &&
+            nextLine === '' &&
+            trimmed.length < 80 &&
+            !trimmed.endsWith('.') &&
+            !trimmed.startsWith('#') &&
+            !trimmed.startsWith('*') &&
+            !trimmed.startsWith('>') &&
+            !/^\d+[\\.]/.test(trimmed) &&
+            !trimmed.startsWith('TRADE') &&
+            !trimmed.startsWith('BY ') &&
+            !trimmed.startsWith('PLEASE') &&
+            !trimmed.startsWith('Risk Category')
+        ) {
+            result.push(`- ${trimmed}`);
+            continue;
+        }
+
+        // Everything else is a regular paragraph
+        result.push(trimmed);
     }
 
-    fetchVersion()
-  }, [])
-
-  return (
-    <footer className={cn('mt-auto border-t bg-muted/30', className)}>
-      <div className="container mx-auto px-4 py-6">
-        <div className="flex flex-col md:flex-row items-center justify-center gap-2 md:gap-4 text-sm text-muted-foreground">
-          <div className="flex items-center gap-2">
-            <span>Copyright 2026</span>
-            <span className="hidden md:inline">|</span>
-            <a
-              href="https://www.openalgo.in"
-              className="text-primary hover:underline font-medium"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              www.openalgo.in
-            </a>
-          </div>
-          <span className="hidden md:inline">|</span>
-          <span className="text-center">Open Source Algo Platform for Everyone</span>
-          <span className="hidden md:inline">|</span>
-          {version && (
-            <Badge variant="secondary" className="gap-1">
-              <span className="opacity-75">v</span>
-              <span>{version}</span>
-            </Badge>
-          )}
-        </div>
-
-        {/* Social Links */}
-        <div className="flex justify-center gap-2 mt-4">
-          <Button variant="ghost" size="icon" asChild className="h-8 w-8">
-            <a
-              href="https://github.com/marketcalls/openalgo"
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="GitHub"
-            >
-              <Github className="h-4 w-4" />
-            </a>
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            asChild
-            className="h-8 w-8"
-            title="Join our Discord community"
-          >
-            <a
-              href="https://openalgo.in/discord"
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Discord"
-            >
-              <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z" />
-              </svg>
-            </a>
-          </Button>
-          <Button variant="ghost" size="icon" asChild className="h-8 w-8" title="Follow us on X">
-            <a
-              href="https://x.com/openalgoHQ"
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="X (Twitter)"
-            >
-              <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z" />
-              </svg>
-            </a>
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            asChild
-            className="h-8 w-8"
-            title="Subscribe to our YouTube channel"
-          >
-            <a
-              href="https://www.youtube.com/@openalgo"
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="YouTube"
-            >
-              <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
-              </svg>
-            </a>
-          </Button>
-        </div>
-      </div>
-    </footer>
-  )
+    // Clean up excessive blank lines
+    return result.join('\n').replace(/\n{3,}/g, '\n\n');
 }
+
+export const Footer: React.FC = () => {
+    const { mode } = useThemeStore()
+    const isDark = mode === 'dark';
+    const subTextClass = isDark ? 'text-gray-400' : 'text-gray-600';
+
+    const [activeModal, setActiveModal] = useState<FooterLink | null>(null);
+    const [content, setContent] = useState<string>('');
+    const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        if (!activeModal) return;
+        setLoading(true);
+        fetch(footerFiles[activeModal])
+            .then((res) => res.text())
+            .then((text) => {
+                setContent(preprocessMarkdown(text));
+                setLoading(false);
+            })
+            .catch(() => {
+                setContent('Failed to load content.');
+                setLoading(false);
+            });
+    }, [activeModal]);
+
+    const closeModal = () => {
+        setActiveModal(null);
+        setContent('');
+    };
+
+    const markdownComponents: Components = {
+        h1: ({ children }) => (
+            <h1 className={`text-2xl font-bold mb-1 pb-2 border-b ${isDark ? 'text-white border-gray-600' : 'text-gray-900 border-gray-300'}`}>
+                {children}
+            </h1>
+        ),
+        h2: ({ children }) => (
+            <h2 className={`text-lg font-bold mt-6 mb-2 pb-1 border-b ${isDark ? 'text-blue-400 border-gray-700' : 'text-blue-700 border-gray-200'}`}>
+                {children}
+            </h2>
+        ),
+        h3: ({ children }) => (
+            <h3 className={`text-base font-semibold mt-4 mb-1 ${isDark ? 'text-gray-200' : 'text-gray-800'}`}>
+                {children}
+            </h3>
+        ),
+        p: ({ children }) => (
+            <p className={`text-sm leading-relaxed mb-2 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
+                {children}
+            </p>
+        ),
+        ul: ({ children }) => (
+            <ul className={`list-disc list-outside ml-5 mb-3 space-y-1 text-sm ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>
+                {children}
+            </ul>
+        ),
+        li: ({ children }) => (
+            <li className="leading-relaxed">{children}</li>
+        ),
+        strong: ({ children }) => (
+            <strong className={`font-semibold ${isDark ? 'text-gray-100' : 'text-gray-900'}`}>
+                {children}
+            </strong>
+        ),
+        blockquote: ({ children }) => (
+            <blockquote className={`border-l-4 pl-3 my-2 text-xs italic ${isDark ? 'border-blue-500 text-gray-400' : 'border-blue-400 text-gray-500'}`}>
+                {children}
+            </blockquote>
+        ),
+        em: ({ children }) => (
+            <em className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                {children}
+            </em>
+        ),
+        a: ({ href, children }) => (
+            <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-500 underline hover:text-blue-600">
+                {children}
+            </a>
+        ),
+    };
+
+    return (
+        <>
+            <footer
+                className={`px-4 py-1 border-t text-center text-sm
+          ${isDark
+                        ? 'bg-gray-800 border-gray-700'
+                        : 'bg-gray-50 border-gray-200'
+                    }`}
+            >
+                <p className={`mb-1 ${subTextClass}`}>
+                    © 2026 <span className="font-semibold">Smart Touch Infotech Private Limited</span>. All rights reserved.
+                </p>
+
+                <div className="flex justify-center gap-4">
+                    {(['terms', 'disclaimer'] as FooterLink[]).map((item) => (
+                        <div key={item} className="relative group">
+                            <button
+                                onClick={() => setActiveModal(item)}
+                                className={`
+                                text-xs
+                                font-medium
+                                underline-offset-2
+                                hover:underline
+                                transition-colors
+                                ${mode === 'dark'
+                                    ? 'text-gray-400 hover:text-gray-200'
+                                    : 'text-gray-600 hover:text-gray-800'}
+                                `}
+                            >
+                                {footerTitles[item]}
+                            </button>
+
+                            <div
+                                className={`absolute bottom-full mb-2 left-1/2 -translate-x-1/2
+    whitespace-nowrap px-3 py-1.5 rounded-md text-xs z-10
+    opacity-0 group-hover:opacity-100 transition-opacity
+    ${isDark
+                                        ? 'bg-gray-700 text-gray-200'
+                                        : 'bg-gray-200 text-gray-800'
+                                    }`}
+                            >
+                                {tooltipText[item]}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </footer>
+
+            {activeModal && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+                    onClick={closeModal}
+                >
+                    <div
+                        onClick={(e) => e.stopPropagation()}
+                        className={`w-full max-w-2xl max-h-[80vh] flex flex-col rounded-lg shadow-xl mx-4
+              ${isDark
+                                ? 'bg-gray-800 text-gray-100'
+                                : 'bg-white text-gray-800'
+                            }`}
+                    >
+                        <div className={`flex items-center justify-between px-6 py-4 border-b shrink-0 ${isDark ? 'border-gray-700' : 'border-gray-200'}`}>
+                            <h3 className="text-lg font-bold">
+                                {footerTitles[activeModal]}
+                            </h3>
+                            <button
+                                onClick={closeModal}
+                                className={`text-xl leading-none px-2 py-1 rounded hover:bg-gray-500/20`}
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto px-6 py-4">
+                            {loading ? (
+                                <div className="flex items-center justify-center py-10">
+                                    <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-500 border-t-transparent"></div>
+                                    <span className="ml-2 text-sm">Loading...</span>
+                                </div>
+                            ) : (
+                                <div className="max-w-none">
+                                    <ReactMarkdown components={markdownComponents}>
+                                        {content}
+                                    </ReactMarkdown>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className={`flex justify-end px-6 py-3 border-t shrink-0 ${isDark ? 'border-gray-700' : 'border-gray-200'}`}>
+                            <button
+                                onClick={closeModal}
+                                className={`px-4 py-2 rounded-lg text-sm font-medium
+                  ${isDark
+                                        ? 'bg-blue-600 hover:bg-blue-700 text-white'
+                                        : 'bg-blue-500 hover:bg-blue-600 text-white'
+                                    }`}
+                            >
+                                Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </>
+    );
+};

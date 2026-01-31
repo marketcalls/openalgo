@@ -59,6 +59,7 @@
     "openalgo": "file:..",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
+    "react-markdown": "^10.1.0",
     "react-resizable-panels": "^4.5.1",
     "react-router-dom": "^7.13.0",
     "react-syntax-highlighter": "^16.1.0",
