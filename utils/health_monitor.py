@@ -573,7 +573,7 @@ def _collector_loop():
     """Background collector loop (daemon thread, low priority)"""
     global _collector_running
 
-    logger.info(f"Health monitoring collector started (interval: {HEALTH_SAMPLE_INTERVAL}s)")
+    logger.debug(f"Health monitoring collector started (interval: {HEALTH_SAMPLE_INTERVAL}s)")
 
     while _collector_running:
         try:
@@ -614,7 +614,7 @@ def start_health_collector(interval=None):
             target=_collector_loop, name="HealthCollector", daemon=True  # Daemon = zero impact
         )
         _collector_thread.start()
-        logger.info("Started health monitoring collector (background daemon thread)")
+        logger.debug("Started health monitoring collector (background daemon thread)")
 
 
 def stop_health_collector():
@@ -650,6 +650,6 @@ def init_health_monitoring(app):
         # Start collector (background daemon thread)
         start_health_collector()
 
-        logger.info("Health monitoring initialized successfully (background mode)")
+        logger.debug("Health monitoring initialized successfully (background mode)")
     except Exception as e:
         logger.exception(f"Error initializing health monitoring: {e}")

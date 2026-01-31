@@ -6,6 +6,7 @@ Cross-platform compatible (Windows, Linux, macOS).
 """
 
 import atexit
+import logging
 import os
 import signal
 import threading
@@ -14,6 +15,11 @@ from urllib.parse import urlparse
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Suppress verbose pyngrok library logging (it logs at INFO level by default)
+logging.getLogger("pyngrok").setLevel(logging.WARNING)
+logging.getLogger("pyngrok.ngrok").setLevel(logging.WARNING)
+logging.getLogger("pyngrok.process").setLevel(logging.WARNING)
 
 # Global variables with thread safety
 _ngrok_tunnel = None
