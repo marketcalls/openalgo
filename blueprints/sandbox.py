@@ -1,7 +1,10 @@
+import csv
+import io
 import os
 import traceback
+from datetime import datetime
 
-from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, Response, flash, jsonify, redirect, render_template, request, session, url_for
 
 from database.sandbox_db import (
     SandboxFunds,
@@ -864,3 +867,300 @@ def validate_config(config_key, config_value):
     except Exception as e:
         logger.exception(f"Error validating config: {str(e)}")
         return f"Validation error: {str(e)}"
+
+
+def sanitize_csv_value(value):
+    """
+    Sanitize a value for CSV export to prevent CSV injection attacks.
+
+    CSV injection occurs when cells starting with =, +, @, \t, or \r
+    are interpreted as formulas by spreadsheet applications like Excel.
+    We prefix these with a single quote to force text interpretation.
+
+    Note: We do NOT sanitize '-' as it's commonly used for negative numbers
+    in financial/P&L data.
+    """
+    if value is None:
+        return ""
+
+    str_value = str(value)
+
+    # Check if the value starts with potentially dangerous characters
+    # Note: '-' is excluded because negative numbers are common in financial data
+    if str_value and str_value[0] in ('=', '+', '@', '\t', '\r'):
+        return "'" + str_value
+
+    return str_value
+
+
+def generate_daily_pnl_csv(daily_pnl_records):
+    """Generate CSV from daily P&L records"""
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Write headers
+    headers = [
+        "Date",
+        "Realized P&L",
+        "Positions Unrealized",
+        "Holdings Unrealized",
+        "Total Unrealized",
+        "Total MTM",
+        "Portfolio Value",
+    ]
+    writer.writerow(headers)
+
+    # Write data rows
+    for record in daily_pnl_records:
+        row = [
+            sanitize_csv_value(record.date.strftime("%Y-%m-%d") if record.date else ""),
+            float(record.realized_pnl or 0),
+            float(record.positions_unrealized_pnl or 0),
+            float(record.holdings_unrealized_pnl or 0),
+            float((record.positions_unrealized_pnl or 0) + (record.holdings_unrealized_pnl or 0)),
+            float(record.total_mtm or 0),
+            float(record.portfolio_value or 0),
+        ]
+        writer.writerow(row)
+
+    return output.getvalue()
+
+
+def generate_positions_csv(positions):
+    """Generate CSV from positions data"""
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Write headers
+    headers = [
+        "Symbol",
+        "Exchange",
+        "Product",
+        "Quantity",
+        "Average Price",
+        "LTP",
+        "Unrealized P&L",
+        "Today Realized P&L",
+        "All-Time Realized P&L",
+        "Margin Blocked",
+        "Status",
+        "Last Updated",
+    ]
+    writer.writerow(headers)
+
+    # Write data rows
+    for pos in positions:
+        unrealized = float(pos.pnl or 0) if pos.quantity != 0 else 0.0
+        row = [
+            sanitize_csv_value(pos.symbol),
+            sanitize_csv_value(pos.exchange),
+            sanitize_csv_value(pos.product),
+            pos.quantity,
+            float(pos.average_price),
+            float(pos.ltp) if pos.ltp else 0.0,
+            unrealized,
+            float(pos.today_realized_pnl or 0),
+            float(pos.accumulated_realized_pnl or 0),
+            float(pos.margin_blocked or 0),
+            "Open" if pos.quantity != 0 else "Closed",
+            pos.updated_at.strftime("%Y-%m-%d %H:%M:%S") if pos.updated_at else "",
+        ]
+        writer.writerow(row)
+
+    return output.getvalue()
+
+
+def generate_holdings_csv(holdings):
+    """Generate CSV from holdings data"""
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Write headers
+    headers = [
+        "Symbol",
+        "Exchange",
+        "Quantity",
+        "Average Price",
+        "LTP",
+        "Unrealized P&L",
+        "P&L %",
+        "Settlement Date",
+    ]
+    writer.writerow(headers)
+
+    # Write data rows
+    for holding in holdings:
+        row = [
+            sanitize_csv_value(holding.symbol),
+            sanitize_csv_value(holding.exchange),
+            holding.quantity,
+            float(holding.average_price),
+            float(holding.ltp) if holding.ltp else 0.0,
+            float(holding.pnl or 0),
+            float(holding.pnl_percent or 0),
+            holding.settlement_date.strftime("%Y-%m-%d") if holding.settlement_date else "",
+        ]
+        writer.writerow(row)
+
+    return output.getvalue()
+
+
+def generate_trades_csv(trades):
+    """Generate CSV from trades data"""
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Write headers
+    headers = [
+        "Trade ID",
+        "Order ID",
+        "Symbol",
+        "Exchange",
+        "Action",
+        "Quantity",
+        "Price",
+        "Product",
+        "Strategy",
+        "Timestamp",
+    ]
+    writer.writerow(headers)
+
+    # Write data rows
+    for trade in trades:
+        row = [
+            sanitize_csv_value(trade.tradeid),
+            sanitize_csv_value(trade.orderid),
+            sanitize_csv_value(trade.symbol),
+            sanitize_csv_value(trade.exchange),
+            sanitize_csv_value(trade.action),
+            trade.quantity,
+            float(trade.price),
+            sanitize_csv_value(trade.product),
+            sanitize_csv_value(trade.strategy or ""),
+            trade.trade_timestamp.strftime("%Y-%m-%d %H:%M:%S") if trade.trade_timestamp else "",
+        ]
+        writer.writerow(row)
+
+    return output.getvalue()
+
+
+@sandbox_bp.route("/mypnl/export/daily")
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def export_daily_pnl():
+    """Export date-wise P&L data as CSV"""
+    try:
+        from database.sandbox_db import SandboxDailyPnL
+
+        user_id = session.get("user")
+
+        # Get all daily P&L records for the user (no limit for export)
+        daily_pnl_records = (
+            SandboxDailyPnL.query.filter_by(user_id=user_id)
+            .order_by(SandboxDailyPnL.date.desc())
+            .all()
+        )
+
+        if not daily_pnl_records:
+            return jsonify({"status": "error", "message": "No daily P&L data to export"}), 404
+
+        csv_data = generate_daily_pnl_csv(daily_pnl_records)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        response = Response(csv_data, mimetype="text/csv")
+        response.headers["Content-Disposition"] = f'attachment; filename=sandbox_daily_pnl_{timestamp}.csv'
+        return response
+
+    except Exception as e:
+        logger.exception(f"Error exporting daily P&L: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({"status": "error", "message": f"Error exporting data: {str(e)}"}), 500
+
+
+@sandbox_bp.route("/mypnl/export/positions")
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def export_positions():
+    """Export positions data as CSV"""
+    try:
+        user_id = session.get("user")
+
+        # Get all positions for the user
+        positions = (
+            SandboxPositions.query.filter_by(user_id=user_id)
+            .order_by(SandboxPositions.updated_at.desc())
+            .all()
+        )
+
+        if not positions:
+            return jsonify({"status": "error", "message": "No positions data to export"}), 404
+
+        csv_data = generate_positions_csv(positions)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        response = Response(csv_data, mimetype="text/csv")
+        response.headers["Content-Disposition"] = f'attachment; filename=sandbox_positions_{timestamp}.csv'
+        return response
+
+    except Exception as e:
+        logger.exception(f"Error exporting positions: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({"status": "error", "message": f"Error exporting data: {str(e)}"}), 500
+
+
+@sandbox_bp.route("/mypnl/export/holdings")
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def export_holdings():
+    """Export holdings data as CSV"""
+    try:
+        user_id = session.get("user")
+
+        # Get all holdings for the user
+        holdings = (
+            SandboxHoldings.query.filter_by(user_id=user_id)
+            .order_by(SandboxHoldings.updated_at.desc())
+            .all()
+        )
+
+        if not holdings:
+            return jsonify({"status": "error", "message": "No holdings data to export"}), 404
+
+        csv_data = generate_holdings_csv(holdings)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        response = Response(csv_data, mimetype="text/csv")
+        response.headers["Content-Disposition"] = f'attachment; filename=sandbox_holdings_{timestamp}.csv'
+        return response
+
+    except Exception as e:
+        logger.exception(f"Error exporting holdings: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({"status": "error", "message": f"Error exporting data: {str(e)}"}), 500
+
+
+@sandbox_bp.route("/mypnl/export/trades")
+@check_session_validity
+@limiter.limit(API_RATE_LIMIT)
+def export_trades():
+    """Export all trades data as CSV (no limit)"""
+    try:
+        user_id = session.get("user")
+
+        # Get ALL trades for the user (no limit for export)
+        trades = (
+            SandboxTrades.query.filter_by(user_id=user_id)
+            .order_by(SandboxTrades.trade_timestamp.desc())
+            .all()
+        )
+
+        if not trades:
+            return jsonify({"status": "error", "message": "No trades data to export"}), 404
+
+        csv_data = generate_trades_csv(trades)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        response = Response(csv_data, mimetype="text/csv")
+        response.headers["Content-Disposition"] = f'attachment; filename=sandbox_trades_{timestamp}.csv'
+        return response
+
+    except Exception as e:
+        logger.exception(f"Error exporting trades: {str(e)}\n{traceback.format_exc()}")
+        return jsonify({"status": "error", "message": f"Error exporting data: {str(e)}"}), 500
