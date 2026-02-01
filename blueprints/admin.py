@@ -374,9 +374,16 @@ def api_holiday_add():
         description = data.get("description", "").strip()
         holiday_type = data.get("holiday_type", "TRADING_HOLIDAY").strip()
         closed_exchanges = data.get("closed_exchanges", [])
+        open_exchanges = data.get("open_exchanges", [])  # For special sessions
 
         if not date_str or not description:
             return jsonify({"status": "error", "message": "Date and description are required"}), 400
+
+        # Validate special session has open exchanges with timings
+        if holiday_type == "SPECIAL_SESSION" and not open_exchanges:
+            return jsonify(
+                {"status": "error", "message": "Special session requires at least one exchange with timings"}
+            ), 400
 
         holiday_date = datetime.strptime(date_str, "%Y-%m-%d").date()
         year = holiday_date.year
@@ -387,9 +394,28 @@ def api_holiday_add():
         calendar_db_session.add(holiday)
         calendar_db_session.flush()
 
+        # Add closed exchanges (for trading holidays)
         for exchange in closed_exchanges:
             exchange_entry = HolidayExchange(
                 holiday_id=holiday.id, exchange_code=exchange, is_open=False
+            )
+            calendar_db_session.add(exchange_entry)
+
+        # Add open exchanges with special timings (for special sessions)
+        for open_ex in open_exchanges:
+            exchange_code = open_ex.get("exchange", "").strip()
+            start_time = open_ex.get("start_time")  # epoch milliseconds
+            end_time = open_ex.get("end_time")  # epoch milliseconds
+
+            if not exchange_code or start_time is None or end_time is None:
+                continue
+
+            exchange_entry = HolidayExchange(
+                holiday_id=holiday.id,
+                exchange_code=exchange_code,
+                is_open=True,
+                start_time=start_time,
+                end_time=end_time,
             )
             calendar_db_session.add(exchange_entry)
 
@@ -406,6 +432,7 @@ def api_holiday_add():
                     "description": description,
                     "holiday_type": holiday_type,
                     "closed_exchanges": closed_exchanges,
+                    "open_exchanges": open_exchanges,
                 },
             }
         )
