@@ -17,6 +17,12 @@ export interface UpdateFreezeQtyRequest {
   freeze_qty: number
 }
 
+export interface SpecialSessionExchange {
+  exchange: string
+  start_time: string // HH:MM format for UI, converted to epoch ms before sending
+  end_time: string
+}
+
 export interface Holiday {
   id: number
   date: string
@@ -24,6 +30,7 @@ export interface Holiday {
   description: string
   holiday_type: 'TRADING_HOLIDAY' | 'SETTLEMENT_HOLIDAY' | 'SPECIAL_SESSION'
   closed_exchanges: string[]
+  open_exchanges?: SpecialSessionExchange[]
 }
 
 export interface AddHolidayRequest {
@@ -31,6 +38,11 @@ export interface AddHolidayRequest {
   description: string
   holiday_type: 'TRADING_HOLIDAY' | 'SETTLEMENT_HOLIDAY' | 'SPECIAL_SESSION'
   closed_exchanges: string[]
+  open_exchanges?: Array<{
+    exchange: string
+    start_time: number // epoch milliseconds
+    end_time: number
+  }>
 }
 
 export interface HolidaysResponse {

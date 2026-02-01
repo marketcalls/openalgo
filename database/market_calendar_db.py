@@ -640,11 +640,6 @@ def get_market_timings_for_date(query_date: date) -> list[dict[str, Any]]:
         return _timings_cache[cache_key]
 
     try:
-        # Check if it's a weekend (Saturday=5, Sunday=6)
-        if query_date.weekday() >= 5:
-            _timings_cache[cache_key] = []
-            return []
-
         # Calculate midnight timestamp for the date in IST
         midnight_ist = datetime.combine(query_date, datetime.min.time())
         midnight_epoch = int(midnight_ist.timestamp() * 1000)
@@ -652,7 +647,8 @@ def get_market_timings_for_date(query_date: date) -> list[dict[str, Any]]:
         # Get timing offsets from database (or defaults if not in DB)
         timing_offsets = _get_timing_offsets()
 
-        # Check if it's a holiday
+        # Check if it's a holiday/special session FIRST (before weekend check)
+        # This allows special sessions like Budget Day or Muhurat Trading on weekends
         holiday = Holiday.query.filter(Holiday.holiday_date == query_date).first()
 
         if holiday:
@@ -704,6 +700,12 @@ def get_market_timings_for_date(query_date: date) -> list[dict[str, Any]]:
             _timings_cache[cache_key] = result
             return result
 
+        # No holiday entry found - check if it's a weekend (Saturday=5, Sunday=6)
+        # Weekend check is done AFTER holiday check so special sessions on weekends work
+        if query_date.weekday() >= 5:
+            _timings_cache[cache_key] = []
+            return []
+
         # Normal trading day - return timings for all exchanges from DB
         result = []
         for exchange in SUPPORTED_EXCHANGES:
@@ -736,17 +738,19 @@ def is_market_holiday(query_date: date, exchange: str = None) -> bool:
     Returns:
         True if it's a holiday (or weekend), False otherwise
     """
-    # Weekend check
+    # Check for special session FIRST (before weekend check)
+    # This allows special sessions like Budget Day or Muhurat Trading on weekends
+    holiday = Holiday.query.filter(Holiday.holiday_date == query_date).first()
+
+    # Special sessions are not holidays - markets are open with special timings
+    if holiday and holiday.holiday_type == "SPECIAL_SESSION":
+        return False
+
+    # Weekend check (only if no special session)
     if query_date.weekday() >= 5:
         return True
 
-    holiday = Holiday.query.filter(Holiday.holiday_date == query_date).first()
-
     if not holiday:
-        return False
-
-    # Special sessions are not full holidays
-    if holiday.holiday_type == "SPECIAL_SESSION":
         return False
 
     if exchange:
