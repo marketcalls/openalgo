@@ -1,4 +1,4 @@
-import { Activity, Briefcase, Calendar, Package, Settings } from 'lucide-react'
+import { Activity, Briefcase, Calendar, Download, Package, Settings } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
@@ -115,6 +115,11 @@ export default function SandboxPnL() {
     } finally {
       setIsLoading(false)
     }
+  }
+
+  const handleExport = (type: 'daily' | 'positions' | 'holdings' | 'trades') => {
+    // Trigger download by navigating to the export endpoint
+    window.location.href = `/sandbox/mypnl/export/${type}`
   }
 
   if (isLoading) {
@@ -249,8 +254,14 @@ export default function SandboxPnL() {
         {/* Date-wise P&L Tab */}
         <TabsContent value="daily">
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>Date-wise P&L Report</CardTitle>
+              {data?.daily_pnl && data.daily_pnl.length > 0 && (
+                <Button variant="outline" size="sm" onClick={() => handleExport('daily')}>
+                  <Download className="h-4 w-4 mr-2" />
+                  Export CSV
+                </Button>
+              )}
             </CardHeader>
             <CardContent>
               {data?.daily_pnl && data.daily_pnl.length > 0 ? (
@@ -316,8 +327,14 @@ export default function SandboxPnL() {
         {/* Positions Tab */}
         <TabsContent value="positions">
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>Position-wise P&L</CardTitle>
+              {data?.positions && data.positions.length > 0 && (
+                <Button variant="outline" size="sm" onClick={() => handleExport('positions')}>
+                  <Download className="h-4 w-4 mr-2" />
+                  Export CSV
+                </Button>
+              )}
             </CardHeader>
             <CardContent>
               {data?.positions && data.positions.length > 0 ? (
@@ -398,8 +415,14 @@ export default function SandboxPnL() {
         {/* Holdings Tab */}
         <TabsContent value="holdings">
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>Holdings P&L (T+1 Settled)</CardTitle>
+              {data?.holdings && data.holdings.length > 0 && (
+                <Button variant="outline" size="sm" onClick={() => handleExport('holdings')}>
+                  <Download className="h-4 w-4 mr-2" />
+                  Export CSV
+                </Button>
+              )}
             </CardHeader>
             <CardContent>
               {data?.holdings && data.holdings.length > 0 ? (
@@ -460,8 +483,14 @@ export default function SandboxPnL() {
         {/* Recent Trades Tab */}
         <TabsContent value="trades">
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>Recent Trades (Last 50)</CardTitle>
+              {data?.trades && data.trades.length > 0 && (
+                <Button variant="outline" size="sm" onClick={() => handleExport('trades')}>
+                  <Download className="h-4 w-4 mr-2" />
+                  Export All CSV
+                </Button>
+              )}
             </CardHeader>
             <CardContent>
               {data?.trades && data.trades.length > 0 ? (
