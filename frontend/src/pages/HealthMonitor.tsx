@@ -234,6 +234,32 @@ export default function HealthMonitor() {
     const gridColor = dark ? '#374151' : '#e5e7eb'  // gray-700 / gray-200
     const borderColor = dark ? '#4b5563' : '#d1d5db' // gray-600 / gray-300
 
+    // IST offset in milliseconds (5 hours 30 minutes)
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000
+
+    // Helper to convert UTC timestamp to IST formatted string
+    const formatTimeIST = (time: number): string => {
+      const date = new Date(time * 1000)
+      const istDate = new Date(date.getTime() + IST_OFFSET_MS)
+      const hours = istDate.getUTCHours().toString().padStart(2, '0')
+      const minutes = istDate.getUTCMinutes().toString().padStart(2, '0')
+      return `${hours}:${minutes}`
+    }
+
+    // Helper to format date and time for crosshair tooltip in IST
+    const formatDateTimeIST = (time: number): string => {
+      const date = new Date(time * 1000)
+      const istDate = new Date(date.getTime() + IST_OFFSET_MS)
+      const day = istDate.getUTCDate().toString().padStart(2, '0')
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+      const month = months[istDate.getUTCMonth()]
+      const year = istDate.getUTCFullYear().toString().slice(-2)
+      const hours = istDate.getUTCHours().toString().padStart(2, '0')
+      const minutes = istDate.getUTCMinutes().toString().padStart(2, '0')
+      const seconds = istDate.getUTCSeconds().toString().padStart(2, '0')
+      return `${day} ${month} '${year} ${hours}:${minutes}:${seconds}`
+    }
+
     // Create chart options - no grid lines for clean look
     const chartOptions = {
       height: 300,
@@ -248,6 +274,7 @@ export default function HealthMonitor() {
       timeScale: {
         borderColor: borderColor,
         timeVisible: true,
+        tickMarkFormatter: (time: number) => formatTimeIST(time),
       },
       rightPriceScale: {
         borderColor: borderColor,
@@ -255,6 +282,9 @@ export default function HealthMonitor() {
       crosshair: {
         vertLine: { color: gridColor },
         horzLine: { color: gridColor },
+      },
+      localization: {
+        timeFormatter: (time: number) => formatDateTimeIST(time),
       },
     }
 
@@ -264,6 +294,7 @@ export default function HealthMonitor() {
         ...chartOptions,
         width: fdChartContainerRef.current.clientWidth,
         localization: {
+          ...chartOptions.localization,
           priceFormatter: (price: number) => Math.round(price).toString(),
         },
       })
