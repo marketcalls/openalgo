@@ -39,9 +39,9 @@
   }
 
   .dark {
-    --background: 240 10% 3.9%;
+    --background: 221 40% 11%;
     --foreground: 0 0% 98%;
-    --card: 240 10% 3.9%;
+    --card: 221 43% 15%;
     --card-foreground: 0 0% 98%;
     --popover: 240 10% 3.9%;
     --popover-foreground: 0 0% 98%;
@@ -68,7 +68,7 @@
 
   /* Analyzer Mode - Dark purple theme (like dracula) */
   .analyzer {
-    --background: oklch(0.16 0.02 280);
+    --background: oklch(0.21 0.03 265);
     --foreground: oklch(0.95 0.02 280);
     --card: oklch(0.2 0.025 280);
     --card-foreground: oklch(0.95 0.02 280);
@@ -199,9 +199,9 @@
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
+  --background: oklch(0.21 0.03 265);
   --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
+  --card: oklch(0.25 0.035 265);
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.205 0 0);
   --popover-foreground: oklch(0.985 0 0);
@@ -323,7 +323,7 @@
 
 /* Analyzer Mode - Dark purple theme (like dracula) - placed last for highest priority */
 .analyzer {
-  --background: oklch(0.16 0.02 280);
+  --background: oklch(0.21 0.03 265);
   --foreground: oklch(0.95 0.02 280);
   --card: oklch(0.2 0.025 280);
   --card-foreground: oklch(0.95 0.02 280);

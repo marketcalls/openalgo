@@ -240,7 +240,7 @@ export default function Login() {
           {/* Welcome Content - Second on mobile */}
           <div className="flex-1 max-w-xl text-center lg:text-left order-2 lg:order-1">
             <h1 className="text-4xl lg:text-5xl font-bold mb-6">
-              Welcome to <span className="text-primary">OpenAlgo</span>
+              Welcome to <span className="text-primary">Zenxo</span>
             </h1>
             <p className="text-lg lg:text-xl mb-8 text-muted-foreground">
               Sign in to your account to access your trading dashboard and manage your algorithmic

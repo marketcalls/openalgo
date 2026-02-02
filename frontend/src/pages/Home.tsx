@@ -20,6 +20,9 @@ export default function Home() {
   const { mode, toggleMode } = useThemeStore()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
+  // Dynamic logo based on light/dark mode
+  const logoSrc = mode === 'dark' ? '/darkMode.png' : '/whiteMode.jpeg'
+
   const navLinks = [
     { href: '/', label: 'Home', internal: true },
     { href: '/faq', label: 'FAQ', internal: true },
@@ -44,8 +47,8 @@ export default function Home() {
               </SheetTrigger>
               <SheetContent side="left" className="w-80">
                 <div className="flex items-center gap-2 mb-8">
-                  <img src="/logo.png" alt="OpenAlgo" className="h-8 w-8" />
-                  <span className="text-xl font-semibold">OpenAlgo</span>
+                  <img src={logoSrc} alt="zenxo" className="h-8 w-20" />
+                  {/* <span className="text-xl font-semibold">Zenxo</span> */}
                 </div>
                 <div className="flex flex-col gap-2">
                   <Link
@@ -117,8 +120,8 @@ export default function Home() {
             </Sheet>
 
             <Link to="/" className="flex items-center gap-2">
-              <img src="/logo.png" alt="OpenAlgo" className="h-8 w-8" />
-              <span className="text-xl font-bold hidden sm:inline">OpenAlgo</span>
+              <img src={logoSrc} alt="zenxo" className="h-8 w-20" />
+              {/* <span className="text-xl font-bold hidden sm:inline">Zenxo</span> */}
             </Link>
           </div>
 
