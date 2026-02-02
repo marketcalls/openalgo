@@ -503,6 +503,19 @@ class OrderManager:
 
             logger.info(f"Order placed: {orderid} - {symbol} {action} {quantity} @ {price_type}")
 
+            # Notify WebSocket execution engine to index and subscribe this symbol
+            try:
+                from sandbox.websocket_execution_engine import (
+                    get_websocket_execution_engine,
+                    is_websocket_execution_engine_running,
+                )
+
+                if is_websocket_execution_engine_running():
+                    engine = get_websocket_execution_engine()
+                    engine.notify_order_placed(order)
+            except Exception as e:
+                logger.debug(f"WebSocket execution engine notification skipped: {e}")
+
             # Execute MARKET orders immediately using cached quote (no re-fetch needed)
             if price_type == "MARKET":
                 try:

@@ -364,11 +364,25 @@ class BrokerData:
         # Step 2: Make concurrent API calls
         start_time = time.time()
 
-        if USE_ASYNC:
+        # Determine if we should use async or threaded approach
+        # asyncio.run() fails when called from within a running event loop
+        # (e.g., Flask-SocketIO with eventlet in production)
+        use_async = USE_ASYNC
+        if use_async:
+            try:
+                asyncio.get_running_loop()
+                # We're in an async context (e.g., eventlet) - must use threads
+                use_async = False
+                logger.debug("Detected running event loop, using threaded approach")
+            except RuntimeError:
+                # No running loop - safe to use asyncio.run()
+                pass
+
+        if use_async:
             # Async approach with httpx.AsyncClient
             results = asyncio.run(self._process_quotes_batch_async(prepared_symbols, api_key))
         else:
-            # ThreadPoolExecutor approach
+            # ThreadPoolExecutor approach (works in any context)
             results = []
             with ThreadPoolExecutor(max_workers=40) as executor:
                 future_to_symbol = {
