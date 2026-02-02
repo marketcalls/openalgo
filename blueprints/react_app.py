@@ -295,6 +295,11 @@ def react_chartink_view(strategy_id):
 def react_chartink_configure(strategy_id):
     return serve_react_app()
 
+# Strategy Positions (State Management)
+@react_bp.route("/strategy-positions", strict_slashes=False)
+def react_strategy_positions():
+    return serve_react_app()
+
 
 # ============================================================
 # Phase 7 Routes - Admin & Settings
