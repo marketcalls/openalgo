@@ -181,7 +181,10 @@ class FlattradeWebSocket:
             self.ws_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
             if self.ws_thread.is_alive():
                 self.logger.warning("WebSocket thread did not terminate within timeout")
-        self.ws_thread = None  # Release reference regardless of outcome
+                # Don't clear reference - thread still running, could interfere with reconnect
+                return
+        # Only clear reference if thread actually stopped
+        self.ws_thread = None
 
     # WebSocket Event Handlers
     def _on_open(self, ws) -> None:
@@ -320,7 +323,10 @@ class FlattradeWebSocket:
             self._heartbeat_thread.join(timeout=self.HEARTBEAT_JOIN_TIMEOUT)
             if self._heartbeat_thread.is_alive():
                 self.logger.warning("Heartbeat thread did not terminate within timeout")
-        self._heartbeat_thread = None  # Release reference
+                # Don't clear reference - thread still running, could cause duplicate heartbeats
+                return
+        # Only clear reference if thread actually stopped
+        self._heartbeat_thread = None
 
     def _heartbeat_worker(self) -> None:
         """Heartbeat worker thread - sends periodic heartbeats and monitors connection"""

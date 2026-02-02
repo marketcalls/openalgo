@@ -392,19 +392,21 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def disconnect(self) -> None:
         """Disconnect from Flattrade WebSocket endpoint"""
-        self.running = False
+        # Use lock to prevent race with _attempt_reconnection
+        with self.lock:
+            self.running = False
 
-        # Cancel any pending reconnection timer to prevent zombie connections
-        if self._reconnect_timer:
-            self._reconnect_timer.cancel()
-            self._reconnect_timer = None
-            self.logger.debug("Cancelled pending reconnection timer")
+            # Cancel any pending reconnection timer to prevent zombie connections
+            if self._reconnect_timer:
+                self._reconnect_timer.cancel()
+                self._reconnect_timer = None
+                self.logger.debug("Cancelled pending reconnection timer")
 
-        if self.ws_client:
-            self.ws_client.stop()
-            self.ws_client = None
+            if self.ws_client:
+                self.ws_client.stop()
+                self.ws_client = None
 
-        # Clean up market data cache
+        # Clean up market data cache (outside lock - has its own lock)
         self.market_cache.clear()
 
         # Clean up ZeroMQ resources
@@ -702,68 +704,77 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def _schedule_reconnection(self) -> None:
         """Schedule reconnection with exponential backoff"""
-        if self.reconnect_attempts >= Config.MAX_RECONNECT_ATTEMPTS:
-            self.logger.error("Maximum reconnection attempts reached")
-            self.running = False
-            return
+        # Use lock to prevent race with disconnect()
+        with self.lock:
+            # Double-check running inside lock
+            if not self.running:
+                self.logger.debug("Skipping reconnection schedule - adapter stopped")
+                return
 
-        delay = min(
-            Config.BASE_RECONNECT_DELAY * (2**self.reconnect_attempts), Config.MAX_RECONNECT_DELAY
-        )
+            if self.reconnect_attempts >= Config.MAX_RECONNECT_ATTEMPTS:
+                self.logger.error("Maximum reconnection attempts reached")
+                self.running = False
+                return
 
-        self.logger.info(f"Reconnecting in {delay}s (attempt {self.reconnect_attempts + 1})")
+            delay = min(
+                Config.BASE_RECONNECT_DELAY * (2**self.reconnect_attempts), Config.MAX_RECONNECT_DELAY
+            )
 
-        # Cancel any existing timer before creating new one
-        if self._reconnect_timer:
-            self._reconnect_timer.cancel()
+            self.logger.info(f"Reconnecting in {delay}s (attempt {self.reconnect_attempts + 1})")
 
-        # Store timer reference so it can be cancelled on disconnect
-        self._reconnect_timer = threading.Timer(delay, self._attempt_reconnection)
-        self._reconnect_timer.daemon = True  # Don't block process exit
-        self._reconnect_timer.start()
+            # Cancel any existing timer before creating new one
+            if self._reconnect_timer:
+                self._reconnect_timer.cancel()
+
+            # Store timer reference so it can be cancelled on disconnect
+            self._reconnect_timer = threading.Timer(delay, self._attempt_reconnection)
+            self._reconnect_timer.daemon = True  # Don't block process exit
+            self._reconnect_timer.start()
 
     def _attempt_reconnection(self) -> None:
         """Attempt to reconnect to WebSocket"""
-        # Clear timer reference since we're now executing
-        self._reconnect_timer = None
+        # Use lock to prevent race with disconnect()
+        with self.lock:
+            # Clear timer reference since we're now executing
+            self._reconnect_timer = None
 
-        # Don't reconnect if we've been stopped
-        if not self.running:
-            self.logger.debug("Reconnection cancelled - adapter no longer running")
-            return
+            # Don't reconnect if we've been stopped (check inside lock to prevent race)
+            if not self.running:
+                self.logger.debug("Reconnection cancelled - adapter no longer running")
+                return
 
-        self.reconnect_attempts += 1
+            self.reconnect_attempts += 1
 
-        try:
-            # CRITICAL: Clean up old WebSocket client to prevent FD leaks
-            if self.ws_client:
-                self.logger.debug("Cleaning up old WebSocket client before reconnection")
-                try:
-                    self.ws_client.stop()
-                except Exception as cleanup_err:
-                    self.logger.warning(f"Error cleaning up old WebSocket: {cleanup_err}")
-                self.ws_client = None
+            try:
+                # CRITICAL: Clean up old WebSocket client to prevent FD leaks
+                if self.ws_client:
+                    self.logger.debug("Cleaning up old WebSocket client before reconnection")
+                    try:
+                        self.ws_client.stop()
+                    except Exception as cleanup_err:
+                        self.logger.warning(f"Error cleaning up old WebSocket: {cleanup_err}")
+                    self.ws_client = None
 
-            # Recreate WebSocket client
-            self.ws_client = FlattradeWebSocket(
-                user_id=self.actid,
-                actid=self.actid,
-                susertoken=self.susertoken,
-                on_message=self._on_message,
-                on_error=self._on_error,
-                on_close=self._on_close,
-                on_open=self._on_open,
-            )
+                # Recreate WebSocket client
+                self.ws_client = FlattradeWebSocket(
+                    user_id=self.actid,
+                    actid=self.actid,
+                    susertoken=self.susertoken,
+                    on_message=self._on_message,
+                    on_error=self._on_error,
+                    on_close=self._on_close,
+                    on_open=self._on_open,
+                )
 
-            if self.ws_client.connect():
-                self.connected = True
-                self.reconnect_attempts = 0
-                self.logger.info("Reconnected successfully")
-            else:
-                self.logger.error("Reconnection failed")
+                if self.ws_client.connect():
+                    self.connected = True
+                    self.reconnect_attempts = 0
+                    self.logger.info("Reconnected successfully")
+                else:
+                    self.logger.error("Reconnection failed")
 
-        except Exception as e:
-            self.logger.error(f"Reconnection error: {e}")
+            except Exception as e:
+                self.logger.error(f"Reconnection error: {e}")
 
     def _resubscribe_all(self):
         """Resubscribe to all active subscriptions after reconnect"""
