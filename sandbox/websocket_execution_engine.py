@@ -22,6 +22,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.sandbox_db import SandboxOrders, db_session
 from services.market_data_service import get_market_data_service
+from services.websocket_service import subscribe_to_symbols, unsubscribe_from_symbols
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -45,6 +46,10 @@ class WebSocketExecutionEngine:
 
         # Track symbols we're monitoring
         self._monitored_symbols: set[str] = set()
+
+        # Track per-user symbol subscriptions (refcounts)
+        # {user_id: {symbol_key: count}}
+        self._user_symbol_refcounts: dict[str, dict[str, int]] = {}
 
         # Fallback settings
         self.fallback_enabled = os.getenv("SANDBOX_ENGINE_FALLBACK", "true").lower() == "true"
@@ -106,11 +111,17 @@ class WebSocketExecutionEngine:
 
         self._subscriber_id = None
 
+        # Unsubscribe all WebSocket symbols for all users
+        self._unsubscribe_all_ws()
+
     def _rebuild_order_index(self):
         """Build index of pending orders from database"""
+        subscriptions_to_add: dict[str, list[tuple[str, str]]] = {}
+
         with self._lock:
             self._pending_orders_index.clear()
             self._monitored_symbols.clear()
+            self._user_symbol_refcounts.clear()
 
             try:
                 pending_orders = SandboxOrders.query.filter_by(order_status="open").all()
@@ -121,6 +132,7 @@ class WebSocketExecutionEngine:
                         self._pending_orders_index[symbol_key] = []
                     self._pending_orders_index[symbol_key].append(order.orderid)
                     self._monitored_symbols.add(symbol_key)
+                    self._increment_user_symbol_refcount(order.user_id, symbol_key)
 
                 logger.info(
                     f"Built order index: {len(pending_orders)} orders across {len(self._monitored_symbols)} symbols"
@@ -128,10 +140,26 @@ class WebSocketExecutionEngine:
 
             except Exception as e:
                 logger.exception(f"Error building order index: {e}")
+                return
+
+            # Build subscriptions per user (outside lock)
+            for user_id, symbols in self._user_symbol_refcounts.items():
+                new_symbols = []
+                for symbol_key in symbols:
+                    exchange, symbol = symbol_key.split(":", 1)
+                    new_symbols.append((symbol, exchange))
+                if new_symbols:
+                    subscriptions_to_add[user_id] = new_symbols
+
+        # Subscribe for all users
+        for user_id, symbols in subscriptions_to_add.items():
+            self._subscribe_ws_symbols(user_id, symbols)
 
     def notify_order_placed(self, order):
         """Called when a new order is placed to update the index"""
         symbol_key = f"{order.exchange}:{order.symbol}"
+        subscribe_user = None
+        subscribe_symbol = None
 
         with self._lock:
             if symbol_key not in self._pending_orders_index:
@@ -142,10 +170,22 @@ class WebSocketExecutionEngine:
                 self._monitored_symbols.add(symbol_key)
                 logger.debug(f"Added order {order.orderid} to index for {symbol_key}")
 
-    def notify_order_completed(self, order_id: str, symbol_key: str):
+            # Increment refcount and decide if we need to subscribe
+            if self._increment_user_symbol_refcount(order.user_id, symbol_key):
+                subscribe_user = order.user_id
+                subscribe_symbol = symbol_key
+
+        if subscribe_user and subscribe_symbol:
+            exchange, symbol = subscribe_symbol.split(":", 1)
+            self._subscribe_ws_symbols(subscribe_user, [(symbol, exchange)])
+
+    def notify_order_completed(self, order_id: str, symbol_key: str, user_id: str | None = None):
         """Called when an order is completed/cancelled to update the index"""
+        unsubscribe_user = None
+        unsubscribe_symbol = None
+
         with self._lock:
-            if symbol_key in self._pending_orders_index:
+            if symbol_key and symbol_key in self._pending_orders_index:
                 if order_id in self._pending_orders_index[symbol_key]:
                     self._pending_orders_index[symbol_key].remove(order_id)
                     logger.debug(f"Removed order {order_id} from index for {symbol_key}")
@@ -154,6 +194,19 @@ class WebSocketExecutionEngine:
                 if not self._pending_orders_index[symbol_key]:
                     del self._pending_orders_index[symbol_key]
                     self._monitored_symbols.discard(symbol_key)
+            else:
+                # Fallback: remove order_id from any symbol list
+                self._remove_order_from_index(order_id)
+
+            # Decrement refcount and decide if we should unsubscribe
+            if user_id and symbol_key:
+                if self._decrement_user_symbol_refcount(user_id, symbol_key):
+                    unsubscribe_user = user_id
+                    unsubscribe_symbol = symbol_key
+
+        if unsubscribe_user and unsubscribe_symbol:
+            exchange, symbol = unsubscribe_symbol.split(":", 1)
+            self._unsubscribe_ws_symbols(unsubscribe_user, [(symbol, exchange)])
 
     def _on_market_data(self, data: dict):
         """
@@ -200,9 +253,13 @@ class WebSocketExecutionEngine:
             order = SandboxOrders.query.filter_by(orderid=order_id, order_status="open").first()
 
             if not order:
-                # Order no longer pending, remove from index
-                symbol_key = f"{order.exchange if order else 'unknown'}:{order.symbol if order else 'unknown'}"
-                self.notify_order_completed(order_id, symbol_key)
+                # Order no longer pending, remove from index and unsubscribe if possible
+                stale_order = SandboxOrders.query.filter_by(orderid=order_id).first()
+                if stale_order:
+                    symbol_key = f"{stale_order.exchange}:{stale_order.symbol}"
+                    self.notify_order_completed(order_id, symbol_key, stale_order.user_id)
+                else:
+                    self.notify_order_completed(order_id, "", None)
                 return
 
             # Create a mock quote for the execution engine's _process_order method
@@ -220,7 +277,7 @@ class WebSocketExecutionEngine:
             db_session.refresh(order)
             if order.order_status != "open":
                 symbol_key = f"{order.exchange}:{order.symbol}"
-                self.notify_order_completed(order_id, symbol_key)
+                self.notify_order_completed(order_id, symbol_key, order.user_id)
 
         except Exception as e:
             logger.exception(f"Error checking/executing order {order_id}: {e}")
@@ -294,6 +351,127 @@ class WebSocketExecutionEngine:
         if self._fallback_thread and self._fallback_thread.is_alive():
             self._fallback_thread.join(timeout=10)
             self._fallback_thread = None
+
+    def _increment_user_symbol_refcount(self, user_id: str, symbol_key: str) -> bool:
+        """
+        Increment refcount for a user's symbol. Returns True if this is the first ref.
+        """
+        if user_id not in self._user_symbol_refcounts:
+            self._user_symbol_refcounts[user_id] = {}
+
+        current = self._user_symbol_refcounts[user_id].get(symbol_key, 0)
+        self._user_symbol_refcounts[user_id][symbol_key] = current + 1
+        return current == 0
+
+    def _decrement_user_symbol_refcount(self, user_id: str, symbol_key: str) -> bool:
+        """
+        Decrement refcount for a user's symbol. Returns True if count reaches zero.
+        """
+        if user_id not in self._user_symbol_refcounts:
+            return False
+
+        current = self._user_symbol_refcounts[user_id].get(symbol_key, 0)
+        if current <= 1:
+            self._user_symbol_refcounts[user_id].pop(symbol_key, None)
+            if not self._user_symbol_refcounts[user_id]:
+                self._user_symbol_refcounts.pop(user_id, None)
+            return True
+
+        self._user_symbol_refcounts[user_id][symbol_key] = current - 1
+        return False
+
+    def _remove_order_from_index(self, order_id: str):
+        """Remove order_id from all symbol buckets (fallback cleanup)."""
+        to_cleanup = []
+        for symbol_key, order_ids in self._pending_orders_index.items():
+            if order_id in order_ids:
+                order_ids.remove(order_id)
+                logger.debug(f"Removed order {order_id} from index for {symbol_key} (fallback)")
+                if not order_ids:
+                    to_cleanup.append(symbol_key)
+        for symbol_key in to_cleanup:
+            del self._pending_orders_index[symbol_key]
+            self._monitored_symbols.discard(symbol_key)
+
+    def _subscribe_ws_symbols(self, user_id: str, symbols: list[tuple[str, str]]):
+        """Subscribe to LTP via WebSocket for the given user and symbols."""
+        if not symbols:
+            return
+
+        try:
+            from database.auth_db import get_api_key_for_tradingview, get_broker_name
+
+            api_key = get_api_key_for_tradingview(user_id)
+            if not api_key:
+                logger.warning(
+                    f"WebSocket subscribe skipped: no API key for user {user_id}"
+                )
+                return
+            broker = get_broker_name(api_key) if api_key else None
+            broker_name = broker or "unknown"
+            if broker_name == "unknown":
+                logger.warning(
+                    f"WebSocket subscribe may fail: unknown broker for user {user_id}"
+                )
+
+            symbol_payload = [{"symbol": s, "exchange": e} for s, e in symbols]
+            success, response, status_code = subscribe_to_symbols(
+                username=user_id, broker=broker_name, symbols=symbol_payload, mode="LTP"
+            )
+            if not success:
+                logger.warning(
+                    f"WebSocket subscribe failed for user {user_id}: {response.get('message')} (status {status_code})"
+                )
+        except Exception as e:
+            logger.exception(f"Error subscribing WebSocket symbols for user {user_id}: {e}")
+
+    def _unsubscribe_ws_symbols(self, user_id: str, symbols: list[tuple[str, str]]):
+        """Unsubscribe from LTP via WebSocket for the given user and symbols."""
+        if not symbols:
+            return
+
+        try:
+            from database.auth_db import get_api_key_for_tradingview, get_broker_name
+
+            api_key = get_api_key_for_tradingview(user_id)
+            if not api_key:
+                logger.warning(
+                    f"WebSocket unsubscribe skipped: no API key for user {user_id}"
+                )
+                return
+            broker = get_broker_name(api_key) if api_key else None
+            broker_name = broker or "unknown"
+            if broker_name == "unknown":
+                logger.warning(
+                    f"WebSocket unsubscribe may fail: unknown broker for user {user_id}"
+                )
+
+            symbol_payload = [{"symbol": s, "exchange": e} for s, e in symbols]
+            success, response, status_code = unsubscribe_from_symbols(
+                username=user_id, broker=broker_name, symbols=symbol_payload, mode="LTP"
+            )
+            if not success:
+                logger.warning(
+                    f"WebSocket unsubscribe failed for user {user_id}: {response.get('message')} (status {status_code})"
+                )
+        except Exception as e:
+            logger.exception(f"Error unsubscribing WebSocket symbols for user {user_id}: {e}")
+
+    def _unsubscribe_all_ws(self):
+        """Unsubscribe all WebSocket symbols for all users."""
+        users_to_unsub = []
+        with self._lock:
+            for user_id, symbols in self._user_symbol_refcounts.items():
+                symbol_list = []
+                for symbol_key in symbols:
+                    exchange, symbol = symbol_key.split(":", 1)
+                    symbol_list.append((symbol, exchange))
+                if symbol_list:
+                    users_to_unsub.append((user_id, symbol_list))
+            self._user_symbol_refcounts.clear()
+
+        for user_id, symbols in users_to_unsub:
+            self._unsubscribe_ws_symbols(user_id, symbols)
 
 
 # Global instance for singleton access
