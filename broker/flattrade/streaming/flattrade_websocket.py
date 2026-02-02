@@ -26,6 +26,7 @@ class FlattradeWebSocket:
     HEARTBEAT_TIMEOUT = 120
     PING_INTERVAL = 30
     PING_TIMEOUT = 10
+    HEARTBEAT_JOIN_TIMEOUT = 3  # Timeout for heartbeat thread join
 
     # Message types
     MSG_TYPE_CONNECT = "c"
@@ -165,12 +166,14 @@ class FlattradeWebSocket:
         self._stop_heartbeat()
 
     def _close_websocket(self) -> None:
-        """Close WebSocket connection"""
+        """Close WebSocket connection and release reference"""
         if self.ws:
             try:
                 self.ws.close()
             except Exception as e:
                 self.logger.error(f"Error closing WebSocket: {e}")
+            finally:
+                self.ws = None  # Release reference to prevent stale usage
 
     def _wait_for_thread_completion(self) -> None:
         """Wait for WebSocket thread to complete"""
@@ -178,6 +181,10 @@ class FlattradeWebSocket:
             self.ws_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
             if self.ws_thread.is_alive():
                 self.logger.warning("WebSocket thread did not terminate within timeout")
+                # Don't clear reference - thread still running, could interfere with reconnect
+                return
+        # Only clear reference if thread actually stopped
+        self.ws_thread = None
 
     # WebSocket Event Handlers
     def _on_open(self, ws) -> None:
@@ -309,10 +316,17 @@ class FlattradeWebSocket:
         self.logger.debug("Heartbeat thread started")
 
     def _stop_heartbeat(self) -> None:
-        """Stop heartbeat monitoring thread"""
-        # Thread will stop when self.running becomes False
+        """Stop heartbeat monitoring thread and wait for it to terminate"""
         if self._heartbeat_thread and self._heartbeat_thread.is_alive():
             self.logger.debug("Waiting for heartbeat thread to stop")
+            # Thread checks self.running and self.connected, which should be False now
+            self._heartbeat_thread.join(timeout=self.HEARTBEAT_JOIN_TIMEOUT)
+            if self._heartbeat_thread.is_alive():
+                self.logger.warning("Heartbeat thread did not terminate within timeout")
+                # Don't clear reference - thread still running, could cause duplicate heartbeats
+                return
+        # Only clear reference if thread actually stopped
+        self._heartbeat_thread = None
 
     def _heartbeat_worker(self) -> None:
         """Heartbeat worker thread - sends periodic heartbeats and monitors connection"""
