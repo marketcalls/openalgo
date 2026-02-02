@@ -9,6 +9,7 @@ import os
 import sys
 import threading
 import time
+import uuid
 from enum import IntEnum
 from typing import Any, Dict, List, Optional
 
@@ -327,6 +328,7 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.connected = False
         self.lock = threading.Lock()
         self.reconnect_attempts = 0
+        self._reconnect_timer = None  # Track reconnection timer for cleanup
 
     def _setup_normalizers(self):
         """Initialize data normalizers"""
@@ -392,8 +394,15 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         """Disconnect from Flattrade WebSocket endpoint"""
         self.running = False
 
+        # Cancel any pending reconnection timer to prevent zombie connections
+        if self._reconnect_timer:
+            self._reconnect_timer.cancel()
+            self._reconnect_timer = None
+            self.logger.debug("Cancelled pending reconnection timer")
+
         if self.ws_client:
             self.ws_client.stop()
+            self.ws_client = None
 
         # Clean up market data cache
         self.market_cache.clear()
@@ -429,8 +438,6 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             # Generate a unique correlation_id for each subscription
             # This allows multiple clients to subscribe to the same symbol
-            import uuid
-
             unique_id = str(uuid.uuid4())[:8]
             correlation_id = f"{symbol}_{exchange}_{mode}_{unique_id}"
             base_correlation_id = f"{symbol}_{exchange}_{mode}"
@@ -705,13 +712,38 @@ class FlattradeWebSocketAdapter(BaseBrokerWebSocketAdapter):
         )
 
         self.logger.info(f"Reconnecting in {delay}s (attempt {self.reconnect_attempts + 1})")
-        threading.Timer(delay, self._attempt_reconnection).start()
+
+        # Cancel any existing timer before creating new one
+        if self._reconnect_timer:
+            self._reconnect_timer.cancel()
+
+        # Store timer reference so it can be cancelled on disconnect
+        self._reconnect_timer = threading.Timer(delay, self._attempt_reconnection)
+        self._reconnect_timer.daemon = True  # Don't block process exit
+        self._reconnect_timer.start()
 
     def _attempt_reconnection(self) -> None:
         """Attempt to reconnect to WebSocket"""
+        # Clear timer reference since we're now executing
+        self._reconnect_timer = None
+
+        # Don't reconnect if we've been stopped
+        if not self.running:
+            self.logger.debug("Reconnection cancelled - adapter no longer running")
+            return
+
         self.reconnect_attempts += 1
 
         try:
+            # CRITICAL: Clean up old WebSocket client to prevent FD leaks
+            if self.ws_client:
+                self.logger.debug("Cleaning up old WebSocket client before reconnection")
+                try:
+                    self.ws_client.stop()
+                except Exception as cleanup_err:
+                    self.logger.warning(f"Error cleaning up old WebSocket: {cleanup_err}")
+                self.ws_client = None
+
             # Recreate WebSocket client
             self.ws_client = FlattradeWebSocket(
                 user_id=self.actid,
