@@ -86,6 +86,33 @@ class WerkzeugErrorFilter(logging.Filter):
         return True
 
 
+class WebSocketHandshakeFilter(logging.Filter):
+    """Suppress noisy WebSocket handshake errors from short-lived connections."""
+
+    SUPPRESSED_PATTERNS = [
+        "opening handshake failed",
+        "did not receive a valid HTTP request",
+        "connection closed while reading HTTP request line",
+    ]
+
+    def filter(self, record):
+        try:
+            msg = str(record.getMessage())
+            for pattern in self.SUPPRESSED_PATTERNS:
+                if pattern in msg:
+                    return False
+
+            if record.exc_info and record.exc_info[1]:
+                exc_str = str(record.exc_info[1])
+                for pattern in self.SUPPRESSED_PATTERNS:
+                    if pattern in exc_str:
+                        return False
+        except Exception:
+            pass
+
+        return True
+
+
 class SensitiveDataFilter(logging.Filter):
     """Filter to redact sensitive information from log messages."""
 
@@ -306,6 +333,11 @@ def setup_logging():
     # Flask uses _internal logger for werkzeug errors
     internal_logger = logging.getLogger("_internal")
     internal_logger.addFilter(werkzeug_error_filter)
+    # Suppress noisy WebSocket handshake errors (short-lived connections)
+    ws_handshake_filter = WebSocketHandshakeFilter()
+    logging.getLogger("websockets").addFilter(ws_handshake_filter)
+    logging.getLogger("websockets.server").addFilter(ws_handshake_filter)
+    logging.getLogger("server").addFilter(ws_handshake_filter)
     # Suppress hpack DEBUG logs - they have format string bugs and are not useful
     logging.getLogger("hpack.hpack").setLevel(logging.INFO)
     logging.getLogger("hpack").setLevel(logging.INFO)

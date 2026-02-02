@@ -25,6 +25,9 @@ _websocket_engine = None
 _thread_lock = threading.Lock()
 _stop_event = threading.Event()
 _current_engine_type = None  # Track which engine type is running
+_auto_upgrade_thread = None
+_auto_upgrade_stop_event = threading.Event()
+_auto_upgrade_enabled = False
 
 
 class ExecutionEngineThread(threading.Thread):
@@ -107,6 +110,7 @@ def start_execution_engine(engine_type: str = None):
     - WebSocket engine has built-in fallback to polling if data becomes stale
     """
     global _execution_thread, _websocket_engine, _current_engine_type
+    global _auto_upgrade_thread, _auto_upgrade_enabled
 
     with _thread_lock:
         # Check if any engine is already running
@@ -124,6 +128,8 @@ def start_execution_engine(engine_type: str = None):
         # Determine engine type - default to websocket (with auto-fallback)
         if engine_type is None:
             engine_type = os.getenv("SANDBOX_ENGINE_TYPE", "websocket").lower()
+            if os.getenv("SANDBOX_ENGINE_TYPE"):
+                logger.info(f"Sandbox engine type forced by env: {engine_type}")
 
         logger.debug(f"Starting execution engine with type: {engine_type}")
 
@@ -147,16 +153,21 @@ def start_execution_engine(engine_type: str = None):
                             f"Failed to start WebSocket engine: {message}, falling back to polling"
                         )
                 else:
-                    logger.debug("WebSocket proxy not healthy, falling back to polling engine")
+                    logger.warning(
+                        "WebSocket proxy not healthy at startup, falling back to polling engine"
+                    )
 
                 # Fallback to polling
                 engine_type = "polling"
+                _auto_upgrade_enabled = True
 
             # Start polling engine (default)
             _execution_thread = ExecutionEngineThread()
             _execution_thread.start()
             _current_engine_type = "polling"
             logger.debug("Polling execution engine started successfully")
+            if _auto_upgrade_enabled:
+                _start_websocket_upgrade_watcher()
             return True, "Polling execution engine started"
 
         except Exception as e:
@@ -170,9 +181,13 @@ def stop_execution_engine():
     Handles both WebSocket and polling engine types.
     """
     global _execution_thread, _websocket_engine, _current_engine_type
+    global _auto_upgrade_thread, _auto_upgrade_enabled
 
     with _thread_lock:
         stopped_any = False
+
+        # Stop auto-upgrade watcher
+        _stop_websocket_upgrade_watcher()
 
         # Stop WebSocket engine if running
         if _websocket_engine is not None:
@@ -207,11 +222,79 @@ def stop_execution_engine():
                 logger.exception(f"Error stopping polling execution engine: {e}")
 
         _current_engine_type = None
+        _auto_upgrade_enabled = False
 
         if stopped_any:
             return True, "Execution engine stopped"
         else:
             return True, "Execution engine not running"
+
+
+def _start_websocket_upgrade_watcher():
+    """Start a background watcher to upgrade polling -> websocket when available."""
+    global _auto_upgrade_thread, _auto_upgrade_stop_event
+
+    if _auto_upgrade_thread and _auto_upgrade_thread.is_alive():
+        return
+
+    _auto_upgrade_stop_event.clear()
+
+    def _watch():
+        global _execution_thread, _websocket_engine, _current_engine_type
+        while not _auto_upgrade_stop_event.is_set():
+            time.sleep(5)
+            if _auto_upgrade_stop_event.is_set():
+                break
+            if not _is_websocket_proxy_healthy():
+                continue
+            with _thread_lock:
+                # Only upgrade if polling is running and websocket engine is not
+                if _execution_thread is None or not _execution_thread.is_alive():
+                    continue
+                if _websocket_engine is not None:
+                    continue
+                try:
+                    from sandbox.websocket_execution_engine import (
+                        get_websocket_execution_engine,
+                        start_websocket_execution_engine,
+                    )
+
+                    success, message = start_websocket_execution_engine()
+                    if success:
+                        _websocket_engine = get_websocket_execution_engine()
+                        _current_engine_type = "websocket"
+                        logger.info("WebSocket execution engine started (auto-upgrade)")
+
+                        # Stop polling engine after successful upgrade
+                        _execution_thread.stop()
+                        _execution_thread.join(timeout=10)
+                        if _execution_thread.is_alive():
+                            logger.warning("Polling execution engine did not stop after upgrade")
+                        else:
+                            logger.info("Polling execution engine stopped after upgrade")
+                        _execution_thread = None
+                        break
+                    else:
+                        logger.warning(
+                            f"Auto-upgrade failed to start WebSocket engine: {message}"
+                        )
+                except Exception as e:
+                    logger.exception(f"Error during auto-upgrade to WebSocket engine: {e}")
+
+    _auto_upgrade_thread = threading.Thread(
+        target=_watch, daemon=True, name="SandboxEngine-WsUpgradeWatcher"
+    )
+    _auto_upgrade_thread.start()
+
+
+def _stop_websocket_upgrade_watcher():
+    """Stop the background websocket upgrade watcher."""
+    global _auto_upgrade_thread, _auto_upgrade_stop_event
+
+    _auto_upgrade_stop_event.set()
+    if _auto_upgrade_thread and _auto_upgrade_thread.is_alive():
+        _auto_upgrade_thread.join(timeout=5)
+    _auto_upgrade_thread = None
 
 
 def is_execution_engine_running():
