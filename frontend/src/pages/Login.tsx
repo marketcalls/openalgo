@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuthStore } from '@/stores/authStore'
+import { useThemeStore } from '@/stores/themeStore'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -18,6 +19,12 @@ export default function Login() {
   const [isLoading, setIsLoading] = useState(false)
   const [isCheckingSetup, setIsCheckingSetup] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const { mode } = useThemeStore()
+  
+
+  // Dynamic logo based on light/dark mode
+  const logoSrc = mode === 'dark' ? '/darkMode.png' : '/whiteMode.jpeg'
+
 
   // Check if setup is required or already logged in on page load
   useEffect(() => {
@@ -154,10 +161,10 @@ export default function Login() {
           <Card className="w-full max-w-md order-1 lg:order-2 shadow-xl">
             <CardHeader className="text-center">
               <div className="flex justify-center mb-4">
-                <img src="/whiteMode.jpeg" alt="Zenxo" className="h-8 w-20" />
+                <img src={logoSrc} alt="Zenxo" className="h-8 w-20" />
               </div>
               <CardTitle className="text-2xl">Welcome Back</CardTitle>
-              <CardDescription>Sign in to your Zenxo account</CardDescription>
+              <CardDescription>Sign in to your Zenxo trading account</CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleSubmit} className="space-y-4">
