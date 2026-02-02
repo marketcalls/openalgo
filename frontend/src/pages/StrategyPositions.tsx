@@ -597,8 +597,6 @@ function CurrentPositionsTable({
                   <TableHead>Symbol</TableHead>
                   <TableHead>Side</TableHead>
                   <TableHead className="text-right">Qty</TableHead>
-                  <TableHead className="text-right">Entry</TableHead>
-                  <TableHead className="text-right">Realized P&L</TableHead>
                   <TableHead className="text-right">Total P&L</TableHead>
                   <TableHead>Status</TableHead>
                 </TableRow>
@@ -626,16 +624,9 @@ function CurrentPositionsTable({
                     </TableCell>
                     <TableCell className="text-right">{leg.quantity}</TableCell>
                     <TableCell className="text-right">
-                      <div className="flex flex-col">
-                        <span>{formatPrice(leg.entry_price)}</span>
-                        <span className="text-xs text-muted-foreground">{formatTime(leg.entry_time)}</span>
+                      <div className="flex justify-end">
+                        <PnLDisplay value={leg.total_pnl ?? leg.realized_pnl} />
                       </div>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <PnLDisplay value={leg.realized_pnl} />
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <PnLDisplay value={leg.total_pnl ?? leg.realized_pnl} />
                     </TableCell>
                     <TableCell>
                       <Badge className={legStatusColors[leg.status] || 'bg-gray-400'} variant="secondary">
@@ -748,6 +739,7 @@ function StrategyAccordionItem({
 }) {
   const [isOpen, setIsOpen] = useState(true)
   const [isLegPnlOpen, setIsLegPnlOpen] = useState(false)
+  const [isConfigOpen, setIsConfigOpen] = useState(false)
   const config = strategy.config
 
   const handleDeleteClick = (e: React.MouseEvent) => {
@@ -861,6 +853,81 @@ function StrategyAccordionItem({
                 <PnLDisplay value={unrealizedPnl} showIcon={false} />
               </div>
             </div>
+
+            {/* Strategy Config (collapsed by default) */}
+            {config && (
+              <Collapsible open={isConfigOpen} onOpenChange={setIsConfigOpen}>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-md font-semibold">Strategy Configuration</h3>
+                  <CollapsibleTrigger asChild>
+                    <Button variant="ghost" size="sm" className="h-8 px-2">
+                      {isConfigOpen ? (
+                        <ChevronDown className="h-4 w-4 mr-2" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 mr-2" />
+                      )}
+                      {isConfigOpen ? 'Hide' : 'Show'}
+                    </Button>
+                  </CollapsibleTrigger>
+                </div>
+                <CollapsibleContent>
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 text-sm border rounded-md p-4 bg-muted/20">
+                    {/* Basic Settings */}
+                    <div className="space-y-2">
+                      <p className="font-semibold text-xs uppercase text-muted-foreground">Basic Settings</p>
+                      {config.underlying && <p><span className="text-muted-foreground">Underlying:</span> <span className="font-medium">{config.underlying}</span></p>}
+                      {config.expiry_date && <p><span className="text-muted-foreground">Expiry:</span> <span className="font-medium">{config.expiry_date}</span></p>}
+                      {config.lots !== undefined && <p><span className="text-muted-foreground">Lots:</span> <span className="font-medium">{config.lots}</span></p>}
+                      {config.lot_size !== undefined && <p><span className="text-muted-foreground">Lot Size:</span> <span className="font-medium">{config.lot_size}</span></p>}
+                      {config.quantity !== undefined && <p><span className="text-muted-foreground">Quantity:</span> <span className="font-medium">{config.quantity}</span></p>}
+                    </div>
+
+                    {/* Execution Settings */}
+                    <div className="space-y-2">
+                      <p className="font-semibold text-xs uppercase text-muted-foreground">Execution</p>
+                      {config.exchange && <p><span className="text-muted-foreground">Exchange:</span> <span className="font-medium">{config.exchange}</span></p>}
+                      {config.product && <p><span className="text-muted-foreground">Product:</span> <span className="font-medium">{config.product}</span></p>}
+                      {config.price_type && <p><span className="text-muted-foreground">Price Type:</span> <span className="font-medium">{config.price_type}</span></p>}
+                      {config.poll_interval !== undefined && <p><span className="text-muted-foreground">Poll Interval:</span> <span className="font-medium">{config.poll_interval}s</span></p>}
+                      {config.entry_time && <p><span className="text-muted-foreground">Entry Time:</span> <span className="font-medium">{config.entry_time}</span></p>}
+                      {config.exit_time && <p><span className="text-muted-foreground">Exit Time:</span> <span className="font-medium">{config.exit_time}</span></p>}
+                    </div>
+
+                    {/* Risk Management */}
+                    <div className="space-y-2">
+                      <p className="font-semibold text-xs uppercase text-muted-foreground">Risk Management</p>
+                      {config.sl_percent !== undefined && config.sl_percent !== null && <p><span className="text-muted-foreground">SL %:</span> <span className="font-medium">{(config.sl_percent * 100).toFixed(1)}%</span></p>}
+                      {config.target_percent !== undefined && config.target_percent !== null && <p><span className="text-muted-foreground">Target %:</span> <span className="font-medium">{(config.target_percent * 100).toFixed(1)}%</span></p>}
+                      {config.reentry_limit !== undefined && <p><span className="text-muted-foreground">Re-entry Limit:</span> <span className="font-medium">{config.reentry_limit}</span></p>}
+                      {config.reexecute_limit !== undefined && <p><span className="text-muted-foreground">Re-execute Limit:</span> <span className="font-medium">{config.reexecute_limit}</span></p>}
+                    </div>
+
+                    {/* Leg Pair Configs */}
+                    {config.leg_pair_configs && config.leg_pair_configs.length > 0 && (
+                      <div className="space-y-2 md:col-span-2 lg:col-span-3">
+                        <p className="font-semibold text-xs uppercase text-muted-foreground">Leg Configurations</p>
+                        <div className="grid gap-3 md:grid-cols-2">
+                          {config.leg_pair_configs.map((legConfig: any, idx: number) => (
+                            <div key={idx} className="border rounded p-3 bg-background/50">
+                              <p className="font-medium mb-2">{legConfig.name || `Leg ${idx + 1}`}</p>
+                              <div className="space-y-1 text-xs">
+                                {legConfig.main_leg && <p><span className="text-muted-foreground">Main Leg:</span> <span className="font-medium">{legConfig.main_leg}</span></p>}
+                                {legConfig.sl_percent !== undefined && legConfig.sl_percent !== null && <p><span className="text-muted-foreground">SL %:</span> <span className="font-medium">{(legConfig.sl_percent * 100).toFixed(1)}%</span></p>}
+                                {legConfig.target_percent !== undefined && legConfig.target_percent !== null && <p><span className="text-muted-foreground">Target %:</span> <span className="font-medium">{(legConfig.target_percent * 100).toFixed(1)}%</span></p>}
+                                {legConfig.reentry_limit !== undefined && <p><span className="text-muted-foreground">Re-entry:</span> <span className="font-medium">{legConfig.reentry_limit}</span></p>}
+                                {legConfig.reexecute_limit !== undefined && <p><span className="text-muted-foreground">Re-execute:</span> <span className="font-medium">{legConfig.reexecute_limit}</span></p>}
+                                {legConfig.ce_sell_offset && <p><span className="text-muted-foreground">CE Sell:</span> <span className="font-medium">{legConfig.ce_sell_offset}</span></p>}
+                                {legConfig.pe_sell_offset && <p><span className="text-muted-foreground">PE Sell:</span> <span className="font-medium">{legConfig.pe_sell_offset}</span></p>}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+            )}
 
             {/* Leg P&L Breakdown (collapsed by default) */}
             <Collapsible open={isLegPnlOpen} onOpenChange={setIsLegPnlOpen}>
@@ -1432,55 +1499,57 @@ export default function StrategyPositions() {
 
   return (
     <div className="container mx-auto py-6 px-4 max-w-7xl">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-2xl font-bold">Strategy Positions</h1>
-          <p className="text-muted-foreground">
-            View positions and trade history for Python strategies
-          </p>
-        </div>
-
-        <div className="flex flex-col items-end gap-2">
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <Label className="text-xs text-muted-foreground">Auto refresh</Label>
-              <Switch checked={autoRefreshEnabled} onCheckedChange={setAutoRefreshEnabled} />
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Label className="text-xs text-muted-foreground">Every (s)</Label>
-              <Input
-                type="number"
-                min={5}
-                max={300}
-                step={1}
-                value={autoRefreshSeconds}
-                onChange={(e) => {
-                  const raw = Number.parseInt(e.target.value, 10)
-                  if (Number.isNaN(raw)) return
-                  const clamped = Math.min(300, Math.max(5, raw))
-                  setAutoRefreshSeconds(clamped)
-                }}
-                className="h-8 w-20"
-                disabled={!autoRefreshEnabled}
-              />
-            </div>
-
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleRefresh}
-              disabled={isRefreshing}
-            >
-              <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
+      {/* Header - Sticky */}
+      <div className="sticky top-[56px] z-10 bg-background pb-6 mb-6 border-b">
+        <div className="flex items-start justify-between gap-4 pt-6">
+          <div>
+            <h1 className="text-2xl font-bold">Strategy Positions</h1>
+            <p className="text-muted-foreground">
+              View positions and trade history for Python strategies
+            </p>
           </div>
 
-          <p className="text-[11px] text-muted-foreground">
-            Range: 5–300 seconds (saved locally)
-          </p>
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <Label className="text-xs text-muted-foreground">Auto refresh</Label>
+                <Switch checked={autoRefreshEnabled} onCheckedChange={setAutoRefreshEnabled} />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Label className="text-xs text-muted-foreground">Every (s)</Label>
+                <Input
+                  type="number"
+                  min={5}
+                  max={300}
+                  step={1}
+                  value={autoRefreshSeconds}
+                  onChange={(e) => {
+                    const raw = Number.parseInt(e.target.value, 10)
+                    if (Number.isNaN(raw)) return
+                    const clamped = Math.min(300, Math.max(5, raw))
+                    setAutoRefreshSeconds(clamped)
+                  }}
+                  className="h-8 w-20"
+                  disabled={!autoRefreshEnabled}
+                />
+              </div>
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRefresh}
+                disabled={isRefreshing}
+              >
+                <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
+            </div>
+
+            <p className="text-[11px] text-muted-foreground">
+              Range: 5–300 seconds (saved locally)
+            </p>
+          </div>
         </div>
       </div>
 

@@ -12,6 +12,34 @@ export interface StrategyConfig {
   expiry_date: string
   /** Options exchange for the strategy (e.g., NFO, BFO). Persisted by python strategies as `exchange`. */
   exchange?: string
+  quantity?: number
+  product?: string
+  price_type?: string
+  poll_interval?: number
+  entry_time?: string | null
+  exit_time?: string | null
+  persist_cycles?: number
+  limit_order_retry_wait?: number
+  limit_order_retries?: number
+  leg_pair_configs?: LegPairConfig[]
+}
+
+export interface LegPairConfig {
+  name: string
+  main_leg?: string
+  sl_percent?: number
+  reentry_limit?: number
+  target_percent?: number
+  reexecute_limit?: number
+  wait_trade_percentage?: number | null
+  ce_sell_offset?: string | null
+  ce_buy_offset?: string | null
+  pe_sell_offset?: string | null
+  pe_buy_offset?: string | null
+  ce_sell_premium?: number | null
+  ce_buy_premium?: number | null
+  pe_sell_premium?: number | null
+  pe_buy_premium?: number | null
 }
 
 export type LegStatus =
