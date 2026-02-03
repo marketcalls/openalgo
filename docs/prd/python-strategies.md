@@ -1,5 +1,7 @@
 # PRD: Python Strategies - Automated Strategy Execution
 
+> **Status:** ✅ Stable - Fully implemented, production-ready
+
 ## Overview
 
 Python Strategies enables traders to run custom Python trading algorithms within OpenAlgo, with process isolation, market-aware scheduling, and comprehensive lifecycle management.
@@ -267,7 +269,7 @@ openalgo/
 ├── log/
 │   └── strategies/        # Strategy output logs
 └── blueprints/
-    └── python_strategy.py # Strategy hosting (2500+ lines)
+    └── python_strategy.py # Strategy hosting (~2680 lines)
 ```
 
 ## Related Documentation
@@ -277,6 +279,18 @@ openalgo/
 | [Process Management](./python-strategies-process-management.md) | Subprocess handling and lifecycle |
 | [Scheduling Guide](./python-strategies-scheduling.md) | Market-aware scheduling with APScheduler |
 | [API Reference](./python-strategies-api-reference.md) | Complete API documentation |
+
+## Key Files Reference
+
+| File | Purpose | Lines |
+|------|---------|-------|
+| `blueprints/python_strategy.py` | Main implementation with routes, process management, scheduling | ~2680 |
+| `strategies/scripts/` | User-uploaded strategy Python files | - |
+| `strategies/examples/` | Template strategies for users | - |
+| `strategies/strategy_configs.json` | Strategy configuration storage | - |
+| `log/strategies/` | Strategy execution log files | - |
+
+> **Note:** React frontend for strategy management is served via the Flask backend's Jinja2 templates. The strategy list, upload, and log viewing are available at `/python/*` routes.
 
 ## Success Metrics
 

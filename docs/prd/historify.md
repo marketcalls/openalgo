@@ -1,5 +1,7 @@
 # PRD: Historify - Historical Data Management
 
+> **Status:** 🚧 Beta - Implemented but evolving; some broker integrations may vary
+
 ## Overview
 
 Historify is OpenAlgo's historical market data management system for downloading, storing, and exporting OHLCV data for backtesting and analysis.
@@ -153,6 +155,19 @@ User Request → Validate → Broker History API → Transform → DuckDB → Re
 | [Data Model](./historify-data-model.md) | DuckDB schema and storage |
 | [Download Engine](./historify-download-engine.md) | Bulk download job management |
 | [API Reference](./historify-api-reference.md) | Complete API documentation |
+
+## Key Files Reference
+
+| File | Purpose |
+|------|---------|
+| `blueprints/historify.py` | Web routes and API endpoints |
+| `services/historify_service.py` | Core download and storage logic |
+| `services/historify_scheduler_service.py` | Bulk job scheduling |
+| `db/historify.duckdb` | DuckDB database file |
+| `frontend/src/pages/Historify.tsx` | React watchlist/download UI |
+| `frontend/src/pages/HistorifyCharts.tsx` | React chart visualization |
+
+> **Note:** Historical data availability depends on broker API capabilities. Not all brokers support the full date range or all intervals.
 
 ## Success Metrics
 

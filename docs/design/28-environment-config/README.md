@@ -2,144 +2,263 @@
 
 ## Overview
 
-OpenAlgo uses environment variables for configuration, managed through a `.env` file with validation at startup.
+OpenAlgo uses environment variables for configuration, managed through a `.env` file with validation at startup. For cloud deployments (Railway/Render), the `start.sh` script can auto-generate `.env` from environment variables.
 
-## Configuration File
+## Configuration Files
 
-### Location
 ```
-.env (root directory)
-```
-
-### Template
-```
-.sample.env (reference template)
+.env                # Active configuration (not in git)
+.sample.env         # Reference template with all variables
 ```
 
-## Environment Variables
+## Environment Variables (65+ Variables)
 
-### Core Application
+### Version Tracking
 
 ```bash
-# Application secret key (required)
-APP_KEY=your_32_character_secret_key_here
+# Configuration version - compare with .sample.env when updating
+ENV_CONFIG_VERSION = '1.0.6'
+```
 
-# API key encryption pepper (required)
-API_KEY_PEPPER=your_32_character_pepper_here
+### Core Security (Required)
 
-# Flask debug mode
-FLASK_DEBUG=False
+```bash
+# Application secret key (required, 32+ characters)
+# Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+APP_KEY = 'your_32_character_secret_key_here'
 
-# Application host and port
-HOST_SERVER=http://127.0.0.1:5000
+# Security pepper for API key hashing, password hashing, token encryption
+# Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+API_KEY_PEPPER = 'your_32_character_pepper_here'
+```
+
+### Broker Configuration
+
+```bash
+# Broker API credentials
+BROKER_API_KEY = 'YOUR_BROKER_API_KEY'
+BROKER_API_SECRET = 'YOUR_BROKER_API_SECRET'
+
+# XTS API brokers only (5Paisa XTS, Jainam XTS, etc.)
+BROKER_API_KEY_MARKET = 'YOUR_BROKER_MARKET_API_KEY'
+BROKER_API_SECRET_MARKET = 'YOUR_BROKER_MARKET_API_SECRET'
+
+# OAuth redirect URL
+REDIRECT_URL = 'http://127.0.0.1:5000/<broker>/callback'
+
+# Enabled brokers (comma-separated)
+VALID_BROKERS = 'fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,dhan,dhan_sandbox,definedge,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha'
 ```
 
 ### Database Configuration
 
 ```bash
 # Main database
-MAIN_DATABASE_URL=sqlite:///db/openalgo.db
+DATABASE_URL = 'sqlite:///db/openalgo.db'
 
-# Logs database
-LOGS_DATABASE_URL=sqlite:///db/logs.db
-
-# Latency database
-LATENCY_DATABASE_URL=sqlite:///db/latency.db
-
-# Sandbox database
-SANDBOX_DATABASE_URL=sqlite:///db/sandbox.db
-
-# Historical data (DuckDB)
-HISTORIFY_DATABASE_PATH=db/historify.duckdb
+# Additional databases
+LATENCY_DATABASE_URL = 'sqlite:///db/latency.db'
+LOGS_DATABASE_URL = 'sqlite:///db/logs.db'
+SANDBOX_DATABASE_URL = 'sqlite:///db/sandbox.db'
+HISTORIFY_DATABASE_URL = 'db/historify.duckdb'
 ```
 
-### Broker Configuration
+### Flask Application
 
 ```bash
-# Enabled brokers
-VALID_BROKERS=zerodha,dhan,angel,shoonya,firstock
+# Host and port
+FLASK_HOST_IP = '127.0.0.1'  # Use 0.0.0.0 for external access
+FLASK_PORT = '5000'
 
-# Broker API credentials
-BROKER_API_KEY=your_broker_api_key
-BROKER_API_SECRET=your_broker_api_secret
+# Environment
+FLASK_DEBUG = 'False'
+FLASK_ENV = 'development'  # or 'production'
 
-# Redirect URL for OAuth brokers
-REDIRECT_URL=http://127.0.0.1:5000
+# Public URL
+HOST_SERVER = 'http://127.0.0.1:5000'
 ```
 
 ### WebSocket Configuration
 
 ```bash
 # WebSocket server
-WEBSOCKET_HOST=127.0.0.1
-WEBSOCKET_PORT=8765
-WEBSOCKET_URL=ws://127.0.0.1:8765
+WEBSOCKET_HOST = '127.0.0.1'
+WEBSOCKET_PORT = '8765'
+WEBSOCKET_URL = 'ws://127.0.0.1:8765'
 
-# Connection limits
-MAX_SYMBOLS_PER_WEBSOCKET=1000
-MAX_WEBSOCKET_CONNECTIONS=3
+# ZeroMQ message bus
+ZMQ_HOST = '127.0.0.1'
+ZMQ_PORT = '5555'
 ```
 
-### Rate Limiting
+### Connection Pooling
 
 ```bash
-# API rate limits
-API_RATE_LIMIT=50 per second
-ORDER_RATE_LIMIT=10 per second
+# Maximum symbols per WebSocket connection (default: 1000)
+MAX_SYMBOLS_PER_WEBSOCKET = '1000'
 
-# Login rate limits
-LOGIN_RATE_LIMIT_MIN=5 per minute
-LOGIN_RATE_LIMIT_HOUR=25 per hour
-```
+# Maximum WebSocket connections per user/broker (default: 3)
+# Total capacity = MAX_SYMBOLS_PER_WEBSOCKET × MAX_WEBSOCKET_CONNECTIONS
+MAX_WEBSOCKET_CONNECTIONS = '3'
 
-### Session Configuration
-
-```bash
-# Session expiry time (24-hour format)
-SESSION_EXPIRY_TIME=03:00
-```
-
-### Logging Configuration
-
-```bash
-# Enable file logging
-LOG_TO_FILE=True
-
-# Log level
-LOG_LEVEL=INFO
-
-# Log directory
-LOG_DIR=log
-
-# Log retention (days)
-LOG_RETENTION=14
-```
-
-### Security Settings
-
-```bash
-# 404 error threshold for IP ban
-SECURITY_404_THRESHOLD=20
-SECURITY_404_BAN_DURATION=24
-
-# API abuse threshold
-SECURITY_API_THRESHOLD=10
-SECURITY_API_BAN_DURATION=48
-
-# Repeat offender limit
-SECURITY_REPEAT_OFFENDER_LIMIT=3
+# Enable/disable connection pooling (default: true)
+ENABLE_CONNECTION_POOLING = 'true'
 ```
 
 ### Ngrok Configuration
 
 ```bash
 # Enable ngrok tunnel
-NGROK_ENABLED=False
-NGROK_AUTH_TOKEN=your_ngrok_auth_token
-
-# Custom domain (optional)
-NGROK_DOMAIN=your-custom-domain.ngrok.io
+NGROK_ALLOW = 'FALSE'
 ```
+
+### Logging Configuration
+
+```bash
+# File logging
+LOG_TO_FILE = 'False'
+LOG_LEVEL = 'INFO'  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+LOG_DIR = 'log'
+LOG_FORMAT = '[%(asctime)s] %(levelname)s in %(module)s: %(message)s'
+LOG_RETENTION = '14'  # Days
+
+# Color output
+LOG_COLORS = 'True'
+FORCE_COLOR = '1'
+```
+
+### Python Strategy Logging
+
+```bash
+# Maximum log files per strategy (oldest deleted first)
+STRATEGY_LOG_MAX_FILES = '10'
+
+# Maximum total log size per strategy in MB
+STRATEGY_LOG_MAX_SIZE_MB = '50'
+
+# Delete strategy logs older than N days
+STRATEGY_LOG_RETENTION_DAYS = '7'
+```
+
+### Rate Limiting
+
+```bash
+# Login rate limits
+LOGIN_RATE_LIMIT_MIN = '5 per minute'
+LOGIN_RATE_LIMIT_HOUR = '25 per hour'
+RESET_RATE_LIMIT = '15 per hour'
+
+# API rate limits
+API_RATE_LIMIT = '50 per second'
+ORDER_RATE_LIMIT = '10 per second'
+SMART_ORDER_RATE_LIMIT = '2 per second'
+
+# Webhook rate limits
+WEBHOOK_RATE_LIMIT = '100 per minute'
+STRATEGY_RATE_LIMIT = '200 per minute'
+```
+
+### API Configuration
+
+```bash
+# Delay between multi-leg option orders (seconds)
+SMART_ORDER_DELAY = '0.5'
+
+# Session expiry time (24-hour format, IST)
+SESSION_EXPIRY_TIME = '03:00'
+```
+
+### CORS Configuration
+
+```bash
+# Enable/disable CORS
+CORS_ENABLED = 'TRUE'
+
+# Allowed origins (comma-separated)
+CORS_ALLOWED_ORIGINS = 'http://127.0.0.1:5000'
+
+# Allowed HTTP methods
+CORS_ALLOWED_METHODS = 'GET,POST,DELETE,PUT,PATCH'
+
+# Allowed headers
+CORS_ALLOWED_HEADERS = 'Content-Type,Authorization,X-Requested-With'
+
+# Exposed headers
+CORS_EXPOSED_HEADERS = ''
+
+# Allow credentials (cookies, auth headers)
+CORS_ALLOW_CREDENTIALS = 'FALSE'
+
+# Preflight cache max age (seconds)
+CORS_MAX_AGE = '86400'
+```
+
+### Content Security Policy (CSP)
+
+```bash
+# Enable/disable CSP
+CSP_ENABLED = 'TRUE'
+
+# Report-only mode (testing)
+CSP_REPORT_ONLY = 'FALSE'
+
+# CSP directives
+CSP_DEFAULT_SRC = "'self'"
+CSP_SCRIPT_SRC = "'self' 'unsafe-inline' https://cdn.socket.io https://static.cloudflareinsights.com"
+CSP_STYLE_SRC = "'self' 'unsafe-inline'"
+CSP_IMG_SRC = "'self' data:"
+CSP_CONNECT_SRC = "'self' wss: ws: https://cdn.socket.io"
+CSP_FONT_SRC = "'self'"
+CSP_OBJECT_SRC = "'none'"
+CSP_MEDIA_SRC = "'self' data: https://*.amazonaws.com https://*.cloudfront.net"
+CSP_FRAME_SRC = "'self'"
+CSP_FORM_ACTION = "'self'"
+CSP_FRAME_ANCESTORS = "'self'"
+CSP_BASE_URI = "'self'"
+CSP_UPGRADE_INSECURE_REQUESTS = 'FALSE'
+CSP_REPORT_URI = ''
+```
+
+### CSRF Protection
+
+```bash
+# Enable/disable CSRF protection
+CSRF_ENABLED = 'TRUE'
+
+# Token time limit (seconds, empty = no limit)
+CSRF_TIME_LIMIT = ''
+```
+
+### Cookie Configuration
+
+```bash
+# Cookie names (customize for multiple instances)
+SESSION_COOKIE_NAME = 'session'
+CSRF_COOKIE_NAME = 'csrf_token'
+```
+
+## Railway/Cloud Deployment
+
+When deploying to Railway or Render, set these environment variables in the platform dashboard:
+
+### Required Variables
+
+| Variable | Description |
+|----------|-------------|
+| `HOST_SERVER` | Your app URL (e.g., `https://your-app.up.railway.app`) |
+| `REDIRECT_URL` | Broker OAuth callback URL |
+| `BROKER_API_KEY` | Broker API key |
+| `BROKER_API_SECRET` | Broker API secret |
+| `APP_KEY` | Generated secret key |
+| `API_KEY_PEPPER` | Generated pepper |
+
+### Auto-Generated by start.sh
+
+When `HOST_SERVER` is set and no `.env` exists, `start.sh` automatically generates `.env` with:
+- All security settings
+- CORS configured for your domain
+- CSP with secure WebSocket URLs
+- Railway's `PORT` environment variable support
 
 ## Validation
 
@@ -161,119 +280,57 @@ def validate_env():
 
 | Variable | Validation |
 |----------|------------|
-| APP_KEY | Must be 32+ characters |
-| API_KEY_PEPPER | Must be 32+ characters |
-| PORT | 0-65535 |
-| RATE_LIMIT | Format: "X per Y" |
-| SESSION_EXPIRY_TIME | Format: HH:MM |
-| WEBSOCKET_URL | Starts with ws:// or wss:// |
-| LOG_LEVEL | DEBUG/INFO/WARNING/ERROR/CRITICAL |
-
-## Version Compatibility
-
-### Version Check
-
-```python
-def check_env_version_compatibility():
-    """Ensure .env matches .sample.env version"""
-    env_version = get_env_version('.env')
-    sample_version = get_env_version('.sample.env')
-
-    if env_version != sample_version:
-        logger.warning(
-            f"Environment version mismatch: "
-            f".env={env_version}, .sample.env={sample_version}"
-        )
-```
+| `APP_KEY` | Must be 32+ characters |
+| `API_KEY_PEPPER` | Must be 32+ characters |
+| `*_PORT` | 0-65535 |
+| `*_RATE_LIMIT*` | Format: "X per Y" |
+| `SESSION_EXPIRY_TIME` | Format: HH:MM |
+| `WEBSOCKET_URL` | Starts with ws:// or wss:// |
+| `LOG_LEVEL` | DEBUG/INFO/WARNING/ERROR/CRITICAL |
 
 ## Generating Secrets
 
-### App Key and Pepper
-
 ```bash
-# Generate 32-character hex key
+# Generate 32-character hex key for APP_KEY and API_KEY_PEPPER
 python -c "import secrets; print(secrets.token_hex(32))"
+
+# Output example:
+# a1b2c3d4e5f6789012345678901234567890123456789012345678901234
 ```
 
-### Example Output
-```
-a1b2c3d4e5f6789012345678901234567890123456789012345678901234
-```
+## Environment Comparison
 
-## Broker-Specific Configuration
-
-### Zerodha
+### Development
 
 ```bash
-BROKER_API_KEY=your_kite_api_key
-BROKER_API_SECRET=your_kite_api_secret
+FLASK_DEBUG = 'True'
+FLASK_ENV = 'development'
+LOG_LEVEL = 'DEBUG'
+HOST_SERVER = 'http://127.0.0.1:5000'
+FLASK_HOST_IP = '127.0.0.1'
+CSP_UPGRADE_INSECURE_REQUESTS = 'FALSE'
 ```
 
-### Dhan
+### Production (Local)
 
 ```bash
-BROKER_API_KEY=your_dhan_client_id
-BROKER_API_SECRET=your_dhan_access_token
+FLASK_DEBUG = 'False'
+FLASK_ENV = 'production'
+LOG_LEVEL = 'INFO'
+HOST_SERVER = 'https://your-domain.com'
+FLASK_HOST_IP = '0.0.0.0'
+CSP_UPGRADE_INSECURE_REQUESTS = 'TRUE'
 ```
 
-### Angel One
+### Production (Railway)
 
 ```bash
-BROKER_API_KEY=your_angel_api_key
-BROKER_API_SECRET=your_angel_secret
-```
-
-### 5Paisa
-
-```bash
-BROKER_API_KEY=AppName:UserId:EncryptionKey
-BROKER_API_SECRET=password
-```
-
-## Environment Helpers
-
-### Accessing Config
-
-```python
-from utils.config import (
-    get_broker_api_key,
-    get_broker_api_secret,
-    get_host_server
-)
-
-api_key = get_broker_api_key()
-api_secret = get_broker_api_secret()
-host = get_host_server()
-```
-
-### Default Values
-
-```python
-import os
-
-# With default fallback
-port = int(os.getenv('PORT', '5000'))
-debug = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
-```
-
-## Production vs Development
-
-### Development (.env)
-
-```bash
-FLASK_DEBUG=True
-LOG_LEVEL=DEBUG
-NGROK_ENABLED=True
-HOST_SERVER=http://127.0.0.1:5000
-```
-
-### Production (.env)
-
-```bash
-FLASK_DEBUG=False
-LOG_LEVEL=INFO
-NGROK_ENABLED=False
-HOST_SERVER=https://your-domain.com
+# Set in Railway dashboard, start.sh generates .env:
+HOST_SERVER = 'https://your-app.up.railway.app'
+FLASK_HOST_IP = '0.0.0.0'  # Auto-set
+FLASK_PORT = '${PORT}'  # Railway's PORT
+WEBSOCKET_HOST = '0.0.0.0'  # Auto-set
+ZMQ_HOST = '0.0.0.0'  # Auto-set
 ```
 
 ## Security Best Practices
@@ -294,19 +351,16 @@ chmod 600 .env
 *.key
 ```
 
-### Use Environment Variables in Production
+### Version Check
 
-```bash
-# Export instead of .env file
-export APP_KEY="your_secret_key"
-export BROKER_API_KEY="your_api_key"
-```
+Compare `ENV_CONFIG_VERSION` in your `.env` with `.sample.env` after updates. If they differ, copy new variables from the sample.
 
 ## Key Files Reference
 
 | File | Purpose |
 |------|---------|
-| `.env` | Environment configuration |
-| `.sample.env` | Template file |
+| `.env` | Active configuration |
+| `.sample.env` | Reference template |
+| `start.sh` | Auto-generates .env for cloud |
 | `utils/env_check.py` | Validation logic |
 | `utils/config.py` | Config helpers |

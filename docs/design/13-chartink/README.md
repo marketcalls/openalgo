@@ -4,6 +4,8 @@
 
 Chartink integration allows OpenAlgo to receive trading signals from Chartink screener alerts via webhooks. When a stock appears in a Chartink scanner, it triggers a webhook that OpenAlgo processes to place trades automatically.
 
+> **Note**: The Chartink integration uses a "Strategy" concept (not "Scanner") where each strategy has symbol-level configuration with time-based trading controls.
+
 ## Architecture Diagram
 
 ```
@@ -45,11 +47,13 @@ Chartink integration allows OpenAlgo to receive trading signals from Chartink sc
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │  1. Validate webhook_id against database                            │   │
-│  │  2. Get scanner configuration                                        │   │
-│  │  3. Parse stock list                                                 │   │
-│  │  4. For each stock:                                                 │   │
-│  │     - Lookup symbol mapping (if exists)                              │   │
-│  │     - Apply default exchange/product/quantity                       │   │
+│  │  2. Get strategy configuration                                       │   │
+│  │  3. Check time-based trading controls                               │   │
+│  │     - Is current time within start_time and end_time?               │   │
+│  │     - Is strategy active?                                           │   │
+│  │  4. Parse stock list                                                │   │
+│  │  5. For each stock:                                                 │   │
+│  │     - Lookup symbol mapping (chartink_symbol → exchange/qty/product)│   │
 │  │     - Queue order for execution                                      │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -71,31 +75,45 @@ Chartink integration allows OpenAlgo to receive trading signals from Chartink sc
 **Location:** `database/chartink_db.py`
 
 ```python
-class ChartinkScanner(Base):
-    __tablename__ = 'chartink_scanners'
+class ChartinkStrategy(Base):
+    """Model for Chartink strategies - each strategy has time-based trading controls"""
+    __tablename__ = 'chartink_strategies'
 
     id = Column(Integer, primary_key=True)
-    name = Column(String(100), nullable=False)      # Scanner name
-    webhook_id = Column(String(36), unique=True)    # UUID for webhook
-    user_id = Column(String(50), nullable=False)    # Owner
-    action = Column(String(10), default='BUY')      # BUY or SELL
-    exchange = Column(String(10), default='NSE')    # Default exchange
-    product_type = Column(String(10), default='MIS')# Default product
-    default_quantity = Column(Integer, default=1)   # Default qty
-    is_active = Column(Boolean, default=True)       # Enable/disable
-    created_at = Column(DateTime, default=func.now())
+    name = Column(String(255), nullable=False)           # Strategy name
+    webhook_id = Column(String(36), unique=True)         # UUID for webhook
+    user_id = Column(String(255), nullable=False)        # Owner
+    is_active = Column(Boolean, default=True)            # Enable/disable
+    is_intraday = Column(Boolean, default=True)          # Intraday mode flag
+    start_time = Column(String(5))                       # Trading start (HH:MM format)
+    end_time = Column(String(5))                         # Trading end (HH:MM format)
+    squareoff_time = Column(String(5))                   # Auto square-off time (HH:MM)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
+
+    # Relationships
+    symbol_mappings = relationship("ChartinkSymbolMapping", back_populates="strategy",
+                                   cascade="all, delete-orphan")
+
 
 class ChartinkSymbolMapping(Base):
+    """Symbol-level configuration - maps Chartink symbols to trading parameters"""
     __tablename__ = 'chartink_symbol_mappings'
 
     id = Column(Integer, primary_key=True)
-    scanner_id = Column(Integer, ForeignKey('chartink_scanners.id'))
-    chartink_symbol = Column(String(50))     # Symbol from Chartink
-    symbol = Column(String(50))               # OpenAlgo symbol
-    exchange = Column(String(10))             # Override exchange
-    product_type = Column(String(10))         # Override product
-    quantity = Column(Integer)                # Override quantity
+    strategy_id = Column(Integer, ForeignKey('chartink_strategies.id'), nullable=False)
+    chartink_symbol = Column(String(50), nullable=False)  # Symbol from Chartink
+    exchange = Column(String(10), nullable=False)         # NSE/BSE/NFO
+    quantity = Column(Integer, nullable=False)            # Order quantity
+    product_type = Column(String(10), nullable=False)     # MIS/CNC/NRML
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
+
+    # Relationships
+    strategy = relationship("ChartinkStrategy", back_populates="symbol_mappings")
 ```
+
+> **Key Differences from Scanner Model**: The strategy model does NOT have `action` (BUY/SELL), `default_quantity`, or scanner-level `exchange`/`product_type`. Instead, trading parameters are defined per-symbol in the mapping table.
 
 ## Webhook Configuration
 
@@ -116,23 +134,31 @@ class ChartinkSymbolMapping(Base):
 ### OpenAlgo Setup
 
 1. Navigate to `/chartink`
-2. Create new scanner
+2. Create new strategy
 3. Copy the generated `webhook_id`
-4. Configure default settings:
-   - Action: BUY/SELL
-   - Exchange: NSE/BSE/NFO
-   - Product: MIS/CNC/NRML
-   - Default Quantity
+4. Configure time-based trading controls:
+   - **Start Time**: When to start accepting signals (HH:MM)
+   - **End Time**: When to stop accepting signals (HH:MM)
+   - **Square-off Time**: Auto close positions (HH:MM)
+   - **Intraday Mode**: Enable for MIS trades
+
+5. Add symbol mappings with per-symbol configuration:
+   - **Chartink Symbol**: Symbol as sent by Chartink
+   - **Exchange**: NSE/BSE/NFO
+   - **Product Type**: MIS/CNC/NRML
+   - **Quantity**: Order quantity for this symbol
 
 ## Symbol Mapping
 
-Map Chartink symbols to OpenAlgo format:
+Each symbol in a strategy has its own trading configuration:
 
-| Chartink Symbol | OpenAlgo Symbol | Exchange | Product | Quantity |
-|-----------------|-----------------|----------|---------|----------|
-| SBIN | SBIN | NSE | MIS | 100 |
-| RELIANCE | RELIANCE | NSE | CNC | 10 |
-| INFY | INFY | NSE | MIS | 50 |
+| Chartink Symbol | Exchange | Product | Quantity |
+|-----------------|----------|---------|----------|
+| SBIN | NSE | MIS | 100 |
+| RELIANCE | NSE | CNC | 10 |
+| INFY | NSE | MIS | 50 |
+
+> **Note**: Unlike scanner-level defaults, each symbol must have its exchange, product, and quantity explicitly configured in the symbol mapping.
 
 ## Processing Flow
 
@@ -188,13 +214,31 @@ Webhook Received
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/chartink/webhook` | POST | Receive Chartink alerts |
-| `/chartink/` | GET | List scanners |
-| `/chartink/new` | GET/POST | Create scanner |
-| `/chartink/<id>` | GET | View scanner |
-| `/chartink/<id>/edit` | GET/POST | Edit scanner |
-| `/chartink/<id>/delete` | POST | Delete scanner |
-| `/chartink/<id>/toggle` | POST | Enable/disable |
+| `/chartink/` | GET | List strategies |
+| `/chartink/new` | GET/POST | Create strategy |
+| `/chartink/<id>` | GET | View strategy |
+| `/chartink/<id>/edit` | GET/POST | Edit strategy |
+| `/chartink/<id>/delete` | POST | Delete strategy |
+| `/chartink/<id>/toggle` | POST | Enable/disable strategy |
 | `/chartink/<id>/symbols` | GET/POST | Symbol mappings |
+
+## Database Functions
+
+**Strategy Management:**
+- `create_strategy(name, webhook_id, user_id, is_intraday, start_time, end_time, squareoff_time)`
+- `get_strategy(strategy_id)` - Get strategy by ID
+- `get_strategy_by_webhook_id(webhook_id)` - Get strategy by webhook ID
+- `get_user_strategies(user_id)` - Get all strategies for a user
+- `get_all_strategies()` - Get all strategies
+- `delete_strategy(strategy_id)` - Delete a strategy
+- `toggle_strategy(strategy_id)` - Toggle active status
+- `update_strategy_times(strategy_id, start_time, end_time, squareoff_time)` - Update trading times
+
+**Symbol Mapping Management:**
+- `add_symbol_mapping(strategy_id, chartink_symbol, exchange, quantity, product_type)`
+- `bulk_add_symbol_mappings(strategy_id, mappings)` - Add multiple mappings at once
+- `get_symbol_mappings(strategy_id)` - Get all mappings for a strategy
+- `delete_symbol_mapping(mapping_id)` - Delete a mapping
 
 ## Webhook Payload Format
 
@@ -230,16 +274,27 @@ WEBHOOK_RATE_LIMIT=100 per minute
 STRATEGY_RATE_LIMIT=200 per minute
 ```
 
-### Scanner Settings
+### Strategy Settings
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| `name` | Scanner name | Required |
-| `action` | BUY or SELL | BUY |
-| `exchange` | Default exchange | NSE |
-| `product_type` | MIS/CNC/NRML | MIS |
-| `default_quantity` | Default order qty | 1 |
-| `is_active` | Enable/disable | true |
+| `name` | Strategy name | Required |
+| `webhook_id` | UUID for webhook | Auto-generated |
+| `user_id` | Owner user ID | Current user |
+| `is_active` | Enable/disable strategy | true |
+| `is_intraday` | Intraday trading mode | true |
+| `start_time` | Trading window start (HH:MM) | None |
+| `end_time` | Trading window end (HH:MM) | None |
+| `squareoff_time` | Auto square-off time (HH:MM) | None |
+
+### Symbol Mapping Settings
+
+| Setting | Description | Required |
+|---------|-------------|----------|
+| `chartink_symbol` | Symbol from Chartink | Yes |
+| `exchange` | Trading exchange (NSE/BSE/NFO) | Yes |
+| `quantity` | Order quantity | Yes |
+| `product_type` | Product type (MIS/CNC/NRML) | Yes |
 
 ## Use Cases
 

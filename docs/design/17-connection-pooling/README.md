@@ -2,7 +2,7 @@
 
 ## Overview
 
-OpenAlgo implements connection pooling for HTTP connections and WebSocket symbol subscriptions to optimize performance and manage broker API rate limits efficiently.
+OpenAlgo implements connection pooling for WebSocket symbol subscriptions to optimize performance and manage broker API limits. The system uses `ConnectionPool` with a `SharedZmqPublisher` singleton to handle multiple WebSocket connections per broker, aggregating data through ZeroMQ for unified distribution.
 
 ## Architecture Diagram
 
@@ -12,7 +12,7 @@ OpenAlgo implements connection pooling for HTTP connections and WebSocket symbol
 └──────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                      WebSocket Connection Pool                               │
+│                      ConnectionPool (per broker/user)                        │
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │  Configuration:                                                      │   │
@@ -22,188 +22,323 @@ OpenAlgo implements connection pooling for HTTP connections and WebSocket symbol
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                              │
 │  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐                   │
-│  │  Connection 1 │  │  Connection 2 │  │  Connection 3 │                   │
+│  │  Adapter 0    │  │  Adapter 1    │  │  Adapter 2    │                   │
 │  │  1000 symbols │  │  1000 symbols │  │  1000 symbols │                   │
 │  │               │  │               │  │               │                   │
 │  │  SBIN, INFY,  │  │  TCS, WIPRO,  │  │  NIFTY opts,  │                   │
 │  │  RELIANCE...  │  │  HDFC...      │  │  BANKNIFTY... │                   │
-│  └───────────────┘  └───────────────┘  └───────────────┘                   │
-│         │                 │                    │                            │
-│         └─────────────────┼────────────────────┘                            │
-│                           │                                                  │
-│                           ▼                                                  │
+│  └───────┬───────┘  └───────┬───────┘  └───────┬───────┘                   │
+│          │                  │                  │                            │
+│          └──────────────────┼──────────────────┘                            │
+│                             │                                                │
+│                             ▼                                                │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                      Broker WebSocket Server                         │   │
+│  │                   SharedZmqPublisher (Singleton)                     │   │
+│  │                   Binds to ZMQ_PORT (default: 5555)                  │   │
+│  │                   Thread-safe publish with _publish_lock             │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────┘
-
+                                     │
+                                     │ ZeroMQ PUB/SUB
+                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                      HTTP Connection Pooling (requests)                      │
+│                      WebSocketProxy (server.py)                              │
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  requests.Session() with connection pooling                          │   │
-│  │                                                                      │   │
-│  │  - Keep-alive connections                                           │   │
-│  │  - Connection reuse                                                 │   │
-│  │  - Automatic retry                                                  │   │
+│  │  ZeroMQ SUB socket connects to ZMQ_PORT                             │   │
+│  │  Routes data to WebSocket clients (port 8765)                       │   │
+│  │  O(1) subscription lookup via subscription_index                    │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## WebSocket Connection Pool
-
-### Configuration
+## Configuration
 
 ```bash
 # .env
 MAX_SYMBOLS_PER_WEBSOCKET=1000
 MAX_WEBSOCKET_CONNECTIONS=3
+ZMQ_PORT=5555
 ```
 
-### Pool Management
+## Core Components
+
+### 1. SharedZmqPublisher (Singleton)
+
+**Location:** `websocket_proxy/connection_manager.py`
+
+Ensures all adapter connections publish to the same ZeroMQ socket:
 
 ```python
-class WebSocketPool:
-    """Manages multiple WebSocket connections"""
+class SharedZmqPublisher:
+    """
+    Shared ZeroMQ publisher that can be used by multiple adapter instances.
+    Ensures all connections publish to the same ZeroMQ socket, so the WebSocketProxy
+    receives data from all connections on a single port.
+    """
 
-    def __init__(self, max_symbols=1000, max_connections=3):
-        self.max_symbols = max_symbols
-        self.max_connections = max_connections
-        self.connections = []
-        self.symbol_map = {}  # symbol -> connection
+    _instance = None
+    _lock = threading.Lock()
 
-    def subscribe(self, symbol):
-        """Subscribe to symbol, creating new connection if needed"""
-        # Find connection with capacity
-        for conn in self.connections:
-            if len(conn.symbols) < self.max_symbols:
-                conn.subscribe(symbol)
-                self.symbol_map[symbol] = conn
-                return
+    def __new__(cls):
+        """Singleton pattern to ensure only one shared publisher exists"""
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
 
-        # Create new connection if under limit
-        if len(self.connections) < self.max_connections:
-            conn = self.create_connection()
-            self.connections.append(conn)
-            conn.subscribe(symbol)
-            self.symbol_map[symbol] = conn
-        else:
-            raise PoolExhaustedError("Maximum connections reached")
+    def __init__(self):
+        if self._initialized:
+            return
 
-    def unsubscribe(self, symbol):
-        """Unsubscribe from symbol"""
-        if symbol in self.symbol_map:
-            conn = self.symbol_map[symbol]
-            conn.unsubscribe(symbol)
-            del self.symbol_map[symbol]
+        self._initialized = True
+        self.context = zmq.Context()
+        self.socket = self.context.socket(zmq.PUB)
+        self.socket.setsockopt(zmq.LINGER, 1000)
+        self.socket.setsockopt(zmq.SNDHWM, 1000)
+        self.zmq_port = None
+        self._bound = False
+        self._publish_lock = threading.Lock()
+
+    def bind(self, port: int | None = None) -> int:
+        """Bind to ZMQ port. If already bound, returns existing port."""
+        # Auto-finds available port starting from ZMQ_PORT env var
+        pass
+
+    def publish(self, topic: str, data: dict):
+        """Thread-safe publishing to ZeroMQ subscribers."""
+        with self._publish_lock:
+            self.socket.send_multipart([
+                topic.encode("utf-8"),
+                json.dumps(data).encode("utf-8")
+            ])
+
+    def cleanup(self):
+        """Clean up ZeroMQ resources"""
+        pass
 ```
 
-### Connection Balancing
+### 2. ConnectionPool
+
+**Location:** `websocket_proxy/connection_manager.py`
+
+Manages multiple WebSocket connections for a single broker/user:
+
+```python
+class ConnectionPool:
+    """
+    Manages multiple WebSocket connections for a single broker/user.
+
+    Automatically creates new connections when symbol limits are reached,
+    up to the configured maximum. Distributes subscriptions across connections
+    and aggregates data through a shared ZeroMQ publisher.
+    """
+
+    def __init__(
+        self,
+        adapter_class: type,
+        broker_name: str,
+        user_id: str,
+        max_symbols_per_connection: int | None = None,
+        max_connections: int | None = None,
+    ):
+        self.adapter_class = adapter_class
+        self.broker_name = broker_name
+        self.user_id = user_id
+        self.max_symbols = max_symbols_per_connection or get_max_symbols_per_websocket()
+        self.max_connections = max_connections or get_max_websocket_connections()
+
+        self.lock = threading.RLock()
+
+        # Connection tracking
+        self.adapters: list[Any] = []  # List of adapter instances
+        self.adapter_symbol_counts: list[int] = []  # Symbols per adapter
+
+        # Subscription tracking: (symbol, exchange, mode) -> adapter_index
+        self.subscription_map: dict[tuple[str, str, int], int] = {}
+
+        # Shared ZeroMQ publisher (singleton)
+        self.shared_publisher = SharedZmqPublisher()
+
+        # Peak usage tracking (for logging)
+        self.peak_total_symbols = 0
+        self.peak_connections_used = 0
+```
+
+### Key Methods
+
+```python
+def subscribe(self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5) -> dict:
+    """
+    Subscribe to market data, automatically using connection with capacity.
+
+    Returns:
+        {
+            "status": "success",
+            "connection": 1,  # Which connection (1-indexed)
+            "total_connections": 2,
+            "symbols_on_connection": 500
+        }
+    """
+    sub_key = (symbol, exchange, mode)
+
+    with self.lock:
+        # Check if already subscribed
+        if sub_key in self.subscription_map:
+            return {"status": "success", "message": f"Already subscribed"}
+
+        # Get adapter with capacity (creates new if needed)
+        adapter_idx, adapter = self._get_adapter_with_capacity()
+
+        # Subscribe and track
+        result = adapter.subscribe(symbol, exchange, mode, depth_level)
+
+        if result.get("status") == "success":
+            self.subscription_map[sub_key] = adapter_idx
+            self.adapter_symbol_counts[adapter_idx] += 1
+
+        return result
+
+def _get_adapter_with_capacity(self) -> tuple[int, Any]:
+    """Get an adapter with available capacity, or create a new one."""
+    # Find existing adapter with capacity
+    for idx, count in enumerate(self.adapter_symbol_counts):
+        if count < self.max_symbols:
+            return idx, self.adapters[idx]
+
+    # Check if we can create a new adapter
+    if len(self.adapters) >= self.max_connections:
+        raise RuntimeError(
+            f"Maximum capacity reached: {self.max_connections} connections × "
+            f"{self.max_symbols} symbols = {self.max_connections * self.max_symbols}"
+        )
+
+    # Create new adapter with shared publisher
+    adapter = self._create_adapter()
+    adapter.initialize(self.broker_name, self.user_id)
+    adapter.connect()
+
+    self.adapters.append(adapter)
+    self.adapter_symbol_counts.append(0)
+
+    return len(self.adapters) - 1, adapter
+```
+
+### 3. Thread-Local Context for Pooled Adapters
+
+```python
+# Thread-local storage for pooled adapter creation context
+_pooled_creation_context = threading.local()
+
+def is_pooled_creation() -> bool:
+    """Check if we're currently creating an adapter within a ConnectionPool"""
+    return getattr(_pooled_creation_context, "active", False)
+
+def get_shared_publisher_for_pooled_creation():
+    """Get the shared publisher during pooled adapter creation"""
+    return getattr(_pooled_creation_context, "shared_publisher", None)
+```
+
+This allows `BaseBrokerWebSocketAdapter` to detect when it's being created within a `ConnectionPool` and skip its own ZMQ socket creation.
+
+## Connection Balancing Flow
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Symbol Distribution                           │
-└─────────────────────────────────────────────────────────────────┘
-
 New Symbol Subscribe Request
               │
               ▼
 ┌─────────────────────────┐
-│ Find connection with    │
-│ available capacity      │
+│ Check subscription_map  │
+│ (symbol, exchange, mode)│
 └───────────┬─────────────┘
             │
     ┌───────┴───────┐
     │               │
-   Found         Not Found
+ Found          Not Found
     │               │
     ▼               ▼
 ┌──────────┐   ┌─────────────────────┐
-│ Subscribe│   │ Connections < max?  │
-│ to conn  │   └──────────┬──────────┘
+│ Return   │   │ _get_adapter_with   │
+│ "already │   │ _capacity()         │
+│ subscribed" │ └──────────┬──────────┘
 └──────────┘              │
                   ┌───────┴───────┐
                   │               │
-                 Yes              No
+              Adapter           No Adapter
+              Found             With Capacity
                   │               │
                   ▼               ▼
-           ┌──────────┐    ┌──────────┐
-           │ Create   │    │ Error:   │
-           │ new conn │    │ Pool     │
-           └──────────┘    │ exhausted│
-                           └──────────┘
+           ┌──────────┐    ┌─────────────────────┐
+           │ Subscribe│    │ Adapters < max?     │
+           │ to adapter│   └──────────┬──────────┘
+           └──────────┘              │
+                              ┌───────┴───────┐
+                              │               │
+                             Yes              No
+                              │               │
+                              ▼               ▼
+                       ┌──────────┐    ┌──────────┐
+                       │ Create   │    │ Error:   │
+                       │ new      │    │ MAX_     │
+                       │ adapter  │    │ CAPACITY │
+                       └──────────┘    │ REACHED  │
+                                       └──────────┘
 ```
 
-## HTTP Connection Pool
-
-### Using requests.Session
+## Pool Statistics
 
 ```python
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+def get_stats(self) -> dict:
+    """Get pool statistics."""
+    with self.lock:
+        total_symbols = sum(self.adapter_symbol_counts)
+        max_capacity = self.max_connections * self.max_symbols
 
-class BrokerClient:
-    def __init__(self):
-        self.session = requests.Session()
-
-        # Configure retry strategy
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=0.5,
-            status_forcelist=[429, 500, 502, 503, 504]
-        )
-
-        adapter = HTTPAdapter(
-            pool_connections=10,
-            pool_maxsize=20,
-            max_retries=retry_strategy
-        )
-
-        self.session.mount("https://", adapter)
-        self.session.mount("http://", adapter)
-
-    def get_quote(self, symbol):
-        """Reuses connection from pool"""
-        return self.session.get(
-            f"https://api.broker.com/quote/{symbol}",
-            timeout=10
-        )
+        return {
+            "broker": self.broker_name,
+            "user_id": self.user_id,
+            "active_connections": len(self.adapters),
+            "max_connections": self.max_connections,
+            "max_symbols_per_connection": self.max_symbols,
+            "total_subscriptions": total_symbols,
+            "max_capacity": max_capacity,
+            "capacity_used_percent": (total_symbols / max_capacity * 100),
+            "connections": [
+                {
+                    "index": idx + 1,
+                    "symbols": count,
+                    "capacity_percent": (count / self.max_symbols * 100),
+                }
+                for idx, count in enumerate(self.adapter_symbol_counts)
+            ],
+        }
 ```
 
-### Pool Settings
+## WebSocketProxy Integration
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| pool_connections | 10 | Number of connection pools |
-| pool_maxsize | 20 | Max connections per pool |
-| max_retries | 3 | Retry attempts |
-| backoff_factor | 0.5 | Delay between retries |
+**Location:** `websocket_proxy/server.py`
 
-## Database Connection Pool
-
-SQLAlchemy connection pooling configuration:
+The `WebSocketProxy` class receives data from all `ConnectionPool` instances via ZeroMQ:
 
 ```python
-from sqlalchemy import create_engine
+class WebSocketProxy:
+    def __init__(self, host: str = "127.0.0.1", port: int = 8765):
+        # ZeroMQ context for subscribing to broker adapters
+        self.context = zmq.asyncio.Context()
+        self.socket = self.context.socket(zmq.SUB)
+        self.socket.connect(f"tcp://{ZMQ_HOST}:{ZMQ_PORT}")
+        self.socket.setsockopt(zmq.SUBSCRIBE, b"")  # Subscribe to all topics
 
-engine = create_engine(
-    'sqlite:///db/openalgo.db',
-    pool_size=5,
-    max_overflow=10,
-    pool_timeout=30,
-    pool_pre_ping=True
-)
+        # OPTIMIZATION: O(1) subscription lookup
+        # Maps (symbol, exchange, mode) -> set of client_ids
+        self.subscription_index: dict[tuple[str, str, int], set[int]] = defaultdict(set)
+
+        # Message throttling (50ms minimum between LTP updates)
+        self.last_message_time: dict[tuple[str, str, int], float] = {}
+        self.message_throttle_interval = 0.05
 ```
-
-### Pool Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| pool_size | 5 | Permanent connections |
-| max_overflow | 10 | Extra connections allowed |
-| pool_timeout | 30 | Wait time for connection |
-| pool_pre_ping | True | Verify connection before use |
 
 ## Benefits
 
@@ -211,41 +346,40 @@ engine = create_engine(
 
 | Aspect | Without Pooling | With Pooling |
 |--------|-----------------|--------------|
-| Connection Time | ~100ms each | ~5ms (reused) |
-| Memory Usage | High (new connections) | Optimized |
-| Broker Rate Limits | Easy to exceed | Managed |
+| Symbol Limit | ~1000 per broker | 3000+ per broker |
+| Connection Time | Limited by broker | Automatic scaling |
+| Memory Usage | Multiple ZMQ contexts | Single SharedZmqPublisher |
+| Message Routing | Multiple endpoints | Unified ZMQ channel |
 
 ### Reliability
 
-- Automatic reconnection
-- Connection health checks
-- Graceful degradation
-- Error recovery
+- Automatic connection creation when capacity is reached
+- Shared ZeroMQ publisher ensures single point of data aggregation
+- Thread-safe operations with `threading.RLock`
+- Peak usage tracking for monitoring
+- Graceful cleanup on disconnect
 
-## Monitoring
+## Logging
 
-### Pool Statistics
+The ConnectionPool provides detailed logging at key milestones:
 
-```python
-def get_pool_stats():
-    return {
-        'websocket': {
-            'connections': len(ws_pool.connections),
-            'total_symbols': sum(len(c.symbols) for c in ws_pool.connections),
-            'capacity_used': total_symbols / (max_symbols * max_connections)
-        },
-        'http': {
-            'pool_size': session.adapters['https://'].poolmanager.num_pools,
-            'active_connections': get_active_count()
-        }
-    }
+```
+[POOL] ========== CONNECTION POOL INITIALIZED ==========
+[POOL] Broker: angel | User: user123
+[POOL] Config: 1000 symbols/connection x 3 max connections = 3000 total capacity
+[POOL] ==================================================
+[POOL] Connection 1 started - first symbol: RELIANCE.NSE
+[POOL] Connection 1: 100/1000 symbols (10% full) | Total: 100 symbols across 1 connection(s)
+[POOL] Connection 1: 1000/1000 symbols (100% full) | Total: 1000 symbols across 1 connection(s)
+[POOL] Creating NEW connection 2/3 for angel (previous connection full: 1000/1000 symbols)
 ```
 
 ## Key Files Reference
 
 | File | Purpose |
 |------|---------|
-| `websocket_proxy/server.py` | WebSocket pool management |
-| `broker/*/api/data.py` | HTTP session management |
-| `database/*.py` | SQLAlchemy pool config |
-| `.env` | Pool configuration |
+| `websocket_proxy/connection_manager.py` | ConnectionPool and SharedZmqPublisher |
+| `websocket_proxy/server.py` | WebSocketProxy with ZMQ subscription |
+| `websocket_proxy/base_adapter.py` | BaseBrokerWebSocketAdapter base class |
+| `websocket_proxy/broker_factory.py` | Adapter creation with pooling support |
+| `.env` | Pool configuration variables |

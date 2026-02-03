@@ -2,7 +2,7 @@
 
 ## Overview
 
-The PnL (Profit & Loss) Tracker provides real-time monitoring of trading performance. It calculates realized and unrealized P&L, tracks daily performance, and displays data via interactive charts and tables.
+The PnL (Profit & Loss) Tracker provides real-time intraday P&L monitoring by combining tradebook data with historical price data. It calculates mark-to-market (MTM) P&L for all positions throughout the trading day and displays it via interactive charts.
 
 ## Architecture Diagram
 
@@ -15,8 +15,8 @@ The PnL (Profit & Loss) Tracker provides real-time monitoring of trading perform
 │                         Data Sources                                         │
 │                                                                              │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐             │
-│  │  Position Book  │  │   Trade Book    │  │  WebSocket      │             │
-│  │  (Broker API)   │  │   (Broker API)  │  │  (Live Prices)  │             │
+│  │  Tradebook      │  │  Position Book  │  │  History API    │             │
+│  │  (Broker API)   │  │  (Broker API)   │  │  (1-minute bars)│             │
 │  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘             │
 │           │                    │                    │                       │
 │           └────────────────────┼────────────────────┘                       │
@@ -26,28 +26,31 @@ The PnL (Profit & Loss) Tracker provides real-time monitoring of trading perform
                                  │
                                  ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                       PnL Calculation Service                                │
+│                       PnL Calculation (blueprints/pnltracker.py)            │
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    Dual Calculation System                           │   │
+│  │                    Position Window Tracking                          │   │
 │  │                                                                      │   │
-│  │  ┌──────────────────────────┐  ┌──────────────────────────┐        │   │
-│  │  │   Intraday (Legacy)      │  │   Sandbox (Modern)       │        │   │
-│  │  │                          │  │                          │        │   │
-│  │  │  • Position-based        │  │  • Trade-based           │        │   │
-│  │  │  • MTM from positions    │  │  • FIFO matching         │        │   │
-│  │  │  • Broker P&L values     │  │  • Precise tracking      │        │   │
-│  │  └──────────────────────────┘  └──────────────────────────┘        │   │
+│  │  1. Parse trades from tradebook                                     │   │
+│  │  2. Group by symbol/exchange                                        │   │
+│  │  3. Create position windows (start_time, end_time, qty, price)      │   │
+│  │  4. Apply rate limiting (2 calls/sec for history API)               │   │
+│  │  5. Calculate MTM using historical close prices                     │   │
+│  │  6. Aggregate all symbols into portfolio P&L                        │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                    │                                         │
 │                                    ▼                                         │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    P&L Components                                    │   │
+│  │                    P&L Calculation Formula                           │   │
 │  │                                                                      │   │
-│  │  Realized P&L        = Closed position profits/losses               │   │
-│  │  Unrealized P&L      = Open position MTM (Mark-to-Market)           │   │
-│  │  Total P&L           = Realized + Unrealized                        │   │
-│  │  Day P&L             = Today's total performance                    │   │
+│  │  For LONG positions:                                                 │   │
+│  │    MTM P&L = (Current Price - Entry Price) × Quantity               │   │
+│  │                                                                      │   │
+│  │  For SHORT positions:                                                │   │
+│  │    MTM P&L = (Entry Price - Current Price) × Quantity               │   │
+│  │                                                                      │   │
+│  │  Realized P&L = (Exit Price - Entry Price) × Quantity  [Long]       │   │
+│  │                = (Entry Price - Exit Price) × Quantity  [Short]     │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────────────┘
                                  │
@@ -56,12 +59,12 @@ The PnL (Profit & Loss) Tracker provides real-time monitoring of trading perform
 │                         Frontend Display                                     │
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │  Dashboard Cards                                                     │   │
+│  │  Metrics Cards                                                       │   │
 │  │                                                                      │   │
 │  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐              │   │
-│  │  │ Realized │ │Unrealized│ │  Total   │ │   ROI    │              │   │
-│  │  │ +₹2,500  │ │ +₹1,250  │ │ +₹3,750  │ │  +0.75%  │              │   │
-│  │  │  (green) │ │  (green) │ │  (green) │ │  (green) │              │   │
+│  │  │ Current  │ │   Max    │ │   Min    │ │   Max    │              │   │
+│  │  │   MTM    │ │   MTM    │ │   MTM    │ │ Drawdown │              │   │
+│  │  │ +₹3,750  │ │ +₹4,200  │ │ +₹1,000  │ │  -₹800   │              │   │
 │  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘              │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                              │
@@ -79,225 +82,75 @@ The PnL (Profit & Loss) Tracker provides real-time monitoring of trading perform
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Calculation Methods
+## Implementation Details
 
-### Position-Based P&L (Intraday)
+### Position Window Tracking
 
-```
-┌────────────────────────────────────────────────────────────────────────────┐
-│                     Position-Based Calculation                              │
-│                                                                             │
-│  For each open position:                                                    │
-│                                                                             │
-│  Unrealized P&L = (LTP - Avg Price) × Quantity × Multiplier                │
-│                                                                             │
-│  Where:                                                                     │
-│  • LTP = Last Traded Price (from WebSocket or API)                         │
-│  • Avg Price = Average entry price                                         │
-│  • Quantity = Net position quantity (positive=long, negative=short)        │
-│  • Multiplier = Lot size (for F&O) or 1 (for equity)                       │
-│                                                                             │
-│  Example:                                                                   │
-│  SBIN: LTP=630, Avg=625, Qty=100, Mult=1                                   │
-│  Unrealized = (630 - 625) × 100 × 1 = ₹500                                │
-│                                                                             │
-└────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Trade-Based P&L (Sandbox)
-
-```
-┌────────────────────────────────────────────────────────────────────────────┐
-│                     Trade-Based FIFO Calculation                            │
-│                                                                             │
-│  1. Match trades using FIFO (First In First Out)                           │
-│                                                                             │
-│  2. For matched pairs:                                                      │
-│     Realized P&L = (Exit Price - Entry Price) × Quantity                   │
-│                                                                             │
-│  3. For unmatched trades:                                                   │
-│     Unrealized P&L = (LTP - Entry Price) × Quantity                        │
-│                                                                             │
-│  Example:                                                                   │
-│  Trade 1: BUY 100 @ ₹625 (Entry)                                           │
-│  Trade 2: SELL 50 @ ₹630 (Partial Exit)                                    │
-│                                                                             │
-│  Realized = (630 - 625) × 50 = ₹250                                        │
-│  Unrealized (remaining 50) = (LTP - 625) × 50                              │
-│                                                                             │
-└────────────────────────────────────────────────────────────────────────────┘
-```
-
-## Real-Time Updates
-
-### WebSocket Data Freshness
+The PnL tracker creates "position windows" to track when positions were opened and closed:
 
 ```python
-# Data freshness check (≤5 seconds is considered fresh)
-MAX_DATA_AGE_SECONDS = 5
-
-def is_price_fresh(last_update_time):
-    """Check if price data is recent enough"""
-    age = (datetime.now() - last_update_time).total_seconds()
-    return age <= MAX_DATA_AGE_SECONDS
-
-def get_position_pnl(position, ws_data):
-    """Calculate P&L with fresh WebSocket data"""
-    symbol = position['symbol']
-
-    if symbol in ws_data and is_price_fresh(ws_data[symbol]['time']):
-        ltp = ws_data[symbol]['ltp']
-    else:
-        # Fallback to broker API
-        ltp = get_quote_from_broker(symbol)
-
-    return calculate_pnl(position, ltp)
+# Data structure for each position window
+position_window = {
+    "start_time": datetime,    # When position was opened
+    "end_time": datetime,      # When position was closed (None if still open)
+    "qty": float,              # Position quantity
+    "price": float,            # Entry price
+    "action": str,             # "BUY" or "SELL"
+    "exit_price": float        # Exit price (None if still open)
+}
 ```
 
-### SocketIO Updates
+### Trade Timestamp Parsing
 
-```typescript
-// Frontend real-time subscription
-socket.on('position_update', (data) => {
-    updatePositionPnL(data.symbol, data.pnl);
-});
-
-socket.on('pnl_summary', (data) => {
-    setRealizedPnL(data.realized);
-    setUnrealizedPnL(data.unrealized);
-    setTotalPnL(data.total);
-});
-```
-
-## Database Schema
-
-### daily_pnl Table
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│                      daily_pnl table                            │
-├──────────────────┬──────────────┬──────────────────────────────┤
-│ Column           │ Type         │ Description                  │
-├──────────────────┼──────────────┼──────────────────────────────┤
-│ id               │ INTEGER PK   │ Auto-increment               │
-│ user_id          │ VARCHAR(255) │ User identifier              │
-│ date             │ DATE         │ Trading date                 │
-│ realized_pnl     │ DECIMAL      │ Closed position P&L          │
-│ unrealized_pnl   │ DECIMAL      │ Open position MTM            │
-│ total_pnl        │ DECIMAL      │ Sum of realized + unrealized │
-│ trade_count      │ INTEGER      │ Number of trades             │
-│ win_count        │ INTEGER      │ Profitable trades            │
-│ loss_count       │ INTEGER      │ Loss-making trades           │
-│ created_at       │ DATETIME     │ Record creation time         │
-│ updated_at       │ DATETIME     │ Last update time             │
-└──────────────────┴──────────────┴──────────────────────────────┘
-```
-
-### pnl_snapshots Table
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│                    pnl_snapshots table                          │
-├──────────────────┬──────────────┬──────────────────────────────┤
-│ Column           │ Type         │ Description                  │
-├──────────────────┼──────────────┼──────────────────────────────┤
-│ id               │ INTEGER PK   │ Auto-increment               │
-│ user_id          │ VARCHAR(255) │ User identifier              │
-│ timestamp        │ DATETIME     │ Snapshot time                │
-│ total_pnl        │ DECIMAL      │ P&L at snapshot time         │
-│ positions_json   │ TEXT         │ Position details             │
-└──────────────────┴──────────────┴──────────────────────────────┘
-```
-
-## Service Implementation
-
-### P&L Calculation Service
+The system handles multiple timestamp formats from different brokers:
 
 ```python
-def calculate_total_pnl(user_id, positions, ws_data):
-    """Calculate total P&L for all positions"""
-    realized = 0
-    unrealized = 0
-
-    for position in positions:
-        symbol = position['symbol']
-        quantity = position['quantity']
-        avg_price = position['average_price']
-
-        # Get current price
-        if symbol in ws_data:
-            ltp = ws_data[symbol]['ltp']
-        else:
-            ltp = position.get('ltp', avg_price)
-
-        # Calculate unrealized for open positions
-        if quantity != 0:
-            position_pnl = (ltp - avg_price) * quantity
-            unrealized += position_pnl
-
-        # Add realized from closed positions
-        realized += position.get('realized_pnl', 0)
-
-    return {
-        'realized': round(realized, 2),
-        'unrealized': round(unrealized, 2),
-        'total': round(realized + unrealized, 2)
-    }
+# Supported formats in parse_trade_timestamp():
+formats = [
+    "%d-%b-%Y %H:%M:%S",    # AngelOne: "17-Dec-2025 10:54:03"
+    "%H:%M:%S %d-%m-%Y",    # Flattrade: "09:41:01 17-12-2025"
+    "%d-%m-%Y %H:%M:%S",    # "17-12-2025 09:41:01"
+    "%Y-%m-%d %H:%M:%S",    # ISO-like: "2025-12-17 10:30:00"
+    "%Y-%m-%dT%H:%M:%S",    # ISO: "2025-12-17T10:30:00"
+]
 ```
 
-### Daily Tracking
+### Rate Limiting
+
+Historical data API calls are rate-limited to avoid broker rate limits:
 
 ```python
-def update_daily_pnl(user_id):
-    """Update daily P&L record"""
-    today = date.today()
+class RateLimiter:
+    """Thread-safe rate limiter for API calls"""
 
-    # Get current P&L
-    positions = get_positions(user_id)
-    trades = get_trades(user_id, today)
-    pnl = calculate_total_pnl(user_id, positions, get_ws_data())
+    def __init__(self, calls_per_second=2):
+        self.calls_per_second = calls_per_second
+        self.min_interval = 1.0 / calls_per_second
+        self.last_call_time = 0
+        self.lock = threading.Lock()
 
-    # Calculate trade statistics
-    winning_trades = [t for t in trades if t['pnl'] > 0]
-    losing_trades = [t for t in trades if t['pnl'] < 0]
+    def wait(self):
+        """Wait if necessary to respect rate limit"""
+        with self.lock:
+            current_time = time_module.time()
+            elapsed = current_time - self.last_call_time
+            if elapsed < self.min_interval:
+                sleep_time = self.min_interval - elapsed
+                time_module.sleep(sleep_time)
+            self.last_call_time = time_module.time()
 
-    # Update or create daily record
-    daily = DailyPnL.query.filter_by(
-        user_id=user_id,
-        date=today
-    ).first()
-
-    if daily:
-        daily.realized_pnl = pnl['realized']
-        daily.unrealized_pnl = pnl['unrealized']
-        daily.total_pnl = pnl['total']
-        daily.trade_count = len(trades)
-        daily.win_count = len(winning_trades)
-        daily.loss_count = len(losing_trades)
-        daily.updated_at = datetime.utcnow()
-    else:
-        daily = DailyPnL(
-            user_id=user_id,
-            date=today,
-            realized_pnl=pnl['realized'],
-            unrealized_pnl=pnl['unrealized'],
-            total_pnl=pnl['total'],
-            trade_count=len(trades),
-            win_count=len(winning_trades),
-            loss_count=len(losing_trades)
-        )
-        db.session.add(daily)
-
-    db.session.commit()
+# Global instance - 2 calls per second (conservative)
+history_rate_limiter = RateLimiter(calls_per_second=2)
 ```
 
-## API Endpoints
+## API Endpoint
 
-### Get Current P&L
+### Get P&L Data
 
 ```
-GET /api/v1/pnl
-Authorization: Bearer YOUR_API_KEY
+POST /pnltracker/api/pnl
+Content-Type: application/json
+Cookie: session=...
 ```
 
 **Response:**
@@ -305,187 +158,164 @@ Authorization: Bearer YOUR_API_KEY
 {
     "status": "success",
     "data": {
-        "realized": 2500.00,
-        "unrealized": 1250.00,
-        "total": 3750.00,
-        "positions": [
-            {
-                "symbol": "SBIN",
-                "exchange": "NSE",
-                "quantity": 100,
-                "avg_price": 625.50,
-                "ltp": 630.00,
-                "pnl": 450.00,
-                "pnl_percent": 0.72
-            }
+        "current_mtm": 3750.00,
+        "max_mtm": 4200.00,
+        "max_mtm_time": "11:30",
+        "min_mtm": 1000.00,
+        "min_mtm_time": "09:45",
+        "max_drawdown": -800.00,
+        "pnl_series": [
+            {"time": 1706165700000, "value": 1000.00},
+            {"time": 1706165760000, "value": 1500.00},
+            {"time": 1706165820000, "value": 2200.00}
+        ],
+        "drawdown_series": [
+            {"time": 1706165700000, "value": 0.00},
+            {"time": 1706165760000, "value": -200.00},
+            {"time": 1706165820000, "value": 0.00}
         ]
     }
 }
 ```
 
-### Get Daily History
+### Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `current_mtm` | number | Current mark-to-market P&L |
+| `max_mtm` | number | Maximum P&L reached during the day |
+| `max_mtm_time` | string | Time when max P&L was reached (HH:MM) |
+| `min_mtm` | number | Minimum P&L during the day |
+| `min_mtm_time` | string | Time when min P&L was reached (HH:MM) |
+| `max_drawdown` | number | Largest drawdown from peak (negative) |
+| `pnl_series` | array | Time series data for P&L chart |
+| `drawdown_series` | array | Time series data for drawdown chart |
+
+## Calculation Flow
 
 ```
-GET /api/v1/pnl/history?days=30
-Authorization: Bearer YOUR_API_KEY
+┌─────────────────────────────────────────────────────────────────┐
+│                    P&L Calculation Flow                          │
+└─────────────────────────────────────────────────────────────────┘
+
+Request arrives at /pnltracker/api/pnl
+              │
+              ▼
+┌─────────────────────────┐
+│ Get broker from session │
+└───────────┬─────────────┘
+            │
+            ▼
+┌─────────────────────────┐     ┌─────────────────────┐
+│ Get tradebook via       │────▶│ services/tradebook  │
+│ get_tradebook(api_key)  │     │ _service.py         │
+└───────────┬─────────────┘     └─────────────────────┘
+            │
+            ▼
+┌─────────────────────────┐     ┌─────────────────────┐
+│ Get positions via       │────▶│ services/positionbook│
+│ get_positionbook()      │     │ _service.py         │
+└───────────┬─────────────┘     └─────────────────────┘
+            │
+            ▼
+┌─────────────────────────┐
+│ Group trades by symbol  │
+│ Create position windows │
+└───────────┬─────────────┘
+            │
+            ▼
+┌─────────────────────────┐
+│ For each symbol:        │
+│ 1. Rate limit wait      │
+│ 2. Get 1m history       │
+│ 3. Calculate MTM        │
+│ 4. Track realized P&L   │
+└───────────┬─────────────┘
+            │
+            ▼
+┌─────────────────────────┐
+│ Aggregate portfolio     │
+│ Calculate drawdown      │
+│ Return JSON response    │
+└─────────────────────────┘
 ```
 
-**Response:**
-```json
-{
-    "status": "success",
-    "data": [
-        {
-            "date": "2025-01-25",
-            "realized": 2500.00,
-            "unrealized": 1250.00,
-            "total": 3750.00,
-            "trade_count": 5,
-            "win_rate": 80
-        }
-    ]
-}
-```
+## Data Dependencies
 
-### Get P&L Chart Data
+The PnL tracker relies on these services (no dedicated database):
 
-```
-GET /api/v1/pnl/chart?interval=1m
-Authorization: Bearer YOUR_API_KEY
-```
-
-**Response:**
-```json
-{
-    "status": "success",
-    "data": [
-        {"time": 1706165700, "value": 1000},
-        {"time": 1706165760, "value": 1500},
-        {"time": 1706165820, "value": 2200}
-    ]
-}
-```
+| Service | Purpose |
+|---------|---------|
+| `services/tradebook_service.py` | Get today's executed trades |
+| `services/positionbook_service.py` | Get current positions |
+| `services/history_service.py` | Get 1-minute historical bars |
+| `database/auth_db.py` | Get user auth token and API key |
 
 ## Frontend Components
 
-### P&L Dashboard
+### React Page
 
-```typescript
-interface PnLSummary {
-  realized: number;
-  unrealized: number;
-  total: number;
-  roi: number;
-}
+**Location:** `frontend/src/pages/PnLTracker.tsx`
 
-function PnLDashboard() {
-  const { data: pnl } = useQuery({
-    queryKey: ['pnl'],
-    queryFn: () => api.getPnL(),
-    refetchInterval: 5000  // Refresh every 5 seconds
-  });
+The React frontend:
+- Polls `/pnltracker/api/pnl` periodically
+- Renders metrics cards (current MTM, max, min, drawdown)
+- Uses LightWeight Charts for interactive P&L visualization
+- Shows separate drawdown chart below main chart
 
-  return (
-    <div className="grid grid-cols-4 gap-4">
-      <PnLCard
-        label="Realized"
-        value={pnl?.realized}
-        color={pnl?.realized >= 0 ? 'green' : 'red'}
-      />
-      <PnLCard
-        label="Unrealized"
-        value={pnl?.unrealized}
-        color={pnl?.unrealized >= 0 ? 'green' : 'red'}
-      />
-      <PnLCard
-        label="Total"
-        value={pnl?.total}
-        color={pnl?.total >= 0 ? 'green' : 'red'}
-      />
-      <PnLCard
-        label="ROI"
-        value={`${pnl?.roi}%`}
-        color={pnl?.roi >= 0 ? 'green' : 'red'}
-      />
-    </div>
-  );
-}
-```
+### Legacy Jinja Template
 
-### P&L Chart
+**Location:** `templates/pnltracker.html`
 
-```typescript
-import { createChart } from 'lightweight-charts';
+Available at `/pnltracker/legacy` for backwards compatibility.
 
-function PnLChart({ data }) {
-  const chartRef = useRef(null);
+## Edge Cases Handled
 
-  useEffect(() => {
-    const chart = createChart(chartRef.current, {
-      width: 800,
-      height: 300,
-      layout: {
-        background: { type: 'solid', color: 'white' },
-        textColor: 'black',
-      }
-    });
+### Sub-Minute Trades
 
-    const lineSeries = chart.addLineSeries({
-      color: data[data.length - 1]?.value >= 0 ? '#22c55e' : '#ef4444',
-      lineWidth: 2
-    });
-
-    lineSeries.setData(data);
-
-    return () => chart.remove();
-  }, [data]);
-
-  return <div ref={chartRef} />;
-}
-```
-
-## Performance Optimization
-
-### Caching Strategy
+When a position is opened and closed within the same minute (no historical data points):
 
 ```python
-from cachetools import TTLCache
-
-# Cache P&L calculations for 1 second
-pnl_cache = TTLCache(maxsize=1000, ttl=1)
-
-def get_cached_pnl(user_id):
-    """Get P&L with caching"""
-    if user_id in pnl_cache:
-        return pnl_cache[user_id]
-
-    pnl = calculate_total_pnl(user_id)
-    pnl_cache[user_id] = pnl
-    return pnl
+# Calculate realized PnL even without historical data
+if is_closed_position:
+    if window["action"] == "BUY":
+        realized = (window["exit_price"] - window["price"]) * window["qty"]
+    else:  # SELL
+        realized = (window["price"] - window["exit_price"]) * window["qty"]
 ```
 
-### Batch Updates
+### Pre-Trade Period
+
+Zero P&L data is added from market open (9:15 AM IST) to first trade time for complete visualization.
+
+### Timezone Handling
+
+All timestamps are converted to IST (Asia/Kolkata) timezone:
 
 ```python
-def batch_update_pnl():
-    """Update P&L for all active users"""
-    active_users = get_active_users()
-    ws_data = get_all_ws_data()
+ist = pytz.timezone("Asia/Kolkata")
+if df["datetime"].dt.tz is None:
+    df["datetime"] = df["datetime"].dt.tz_localize("UTC").dt.tz_convert(ist)
+```
 
-    for user_id in active_users:
-        positions = get_positions(user_id)
-        pnl = calculate_total_pnl(user_id, positions, ws_data)
+## Drawdown Calculation
 
-        # Emit to user's socket room
-        socketio.emit('pnl_update', pnl, room=f"user_{user_id}")
+```python
+# Drawdown = Current P&L - Peak P&L (running maximum)
+portfolio_pnl["Peak"] = portfolio_pnl["Total_PnL"].cummax()
+portfolio_pnl["Drawdown"] = portfolio_pnl["Total_PnL"] - portfolio_pnl["Peak"]
+
+# Max drawdown is the minimum value (most negative)
+max_drawdown = portfolio_pnl["Drawdown"].min()
 ```
 
 ## Key Files Reference
 
 | File | Purpose |
 |------|---------|
-| `services/pnl_service.py` | P&L calculation logic |
-| `database/pnl_db.py` | Daily P&L database models |
-| `blueprints/pnl.py` | P&L API endpoints |
-| `frontend/src/components/PnLDashboard.tsx` | Dashboard UI |
-| `frontend/src/components/PnLChart.tsx` | Chart component |
+| `blueprints/pnltracker.py` | Blueprint with P&L calculation logic |
+| `services/tradebook_service.py` | Fetches tradebook from broker |
+| `services/positionbook_service.py` | Fetches current positions |
+| `services/history_service.py` | Fetches historical price data |
+| `frontend/src/pages/PnLTracker.tsx` | React UI component |
+| `templates/pnltracker.html` | Legacy Jinja template |
