@@ -21,7 +21,13 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
     - Handles all WebSocket operations through UpstoxWebSocketClient
     - Processes protobuf messages decoded to dict format
     - Manages subscriptions and market data publishing
+
+    Enhanced with proper resource management and file descriptor cleanup
+    to prevent leaks during reconnection and shutdown.
     """
+
+    # Thread cleanup timeout
+    THREAD_JOIN_TIMEOUT = 5
 
     def __init__(self):
         super().__init__()
@@ -33,7 +39,8 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.market_status: dict[str, Any] = {}
         self.connected = False
         self.running = False
-        self.lock = threading.Lock()  # Add threading lock for subscription management
+        self.lock = threading.Lock()  # Threading lock for subscription management
+        self._reconnecting = False  # Prevent concurrent reconnection attempts
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, Any] | None = None
@@ -78,12 +85,16 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.info("Connected to Upstox WebSocket")
                 return self._create_success_response("Connected to Upstox WebSocket")
             else:
+                # Clean up event loop on connection failure to prevent FD leak
+                self._stop_event_loop()
                 return self._create_error_response(
                     "CONNECTION_FAILED", "Failed to connect to Upstox WebSocket"
                 )
 
         except Exception as e:
             self.logger.error(f"Connection error: {e}")
+            # Clean up event loop on error to prevent FD leak
+            self._stop_event_loop()
             return self._create_error_response("CONNECTION_ERROR", str(e))
 
     def subscribe(
@@ -228,19 +239,85 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         try:
             self.running = False
             self.connected = False
+            self._reconnecting = False
 
             if self.ws_client and self.event_loop:
-                future = asyncio.run_coroutine_threadsafe(
-                    self.ws_client.disconnect(), self.event_loop
-                )
-                future.result(timeout=5)
+                try:
+                    future = asyncio.run_coroutine_threadsafe(
+                        self.ws_client.disconnect(), self.event_loop
+                    )
+                    future.result(timeout=self.THREAD_JOIN_TIMEOUT)
+                except Exception as e:
+                    self.logger.warning(f"Error disconnecting WebSocket client: {e}")
 
             self._stop_event_loop()
+
+            # Clear subscriptions
+            with self.lock:
+                self.subscriptions.clear()
+
             self.cleanup_zmq()
             self.logger.info("Disconnected from Upstox WebSocket")
 
         except Exception as e:
             self.logger.error(f"Disconnect error: {e}")
+        finally:
+            # Ensure flags are reset even if cleanup fails
+            self.running = False
+            self.connected = False
+
+    def cleanup(self) -> None:
+        """
+        Clean up all resources including WebSocket connection and ZMQ resources.
+        This method should be called before discarding the adapter instance.
+        """
+        try:
+            # Disconnect WebSocket if connected
+            if self.ws_client:
+                try:
+                    if self.event_loop and self.event_loop.is_running():
+                        future = asyncio.run_coroutine_threadsafe(
+                            self.ws_client.disconnect(), self.event_loop
+                        )
+                        future.result(timeout=self.THREAD_JOIN_TIMEOUT)
+                except Exception as ws_err:
+                    self.logger.error(f"Error stopping WebSocket client during cleanup: {ws_err}")
+                finally:
+                    self.ws_client = None
+
+            # Stop event loop
+            self._stop_event_loop()
+
+            # Reset adapter state
+            with self.lock:
+                self.running = False
+                self.connected = False
+                self._reconnecting = False
+                self.subscriptions.clear()
+
+            # Clean up ZMQ resources
+            self.cleanup_zmq()
+
+            self.logger.info("Upstox adapter cleaned up completely")
+
+        except Exception as e:
+            self.logger.error(f"Error during cleanup: {e}")
+            # Try one last time to clean up ZMQ resources
+            try:
+                self.cleanup_zmq()
+            except Exception as zmq_err:
+                self.logger.error(f"Error cleaning up ZMQ during final cleanup attempt: {zmq_err}")
+
+    def __del__(self):
+        """
+        Destructor - ensures resources are released even when adapter is garbage collected.
+        This is a safety net; callers should explicitly call disconnect() or cleanup().
+        """
+        try:
+            self.cleanup()
+        except Exception:
+            # Can't use logger in __del__ reliably
+            pass
 
     # Private helper methods
     def _get_auth_token(self, auth_data: dict[str, Any] | None, user_id: str) -> str | None:
@@ -274,10 +351,22 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _stop_event_loop(self):
         """Stop event loop and wait for thread to finish"""
         if self.event_loop:
-            self.event_loop.call_soon_threadsafe(self.event_loop.stop)
+            try:
+                self.event_loop.call_soon_threadsafe(self.event_loop.stop)
+            except Exception as e:
+                self.logger.debug(f"Error stopping event loop: {e}")
 
         if self.ws_thread and self.ws_thread.is_alive():
-            self.ws_thread.join(timeout=5)
+            self.ws_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
+            if self.ws_thread.is_alive():
+                self.logger.warning("WebSocket thread did not terminate within timeout")
+                # Don't clear event_loop/ws_thread if thread is still alive
+                # to prevent _start_event_loop from spawning a new loop
+                return
+            else:
+                self.ws_thread = None
+
+        self.event_loop = None
 
     def _create_instrument_key(self, token_info: dict[str, Any]) -> str:
         """Create instrument key from token info"""
