@@ -1,6 +1,16 @@
-import { Download, Loader2, Radio, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  AlertTriangle,
+  Download,
+  Loader2,
+  Pause,
+  Radio,
+  RefreshCw,
+  TrendingDown,
+  TrendingUp,
+} from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { tradingApi } from '@/api/trading'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -14,6 +24,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useLivePrice, calculateLiveStats } from '@/hooks/useLivePrice'
+import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { cn, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
@@ -38,13 +49,20 @@ export default function Holdings() {
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [showStaleWarning, setShowStaleWarning] = useState(false)
+
+  // Page visibility tracking for resource optimization
+  const { isVisible, wasHidden, timeSinceHidden } = usePageVisibility()
+  const lastFetchRef = useRef<number>(Date.now())
 
   // Centralized real-time price hook with WebSocket + MultiQuotes fallback
-  const { data: enhancedHoldings, isLive } = useLivePrice(holdings, {
+  // Automatically pauses when tab is hidden
+  const { data: enhancedHoldings, isLive, isPaused } = useLivePrice(holdings, {
     enabled: holdings.length > 0,
     useMultiQuotesFallback: true,
     staleThreshold: 5000,
     multiQuotesRefreshInterval: 30000,
+    pauseWhenHidden: true,
   })
 
   // Calculate enhanced stats based on real-time data
@@ -91,14 +109,42 @@ export default function Holdings() {
     [apiKey]
   )
 
-  // Initial fetch and polling
+  // Initial fetch and visibility-aware polling
+  // Pauses polling when tab is hidden to save resources
   useEffect(() => {
+    // Don't poll when tab is hidden
+    if (!isVisible) return
+
     fetchHoldings()
+    lastFetchRef.current = Date.now()
+
     // Reduce polling interval when live (WebSocket connected AND market open)
     const intervalMs = isLive ? 30000 : 10000
-    const interval = setInterval(() => fetchHoldings(), intervalMs)
+    const interval = setInterval(() => {
+      fetchHoldings()
+      lastFetchRef.current = Date.now()
+    }, intervalMs)
+
     return () => clearInterval(interval)
-  }, [fetchHoldings, isLive])
+  }, [fetchHoldings, isLive, isVisible])
+
+  // Refresh data when tab becomes visible after being hidden
+  useEffect(() => {
+    if (!wasHidden || !isVisible) return
+
+    const timeSinceLastFetch = Date.now() - lastFetchRef.current
+
+    // If hidden for more than 30 seconds, show stale warning and refresh
+    if (timeSinceHidden > 30000 || timeSinceLastFetch > 30000) {
+      setShowStaleWarning(true)
+      fetchHoldings()
+      lastFetchRef.current = Date.now()
+
+      // Hide the warning after 5 seconds
+      const timeout = setTimeout(() => setShowStaleWarning(false), 5000)
+      return () => clearTimeout(timeout)
+    }
+  }, [wasHidden, isVisible, timeSinceHidden, fetchHoldings])
 
   // Listen for mode changes (live/analyze) and refresh data
   useEffect(() => {
@@ -137,18 +183,38 @@ export default function Holdings() {
     a.href = url
     a.download = `holdings_${new Date().toISOString().split('T')[0]}.csv`
     a.click()
+    // Revoke the object URL to free memory
+    URL.revokeObjectURL(url)
   }
 
   const isProfit = (value: number) => value >= 0
 
   return (
     <div className="space-y-6">
+      {/* Stale Data Warning */}
+      {showStaleWarning && (
+        <Alert variant="default" className="bg-amber-500/10 border-amber-500/30">
+          <AlertTriangle className="h-4 w-4 text-amber-600" />
+          <AlertDescription className="text-amber-700 dark:text-amber-400">
+            Data is being refreshed after tab was inactive...
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <div className="flex items-center gap-3">
             <h1 className="text-3xl font-bold tracking-tight">Investor Summary</h1>
-            {isLive && (
+            {isPaused ? (
+              <Badge
+                variant="outline"
+                className="bg-amber-500/10 text-amber-600 border-amber-500/30 gap-1"
+              >
+                <Pause className="h-3 w-3" />
+                Paused
+              </Badge>
+            ) : isLive ? (
               <Badge
                 variant="outline"
                 className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30 gap-1"
@@ -156,7 +222,7 @@ export default function Holdings() {
                 <Radio className="h-3 w-3 animate-pulse" />
                 Live
               </Badge>
-            )}
+            ) : null}
           </div>
           <p className="text-muted-foreground">View your holdings portfolio</p>
         </div>
