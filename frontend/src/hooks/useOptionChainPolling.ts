@@ -1,32 +1,49 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { OptionChainResponse } from '@/types/option-chain'
+import { usePageVisibility } from './usePageVisibility'
 
-interface UseOptionChainSSEOptions {
+interface UseOptionChainPollingOptions {
   enabled: boolean
   refreshInterval?: number
+  pauseWhenHidden?: boolean
 }
 
-interface UseOptionChainSSEState {
+interface UseOptionChainPollingState {
   data: OptionChainResponse | null
   isLoading: boolean
   isConnected: boolean
+  isPaused: boolean
   error: string | null
   lastUpdate: Date | null
 }
 
-export function useOptionChainSSE(
+/**
+ * Hook for polling option chain data from REST API.
+ * Supports page visibility to pause polling when tab is hidden.
+ *
+ * @param apiKey - OpenAlgo API key
+ * @param underlying - Underlying symbol (NIFTY, BANKNIFTY, etc.)
+ * @param exchange - Exchange code (NSE_INDEX, BSE_INDEX)
+ * @param expiryDate - Expiry date in DDMMMYY format
+ * @param strikeCount - Number of strikes to fetch
+ * @param options - Polling options
+ */
+export function useOptionChainPolling(
   apiKey: string | null,
   underlying: string,
   exchange: string,
   expiryDate: string,
   strikeCount: number,
-  options: UseOptionChainSSEOptions = { enabled: true, refreshInterval: 3000 }
+  options: UseOptionChainPollingOptions = { enabled: true, refreshInterval: 30000, pauseWhenHidden: true }
 ) {
-  const { enabled, refreshInterval = 3000 } = options
-  const [state, setState] = useState<UseOptionChainSSEState>({
+  const { enabled, refreshInterval = 30000, pauseWhenHidden = true } = options
+  const { isVisible } = usePageVisibility()
+
+  const [state, setState] = useState<UseOptionChainPollingState>({
     data: null,
     isLoading: false,
     isConnected: false,
+    isPaused: false,
     error: null,
     lastUpdate: null,
   })
@@ -34,11 +51,15 @@ export function useOptionChainSSE(
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
 
+  // Determine if polling should be active
+  const shouldPoll = enabled && (!pauseWhenHidden || isVisible)
+
   const fetchData = useCallback(async () => {
     if (!apiKey || !underlying || !exchange || !expiryDate) {
       return
     }
 
+    // Skip if already fetching
     if (abortControllerRef.current) {
       return
     }
@@ -106,15 +127,25 @@ export function useOptionChainSSE(
     }
   }, [apiKey, underlying, exchange, expiryDate, strikeCount])
 
+  // Handle polling start/stop based on visibility
   useEffect(() => {
-    if (!enabled) {
+    if (!shouldPoll) {
+      // Pause polling
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current)
+        intervalRef.current = null
+      }
+      setState((prev) => ({ ...prev, isPaused: !enabled ? false : true }))
       return
     }
 
-    setState((prev) => ({ ...prev, isConnected: true }))
+    // Resume/start polling
+    setState((prev) => ({ ...prev, isConnected: true, isPaused: false }))
 
+    // Fetch immediately when becoming visible
     fetchData()
 
+    // Set up interval
     intervalRef.current = setInterval(fetchData, refreshInterval)
 
     return () => {
@@ -127,7 +158,7 @@ export function useOptionChainSSE(
         abortControllerRef.current = null
       }
     }
-  }, [enabled, fetchData, refreshInterval])
+  }, [shouldPoll, fetchData, refreshInterval, enabled])
 
   const refetch = useCallback(() => {
     fetchData()
