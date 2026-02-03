@@ -390,6 +390,7 @@ def sandbox_close_position(
                     {
                         "status": "success",
                         "message": "No open positions to close",
+                        "order_ids": [],  # Consistent with success response
                         "mode": "analyze",
                     },
                     200,
