@@ -153,6 +153,7 @@ class FyersHSMWebSocket:
         # Health check state
         self._last_message_time = None
         self._health_check_thread = None
+        self._health_check_stop_event = threading.Event()  # Signal to stop health check thread
 
         # Data structures
         self.subscriptions = {}  # topic_id -> topic_name mapping
@@ -905,8 +906,11 @@ class FyersHSMWebSocket:
 
     def _start_health_check(self):
         """Start health check thread to detect silent stalls"""
-        # Stop existing health check thread
+        # Stop existing health check thread first
         self._stop_health_check()
+
+        # Clear stop event before starting new thread
+        self._health_check_stop_event.clear()
 
         self._health_check_thread = threading.Thread(target=self._health_check_loop, daemon=True)
         self._health_check_thread.start()
@@ -914,10 +918,14 @@ class FyersHSMWebSocket:
 
     def _stop_health_check(self):
         """Stop health check thread"""
-        # Thread will exit on its own when self.connected becomes False
+        # Signal thread to stop immediately
+        self._health_check_stop_event.set()
+
         if self._health_check_thread and self._health_check_thread.is_alive():
-            # Wait briefly for thread to notice disconnection
-            self._health_check_thread.join(timeout=2)
+            # Wait for thread to notice the stop event
+            self._health_check_thread.join(timeout=5)
+            if self._health_check_thread.is_alive():
+                self.logger.warning("Health check thread did not stop within timeout")
         self._health_check_thread = None
 
     def _health_check_loop(self):
@@ -927,7 +935,11 @@ class FyersHSMWebSocket:
         """
         while self.running and self.connected:
             try:
-                time.sleep(self.HEALTH_CHECK_INTERVAL)
+                # Use event.wait() instead of time.sleep() so thread can be interrupted
+                if self._health_check_stop_event.wait(timeout=self.HEALTH_CHECK_INTERVAL):
+                    # Event was set - stop requested
+                    self.logger.debug("Health check thread received stop signal")
+                    break
 
                 if not self.running or not self.connected:
                     break
@@ -1069,8 +1081,13 @@ class FyersHSMWebSocket:
                 f"Updated symbol mappings. Total mappings: {len(self.symbol_mappings)}"
             )
 
-        # Store for resubscription after reconnect
-        self._pending_hsm_symbols = list(hsm_symbols)
+        # Store for resubscription after reconnect (merge with existing, avoid duplicates)
+        with self.lock:
+            existing_symbols = set(self._pending_hsm_symbols)
+            for symbol in hsm_symbols:
+                if symbol not in existing_symbols:
+                    self._pending_hsm_symbols.append(symbol)
+                    existing_symbols.add(symbol)
 
         # Create and send subscription message
         sub_msg = self._create_subscription_message(hsm_symbols, channel=11)
@@ -1080,7 +1097,7 @@ class FyersHSMWebSocket:
         for i, symbol in enumerate(hsm_symbols, 1):
             mapped_symbol = symbol_mappings.get(symbol, "Unknown") if symbol_mappings else "N/A"
             # self.logger.info(f"  {i}. {symbol} => {mapped_symbol}")
-        self.logger.debug(f"Total active subscriptions in HSM: {len(hsm_symbols)}")
+        self.logger.debug(f"Total active subscriptions in HSM: {len(self._pending_hsm_symbols)}")
 
     def is_connected(self) -> bool:
         """Check if connected and authenticated"""
@@ -1133,6 +1150,10 @@ class FyersHSMWebSocket:
                 except:
                     pass
                 self.ws = None
+
+            # Signal health check thread to stop
+            if hasattr(self, "_health_check_stop_event"):
+                self._health_check_stop_event.set()
 
             # Reset threads
             if hasattr(self, "ws_thread"):
