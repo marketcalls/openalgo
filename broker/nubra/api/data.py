@@ -15,9 +15,9 @@ logger = get_logger(__name__)
 
 
 def get_api_response(endpoint, auth, method="GET", payload=""):
-    """Helper function to make API calls to Angel One"""
+    """Helper function to make API calls to Nubra"""
     AUTH_TOKEN = auth
-    api_key = os.getenv("BROKER_API_KEY")
+    device_id = "OPENALGO"  # Fixed device ID
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -26,18 +26,14 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
         "Authorization": f"Bearer {AUTH_TOKEN}",
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "X-UserType": "USER",
-        "X-SourceID": "WEB",
-        "X-ClientLocalIP": "CLIENT_LOCAL_IP",
-        "X-ClientPublicIP": "CLIENT_PUBLIC_IP",
-        "X-MACAddress": "MAC_ADDRESS",
-        "X-PrivateKey": api_key,
+        "x-device-id": device_id,
     }
 
     if isinstance(payload, dict):
         payload = json.dumps(payload)
 
-    url = f"https://apiconnect.angelbroking.com{endpoint}"
+    # Nubra base URL
+    url = f"https://api.nubra.io{endpoint}"
 
     try:
         if method == "GET":
@@ -53,7 +49,7 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
         if response.status_code == 403:
             logger.debug(f"Debug - API returned 403 Forbidden. Headers: {headers}")
             logger.debug(f"Debug - Response text: {response.text}")
-            raise Exception("Authentication failed. Please check your API key and auth token.")
+            raise Exception("Authentication failed. Please check your auth token.")
 
         return json.loads(response.text)
     except json.JSONDecodeError:
@@ -83,60 +79,90 @@ class BrokerData:
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
-        Get real-time quotes for given symbol
+        Get real-time quotes for given symbol using Nubra's orderbooks API.
+        
+        Nubra API: GET /orderbooks/{ref_id}?levels=1
+        
+        Note: Nubra's orderbook API requires numeric ref_id. Index symbols 
+        don't have ref_id in Nubra's API, so quotes are not available for indices.
+        
         Args:
             symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX)
+            exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX)
         Returns:
             dict: Quote data with required fields
         """
         try:
-            # Convert symbol to broker format and get token
-            br_symbol = get_br_symbol(symbol, exchange)
+            # Check if this is an index - Nubra orderbook API doesn't support indices
+            # Return zeros gracefully instead of throwing an error
+            if exchange.endswith('_INDEX'):
+                logger.info(f"Index quotes not available from Nubra for {symbol} on {exchange}")
+                return {
+                    "bid": 0,
+                    "ask": 0,
+                    "open": 0,
+                    "high": 0,
+                    "low": 0,
+                    "ltp": 0,
+                    "prev_close": 0,
+                    "volume": 0,
+                    "oi": 0,
+                }
+
+            # Get token (ref_id) for the symbol
             token = get_token(symbol, exchange)
+            
+            if not token:
+                raise Exception(f"Could not find token for symbol {symbol} on {exchange}")
 
-            if exchange == "NSE_INDEX":
-                exchange = "NSE"
-            elif exchange == "BSE_INDEX":
-                exchange = "BSE"
-            elif exchange == "MCX_INDEX":
-                exchange = "MCX"
+            # Verify token is numeric (ref_id) - indices have text tokens which won't work
+            if not str(token).isdigit():
+                raise Exception(f"Invalid token '{token}' for {symbol}. Nubra orderbook API requires numeric ref_id.")
 
-            # Prepare payload for Angel's quote API
-            payload = {"mode": "FULL", "exchangeTokens": {exchange: [token]}}
+            logger.info(f"Fetching quotes for {symbol} on {exchange} with token {token}")
 
+            # Call Nubra's orderbooks API with 1 level of depth for quotes
             response = get_api_response(
-                "/rest/secure/angelbroking/market/v1/quote/", self.auth_token, "POST", payload
+                f"/orderbooks/{token}?levels=1", self.auth_token, "GET"
             )
+            
+            logger.debug(f"Nubra orderbooks response: {response}")
 
-            if not response.get("status"):
-                raise Exception(f"Error from Angel API: {response.get('message', 'Unknown error')}")
-
-            # Extract quote data from response
-            fetched_data = response.get("data", {}).get("fetched", [])
-            if not fetched_data:
+            # Extract orderBook data from response
+            orderbook = response.get("orderBook", {})
+            
+            # Check if we got valid data
+            if not orderbook:
+                logger.warning(f"Empty orderbook response for {symbol} on {exchange}")
                 raise Exception("No quote data received")
 
-            quote = fetched_data[0]
+            # Parse bid/ask from arrays
+            # Nubra format: {"p": price, "q": quantity, "o": num_orders}
+            # Prices are in paise, need to convert to rupees (divide by 100)
+            bids = orderbook.get("bid", [])
+            asks = orderbook.get("ask", [])
+            
+            # For some instruments, bid/ask might be empty - that's ok, we still have LTP
+            bid_price = float(bids[0].get("p", 0)) / 100 if bids else 0
+            ask_price = float(asks[0].get("p", 0)) / 100 if asks else 0
+            ltp = float(orderbook.get("ltp", 0)) / 100
 
-            # Return quote in common format
-            depth = quote.get("depth", {})
-            bids = depth.get("buy", [])
-            asks = depth.get("sell", [])
-
+            # Return quote in OpenAlgo format
+            # Note: Nubra doesn't provide open/high/low/close/oi in orderbook API
             return {
-                "bid": float(bids[0].get("price", 0)) if bids else 0,
-                "ask": float(asks[0].get("price", 0)) if asks else 0,
-                "open": float(quote.get("open", 0)),
-                "high": float(quote.get("high", 0)),
-                "low": float(quote.get("low", 0)),
-                "ltp": float(quote.get("ltp", 0)),
-                "prev_close": float(quote.get("close", 0)),
-                "volume": int(quote.get("tradeVolume", 0)),
-                "oi": int(quote.get("opnInterest", 0)),
+                "bid": bid_price,
+                "ask": ask_price,
+                "open": 0,  # Not available in Nubra orderbook API
+                "high": 0,  # Not available in Nubra orderbook API
+                "low": 0,   # Not available in Nubra orderbook API
+                "ltp": ltp,
+                "prev_close": 0,  # Not available in Nubra orderbook API
+                "volume": int(orderbook.get("volume", 0)),
+                "oi": 0,  # Not available in Nubra orderbook API
             }
 
         except Exception as e:
+            logger.error(f"Error fetching quotes for {symbol} on {exchange}: {str(e)}")
             raise Exception(f"Error fetching quotes: {str(e)}")
 
     def get_multiquotes(self, symbols: list) -> list:
@@ -666,7 +692,13 @@ class BrokerData:
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
-        Get market depth for given symbol
+        Get market depth for given symbol using Nubra's orderbooks API.
+        
+        Nubra API: GET /orderbooks/{ref_id}?levels=5
+        
+        Note: Nubra's orderbook API requires numeric ref_id. Index symbols 
+        don't have ref_id in Nubra's API, so depth is not available for indices.
+        
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX)
@@ -674,72 +706,105 @@ class BrokerData:
             dict: Market depth data with bids, asks and other details
         """
         try:
-            # Convert symbol to broker format and get token
-            br_symbol = get_br_symbol(symbol, exchange)
+            # Check if this is an index - Nubra orderbook API doesn't support indices
+            # Return zeros gracefully instead of throwing an error
+            if exchange.endswith('_INDEX'):
+                logger.info(f"Index depth not available from Nubra for {symbol} on {exchange}")
+                return {
+                    "bids": [{"price": 0, "quantity": 0} for _ in range(5)],
+                    "asks": [{"price": 0, "quantity": 0} for _ in range(5)],
+                    "high": 0,
+                    "low": 0,
+                    "ltp": 0,
+                    "ltq": 0,
+                    "open": 0,
+                    "prev_close": 0,
+                    "volume": 0,
+                    "oi": 0,
+                    "totalbuyqty": 0,
+                    "totalsellqty": 0,
+                }
+
+            # Get token (ref_id) for the symbol
             token = get_token(symbol, exchange)
+            
+            if not token:
+                raise Exception(f"Could not find token for symbol {symbol} on {exchange}")
 
-            if exchange == "NSE_INDEX":
-                exchange = "NSE"
-            elif exchange == "BSE_INDEX":
-                exchange = "BSE"
-            elif exchange == "MCX_INDEX":
-                exchange = "MCX"
+            # Verify token is numeric (ref_id) - indices have text tokens which won't work
+            if not str(token).isdigit():
+                raise Exception(f"Invalid token '{token}' for {symbol}. Nubra orderbook API requires numeric ref_id.")
 
-            # Prepare payload for market depth API
-            payload = {"mode": "FULL", "exchangeTokens": {exchange: [token]}}
+            logger.info(f"Fetching depth for {symbol} on {exchange} with token {token}")
 
+            # Call Nubra's orderbooks API with 5 levels of depth
             response = get_api_response(
-                "/rest/secure/angelbroking/market/v1/quote/", self.auth_token, "POST", payload
+                f"/orderbooks/{token}?levels=5", self.auth_token, "GET"
             )
 
-            if not response.get("status"):
-                raise Exception(f"Error from Angel API: {response.get('message', 'Unknown error')}")
-
-            # Extract depth data
-            fetched_data = response.get("data", {}).get("fetched", [])
-            if not fetched_data:
+            # Extract orderBook data from response
+            orderbook = response.get("orderBook", {})
+            if not orderbook:
                 raise Exception("No depth data received")
 
-            quote = fetched_data[0]
-            depth = quote.get("depth", {})
-
+            # Parse bid/ask from arrays
+            # Nubra format: {"p": price in paise, "q": quantity, "o": num_orders}
+            bid_orders = orderbook.get("bid", [])
+            ask_orders = orderbook.get("ask", [])
+            
             # Format bids and asks with exactly 5 entries each
+            # Convert price from paise to rupees (divide by 100)
             bids = []
             asks = []
 
             # Process buy orders (top 5)
-            buy_orders = depth.get("buy", [])
             for i in range(5):  # Ensure exactly 5 entries
-                if i < len(buy_orders):
-                    bid = buy_orders[i]
-                    bids.append({"price": bid.get("price", 0), "quantity": bid.get("quantity", 0)})
+                if i < len(bid_orders):
+                    bid = bid_orders[i]
+                    bids.append({
+                        "price": float(bid.get("p", 0)) / 100,
+                        "quantity": int(bid.get("q", 0))
+                    })
                 else:
                     bids.append({"price": 0, "quantity": 0})
 
             # Process sell orders (top 5)
-            sell_orders = depth.get("sell", [])
             for i in range(5):  # Ensure exactly 5 entries
-                if i < len(sell_orders):
-                    ask = sell_orders[i]
-                    asks.append({"price": ask.get("price", 0), "quantity": ask.get("quantity", 0)})
+                if i < len(ask_orders):
+                    ask = ask_orders[i]
+                    asks.append({
+                        "price": float(ask.get("p", 0)) / 100,
+                        "quantity": int(ask.get("q", 0))
+                    })
                 else:
                     asks.append({"price": 0, "quantity": 0})
 
-            # Return depth data in common format matching REST API response
+            # Calculate total buy and sell quantities
+            totalbuyqty = sum(bid.get("q", 0) for bid in bid_orders)
+            totalsellqty = sum(ask.get("q", 0) for ask in ask_orders)
+            
+            # LTP and other values - convert from paise to rupees
+            ltp = float(orderbook.get("ltp", 0)) / 100
+            ltq = int(orderbook.get("ltq", 0))
+            volume = int(orderbook.get("volume", 0))
+
+            # Return depth data in OpenAlgo format
+            # Note: Nubra orderbook API doesn't provide open/high/low/close/oi
             return {
                 "bids": bids,
                 "asks": asks,
-                "high": quote.get("high", 0),
-                "low": quote.get("low", 0),
-                "ltp": quote.get("ltp", 0),
-                "ltq": quote.get("lastTradeQty", 0),
-                "open": quote.get("open", 0),
-                "prev_close": quote.get("close", 0),
-                "volume": quote.get("tradeVolume", 0),
-                "oi": quote.get("opnInterest", 0),
-                "totalbuyqty": quote.get("totBuyQuan", 0),
-                "totalsellqty": quote.get("totSellQuan", 0),
+                "high": 0,  # Not available in Nubra orderbook API
+                "low": 0,   # Not available in Nubra orderbook API
+                "ltp": ltp,
+                "ltq": ltq,
+                "open": 0,  # Not available in Nubra orderbook API
+                "prev_close": 0,  # Not available in Nubra orderbook API
+                "volume": volume,
+                "oi": 0,  # Not available in Nubra orderbook API
+                "totalbuyqty": totalbuyqty,
+                "totalsellqty": totalsellqty,
             }
 
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
+
