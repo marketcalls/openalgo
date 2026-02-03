@@ -1,0 +1,27 @@
+# Kubernetes secrets and sensitive files
+secrets.yaml
+*.secret.yaml
+*-secret.yaml
+
+# Environment files
+.env
+.env.*
+!.env.template
+
+# Backups
+backup/
+*.backup
+
+# Temporary files
+*.tmp
+*.swp
+*~
+
+# IDE files
+.vscode/
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
