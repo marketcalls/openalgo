@@ -360,6 +360,9 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.ws_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
             if self.ws_thread.is_alive():
                 self.logger.warning("WebSocket thread did not terminate within timeout")
+                # Don't clear event_loop/ws_thread if thread is still alive
+                # to prevent _start_event_loop from spawning a new loop
+                return
             else:
                 self.ws_thread = None
 
