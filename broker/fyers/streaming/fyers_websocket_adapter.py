@@ -355,6 +355,322 @@ class FyersWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error(f"Subscription error: {e}")
             return {"status": "error", "message": f"Subscription failed: {str(e)}"}
 
+    def subscribe_bulk(self, symbols: list, mode: int = 2, depth_level: int = 5):
+        """
+        Subscribe to multiple symbols in a single batch operation.
+
+        OPTIMIZATION: This method batches all symbol subscriptions into a single
+        broker API call per mode, significantly reducing latency for option chains.
+
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+            mode: Subscription mode - 1:LTP, 2:Quote, 3:Depth
+            depth_level: Depth level (not used in Fyers standard depth)
+
+        Returns:
+            dict: Response with status and per-symbol results
+        """
+        try:
+            # Auto-reconnect if disconnected
+            if not self.connected or not self.fyers_adapter:
+                self.logger.info("Not connected to Fyers - attempting to reconnect...")
+                connect_result = self.connect()
+                if not connect_result or connect_result.get("status") != "success":
+                    return {
+                        "status": "error",
+                        "results": [],
+                        "subscribed_count": 0,
+                        "failed_count": len(symbols),
+                        "message": "Failed to reconnect to Fyers WebSocket"
+                    }
+
+            # Ensure adapter is properly connected
+            if self.fyers_adapter and not self.fyers_adapter.connected:
+                if not self.fyers_adapter.connect():
+                    return {
+                        "status": "error",
+                        "results": [],
+                        "subscribed_count": 0,
+                        "failed_count": len(symbols),
+                        "message": "Failed to reconnect Fyers adapter"
+                    }
+
+            results = []
+            subscribed_count = 0
+            failed_count = 0
+
+            # Separate symbols by type: regular vs TBT (50-level depth)
+            regular_symbols = []
+            tbt_symbols = []
+
+            for symbol_info in symbols:
+                symbol = symbol_info.get("symbol")
+                exchange = symbol_info.get("exchange")
+
+                if not symbol or not exchange:
+                    results.append({
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "status": "error",
+                        "message": "Missing symbol or exchange"
+                    })
+                    failed_count += 1
+                    continue
+
+                # Check if 50-level depth is requested
+                if mode == 3 and symbol.endswith(":50") and exchange in self.TBT_SUPPORTED_EXCHANGES:
+                    tbt_symbols.append({"symbol": symbol, "exchange": exchange})
+                else:
+                    regular_symbols.append({"symbol": symbol, "exchange": exchange})
+
+            # OPTIMIZATION: Batch subscribe regular symbols (LTP, Quote, 5-level Depth)
+            if regular_symbols:
+                with self.lock:
+                    # Prepare symbol list for Fyers API
+                    symbol_info_list = [{"exchange": s["exchange"], "symbol": s["symbol"]} for s in regular_symbols]
+
+                    # Create a shared callback that routes data to the correct subscription
+                    def bulk_data_callback(data):
+                        """Handle market data for bulk subscriptions"""
+                        try:
+                            if not data:
+                                return
+
+                            # Get original symbol info from data
+                            orig_symbol = data.get("symbol", "")
+                            orig_exchange = data.get("exchange", "")
+                            subscription_key = f"{orig_exchange}:{orig_symbol}:{mode}"
+
+                            # Check if subscription is still active
+                            if subscription_key not in self.subscriptions:
+                                return
+
+                            # Ensure correct mode is set
+                            data["subscription_mode"] = mode
+                            self._send_data(data)
+
+                        except Exception as e:
+                            self.logger.error(f"Error in bulk data callback: {e}")
+
+                    # Store callback reference
+                    if not hasattr(self, "active_callbacks"):
+                        self.active_callbacks = {}
+
+                    # Subscribe based on mode
+                    success = False
+                    if mode == 1:  # LTP
+                        success = self.fyers_adapter.subscribe_ltp(symbol_info_list, bulk_data_callback)
+                    elif mode == 2:  # Quote
+                        success = self.fyers_adapter.subscribe_quote(symbol_info_list, bulk_data_callback)
+                    elif mode == 3:  # Depth (5-level)
+                        success = self.fyers_adapter.subscribe_depth(symbol_info_list, bulk_data_callback)
+
+                    # Process results
+                    for s in regular_symbols:
+                        symbol = s["symbol"]
+                        exchange = s["exchange"]
+                        subscription_key = f"{exchange}:{symbol}:{mode}"
+
+                        if success:
+                            # Track subscription
+                            self.subscriptions[subscription_key] = {
+                                "symbol": symbol,
+                                "exchange": exchange,
+                                "mode": mode,
+                                "subscribed_at": time.time(),
+                            }
+                            self.active_callbacks[subscription_key] = bulk_data_callback
+
+                            results.append({
+                                "symbol": symbol,
+                                "exchange": exchange,
+                                "status": "success",
+                                "mode": mode,
+                                "depth_level": 5 if mode == 3 else None
+                            })
+                            subscribed_count += 1
+                        else:
+                            results.append({
+                                "symbol": symbol,
+                                "exchange": exchange,
+                                "status": "error",
+                                "message": "Bulk subscription failed"
+                            })
+                            failed_count += 1
+
+                    if success:
+                        self.logger.info(f"Bulk subscribed {len(regular_symbols)} symbols (mode={mode})")
+
+            # Handle TBT (50-level depth) symbols individually (TBT has limitations)
+            for s in tbt_symbols:
+                symbol = s["symbol"]
+                exchange = s["exchange"]
+                subscription_key = f"{exchange}:{symbol}:{mode}"
+
+                # Create individual callback for TBT
+                def tbt_callback(data, sym=symbol, exch=exchange):
+                    try:
+                        if data:
+                            data["symbol"] = sym
+                            data["exchange"] = exch
+                            data["subscription_mode"] = mode
+                            self._send_data(data)
+                    except Exception as e:
+                        self.logger.error(f"Error in TBT callback: {e}")
+
+                actual_symbol = symbol[:-3]  # Remove :50 suffix
+                success = self._subscribe_tbt_depth(actual_symbol, exchange, tbt_callback, symbol)
+
+                if success:
+                    self.subscriptions[subscription_key] = {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "mode": mode,
+                        "subscribed_at": time.time(),
+                    }
+                    results.append({
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "status": "success",
+                        "mode": mode,
+                        "depth_level": 50
+                    })
+                    subscribed_count += 1
+                else:
+                    results.append({
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "status": "error",
+                        "message": "TBT subscription failed"
+                    })
+                    failed_count += 1
+
+            # Determine overall status
+            if failed_count == 0:
+                status = "success"
+            elif subscribed_count == 0:
+                status = "error"
+            else:
+                status = "partial"
+
+            return {
+                "status": status,
+                "results": results,
+                "subscribed_count": subscribed_count,
+                "failed_count": failed_count
+            }
+
+        except Exception as e:
+            self.logger.error(f"Bulk subscription error: {e}")
+            return {
+                "status": "error",
+                "results": [],
+                "subscribed_count": 0,
+                "failed_count": len(symbols),
+                "message": str(e)
+            }
+
+    def unsubscribe_bulk(self, symbols: list, mode: int = 2):
+        """
+        Unsubscribe from multiple symbols in a single batch operation.
+
+        Note: Fyers HSM doesn't support selective unsubscription, so this
+        removes tracking and if no subscriptions remain, disconnects entirely.
+
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+            mode: Subscription mode
+
+        Returns:
+            dict: Response with status and per-symbol results
+        """
+        try:
+            results = []
+            unsubscribed_count = 0
+            failed_count = 0
+
+            with self.lock:
+                for symbol_info in symbols:
+                    symbol = symbol_info.get("symbol")
+                    exchange = symbol_info.get("exchange")
+
+                    if not symbol or not exchange:
+                        results.append({
+                            "symbol": symbol,
+                            "exchange": exchange,
+                            "status": "error",
+                            "message": "Missing symbol or exchange"
+                        })
+                        failed_count += 1
+                        continue
+
+                    key = f"{exchange}:{symbol}:{mode}"
+
+                    if key in self.subscriptions:
+                        # Remove from tracking
+                        self.subscriptions.pop(key)
+
+                        # Remove callback reference
+                        if hasattr(self, "active_callbacks") and key in self.active_callbacks:
+                            del self.active_callbacks[key]
+
+                        # Clean up TBT if depth mode
+                        if mode == 3:
+                            self._unsubscribe_tbt_depth(symbol, exchange)
+
+                        results.append({
+                            "symbol": symbol,
+                            "exchange": exchange,
+                            "status": "success"
+                        })
+                        unsubscribed_count += 1
+                    else:
+                        results.append({
+                            "symbol": symbol,
+                            "exchange": exchange,
+                            "status": "warning",
+                            "message": "Not subscribed"
+                        })
+                        # Count as success since the end state is achieved
+                        unsubscribed_count += 1
+
+            # If no more subscriptions, disconnect to stop background data
+            if len(self.subscriptions) == 0:
+                self.logger.info("No active subscriptions remaining - disconnecting from Fyers")
+                try:
+                    if self.fyers_adapter:
+                        self.fyers_adapter.disconnect(clear_mappings=False)
+                    self.connected = False
+                    if hasattr(self, "active_callbacks"):
+                        self.active_callbacks.clear()
+                except Exception as e:
+                    self.logger.error(f"Error disconnecting: {e}")
+
+            # Determine overall status
+            if failed_count == 0:
+                status = "success"
+            elif unsubscribed_count == 0:
+                status = "error"
+            else:
+                status = "partial"
+
+            return {
+                "status": status,
+                "results": results,
+                "unsubscribed_count": unsubscribed_count,
+                "failed_count": failed_count
+            }
+
+        except Exception as e:
+            self.logger.error(f"Bulk unsubscription error: {e}")
+            return {
+                "status": "error",
+                "results": [],
+                "unsubscribed_count": 0,
+                "failed_count": len(symbols),
+                "message": str(e)
+            }
+
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2):
         """
         Unsubscribe from market data
