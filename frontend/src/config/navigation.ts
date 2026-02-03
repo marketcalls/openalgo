@@ -63,6 +63,7 @@ export const profileMenuItems: NavItem[] = [
   { href: '/python', label: 'Python Strategies', icon: Code2 },
   { href: '/pnl-tracker', label: 'PnL Tracker', icon: BarChart3 },
   { href: '/historify', label: 'Historify', icon: Database },
+  { href: '/optionchain', label: 'Option Chain', icon: TrendingUp },
   { href: '/search/token', label: 'Search', icon: Search },
   { href: '/sandbox', label: 'Sandbox', icon: FlaskConical },
   { href: '/admin', label: 'Admin', icon: Settings },
