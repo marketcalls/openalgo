@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { RefreshCw, TrendingUp } from 'lucide-react'
+import { RefreshCw, TrendingUp, Wifi, WifiOff } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
-import { useOptionChainSSE } from '@/hooks/useOptionChainSSE'
+import { useOptionChainLive } from '@/hooks/useOptionChainLive'
 import { useOptionChainPreferences } from '@/hooks/useOptionChainPreferences'
 import { optionChainApi } from '@/api/option-chain'
 import type { BarDataSource, BarStyle, ColumnKey, OptionStrike } from '@/types/option-chain'
@@ -206,7 +206,7 @@ function OptionChainRow({
       case 'ce_volume':
         return <span className="font-mono text-xs">{formatInLakhs(ce?.volume)}</span>
       case 'ce_bid_qty':
-        return <span className="text-xs">{ce?.bid ? 0 : 0}</span>
+        return <span className="text-xs">{ce?.bid_qty ?? 0}</span>
       case 'ce_bid':
         return <span className="text-red-500 text-xs">{formatPrice(ce?.bid)}</span>
       case 'ce_ltp':
@@ -214,7 +214,7 @@ function OptionChainRow({
       case 'ce_ask':
         return <span className="text-green-500 text-xs">{formatPrice(ce?.ask)}</span>
       case 'ce_ask_qty':
-        return <span className="text-xs">{ce?.ask ? 0 : 0}</span>
+        return <span className="text-xs">{ce?.ask_qty ?? 0}</span>
       case 'ce_spread':
         return <span className={cn('text-xs', ceSpreadClass)}>{formatPrice(ceSpread)}</span>
       default:
@@ -229,7 +229,7 @@ function OptionChainRow({
       case 'pe_volume':
         return <span className="font-mono text-xs">{formatInLakhs(pe?.volume)}</span>
       case 'pe_bid_qty':
-        return <span className="text-xs">{pe?.bid ? 0 : 0}</span>
+        return <span className="text-xs">{pe?.bid_qty ?? 0}</span>
       case 'pe_bid':
         return <span className="text-red-500 text-xs">{formatPrice(pe?.bid)}</span>
       case 'pe_ltp':
@@ -237,7 +237,7 @@ function OptionChainRow({
       case 'pe_ask':
         return <span className="text-green-500 text-xs">{formatPrice(pe?.ask)}</span>
       case 'pe_ask_qty':
-        return <span className="text-xs">{pe?.ask ? 0 : 0}</span>
+        return <span className="text-xs">{pe?.ask_qty ?? 0}</span>
       case 'pe_spread':
         return <span className={cn('text-xs', peSpreadClass)}>{formatPrice(peSpread)}</span>
       default:
@@ -372,15 +372,16 @@ export default function OptionChain() {
 
   const underlyingInfo = UNDERLYINGS.find((u) => u.value === selectedUnderlying)
   const exchange = underlyingInfo?.brokerExchange ?? 'NSE_INDEX'
-  const expiryExchange = underlyingInfo?.exchange ?? 'NFO'
+  const optionExchange = underlyingInfo?.exchange ?? 'NFO'
 
-  const { data, isConnected, error, lastUpdate, refetch, isLoading } = useOptionChainSSE(
+  const { data, isConnected, isStreaming, isPaused, error, lastUpdate, refetch, isLoading, streamingSymbols } = useOptionChainLive(
     apiKey,
     selectedUnderlying,
     exchange,
+    optionExchange,
     convertExpiryForAPI(selectedExpiry),
     strikeCount,
-    { enabled: !!selectedExpiry, refreshInterval: 3000 }
+    { enabled: !!selectedExpiry, oiRefreshInterval: 30000, pauseWhenHidden: true }
   )
 
   useEffect(() => {
@@ -388,7 +389,7 @@ export default function OptionChain() {
       if (!apiKey || !selectedUnderlying) return
 
       try {
-        const response = await optionChainApi.getExpiries(apiKey, selectedUnderlying, expiryExchange)
+        const response = await optionChainApi.getExpiries(apiKey, selectedUnderlying, optionExchange)
         if (response.status === 'success' && response.data.length > 0) {
           setExpiries(response.data)
           if (!selectedExpiry) {
@@ -404,7 +405,7 @@ export default function OptionChain() {
     }
 
     loadExpiries()
-  }, [apiKey, selectedUnderlying, expiryExchange, selectedExpiry])
+  }, [apiKey, selectedUnderlying, optionExchange, selectedExpiry])
 
   useEffect(() => {
     if (data?.chain) {
@@ -690,8 +691,14 @@ export default function OptionChain() {
           <div className="flex justify-between items-center text-sm text-muted-foreground">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
-                <span>Connection:</span>
-                <Badge variant={isConnected ? 'default' : 'destructive'}>{isConnected ? 'Connected' : 'Disconnected'}</Badge>
+                {isStreaming ? (
+                  <Wifi className="h-4 w-4 text-green-500" />
+                ) : (
+                  <WifiOff className="h-4 w-4 text-muted-foreground" />
+                )}
+                <Badge variant={isStreaming ? 'default' : isConnected ? 'secondary' : 'destructive'}>
+                  {isPaused ? 'Paused' : isStreaming ? `Streaming ${streamingSymbols} symbols` : isConnected ? 'Polling' : 'Disconnected'}
+                </Badge>
               </div>
               <div className="text-xs">
                 Bar: {barDataSource === 'oi' ? 'OI' : 'Volume'} ({barStyle})
