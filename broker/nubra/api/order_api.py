@@ -3,7 +3,7 @@ import os
 
 import httpx
 
-from broker.angel.mapping.transform_data import (
+from broker.nubra.mapping.transform_data import (
     map_product_type,
     reverse_map_product_type,
     transform_data,
@@ -16,10 +16,13 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Nubra API Base URL
+NUBRA_BASE_URL = "https://api.nubra.io"
+
 
 def get_api_response(endpoint, auth, method="GET", payload=""):
     AUTH_TOKEN = auth
-    api_key = os.getenv("BROKER_API_KEY")
+    device_id = "OPENALGO"  # Fixed device ID, same as auth_api.py
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -28,15 +31,10 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
         "Authorization": f"Bearer {AUTH_TOKEN}",
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "X-UserType": "USER",
-        "X-SourceID": "WEB",
-        "X-ClientLocalIP": "CLIENT_LOCAL_IP",
-        "X-ClientPublicIP": "CLIENT_PUBLIC_IP",
-        "X-MACAddress": "MAC_ADDRESS",
-        "X-PrivateKey": api_key,
+        "x-device-id": device_id,
     }
 
-    url = f"https://apiconnect.angelbroking.com{endpoint}"
+    url = f"{NUBRA_BASE_URL}{endpoint}"
 
     if method == "GET":
         response = client.get(url, headers=headers)
@@ -98,63 +96,66 @@ def get_open_position(tradingsymbol, exchange, producttype, auth):
 
 
 def place_order_api(data, auth):
+    """
+    Place a single order using Nubra's API.
+    
+    Nubra API: POST /orders/v2/single
+    """
     AUTH_TOKEN = auth
-    BROKER_API_KEY = os.getenv("BROKER_API_KEY")
-    data["apikey"] = BROKER_API_KEY
+    device_id = "OPENALGO"  # Fixed device ID, same as auth_api.py
+    
+    # Get token (ref_id) for the symbol
     token = get_token(data["symbol"], data["exchange"])
-    newdata = transform_data(data, token)
+    
+    logger.info(f"Nubra order - Symbol: {data['symbol']}, Exchange: {data['exchange']}, Token: {token}")
+    
+    # Transform OpenAlgo data to Nubra format
+    nubra_data = transform_data(data, token)
+    
     headers = {
         "Authorization": f"Bearer {AUTH_TOKEN}",
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "X-UserType": "USER",
-        "X-SourceID": "WEB",
-        "X-ClientLocalIP": "CLIENT_LOCAL_IP",
-        "X-ClientPublicIP": "CLIENT_PUBLIC_IP",
-        "X-MACAddress": "MAC_ADDRESS",
-        "X-PrivateKey": newdata["apikey"],
+        "x-device-id": device_id,
     }
-    payload = json.dumps(
-        {
-            "variety": newdata.get("variety", "NORMAL"),
-            "tradingsymbol": newdata["tradingsymbol"],
-            "symboltoken": newdata["symboltoken"],
-            "transactiontype": newdata["transactiontype"],
-            "exchange": newdata["exchange"],
-            "ordertype": newdata.get("ordertype", "MARKET"),
-            "producttype": newdata.get("producttype", "INTRADAY"),
-            "duration": newdata.get("duration", "DAY"),
-            "price": newdata.get("price", "0"),
-            "triggerprice": newdata.get("triggerprice", "0"),
-            "squareoff": newdata.get("squareoff", "0"),
-            "stoploss": newdata.get("stoploss", "0"),
-            "quantity": newdata["quantity"],
-        }
-    )
-
-    logger.debug(f"{payload}")
+    
+    payload = json.dumps(nubra_data)
+    
+    logger.info(f"Nubra place order payload: {payload}")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
     # Make the request using the shared client
     response = client.post(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/placeOrder",
+        f"{NUBRA_BASE_URL}/orders/v2/single",
         headers=headers,
         content=payload,
     )
 
-    # Add status attribute to make response compatible with http.client response
-    # as the rest of the codebase expects .status instead of .status_code
-    response.status = response.status_code
-
     # Parse the JSON response
-    response_data = response.json()
+    try:
+        response_data = response.json()
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse order response: {response.text}")
+        response_data = {"error": "Failed to parse response"}
+        return response, response_data, None
 
-    if response_data["status"] == True:
-        orderid = response_data["data"]["orderid"]
+    logger.info(f"Nubra place order response (status={response.status_code}): {response_data}")
+
+    # Nubra returns 201 (Created) on success with order_id in response
+    if response.status_code in [200, 201] and "order_id" in response_data:
+        orderid = str(response_data["order_id"])
+        # Normalize response format for OpenAlgo compatibility
+        response_data["status"] = True
+        response_data["data"] = {"orderid": orderid}
+        # OpenAlgo service layer expects status 200 for success
+        response.status = 200
     else:
         orderid = None
+        response_data["status"] = False
+        response.status = response.status_code
+        
     return response, response_data, orderid
 
 

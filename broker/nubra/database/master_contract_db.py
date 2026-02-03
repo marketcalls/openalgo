@@ -137,7 +137,8 @@ def process_nubra_json(path):
     df = pd.read_json(path)
 
     # Basic field mappings
-    df['token'] = df['token'].astype(str)
+    # IMPORTANT: Use ref_id as token because Nubra's order API uses ref_id, not exchange token
+    df['token'] = df['ref_id'].astype(str)  # ref_id is what Nubra order API needs
     df['lotsize'] = df['lot_size']
     df['tick_size'] = df['tick_size'].astype(float)
     df['name'] = df['asset']
