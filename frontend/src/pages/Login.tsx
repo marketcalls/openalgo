@@ -1,4 +1,4 @@
-import { Eye, EyeOff, Github, Info, Loader2, LogIn, MessageCircle } from 'lucide-react'
+import { Eye, EyeOff, Info, Loader2, LogIn } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -262,7 +262,7 @@ export default function Login() {
               </AlertDescription>
             </Alert>
 
-            <div className="flex justify-center lg:justify-start gap-4">
+            {/* <div className="flex justify-center lg:justify-start gap-4">
               <Button variant="outline" asChild>
                 <a
                   href="https://github.com/marketcalls/openalgo"
@@ -285,7 +285,7 @@ export default function Login() {
                   Discord
                 </a>
               </Button>
-            </div>
+            </div> */}
           </div>
         </div>
       </div>

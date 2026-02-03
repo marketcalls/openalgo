@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, LogOut, Menu, Moon, Sun, Zap } from 'lucide-react'
+import { BarChart3, LogOut, Menu, Moon, Sun, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -208,7 +208,7 @@ export function Navbar() {
                   {item.label}
                 </DropdownMenuItem>
               ))}
-              <DropdownMenuItem asChild>
+              {/* <DropdownMenuItem asChild>
                 <a
                   href="https://docs.openalgo.in"
                   target="_blank"
@@ -218,7 +218,7 @@ export function Navbar() {
                   <BookOpen className="h-4 w-4" />
                   Docs
                 </a>
-              </DropdownMenuItem>
+              </DropdownMenuItem> */}
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={handleLogout}

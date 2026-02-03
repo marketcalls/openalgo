@@ -1,12 +1,10 @@
 import {
   Activity,
   ArrowRight,
-  BookOpen,
   ClipboardList,
   Clock,
   FileText,
   FlaskConical,
-  Shield,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
@@ -46,23 +44,23 @@ export default function LogsIndex() {
       color: 'bg-cyan-500',
       countLabel: 'monitoring',
     },
-    {
-      title: 'Security Logs',
-      description: 'Monitor security events, banned IPs, and threat activity',
-      icon: Shield,
-      href: '/logs/security',
-      color: 'bg-red-500',
-      countLabel: 'security',
-    },
-    {
-      title: 'Documentation',
-      description: 'Access guides, API references, and troubleshooting tips',
-      icon: BookOpen,
-      href: 'https://docs.openalgo.in',
-      color: 'bg-green-500',
-      countLabel: 'docs',
-      isExternal: true,
-    },
+    // {
+    //   title: 'Security Logs',
+    //   description: 'Monitor security events, banned IPs, and threat activity',
+    //   icon: Shield,
+    //   href: '/logs/security',
+    //   color: 'bg-red-500',
+    //   countLabel: 'security',
+    // },
+    // {
+    //   title: 'Documentation',
+    //   description: 'Access guides, API references, and troubleshooting tips',
+    //   icon: BookOpen,
+    //   href: 'https://docs.openalgo.in',
+    //   color: 'bg-green-500',
+    //   countLabel: 'docs',
+    //   isExternal: true,
+    // },
   ]
 
   return (
@@ -80,7 +78,7 @@ export default function LogsIndex() {
 
       {/* Log Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {logCards.map((card) => {
+        {logCards.map((card: any) => {
           const CardWrapper = card.isExternal ? 'a' : Link
           const linkProps = card.isExternal
             ? { href: card.href, target: '_blank', rel: 'noopener noreferrer' }
