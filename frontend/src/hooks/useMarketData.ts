@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { usePageVisibility } from './usePageVisibility'
 
 // Fetch CSRF token for authenticated requests
 async function fetchCSRFToken(): Promise<string> {
@@ -31,6 +32,10 @@ interface UseMarketDataOptions {
   mode?: 'LTP' | 'Quote' | 'Depth'
   enabled?: boolean
   autoReconnect?: boolean
+  /** Pause WebSocket connection when tab is hidden (default: true) */
+  pauseWhenHidden?: boolean
+  /** Time in ms to wait before disconnecting when hidden (default: 5000) */
+  pauseDelay?: number
 }
 
 interface UseMarketDataReturn {
@@ -38,6 +43,7 @@ interface UseMarketDataReturn {
   isConnected: boolean
   isAuthenticated: boolean
   isConnecting: boolean
+  isPaused: boolean
   error: string | null
   connect: () => Promise<void>
   disconnect: () => void
@@ -48,15 +54,23 @@ export function useMarketData({
   mode = 'LTP',
   enabled = true,
   autoReconnect = true,
+  pauseWhenHidden = true,
+  pauseDelay = 5000,
 }: UseMarketDataOptions): UseMarketDataReturn {
   const [marketData, setMarketData] = useState<Map<string, SymbolData>>(new Map())
   const [isConnected, setIsConnected] = useState(false)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
+  const [isPaused, setIsPaused] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Page visibility tracking
+  const { isVisible, wasHidden } = usePageVisibility()
 
   const socketRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pauseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isPausePendingRef = useRef<boolean>(false) // Track pending pause to avoid race conditions
   const subscribedSymbolsRef = useRef<Set<string>>(new Set())
   const pendingSubscriptionsRef = useRef<Array<{ symbol: string; exchange: string }>>([])
 
@@ -236,7 +250,18 @@ export function useMarketData({
         setIsAuthenticated(false)
         subscribedSymbolsRef.current.clear()
 
-        if (autoReconnect && !event.wasClean && enabled) {
+        // Only auto-reconnect if:
+        // 1. autoReconnect is enabled
+        // 2. Connection closed unexpectedly (not clean)
+        // 3. Hook is still enabled
+        // 4. Page is visible (don't reconnect in background)
+        const shouldReconnect =
+          autoReconnect &&
+          !event.wasClean &&
+          enabled &&
+          (!pauseWhenHidden || document.visibilityState === 'visible')
+
+        if (shouldReconnect) {
           reconnectTimeoutRef.current = setTimeout(connect, 3000)
         }
       }
@@ -253,7 +278,7 @@ export function useMarketData({
       setError(`Connection failed: ${err}`)
       setIsConnecting(false)
     }
-  }, [getCsrfToken, handleMessage, autoReconnect, enabled])
+  }, [getCsrfToken, handleMessage, autoReconnect, enabled, pauseWhenHidden])
 
   // Disconnect from WebSocket
   const disconnect = useCallback(() => {
@@ -298,11 +323,60 @@ export function useMarketData({
     }
   }, [disconnect])
 
+  // Handle page visibility changes - pause when hidden, resume when visible
+  useEffect(() => {
+    if (!pauseWhenHidden) return
+
+    if (!isVisible && isConnected) {
+      // Page became hidden - schedule disconnect after delay
+      // This allows brief tab switches without disconnecting
+      isPausePendingRef.current = true // Mark pause as pending (sync)
+      pauseTimeoutRef.current = setTimeout(() => {
+        isPausePendingRef.current = false
+        setIsPaused(true)
+        disconnect()
+      }, pauseDelay)
+    } else if (isVisible) {
+      // Page became visible
+      // Clear any pending pause timeout (user returned before delay elapsed)
+      if (pauseTimeoutRef.current) {
+        clearTimeout(pauseTimeoutRef.current)
+        pauseTimeoutRef.current = null
+        isPausePendingRef.current = false // Cancel pending pause
+      }
+
+      // If we were paused, reconnect
+      if (isPaused && enabled && symbols.length > 0) {
+        isPausePendingRef.current = false
+        setIsPaused(false)
+        connect()
+      }
+    }
+
+    return () => {
+      if (pauseTimeoutRef.current) {
+        clearTimeout(pauseTimeoutRef.current)
+        pauseTimeoutRef.current = null
+        isPausePendingRef.current = false
+      }
+    }
+  }, [isVisible, isConnected, isPaused, pauseWhenHidden, pauseDelay, enabled, symbols.length, connect, disconnect])
+
+  // When returning from hidden state, re-subscribe to all symbols
+  useEffect(() => {
+    if (wasHidden && isVisible && isAuthenticated && symbols.length > 0) {
+      // Clear tracked subscriptions to force re-subscribe
+      subscribedSymbolsRef.current.clear()
+      subscribeToSymbols(symbols)
+    }
+  }, [wasHidden, isVisible, isAuthenticated, symbols, subscribeToSymbols])
+
   return {
     data: marketData,
     isConnected,
     isAuthenticated,
     isConnecting,
+    isPaused,
     error,
     connect,
     disconnect,

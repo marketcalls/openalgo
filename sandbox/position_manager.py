@@ -592,23 +592,19 @@ class PositionManager:
             ]
 
             if missing_symbols:
-                # Fallback to multiquotes for missing symbols
+                # Fallback to multiquotes for missing symbols (no individual quote fallback to avoid rate limiting)
                 logger.debug(
                     f"Positions MTM: {ws_count} from WebSocket, {len(missing_symbols)} need multiquotes fallback"
                 )
                 multiquotes_cache = self._fetch_quotes_batch(missing_symbols)
                 quote_cache.update(multiquotes_cache)
 
-                # Final fallback: individual fetch for any still missing
+                # Log any symbols that couldn't be fetched (don't fall back to individual quotes)
                 still_missing = [
                     s for s in missing_symbols if s not in quote_cache or quote_cache[s] is None
                 ]
                 if still_missing:
-                    logger.debug(f"Fetching {len(still_missing)} symbols individually")
-                    for symbol, exchange in still_missing:
-                        quote = self._fetch_quote(symbol, exchange)
-                        if quote:
-                            quote_cache[(symbol, exchange)] = quote
+                    logger.debug(f"{len(still_missing)} symbols not available via multiquotes, waiting for WebSocket data")
             else:
                 logger.debug(f"Positions MTM: All {ws_count} symbols from WebSocket (no API calls)")
 
