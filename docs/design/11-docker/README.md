@@ -2,83 +2,121 @@
 
 ## Overview
 
-OpenAlgo provides Docker support for containerized deployment with multi-stage builds, IST timezone configuration, and proper security isolation. The Docker setup uses Python 3.12, Gunicorn with Eventlet workers, and runs as a non-root user.
+OpenAlgo provides Docker support for containerized deployment with **3-stage builds** (Python builder, Frontend builder, Production), IST timezone configuration, and proper security isolation. The Docker setup uses Python 3.12, Gunicorn with Eventlet workers, and runs as a non-root user. It includes Railway/cloud deployment support with automatic `.env` generation.
 
 ## Architecture Diagram
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                        Docker Architecture                                    │
+│                        Docker Architecture (3-Stage Build)                    │
 └──────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        Multi-Stage Build                                     │
+│                        Stage 1: Python Builder                               │
+│                        (python:3.12-bullseye)                                │
 │                                                                              │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │  Stage 1: Builder (python:3.12-bullseye)                              │  │
-│  │                                                                        │  │
 │  │  1. Install build dependencies (curl, build-essential)                │  │
 │  │  2. Copy pyproject.toml                                               │  │
 │  │  3. Create virtual environment with uv                                │  │
 │  │  4. Install dependencies: uv sync                                     │  │
-│  │  5. Add gunicorn + eventlet==0.35.2                                   │  │
+│  │  5. Add gunicorn + eventlet>=0.40.3                                   │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
-│                                    │                                         │
-│                                    ▼                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                     │
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        Stage 2: Frontend Builder                             │
+│                        (node:20-bullseye-slim)                               │
+│                                                                              │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │  Stage 2: Production (python:3.12-slim-bullseye)                      │  │
-│  │                                                                        │  │
-│  │  1. Set timezone to IST (Asia/Kolkata)                                │  │
-│  │  2. Create non-root user (appuser)                                    │  │
-│  │  3. Copy venv from builder                                            │  │
-│  │  4. Copy application source                                           │  │
-│  │  5. Create directories (log, db, strategies, keys)                    │  │
-│  │  6. Set permissions                                                   │  │
-│  │  7. Run as appuser                                                    │  │
+│  │  1. Copy frontend/package*.json                                       │  │
+│  │  2. npm install                                                       │  │
+│  │  3. Copy frontend source                                              │  │
+│  │  4. npm run build (React production build)                            │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
                                      │
                                      ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        Container Runtime                                     │
+│                        Stage 3: Production                                   │
+│                        (python:3.12-slim-bullseye)                           │
+│                                                                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │  1. Set timezone to IST (Asia/Kolkata)                                │  │
+│  │  2. Install runtime dependencies (curl, libopenblas0, libgomp1,       │  │
+│  │     libgfortran5) for scipy/numba                                     │  │
+│  │  3. Create non-root user (appuser)                                    │  │
+│  │  4. Copy venv from python-builder                                     │  │
+│  │  5. Copy application source                                           │  │
+│  │  6. Copy frontend/dist from frontend-builder                          │  │
+│  │  7. Create directories (log, db, strategies, keys, tmp, numba_cache)  │  │
+│  │  8. Set permissions (keys: 700, others: 755)                          │  │
+│  │  9. Run as appuser                                                    │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                     │
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        Container Runtime (start.sh)                          │
 │                                                                              │
 │  ┌────────────────────────────────────────────────────────────────────┐    │
-│  │  start.sh                                                           │    │
-│  │                                                                     │    │
-│  │  1. Start WebSocket proxy (background)                             │    │
-│  │  2. Start Gunicorn with Eventlet worker                            │    │
-│  │     - Single worker (-w 1) for WebSocket compatibility             │    │
-│  │     - Bind to 0.0.0.0:5000                                         │    │
+│  │  1. Railway/Cloud Detection & .env Generation                       │    │
+│  │     - Detects HOST_SERVER environment variable                      │    │
+│  │     - Auto-generates .env with all required variables               │    │
+│  │     - Supports 40+ configuration options                            │    │
+│  │  2. Directory Setup                                                 │    │
+│  │  3. Database Migrations (if /app/upgrade/migrate_all.py exists)     │    │
+│  │  4. WebSocket Proxy (background, PID tracked)                       │    │
+│  │  5. Signal Handling (SIGTERM, SIGINT cleanup)                       │    │
+│  │  6. Gunicorn with Eventlet                                          │    │
+│  │     - Single worker (-w 1) for WebSocket compatibility              │    │
+│  │     - Timeout: 300s, Graceful timeout: 30s                          │    │
+│  │     - Worker temp dir: /tmp/gunicorn_workers                        │    │
 │  └────────────────────────────────────────────────────────────────────┘    │
 │                                                                              │
 │  Exposed Ports:                                                             │
-│  - 5000: Flask application                                                  │
-│  - 8765: WebSocket proxy (internal)                                         │
+│  - 5000: Flask application (or PORT env var for Railway)                    │
+│  - 8765: WebSocket proxy                                                    │
+│  - 5555: ZeroMQ message bus (internal)                                      │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Dockerfile
 
 ```dockerfile
-# ------------------------------ Builder Stage ------------------------------ #
-FROM python:3.12-bullseye AS builder
+# ------------------------------ Python Builder Stage ----------------------- #
+FROM python:3.12-bullseye AS python-builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl build-essential && \
+    curl build-essential && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY pyproject.toml .
+# Create isolated virtual-env with uv, then add gunicorn and eventlet
 RUN pip install --no-cache-dir uv && \
     uv venv .venv && \
     uv pip install --upgrade pip && \
     uv sync && \
-    uv pip install gunicorn eventlet==0.35.2 && \
+    uv pip install gunicorn eventlet>=0.40.3 && \
     rm -rf /root/.cache
+
+# ------------------------------ Frontend Builder Stage --------------------- #
+FROM node:20-bullseye-slim AS frontend-builder
+WORKDIR /app
+COPY frontend/package*.json ./frontend/
+RUN cd frontend && npm install
+COPY frontend/ ./frontend/
+RUN cd frontend && npm run build
 
 # ------------------------------ Production Stage --------------------------- #
 FROM python:3.12-slim-bullseye AS production
 
-# Set timezone to IST
-RUN apt-get update && apt-get install -y --no-install-recommends tzdata && \
+# Set timezone to IST and install runtime dependencies for scipy/numba
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tzdata \
+    curl \
+    libopenblas0 \
+    libgomp1 \
+    libgfortran5 && \
     ln -fs /usr/share/zoneinfo/Asia/Kolkata /etc/localtime && \
     dpkg-reconfigure -f noninteractive tzdata && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
@@ -87,22 +125,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends tzdata && \
 RUN useradd --create-home appuser
 WORKDIR /app
 
-# Copy venv and source
-COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
+# Copy venv from python-builder
+COPY --from=python-builder --chown=appuser:appuser /app/.venv /app/.venv
 COPY --chown=appuser:appuser . .
 
-# Create directories with proper permissions
-RUN mkdir -p /app/log /app/log/strategies /app/db /app/strategies \
-             /app/strategies/scripts /app/keys && \
-    chown -R appuser:appuser /app/log /app/db /app/strategies /app/keys && \
-    chmod 700 /app/keys
+# Copy built frontend from frontend-builder
+COPY --from=frontend-builder --chown=appuser:appuser /app/frontend/dist /app/frontend/dist
+
+# Create directories with proper permissions (including tmp for numba/matplotlib)
+RUN mkdir -p /app/log /app/log/strategies /app/db /app/tmp /app/tmp/numba_cache \
+             /app/tmp/matplotlib /app/strategies /app/strategies/scripts \
+             /app/strategies/examples /app/keys && \
+    chown -R appuser:appuser /app/log /app/db /app/tmp /app/strategies /app/keys && \
+    chmod -R 755 /app/strategies /app/log /app/tmp && \
+    chmod 700 /app/keys && \
+    touch /app/.env && chown appuser:appuser /app/.env && chmod 666 /app/.env
+
+# Entrypoint script (fix line endings for Windows compatibility)
+COPY --chown=appuser:appuser start.sh /app/start.sh
+RUN sed -i 's/\r$//' /app/start.sh && chmod +x /app/start.sh
 
 # Environment variables
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TZ=Asia/Kolkata \
-    APP_MODE=standalone
+    APP_MODE=standalone \
+    TMPDIR=/app/tmp \
+    NUMBA_CACHE_DIR=/app/tmp/numba_cache \
+    LLVMLITE_TMPDIR=/app/tmp \
+    MPLCONFIGDIR=/app/tmp/matplotlib
 
 USER appuser
 EXPOSE 5000
@@ -112,7 +164,7 @@ CMD ["/app/start.sh"]
 ## Docker Compose
 
 ```yaml
-# docker-compose.yml
+# docker-compose.yaml (note: .yaml extension, not .yml)
 version: '3.8'
 
 services:
@@ -122,23 +174,49 @@ services:
       - "5000:5000"
       - "8765:8765"
     volumes:
-      - ./db:/app/db              # Persist databases
-      - ./log:/app/log            # Persist logs
-      - ./strategies:/app/strategies  # Persist strategies
-      - ./.env:/app/.env:ro       # Environment config
+      # Named volumes for better persistence management
+      - openalgo_db:/app/db
+      - openalgo_log:/app/log
+      - openalgo_strategies:/app/strategies
+      - openalgo_keys:/app/keys
+      - openalgo_tmp:/app/tmp
+      - ./.env:/app/.env:ro       # Environment config (read-only)
     environment:
       - FLASK_HOST_IP=0.0.0.0
       - FLASK_PORT=5000
       - WEBSOCKET_HOST=0.0.0.0
       - WEBSOCKET_PORT=8765
+    shm_size: '2gb'                # Required for scipy/numba operations
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
+
+volumes:
+  openalgo_db:
+  openalgo_log:
+  openalgo_strategies:
+  openalgo_keys:
+  openalgo_tmp:
 ```
+
+### Named Volumes vs Bind Mounts
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **Named Volumes** (recommended) | Better performance, managed by Docker | Data in Docker's volume directory |
+| **Bind Mounts** (`./db:/app/db`) | Easy access to files | Permission issues possible |
 
 ## Directory Structure
 
 ```
 Container /app/
 ├── .venv/                 # Python virtual environment
+├── frontend/
+│   └── dist/              # Built React frontend (from frontend-builder stage)
 ├── db/                    # SQLite databases (mounted volume)
 │   ├── openalgo.db
 │   ├── logs.db
@@ -148,31 +226,105 @@ Container /app/
 ├── log/                   # Log files (mounted volume)
 │   └── strategies/
 ├── strategies/            # User strategies (mounted volume)
-│   └── scripts/
+│   ├── scripts/
+│   └── examples/
+├── tmp/                   # Temporary files (internal volume)
+│   ├── numba_cache/       # Numba JIT cache
+│   └── matplotlib/        # Matplotlib config
 ├── keys/                  # Encryption keys (700 permissions)
-├── .env                   # Environment configuration
-├── start.sh               # Entrypoint script
+├── .env                   # Environment configuration (666 for Railway)
+├── start.sh               # Entrypoint script (246 lines)
+├── upgrade/
+│   └── migrate_all.py     # Database migrations (run on startup)
 └── app.py                 # Main application
 ```
 
 ## Start Script
 
+The `start.sh` script is a sophisticated 246-line entrypoint that handles:
+
+1. **Railway/Cloud Environment Detection** - Auto-generates `.env` from environment variables
+2. **Directory Setup** - Creates required directories with proper permissions
+3. **Database Migrations** - Runs `upgrade/migrate_all.py` if present
+4. **WebSocket Proxy** - Starts in background with PID tracking
+5. **Signal Handling** - Graceful shutdown on SIGTERM/SIGINT
+6. **Gunicorn Startup** - Eventlet worker with optimized settings
+
 ```bash
 #!/bin/bash
-# start.sh
+# start.sh (simplified overview - actual script is 246 lines)
 
-# Start WebSocket proxy in background
-python websocket_proxy/server.py &
+echo "[OpenAlgo] Starting up..."
 
-# Start Gunicorn with Eventlet worker
-# -w 1: Single worker required for WebSocket compatibility
-gunicorn --worker-class eventlet \
-         -w 1 \
-         --bind 0.0.0.0:5000 \
-         --timeout 120 \
-         --keep-alive 5 \
-         app:app
+# ============================================
+# RAILWAY/CLOUD ENVIRONMENT DETECTION
+# ============================================
+# If HOST_SERVER is set and no .env exists, auto-generate .env
+# with 40+ configuration variables including:
+# - Broker configuration
+# - Database URLs
+# - CORS, CSP, CSRF settings
+# - Rate limiting
+# - WebSocket/ZeroMQ configuration
+
+# ============================================
+# DIRECTORY SETUP
+# ============================================
+for dir in db log log/strategies strategies strategies/scripts keys; do
+    mkdir -p "$dir" 2>/dev/null || true
+done
+
+# ============================================
+# DATABASE MIGRATIONS
+# ============================================
+if [ -f "/app/upgrade/migrate_all.py" ]; then
+    /app/.venv/bin/python /app/upgrade/migrate_all.py
+fi
+
+# ============================================
+# WEBSOCKET PROXY SERVER
+# ============================================
+/app/.venv/bin/python -m websocket_proxy.server &
+WEBSOCKET_PID=$!
+
+# ============================================
+# SIGNAL HANDLING
+# ============================================
+cleanup() {
+    echo "[OpenAlgo] Shutting down..."
+    kill $WEBSOCKET_PID 2>/dev/null
+    exit 0
+}
+trap cleanup SIGTERM SIGINT
+
+# ============================================
+# GUNICORN STARTUP
+# ============================================
+APP_PORT="${PORT:-5000}"  # Railway uses PORT env var
+mkdir -p /tmp/gunicorn_workers
+
+exec /app/.venv/bin/gunicorn \
+    --worker-class eventlet \
+    --workers 1 \
+    --bind 0.0.0.0:${APP_PORT} \
+    --timeout 300 \
+    --graceful-timeout 30 \
+    --worker-tmp-dir /tmp/gunicorn_workers \
+    --log-level warning \
+    app:app
 ```
+
+### Key Differences from Simple Script
+
+| Feature | Old (6 lines) | Actual (246 lines) |
+|---------|---------------|-------------------|
+| Cloud Support | None | Full Railway/Render support |
+| .env Generation | None | 40+ variables auto-generated |
+| Migrations | None | Auto-runs on startup |
+| Signal Handling | None | Graceful shutdown |
+| Timeout | 120s | 300s |
+| Graceful Timeout | None | 30s |
+| Worker Temp Dir | Default | /tmp/gunicorn_workers |
 
 ## Build Commands
 

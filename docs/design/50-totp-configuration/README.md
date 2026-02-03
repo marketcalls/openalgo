@@ -544,9 +544,14 @@ function TOTPVerification({ sessionToken, onSuccess }: Props) {
 
 | File | Purpose |
 |------|---------|
-| `services/totp_service.py` | TOTP generation and verification |
-| `utils/totp_utils.py` | QR code generation |
-| `blueprints/auth.py` | TOTP API endpoints |
-| `database/auth_db.py` | User TOTP fields |
+| `database/user_db.py` | User model with TOTP methods (`get_totp_uri()`, `verify_totp()`) |
+| `blueprints/auth.py` | TOTP endpoints (reset-password with TOTP) |
 | `frontend/src/pages/TwoFactorSettings.tsx` | Setup UI |
 | `frontend/src/components/TOTPVerification.tsx` | Login verification |
+
+> **Note**: TOTP functionality is integrated directly into the `User` model in `database/user_db.py`. The model includes:
+> - `totp_secret` field - stores the TOTP secret
+> - `get_totp_uri()` method - generates provisioning URI for QR codes using `pyotp`
+> - `verify_totp()` method - verifies TOTP tokens
+>
+> There are no separate `services/totp_service.py` or `utils/totp_utils.py` files. QR code generation uses the `pyotp` library's `provisioning_uri()` method.

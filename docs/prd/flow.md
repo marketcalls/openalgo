@@ -1,5 +1,7 @@
 # PRD: Flow - Visual Workflow Automation
 
+> **Status:** ✅ Stable - Fully implemented with 53 node types
+
 ## Overview
 
 Flow is a no-code visual workflow builder that enables traders to create automated trading strategies using drag-and-drop nodes. Built with React Flow for the visual canvas and a Python-based execution engine.
@@ -58,16 +60,16 @@ A visual canvas where users:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-## Node Categories (50+ nodes)
+## Node Categories (53 nodes verified)
 
 | Category | Count | Examples |
 |----------|-------|----------|
-| Triggers | 4 | Start, Webhook, PriceAlert, HttpRequest |
-| Actions | 10 | PlaceOrder, SmartOrder, OptionsOrder, BasketOrder |
-| Conditions | 8 | PriceCondition, TimeWindow, PositionCheck, LogicGates |
-| Data | 16 | GetQuote, GetDepth, PositionBook, OptionChain |
-| Streaming | 4 | SubscribeLTP, SubscribeQuote, SubscribeDepth |
-| Utility | 7 | Variable, Delay, Log, TelegramAlert, MathExpression |
+| Triggers | 5 | Start, Webhook, PriceAlert, HttpRequest, WaitUntil |
+| Actions | 12 | PlaceOrder, SmartOrder, OptionsOrder, BasketOrder, SplitOrder, ModifyOrder, CancelOrder |
+| Conditions | 9 | PriceCondition, TimeWindow, TimeCondition, PositionCheck, FundCheck, AndGate, OrGate, NotGate |
+| Data | 17 | GetQuote, MultiQuotes, GetDepth, PositionBook, OrderBook, TradeBook, Holdings, Funds, Margin, OptionChain, OptionSymbol, History |
+| Streaming | 4 | SubscribeLTP, SubscribeQuote, SubscribeDepth, Unsubscribe |
+| Utility | 6 | Variable, Delay, Log, TelegramAlert, MathExpression, Symbol |
 
 ## Functional Requirements
 
@@ -215,6 +217,21 @@ flow_workflow_executions (
 | [Node Creation Guide](./flow-node-creation.md) | How to create new nodes |
 | [UI Components](./flow-ui-components.md) | React components guide |
 | [Execution Engine](./flow-execution.md) | Backend execution details |
+
+## Key Files Reference
+
+| File | Purpose | Lines |
+|------|---------|-------|
+| `blueprints/flow.py` | Web routes and workflow API | - |
+| `services/flow_executor_service.py` | Main execution engine | ~1940 |
+| `services/flow_openalgo_client.py` | OpenAlgo API wrapper for nodes | - |
+| `services/flow_scheduler_service.py` | APScheduler integration | - |
+| `services/flow_price_monitor_service.py` | Price alert monitoring | - |
+| `database/flow_db.py` | SQLAlchemy models (workflows, executions) | - |
+| `frontend/src/pages/flow/FlowEditor.tsx` | React Flow canvas | - |
+| `frontend/src/pages/flow/FlowIndex.tsx` | Workflow list page | - |
+| `frontend/src/components/flow/nodes/*.tsx` | 53 node implementations | - |
+| `frontend/src/components/flow/panels/*.tsx` | ConfigPanel, NodePalette, ExecutionLog | - |
 
 ## Success Metrics
 
