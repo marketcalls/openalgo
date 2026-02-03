@@ -21,7 +21,7 @@ import pytz
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database.sandbox_db import SandboxHoldings, SandboxPositions, db_session
-from services.quotes_service import get_quotes
+from services.quotes_service import get_multiquotes, get_quotes
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -252,22 +252,49 @@ class HoldingsManager:
             return False, f"Settlement error: {str(e)}"
 
     def _update_holdings_mtm(self, holdings):
-        """Update MTM for all holdings with live quotes"""
+        """Update MTM for all holdings with live quotes using batch multiquotes"""
         try:
             if not holdings:
                 return
 
-            # Get unique symbols
-            symbols_to_fetch = set()
+            # Get unique symbols as list of dicts for multiquotes
+            symbols_to_fetch = []
+            seen = set()
             for holding in holdings:
-                symbols_to_fetch.add((holding.symbol, holding.exchange))
+                key = (holding.symbol, holding.exchange)
+                if key not in seen:
+                    seen.add(key)
+                    symbols_to_fetch.append({"symbol": holding.symbol, "exchange": holding.exchange})
 
-            # Fetch quotes for all symbols
+            if not symbols_to_fetch:
+                return
+
+            # Fetch all quotes in a single batch call using multiquotes
             quote_cache = {}
-            for symbol, exchange in symbols_to_fetch:
-                quote = self._fetch_quote(symbol, exchange)
-                if quote:
-                    quote_cache[(symbol, exchange)] = quote
+            try:
+                # Get any user's API key for fetching quotes
+                from database.auth_db import ApiKeys, decrypt_token
+
+                api_key_obj = ApiKeys.query.first()
+                if api_key_obj:
+                    api_key = decrypt_token(api_key_obj.api_key_encrypted)
+                    success, response, status_code = get_multiquotes(
+                        symbols=symbols_to_fetch, api_key=api_key
+                    )
+
+                    if success and "results" in response:
+                        for result in response["results"]:
+                            symbol = result.get("symbol")
+                            exchange = result.get("exchange")
+                            data = result.get("data")
+                            if symbol and exchange and data:
+                                quote_cache[(symbol, exchange)] = data
+                    else:
+                        logger.debug(f"Multiquotes returned no results: {response.get('message', 'Unknown error')}")
+                else:
+                    logger.warning("No API keys found for fetching multiquotes")
+            except Exception as e:
+                logger.exception(f"Error fetching multiquotes for holdings MTM: {e}")
 
             # Update MTM for each holding
             for holding in holdings:
