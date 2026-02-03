@@ -24,7 +24,8 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/closeposition
 ```json
 {
   "message": "All Open Positions Squared Off",
-  "status": "success"
+  "status": "success",
+  "order_ids": ["order123", "order456"]
 }
 ```
 
@@ -33,7 +34,8 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/closeposition
 ```json
 {
   "message": "No open positions to close",
-  "status": "success"
+  "status": "success",
+  "order_ids": []
 }
 ```
 
@@ -50,6 +52,7 @@ Custom Domain:  POST https://<your-custom-domain>/api/v1/closeposition
 |-------|------|-------------|
 | status | string | "success" or "error" |
 | message | string | Result message |
+| order_ids | array | List of order IDs for the closing orders placed |
 | mode | string | "live" or "analyze" |
 
 ## How It Works

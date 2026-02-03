@@ -424,6 +424,7 @@ def sandbox_close_position(
                     "message": message,
                     "closed_positions": closed_count,
                     "failed_closures": failed_count,
+                    "order_ids": [],  # No real order IDs in sandbox mode
                     "mode": "analyze",
                 },
                 200,

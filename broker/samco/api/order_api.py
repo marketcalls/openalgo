@@ -260,8 +260,9 @@ def close_all_positions(current_api_key, auth):
     positions_response = get_positions(auth)
 
     if not positions_response.get("positionDetails"):
-        return {"message": "No Open Positions Found"}, 200
+        return {"message": "No Open Positions Found", "order_ids": []}, 200
 
+    order_ids = []
     if positions_response.get("status") == "Success":
         for position in positions_response["positionDetails"]:
             # Get net quantity and handle Samco's direction via transactionType
@@ -297,9 +298,13 @@ def close_all_positions(current_api_key, auth):
 
             logger.info(f"Close position payload: {place_order_payload}")
 
-            res, response, orderid = place_order_api(place_order_payload, auth)
+            res, response, order_id = place_order_api(place_order_payload, auth)
 
-    return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
+            # Collect the order ID if available
+            if order_id:
+                order_ids.append(order_id)
+
+    return {"status": "success", "message": "All Open Positions SquaredOff", "order_ids": order_ids}, 200
 
 
 def cancel_order(orderid, auth):
