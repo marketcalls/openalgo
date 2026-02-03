@@ -58,7 +58,13 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
 
 def get_order_book(auth):
-    return get_api_response("/rest/secure/angelbroking/order/v1/getOrderBook", auth)
+    """
+    Fetch all orders for the day from Nubra API.
+    
+    Nubra API: GET /orders/v2
+    Returns list of orders with their current status.
+    """
+    return get_api_response("/orders/v2", auth)
 
 
 def get_trade_book(auth):
@@ -296,9 +302,13 @@ def close_all_positions(current_api_key, auth):
 
 
 def cancel_order(orderid, auth):
-    # Assuming you have a function to get the authentication token
+    """
+    Cancel an order using Nubra's API.
+    
+    Nubra API: DELETE /orders/{order_id}
+    """
     AUTH_TOKEN = auth
-    api_key = os.getenv("BROKER_API_KEY")
+    device_id = "OPENALGO"  # Fixed device ID, same as auth_api.py
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -308,77 +318,79 @@ def cancel_order(orderid, auth):
         "Authorization": f"Bearer {AUTH_TOKEN}",
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "X-UserType": "USER",
-        "X-SourceID": "WEB",
-        "X-ClientLocalIP": "CLIENT_LOCAL_IP",
-        "X-ClientPublicIP": "CLIENT_PUBLIC_IP",
-        "X-MACAddress": "MAC_ADDRESS",
-        "X-PrivateKey": api_key,
+        "x-device-id": device_id,
     }
 
-    # Prepare the payload
-    payload = json.dumps(
-        {
-            "variety": "NORMAL",
-            "orderid": orderid,
-        }
-    )
-
-    # Make the request using the shared client
-    response = client.post(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/cancelOrder",
+    # Make the DELETE request using the shared client
+    response = client.delete(
+        f"{NUBRA_BASE_URL}/orders/{orderid}",
         headers=headers,
-        content=payload,
     )
 
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
 
-    data = json.loads(response.text)
+    # Handle empty response
+    if not response.text:
+        if response.status_code in [200, 204]:
+            return {"status": "success", "orderid": orderid}, 200
+        else:
+            return {"status": "error", "message": "Empty response from API"}, response.status_code
+
+    try:
+        data = json.loads(response.text)
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse cancel order response: {response.text}")
+        return {"status": "error", "message": "Failed to parse response"}, response.status_code
 
     # Check if the request was successful
-    if data.get("status"):
-        # Return a success response
+    # Nubra returns 200 on success
+    if response.status_code in [200, 204]:
+        return {"status": "success", "orderid": orderid}, 200
+    elif data.get("order_id") or data.get("status") == "cancelled":
         return {"status": "success", "orderid": orderid}, 200
     else:
         # Return an error response
         return {
             "status": "error",
-            "message": data.get("message", "Failed to cancel order"),
-        }, response.status
+            "message": data.get("message", data.get("error", "Failed to cancel order")),
+        }, response.status_code
 
 
 def modify_order(data, auth):
-    # Assuming you have a function to get the authentication token
+    """
+    Modify an order using Nubra's API.
+    
+    Nubra API: PUT /orders/{order_id}
+    """
     AUTH_TOKEN = auth
-    api_key = os.getenv("BROKER_API_KEY")
+    device_id = "OPENALGO"  # Fixed device ID, same as auth_api.py
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
     token = get_token(data["symbol"], data["exchange"])
-    data["symbol"] = get_br_symbol(data["symbol"], data["exchange"])
 
-    transformed_data = transform_modify_order_data(
-        data, token
-    )  # You need to implement this function
+    # Transform OpenAlgo data to Nubra modify order format
+    transformed_data = transform_modify_order_data(data, token)
+    
+    # Get order_id from the data
+    orderid = data.get("orderid", "")
+    
     # Set up the request headers
     headers = {
         "Authorization": f"Bearer {AUTH_TOKEN}",
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "X-UserType": "USER",
-        "X-SourceID": "WEB",
-        "X-ClientLocalIP": "CLIENT_LOCAL_IP",
-        "X-ClientPublicIP": "CLIENT_PUBLIC_IP",
-        "X-MACAddress": "MAC_ADDRESS",
-        "X-PrivateKey": api_key,
+        "x-device-id": device_id,
     }
     payload = json.dumps(transformed_data)
+    
+    logger.info(f"Nubra modify order payload: {payload}")
 
-    # Make the request using the shared client
-    response = client.post(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/modifyOrder",
+    # Make the PUT request using the shared client
+    response = client.put(
+        f"{NUBRA_BASE_URL}/orders/{orderid}",
         headers=headers,
         content=payload,
     )
@@ -386,32 +398,67 @@ def modify_order(data, auth):
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
 
-    data = json.loads(response.text)
+    # Handle empty response
+    if not response.text:
+        if response.status_code in [200, 204]:
+            return {"status": "success", "orderid": orderid}, 200
+        else:
+            return {"status": "error", "message": "Empty response from API"}, response.status_code
 
-    if data.get("status") == "true" or data.get("message") == "SUCCESS":
-        return {"status": "success", "orderid": data["data"]["orderid"]}, 200
+    try:
+        response_data = json.loads(response.text)
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse modify order response: {response.text}")
+        return {"status": "error", "message": "Failed to parse response"}, response.status_code
+
+    # Check if the request was successful
+    if response.status_code in [200, 204] and response_data.get("order_id"):
+        return {"status": "success", "orderid": str(response_data["order_id"])}, 200
+    elif response.status_code in [200, 204]:
+        return {"status": "success", "orderid": orderid}, 200
     else:
         return {
             "status": "error",
-            "message": data.get("message", "Failed to modify order"),
-        }, response.status
+            "message": response_data.get("message", response_data.get("error", "Failed to modify order")),
+        }, response.status_code
 
 
 def cancel_all_orders_api(data, auth):
-    # Get the order book
-
+    """
+    Cancel all open orders using Nubra's API.
+    
+    Nubra API returns orders as a list with order_id and order_status fields.
+    """
     AUTH_TOKEN = auth
 
     order_book_response = get_order_book(AUTH_TOKEN)
     # logger.info(f"{order_book_response}")
-    if order_book_response["status"] != True:
-        return [], []  # Return empty lists indicating failure to retrieve the order book
+    
+    # Nubra returns a list directly, or could return error dict
+    if isinstance(order_book_response, dict):
+        if order_book_response.get("error"):
+            return [], []  # Return empty lists indicating failure to retrieve the order book
+        orders = order_book_response.get("data", []) if "data" in order_book_response else []
+    elif isinstance(order_book_response, list):
+        orders = order_book_response
+    else:
+        return [], []
 
-    # Filter orders that are in 'open' or 'trigger_pending' state
+    if not orders:
+        return [], []
+
+    # Filter orders that are in 'open' or 'pending' state
+    # Nubra uses ORDER_STATUS_OPEN, ORDER_STATUS_PENDING
+    open_statuses = [
+        "ORDER_STATUS_OPEN", 
+        "ORDER_STATUS_PENDING",
+        "ORDER_STATUS_TRIGGER_PENDING",
+    ]
+    
     orders_to_cancel = [
         order
-        for order in order_book_response.get("data", [])
-        if order["status"] in ["open", "trigger pending"]
+        for order in orders
+        if order.get("order_status") in open_statuses
     ]
     # logger.info(f"{orders_to_cancel}")
     canceled_orders = []
@@ -419,11 +466,12 @@ def cancel_all_orders_api(data, auth):
 
     # Cancel the filtered orders
     for order in orders_to_cancel:
-        orderid = order["orderid"]
-        cancel_response, status_code = cancel_order(orderid, auth)
-        if status_code == 200:
-            canceled_orders.append(orderid)
-        else:
-            failed_cancellations.append(orderid)
+        orderid = str(order.get("order_id", ""))
+        if orderid:
+            cancel_response, status_code = cancel_order(orderid, auth)
+            if status_code == 200:
+                canceled_orders.append(orderid)
+            else:
+                failed_cancellations.append(orderid)
 
     return canceled_orders, failed_cancellations
