@@ -20,7 +20,15 @@ from .angel_mapping import AngelCapabilityRegistry, AngelExchangeMapper
 
 
 class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
-    """Angel-specific implementation of the WebSocket adapter"""
+    """
+    Angel-specific implementation of the WebSocket adapter.
+
+    Enhanced with proper resource management and file descriptor cleanup
+    to prevent leaks during reconnection and shutdown.
+    """
+
+    # Thread cleanup timeout
+    THREAD_JOIN_TIMEOUT = 5
 
     def __init__(self):
         super().__init__()
@@ -34,6 +42,11 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.max_reconnect_attempts = 10
         self.running = False
         self.lock = threading.Lock()
+
+        # Connection thread tracking
+        self._connect_thread = None
+        self._reconnect_timer = None
+        self._reconnecting = False
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
@@ -74,6 +87,9 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.error("Missing required authentication data")
                 raise ValueError("Missing required authentication data")
 
+        # Store API key for potential reconnection
+        self._api_key = api_key
+
         # Create SmartWebSocketV2 instance
         self.ws_client = SmartWebSocketV2(
             auth_token=auth_token,
@@ -98,38 +114,198 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error("WebSocket client not initialized. Call initialize() first.")
             return
 
-        threading.Thread(target=self._connect_with_retry, daemon=True).start()
+        with self.lock:
+            # Don't start a new connection thread if one is already running
+            if self._connect_thread and self._connect_thread.is_alive():
+                self.logger.debug("Connection thread already running")
+                return
+
+            self._connect_thread = threading.Thread(
+                target=self._connect_with_retry, daemon=True, name="AngelWSConnect"
+            )
+            self._connect_thread.start()
 
     def _connect_with_retry(self) -> None:
         """Connect to Angel WebSocket with retry logic"""
-        while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
-            try:
-                self.logger.info(
-                    f"Connecting to Angel WebSocket (attempt {self.reconnect_attempts + 1})"
-                )
-                self.ws_client.connect()
-                self.reconnect_attempts = 0  # Reset attempts on successful connection
-                break
+        try:
+            while self.running and self.reconnect_attempts < self.max_reconnect_attempts:
+                try:
+                    self.logger.info(
+                        f"Connecting to Angel WebSocket (attempt {self.reconnect_attempts + 1})"
+                    )
+                    self.ws_client.connect()
+                    self.reconnect_attempts = 0  # Reset attempts on successful connection
+                    break
 
-            except Exception as e:
-                self.reconnect_attempts += 1
-                delay = min(
-                    self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
-                )
-                self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
-                time.sleep(delay)
+                except Exception as e:
+                    self.reconnect_attempts += 1
+                    delay = min(
+                        self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
+                    )
+                    self.logger.error(f"Connection failed: {e}. Retrying in {delay} seconds...")
+                    time.sleep(delay)
 
-        if self.reconnect_attempts >= self.max_reconnect_attempts:
-            self.logger.error("Max reconnection attempts reached. Giving up.")
+            if self.reconnect_attempts >= self.max_reconnect_attempts:
+                self.logger.error("Max reconnection attempts reached. Giving up.")
+        finally:
+            # Reset reconnecting flag when done
+            with self.lock:
+                self._reconnecting = False
+
+    def _schedule_reconnection(self) -> None:
+        """Schedule reconnection with exponential backoff"""
+        with self.lock:
+            if not self.running:
+                self.logger.debug("Skipping reconnection schedule - adapter stopped")
+                self._reconnecting = False
+                return
+
+            if self.reconnect_attempts >= self.max_reconnect_attempts:
+                self.logger.error("Maximum reconnection attempts reached")
+                self.running = False
+                self._reconnecting = False
+                return
+
+            delay = min(
+                self.reconnect_delay * (2**self.reconnect_attempts), self.max_reconnect_delay
+            )
+
+            self.logger.info(f"Reconnecting in {delay}s (attempt {self.reconnect_attempts + 1})")
+
+            # Cancel any existing timer before creating new one
+            if self._reconnect_timer:
+                self._reconnect_timer.cancel()
+
+            # Store timer reference so it can be cancelled on disconnect
+            self._reconnect_timer = threading.Timer(delay, self._attempt_reconnection)
+            self._reconnect_timer.daemon = True
+            self._reconnect_timer.start()
+
+    def _attempt_reconnection(self) -> None:
+        """Attempt to reconnect to WebSocket"""
+        with self.lock:
+            # Clear timer reference since we're now executing
+            self._reconnect_timer = None
+
+            # Don't reconnect if we've been stopped
+            if not self.running:
+                self.logger.debug("Reconnection cancelled - adapter no longer running")
+                self._reconnecting = False
+                return
+
+            self.reconnect_attempts += 1
+
+        try:
+            # Clean up old WebSocket client to prevent FD leaks
+            if self.ws_client:
+                self.logger.debug("Cleaning up old WebSocket client before reconnection")
+                try:
+                    self.ws_client.close_connection()
+                except Exception as cleanup_err:
+                    self.logger.warning(f"Error cleaning up old WebSocket: {cleanup_err}")
+
+                # Recreate WebSocket client with fresh credentials
+                self._recreate_ws_client()
+
+            # Start connection
+            if self.ws_client:
+                self._connect_thread = threading.Thread(
+                    target=self._connect_with_retry, daemon=True, name="AngelWSReconnect"
+                )
+                self._connect_thread.start()
+            else:
+                self.logger.error("Failed to recreate WebSocket client")
+                with self.lock:
+                    self._reconnecting = False
+
+        except Exception as e:
+            self.logger.error(f"Reconnection error: {e}")
+            with self.lock:
+                self._reconnecting = False
+
+    def _recreate_ws_client(self) -> None:
+        """Recreate the WebSocket client with current credentials"""
+        try:
+            # Get tokens from database
+            auth_token = get_auth_token(self.user_id)
+            feed_token = get_feed_token(self.user_id)
+
+            if not auth_token or not feed_token:
+                self.logger.error(f"Cannot recreate client - no tokens for user {self.user_id}")
+                self.ws_client = None
+                return
+
+            # Get API key (should be stored from initialization)
+            api_key = getattr(self, '_api_key', 'api_key')
+
+            # Create new SmartWebSocketV2 instance
+            self.ws_client = SmartWebSocketV2(
+                auth_token=auth_token,
+                api_key=api_key,
+                client_code=self.user_id,
+                feed_token=feed_token,
+                max_retry_attempt=5,
+            )
+
+            # Restore callbacks
+            self.ws_client.on_open = self._on_open
+            self.ws_client.on_data = self._on_data
+            self.ws_client.on_error = self._on_error
+            self.ws_client.on_close = self._on_close
+            self.ws_client.on_message = self._on_message
+
+            self.logger.debug("WebSocket client recreated successfully")
+
+        except Exception as e:
+            self.logger.error(f"Error recreating WebSocket client: {e}")
+            self.ws_client = None
 
     def disconnect(self) -> None:
-        """Disconnect from Angel WebSocket"""
-        self.running = False
-        if hasattr(self, "ws_client") and self.ws_client:
-            self.ws_client.close_connection()
+        """
+        Disconnect from Angel WebSocket and clean up all resources.
+        Uses try/finally to ensure ZMQ cleanup even if WebSocket close fails.
+        """
+        with self.lock:
+            self.running = False
+            self._reconnecting = False
 
-        # Clean up ZeroMQ resources
-        self.cleanup_zmq()
+            # Cancel any pending reconnection timer
+            if self._reconnect_timer:
+                self._reconnect_timer.cancel()
+                self._reconnect_timer = None
+                self.logger.debug("Cancelled pending reconnection timer")
+
+        try:
+            if hasattr(self, "ws_client") and self.ws_client:
+                try:
+                    self.ws_client.close_connection()
+                except Exception as e:
+                    self.logger.error(f"Error closing WebSocket client: {e}")
+                finally:
+                    self.ws_client = None
+
+            # Wait for connection thread to finish
+            if self._connect_thread and self._connect_thread.is_alive():
+                self._connect_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
+                if self._connect_thread.is_alive():
+                    self.logger.warning("Connection thread did not terminate within timeout")
+                else:
+                    self._connect_thread = None
+
+            # Clear subscription tracking
+            with self.lock:
+                self.subscriptions.clear()
+                self.connected = False
+                self.reconnect_attempts = 0
+
+        finally:
+            # Always clean up ZeroMQ resources
+            try:
+                self.cleanup_zmq()
+            except Exception as e:
+                self.logger.error(f"Error cleaning up ZMQ resources: {e}")
+
+        self.logger.info("Angel WebSocket disconnected and resources cleaned up")
 
     def subscribe(
         self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5
@@ -295,9 +471,18 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}"
                     )
 
-    def _on_error(self, wsapp, error) -> None:
-        """Callback for WebSocket errors"""
-        self.logger.error(f"Angel WebSocket error: {error}")
+    def _on_error(self, error_type, error_msg=None) -> None:
+        """
+        Callback for WebSocket errors.
+
+        Args:
+            error_type: Type of error or the error object
+            error_msg: Optional error message (for compatibility with SmartWebSocketV2)
+        """
+        if error_msg:
+            self.logger.error(f"Angel WebSocket error: {error_type} - {error_msg}")
+        else:
+            self.logger.error(f"Angel WebSocket error: {error_type}")
 
     def _on_close(self, wsapp) -> None:
         """Callback when connection is closed"""
@@ -305,8 +490,19 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.connected = False
 
         # Attempt to reconnect if we're still running
-        if self.running:
-            threading.Thread(target=self._connect_with_retry, daemon=True).start()
+        with self.lock:
+            if not self.running:
+                self.logger.debug("Not reconnecting - adapter stopped")
+                return
+
+            if self._reconnecting:
+                self.logger.debug("Reconnection already in progress, skipping")
+                return
+
+            self._reconnecting = True
+
+        # Schedule reconnection
+        self._schedule_reconnection()
 
     def _on_message(self, wsapp, message) -> None:
         """Callback for text messages from the WebSocket"""
@@ -570,3 +766,72 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 )
 
         return depth
+
+    def cleanup(self) -> None:
+        """
+        Clean up all resources including WebSocket connection and ZMQ resources.
+        This method should be called before discarding the adapter instance.
+        """
+        try:
+            # Cancel any pending reconnection timer
+            with self.lock:
+                if self._reconnect_timer:
+                    self._reconnect_timer.cancel()
+                    self._reconnect_timer = None
+
+            # Disconnect WebSocket if connected
+            if self.ws_client:
+                try:
+                    self.ws_client.close_connection()
+                except Exception as ws_err:
+                    self.logger.error(f"Error stopping WebSocket client during cleanup: {ws_err}")
+                finally:
+                    self.ws_client = None
+
+            # Wait for connection thread to finish
+            if self._connect_thread and self._connect_thread.is_alive():
+                self._connect_thread.join(timeout=self.THREAD_JOIN_TIMEOUT)
+                if not self._connect_thread.is_alive():
+                    self._connect_thread = None
+
+            # Reset adapter state
+            with self.lock:
+                self.running = False
+                self.connected = False
+                self._reconnecting = False
+                self.reconnect_attempts = 0
+                self.subscriptions.clear()
+
+            # Clean up ZMQ resources
+            self.cleanup_zmq()
+
+            self.logger.info("Angel adapter cleaned up completely")
+
+        except Exception as e:
+            self.logger.error(f"Error during cleanup: {e}")
+            # Try one last time to clean up ZMQ resources
+            try:
+                self.cleanup_zmq()
+            except Exception as zmq_err:
+                self.logger.error(f"Error cleaning up ZMQ during final cleanup attempt: {zmq_err}")
+
+    def __del__(self):
+        """
+        Destructor - ensures resources are released even when adapter is garbage collected.
+        This is a safety net; callers should explicitly call disconnect() or cleanup().
+        """
+        try:
+            # During garbage collection, logger may not be available
+            try:
+                self.cleanup()
+            except Exception:
+                pass
+
+            # Last resort cleanup
+            try:
+                self.cleanup_zmq()
+            except Exception:
+                pass
+        except Exception:
+            # Can't use logger in __del__ reliably
+            pass
