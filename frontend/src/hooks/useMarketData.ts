@@ -8,6 +8,12 @@ async function fetchCSRFToken(): Promise<string> {
   return data.csrf_token
 }
 
+export interface DepthLevel {
+  price: number
+  quantity: number
+  orders?: number
+}
+
 export interface MarketData {
   ltp?: number
   open?: number
@@ -18,6 +24,16 @@ export interface MarketData {
   change?: number
   change_percent?: number
   timestamp?: string
+  // Quote data - best bid/ask (available in Quote and Depth modes)
+  bid_price?: number
+  ask_price?: number
+  bid_size?: number
+  ask_size?: number
+  // Depth data - full order book (available in Depth mode only)
+  depth?: {
+    buy: DepthLevel[]
+    sell: DepthLevel[]
+  }
 }
 
 export interface SymbolData {
@@ -171,6 +187,13 @@ export function useMarketData({
                 change: marketDataPayload.change ?? newData.change,
                 change_percent: marketDataPayload.change_percent ?? newData.change_percent,
                 timestamp: marketDataPayload.timestamp ?? newData.timestamp,
+                // Quote data - best bid/ask (from Quote mode or sf packets)
+                bid_price: marketDataPayload.bid_price ?? newData.bid_price,
+                ask_price: marketDataPayload.ask_price ?? newData.ask_price,
+                bid_size: marketDataPayload.bid_size ?? newData.bid_size,
+                ask_size: marketDataPayload.ask_size ?? newData.ask_size,
+                // Depth data - full order book (from Depth mode or dp packets)
+                depth: marketDataPayload.depth ?? newData.depth,
               })
 
               updated.set(key, { ...existing, data: newData, lastUpdate: Date.now() })
