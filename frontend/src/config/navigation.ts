@@ -29,6 +29,7 @@ export interface NavItem {
 // Main navigation items shown in desktop navbar
 export const navItems: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/optionchain', label: 'Option Chain', icon: TrendingUp },
   { href: '/orderbook', label: 'Orderbook', icon: ClipboardList },
   { href: '/tradebook', label: 'Tradebook', icon: FileText },
   { href: '/positions', label: 'Positions', icon: TrendingUp },
@@ -63,6 +64,7 @@ export const profileMenuItems: NavItem[] = [
   { href: '/python', label: 'Python Strategies', icon: Code2 },
   { href: '/pnl-tracker', label: 'PnL Tracker', icon: BarChart3 },
   { href: '/historify', label: 'Historify', icon: Database },
+  { href: '/optionchain', label: 'Option Chain', icon: TrendingUp },
   { href: '/search/token', label: 'Search', icon: Search },
   { href: '/sandbox', label: 'Sandbox', icon: FlaskConical },
   { href: '/admin', label: 'Admin', icon: Settings },

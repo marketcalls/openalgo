@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { tradingApi, type QuotesData } from '@/api/trading'
 import { useMarketData } from '@/hooks/useMarketData'
 import { useMarketStatus } from '@/hooks/useMarketStatus'
+import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { useAuthStore } from '@/stores/authStore'
 
 /**
@@ -30,6 +31,10 @@ export interface UseLivePriceOptions {
   useMultiQuotesFallback?: boolean
   /** Interval in ms to refresh MultiQuotes data (default: 30000) */
   multiQuotesRefreshInterval?: number
+  /** Pause WebSocket and polling when tab is hidden (default: true) */
+  pauseWhenHidden?: boolean
+  /** Time in ms to wait before pausing when hidden (default: 5000) */
+  pauseDelay?: number
 }
 
 /**
@@ -42,6 +47,8 @@ export interface UseLivePriceResult<T extends PriceableItem> {
   isLive: boolean
   /** Whether WebSocket is connected */
   isConnected: boolean
+  /** Whether WebSocket is paused due to tab being hidden */
+  isPaused: boolean
   /** Whether any market is currently open */
   isAnyMarketOpen: boolean
   /** Map of MultiQuotes data for external access if needed */
@@ -75,14 +82,20 @@ export function useLivePrice<T extends PriceableItem>(
     staleThreshold = 5000,
     useMultiQuotesFallback = true,
     multiQuotesRefreshInterval = 30000,
+    pauseWhenHidden = true,
+    pauseDelay = 5000,
   } = options
 
   const { apiKey } = useAuthStore()
   const { isMarketOpen, isAnyMarketOpen } = useMarketStatus()
+  const { isVisible, wasHidden, timeSinceHidden } = usePageVisibility()
   const anyMarketOpen = isAnyMarketOpen()
 
   // State for MultiQuotes fallback data
   const [multiQuotes, setMultiQuotes] = useState<Map<string, QuotesData>>(new Map())
+
+  // Track last fetch time for visibility-aware refresh
+  const lastFetchRef = useRef<number>(Date.now())
 
   // Extract symbols for WebSocket subscription
   const symbols = useMemo(
@@ -94,15 +107,17 @@ export function useLivePrice<T extends PriceableItem>(
     [items]
   )
 
-  // WebSocket market data - connect when enabled (market check removed for testing)
-  const { data: marketData, isConnected: wsConnected } = useMarketData({
+  // WebSocket market data - connect when enabled, with visibility awareness
+  const { data: marketData, isConnected: wsConnected, isPaused: wsPaused } = useMarketData({
     symbols,
     mode: 'LTP',
     enabled: enabled && items.length > 0,
+    pauseWhenHidden,
+    pauseDelay,
   })
 
   // Effective live status
-  const isLive = wsConnected && anyMarketOpen
+  const isLive = wsConnected && anyMarketOpen && !wsPaused
 
   /**
    * Fetch MultiQuotes data from API
@@ -135,17 +150,36 @@ export function useLivePrice<T extends PriceableItem>(
   }, [apiKey, items, useMultiQuotesFallback])
 
   // Fetch MultiQuotes on mount and when items change
+  // Visibility-aware: pause polling when tab is hidden
   useEffect(() => {
     if (!enabled || items.length === 0 || !useMultiQuotesFallback) return
 
+    // Don't poll when hidden (if pauseWhenHidden is true)
+    if (pauseWhenHidden && !isVisible) return
+
     // Initial fetch
     fetchMultiQuotes()
+    lastFetchRef.current = Date.now()
 
     // Set up periodic refresh
-    const interval = setInterval(fetchMultiQuotes, multiQuotesRefreshInterval)
+    const interval = setInterval(() => {
+      fetchMultiQuotes()
+      lastFetchRef.current = Date.now()
+    }, multiQuotesRefreshInterval)
 
     return () => clearInterval(interval)
-  }, [enabled, items.length, useMultiQuotesFallback, fetchMultiQuotes, multiQuotesRefreshInterval])
+  }, [enabled, items.length, useMultiQuotesFallback, fetchMultiQuotes, multiQuotesRefreshInterval, pauseWhenHidden, isVisible])
+
+  // Refresh MultiQuotes immediately when tab becomes visible after being hidden
+  useEffect(() => {
+    if (!wasHidden || !isVisible || !useMultiQuotesFallback || !enabled) return
+
+    // If we were hidden for more than the refresh interval, fetch immediately
+    if (timeSinceHidden > multiQuotesRefreshInterval) {
+      fetchMultiQuotes()
+      lastFetchRef.current = Date.now()
+    }
+  }, [wasHidden, isVisible, timeSinceHidden, multiQuotesRefreshInterval, useMultiQuotesFallback, enabled, fetchMultiQuotes])
 
   /**
    * Enhance items with real-time LTP and recalculated P&L
@@ -244,6 +278,7 @@ export function useLivePrice<T extends PriceableItem>(
     data: enhancedData,
     isLive,
     isConnected: wsConnected,
+    isPaused: wsPaused,
     isAnyMarketOpen: anyMarketOpen,
     multiQuotes,
     refreshMultiQuotes: fetchMultiQuotes,
