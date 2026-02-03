@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import ssl
+import time
 import uuid
 from collections.abc import Callable
 from typing import Any, Dict, List, Optional
@@ -18,10 +19,19 @@ class UpstoxWebSocketClient:
     """
     Upstox V3 WebSocket client implementation.
     Handles WebSocket connections, subscriptions, and message processing.
+
+    Enhanced with proper resource management and health check for silent stalls.
     """
 
     API_URL = "https://api.upstox.com/v3"
     AUTH_ENDPOINT = f"{API_URL}/feed/market-data-feed/authorize"
+
+    # HTTP request timeout
+    HTTP_TIMEOUT = 10
+
+    # Health check settings - detect silent stalls
+    HEALTH_CHECK_INTERVAL = 30  # Check every 30 seconds
+    DATA_TIMEOUT = 90  # Consider stalled if no data for 90 seconds
 
     def __init__(self, auth_token: str):
         self.auth_token = auth_token
@@ -30,6 +40,8 @@ class UpstoxWebSocketClient:
         self._subscriptions: set = set()
         self.running = False
         self.ws_task: asyncio.Task | None = None
+        self._health_check_task: asyncio.Task | None = None
+        self._last_message_time: float | None = None
         self.callbacks: dict[str, Callable | None] = {
             "on_connect": None,
             "on_message": None,
@@ -37,6 +49,11 @@ class UpstoxWebSocketClient:
             "on_close": None,
         }
         self._reconnect_config = {"max_attempts": 5, "base_delay": 2, "max_delay": 30}
+
+        # Cache SSL context to avoid creating it on every connection
+        self._ssl_context = ssl.create_default_context()
+        self._ssl_context.check_hostname = False
+        self._ssl_context.verify_mode = ssl.CERT_NONE
 
     async def connect(self) -> bool:
         """Establish WebSocket connection with reconnection logic"""
@@ -54,9 +71,14 @@ class UpstoxWebSocketClient:
                 await self._establish_connection(ws_url)
                 self.logger.info("Connected to Upstox WebSocket")
 
-                # Start message handler and trigger connect callback
+                # Initialize last message time and start health check
+                self._last_message_time = time.time()
                 self.running = True
+
+                # Start message handler and health check
                 self.ws_task = asyncio.create_task(self._message_handler())
+                self._health_check_task = asyncio.create_task(self._health_check_loop())
+
                 await self._trigger_callback("on_connect")
                 return True
 
@@ -110,16 +132,35 @@ class UpstoxWebSocketClient:
         """Disconnect from WebSocket and cleanup resources"""
         self.running = False
 
+        # Stop health check task
+        if self._health_check_task:
+            self._health_check_task.cancel()
+            try:
+                await self._health_check_task
+            except asyncio.CancelledError:
+                pass
+            self._health_check_task = None
+
+        # Stop message handler task
         if self.ws_task:
             self.ws_task.cancel()
             try:
                 await self.ws_task
             except asyncio.CancelledError:
                 pass
+            self.ws_task = None
 
+        # Close WebSocket connection
         if self.websocket:
-            await self.websocket.close()
+            try:
+                await self.websocket.close()
+            except Exception as e:
+                self.logger.debug(f"Error closing WebSocket: {e}")
             self.websocket = None
+
+        # Clear subscriptions and state
+        self._subscriptions.clear()
+        self._last_message_time = None
 
         self.logger.info("Disconnected from WebSocket")
         await self._trigger_callback("on_close")
@@ -144,7 +185,9 @@ class UpstoxWebSocketClient:
             headers = {"Accept": "application/json", "Authorization": f"Bearer {self.auth_token}"}
 
             self.logger.debug("Requesting WebSocket authorization")
-            response = requests.get(self.AUTH_ENDPOINT, headers=headers)
+            response = requests.get(
+                self.AUTH_ENDPOINT, headers=headers, timeout=self.HTTP_TIMEOUT
+            )
             response.raise_for_status()
 
             auth_data = response.json()
@@ -157,19 +200,18 @@ class UpstoxWebSocketClient:
                 self.logger.error("No WebSocket URL in auth response")
                 return None
 
+        except requests.Timeout:
+            self.logger.error(f"Timeout getting WebSocket authorization after {self.HTTP_TIMEOUT}s")
+            return None
         except Exception as e:
             self.logger.error(f"Failed to get WebSocket authorization: {e}")
             return None
 
     async def _establish_connection(self, ws_url: str) -> None:
-        """Establish WebSocket connection"""
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-
+        """Establish WebSocket connection using cached SSL context"""
         self.logger.info(f"Connecting to WebSocket: {ws_url}")
         self.websocket = await websockets.connect(
-            ws_url, ssl=ssl_context, ping_interval=None, ping_timeout=None
+            ws_url, ssl=self._ssl_context, ping_interval=None, ping_timeout=None
         )
 
     def _calculate_backoff_delay(self, attempt: int) -> int:
@@ -220,6 +262,8 @@ class UpstoxWebSocketClient:
             while self.running and self.websocket:
                 try:
                     message = await self.websocket.recv()
+                    # Update last message time for health check
+                    self._last_message_time = time.time()
                     await self._process_message(message)
 
                 except websockets.exceptions.ConnectionClosed:
@@ -270,3 +314,48 @@ class UpstoxWebSocketClient:
         self.logger.debug(
             f"WebSocket {direction}: Binary message ({len(message)} bytes), preview: {hex_preview}"
         )
+
+    async def _health_check_loop(self) -> None:
+        """
+        Health check loop - detects silent stalls where connection appears alive
+        but no data is flowing (common in VPS/cloud environments with NAT timeouts)
+        """
+        self.logger.debug("Upstox health check started")
+        try:
+            while self.running and self.websocket:
+                await asyncio.sleep(self.HEALTH_CHECK_INTERVAL)
+
+                if not self.running or not self.websocket:
+                    break
+
+                # Check if we've received data recently
+                if self._last_message_time:
+                    elapsed = time.time() - self._last_message_time
+                    if elapsed > self.DATA_TIMEOUT:
+                        self.logger.error(
+                            f"Upstox data stall detected - no data for {elapsed:.1f}s "
+                            f"(timeout: {self.DATA_TIMEOUT}s). Forcing reconnect..."
+                        )
+                        await self._force_reconnect()
+                        break
+                    else:
+                        self.logger.debug(f"Upstox health check OK - last data {elapsed:.1f}s ago")
+
+        except asyncio.CancelledError:
+            self.logger.debug("Health check task cancelled")
+        except Exception as e:
+            self.logger.error(f"Upstox health check error: {e}")
+
+        self.logger.debug("Upstox health check loop exited")
+
+    async def _force_reconnect(self) -> None:
+        """Force a reconnection by closing the current WebSocket"""
+        self.logger.info("Forcing Upstox WebSocket reconnection...")
+
+        # Close current connection - this will trigger on_close callback
+        if self.websocket:
+            try:
+                await self.websocket.close()
+            except Exception as e:
+                self.logger.warning(f"Error closing WebSocket during force reconnect: {e}")
+            self.websocket = None

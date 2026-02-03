@@ -10,10 +10,11 @@ import {
 describe('Navigation Config', () => {
   describe('navItems', () => {
     it('contains the expected main navigation items', () => {
-      expect(navItems).toHaveLength(8)
+      expect(navItems).toHaveLength(9)
 
       const labels = navItems.map((item) => item.label)
       expect(labels).toContain('Dashboard')
+      expect(labels).toContain('Option Chain')
       expect(labels).toContain('Orderbook')
       expect(labels).toContain('Positions')
       expect(labels).toContain('Strategy')
