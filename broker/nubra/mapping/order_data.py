@@ -8,56 +8,144 @@ logger = get_logger(__name__)
 
 def map_order_data(order_data):
     """
-    Processes and modifies a list of order dictionaries based on specific conditions.
-
+    Processes and modifies a list of order dictionaries from Nubra API.
+    
+    Nubra API returns orders as a direct list with fields like:
+    - order_id, order_side, order_status, order_type, order_price, order_qty
+    - ref_data containing: token, stock_name, exchange, etc.
+    
     Parameters:
-    - order_data: A list of dictionaries, where each dictionary represents an order.
+    - order_data: Response from Nubra API (list of orders or dict with status).
 
     Returns:
-    - The modified order_data with updated 'tradingsymbol' and 'product' fields.
+    - The modified order_data normalized to OpenAlgo format.
     """
-    # Check if order_data is empty or doesn't have 'data' key
-    if not order_data or "data" not in order_data or order_data["data"] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        logger.info("No data available.")
-        order_data = []  # Return empty list as the functions expect a list
+    # Nubra API returns a direct list of orders, not wrapped in {status: bool, data: [...]}
+    # Handle both cases for compatibility
+    if isinstance(order_data, dict):
+        if "data" in order_data and order_data.get("data") is not None:
+            orders = order_data["data"]
+        elif order_data.get("status") == False or order_data.get("error"):
+            logger.info(f"No data available or error in response: {order_data}")
+            return []
+        else:
+            # Might be an empty dict or unexpected format
+            logger.info("No data available.")
+            return []
+    elif isinstance(order_data, list):
+        orders = order_data
     else:
-        order_data = order_data["data"]
-        logger.info(f"{order_data}")
+        logger.info("Unexpected order_data format.")
+        return []
 
-    if order_data:
-        for order in order_data:
-            # Extract the instrument_token and exchange for the current order
-            symboltoken = order["symboltoken"]
-            exchange = order["exchange"]
+    if not orders:
+        return []
 
-            # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_symbol(symboltoken, exchange)
+    normalized_orders = []
+    for order in orders:
+        # Get ref_data for symbol information
+        ref_data = order.get("ref_data", {})
+        
+        # Map Nubra fields to OpenAlgo/Angel-like format
+        # Nubra: order_side -> transactiontype (BUY/SELL)
+        order_side = order.get("order_side", "")
+        if order_side == "ORDER_SIDE_BUY":
+            transaction_type = "BUY"
+        elif order_side == "ORDER_SIDE_SELL":
+            transaction_type = "SELL"
+        else:
+            transaction_type = order_side.replace("ORDER_SIDE_", "") if order_side else ""
 
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol_from_db:
-                order["tradingsymbol"] = symbol_from_db
-                if (order["exchange"] == "NSE" or order["exchange"] == "BSE") and order[
-                    "producttype"
-                ] == "DELIVERY":
-                    order["producttype"] = "CNC"
+        # Nubra: order_status -> status (complete/open/rejected)
+        order_status = order.get("order_status", "")
+        status_map = {
+            "ORDER_STATUS_FILLED": "complete",
+            "ORDER_STATUS_OPEN": "open",
+            "ORDER_STATUS_PENDING": "open",
+            "ORDER_STATUS_REJECTED": "rejected",
+            "ORDER_STATUS_CANCELLED": "cancelled",
+            "ORDER_STATUS_PARTIALLY_FILLED": "open",
+        }
+        status = status_map.get(order_status, order_status.replace("ORDER_STATUS_", "").lower() if order_status else "")
 
-                elif order["producttype"] == "INTRADAY":
-                    order["producttype"] = "MIS"
-
-                elif (
-                    order["exchange"] in ["NFO", "MCX", "BFO", "CDS"]
-                    and order["producttype"] == "CARRYFORWARD"
-                ):
-                    order["producttype"] = "NRML"
+        # Nubra uses both order_type and price_type:
+        # - order_type: ORDER_TYPE_REGULAR, ORDER_TYPE_STOPLOSS, ORDER_TYPE_ICEBERG
+        # - price_type: MARKET, LIMIT
+        # For OpenAlgo we need: MARKET, LIMIT, SL, SL-M (uppercase like Angel)
+        order_type = order.get("order_type", "")
+        price_type = order.get("price_type", "")
+        
+        # Determine the ordertype based on Nubra's fields
+        if order_type == "ORDER_TYPE_STOPLOSS":
+            # Stoploss order - check price_type for SL vs SL-M
+            if price_type == "MARKET":
+                ordertype = "SL-M"
             else:
-                logger.info(
-                    f"Symbol not found for token {symboltoken} and exchange {exchange}. Keeping original trading symbol."
-                )
+                ordertype = "SL"
+        elif price_type == "MARKET":
+            ordertype = "MARKET"
+        elif price_type == "LIMIT":
+            ordertype = "LIMIT"
+        else:
+            # Fallback: try to derive from price_type or default to MARKET
+            ordertype = price_type.upper() if price_type else "MARKET"
 
-    return order_data
+        # Nubra: order_delivery_type -> producttype (CNC/MIS/NRML)
+        delivery_type = order.get("order_delivery_type", "")
+        product_map = {
+            "ORDER_DELIVERY_TYPE_CNC": "CNC",
+            "ORDER_DELIVERY_TYPE_IDAY": "MIS",
+            "ORDER_DELIVERY_TYPE_INTRADAY": "MIS",
+            "ORDER_DELIVERY_TYPE_MARGIN": "NRML",
+            "ORDER_DELIVERY_TYPE_NRML": "NRML",
+        }
+        producttype = product_map.get(delivery_type, delivery_type.replace("ORDER_DELIVERY_TYPE_", "") if delivery_type else "")
+
+        # Exchange from ref_data
+        exchange = ref_data.get("exchange", "")
+        
+        # Symbol token from ref_data
+        symboltoken = str(ref_data.get("token", order.get("ref_id", "")))
+        
+        # Get symbol from database using token
+        symbol_from_db = get_symbol(symboltoken, exchange)
+        tradingsymbol = symbol_from_db if symbol_from_db else order.get("display_name", ref_data.get("stock_name", ""))
+
+        # Build normalized order object
+        normalized_order = {
+            "orderid": str(order.get("order_id", "")),
+            "exchange_order_id": str(order.get("exchange_order_id", "")),
+            "tradingsymbol": tradingsymbol,
+            "symboltoken": symboltoken,
+            "exchange": exchange,
+            "transactiontype": transaction_type,
+            "producttype": producttype,
+            "ordertype": ordertype,
+            "quantity": order.get("order_qty", 0),
+            "filledshares": order.get("filled_qty", 0),
+            "averageprice": order.get("avg_filled_price", 0.0),
+            "price": order.get("order_price", 0.0),
+            "triggerprice": order.get("trigger_price", 0.0),
+            "status": status,
+            "ordertag": order.get("tag", ""),
+            "updatetime": "",  # Nubra doesn't provide formatted time directly
+        }
+        
+        # Convert timestamps if available
+        order_time = order.get("order_time")
+        if order_time:
+            try:
+                # Nubra timestamp is in nanoseconds, convert to readable format
+                from datetime import datetime
+                ts_seconds = order_time / 1_000_000_000
+                dt = datetime.fromtimestamp(ts_seconds)
+                normalized_order["updatetime"] = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except (ValueError, OSError):
+                normalized_order["updatetime"] = str(order_time)
+
+        normalized_orders.append(normalized_order)
+
+    return normalized_orders
 
 
 def calculate_order_statistics(order_data):
