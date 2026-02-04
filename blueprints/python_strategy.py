@@ -315,7 +315,7 @@ def create_subprocess_args():
 
 # Resource limits for strategy processes (Unix only)
 # Prevents buggy strategies from crashing the system
-STRATEGY_MEMORY_LIMIT_MB = 512  # Max memory per strategy (512 MB)
+STRATEGY_MEMORY_LIMIT_MB = 1024  # Max memory per strategy (1 GB - increased from 512MB for complex strategies)
 STRATEGY_CPU_TIME_LIMIT_SEC = 3600  # Max CPU time (1 hour) - resets on each run
 
 
@@ -358,7 +358,7 @@ def set_resource_limits():
 
         # Limit number of processes - prevents fork bombs
         try:
-            resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
+            resource.setrlimit(resource.RLIMIT_NPROC, (256, 256))
         except (OSError, ValueError) as e:
             logger.debug(f"Could not set process limit: {e}")
 
