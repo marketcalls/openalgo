@@ -307,10 +307,165 @@ def transform_tradebook_data(tradebook_data):
 
 
 def map_position_data(position_data):
-    return map_order_data(position_data)
+    """
+    Map Nubra's positions response to OpenAlgo normalized format.
+    
+    Nubra returns positions in portfolio.stock_positions, portfolio.fut_positions, 
+    portfolio.opt_positions arrays. Prices are in paise (divide by 100).
+    
+    Args:
+        position_data: Raw response from Nubra's /portfolio/positions API
+        
+    Returns:
+        List of normalized position dictionaries
+    """
+    logger.info(f"Nubra map_position_data input: {position_data}")
+    
+    # Handle error responses
+    if isinstance(position_data, dict) and position_data.get("error"):
+        logger.warning(f"Nubra positions error: {position_data}")
+        return []
+    
+    # Handle empty response
+    if not position_data:
+        logger.info("No position data available.")
+        return []
+    
+    positions = []
+    
+    # If position_data is a dict with 'portfolio' key (Nubra format)
+    if isinstance(position_data, dict):
+        portfolio = position_data.get("portfolio", position_data)
+        
+        # Collect positions from all position types
+        stock_positions = portfolio.get("stock_positions") or []
+        fut_positions = portfolio.get("fut_positions") or []
+        opt_positions = portfolio.get("opt_positions") or []
+        close_positions = portfolio.get("close_positions") or []
+        
+        # Build a dictionary to merge positions by unique key (symbol+exchange+product)
+        # Open positions take priority over closed positions
+        merged_positions = {}
+        
+        # First, add closed positions (they will be overwritten by open positions if exists)
+        for pos in close_positions:
+            symbol = pos.get("symbol", pos.get("display_name", ""))
+            exchange = pos.get("exchange", "NSE")
+            product = pos.get("product", "")
+            key = f"{symbol}_{exchange}_{product}"
+            
+            # Mark as closed (qty=0)
+            pos_copy = pos.copy()
+            pos_copy["_is_closed"] = True
+            merged_positions[key] = pos_copy
+        
+        # Then, add open positions (will overwrite closed if same symbol)
+        for pos in stock_positions + fut_positions + opt_positions:
+            symbol = pos.get("symbol", pos.get("display_name", ""))
+            exchange = pos.get("exchange", "NSE")
+            product = pos.get("product", "")
+            key = f"{symbol}_{exchange}_{product}"
+            
+            pos_copy = pos.copy()
+            pos_copy["_is_closed"] = False
+            merged_positions[key] = pos_copy
+        
+        logger.info(f"Nubra merged_positions keys: {list(merged_positions.keys())}")
+        logger.info(f"Nubra merged_positions count: {len(merged_positions)}")
+        
+        # Process merged positions
+        for pos in merged_positions.values():
+            # Nubra prices are in paise, convert to rupees
+            # Note: PnL values are already in rupees, no conversion needed
+            avg_price_paise = pos.get("avg_price", 0) or 0
+            ltp_paise = pos.get("ltp", 0) or 0
+            pnl_rupees = pos.get("pnl", 0) or 0  # Already in rupees
+            
+            # Map product type from Nubra format to OpenAlgo format
+            product = pos.get("product", "")
+            if product == "ORDER_DELIVERY_TYPE_CNC":
+                producttype = "CNC"
+            elif product == "ORDER_DELIVERY_TYPE_IDAY":
+                producttype = "MIS"
+            elif product == "ORDER_DELIVERY_TYPE_NRML":
+                producttype = "NRML"
+            else:
+                producttype = product
+            
+            # Determine net quantity
+            qty = pos.get("qty", 0) or 0
+            order_side = pos.get("order_side", "BUY")
+            is_closed = pos.get("_is_closed", False)
+            
+            # If position is closed only (not in open positions), show qty=0
+            if is_closed or order_side == "C":
+                netqty = 0
+            elif order_side == "SELL":
+                netqty = -qty
+            else:  # BUY
+                netqty = qty
+            
+            normalized_position = {
+                "tradingsymbol": pos.get("symbol", pos.get("display_name", "")),
+                "symboltoken": str(pos.get("ref_id", "")),
+                "exchange": pos.get("exchange", "NSE"),
+                "producttype": producttype,
+                "netqty": netqty,
+                "quantity": qty if not is_closed else 0,
+                "avgnetprice": avg_price_paise / 100 if avg_price_paise else 0.0,
+                "avgbuyprice": (pos.get("avg_buy_price", 0) or 0) / 100,
+                "avgsellprice": (pos.get("avg_sell_price", 0) or 0) / 100,
+                "ltp": ltp_paise / 100 if ltp_paise else 0.0,
+                "pnl": pnl_rupees,  # Already in rupees
+                "pnlpercentage": pos.get("pnl_chg", 0) or 0,
+            }
+            positions.append(normalized_position)
+    
+    elif isinstance(position_data, list):
+        # If already a list, normalize each position
+        for pos in position_data:
+            avg_price_paise = pos.get("avg_price", pos.get("avgnetprice", 0)) or 0
+            ltp_paise = pos.get("ltp", 0) or 0
+            pnl_paise = pos.get("pnl", 0) or 0
+            
+            # Check if already in rupees (small value) or paise (large value)
+            # If avg_price > 10000, likely paise
+            if avg_price_paise > 10000:
+                avg_price = avg_price_paise / 100
+                ltp = ltp_paise / 100
+                pnl = pnl_paise / 100
+            else:
+                avg_price = avg_price_paise
+                ltp = ltp_paise
+                pnl = pnl_paise
+            
+            normalized_position = {
+                "tradingsymbol": pos.get("symbol", pos.get("tradingsymbol", "")),
+                "symboltoken": str(pos.get("ref_id", pos.get("symboltoken", ""))),
+                "exchange": pos.get("exchange", "NSE"),
+                "producttype": pos.get("producttype", "MIS"),
+                "netqty": pos.get("netqty", pos.get("qty", 0)),
+                "quantity": pos.get("quantity", pos.get("qty", 0)),
+                "avgnetprice": avg_price,
+                "ltp": ltp,
+                "pnl": pnl,
+            }
+            positions.append(normalized_position)
+    
+    logger.info(f"Nubra mapped positions: {len(positions)} positions")
+    return positions
 
 
 def transform_positions_data(positions_data):
+    """
+    Transform normalized position data to final UI format.
+    
+    Args:
+        positions_data: List of normalized position dictionaries from map_position_data
+        
+    Returns:
+        List of transformed position dictionaries for UI display
+    """
     transformed_data = []
     for position in positions_data:
         transformed_position = {

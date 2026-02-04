@@ -72,7 +72,15 @@ def get_trade_book(auth):
 
 
 def get_positions(auth):
-    return get_api_response("/rest/secure/angelbroking/order/v1/getPosition", auth)
+    """
+    Fetch positions from Nubra's API.
+    
+    Nubra API: GET /portfolio/positions
+    Returns list of positions with fields like ref_id, ref_data, quantity, etc.
+    """
+    response = get_api_response("/portfolio/positions", auth)
+    logger.info(f"Nubra Raw position book response: {response}")
+    return response
 
 
 def get_holdings(auth):
@@ -80,23 +88,59 @@ def get_holdings(auth):
 
 
 def get_open_position(tradingsymbol, exchange, producttype, auth):
+    """
+    Get the net quantity for a specific position.
+    Uses Nubra's position data format with portfolio.stock_positions, fut_positions, opt_positions.
+    """
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     positions_data = get_positions(auth)
 
-    logger.debug(f"{positions_data}")
+    logger.debug(f"Nubra positions data: {positions_data}")
 
     net_qty = "0"
 
-    if positions_data and positions_data.get("status") and positions_data.get("data"):
-        for position in positions_data["data"]:
-            if (
-                position.get("tradingsymbol") == tradingsymbol
-                and position.get("exchange") == exchange
-                and position.get("producttype") == producttype
-            ):
-                net_qty = position.get("netqty", "0")
-                break  # Assuming you need the first match
+    # Nubra returns positions in portfolio.stock_positions, portfolio.fut_positions, portfolio.opt_positions
+    positions = []
+    if isinstance(positions_data, dict):
+        portfolio = positions_data.get("portfolio", positions_data)
+        
+        stock_positions = portfolio.get("stock_positions") or []
+        fut_positions = portfolio.get("fut_positions") or []
+        opt_positions = portfolio.get("opt_positions") or []
+        
+        positions = stock_positions + fut_positions + opt_positions
+    elif isinstance(positions_data, list):
+        positions = positions_data
+
+    for position in positions:
+        pos_exchange = position.get("exchange", "")
+        pos_symbol = position.get("symbol", position.get("display_name", ""))
+        ref_id = str(position.get("ref_id", ""))
+        
+        # Map product type from Nubra format
+        product = position.get("product", "")
+        if product == "ORDER_DELIVERY_TYPE_CNC":
+            pos_producttype = "CNC"
+        elif product == "ORDER_DELIVERY_TYPE_IDAY":
+            pos_producttype = "MIS"
+        elif product == "ORDER_DELIVERY_TYPE_NRML":
+            pos_producttype = "NRML"
+        else:
+            pos_producttype = product
+        
+        # Check for matching position
+        if pos_exchange == exchange and pos_producttype == producttype:
+            # Match by symbol or ref_id
+            symbol_from_db = get_symbol(ref_id, pos_exchange)
+            
+            if symbol_from_db == tradingsymbol or pos_symbol == tradingsymbol:
+                # Nubra uses 'qty' for position quantity
+                qty = position.get("qty", position.get("quantity", 0)) or 0
+                order_side = position.get("order_side", "BUY")
+                # For sell positions, return negative quantity
+                net_qty = str(qty) if order_side == "BUY" else str(-qty)
+                break
 
     return net_qty
 
@@ -251,52 +295,91 @@ def place_smartorder_api(data, auth):
 
 
 def close_all_positions(current_api_key, auth):
-    # Fetch the current open positions
+    """
+    Close all open positions using Nubra's API.
+    
+    Fetches positions from portfolio.stock_positions, portfolio.fut_positions,
+    portfolio.opt_positions and places market orders to close each one.
+    """
     AUTH_TOKEN = auth
 
     positions_response = get_positions(AUTH_TOKEN)
+    
+    logger.info(f"Nubra positions response: {positions_response}")
 
-    # Check if the positions data is null or empty
-    if positions_response["data"] is None or not positions_response["data"]:
+    # Handle Nubra's response format - portfolio contains stock_positions, fut_positions, opt_positions
+    positions = []
+    if isinstance(positions_response, dict):
+        portfolio = positions_response.get("portfolio", positions_response)
+        
+        # Collect positions from all position types
+        stock_positions = portfolio.get("stock_positions") or []
+        fut_positions = portfolio.get("fut_positions") or []
+        opt_positions = portfolio.get("opt_positions") or []
+        
+        positions = stock_positions + fut_positions + opt_positions
+        
+        if positions_response.get("error"):
+            logger.warning(f"Nubra positions error: {positions_response}")
+            return {"message": "Failed to fetch positions"}, 500
+    elif isinstance(positions_response, list):
+        positions = positions_response
+
+    # Check if positions is empty
+    if not positions:
         return {"message": "No Open Positions Found"}, 200
 
-    if positions_response["status"]:
-        # Loop through each position to close
-        for position in positions_response["data"]:
-            # Skip if net quantity is zero
-            if int(position["netqty"]) == 0:
-                continue
+    # Loop through each position to close
+    for position in positions:
+        # Get quantity - Nubra uses 'qty' in position data
+        qty = int(position.get("qty", position.get("quantity", 0)) or 0)
+        
+        # Skip if quantity is zero
+        if qty == 0:
+            continue
 
-            # Determine action based on net quantity
-            action = "SELL" if int(position["netqty"]) > 0 else "BUY"
-            quantity = abs(int(position["netqty"]))
+        # Determine action based on order_side (opposite to close)
+        order_side = position.get("order_side", "BUY")
+        # To close, we do the opposite action
+        action = "SELL" if order_side == "BUY" else "BUY"
+        quantity = abs(qty)
 
-            # get openalgo symbol to send to placeorder function
-            symbol = get_symbol(position["symboltoken"], position["exchange"])
-            logger.info(f"The Symbol is {symbol}")
+        # Get exchange from position
+        exchange = position.get("exchange", "NSE")
+        
+        # Get symbol from position - use 'symbol' field
+        symbol = position.get("symbol", position.get("display_name", ""))
+        ref_id = str(position.get("ref_id", ""))
+        
+        # Try to get OpenAlgo symbol from database using ref_id
+        oa_symbol = get_symbol(ref_id, exchange)
+        if oa_symbol:
+            symbol = oa_symbol
+        
+        logger.info(f"Closing position - Symbol: {symbol}, Exchange: {exchange}, Qty: {quantity}, Action: {action}")
 
-            # Prepare the order payload
-            place_order_payload = {
-                "apikey": current_api_key,
-                "strategy": "Squareoff",
-                "symbol": symbol,
-                "action": action,
-                "exchange": position["exchange"],
-                "pricetype": "MARKET",
-                "product": reverse_map_product_type(position["producttype"]),
-                "quantity": str(quantity),
-            }
+        # Map product type - Nubra uses 'product' like ORDER_DELIVERY_TYPE_CNC
+        product_type = position.get("product", "ORDER_DELIVERY_TYPE_IDAY")
+        product = reverse_map_product_type(product_type)
 
-            logger.info(f"{place_order_payload}")
+        # Prepare the order payload
+        place_order_payload = {
+            "apikey": current_api_key,
+            "strategy": "Squareoff",
+            "symbol": symbol,
+            "action": action,
+            "exchange": exchange,
+            "pricetype": "MARKET",
+            "product": product,
+            "quantity": str(quantity),
+        }
 
-            # Place the order to close the position
-            res, response, orderid = place_order_api(place_order_payload, auth)
+        logger.info(f"Close position payload: {place_order_payload}")
 
-            # logger.info(f"{res}")
-            # logger.info(f"{response}")
-            # logger.info(f"{orderid}")
-
-            # Note: Ensure place_order_api handles any errors and logs accordingly
+        # Place the order to close the position
+        res, response, orderid = place_order_api(place_order_payload, auth)
+        
+        logger.info(f"Close position response: {response}, orderid: {orderid}")
 
     return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
 
