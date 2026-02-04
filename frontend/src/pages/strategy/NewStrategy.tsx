@@ -1,7 +1,7 @@
 import { ArrowLeft, Info, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { strategyApi } from '@/api/strategy'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -71,7 +71,7 @@ export default function NewStrategy() {
     e.preventDefault()
 
     if (!validateForm()) {
-      toast.error('Please fix the form errors')
+      showToast.error('Please fix the form errors', 'strategy')
       return
     }
 
@@ -90,15 +90,15 @@ export default function NewStrategy() {
       })
 
       if (response.status === 'success') {
-        toast.success('Strategy created successfully')
+        showToast.success('Strategy created successfully', 'strategy')
         navigate(`/strategy/${response.data?.strategy_id}`)
       } else {
-        toast.error(response.message || 'Failed to create strategy')
+        showToast.error(response.message || 'Failed to create strategy', 'strategy')
       }
     } catch (error: unknown) {
       console.error('Failed to create strategy:', error)
       const errorMessage = error instanceof Error ? error.message : 'Failed to create strategy'
-      toast.error(errorMessage)
+      showToast.error(errorMessage, 'strategy')
     } finally {
       setLoading(false)
     }

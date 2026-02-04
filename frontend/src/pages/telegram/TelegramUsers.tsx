@@ -1,7 +1,7 @@
 import { ArrowLeft, Bell, BellOff, Search, Send, Trash2, Users } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { webClient } from '@/api/client'
 import {
   AlertDialog,
@@ -85,7 +85,7 @@ export default function TelegramUsers() {
       setStats(fetchedStats)
     } catch (error) {
       console.error('Error fetching users:', error)
-      toast.error('Failed to load users')
+      showToast.error('Failed to load users', 'telegram')
     } finally {
       setIsLoading(false)
     }
@@ -93,7 +93,7 @@ export default function TelegramUsers() {
 
   const handleSendMessage = async () => {
     if (!messageUser || !messageText.trim()) {
-      toast.error('Please enter a message')
+      showToast.error('Please enter a message', 'telegram')
       return
     }
 
@@ -108,15 +108,15 @@ export default function TelegramUsers() {
       )
 
       if (response.data.status === 'success') {
-        toast.success('Message sent successfully')
+        showToast.success('Message sent successfully', 'telegram')
         setMessageUser(null)
         setMessageText('')
       } else {
-        toast.error(response.data.message || 'Failed to send message')
+        showToast.error(response.data.message || 'Failed to send message', 'telegram')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to send message')
+      showToast.error(err.response?.data?.message || 'Failed to send message', 'telegram')
     } finally {
       setIsSending(false)
     }
@@ -132,15 +132,15 @@ export default function TelegramUsers() {
       )
 
       if (response.data.status === 'success') {
-        toast.success('User unlinked successfully')
+        showToast.success('User unlinked successfully', 'telegram')
         setUnlinkUser(null)
         fetchUsers()
       } else {
-        toast.error(response.data.message || 'Failed to unlink user')
+        showToast.error(response.data.message || 'Failed to unlink user', 'telegram')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to unlink user')
+      showToast.error(err.response?.data?.message || 'Failed to unlink user', 'telegram')
     } finally {
       setIsUnlinking(false)
     }

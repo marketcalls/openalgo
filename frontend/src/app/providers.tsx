@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 import type { ReactNode } from 'react'
 import { Toaster } from '@/components/ui/sonner'
+import { useAlertStore } from '@/stores/alertStore'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -18,10 +19,18 @@ interface ProvidersProps {
 }
 
 export function Providers({ children }: ProvidersProps) {
+  const { position, maxVisibleToasts, duration } = useAlertStore()
+
   return (
     <QueryClientProvider client={queryClient}>
       {children}
-      <Toaster position="top-right" richColors />
+      <Toaster
+        position={position}
+        richColors
+        visibleToasts={maxVisibleToasts}
+        duration={duration}
+        closeButton
+      />
       <ReactQueryDevtools initialIsOpen={false} />
     </QueryClientProvider>
   )

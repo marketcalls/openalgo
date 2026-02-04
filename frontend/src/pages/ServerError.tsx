@@ -1,7 +1,7 @@
 import { AlertTriangle, BookOpen, Download, HelpCircle, Home, LogOut } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { fetchCSRFToken } from '@/api/client'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -25,7 +25,7 @@ export default function ServerError() {
       if (response.ok) {
         window.location.href = '/login'
       } else {
-        toast.error('Failed to logout. Please try again.')
+        showToast.error('Failed to logout. Please try again.')
       }
     } catch {
       // If logout fails, redirect to login anyway

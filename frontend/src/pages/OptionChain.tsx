@@ -25,7 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { cn } from '@/lib/utils'
 
 const UNDERLYINGS = [
@@ -396,11 +396,11 @@ export default function OptionChain() {
             setSelectedExpiry(response.data[0])
           }
         } else {
-          toast.error(response.message || 'Failed to load expiries')
+          showToast.error(response.message || 'Failed to load expiries', 'orders')
         }
       } catch (err) {
         console.error('Error loading expiries:', err)
-        toast.error('Failed to load expiry dates')
+        showToast.error('Failed to load expiry dates', 'orders')
       }
     }
 

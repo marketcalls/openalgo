@@ -17,7 +17,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { authApi } from '@/api/auth'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -93,7 +93,7 @@ export default function HistorifyCharts() {
       await authApi.logout()
       logout()
       navigate('/login')
-      toast.success('Logged out successfully')
+      showToast.success('Logged out successfully', 'historify')
     } catch {
       logout()
       navigate('/login')
@@ -104,9 +104,9 @@ export default function HistorifyCharts() {
     const result = await toggleAppMode()
     if (result.success) {
       const newMode = useThemeStore.getState().appMode
-      toast.success(`Switched to ${newMode === 'live' ? 'Live' : 'Analyze'} mode`)
+      showToast.success(`Switched to ${newMode === 'live' ? 'Live' : 'Analyze'} mode`, 'historify')
     } else {
-      toast.error(result.message || 'Failed to toggle mode')
+      showToast.error(result.message || 'Failed to toggle mode', 'historify')
     }
   }
 
@@ -455,14 +455,14 @@ export default function HistorifyCharts() {
       if (data.status === 'success') {
         setChartData(data.data || [])
         if (data.count === 0) {
-          toast.info('No data available for this range. Make sure 1m data is downloaded for custom intervals.')
+          showToast.info('No data available for this range. Make sure 1m data is downloaded for custom intervals.', 'historify')
         }
       } else {
-        toast.error(data.message || 'Failed to load chart data')
+        showToast.error(data.message || 'Failed to load chart data', 'historify')
       }
     } catch (error) {
       console.error('Error loading chart data:', error)
-      toast.error('Failed to load chart data')
+      showToast.error('Failed to load chart data', 'historify')
     } finally {
       setIsLoading(false)
     }

@@ -14,7 +14,7 @@ import {
   X,
 } from 'lucide-react'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { tradingApi } from '@/api/trading'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -447,11 +447,11 @@ export default function Positions() {
         // Toast handled by order_event socket
         fetchPositions(true)
       } else {
-        toast.error(response.message || 'Failed to close position')
+        showToast.error(response.message || 'Failed to close position', 'positions')
       }
     } catch (err) {
       console.error('Close position error:', err)
-      toast.error('Failed to close position')
+      showToast.error('Failed to close position', 'positions')
     }
   }
 
@@ -459,14 +459,14 @@ export default function Positions() {
     try {
       const response = await tradingApi.closeAllPositions()
       if (response.status === 'success') {
-        toast.success('All positions closed')
+        showToast.success('All positions closed', 'positions')
         fetchPositions(true)
       } else {
-        toast.error(response.message || 'Failed to close all positions')
+        showToast.error(response.message || 'Failed to close all positions', 'positions')
       }
     } catch (err) {
       console.error('Close all positions error:', err)
-      toast.error('Failed to close all positions')
+      showToast.error('Failed to close all positions', 'positions')
     }
   }
 

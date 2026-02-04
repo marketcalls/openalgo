@@ -12,7 +12,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { chartinkApi } from '@/api/chartink'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -59,7 +59,7 @@ export default function ViewChartinkStrategy() {
       setMappings(data.mappings || [])
     } catch (error) {
       console.error('Failed to fetch strategy:', error)
-      toast.error('Failed to load strategy')
+      showToast.error('Failed to load strategy', 'chartink')
       navigate('/chartink')
     } finally {
       setLoading(false)
@@ -94,10 +94,10 @@ export default function ViewChartinkStrategy() {
     try {
       await navigator.clipboard.writeText(text)
       setCopiedField(field)
-      toast.success('Copied to clipboard')
+      showToast.success('Copied to clipboard', 'clipboard')
       setTimeout(() => setCopiedField(null), 2000)
     } catch {
-      toast.error('Failed to copy')
+      showToast.error('Failed to copy', 'clipboard')
     }
   }
 
@@ -108,13 +108,13 @@ export default function ViewChartinkStrategy() {
       const response = await chartinkApi.toggleStrategy(strategy.id)
       if (response.status === 'success') {
         setStrategy({ ...strategy, is_active: response.data?.is_active ?? !strategy.is_active })
-        toast.success(response.data?.is_active ? 'Strategy activated' : 'Strategy deactivated')
+        showToast.success(response.data?.is_active ? 'Strategy activated' : 'Strategy deactivated', 'chartink')
       } else {
-        toast.error(response.message || 'Failed to toggle strategy')
+        showToast.error(response.message || 'Failed to toggle strategy', 'chartink')
       }
     } catch (error) {
       console.error('Failed to toggle strategy:', error)
-      toast.error('Failed to toggle strategy')
+      showToast.error('Failed to toggle strategy', 'chartink')
     } finally {
       setToggling(false)
     }
@@ -126,14 +126,14 @@ export default function ViewChartinkStrategy() {
       setDeleting(true)
       const response = await chartinkApi.deleteStrategy(strategy.id)
       if (response.status === 'success') {
-        toast.success('Strategy deleted successfully')
+        showToast.success('Strategy deleted successfully', 'chartink')
         navigate('/chartink')
       } else {
-        toast.error(response.message || 'Failed to delete strategy')
+        showToast.error(response.message || 'Failed to delete strategy', 'chartink')
       }
     } catch (error) {
       console.error('Failed to delete strategy:', error)
-      toast.error('Failed to delete strategy')
+      showToast.error('Failed to delete strategy', 'chartink')
     } finally {
       setDeleting(false)
       setDeleteDialogOpen(false)
@@ -146,13 +146,13 @@ export default function ViewChartinkStrategy() {
       const response = await chartinkApi.deleteSymbolMapping(strategy.id, mappingId)
       if (response.status === 'success') {
         setMappings(mappings.filter((m) => m.id !== mappingId))
-        toast.success('Symbol mapping deleted')
+        showToast.success('Symbol mapping deleted', 'chartink')
       } else {
-        toast.error(response.message || 'Failed to delete mapping')
+        showToast.error(response.message || 'Failed to delete mapping', 'chartink')
       }
     } catch (error) {
       console.error('Failed to delete mapping:', error)
-      toast.error('Failed to delete mapping')
+      showToast.error('Failed to delete mapping', 'chartink')
     }
   }
 

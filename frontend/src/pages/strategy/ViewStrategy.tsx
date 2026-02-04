@@ -16,7 +16,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { strategyApi } from '@/api/strategy'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -65,7 +65,7 @@ export default function ViewStrategy() {
       setMappings(data.mappings || [])
     } catch (error) {
       console.error('Failed to fetch strategy:', error)
-      toast.error('Failed to load strategy')
+      showToast.error('Failed to load strategy', 'strategy')
       navigate('/strategy')
     } finally {
       setLoading(false)
@@ -100,10 +100,10 @@ export default function ViewStrategy() {
     try {
       await navigator.clipboard.writeText(text)
       setCopiedField(field)
-      toast.success('Copied to clipboard')
+      showToast.success('Copied to clipboard', 'clipboard')
       setTimeout(() => setCopiedField(null), 2000)
     } catch {
-      toast.error('Failed to copy')
+      showToast.error('Failed to copy', 'clipboard')
     }
   }
 
@@ -114,13 +114,13 @@ export default function ViewStrategy() {
       const response = await strategyApi.toggleStrategy(strategy.id)
       if (response.status === 'success') {
         setStrategy({ ...strategy, is_active: response.data?.is_active ?? !strategy.is_active })
-        toast.success(response.data?.is_active ? 'Strategy activated' : 'Strategy deactivated')
+        showToast.success(response.data?.is_active ? 'Strategy activated' : 'Strategy deactivated', 'strategy')
       } else {
-        toast.error(response.message || 'Failed to toggle strategy')
+        showToast.error(response.message || 'Failed to toggle strategy', 'strategy')
       }
     } catch (error) {
       console.error('Failed to toggle strategy:', error)
-      toast.error('Failed to toggle strategy')
+      showToast.error('Failed to toggle strategy', 'strategy')
     } finally {
       setToggling(false)
     }
@@ -132,14 +132,14 @@ export default function ViewStrategy() {
       setDeleting(true)
       const response = await strategyApi.deleteStrategy(strategy.id)
       if (response.status === 'success') {
-        toast.success('Strategy deleted successfully')
+        showToast.success('Strategy deleted successfully', 'strategy')
         navigate('/strategy')
       } else {
-        toast.error(response.message || 'Failed to delete strategy')
+        showToast.error(response.message || 'Failed to delete strategy', 'strategy')
       }
     } catch (error) {
       console.error('Failed to delete strategy:', error)
-      toast.error('Failed to delete strategy')
+      showToast.error('Failed to delete strategy', 'strategy')
     } finally {
       setDeleting(false)
       setDeleteDialogOpen(false)
@@ -152,13 +152,13 @@ export default function ViewStrategy() {
       const response = await strategyApi.deleteSymbolMapping(strategy.id, mappingId)
       if (response.status === 'success') {
         setMappings(mappings.filter((m) => m.id !== mappingId))
-        toast.success('Symbol mapping deleted')
+        showToast.success('Symbol mapping deleted', 'strategy')
       } else {
-        toast.error(response.message || 'Failed to delete mapping')
+        showToast.error(response.message || 'Failed to delete mapping', 'strategy')
       }
     } catch (error) {
       console.error('Failed to delete mapping:', error)
-      toast.error('Failed to delete mapping')
+      showToast.error('Failed to delete mapping', 'strategy')
     }
   }
 
