@@ -59,6 +59,13 @@ def transform_data(data, token):
 def transform_modify_order_data(data, token):
     """
     Transforms modify order data from OpenAlgo format to Nubra's format.
+    
+    Nubra Modify Order API: POST /orders/v2/modify/{order_id}
+    
+    Compulsory fields: order_price, order_qty, exchange, order_type
+    For ORDER_TYPE_STOPLOSS: also requires trigger_price in algo_params
+    
+    Note: order_id goes in the URL, not in the payload
     """
     price = float(data.get("price", 0))
     price_in_paise = int(price * 100) if price else 0
@@ -68,18 +75,16 @@ def transform_modify_order_data(data, token):
     
     pricetype = data.get("pricetype", "MARKET")
     
+    # Build payload per Nubra API requirements
+    # order_id is passed in URL, not in payload
     transformed = {
-        "order_id": int(data["orderid"]),
-        "ref_id": int(token),
-        "order_type": map_order_type(pricetype),
-        "price_type": map_price_type(pricetype),
-        "order_delivery_type": map_order_delivery_type(data["product"]),
-        "validity_type": "DAY",
         "order_qty": int(data["quantity"]),
         "order_price": price_in_paise,
+        "exchange": data["exchange"],  # Compulsory field
+        "order_type": map_order_type(pricetype),
     }
     
-    # Add algo_params for stoploss orders
+    # Add algo_params for stoploss orders (trigger_price is compulsory for stoploss)
     if pricetype in ["SL", "SL-M"]:
         transformed["algo_params"] = {
             "trigger_price": trigger_price_in_paise

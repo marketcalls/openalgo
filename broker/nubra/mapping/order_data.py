@@ -112,6 +112,11 @@ def map_order_data(order_data):
         tradingsymbol = symbol_from_db if symbol_from_db else order.get("display_name", ref_data.get("stock_name", ""))
 
         # Build normalized order object
+        # Note: Nubra prices are in paise, convert to rupees (divide by 100)
+        order_price_paise = order.get("order_price", 0)
+        avg_price_paise = order.get("avg_filled_price", 0)
+        trigger_price_paise = order.get("trigger_price", 0)
+        
         normalized_order = {
             "orderid": str(order.get("order_id", "")),
             "exchange_order_id": str(order.get("exchange_order_id", "")),
@@ -123,9 +128,9 @@ def map_order_data(order_data):
             "ordertype": ordertype,
             "quantity": order.get("order_qty", 0),
             "filledshares": order.get("filled_qty", 0),
-            "averageprice": order.get("avg_filled_price", 0.0),
-            "price": order.get("order_price", 0.0),
-            "triggerprice": order.get("trigger_price", 0.0),
+            "averageprice": avg_price_paise / 100 if avg_price_paise else 0.0,
+            "price": order_price_paise / 100 if order_price_paise else 0.0,
+            "triggerprice": trigger_price_paise / 100 if trigger_price_paise else 0.0,
             "status": status,
             "ordertag": order.get("tag", ""),
             "updatetime": "",  # Nubra doesn't provide formatted time directly
@@ -216,7 +221,7 @@ def transform_order_data(orders):
             "exchange": order.get("exchange", ""),
             "action": order.get("transactiontype", ""),
             "quantity": order.get("quantity", 0),
-            "price": order.get("averageprice", 0.0),
+            "price": order.get("price", 0.0),
             "trigger_price": order.get("triggerprice", 0.0),
             "pricetype": ordertype,
             "product": order.get("producttype", ""),
