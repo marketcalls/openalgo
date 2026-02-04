@@ -1,6 +1,6 @@
 import { AlertTriangle, Camera, RefreshCw, TrendingDown, TrendingUp } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useThemeStore } from '@/stores/themeStore'
@@ -271,11 +271,11 @@ export default function PnLTracker() {
           chartRef.current.timeScale().fitContent()
         }
       } else {
-        toast.error(result.message || 'Failed to load PnL data')
+        showToast.error(result.message || 'Failed to load PnL data', 'positions')
       }
     } catch (error) {
       console.error('Error loading PnL data:', error)
-      toast.error('Failed to load PnL data. Please try again.')
+      showToast.error('Failed to load PnL data. Please try again.', 'positions')
     } finally {
       setIsLoading(false)
     }
@@ -308,14 +308,14 @@ export default function PnLTracker() {
           document.body.removeChild(link)
           URL.revokeObjectURL(url)
 
-          toast.success('Screenshot saved successfully!')
+          showToast.success('Screenshot saved successfully!', 'positions')
         },
         'image/png',
         1.0
       )
     } catch (error) {
       console.error('Screenshot error:', error)
-      toast.error('Failed to capture screenshot')
+      showToast.error('Failed to capture screenshot', 'positions')
     } finally {
       setIsCapturing(false)
     }

@@ -434,7 +434,8 @@ def send_with_retry(bot_token, chat_id, message):
 | File | Purpose |
 |------|---------|
 | `blueprints/telegram.py` | Telegram routes and webhook |
-| `services/telegram_service.py` | Bot command handlers |
+| `services/telegram_bot_service.py` | Bot command handlers |
+| `services/telegram_alert_service.py` | Alert/notification service |
 | `database/telegram_db.py` | Database models |
-| `utils/telegram_utils.py` | API helpers |
+| `restx_api/telegram_bot.py` | REST API endpoints |
 | `frontend/src/pages/TelegramSettings.tsx` | Configuration UI |

@@ -27,7 +27,8 @@ utils/
 ├── plugin_loader.py        # Broker plugin loading
 ├── email_utils.py          # Email sending
 ├── email_debug.py          # Email debugging
-└── ngrok_manager.py        # Ngrok tunnels
+├── ngrok_manager.py        # Ngrok tunnels
+└── health_monitor.py       # Background health monitoring daemon
 ```
 
 ## Key Utilities

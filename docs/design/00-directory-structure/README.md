@@ -39,7 +39,7 @@ openalgo/
 ├── restx_api/                # REST API endpoints
 ├── services/                 # Business logic layer
 ├── database/                 # Database models & utilities
-├── broker/                   # Broker integrations (24+)
+├── broker/                   # Broker integrations (29 brokers)
 ├── utils/                    # Shared utilities
 ├── websocket_proxy/          # Real-time data server
 ├── sandbox/                  # Sandbox trading engine

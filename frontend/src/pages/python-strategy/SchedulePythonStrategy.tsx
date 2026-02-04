@@ -1,7 +1,7 @@
 import { ArrowLeft, Calendar, Clock } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { pythonStrategyApi } from '@/api/python-strategy'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -34,7 +34,7 @@ export default function SchedulePythonStrategy() {
         if (data.schedule_days?.length) setSelectedDays(data.schedule_days)
       } catch (error) {
         console.error('Failed to fetch strategy:', error)
-        toast.error('Failed to load strategy')
+        showToast.error('Failed to load strategy', 'pythonStrategy')
         navigate('/python')
       } finally {
         setLoading(false)
@@ -55,15 +55,15 @@ export default function SchedulePythonStrategy() {
 
     if (!strategyId) return
     if (selectedDays.length === 0) {
-      toast.error('Please select at least one day')
+      showToast.error('Please select at least one day', 'pythonStrategy')
       return
     }
     if (!startTime) {
-      toast.error('Start time is required')
+      showToast.error('Start time is required', 'pythonStrategy')
       return
     }
     if (!stopTime) {
-      toast.error('Stop time is required')
+      showToast.error('Stop time is required', 'pythonStrategy')
       return
     }
 
@@ -76,14 +76,14 @@ export default function SchedulePythonStrategy() {
       })
 
       if (response.status === 'success') {
-        toast.success('Schedule saved successfully')
+        showToast.success('Schedule saved successfully', 'pythonStrategy')
         navigate('/python')
       } else {
-        toast.error(response.message || 'Failed to save schedule')
+        showToast.error(response.message || 'Failed to save schedule', 'pythonStrategy')
       }
     } catch (error) {
       console.error('Failed to schedule:', error)
-      toast.error('Failed to save schedule')
+      showToast.error('Failed to save schedule', 'pythonStrategy')
     } finally {
       setSaving(false)
     }

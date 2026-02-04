@@ -29,7 +29,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -464,7 +464,7 @@ export default function Historify() {
       loadJobs()
       loadCatalog()
       loadStats()
-      toast.success(`Job completed: ${data.completed} success, ${data.failed} failed`)
+      showToast.success(`Job completed: ${data.completed} success, ${data.failed} failed`, 'historify')
     }
 
     const handleJobPaused = (data: { job_id: string }) => {
@@ -483,7 +483,7 @@ export default function Historify() {
         delete newProgress[data.job_id]
         return newProgress
       })
-      toast.info('Job cancelled')
+      showToast.info('Job cancelled', 'historify')
     }
 
     socket.on('historify_progress', handleProgress)
@@ -497,7 +497,7 @@ export default function Historify() {
     }
 
     const handleScheduleExecutionStarted = (data: { schedule_id: string; execution_id: number; job_id: string }) => {
-      toast.info(`Schedule execution started`)
+      showToast.info(`Schedule execution started`, 'historify')
       loadSchedules()
       loadJobs()
       if (expandedSchedule === data.schedule_id) {
@@ -701,7 +701,7 @@ export default function Historify() {
 
   const handleCreateOrUpdateSchedule = async () => {
     if (!scheduleName.trim()) {
-      toast.warning('Please enter a schedule name')
+      showToast.warning('Please enter a schedule name', 'historify')
       return
     }
 
@@ -737,16 +737,16 @@ export default function Historify() {
       const data = await response.json()
 
       if (data.status === 'success') {
-        toast.success(editingSchedule ? 'Schedule updated' : 'Schedule created')
+        showToast.success(editingSchedule ? 'Schedule updated' : 'Schedule created', 'historify')
         setScheduleDialogOpen(false)
         resetScheduleForm()
         loadSchedules()
       } else {
-        toast.error(data.message || 'Failed to save schedule')
+        showToast.error(data.message || 'Failed to save schedule', 'historify')
       }
     } catch (error) {
       console.error('Error saving schedule:', error)
-      toast.error('Failed to save schedule')
+      showToast.error('Failed to save schedule', 'historify')
     } finally {
       setIsCreatingSchedule(false)
     }
@@ -762,14 +762,14 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success('Schedule deleted')
+        showToast.success('Schedule deleted', 'historify')
         loadSchedules()
       } else {
-        toast.error(data.message || 'Failed to delete schedule')
+        showToast.error(data.message || 'Failed to delete schedule', 'historify')
       }
     } catch (error) {
       console.error('Error deleting schedule:', error)
-      toast.error('Failed to delete schedule')
+      showToast.error('Failed to delete schedule', 'historify')
     }
   }
 
@@ -784,14 +784,14 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(`Schedule ${schedule.is_enabled ? 'disabled' : 'enabled'}`)
+        showToast.success(`Schedule ${schedule.is_enabled ? 'disabled' : 'enabled'}`, 'historify')
         loadSchedules()
       } else {
-        toast.error(data.message || 'Failed to toggle schedule')
+        showToast.error(data.message || 'Failed to toggle schedule', 'historify')
       }
     } catch (error) {
       console.error('Error toggling schedule:', error)
-      toast.error('Failed to toggle schedule')
+      showToast.error('Failed to toggle schedule', 'historify')
     }
   }
 
@@ -806,14 +806,14 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(`Schedule ${schedule.is_paused ? 'resumed' : 'paused'}`)
+        showToast.success(`Schedule ${schedule.is_paused ? 'resumed' : 'paused'}`, 'historify')
         loadSchedules()
       } else {
-        toast.error(data.message || 'Failed to pause/resume schedule')
+        showToast.error(data.message || 'Failed to pause/resume schedule', 'historify')
       }
     } catch (error) {
       console.error('Error pausing/resuming schedule:', error)
-      toast.error('Failed to pause/resume schedule')
+      showToast.error('Failed to pause/resume schedule', 'historify')
     }
   }
 
@@ -827,15 +827,15 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success('Schedule triggered')
+        showToast.success('Schedule triggered', 'historify')
         loadSchedules()
         loadJobs()
       } else {
-        toast.error(data.message || 'Failed to trigger schedule')
+        showToast.error(data.message || 'Failed to trigger schedule', 'historify')
       }
     } catch (error) {
       console.error('Error triggering schedule:', error)
-      toast.error('Failed to trigger schedule')
+      showToast.error('Failed to trigger schedule', 'historify')
     }
   }
 
@@ -881,7 +881,7 @@ export default function Historify() {
   // Watchlist operations
   const addToWatchlist = async () => {
     if (!newSymbol.trim()) {
-      toast.warning('Please enter a symbol')
+      showToast.warning('Please enter a symbol', 'historify')
       return
     }
     try {
@@ -894,16 +894,16 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(data.message)
+        showToast.success(data.message, 'historify')
         setNewSymbol('')
         loadWatchlist()
         loadStats()
       } else {
-        toast.error(data.message || 'Failed to add symbol')
+        showToast.error(data.message || 'Failed to add symbol', 'historify')
       }
     } catch (error) {
       console.error('Error adding to watchlist:', error)
-      toast.error('Failed to add symbol')
+      showToast.error('Failed to add symbol', 'historify')
     }
   }
 
@@ -918,15 +918,15 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(data.message)
+        showToast.success(data.message, 'historify')
         loadWatchlist()
         loadStats()
       } else {
-        toast.error(data.message || 'Failed to remove symbol')
+        showToast.error(data.message || 'Failed to remove symbol', 'historify')
       }
     } catch (error) {
       console.error('Error removing from watchlist:', error)
-      toast.error('Failed to remove symbol')
+      showToast.error('Failed to remove symbol', 'historify')
     }
   }
 
@@ -940,7 +940,7 @@ export default function Historify() {
       .filter((s) => s.symbol)
 
     if (symbols.length === 0) {
-      toast.warning('No valid symbols found')
+      showToast.warning('No valid symbols found', 'historify')
       return
     }
 
@@ -955,17 +955,17 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(`Added ${data.added} symbols`)
+        showToast.success(`Added ${data.added} symbols`, 'historify')
         setBulkAddDialogOpen(false)
         setBulkAddText('')
         loadWatchlist()
         loadStats()
       } else {
-        toast.error(data.message || 'Failed to bulk add symbols')
+        showToast.error(data.message || 'Failed to bulk add symbols', 'historify')
       }
     } catch (error) {
       console.error('Error bulk adding:', error)
-      toast.error('Failed to bulk add symbols')
+      showToast.error('Failed to bulk add symbols', 'historify')
     } finally {
       setIsBulkAdding(false)
     }
@@ -1004,7 +1004,7 @@ export default function Historify() {
 
   // const loadFnoChain = async () => {
   //   if (!fnoSelectedUnderlying) {
-  //     toast.warning('Please select an underlying')
+  //     showToast.warning('Please select an underlying')
   //     return
   //   }
   //   setFnoLoading(true)
@@ -1020,13 +1020,13 @@ export default function Historify() {
   //     if (data.status === 'success') {
   //       setFnoSymbols(data.data || [])
   //       setFnoSelectedSymbols(new Set())
-  //       toast.success(`Found ${data.count} symbols`)
+  //       showToast.success(`Found ${data.count} symbols`)
   //     } else {
-  //       toast.error(data.message || 'Failed to load FNO chain')
+  //       showToast.error(data.message || 'Failed to load FNO chain')
   //     }
   //   } catch (error) {
   //     console.error('Error loading FNO chain:', error)
-  //     toast.error('Failed to load FNO chain')
+  //     showToast.error('Failed to load FNO chain')
   //   } finally {
   //     setFnoLoading(false)
   //   }
@@ -1035,7 +1035,7 @@ export default function Historify() {
   // Job operations
   const createDownloadJob = async (symbols: { symbol: string; exchange: string }[], jobType: string = 'custom') => {
     if (symbols.length === 0) {
-      toast.warning('No symbols selected')
+      showToast.warning('No symbols selected', 'historify')
       return
     }
     try {
@@ -1055,21 +1055,21 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(`Job started: ${data.total_symbols} symbols`)
+        showToast.success(`Job started: ${data.total_symbols} symbols`, 'historify')
         loadJobs()
         setActiveTab('jobs')
       } else {
-        toast.error(data.message || 'Failed to create job')
+        showToast.error(data.message || 'Failed to create job', 'historify')
       }
     } catch (error) {
       console.error('Error creating job:', error)
-      toast.error('Failed to create job')
+      showToast.error('Failed to create job', 'historify')
     }
   }
 
   const downloadWatchlist = async () => {
     if (watchlist.length === 0) {
-      toast.warning('Watchlist is empty')
+      showToast.warning('Watchlist is empty', 'historify')
       return
     }
     const symbols = watchlist.map((item) => ({ symbol: item.symbol, exchange: item.exchange }))
@@ -1086,14 +1086,14 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success('Job paused')
+        showToast.success('Job paused', 'historify')
         loadJobs()
       } else {
-        toast.error(data.message || 'Failed to pause job')
+        showToast.error(data.message || 'Failed to pause job', 'historify')
       }
     } catch (error) {
       console.error('Error pausing job:', error)
-      toast.error('Failed to pause job')
+      showToast.error('Failed to pause job', 'historify')
     }
   }
 
@@ -1107,14 +1107,14 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success('Job resumed')
+        showToast.success('Job resumed', 'historify')
         loadJobs()
       } else {
-        toast.error(data.message || 'Failed to resume job')
+        showToast.error(data.message || 'Failed to resume job', 'historify')
       }
     } catch (error) {
       console.error('Error resuming job:', error)
-      toast.error('Failed to resume job')
+      showToast.error('Failed to resume job', 'historify')
     }
   }
 
@@ -1128,14 +1128,14 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success('Job cancellation requested')
+        showToast.success('Job cancellation requested', 'historify')
         loadJobs()
       } else {
-        toast.error(data.message || 'Failed to cancel job')
+        showToast.error(data.message || 'Failed to cancel job', 'historify')
       }
     } catch (error) {
       console.error('Error cancelling job:', error)
-      toast.error('Failed to cancel job')
+      showToast.error('Failed to cancel job', 'historify')
     }
   }
 
@@ -1149,14 +1149,14 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(`Retrying ${data.retry_count} failed items`)
+        showToast.success(`Retrying ${data.retry_count} failed items`, 'historify')
         loadJobs()
       } else {
-        toast.error(data.message || 'Failed to retry job')
+        showToast.error(data.message || 'Failed to retry job', 'historify')
       }
     } catch (error) {
       console.error('Error retrying job:', error)
-      toast.error('Failed to retry job')
+      showToast.error('Failed to retry job', 'historify')
     }
   }
 
@@ -1170,17 +1170,17 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success('Job deleted')
+        showToast.success('Job deleted', 'historify')
         loadJobs()
         if (selectedJob?.id === jobId) {
           setSelectedJob(null)
         }
       } else {
-        toast.error(data.message || 'Failed to delete job')
+        showToast.error(data.message || 'Failed to delete job', 'historify')
       }
     } catch (error) {
       console.error('Error deleting job:', error)
-      toast.error('Failed to delete job')
+      showToast.error('Failed to delete job', 'historify')
     }
   }
 
@@ -1197,15 +1197,15 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(data.message)
+        showToast.success(data.message, 'historify')
         loadCatalog()
         loadStats()
       } else {
-        toast.error(data.message || 'Failed to delete data')
+        showToast.error(data.message || 'Failed to delete data', 'historify')
       }
     } catch (error) {
       console.error('Error deleting data:', error)
-      toast.error('Failed to delete data')
+      showToast.error('Failed to delete data', 'historify')
     } finally {
       setDeleteDialogOpen(false)
       setDeleteTarget(null)
@@ -1230,16 +1230,16 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(data.message)
+        showToast.success(data.message, 'historify')
         setCatalogSelectedSymbols(new Set())
         loadCatalog()
         loadStats()
       } else {
-        toast.error(data.message || 'Failed to delete data')
+        showToast.error(data.message || 'Failed to delete data', 'historify')
       }
     } catch (error) {
       console.error('Error bulk deleting data:', error)
-      toast.error('Failed to delete data')
+      showToast.error('Failed to delete data', 'historify')
     } finally {
       setIsBulkDeleting(false)
       setBulkDeleteDialogOpen(false)
@@ -1264,15 +1264,15 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(data.message)
+        showToast.success(data.message, 'historify')
         setWatchlistSelectedSymbols(new Set())
         loadWatchlist()
       } else {
-        toast.error(data.message || 'Failed to remove from watchlist')
+        showToast.error(data.message || 'Failed to remove from watchlist', 'historify')
       }
     } catch (error) {
       console.error('Error bulk removing from watchlist:', error)
-      toast.error('Failed to remove from watchlist')
+      showToast.error('Failed to remove from watchlist', 'historify')
     } finally {
       setIsBulkWatchlistDeleting(false)
       setBulkWatchlistDeleteDialogOpen(false)
@@ -1285,7 +1285,7 @@ export default function Historify() {
     if (file) {
       const fileName = file.name.toLowerCase()
       if (!fileName.endsWith('.csv') && !fileName.endsWith('.parquet')) {
-        toast.error('Please select a CSV or Parquet file')
+        showToast.error('Please select a CSV or Parquet file', 'historify')
         return
       }
       setUploadFile(file)
@@ -1294,11 +1294,11 @@ export default function Historify() {
 
   const uploadCSVData = async () => {
     if (!uploadFile) {
-      toast.warning('Please select a CSV or Parquet file')
+      showToast.warning('Please select a CSV or Parquet file', 'historify')
       return
     }
     if (!uploadSymbol.trim()) {
-      toast.warning('Please enter a symbol')
+      showToast.warning('Please enter a symbol', 'historify')
       return
     }
     setIsUploading(true)
@@ -1318,7 +1318,7 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(`${data.message}`)
+        showToast.success(`${data.message}`, 'historify')
         setUploadDialogOpen(false)
         setUploadFile(null)
         setUploadSymbol('')
@@ -1326,11 +1326,11 @@ export default function Historify() {
         loadCatalog()
         loadStats()
       } else {
-        toast.error(data.message || 'Failed to upload data')
+        showToast.error(data.message || 'Failed to upload data', 'historify')
       }
     } catch (error) {
       console.error('Error uploading CSV:', error)
-      toast.error('Failed to upload CSV')
+      showToast.error('Failed to upload CSV', 'historify')
     } finally {
       setIsUploading(false)
     }
@@ -1364,15 +1364,15 @@ export default function Historify() {
       })
       const data = await response.json()
       if (data.status === 'success') {
-        toast.success(`${data.message}`)
+        showToast.success(`${data.message}`, 'historify')
         window.location.href = '/historify/api/export/bulk/download'
         setExportDialogOpen(false)
       } else {
-        toast.error(data.message || 'Failed to export data')
+        showToast.error(data.message || 'Failed to export data', 'historify')
       }
     } catch (error) {
       console.error('Error exporting data:', error)
-      toast.error('Failed to export data')
+      showToast.error('Failed to export data', 'historify')
     } finally {
       setIsExporting(false)
     }
@@ -1415,9 +1415,9 @@ export default function Historify() {
     const result = await toggleAppMode()
     if (result.success) {
       const newMode = useThemeStore.getState().appMode
-      toast.success(`Switched to ${newMode === 'live' ? 'Live' : 'Analyze'} mode`)
+      showToast.success(`Switched to ${newMode === 'live' ? 'Live' : 'Analyze'} mode`, 'system')
     } else {
-      toast.error(result.message || 'Failed to toggle mode')
+      showToast.error(result.message || 'Failed to toggle mode', 'system')
     }
   }
 
@@ -1426,7 +1426,7 @@ export default function Historify() {
       await authApi.logout()
       logout()
       navigate('/login')
-      toast.success('Logged out successfully')
+      showToast.success('Logged out successfully', 'system')
     } catch {
       logout()
       navigate('/login')

@@ -1,7 +1,7 @@
 import { ArrowLeft, Check, Eye, EyeOff, Key, Save, Settings } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { webClient } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -44,7 +44,7 @@ export default function TelegramConfig() {
       setRateLimit(configData.rate_limit_per_minute)
     } catch (error) {
       console.error('Error fetching config:', error)
-      toast.error('Failed to load configuration')
+      showToast.error('Failed to load configuration', 'telegram')
     } finally {
       setIsLoading(false)
     }
@@ -72,15 +72,15 @@ export default function TelegramConfig() {
       )
 
       if (response.data.status === 'success') {
-        toast.success('Configuration saved successfully')
+        showToast.success('Configuration saved successfully', 'telegram')
         setToken('') // Clear token field after saving
         fetchConfig() // Refresh config
       } else {
-        toast.error(response.data.message || 'Failed to save configuration')
+        showToast.error(response.data.message || 'Failed to save configuration', 'telegram')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to save configuration')
+      showToast.error(err.response?.data?.message || 'Failed to save configuration', 'telegram')
     } finally {
       setIsSaving(false)
     }

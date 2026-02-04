@@ -1,7 +1,7 @@
 import { ArrowUpDown, ChevronLeft, ChevronRight, Copy, Search as SearchIcon } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -104,10 +104,10 @@ export default function Search() {
     navigator.clipboard
       .writeText(text)
       .then(() => {
-        toast.success('Symbol copied to clipboard')
+        showToast.success('Symbol copied to clipboard', 'clipboard')
       })
       .catch(() => {
-        toast.error('Failed to copy symbol')
+        showToast.error('Failed to copy symbol', 'clipboard')
       })
   }
 

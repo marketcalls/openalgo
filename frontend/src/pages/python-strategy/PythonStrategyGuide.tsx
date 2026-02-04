@@ -18,7 +18,7 @@ import {
   Terminal,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -136,7 +136,7 @@ if __name__ == "__main__":
 
 const copyToClipboard = (text: string) => {
   navigator.clipboard.writeText(text)
-  toast.success('Copied to clipboard')
+  showToast.success('Copied to clipboard', 'clipboard')
 }
 
 export default function PythonStrategyGuide() {

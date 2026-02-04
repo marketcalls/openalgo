@@ -81,7 +81,7 @@ class Strategy(Base):
     start_time = Column(String(5))                    # HH:MM (09:15)
     end_time = Column(String(5))                      # HH:MM (15:15)
     squareoff_time = Column(String(5))                # HH:MM (15:25)
-    is_enabled = Column(Boolean, default=True)        # Active/inactive
+    is_active = Column(Boolean, default=True)         # Active/inactive
     created_at = Column(DateTime, default=func.now())
 
 class StrategySymbolMapping(Base):
