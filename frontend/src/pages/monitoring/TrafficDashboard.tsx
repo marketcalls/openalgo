@@ -1,7 +1,7 @@
 import { Activity, ArrowLeft, Download, Filter, RefreshCw } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { webClient } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -82,7 +82,7 @@ export default function TrafficDashboard() {
       setStats(statsResponse.data)
     } catch (error) {
       console.error('Error fetching traffic data:', error)
-      toast.error('Failed to load traffic data')
+      showToast.error('Failed to load traffic data', 'monitoring')
     } finally {
       setIsLoading(false)
     }
@@ -92,7 +92,7 @@ export default function TrafficDashboard() {
     setIsRefreshing(true)
     await fetchData()
     setIsRefreshing(false)
-    toast.success('Data refreshed')
+    showToast.success('Data refreshed', 'monitoring')
   }
 
   const handleExport = () => {

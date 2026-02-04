@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { pythonStrategyApi } from '@/api/python-strategy'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -60,7 +60,7 @@ export default function EditPythonStrategy() {
       setOriginalCode(contentData.content || '')
     } catch (error) {
       console.error('Failed to fetch strategy:', error)
-      toast.error('Failed to load strategy')
+      showToast.error('Failed to load strategy', 'pythonStrategy')
       navigate('/python')
     } finally {
       setLoading(false)
@@ -85,13 +85,13 @@ export default function EditPythonStrategy() {
 
       if (response.status === 'success') {
         setOriginalCode(currentCode)
-        toast.success('Strategy saved')
+        showToast.success('Strategy saved', 'pythonStrategy')
       } else {
-        toast.error(response.message || 'Failed to save strategy')
+        showToast.error(response.message || 'Failed to save strategy', 'pythonStrategy')
       }
     } catch (error) {
       console.error('Failed to save strategy:', error)
-      toast.error('Failed to save strategy')
+      showToast.error('Failed to save strategy', 'pythonStrategy')
     } finally {
       setSaving(false)
     }
@@ -120,7 +120,7 @@ export default function EditPythonStrategy() {
 
   const handleReset = () => {
     setCode(originalCode)
-    toast.info('Changes discarded')
+    showToast.info('Changes discarded', 'pythonStrategy')
   }
 
   const handleExport = async (version: 'saved' | 'current') => {
@@ -136,10 +136,10 @@ export default function EditPythonStrategy() {
       a.click()
       document.body.removeChild(a)
       URL.revokeObjectURL(url)
-      toast.success('Strategy exported')
+      showToast.success('Strategy exported', 'pythonStrategy')
     } catch (error) {
       console.error('Failed to export strategy:', error)
-      toast.error('Failed to export strategy')
+      showToast.error('Failed to export strategy', 'pythonStrategy')
     }
   }
 

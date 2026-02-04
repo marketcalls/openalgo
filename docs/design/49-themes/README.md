@@ -2,7 +2,7 @@
 
 ## Overview
 
-OpenAlgo's React frontend supports theme customization with light/dark modes and 8 accent colors. Theme preferences persist across sessions using Zustand with localStorage.
+OpenAlgo's React frontend supports theme customization with light/dark modes and 12 base colors. Theme preferences persist across sessions using Zustand with localStorage. The theme system also manages "App Mode" (live vs analyzer) with distinct visual states.
 
 ## Architecture Diagram
 
@@ -18,14 +18,19 @@ OpenAlgo's React frontend supports theme customization with light/dark modes and
 │  │  Zustand Theme Store                                                 │   │
 │  │                                                                      │   │
 │  │  state: {                                                            │   │
-│  │    theme: 'light' | 'dark',                                         │   │
-│  │    accentColor: 'blue' | 'green' | 'purple' | 'orange' | ...        │   │
+│  │    mode: 'light' | 'dark',                                          │   │
+│  │    color: 'zinc' | 'blue' | 'green' | 'violet' | ...               │   │
+│  │    appMode: 'live' | 'analyzer',                                    │   │
+│  │    isTogglingMode: boolean                                          │   │
 │  │  }                                                                   │   │
 │  │                                                                      │   │
 │  │  actions: {                                                          │   │
-│  │    setTheme(theme),                                                 │   │
-│  │    setAccentColor(color),                                           │   │
-│  │    toggleTheme()                                                    │   │
+│  │    setMode(mode),                                                   │   │
+│  │    setColor(color),                                                 │   │
+│  │    setAppMode(appMode),                                             │   │
+│  │    toggleMode(),                                                    │   │
+│  │    toggleAppMode(),   // async - calls backend                      │   │
+│  │    syncAppMode()      // sync with backend state                    │   │
 │  │  }                                                                   │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                    │                                         │
@@ -79,8 +84,9 @@ OpenAlgo's React frontend supports theme customization with light/dark modes and
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-type Theme = 'light' | 'dark';
-type AccentColor = 'blue' | 'green' | 'purple' | 'orange' | 'red' | 'yellow' | 'pink' | 'cyan';
+type ThemeMode = 'light' | 'dark';
+type AppMode = 'live' | 'analyzer';
+type ThemeColor = 'zinc' | 'slate' | 'stone' | 'gray' | 'neutral' | 'red' | 'rose' | 'orange' | 'green' | 'blue' | 'yellow' | 'violet';
 
 interface ThemeState {
   theme: Theme;
@@ -179,41 +185,46 @@ function applyAccentColor(color: AccentColor) {
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Accent Colors
+### Theme Colors (12 options)
 
-| Color | Primary HSL | Use Case |
-|-------|-------------|----------|
-| Blue | hsl(217, 91%, 60%) | Default, professional |
-| Green | hsl(142, 76%, 36%) | Success, growth |
-| Purple | hsl(270, 76%, 60%) | Analyzer mode |
-| Orange | hsl(24, 95%, 53%) | Warnings, attention |
-| Red | hsl(0, 84%, 60%) | Errors, sell actions |
-| Yellow | hsl(45, 93%, 47%) | Caution, pending |
-| Pink | hsl(330, 81%, 60%) | Creative, custom |
-| Cyan | hsl(187, 92%, 41%) | Information, tech |
+| Color | Use Case |
+|-------|----------|
+| Zinc | Default neutral gray |
+| Slate | Blue-gray neutral |
+| Stone | Warm gray neutral |
+| Gray | Pure gray |
+| Neutral | Balanced neutral |
+| Red | Errors, sell actions |
+| Rose | Soft pink accent |
+| Orange | Warnings, attention |
+| Green | Success, growth |
+| Blue | Professional, primary |
+| Yellow | Caution, pending |
+| Violet | Creative accent |
 
-## Analyzer Mode Auto-Theme
+## App Mode (Live vs Analyzer)
+
+The theme store manages two distinct app modes with different visual states:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────┐
-│                    Analyzer Mode Theme Behavior                             │
+│                         App Mode Behavior                                   │
 │                                                                             │
-│  When entering Analyzer Mode:                                               │
+│  LIVE MODE (default):                                                       │
+│  • User can toggle light/dark mode                                         │
+│  • User can change theme color (zinc, blue, green, etc.)                   │
+│  • Normal application appearance                                           │
 │                                                                             │
-│  1. Store current theme preferences                                        │
-│           │                                                                 │
-│           ▼                                                                 │
-│  2. Apply analyzer theme                                                   │
-│     • Accent: Purple (indicates sandbox)                                   │
-│     • Optional: Dark mode for visual distinction                           │
-│           │                                                                 │
-│           ▼                                                                 │
-│  3. Show "ANALYZER MODE" indicator                                         │
+│  ANALYZER MODE (sandbox):                                                   │
+│  • Theme changes are BLOCKED (setMode, setColor, toggleMode disabled)     │
+│  • Fixed dark purple theme via CSS class 'analyzer'                        │
+│  • Visual distinction for paper trading environment                        │
+│  • Mode synced with backend via /auth/analyzer-mode                        │
 │                                                                             │
-│  When exiting Analyzer Mode:                                                │
-│                                                                             │
-│  1. Restore previous theme preferences                                     │
-│  2. Remove analyzer indicators                                             │
+│  Switching modes:                                                           │
+│  • toggleAppMode() - async call to /auth/analyzer-toggle                  │
+│  • syncAppMode() - fetches current mode from backend                      │
+│  • Mode changes emit events via onModeChange() listener                   │
 │                                                                             │
 └────────────────────────────────────────────────────────────────────────────┘
 ```

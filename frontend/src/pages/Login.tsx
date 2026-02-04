@@ -1,7 +1,7 @@
 import { Eye, EyeOff, Github, Info, Loader2, LogIn, MessageCircle } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -125,7 +125,7 @@ export default function Login() {
       } else {
         // Set login state (broker will be set after broker selection)
         setLogin(username, '')
-        toast.success('Login successful')
+        showToast.success('Login successful', 'system')
         // Use redirect from response if provided, otherwise go to broker
         navigate(data.redirect || '/broker')
       }
