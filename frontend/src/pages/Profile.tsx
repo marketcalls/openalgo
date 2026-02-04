@@ -2,6 +2,7 @@ import {
   AlertCircle,
   AlertTriangle,
   ArrowLeft,
+  Bell,
   Bug,
   Check,
   CheckCircle2,
@@ -14,17 +15,20 @@ import {
   Moon,
   Palette,
   RefreshCw,
+  RotateCcw,
   Send,
   Shield,
   Sun,
   User,
+  Volume2,
+  VolumeX,
   Wrench,
   X,
   XCircle,
 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast, toast } from '@/utils/toast'
 import { webClient } from '@/api/client'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
@@ -50,7 +54,9 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
+import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { type AlertCategories, type ToastPosition, useAlertStore } from '@/stores/alertStore'
 import { useAuthStore } from '@/stores/authStore'
 import { type ThemeColor, type ThemeMode, useThemeStore } from '@/stores/themeStore'
 
@@ -151,9 +157,117 @@ interface PermissionsData {
   checks: PermissionCheck[]
 }
 
+// Toast position options
+const TOAST_POSITIONS: { value: ToastPosition; label: string }[] = [
+  { value: 'top-right', label: 'Top Right' },
+  { value: 'top-left', label: 'Top Left' },
+  { value: 'bottom-right', label: 'Bottom Right' },
+  { value: 'bottom-left', label: 'Bottom Left' },
+]
+
+// Alert category descriptions - organized by groups
+const ALERT_CATEGORIES_REALTIME: {
+  key: keyof AlertCategories
+  label: string
+  description: string
+}[] = [
+  {
+    key: 'orders',
+    label: 'Order Notifications',
+    description: 'Real-time BUY/SELL order placement, cancellation, and modification alerts',
+  },
+  {
+    key: 'analyzer',
+    label: 'Analyzer Mode',
+    description: 'Real-time sandbox/analyzer mode operation notifications',
+  },
+  {
+    key: 'system',
+    label: 'System Alerts',
+    description: 'Password changes, master contract downloads, and system events',
+  },
+  {
+    key: 'actionCenter',
+    label: 'Action Center',
+    description: 'Pending order notifications in semi-auto mode',
+  },
+]
+
+const ALERT_CATEGORIES_TRADING: {
+  key: keyof AlertCategories
+  label: string
+  description: string
+}[] = [
+  {
+    key: 'positions',
+    label: 'Positions',
+    description: 'Position close/update operations and P&L notifications',
+  },
+  {
+    key: 'strategy',
+    label: 'Strategy Management',
+    description: 'Strategy creation, symbol configuration, and webhook operations',
+  },
+  {
+    key: 'chartink',
+    label: 'Chartink',
+    description: 'Chartink strategy operations and scanner integrations',
+  },
+]
+
+const ALERT_CATEGORIES_DATA: {
+  key: keyof AlertCategories
+  label: string
+  description: string
+}[] = [
+  {
+    key: 'historify',
+    label: 'Historify',
+    description: 'Historical data jobs, file uploads, downloads, and schedules',
+  },
+  {
+    key: 'pythonStrategy',
+    label: 'Python Strategy',
+    description: 'Python strategy uploads, execution, logs, and scheduling',
+  },
+  {
+    key: 'flow',
+    label: 'Flow Workflows',
+    description: 'Visual workflow creation, execution, and management',
+  },
+]
+
+const ALERT_CATEGORIES_ADMIN: {
+  key: keyof AlertCategories
+  label: string
+  description: string
+}[] = [
+  {
+    key: 'telegram',
+    label: 'Telegram Bot',
+    description: 'Telegram bot operations, broadcasts, and user management',
+  },
+  {
+    key: 'admin',
+    label: 'Admin Panel',
+    description: 'Market timings, holidays, freeze quantities, and admin settings',
+  },
+  {
+    key: 'monitoring',
+    label: 'Monitoring',
+    description: 'Health monitor, latency dashboard, and security alerts',
+  },
+  {
+    key: 'clipboard',
+    label: 'Clipboard',
+    description: 'Copy to clipboard confirmation messages',
+  },
+]
+
 export default function ProfilePage() {
   const user = useAuthStore((s) => s.user)
   const { mode, color, appMode, setMode, setColor } = useThemeStore()
+  const alertStore = useAlertStore()
   const [activeTab, setActiveTab] = useState('account')
   const [isLoading, setIsLoading] = useState(true)
   const [profileData, setProfileData] = useState<ProfileData | null>(null)
@@ -239,7 +353,7 @@ export default function ProfilePage() {
       }
     } catch (error) {
       console.error('Error fetching profile data:', error)
-      toast.error('Failed to load profile data')
+      showToast.error('Failed to load profile data', 'admin')
     } finally {
       setIsLoading(false)
     }
@@ -273,7 +387,7 @@ export default function ProfilePage() {
       }
     } catch (error) {
       console.error('Error fetching permissions:', error)
-      toast.error('Failed to load permission status')
+      showToast.error('Failed to load permission status', 'admin')
     } finally {
       setIsLoadingPermissions(false)
     }
@@ -290,22 +404,22 @@ export default function ProfilePage() {
       if (response.data.status === 'success') {
         const { fixed, failed, message } = response.data.data
         if (fixed.length > 0) {
-          toast.success(`Fixed ${fixed.length} permission issues`)
+          showToast.success(`Fixed ${fixed.length} permission issues`, 'admin')
         }
         if (failed.length > 0) {
-          toast.warning(`${failed.length} issues could not be fixed automatically`)
+          showToast.warning(`${failed.length} issues could not be fixed automatically`, 'admin')
         }
         if (fixed.length === 0 && failed.length === 0) {
-          toast.info(message)
+          showToast.info(message, 'admin')
         }
         // Refresh permissions after fix
         await fetchPermissions()
       } else {
-        toast.error('Failed to fix permissions')
+        showToast.error('Failed to fix permissions', 'admin')
       }
     } catch (error) {
       console.error('Error fixing permissions:', error)
-      toast.error('Failed to fix permissions')
+      showToast.error('Failed to fix permissions', 'admin')
     } finally {
       setIsFixingPermissions(false)
     }
@@ -338,7 +452,7 @@ export default function ProfilePage() {
       }>('/api/broker/credentials', formData)
 
       if (response.data.status === 'success') {
-        toast.success(response.data.message)
+        showToast.success(response.data.message, 'admin')
         // Update local state to reflect saved values (don't re-fetch since env vars won't update until restart)
         if (brokerCredentials) {
           setBrokerCredentials({
@@ -362,11 +476,11 @@ export default function ProfilePage() {
         // Show restart dialog
         setShowRestartDialog(true)
       } else {
-        toast.error(response.data.message || 'Failed to save credentials')
+        showToast.error(response.data.message || 'Failed to save credentials', 'admin')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to save broker credentials')
+      showToast.error(err.response?.data?.message || 'Failed to save broker credentials', 'admin')
     } finally {
       setIsSavingBroker(false)
     }
@@ -411,7 +525,7 @@ export default function ProfilePage() {
       }>('/api/broker/credentials', payload)
 
       if (response.data.status === 'success') {
-        toast.success(response.data.message)
+        showToast.success(response.data.message, 'admin')
         // Update local brokerCredentials state to reflect saved values
         // Don't re-fetch from server since env vars won't update until restart
         if (brokerCredentials) {
@@ -425,11 +539,11 @@ export default function ProfilePage() {
         // Show restart dialog
         setShowRestartDialog(true)
       } else {
-        toast.error(response.data.message || 'Failed to save settings')
+        showToast.error(response.data.message || 'Failed to save settings', 'admin')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to save settings')
+      showToast.error(err.response?.data?.message || 'Failed to save settings', 'admin')
     } finally {
       setIsSavingNgrok(false)
     }
@@ -482,16 +596,16 @@ export default function ProfilePage() {
       )
 
       if (response.data.status === 'success') {
-        toast.success(response.data.message || 'Password changed successfully')
+        showToast.success(response.data.message || 'Password changed successfully', 'system')
         setOldPassword('')
         setNewPassword('')
         setConfirmPassword('')
       } else {
-        toast.error(response.data.message || 'Failed to change password')
+        showToast.error(response.data.message || 'Failed to change password', 'system')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to change password')
+      showToast.error(err.response?.data?.message || 'Failed to change password', 'system')
     } finally {
       setIsChangingPassword(false)
     }
@@ -520,14 +634,14 @@ export default function ProfilePage() {
       )
 
       if (response.data.status === 'success') {
-        toast.success(response.data.message || 'SMTP settings saved successfully')
+        showToast.success(response.data.message || 'SMTP settings saved successfully', 'admin')
         setSmtpPassword('') // Clear password field after save
       } else {
-        toast.error(response.data.message || 'Failed to save SMTP settings')
+        showToast.error(response.data.message || 'Failed to save SMTP settings', 'admin')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to save SMTP settings')
+      showToast.error(err.response?.data?.message || 'Failed to save SMTP settings', 'admin')
     } finally {
       setIsSavingSmtp(false)
     }
@@ -535,7 +649,7 @@ export default function ProfilePage() {
 
   const handleTestEmail = async () => {
     if (!testEmail) {
-      toast.error('Please enter an email address to test')
+      showToast.error('Please enter an email address to test', 'admin')
       return
     }
 
@@ -551,13 +665,13 @@ export default function ProfilePage() {
       )
 
       if (response.data.success) {
-        toast.success(response.data.message || 'Test email sent successfully')
+        showToast.success(response.data.message || 'Test email sent successfully', 'admin')
       } else {
-        toast.error(response.data.message || 'Failed to send test email')
+        showToast.error(response.data.message || 'Failed to send test email', 'admin')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to send test email')
+      showToast.error(err.response?.data?.message || 'Failed to send test email', 'admin')
     } finally {
       setIsSendingTest(false)
     }
@@ -587,40 +701,40 @@ export default function ProfilePage() {
 
   const handleThemeModeChange = (newMode: ThemeMode) => {
     if (isAnalyzerMode) {
-      toast.error('Cannot change theme while in Analyzer Mode')
+      showToast.error('Cannot change theme while in Analyzer Mode', 'system')
       return
     }
     setMode(newMode)
-    toast.success(`Theme changed to ${newMode}`)
+    showToast.success(`Theme changed to ${newMode}`, 'system')
   }
 
   const handleAccentColorChange = (newColor: ThemeColor) => {
     if (isAnalyzerMode) {
-      toast.error('Cannot change theme while in Analyzer Mode')
+      showToast.error('Cannot change theme while in Analyzer Mode', 'system')
       return
     }
     setColor(newColor)
-    toast.success(`Accent color changed to ${newColor}`)
+    showToast.success(`Accent color changed to ${newColor}`, 'system')
   }
 
   const handleResetTheme = () => {
     if (isAnalyzerMode) {
-      toast.error('Cannot change theme while in Analyzer Mode')
+      showToast.error('Cannot change theme while in Analyzer Mode', 'system')
       return
     }
     setMode('light')
     setColor('zinc')
-    toast.success('Theme reset to default')
+    showToast.success('Theme reset to default', 'system')
   }
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard
       .writeText(text)
       .then(() => {
-        toast.success('Copied to clipboard')
+        showToast.success('Copied to clipboard', 'clipboard')
       })
       .catch(() => {
-        toast.error('Failed to copy')
+        showToast.error('Failed to copy', 'clipboard')
       })
   }
 
@@ -660,7 +774,7 @@ export default function ProfilePage() {
           fetchPermissions()
         }
       }}>
-        <TabsList className="grid w-full grid-cols-6">
+        <TabsList className="grid w-full grid-cols-7">
           <TabsTrigger value="account" className="gap-1">
             <Lock className="h-4 w-4" />
             <span className="hidden sm:inline">Account</span>
@@ -668,6 +782,10 @@ export default function ProfilePage() {
           <TabsTrigger value="broker" className="gap-1">
             <Key className="h-4 w-4" />
             <span className="hidden sm:inline">Broker</span>
+          </TabsTrigger>
+          <TabsTrigger value="alerts" className="gap-1">
+            <Bell className="h-4 w-4" />
+            <span className="hidden sm:inline">Alerts</span>
           </TabsTrigger>
           <TabsTrigger value="permissions" className="gap-1">
             <FolderCheck className="h-4 w-4" />
@@ -1131,6 +1249,367 @@ export default function ProfilePage() {
                   </>
                 )}
               </Button>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Alerts Tab */}
+        <TabsContent value="alerts" className="space-y-6">
+          <Alert>
+            <Bell className="h-4 w-4" />
+            <AlertTitle>Toast Notification Settings</AlertTitle>
+            <AlertDescription>
+              Configure how toast notifications appear. Useful for power users running multiple
+              strategies who want to reduce notification spam.
+            </AlertDescription>
+          </Alert>
+
+          {/* Master Controls */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Master Controls</CardTitle>
+              <CardDescription>Enable or disable all toast notifications and sounds</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* Toasts Enabled */}
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="toasts-enabled">Toast Notifications</Label>
+                  <p className="text-sm text-muted-foreground">
+                    Show popup notifications for events
+                  </p>
+                </div>
+                <Switch
+                  id="toasts-enabled"
+                  checked={alertStore.toastsEnabled}
+                  onCheckedChange={alertStore.setToastsEnabled}
+                />
+              </div>
+
+              {/* Sound Enabled */}
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="sound-enabled" className="flex items-center gap-2">
+                    {alertStore.soundEnabled ? (
+                      <Volume2 className="h-4 w-4" />
+                    ) : (
+                      <VolumeX className="h-4 w-4" />
+                    )}
+                    Sound Alerts
+                  </Label>
+                  <p className="text-sm text-muted-foreground">
+                    Play audio alert for important events
+                  </p>
+                </div>
+                <Switch
+                  id="sound-enabled"
+                  checked={alertStore.soundEnabled}
+                  onCheckedChange={alertStore.setSoundEnabled}
+                />
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Display Settings */}
+          <Card className={!alertStore.toastsEnabled ? 'opacity-60' : ''}>
+            <CardHeader>
+              <CardTitle>Display Settings</CardTitle>
+              <CardDescription>Customize toast appearance and behavior</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              {/* Position */}
+              <div className="space-y-2">
+                <Label>Toast Position</Label>
+                <Select
+                  value={alertStore.position}
+                  onValueChange={(value) => alertStore.setPosition(value as ToastPosition)}
+                  disabled={!alertStore.toastsEnabled}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select position" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TOAST_POSITIONS.map((pos) => (
+                      <SelectItem key={pos.value} value={pos.value}>
+                        {pos.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Max Visible Toasts */}
+              <div className="space-y-2">
+                <Label>Maximum Visible Toasts</Label>
+                <div className="flex items-center gap-4">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={alertStore.maxVisibleToasts}
+                    onChange={(e) => alertStore.setMaxVisibleToasts(Number(e.target.value))}
+                    disabled={!alertStore.toastsEnabled}
+                    className="w-24"
+                  />
+                  <span className="text-sm text-muted-foreground">
+                    (1-10) Additional toasts will be queued
+                  </span>
+                </div>
+              </div>
+
+              {/* Duration */}
+              <div className="space-y-2">
+                <Label>Auto-dismiss Duration</Label>
+                <div className="flex items-center gap-4">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={15}
+                    value={alertStore.duration / 1000}
+                    onChange={(e) => alertStore.setDuration(Number(e.target.value) * 1000)}
+                    disabled={!alertStore.toastsEnabled}
+                    className="w-24"
+                  />
+                  <span className="text-sm text-muted-foreground">
+                    seconds (1-15)
+                  </span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Category Controls - Real-time (Socket.IO) */}
+          <Card className={!alertStore.toastsEnabled ? 'opacity-60' : ''}>
+            <CardHeader>
+              <CardTitle>Real-time Notifications</CardTitle>
+              <CardDescription>
+                High-frequency alerts from Socket.IO events. Disable these to reduce notification
+                spam during active trading.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {ALERT_CATEGORIES_REALTIME.map((category) => (
+                <div
+                  key={category.key}
+                  className="flex items-center justify-between py-2 border-b last:border-0"
+                >
+                  <div className="space-y-0.5">
+                    <Label htmlFor={`category-${category.key}`}>{category.label}</Label>
+                    <p className="text-sm text-muted-foreground">{category.description}</p>
+                  </div>
+                  <Switch
+                    id={`category-${category.key}`}
+                    checked={alertStore.categories[category.key]}
+                    onCheckedChange={(checked) =>
+                      alertStore.setCategoryEnabled(category.key, checked)
+                    }
+                    disabled={!alertStore.toastsEnabled}
+                  />
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          {/* Category Controls - Trading */}
+          <Card className={!alertStore.toastsEnabled ? 'opacity-60' : ''}>
+            <CardHeader>
+              <CardTitle>Trading Operations</CardTitle>
+              <CardDescription>
+                Notifications from position management, strategies, and Chartink integrations
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {ALERT_CATEGORIES_TRADING.map((category) => (
+                <div
+                  key={category.key}
+                  className="flex items-center justify-between py-2 border-b last:border-0"
+                >
+                  <div className="space-y-0.5">
+                    <Label htmlFor={`category-${category.key}`}>{category.label}</Label>
+                    <p className="text-sm text-muted-foreground">{category.description}</p>
+                  </div>
+                  <Switch
+                    id={`category-${category.key}`}
+                    checked={alertStore.categories[category.key]}
+                    onCheckedChange={(checked) =>
+                      alertStore.setCategoryEnabled(category.key, checked)
+                    }
+                    disabled={!alertStore.toastsEnabled}
+                  />
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          {/* Category Controls - Data & Automation */}
+          <Card className={!alertStore.toastsEnabled ? 'opacity-60' : ''}>
+            <CardHeader>
+              <CardTitle>Data & Automation</CardTitle>
+              <CardDescription>
+                Notifications from historical data, Python strategies, and workflow automation
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {ALERT_CATEGORIES_DATA.map((category) => (
+                <div
+                  key={category.key}
+                  className="flex items-center justify-between py-2 border-b last:border-0"
+                >
+                  <div className="space-y-0.5">
+                    <Label htmlFor={`category-${category.key}`}>{category.label}</Label>
+                    <p className="text-sm text-muted-foreground">{category.description}</p>
+                  </div>
+                  <Switch
+                    id={`category-${category.key}`}
+                    checked={alertStore.categories[category.key]}
+                    onCheckedChange={(checked) =>
+                      alertStore.setCategoryEnabled(category.key, checked)
+                    }
+                    disabled={!alertStore.toastsEnabled}
+                  />
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          {/* Category Controls - Admin & System */}
+          <Card className={!alertStore.toastsEnabled ? 'opacity-60' : ''}>
+            <CardHeader>
+              <CardTitle>Admin & Utilities</CardTitle>
+              <CardDescription>
+                Notifications from admin panel, Telegram bot, monitoring, and clipboard operations
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {ALERT_CATEGORIES_ADMIN.map((category) => (
+                <div
+                  key={category.key}
+                  className="flex items-center justify-between py-2 border-b last:border-0"
+                >
+                  <div className="space-y-0.5">
+                    <Label htmlFor={`category-${category.key}`}>{category.label}</Label>
+                    <p className="text-sm text-muted-foreground">{category.description}</p>
+                  </div>
+                  <Switch
+                    id={`category-${category.key}`}
+                    checked={alertStore.categories[category.key]}
+                    onCheckedChange={(checked) =>
+                      alertStore.setCategoryEnabled(category.key, checked)
+                    }
+                    disabled={!alertStore.toastsEnabled}
+                  />
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+
+          {/* Actions */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Actions</CardTitle>
+              <CardDescription>Test and manage notifications</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    toast.success('This is a test success notification')
+                  }}
+                  disabled={!alertStore.toastsEnabled}
+                >
+                  Test Toast
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    toast.dismiss()
+                    toast.success('All notifications cleared')
+                  }}
+                >
+                  Clear All Toasts
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    alertStore.resetToDefaults()
+                    toast.success('Settings reset to defaults')
+                  }}
+                >
+                  <RotateCcw className="h-4 w-4 mr-2" />
+                  Reset to Defaults
+                </Button>
+              </div>
+
+              {/* Current Settings Summary */}
+              <div className="mt-4 p-4 bg-muted rounded-lg">
+                <h4 className="font-medium mb-2">Current Configuration</h4>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <span className="text-muted-foreground">Toasts:</span>
+                  <span>{alertStore.toastsEnabled ? 'Enabled' : 'Disabled'}</span>
+                  <span className="text-muted-foreground">Sound:</span>
+                  <span>{alertStore.soundEnabled ? 'Enabled' : 'Disabled'}</span>
+                  <span className="text-muted-foreground">Position:</span>
+                  <span className="capitalize">{alertStore.position.replace('-', ' ')}</span>
+                  <span className="text-muted-foreground">Max Visible:</span>
+                  <span>{alertStore.maxVisibleToasts} toasts</span>
+                  <span className="text-muted-foreground">Duration:</span>
+                  <span>{alertStore.duration / 1000} seconds</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Help Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Understanding Notification Categories</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground space-y-4">
+              <div>
+                <p className="font-medium text-foreground mb-2">Real-time Notifications (High Priority)</p>
+                <ul className="list-disc list-inside space-y-1 ml-2">
+                  <li><strong>Orders:</strong> BUY/SELL alerts from Socket.IO - highest frequency during trading</li>
+                  <li><strong>Analyzer:</strong> Sandbox mode operations - can spam during paper trading</li>
+                  <li><strong>System:</strong> Password changes, master contracts - infrequent but important</li>
+                  <li><strong>Action Center:</strong> Semi-auto pending orders - high frequency in managed accounts</li>
+                </ul>
+              </div>
+              <div>
+                <p className="font-medium text-foreground mb-2">Trading Operations</p>
+                <ul className="list-disc list-inside space-y-1 ml-2">
+                  <li><strong>Positions:</strong> Position close/update notifications</li>
+                  <li><strong>Strategy:</strong> Strategy CRUD, symbol configuration, webhooks</li>
+                  <li><strong>Chartink:</strong> Chartink scanner and strategy integrations</li>
+                </ul>
+              </div>
+              <div>
+                <p className="font-medium text-foreground mb-2">Data & Automation</p>
+                <ul className="list-disc list-inside space-y-1 ml-2">
+                  <li><strong>Historify:</strong> Historical data jobs, uploads, downloads (67 toasts - highest volume)</li>
+                  <li><strong>Python Strategy:</strong> Strategy uploads, execution logs, scheduling</li>
+                  <li><strong>Flow:</strong> Visual workflow execution and management</li>
+                </ul>
+              </div>
+              <div>
+                <p className="font-medium text-foreground mb-2">Admin & Utilities</p>
+                <ul className="list-disc list-inside space-y-1 ml-2">
+                  <li><strong>Telegram:</strong> Bot operations, broadcasts, user management</li>
+                  <li><strong>Admin:</strong> Market timings, holidays, freeze quantities</li>
+                  <li><strong>Monitoring:</strong> Health, latency, and security dashboards</li>
+                  <li><strong>Clipboard:</strong> Copy-to-clipboard confirmations</li>
+                </ul>
+              </div>
+              <div className="pt-3 border-t">
+                <p className="font-medium text-foreground mb-2">Tips for Power Users</p>
+                <ul className="list-disc list-inside space-y-1 ml-2">
+                  <li>Running 5+ strategies? Set max visible to <strong>2-3</strong> and duration to <strong>2 seconds</strong></li>
+                  <li>Disable <strong>Analyzer</strong> when not paper trading to reduce spam</li>
+                  <li>Disable <strong>Orders</strong> if you prefer checking the order book manually</li>
+                  <li>Disable <strong>Historify</strong> during large data imports to avoid notification flood</li>
+                  <li>Keep <strong>System</strong> enabled for critical security alerts</li>
+                </ul>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

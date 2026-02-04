@@ -12,7 +12,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
   AlertDialog,
@@ -74,12 +74,12 @@ export default function ApiKey() {
         } else {
           // Backend returned HTML - this shouldn't happen now
           console.error('Backend returned HTML instead of JSON')
-          toast.error('Failed to load API key - please refresh')
+          showToast.error('Failed to load API key - please refresh', 'system')
         }
       }
     } catch (error) {
       console.error('Error fetching API key:', error)
-      toast.error('Failed to load API key')
+      showToast.error('Failed to load API key', 'system')
     } finally {
       setIsLoading(false)
     }
@@ -89,9 +89,9 @@ export default function ApiKey() {
     if (apiKey) {
       try {
         await navigator.clipboard.writeText(apiKey)
-        toast.success('API key copied to clipboard')
+        showToast.success('API key copied to clipboard', 'clipboard')
       } catch {
-        toast.error('Failed to copy API key')
+        showToast.error('Failed to copy API key', 'clipboard')
       }
     }
   }
@@ -121,13 +121,13 @@ export default function ApiKey() {
         setApiKey(data.api_key)
         setHasApiKey(true)
         setShowApiKey(true)
-        toast.success('API key generated successfully')
+        showToast.success('API key generated successfully', 'system')
       } else {
-        toast.error(data.error || 'Failed to generate API key')
+        showToast.error(data.error || 'Failed to generate API key', 'system')
       }
     } catch (error) {
       console.error('Error regenerating API key:', error)
-      toast.error('Failed to generate API key')
+      showToast.error('Failed to generate API key', 'system')
     } finally {
       setIsRegenerating(false)
     }
@@ -157,13 +157,13 @@ export default function ApiKey() {
 
       if (data.mode) {
         setOrderMode(data.mode)
-        toast.success(`Order mode updated to ${data.mode === 'semi_auto' ? 'Semi-Auto' : 'Auto'}`)
+        showToast.success(`Order mode updated to ${data.mode === 'semi_auto' ? 'Semi-Auto' : 'Auto'}`, 'system')
       } else {
-        toast.error(data.error || 'Failed to update order mode')
+        showToast.error(data.error || 'Failed to update order mode', 'system')
       }
     } catch (error) {
       console.error('Error toggling order mode:', error)
-      toast.error('Failed to update order mode')
+      showToast.error('Failed to update order mode', 'system')
     } finally {
       setIsTogglingMode(false)
     }

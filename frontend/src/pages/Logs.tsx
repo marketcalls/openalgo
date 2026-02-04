@@ -14,7 +14,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { webClient } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -73,7 +73,7 @@ export default function LogsPage() {
         setCurrentPage(response.data.current_page || 1)
       } catch (error) {
         console.error('Error fetching logs:', error)
-        toast.error('Failed to load logs')
+        showToast.error('Failed to load logs', 'monitoring')
       } finally {
         setIsLoading(false)
         setIsRefreshing(false)
@@ -102,7 +102,7 @@ export default function LogsPage() {
   const handleRefresh = async () => {
     setIsRefreshing(true)
     await fetchLogs(currentPage)
-    toast.success('Logs refreshed')
+    showToast.success('Logs refreshed', 'monitoring')
   }
 
   const handleExport = () => {

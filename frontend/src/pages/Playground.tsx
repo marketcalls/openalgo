@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { toast } from "sonner";
+import { showToast } from "@/utils/toast";
 import { authApi } from "@/api/auth";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -183,7 +183,7 @@ export default function Playground() {
       await authApi.logout();
       logout();
       navigate("/login");
-      toast.success("Logged out successfully");
+      showToast.success("Logged out successfully", 'analyzer');
     } catch {
       logout();
       navigate("/login");
@@ -254,7 +254,7 @@ export default function Playground() {
         setEndpoints(data);
       }
     } catch {
-      toast.error("Failed to load endpoints");
+      showToast.error("Failed to load endpoints", 'analyzer');
     }
   };
 
@@ -388,22 +388,22 @@ export default function Playground() {
       const parsed = JSON.parse(requestBody);
       const prettified = JSON.stringify(parsed, null, 2);
       updateCurrentTabBody(prettified);
-      toast.success("JSON prettified");
+      showToast.success("JSON prettified", 'analyzer');
     } catch {
-      toast.error("Invalid JSON - cannot prettify");
+      showToast.error("Invalid JSON - cannot prettify", 'analyzer');
     }
   };
 
   const sendRequest = async () => {
     if (!url) {
-      toast.warning("Please select an endpoint");
+      showToast.warning("Please select an endpoint", 'analyzer');
       return;
     }
 
 
     const validation = isValidApiUrl(url, method);
     if (!validation.valid) {
-      toast.error(validation.error);
+      showToast.error(validation.error || 'Validation error', 'analyzer');
       return;
     }
 
@@ -439,7 +439,7 @@ export default function Playground() {
             });
             fetchUrl = urlObj.toString();
           } catch {
-            toast.error("Invalid JSON for query parameters");
+            showToast.error("Invalid JSON for query parameters", 'analyzer');
             setIsLoading(false);
             return;
           }
@@ -496,14 +496,14 @@ export default function Playground() {
   const copyResponse = () => {
     if (responseData) {
       navigator.clipboard.writeText(responseData);
-      toast.success("Response copied!");
+      showToast.success("Response copied!", 'clipboard');
     }
   };
 
   const copyApiKey = () => {
     if (apiKey) {
       navigator.clipboard.writeText(apiKey);
-      toast.success("API key copied!");
+      showToast.success("API key copied!", 'clipboard');
     }
   };
 
@@ -511,22 +511,22 @@ export default function Playground() {
     const result = await toggleAppMode();
     if (result.success) {
       const newMode = useThemeStore.getState().appMode;
-      toast.success(
+      showToast.success(
         `Switched to ${newMode === "live" ? "Live" : "Analyze"} mode`,
+        'analyzer'
       );
 
       if (newMode === "analyzer") {
         setTimeout(() => {
-          toast.warning(
-            "⚠️ Analyzer (Sandbox) mode is for testing purposes only",
-            {
-              duration: 10000,
-            },
+          showToast.warning(
+            "Analyzer (Sandbox) mode is for testing purposes only",
+            'analyzer',
+            { duration: 10000 },
           );
         }, 2000);
       }
     } else {
-      toast.error(result.message || "Failed to toggle mode");
+      showToast.error(result.message || "Failed to toggle mode", 'analyzer');
     }
   };
 
@@ -546,7 +546,7 @@ export default function Playground() {
         });
         curlUrl = urlObj.toString();
       } catch {
-        toast.error("Invalid JSON for query parameters");
+        showToast.error("Invalid JSON for query parameters", 'analyzer');
         return;
       }
     }
@@ -561,7 +561,7 @@ export default function Playground() {
     }
 
     navigator.clipboard.writeText(curl);
-    toast.success("Copied as cURL");
+    showToast.success("Copied as cURL", 'clipboard');
   };
 
   // Filter endpoints by search

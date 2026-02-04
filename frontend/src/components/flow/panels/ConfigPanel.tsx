@@ -4,7 +4,7 @@
 import { useCallback, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { X, Trash2, Settings2, Info, Copy, Eye, EyeOff, Loader2 } from 'lucide-react'
 import { useFlowWorkflowStore } from '@/stores/flowWorkflowStore'
 import { getWebhookInfo, getIndexSymbolsLotSizes, flowQueryKeys } from '@/api/flow'
@@ -164,7 +164,7 @@ export function ConfigPanel() {
 
   const handleDelete = useCallback(() => { if (selectedNodeId) deleteNode(selectedNodeId) }, [selectedNodeId, deleteNode])
   const handleClose = useCallback(() => { selectNode(null) }, [selectNode])
-  const copyToClipboard = (text: string, label: string) => { navigator.clipboard.writeText(text); toast.success(`${label} copied`) }
+  const copyToClipboard = (text: string, label: string) => { navigator.clipboard.writeText(text); showToast.success(`${label} copied`) }
 
   if (!selectedNode) {
     return (

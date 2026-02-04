@@ -15,8 +15,9 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { io, type Socket } from 'socket.io-client'
-import { toast } from 'sonner'
 import { webClient } from '@/api/client'
+import { useAlertStore } from '@/stores/alertStore'
+import { showToast } from '@/utils/toast'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
   AlertDialog,
@@ -122,7 +123,7 @@ export default function ActionCenterPage() {
       }
     } catch (error) {
       console.error('Error fetching action center data:', error)
-      toast.error('Failed to load action center data')
+      showToast.error('Failed to load action center data', 'actionCenter')
     } finally {
       setIsLoading(false)
       setIsRefreshing(false)
@@ -158,17 +159,19 @@ export default function ActionCenterPage() {
 
     // Listen for new pending orders (semi-auto mode)
     socket.on('pending_order_created', (data: { api_type: string; message: string }) => {
-      // Play alert sound
-      if (audioRef.current) {
+      const { shouldShowToast, shouldPlaySound } = useAlertStore.getState()
+
+      // Play alert sound if enabled
+      if (shouldPlaySound() && shouldShowToast('actionCenter') && audioRef.current) {
         audioRef.current.play().catch(() => {})
       }
 
-      // Show toast notification
-      toast.warning(`New Order Queued: ${data.message}`, {
+      // Show toast notification (showToast handles category filtering)
+      showToast.warning(`New Order Queued: ${data.message}`, 'actionCenter', {
         duration: 5000,
       })
 
-      // Refresh data to show new order
+      // Refresh data to show new order (always do this regardless of toast settings)
       fetchData()
     })
 
@@ -186,7 +189,7 @@ export default function ActionCenterPage() {
   const handleRefresh = async () => {
     setIsRefreshing(true)
     await fetchData()
-    toast.success('Data refreshed')
+    showToast.success('Data refreshed', 'actionCenter')
   }
 
   const handleApprove = async (orderId: number) => {
@@ -198,17 +201,17 @@ export default function ActionCenterPage() {
       )
 
       if (response.data.status === 'success') {
-        toast.success(response.data.message || 'Order approved and executed')
+        showToast.success(response.data.message || 'Order approved and executed', 'actionCenter')
         fetchData()
       } else if (response.data.status === 'warning') {
-        toast.warning(response.data.message)
+        showToast.warning(response.data.message, 'actionCenter')
         fetchData()
       } else {
-        toast.error(response.data.message || 'Failed to approve order')
+        showToast.error(response.data.message || 'Failed to approve order', 'actionCenter')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to approve order')
+      showToast.error(err.response?.data?.message || 'Failed to approve order', 'actionCenter')
     } finally {
       setIsApproving(null)
     }
@@ -223,14 +226,14 @@ export default function ActionCenterPage() {
       )
 
       if (response.data.status === 'success') {
-        toast.success('Order rejected')
+        showToast.success('Order rejected', 'actionCenter')
         fetchData()
       } else {
-        toast.error(response.data.message || 'Failed to reject order')
+        showToast.error(response.data.message || 'Failed to reject order', 'actionCenter')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to reject order')
+      showToast.error(err.response?.data?.message || 'Failed to reject order', 'actionCenter')
     } finally {
       setIsRejecting(null)
     }
@@ -246,15 +249,15 @@ export default function ActionCenterPage() {
       )
 
       if (response.data.status === 'success') {
-        toast.success('Order deleted')
+        showToast.success('Order deleted', 'actionCenter')
         setOrderToDelete(null)
         fetchData()
       } else {
-        toast.error(response.data.message || 'Failed to delete order')
+        showToast.error(response.data.message || 'Failed to delete order', 'actionCenter')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to delete order')
+      showToast.error(err.response?.data?.message || 'Failed to delete order', 'actionCenter')
     } finally {
       setIsDeleting(false)
     }
@@ -269,17 +272,17 @@ export default function ActionCenterPage() {
       )
 
       if (response.data.status === 'success') {
-        toast.success(response.data.message || 'All orders approved')
+        showToast.success(response.data.message || 'All orders approved', 'actionCenter')
         fetchData()
       } else if (response.data.status === 'warning') {
-        toast.warning(response.data.message)
+        showToast.warning(response.data.message, 'actionCenter')
         fetchData()
       } else {
-        toast.error(response.data.message || 'Failed to approve all orders')
+        showToast.error(response.data.message || 'Failed to approve all orders', 'actionCenter')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to approve all orders')
+      showToast.error(err.response?.data?.message || 'Failed to approve all orders', 'actionCenter')
     } finally {
       setIsApprovingAll(false)
     }

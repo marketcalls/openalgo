@@ -1,6 +1,6 @@
 import { AlertTriangle, BookOpen, Copy, ExternalLink, Info, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -141,7 +141,7 @@ export default function GoCharting() {
   const generateJson = (showError = true) => {
     if (!symbol || !exchange) {
       if (showError) {
-        toast.error('Please select a symbol and exchange')
+        showToast.error('Please select a symbol and exchange', 'system')
       }
       return
     }
@@ -169,9 +169,9 @@ export default function GoCharting() {
   const copyToClipboard = async (text: string, label: string) => {
     try {
       await navigator.clipboard.writeText(text)
-      toast.success(`${label} copied to clipboard`)
+      showToast.success(`${label} copied to clipboard`, 'clipboard')
     } catch {
-      toast.error('Copy failed - please copy manually')
+      showToast.error('Copy failed - please copy manually', 'system')
     }
   }
 
