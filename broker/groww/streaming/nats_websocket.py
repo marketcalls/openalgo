@@ -550,6 +550,8 @@ class GrowwNATSWebSocket:
             if not self.authenticated:
                 logger.info("NATS: PONG received - Authentication successful")
                 self.authenticated = True
+                # Subscribe to pending subscriptions (same as +OK handler)
+                self._resubscribe_all()
 
         elif msg_type == "MSG":
             # Market data message
