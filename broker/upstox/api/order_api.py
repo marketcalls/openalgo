@@ -250,8 +250,9 @@ def close_all_positions(current_api_key, auth):
         positions_response = get_positions(auth)
         if positions_response.get("status") != "success" or not positions_response.get("data"):
             logger.info("No open positions found to close.")
-            return {"message": "No Open Positions Found"}, 200
+            return {"message": "No Open Positions Found", "order_ids": []}, 200
 
+        order_ids = []
         for position in positions_response["data"]:
             if int(position.get("quantity", 0)) == 0:
                 continue
@@ -277,15 +278,19 @@ def close_all_positions(current_api_key, auth):
                 "quantity": str(quantity),
             }
             logger.debug(f"Closing position with payload: {place_order_payload}")
-            _, api_response, _ = place_order_api(place_order_payload, auth)
+            _, api_response, order_id = place_order_api(place_order_payload, auth)
             logger.info(f"Close position response for {symbol}: {api_response}")
 
+            # Collect the order ID if available
+            if order_id:
+                order_ids.append(order_id)
+
         logger.info("Successfully initiated closing of all open positions.")
-        return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
+        return {"status": "success", "message": "All Open Positions SquaredOff", "order_ids": order_ids}, 200
 
     except Exception:
         logger.exception("An error occurred while closing all positions.")
-        return {"status": "error", "message": "Failed to close all positions"}, 500
+        return {"status": "error", "message": "Failed to close all positions", "order_ids": []}, 500
 
 
 def cancel_order(orderid, auth):

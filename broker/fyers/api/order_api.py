@@ -291,22 +291,23 @@ def close_all_positions(current_api_key, auth):
         logger.debug(f"Close all positions response: {json.dumps(response_data, indent=2)}")
 
         # Check if the request was successful
+        # Note: Fyers exit_all endpoint doesn't return individual order IDs
         if response_data.get("s") == "ok":
-            return {"status": "success", "message": "All positions closed successfully"}, 200
+            return {"status": "success", "message": "All positions closed successfully", "order_ids": []}, 200
         else:
             error_msg = response_data.get("message", "Failed to close positions")
             logger.warning(f"Failed to close all positions: {error_msg}")
-            return {"status": "error", "message": error_msg}, response.status_code
+            return {"status": "error", "message": error_msg, "order_ids": []}, response.status_code
 
     except httpx.HTTPError as e:
         logger.exception("HTTP error during close all positions")
-        return {"status": "error", "message": f"HTTP error: {e}"}, 500
+        return {"status": "error", "message": f"HTTP error: {e}", "order_ids": []}, 500
     except json.JSONDecodeError as e:
         logger.exception("JSON decode error during close all positions")
-        return {"status": "error", "message": f"JSON decode error: {e}"}, 500
+        return {"status": "error", "message": f"JSON decode error: {e}", "order_ids": []}, 500
     except Exception as e:
         logger.exception("Unexpected error during close all positions")
-        return {"status": "error", "message": f"General error: {e}"}, 500
+        return {"status": "error", "message": f"General error: {e}", "order_ids": []}, 500
 
 
 def cancel_order(orderid, auth):

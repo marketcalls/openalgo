@@ -299,8 +299,9 @@ def close_all_positions(current_api_key, auth):
     # Check if the positions data is null or empty
     if positions_response.get("data") is None or not positions_response.get("data"):
         logger.info("No open positions to close")
-        return {"message": "No Open Positions Found"}, 200
+        return {"message": "No Open Positions Found", "order_ids": []}, 200
 
+    order_ids = []
     # Check status explicitly (mStock Type B returns "true" string or True boolean)
     if positions_response.get("status") in [True, "true"]:
         logger.info(f"Closing {len(positions_response['data'])} positions")
@@ -365,13 +366,16 @@ def close_all_positions(current_api_key, auth):
 
             # Place the order to close the position
             try:
-                res, response, orderid = place_order_api(place_order_payload, auth)
-                logger.info(f"Position closed - OrderID: {orderid}, Response: {response}")
+                res, response, order_id = place_order_api(place_order_payload, auth)
+                logger.info(f"Position closed - OrderID: {order_id}, Response: {response}")
+                # Collect the order ID if available
+                if order_id:
+                    order_ids.append(order_id)
             except Exception as e:
                 logger.error(f"Error closing position for {symbol}: {e}")
                 continue
 
-    return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
+    return {"status": "success", "message": "All Open Positions SquaredOff", "order_ids": order_ids}, 200
 
 
 def cancel_order(orderid, auth):

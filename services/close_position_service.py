@@ -143,7 +143,16 @@ def close_position_with_auth(
         return False, error_response, 500
 
     if status_code == 200:
-        response_data = {"status": "success", "message": "All Open Positions Squared Off"}
+        # Extract order_ids from broker response if available
+        order_ids = []
+        if isinstance(response_code, dict):
+            order_ids = response_code.get("order_ids", [])
+        
+        response_data = {
+            "status": "success",
+            "message": "All Open Positions Squared Off",
+            "order_ids": order_ids
+        }
         # Emit SocketIO event asynchronously (non-blocking)
         socketio.start_background_task(
             socketio.emit,

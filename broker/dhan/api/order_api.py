@@ -273,8 +273,9 @@ def close_all_positions(current_api_key, auth):
 
     # Check if the positions data is null or empty
     if positions_response is None or not positions_response:
-        return {"message": "No Open Positions Found"}, 200
+        return {"message": "No Open Positions Found", "order_ids": []}, 200
 
+    order_ids = []
     if positions_response:
         # Loop through each position to close
         for position in positions_response:
@@ -308,13 +309,17 @@ def close_all_positions(current_api_key, auth):
             logger.debug(f"Close position payload: {place_order_payload}")
 
             # Place the order to close the position
-            _, api_response, _ = place_order_api(place_order_payload, AUTH_TOKEN)
+            _, api_response, order_id = place_order_api(place_order_payload, AUTH_TOKEN)
 
             logger.debug(f"Close position response: {api_response}")
 
+            # Collect the order ID if available
+            if order_id:
+                order_ids.append(order_id)
+
             # Note: Ensure place_order_api handles any errors and logs accordingly
 
-    return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
+    return {"status": "success", "message": "All Open Positions SquaredOff", "order_ids": order_ids}, 200
 
 
 def cancel_order(orderid, auth):
