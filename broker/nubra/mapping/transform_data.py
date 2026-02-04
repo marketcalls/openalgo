@@ -27,10 +27,10 @@ def transform_data(data, token):
     """
     # Convert price from rupees to paise (multiply by 100)
     price = float(data.get("price", 0))
-    price_in_paise = int(price * 100) if price else 0
+    price_in_paise = int(round(price * 100)) if price else 0
     
     trigger_price = float(data.get("trigger_price", 0))
-    trigger_price_in_paise = int(trigger_price * 100) if trigger_price else 0
+    trigger_price_in_paise = int(round(trigger_price * 100)) if trigger_price else 0
     
     pricetype = data.get("pricetype", "MARKET")
     
@@ -76,10 +76,10 @@ def transform_modify_order_data(data, token):
     Note: order_id goes in the URL, not in the payload
     """
     price = float(data.get("price", 0))
-    price_in_paise = int(price * 100) if price else 0
+    price_in_paise = int(round(price * 100)) if price else 0
     
     trigger_price = float(data.get("trigger_price", 0))
-    trigger_price_in_paise = int(trigger_price * 100) if trigger_price else 0
+    trigger_price_in_paise = int(round(trigger_price * 100)) if trigger_price else 0
     
     pricetype = data.get("pricetype", "MARKET")
     
