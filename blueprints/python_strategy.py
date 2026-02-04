@@ -358,7 +358,7 @@ def set_resource_limits():
 
         # Limit number of processes - prevents fork bombs
         try:
-            resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
+            resource.setrlimit(resource.RLIMIT_NPROC, (256, 256))
         except (OSError, ValueError) as e:
             logger.debug(f"Could not set process limit: {e}")
 
