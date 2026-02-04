@@ -1,5 +1,6 @@
 // components/trading/PlaceOrderDialog.tsx
 // Reusable order placement dialog with real-time quotes and market depth
+// Uses WebSocket for real-time data with REST API fallback (like Holdings/Positions)
 
 import { useCallback, useEffect, useState } from 'react'
 import {
@@ -21,7 +22,7 @@ import {
 } from '@/components/ui/select'
 import { useAuthStore } from '@/stores/authStore'
 import { useMarketData } from '@/hooks/useMarketData'
-import { tradingApi } from '@/api/trading'
+import { tradingApi, type QuotesData } from '@/api/trading'
 import { showToast } from '@/utils/toast'
 import { cn } from '@/lib/utils'
 import { QuoteHeader } from './QuoteHeader'
@@ -110,8 +111,30 @@ export function PlaceOrderDialog({
   const [quantityMode, setQuantityMode] = useState<'lots' | 'shares'>('lots')
   const [lotMultiplier, setLotMultiplier] = useState(1)
 
+  // REST API fallback quotes (like useLivePrice pattern)
+  const [restQuotes, setRestQuotes] = useState<QuotesData | null>(null)
+  const [isLoadingQuotes, setIsLoadingQuotes] = useState(false)
+
   // Get available product types based on exchange
   const productTypes = isFnOExchange(exchange) ? FNO_PRODUCT_TYPES : EQUITY_PRODUCT_TYPES
+
+  // Fetch quotes via REST API (fallback when WebSocket not available)
+  const fetchQuotes = useCallback(async () => {
+    if (!apiKey || !symbol || !exchange) return
+
+    setIsLoadingQuotes(true)
+    try {
+      const response = await tradingApi.getQuotes(apiKey, symbol, exchange)
+      if (response.status === 'success' && response.data) {
+        setRestQuotes(response.data)
+      }
+    } catch {
+      // Silently fail - REST quotes is a fallback mechanism
+      console.debug('REST quotes fetch failed')
+    } finally {
+      setIsLoadingQuotes(false)
+    }
+  }, [apiKey, symbol, exchange])
 
   // Reset form when dialog opens with new values
   useEffect(() => {
@@ -127,24 +150,48 @@ export function PlaceOrderDialog({
       setIsDepthExpanded(false)
       setQuantityMode('lots')
       setLotMultiplier(1)
-    }
-  }, [open, initialAction, initialQuantity, lotSize, initialPriceType, initialProduct, exchange])
+      setRestQuotes(null)
 
-  // Real-time market data
+      // Fetch REST quotes immediately when dialog opens
+      fetchQuotes()
+    }
+  }, [open, initialAction, initialQuantity, lotSize, initialPriceType, initialProduct, exchange, fetchQuotes])
+
+  // Real-time market data via WebSocket
   const { data: marketDataMap, isConnected } = useMarketData({
     symbols: symbol && exchange ? [{ symbol, exchange }] : [],
     mode: 'Depth',
     enabled: open && !!symbol && !!exchange,
   })
 
-  const marketData = marketDataMap.get(`${exchange}:${symbol}`)?.data
+  const wsData = marketDataMap.get(`${exchange}:${symbol}`)?.data
+
+  // Merge WebSocket and REST data - WebSocket takes priority when available
+  // This ensures data shows immediately from REST, then updates from WebSocket
+  const mergedData = {
+    ltp: wsData?.ltp ?? restQuotes?.ltp,
+    close: wsData?.close ?? restQuotes?.prev_close,
+    change: wsData?.change,
+    change_percent: wsData?.change_percent,
+    // Bid/Ask: prefer depth data, then WebSocket quote data, then REST
+    bidPrice: wsData?.depth?.buy?.[0]?.price ?? wsData?.bid_price ?? restQuotes?.bid,
+    askPrice: wsData?.depth?.sell?.[0]?.price ?? wsData?.ask_price ?? restQuotes?.ask,
+    bidSize: wsData?.depth?.buy?.[0]?.quantity ?? wsData?.bid_size,
+    askSize: wsData?.depth?.sell?.[0]?.quantity ?? wsData?.ask_size,
+    // Depth only from WebSocket
+    depth: wsData?.depth,
+  }
+
+  // Calculate change from REST data if WebSocket doesn't have it
+  const displayChange = mergedData.change ?? (mergedData.ltp && mergedData.close ? mergedData.ltp - mergedData.close : undefined)
+  const displayChangePercent = mergedData.change_percent ?? (displayChange && mergedData.close ? (displayChange / mergedData.close) * 100 : undefined)
 
   // Set price to LTP when switching to LIMIT and LTP is available
   useEffect(() => {
-    if (formPriceType !== 'MARKET' && marketData?.ltp && formPrice === 0) {
-      setFormPrice(roundToTick(marketData.ltp, tickSize))
+    if (formPriceType !== 'MARKET' && mergedData.ltp && formPrice === 0) {
+      setFormPrice(roundToTick(mergedData.ltp, tickSize))
     }
-  }, [formPriceType, marketData?.ltp, formPrice, tickSize])
+  }, [formPriceType, mergedData.ltp, formPrice, tickSize])
 
   // Validation
   const needsPrice = formPriceType === 'LIMIT' || formPriceType === 'SL' || formPriceType === 'SL-LIMIT'
@@ -192,28 +239,34 @@ export function PlaceOrderDialog({
 
       const response = await tradingApi.placeOrder(orderRequest)
 
-      if (response.status === 'success' && response.data?.orderid) {
-        showToast.success(`Order placed: ${response.data.orderid}`, 'orders')
-        onSuccess?.(response.data.orderid)
+      // Response structure: { status: "success", orderid: "..." } or { status: "error", message: "..." }
+      // Note: orderid is at root level, not in data field
+      const orderid = (response as unknown as { orderid?: string }).orderid
+      if (response.status === 'success' && orderid) {
+        showToast.success(`Order placed: ${orderid}`, 'orders')
+        onSuccess?.(orderid)
         onOpenChange(false)
       } else {
         const errorMsg = response.message || 'Order placement failed'
         showToast.error(errorMsg, 'orders')
         onError?.(errorMsg)
       }
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Order placement failed'
+    } catch (err: unknown) {
+      // Extract error message from axios error response or fallback to error message
+      let errorMsg = 'Order placement failed'
+      if (err && typeof err === 'object') {
+        const axiosError = err as { response?: { data?: { message?: string } }; message?: string }
+        if (axiosError.response?.data?.message) {
+          errorMsg = axiosError.response.data.message
+        } else if (axiosError.message) {
+          errorMsg = axiosError.message
+        }
+      }
       showToast.error(errorMsg, 'orders')
       onError?.(errorMsg)
     } finally {
       setIsSubmitting(false)
     }
-  }
-
-  // Lot multiplier handler
-  const handleLotMultiplier = (multiplier: number) => {
-    setLotMultiplier(multiplier)
-    setFormQuantity(lotSize * multiplier)
   }
 
   // Quantity change handler
@@ -234,9 +287,12 @@ export function PlaceOrderDialog({
   // Get display quantity based on mode
   const displayQuantity = quantityMode === 'lots' ? lotMultiplier : formQuantity
 
+  // Determine if we're still loading initial data
+  const isLoading = isLoadingQuotes && !mergedData.ltp && !isConnected
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[420px]">
+      <DialogContent className="sm:max-w-[420px]" aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <span>Place Order -</span>
@@ -250,24 +306,24 @@ export function PlaceOrderDialog({
         </DialogHeader>
 
         <div className="space-y-4 py-2">
-          {/* Quote Header */}
+          {/* Quote Header - merged WebSocket + REST data */}
           <QuoteHeader
             symbol={symbol}
             exchange={exchange}
-            ltp={marketData?.ltp}
-            prevClose={marketData?.close}
-            change={marketData?.change}
-            changePercent={marketData?.change_percent}
-            bidPrice={marketData?.bid_price}
-            askPrice={marketData?.ask_price}
-            bidSize={marketData?.bid_size}
-            askSize={marketData?.ask_size}
-            isLoading={!isConnected && !marketData}
+            ltp={mergedData.ltp}
+            prevClose={mergedData.close}
+            change={displayChange}
+            changePercent={displayChangePercent}
+            bidPrice={mergedData.bidPrice}
+            askPrice={mergedData.askPrice}
+            bidSize={mergedData.bidSize}
+            askSize={mergedData.askSize}
+            isLoading={isLoading}
           />
 
-          {/* Market Depth Panel */}
+          {/* Market Depth Panel - only from WebSocket */}
           <MarketDepthPanel
-            depth={marketData?.depth}
+            depth={mergedData.depth}
             isExpanded={isDepthExpanded}
             onToggle={() => setIsDepthExpanded(!isDepthExpanded)}
             maxLevels={5}
@@ -302,7 +358,7 @@ export function PlaceOrderDialog({
             </div>
           </div>
 
-          {/* Quantity with Lot Multipliers and Mode Toggle */}
+          {/* Quantity with Mode Toggle */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label className="text-xs">Quantity</Label>
@@ -333,29 +389,12 @@ export function PlaceOrderDialog({
                 </button>
               </div>
             </div>
-            <div className="flex gap-2">
-              <div className="flex gap-1">
-                {[1, 2, 3].map((mult) => (
-                  <Button
-                    key={mult}
-                    type="button"
-                    variant={lotMultiplier === mult ? 'default' : 'outline'}
-                    size="sm"
-                    className="px-2 text-xs"
-                    onClick={() => handleLotMultiplier(mult)}
-                  >
-                    {mult}x
-                  </Button>
-                ))}
-              </div>
-              <Input
-                type="number"
-                value={displayQuantity}
-                onChange={(e) => handleQuantityChange(e.target.value)}
-                className="flex-1"
-                min={1}
-              />
-            </div>
+            <Input
+              type="number"
+              value={displayQuantity}
+              onChange={(e) => handleQuantityChange(e.target.value)}
+              min={1}
+            />
             <div className="flex justify-between text-[10px] text-muted-foreground">
               <span>Lot size: {lotSize}</span>
               <span>Total qty: {formQuantity}</span>
