@@ -216,14 +216,23 @@ def get_memory_metrics():
         rss_mb = mem_info.rss / (1024 * 1024)  # Resident Set Size
         vms_mb = mem_info.vms / (1024 * 1024)  # Virtual Memory Size
 
-        # Get system memory
-        system_mem = psutil.virtual_memory()
-        memory_percent = process.memory_percent()
-        available_mb = system_mem.available / (1024 * 1024)
+        # Get system memory (may fail on Windows with disabled performance counters)
+        try:
+            system_mem = psutil.virtual_memory()
+            memory_percent = process.memory_percent()
+            available_mb = system_mem.available / (1024 * 1024)
+        except Exception:
+            # Fallback if virtual_memory fails (Windows performance counter issue)
+            memory_percent = 0
+            available_mb = 0
 
-        # Get swap usage
-        swap = psutil.swap_memory()
-        swap_mb = swap.used / (1024 * 1024)
+        # Get swap usage (may fail on Windows with disabled performance counters)
+        try:
+            swap = psutil.swap_memory()
+            swap_mb = swap.used / (1024 * 1024)
+        except Exception:
+            # Fallback if swap_memory fails
+            swap_mb = 0
 
         # Determine status
         if rss_mb >= MEMORY_CRITICAL_THRESHOLD:
