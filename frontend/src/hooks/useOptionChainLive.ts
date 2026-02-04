@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { OptionChainResponse, OptionStrike } from '@/types/option-chain'
 import { useOptionChainPolling } from './useOptionChainPolling'
 import { useMarketData } from './useMarketData'
@@ -92,6 +92,9 @@ export function useOptionChainLive(
     pauseWhenHidden,
   })
 
+  // Track last LTP update time using ref to avoid triggering effect loops
+  const lastLtpUpdateRef = useRef<number>(0)
+
   // Merge WebSocket LTP data into polled option chain data
   useEffect(() => {
     if (!polledData) {
@@ -152,11 +155,12 @@ export function useOptionChainLive(
       return newStrike
     })
 
-    // Check if any LTP was updated
+    // Check if any LTP was updated (using ref to avoid loop)
     let hasLtpUpdate = false
     for (const [, symbolData] of wsData) {
-      if (symbolData.lastUpdate && (!lastLtpUpdate || symbolData.lastUpdate > lastLtpUpdate.getTime())) {
+      if (symbolData.lastUpdate && symbolData.lastUpdate > lastLtpUpdateRef.current) {
         hasLtpUpdate = true
+        lastLtpUpdateRef.current = symbolData.lastUpdate
         break
       }
     }
@@ -176,7 +180,7 @@ export function useOptionChainLive(
       underlying_ltp: underlyingLtp,
       chain: mergedChain,
     })
-  }, [polledData, wsData, optionExchange, underlying, lastLtpUpdate])
+  }, [polledData, wsData, optionExchange, underlying])
 
   // Determine streaming status
   const isStreaming = isWsConnected && isWsAuthenticated && wsSymbols.length > 0
