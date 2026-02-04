@@ -15,9 +15,9 @@ logger = get_logger(__name__)
 
 
 def get_api_response(endpoint, auth, method="GET", payload=""):
-    """Helper function to make API calls to Angel One"""
+    """Helper function to make API calls to Nubra"""
     AUTH_TOKEN = auth
-    api_key = os.getenv("BROKER_API_KEY")
+    device_id = "OPENALGO"  # Fixed device ID
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -26,18 +26,14 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
         "Authorization": f"Bearer {AUTH_TOKEN}",
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "X-UserType": "USER",
-        "X-SourceID": "WEB",
-        "X-ClientLocalIP": "CLIENT_LOCAL_IP",
-        "X-ClientPublicIP": "CLIENT_PUBLIC_IP",
-        "X-MACAddress": "MAC_ADDRESS",
-        "X-PrivateKey": api_key,
+        "x-device-id": device_id,
     }
 
     if isinstance(payload, dict):
         payload = json.dumps(payload)
 
-    url = f"https://apiconnect.angelbroking.com{endpoint}"
+    # Nubra base URL
+    url = f"https://api.nubra.io{endpoint}"
 
     try:
         if method == "GET":
@@ -53,7 +49,7 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
         if response.status_code == 403:
             logger.debug(f"Debug - API returned 403 Forbidden. Headers: {headers}")
             logger.debug(f"Debug - Response text: {response.text}")
-            raise Exception("Authentication failed. Please check your API key and auth token.")
+            raise Exception("Authentication failed. Please check your auth token.")
 
         return json.loads(response.text)
     except json.JSONDecodeError:
@@ -83,65 +79,97 @@ class BrokerData:
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
-        Get real-time quotes for given symbol
+        Get real-time quotes for given symbol using Nubra's orderbooks API.
+        
+        Nubra API: GET /orderbooks/{ref_id}?levels=1
+        
+        Note: Nubra's orderbook API requires numeric ref_id. Index symbols 
+        don't have ref_id in Nubra's API, so quotes are not available for indices.
+        
         Args:
             symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX)
+            exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX)
         Returns:
             dict: Quote data with required fields
         """
         try:
-            # Convert symbol to broker format and get token
-            br_symbol = get_br_symbol(symbol, exchange)
+            # Check if this is an index - Nubra orderbook API doesn't support indices
+            # Return zeros gracefully instead of throwing an error
+            if exchange.endswith('_INDEX'):
+                logger.info(f"Index quotes not available from Nubra for {symbol} on {exchange}")
+                return {
+                    "bid": 0,
+                    "ask": 0,
+                    "open": 0,
+                    "high": 0,
+                    "low": 0,
+                    "ltp": 0,
+                    "prev_close": 0,
+                    "volume": 0,
+                    "oi": 0,
+                }
+
+            # Get token (ref_id) for the symbol
             token = get_token(symbol, exchange)
+            
+            if not token:
+                raise Exception(f"Could not find token for symbol {symbol} on {exchange}")
 
-            if exchange == "NSE_INDEX":
-                exchange = "NSE"
-            elif exchange == "BSE_INDEX":
-                exchange = "BSE"
-            elif exchange == "MCX_INDEX":
-                exchange = "MCX"
+            # Verify token is numeric (ref_id) - indices have text tokens which won't work
+            if not str(token).isdigit():
+                raise Exception(f"Invalid token '{token}' for {symbol}. Nubra orderbook API requires numeric ref_id.")
 
-            # Prepare payload for Angel's quote API
-            payload = {"mode": "FULL", "exchangeTokens": {exchange: [token]}}
+            logger.info(f"Fetching quotes for {symbol} on {exchange} with token {token}")
 
+            # Call Nubra's orderbooks API with 1 level of depth for quotes
             response = get_api_response(
-                "/rest/secure/angelbroking/market/v1/quote/", self.auth_token, "POST", payload
+                f"/orderbooks/{token}?levels=1", self.auth_token, "GET"
             )
+            
+            logger.debug(f"Nubra orderbooks response: {response}")
 
-            if not response.get("status"):
-                raise Exception(f"Error from Angel API: {response.get('message', 'Unknown error')}")
-
-            # Extract quote data from response
-            fetched_data = response.get("data", {}).get("fetched", [])
-            if not fetched_data:
+            # Extract orderBook data from response
+            orderbook = response.get("orderBook", {})
+            
+            # Check if we got valid data
+            if not orderbook:
+                logger.warning(f"Empty orderbook response for {symbol} on {exchange}")
                 raise Exception("No quote data received")
 
-            quote = fetched_data[0]
+            # Parse bid/ask from arrays
+            # Nubra format: {"p": price, "q": quantity, "o": num_orders}
+            # Prices are in paise, need to convert to rupees (divide by 100)
+            bids = orderbook.get("bid", [])
+            asks = orderbook.get("ask", [])
+            
+            # For some instruments, bid/ask might be empty - that's ok, we still have LTP
+            bid_price = float(bids[0].get("p", 0)) / 100 if bids else 0
+            ask_price = float(asks[0].get("p", 0)) / 100 if asks else 0
+            ltp = float(orderbook.get("ltp", 0)) / 100
 
-            # Return quote in common format
-            depth = quote.get("depth", {})
-            bids = depth.get("buy", [])
-            asks = depth.get("sell", [])
-
+            # Return quote in OpenAlgo format
+            # Note: Nubra doesn't provide open/high/low/close/oi in orderbook API
             return {
-                "bid": float(bids[0].get("price", 0)) if bids else 0,
-                "ask": float(asks[0].get("price", 0)) if asks else 0,
-                "open": float(quote.get("open", 0)),
-                "high": float(quote.get("high", 0)),
-                "low": float(quote.get("low", 0)),
-                "ltp": float(quote.get("ltp", 0)),
-                "prev_close": float(quote.get("close", 0)),
-                "volume": int(quote.get("tradeVolume", 0)),
-                "oi": int(quote.get("opnInterest", 0)),
+                "bid": bid_price,
+                "ask": ask_price,
+                "open": 0,  # Not available in Nubra orderbook API
+                "high": 0,  # Not available in Nubra orderbook API
+                "low": 0,   # Not available in Nubra orderbook API
+                "ltp": ltp,
+                "prev_close": 0,  # Not available in Nubra orderbook API
+                "volume": int(orderbook.get("volume", 0)),
+                "oi": 0,  # Not available in Nubra orderbook API
             }
 
         except Exception as e:
+            logger.error(f"Error fetching quotes for {symbol} on {exchange}: {str(e)}")
             raise Exception(f"Error fetching quotes: {str(e)}")
 
     def get_multiquotes(self, symbols: list) -> list:
         """
-        Get real-time quotes for multiple symbols with automatic batching
+        Get real-time quotes for multiple symbols by making concurrent requests.
+        Nubra does not have a batch quote API, so we fetch individually in parallel.
+        
         Args:
             symbols: List of dicts with 'symbol' and 'exchange' keys
                      Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
@@ -150,36 +178,46 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            BATCH_SIZE = 50  # Angel API limit: 50 symbols per request
-            RATE_LIMIT_DELAY = 1.0  # Angel rate limit: 1 request per second
+            import concurrent.futures
+            
+            # Limit concurrency to avoid hitting rate limits too hard
+            # Nubra Limit: ~10 requests/sec for standard users
+            MAX_WORKERS = 5
+            
+            results = []
+            
+            def fetch_single_quote(item):
+                symbol = item["symbol"]
+                exchange = item["exchange"]
+                try:
+                    quote_data = self.get_quotes(symbol, exchange)
+                    return {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "data": quote_data
+                    }
+                except Exception as e:
+                    logger.warning(f"Failed to fetch quote for {symbol}: {e}")
+                    return {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "error": str(e)
+                    }
 
-            # If symbols exceed batch size, process in batches
-            if len(symbols) > BATCH_SIZE:
-                logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
-                all_results = []
-
-                # Split symbols into batches
-                for i in range(0, len(symbols), BATCH_SIZE):
-                    batch = symbols[i : i + BATCH_SIZE]
-                    logger.debug(
-                        f"Processing batch {i // BATCH_SIZE + 1}: symbols {i + 1} to {min(i + BATCH_SIZE, len(symbols))}"
-                    )
-
-                    # Process this batch
-                    batch_results = self._process_quotes_batch(batch)
-                    all_results.extend(batch_results)
-
-                    # Rate limit delay between batches
-                    if i + BATCH_SIZE < len(symbols):
-                        time.sleep(RATE_LIMIT_DELAY)
-
-                logger.info(
-                    f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches"
-                )
-                return all_results
-            else:
-                # Single batch processing
-                return self._process_quotes_batch(symbols)
+            # Use ThreadPoolExecutor for concurrent requests
+            with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                # Submit all tasks
+                future_to_symbol = {executor.submit(fetch_single_quote, item): item for item in symbols}
+                
+                # Collect results as they complete
+                for future in concurrent.futures.as_completed(future_to_symbol):
+                    try:
+                        result = future.result()
+                        results.append(result)
+                    except Exception as e:
+                        logger.error(f"Generate quote exception: {e}")
+            
+            return results
 
         except Exception as e:
             logger.exception("Error fetching multiquotes")
@@ -187,140 +225,10 @@ class BrokerData:
 
     def _process_quotes_batch(self, symbols: list) -> list:
         """
-        Process a single batch of symbols (internal method)
-        Args:
-            symbols: List of dicts with 'symbol' and 'exchange' keys (max 50)
-        Returns:
-            list: List of quote data for the batch
+        Deprecated: This was an Angel-specific batch method.
+        Redirecting to get_multiquotes for compatibility.
         """
-        # Group symbols by exchange and build token map
-        exchange_tokens = {}  # {exchange: [token1, token2, ...]}
-        token_map = {}  # {exchange:token -> {symbol, exchange, br_symbol}}
-        skipped_symbols = []  # Track symbols that couldn't be resolved
-
-        for item in symbols:
-            symbol = item["symbol"]
-            exchange = item["exchange"]
-
-            try:
-                br_symbol = get_br_symbol(symbol, exchange)
-                token = get_token(symbol, exchange)
-
-                # Track symbols that couldn't be resolved
-                if not token:
-                    logger.warning(
-                        f"Skipping symbol {symbol} on {exchange}: could not resolve token"
-                    )
-                    skipped_symbols.append(
-                        {"symbol": symbol, "exchange": exchange, "error": "Could not resolve token"}
-                    )
-                    continue
-
-                # Normalize exchange for indices
-                api_exchange = exchange
-                if exchange == "NSE_INDEX":
-                    api_exchange = "NSE"
-                elif exchange == "BSE_INDEX":
-                    api_exchange = "BSE"
-                elif exchange == "MCX_INDEX":
-                    api_exchange = "MCX"
-
-                # Add token to exchange group
-                if api_exchange not in exchange_tokens:
-                    exchange_tokens[api_exchange] = []
-                exchange_tokens[api_exchange].append(token)
-
-                # Store mapping for response parsing
-                token_map[f"{api_exchange}:{token}"] = {
-                    "symbol": symbol,
-                    "exchange": exchange,
-                    "br_symbol": br_symbol,
-                    "token": token,
-                }
-
-            except Exception as e:
-                logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
-                skipped_symbols.append({"symbol": symbol, "exchange": exchange, "error": str(e)})
-                continue
-
-        # Return skipped symbols if no valid tokens
-        if not exchange_tokens:
-            logger.warning("No valid tokens to fetch quotes for")
-            return skipped_symbols
-
-        # Prepare payload for Angel's quote API
-        payload = {"mode": "FULL", "exchangeTokens": exchange_tokens}
-
-        logger.info(
-            f"Requesting quotes for {sum(len(t) for t in exchange_tokens.values())} instruments across {len(exchange_tokens)} exchanges"
-        )
-        logger.debug(f"Exchange tokens: {exchange_tokens}")
-
-        # Make API call
-        response = get_api_response(
-            "/rest/secure/angelbroking/market/v1/quote/", self.auth_token, "POST", payload
-        )
-
-        if not response.get("status"):
-            error_msg = f"Error from Angel API: {response.get('message', 'Unknown error')}"
-            logger.error(error_msg)
-            raise Exception(error_msg)
-
-        # Parse response and build results
-        results = []
-        fetched_data = response.get("data", {}).get("fetched", [])
-        unfetched_data = response.get("data", {}).get("unfetched", [])
-
-        if unfetched_data:
-            logger.warning(f"Some symbols could not be fetched: {unfetched_data}")
-
-        # Create a lookup by exchange:token for quick access
-        quotes_by_token = {}
-        for quote in fetched_data:
-            exchange = quote.get("exchange")
-            token = quote.get("symbolToken")
-            if exchange and token:
-                quotes_by_token[f"{exchange}:{token}"] = quote
-
-        # Build results from token_map
-        for key, original in token_map.items():
-            quote = quotes_by_token.get(key)
-
-            if not quote:
-                logger.warning(f"No quote data found for {original['symbol']} ({key})")
-                results.append(
-                    {
-                        "symbol": original["symbol"],
-                        "exchange": original["exchange"],
-                        "error": "No quote data available",
-                    }
-                )
-                continue
-
-            # Parse and format quote data
-            depth = quote.get("depth", {})
-            bids = depth.get("buy", [])
-            asks = depth.get("sell", [])
-
-            result_item = {
-                "symbol": original["symbol"],
-                "exchange": original["exchange"],
-                "data": {
-                    "bid": float(bids[0].get("price", 0)) if bids else 0,
-                    "ask": float(asks[0].get("price", 0)) if asks else 0,
-                    "open": float(quote.get("open", 0)),
-                    "high": float(quote.get("high", 0)),
-                    "low": float(quote.get("low", 0)),
-                    "ltp": float(quote.get("ltp", 0)),
-                    "prev_close": float(quote.get("close", 0)),
-                    "volume": int(quote.get("tradeVolume", 0)),
-                    "oi": int(quote.get("opnInterest", 0)),
-                },
-            }
-            results.append(result_item)
-
-        # Include skipped symbols in results
-        return skipped_symbols + results
+        return self.get_multiquotes(symbols)
 
     def get_history(
         self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str
@@ -666,7 +574,13 @@ class BrokerData:
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
-        Get market depth for given symbol
+        Get market depth for given symbol using Nubra's orderbooks API.
+        
+        Nubra API: GET /orderbooks/{ref_id}?levels=5
+        
+        Note: Nubra's orderbook API requires numeric ref_id. Index symbols 
+        don't have ref_id in Nubra's API, so depth is not available for indices.
+        
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX)
@@ -674,72 +588,105 @@ class BrokerData:
             dict: Market depth data with bids, asks and other details
         """
         try:
-            # Convert symbol to broker format and get token
-            br_symbol = get_br_symbol(symbol, exchange)
+            # Check if this is an index - Nubra orderbook API doesn't support indices
+            # Return zeros gracefully instead of throwing an error
+            if exchange.endswith('_INDEX'):
+                logger.info(f"Index depth not available from Nubra for {symbol} on {exchange}")
+                return {
+                    "bids": [{"price": 0, "quantity": 0} for _ in range(5)],
+                    "asks": [{"price": 0, "quantity": 0} for _ in range(5)],
+                    "high": 0,
+                    "low": 0,
+                    "ltp": 0,
+                    "ltq": 0,
+                    "open": 0,
+                    "prev_close": 0,
+                    "volume": 0,
+                    "oi": 0,
+                    "totalbuyqty": 0,
+                    "totalsellqty": 0,
+                }
+
+            # Get token (ref_id) for the symbol
             token = get_token(symbol, exchange)
+            
+            if not token:
+                raise Exception(f"Could not find token for symbol {symbol} on {exchange}")
 
-            if exchange == "NSE_INDEX":
-                exchange = "NSE"
-            elif exchange == "BSE_INDEX":
-                exchange = "BSE"
-            elif exchange == "MCX_INDEX":
-                exchange = "MCX"
+            # Verify token is numeric (ref_id) - indices have text tokens which won't work
+            if not str(token).isdigit():
+                raise Exception(f"Invalid token '{token}' for {symbol}. Nubra orderbook API requires numeric ref_id.")
 
-            # Prepare payload for market depth API
-            payload = {"mode": "FULL", "exchangeTokens": {exchange: [token]}}
+            logger.info(f"Fetching depth for {symbol} on {exchange} with token {token}")
 
+            # Call Nubra's orderbooks API with 5 levels of depth
             response = get_api_response(
-                "/rest/secure/angelbroking/market/v1/quote/", self.auth_token, "POST", payload
+                f"/orderbooks/{token}?levels=5", self.auth_token, "GET"
             )
 
-            if not response.get("status"):
-                raise Exception(f"Error from Angel API: {response.get('message', 'Unknown error')}")
-
-            # Extract depth data
-            fetched_data = response.get("data", {}).get("fetched", [])
-            if not fetched_data:
+            # Extract orderBook data from response
+            orderbook = response.get("orderBook", {})
+            if not orderbook:
                 raise Exception("No depth data received")
 
-            quote = fetched_data[0]
-            depth = quote.get("depth", {})
-
+            # Parse bid/ask from arrays
+            # Nubra format: {"p": price in paise, "q": quantity, "o": num_orders}
+            bid_orders = orderbook.get("bid", [])
+            ask_orders = orderbook.get("ask", [])
+            
             # Format bids and asks with exactly 5 entries each
+            # Convert price from paise to rupees (divide by 100)
             bids = []
             asks = []
 
             # Process buy orders (top 5)
-            buy_orders = depth.get("buy", [])
             for i in range(5):  # Ensure exactly 5 entries
-                if i < len(buy_orders):
-                    bid = buy_orders[i]
-                    bids.append({"price": bid.get("price", 0), "quantity": bid.get("quantity", 0)})
+                if i < len(bid_orders):
+                    bid = bid_orders[i]
+                    bids.append({
+                        "price": float(bid.get("p", 0)) / 100,
+                        "quantity": int(bid.get("q", 0))
+                    })
                 else:
                     bids.append({"price": 0, "quantity": 0})
 
             # Process sell orders (top 5)
-            sell_orders = depth.get("sell", [])
             for i in range(5):  # Ensure exactly 5 entries
-                if i < len(sell_orders):
-                    ask = sell_orders[i]
-                    asks.append({"price": ask.get("price", 0), "quantity": ask.get("quantity", 0)})
+                if i < len(ask_orders):
+                    ask = ask_orders[i]
+                    asks.append({
+                        "price": float(ask.get("p", 0)) / 100,
+                        "quantity": int(ask.get("q", 0))
+                    })
                 else:
                     asks.append({"price": 0, "quantity": 0})
 
-            # Return depth data in common format matching REST API response
+            # Calculate total buy and sell quantities
+            totalbuyqty = sum(bid.get("q", 0) for bid in bid_orders)
+            totalsellqty = sum(ask.get("q", 0) for ask in ask_orders)
+            
+            # LTP and other values - convert from paise to rupees
+            ltp = float(orderbook.get("ltp", 0)) / 100
+            ltq = int(orderbook.get("ltq", 0))
+            volume = int(orderbook.get("volume", 0))
+
+            # Return depth data in OpenAlgo format
+            # Note: Nubra orderbook API doesn't provide open/high/low/close/oi
             return {
                 "bids": bids,
                 "asks": asks,
-                "high": quote.get("high", 0),
-                "low": quote.get("low", 0),
-                "ltp": quote.get("ltp", 0),
-                "ltq": quote.get("lastTradeQty", 0),
-                "open": quote.get("open", 0),
-                "prev_close": quote.get("close", 0),
-                "volume": quote.get("tradeVolume", 0),
-                "oi": quote.get("opnInterest", 0),
-                "totalbuyqty": quote.get("totBuyQuan", 0),
-                "totalsellqty": quote.get("totSellQuan", 0),
+                "high": 0,  # Not available in Nubra orderbook API
+                "low": 0,   # Not available in Nubra orderbook API
+                "ltp": ltp,
+                "ltq": ltq,
+                "open": 0,  # Not available in Nubra orderbook API
+                "prev_close": 0,  # Not available in Nubra orderbook API
+                "volume": volume,
+                "oi": 0,  # Not available in Nubra orderbook API
+                "totalbuyqty": totalbuyqty,
+                "totalsellqty": totalsellqty,
             }
 
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
+
