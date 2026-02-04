@@ -5,7 +5,6 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 
 export interface QuoteHeaderProps {
-  symbol: string
   exchange: string
   ltp?: number
   prevClose?: number
@@ -41,7 +40,6 @@ function getExchangeBadgeClass(exchange: string): string {
 }
 
 export function QuoteHeader({
-  symbol,
   exchange,
   ltp,
   prevClose,
@@ -70,16 +68,11 @@ export function QuoteHeader({
 
   return (
     <div className="p-3 bg-muted/30 rounded-lg space-y-2">
-      {/* Symbol with Exchange Badge and LTP Row */}
+      {/* Exchange Badge and LTP Row */}
       <div className="flex items-center justify-between">
-        <div className="flex flex-col gap-1">
-          <span className="text-sm font-medium truncate max-w-[200px]">
-            {symbol}
-          </span>
-          <Badge className={cn('text-[10px] px-1.5 py-0', getExchangeBadgeClass(exchange))}>
-            {exchange}
-          </Badge>
-        </div>
+        <Badge className={cn('text-[10px] px-1.5 py-0', getExchangeBadgeClass(exchange))}>
+          {exchange}
+        </Badge>
         <div className="flex items-center gap-2">
           <span className="text-xl font-bold">
             {ltp !== undefined ? ltp.toFixed(2) : '-'}

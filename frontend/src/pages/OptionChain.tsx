@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw, TrendingUp, Wifi, WifiOff } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
 import { useOptionChainLive } from '@/hooks/useOptionChainLive'
@@ -133,7 +133,7 @@ interface PlaceOrderParams {
 
 interface OptionChainRowProps {
   strike: OptionStrike
-  previousData: Map<number, OptionStrike>
+  previousStrike: OptionStrike | undefined
   maxBarValue: number
   visibleCeColumns: ColumnKey[]
   visiblePeColumns: ColumnKey[]
@@ -143,9 +143,10 @@ interface OptionChainRowProps {
   onPlaceOrder: (params: PlaceOrderParams) => void
 }
 
-function OptionChainRow({
+// Memoized row component to prevent unnecessary re-renders
+const OptionChainRow = React.memo(function OptionChainRow({
   strike,
-  previousData,
+  previousStrike,
   maxBarValue,
   visibleCeColumns,
   visiblePeColumns,
@@ -154,7 +155,6 @@ function OptionChainRow({
   optionExchange,
   onPlaceOrder,
 }: OptionChainRowProps) {
-  const previous = previousData.get(strike.strike)
   const ce = strike.ce
   const pe = strike.pe
   const label = ce?.label ?? pe?.label ?? ''
@@ -165,11 +165,12 @@ function OptionChainRow({
   const isCeOTM = label.startsWith('OTM')
   const isPeOTM = label.startsWith('ITM')
 
-  const ceLtpChanged = previous?.ce?.ltp !== ce?.ltp
-  const peLtpChanged = previous?.pe?.ltp !== pe?.ltp
+  // Flash animation for LTP changes
+  const ceLtpChanged = previousStrike?.ce?.ltp !== undefined && previousStrike.ce.ltp !== ce?.ltp
+  const peLtpChanged = previousStrike?.pe?.ltp !== undefined && previousStrike.pe.ltp !== pe?.ltp
 
-  const ceFlashClass = ceLtpChanged ? (ce && previous?.ce && ce.ltp > previous.ce.ltp ? 'bg-green-500/30' : 'bg-red-500/30') : ''
-  const peFlashClass = peLtpChanged ? (pe && previous?.pe && pe.ltp > previous.pe.ltp ? 'bg-green-500/30' : 'bg-red-500/30') : ''
+  const ceFlashClass = ceLtpChanged ? (ce && previousStrike?.ce && ce.ltp > previousStrike.ce.ltp ? 'bg-green-500/30' : 'bg-red-500/30') : ''
+  const peFlashClass = peLtpChanged ? (pe && previousStrike?.pe && pe.ltp > previousStrike.pe.ltp ? 'bg-green-500/30' : 'bg-red-500/30') : ''
 
   const ceSpread = ce && ce.bid > 0 && ce.ask > 0 ? ce.ask - ce.bid : 0
   const peSpread = pe && pe.bid > 0 && pe.ask > 0 ? pe.ask - pe.bid : 0
@@ -191,24 +192,27 @@ function OptionChainRow({
     ? 'bg-gradient-to-l from-red-500/25 to-transparent'
     : 'bg-red-500/20'
 
+  // Use tabular-nums for consistent number widths to prevent layout shifts
+  const numClass = 'font-mono tabular-nums text-xs'
+
   const getCeColumnValue = (key: ColumnKey) => {
     switch (key) {
       case 'ce_oi':
-        return <span className="font-mono text-xs">{formatInLakhs(ce?.oi)}</span>
+        return <span className={numClass}>{formatInLakhs(ce?.oi)}</span>
       case 'ce_volume':
-        return <span className="font-mono text-xs">{formatInLakhs(ce?.volume)}</span>
+        return <span className={numClass}>{formatInLakhs(ce?.volume)}</span>
       case 'ce_bid_qty':
-        return <span className="text-xs">{ce?.bid_qty ?? 0}</span>
+        return <span className={numClass}>{ce?.bid_qty ?? 0}</span>
       case 'ce_bid':
-        return <span className="text-red-500 text-xs">{formatPrice(ce?.bid)}</span>
+        return <span className={cn(numClass, 'text-red-500')}>{formatPrice(ce?.bid)}</span>
       case 'ce_ltp':
-        return <span className={cn('font-semibold text-xs', ceFlashClass)}>{formatPrice(ce?.ltp)}</span>
+        return <span className={cn(numClass, 'font-semibold', ceFlashClass)}>{formatPrice(ce?.ltp)}</span>
       case 'ce_ask':
-        return <span className="text-green-500 text-xs">{formatPrice(ce?.ask)}</span>
+        return <span className={cn(numClass, 'text-green-500')}>{formatPrice(ce?.ask)}</span>
       case 'ce_ask_qty':
-        return <span className="text-xs">{ce?.ask_qty ?? 0}</span>
+        return <span className={numClass}>{ce?.ask_qty ?? 0}</span>
       case 'ce_spread':
-        return <span className={cn('text-xs', ceSpreadClass)}>{formatPrice(ceSpread)}</span>
+        return <span className={cn(numClass, ceSpreadClass)}>{formatPrice(ceSpread)}</span>
       default:
         return null
     }
@@ -217,21 +221,21 @@ function OptionChainRow({
   const getPeColumnValue = (key: ColumnKey) => {
     switch (key) {
       case 'pe_oi':
-        return <span className="font-mono text-xs">{formatInLakhs(pe?.oi)}</span>
+        return <span className={numClass}>{formatInLakhs(pe?.oi)}</span>
       case 'pe_volume':
-        return <span className="font-mono text-xs">{formatInLakhs(pe?.volume)}</span>
+        return <span className={numClass}>{formatInLakhs(pe?.volume)}</span>
       case 'pe_bid_qty':
-        return <span className="text-xs">{pe?.bid_qty ?? 0}</span>
+        return <span className={numClass}>{pe?.bid_qty ?? 0}</span>
       case 'pe_bid':
-        return <span className="text-red-500 text-xs">{formatPrice(pe?.bid)}</span>
+        return <span className={cn(numClass, 'text-red-500')}>{formatPrice(pe?.bid)}</span>
       case 'pe_ltp':
-        return <span className={cn('font-semibold text-xs', peFlashClass)}>{formatPrice(pe?.ltp)}</span>
+        return <span className={cn(numClass, 'font-semibold', peFlashClass)}>{formatPrice(pe?.ltp)}</span>
       case 'pe_ask':
-        return <span className="text-green-500 text-xs">{formatPrice(pe?.ask)}</span>
+        return <span className={cn(numClass, 'text-green-500')}>{formatPrice(pe?.ask)}</span>
       case 'pe_ask_qty':
-        return <span className="text-xs">{pe?.ask_qty ?? 0}</span>
+        return <span className={numClass}>{pe?.ask_qty ?? 0}</span>
       case 'pe_spread':
-        return <span className={cn('text-xs', peSpreadClass)}>{formatPrice(peSpread)}</span>
+        return <span className={cn(numClass, peSpreadClass)}>{formatPrice(peSpread)}</span>
       default:
         return null
     }
@@ -407,7 +411,7 @@ function OptionChainRow({
       )}
     </TableRow>
   )
-}
+})
 
 export default function OptionChain() {
   const { apiKey } = useAuthStore()
@@ -429,7 +433,8 @@ export default function OptionChain() {
 
   const [selectedExpiry, setSelectedExpiry] = useState('')
   const [expiries, setExpiries] = useState<string[]>([])
-  const [previousData, setPreviousData] = useState<Map<number, OptionStrike>>(new Map())
+  // Use ref for previous data to avoid causing re-renders and enable proper flash animation
+  const previousDataRef = useRef<Map<number, OptionStrike>>(new Map())
   const [orderDialog, setOrderDialog] = useState<{
     open: boolean
     symbol: string
@@ -462,28 +467,34 @@ export default function OptionChain() {
         const response = await optionChainApi.getExpiries(apiKey, selectedUnderlying, optionExchange)
         if (response.status === 'success' && response.data.length > 0) {
           setExpiries(response.data)
-          if (!selectedExpiry) {
-            setSelectedExpiry(response.data[0])
-          }
+          // Only set expiry if not already set (avoid overwriting user selection)
+          setSelectedExpiry(prev => prev || response.data[0])
         } else {
-          showToast.error(response.message || 'Failed to load expiries', 'orders')
+          showToast.error(response.message || 'Failed to load expiries')
         }
       } catch (err) {
         console.error('Error loading expiries:', err)
-        showToast.error('Failed to load expiry dates', 'orders')
+        showToast.error('Failed to load expiry dates')
       }
     }
 
     loadExpiries()
-  }, [apiKey, selectedUnderlying, optionExchange, selectedExpiry])
+    // Note: selectedExpiry removed from deps to prevent re-fetch on expiry change
+  }, [apiKey, selectedUnderlying, optionExchange])
 
+  // Update previous data ref after render (for flash animation)
+  // Using useEffect to update AFTER the current data is rendered
   useEffect(() => {
     if (data?.chain) {
-      const newMap = new Map<number, OptionStrike>()
-      data.chain.forEach((strike) => {
-        newMap.set(strike.strike, strike)
-      })
-      setPreviousData(newMap)
+      // Schedule the ref update for after render so the current render uses old previous data
+      const timeoutId = setTimeout(() => {
+        const newMap = new Map<number, OptionStrike>()
+        data.chain.forEach((strike) => {
+          newMap.set(strike.strike, strike)
+        })
+        previousDataRef.current = newMap
+      }, 100) // Short delay to allow flash animation to show
+      return () => clearTimeout(timeoutId)
     }
   }, [data?.chain])
 
@@ -510,6 +521,11 @@ export default function OptionChain() {
       lotSize: params.lotSize,
       tickSize: params.tickSize,
     })
+  }, [])
+
+  // Memoized callback for dialog close to prevent re-renders
+  const handleOrderDialogClose = useCallback((open: boolean) => {
+    if (!open) setOrderDialog(null)
   }, [])
 
   const pcr = useMemo(() => (data?.chain ? calculatePCR(data.chain) : 0), [data?.chain])
@@ -649,9 +665,9 @@ export default function OptionChain() {
               <CardContent className="p-4">
                 <div className="text-sm text-muted-foreground">Total OI</div>
                 <div className="text-sm mt-1">
-                  <span className="text-green-500 font-mono">{formatInLakhs(totals.ceOi)}</span>
+                  <span className="text-green-500 font-mono tabular-nums">{formatInLakhs(totals.ceOi)}</span>
                   <span className="mx-2 text-muted-foreground">|</span>
-                  <span className="text-red-500 font-mono">{formatInLakhs(totals.peOi)}</span>
+                  <span className="text-red-500 font-mono tabular-nums">{formatInLakhs(totals.peOi)}</span>
                 </div>
                 <div className="h-2 bg-muted rounded-full overflow-hidden mt-2">
                   <div
@@ -669,7 +685,7 @@ export default function OptionChain() {
           <Card>
             <CardContent className="p-0">
               <div className="overflow-x-auto">
-                <Table className="w-full">
+                <Table className="w-full table-fixed">
                   <TableHeader>
                     {/* Section headers row */}
                     <TableRow className="bg-muted/30 border-b-0">
@@ -741,7 +757,7 @@ export default function OptionChain() {
                       <OptionChainRow
                         key={strike.strike}
                         strike={strike}
-                        previousData={previousData}
+                        previousStrike={previousDataRef.current.get(strike.strike)}
                         maxBarValue={maxBarValue}
                         visibleCeColumns={visibleCeColumns}
                         visiblePeColumns={visiblePeColumns}
@@ -787,9 +803,7 @@ export default function OptionChain() {
       {/* Place Order Dialog */}
       <PlaceOrderDialog
         open={orderDialog?.open ?? false}
-        onOpenChange={(open) => {
-          if (!open) setOrderDialog(null)
-        }}
+        onOpenChange={handleOrderDialogClose}
         symbol={orderDialog?.symbol}
         exchange={orderDialog?.exchange}
         action={orderDialog?.action}
