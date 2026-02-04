@@ -67,7 +67,8 @@ export interface PlaceOrderDialogProps {
 // Tick size validation helpers
 function roundToTick(price: number, tickSize: number): number {
   if (tickSize <= 0) return price
-  return Math.round(price / tickSize) * tickSize
+  // Use toFixed to avoid floating point precision issues (e.g., 140.95000000000002)
+  return Number((Math.round(price / tickSize) * tickSize).toFixed(2))
 }
 
 function adjustPrice(price: number, tickSize: number, direction: 'up' | 'down'): number {
