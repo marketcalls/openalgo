@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { tradingApi, type QuotesData, type DepthData, type DepthLevel } from '@/api/trading'
 import { useMarketData } from '@/hooks/useMarketData'
 import { useMarketStatus } from '@/hooks/useMarketStatus'
-import { usePageVisibility } from '@/hooks/usePageVisibility'
 import { useAuthStore } from '@/stores/authStore'
 
 /**
@@ -111,7 +110,6 @@ export function useLiveQuote(
 
   const { apiKey } = useAuthStore()
   const { isMarketOpen } = useMarketStatus()
-  const { isVisible, wasHidden, timeSinceHidden } = usePageVisibility()
 
   // REST fallback state
   const [restQuotes, setRestQuotes] = useState<QuotesData | null>(null)
@@ -197,30 +195,36 @@ export function useLiveQuote(
   }, [apiKey, symbol, exchange, hasSymbol, useQuotesFallback, useDepthFallback, mode])
 
   // Fetch on mount and when symbol changes
+  // Use refs to track current state and avoid stale closures in intervals
+  const enabledRef = useRef(enabled)
+  const hasSymbolRef = useRef(hasSymbol)
+  const fetchRestDataRef = useRef(fetchRestData)
+
+  // Keep refs in sync with latest values
+  useEffect(() => {
+    enabledRef.current = enabled
+    hasSymbolRef.current = hasSymbol
+    fetchRestDataRef.current = fetchRestData
+  }, [enabled, hasSymbol, fetchRestData])
+
   useEffect(() => {
     if (!enabled || !hasSymbol) return
 
-    // Don't fetch when hidden (if pauseWhenHidden is true)
-    if (pauseWhenHidden && !isVisible) return
-
-    // Initial fetch
-    fetchRestData()
+    // Initial fetch - use ref to ensure we have the latest function
+    fetchRestDataRef.current()
 
     // Set up periodic refresh
-    const interval = setInterval(fetchRestData, refreshInterval)
+    const interval = setInterval(() => {
+      // Check current enabled state before fetching
+      if (enabledRef.current && hasSymbolRef.current) {
+        fetchRestDataRef.current()
+      }
+    }, refreshInterval)
 
     return () => clearInterval(interval)
-  }, [enabled, hasSymbol, fetchRestData, refreshInterval, pauseWhenHidden, isVisible])
-
-  // Refresh when tab becomes visible after being hidden
-  useEffect(() => {
-    if (!wasHidden || !isVisible || !enabled || !hasSymbol) return
-
-    // If we were hidden for more than the refresh interval, fetch immediately
-    if (timeSinceHidden > refreshInterval) {
-      fetchRestData()
-    }
-  }, [wasHidden, isVisible, timeSinceHidden, refreshInterval, enabled, hasSymbol, fetchRestData])
+    // Only depend on stable values that should trigger new interval setup
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, hasSymbol, symbol, exchange, refreshInterval])
 
   // Reset state when symbol changes
   useEffect(() => {
