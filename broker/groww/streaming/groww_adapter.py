@@ -170,9 +170,12 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 if self.ws_client:
                     try:
                         self.ws_client.disconnect()
-                    except:
-                        pass
-                    self.ws_client = None
+                    except (ConnectionError, OSError, RuntimeError) as ws_err:
+                        self.logger.debug(f"WebSocket disconnect error (expected): {ws_err}")
+                    except Exception as ws_err:
+                        self.logger.warning(f"Unexpected WebSocket disconnect error: {ws_err}")
+                    finally:
+                        self.ws_client = None
                 self.cleanup_zmq()
 
             # Reset message counter for next session
@@ -206,24 +209,30 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.info("🔌 Starting Groww adapter disconnect sequence...")
         self.running = False
 
+        ws_client_ref = self.ws_client  # Store reference before clearing
+        self.ws_client = None  # Clear early to prevent double cleanup attempts
+
         try:
             # Disconnect WebSocket client with full cleanup
-            if self.ws_client:
+            if ws_client_ref:
                 try:
                     # Use cleanup() for full resource release including HTTP session
-                    self.ws_client.cleanup()
+                    ws_client_ref.cleanup()
                     self.logger.info("🔗 WebSocket client disconnected and cleaned up")
+                except (ConnectionError, OSError, RuntimeError) as e:
+                    self.logger.debug(f"Expected error during WebSocket cleanup: {e}")
                 except Exception as e:
                     self.logger.error(f"Error disconnecting WebSocket client: {e}")
-                    # Try basic disconnect as fallback
+                    # Try basic disconnect as fallback only if cleanup didn't work
                     try:
-                        self.ws_client.disconnect()
-                    except:
-                        pass
+                        ws_client_ref.disconnect()
+                    except (ConnectionError, OSError, RuntimeError) as fallback_err:
+                        self.logger.debug(f"Expected error during fallback disconnect: {fallback_err}")
+                    except Exception as fallback_err:
+                        self.logger.warning(f"Fallback disconnect also failed: {fallback_err}")
 
             # Clear all state for clean reconnection
             self.connected = False
-            self.ws_client = None
             self.subscriptions.clear()
             self.subscription_keys.clear()
 
@@ -236,10 +245,12 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error(f"❌ Error during disconnect: {e}")
             # Force cleanup even if there were errors
             self.connected = False
-            self.ws_client = None
             self.subscriptions.clear()
             self.subscription_keys.clear()
-            self.cleanup_zmq()
+            try:
+                self.cleanup_zmq()
+            except Exception as zmq_err:
+                self.logger.warning(f"ZMQ cleanup error: {zmq_err}")
 
     def subscribe(
         self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5

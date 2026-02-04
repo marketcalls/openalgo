@@ -66,6 +66,8 @@ class GrowwNATSWebSocket:
         # Thread tracking for cleanup (prevents thread leaks on reconnection)
         self._ping_thread = None
         self._auth_check_thread = None
+        self._reconnect_thread = None
+        self._reconnecting = False
         self._threads_lock = threading.Lock()
 
         # HTTP session for connection reuse (prevents socket exhaustion)
@@ -268,25 +270,37 @@ class GrowwNATSWebSocket:
                 self.on_error(str(e))
 
     def _stop_background_threads(self):
-        """Stop background threads (ping and auth check) to prevent leaks on reconnection"""
+        """Stop background threads (ping, auth check, reconnect) to prevent leaks on reconnection"""
         with self._threads_lock:
             # Signal threads to stop by setting connected=False temporarily handled by flags
             # The threads check self.connected and self.running, which are already managed
 
+            # Cancel any pending reconnection
+            self._reconnecting = False
+
             # Wait briefly for auth check thread if it exists
             if self._auth_check_thread and self._auth_check_thread.is_alive():
                 logger.debug("Waiting for auth check thread to finish...")
-                self._auth_check_thread.join(timeout=0.5)
+                self._auth_check_thread.join(timeout=1.0)
                 if self._auth_check_thread.is_alive():
                     logger.debug("Auth check thread still running, will be orphaned (daemon)")
                 self._auth_check_thread = None
 
-            # Ping thread will exit on its own when connected/running become False
-            # Just clear the reference
-            if self._ping_thread:
+            # Wait for ping thread to exit
+            if self._ping_thread and self._ping_thread.is_alive():
+                logger.debug("Waiting for ping thread to finish...")
+                self._ping_thread.join(timeout=1.0)
                 if self._ping_thread.is_alive():
                     logger.debug("Ping thread still running, will exit on flag check")
-                self._ping_thread = None
+            self._ping_thread = None
+
+            # Wait for reconnect thread if exists
+            if self._reconnect_thread and self._reconnect_thread.is_alive():
+                logger.debug("Waiting for reconnect thread to finish...")
+                self._reconnect_thread.join(timeout=1.0)
+                if self._reconnect_thread.is_alive():
+                    logger.debug("Reconnect thread still running, will be orphaned (daemon)")
+            self._reconnect_thread = None
 
     def _on_open(self, ws):
         """Handle WebSocket open"""
@@ -559,20 +573,34 @@ class GrowwNATSWebSocket:
         self._stop_background_threads()
 
         # Only attempt reconnection if still running (not manually disconnected)
+        # and not already reconnecting (prevents thread accumulation)
         if self.running:
-            logger.info("Attempting to reconnect in 5 seconds...")
+            with self._threads_lock:
+                if self._reconnecting:
+                    logger.info("Reconnection already in progress, skipping duplicate attempt")
+                    return
 
-            def reconnect():
-                time.sleep(5)
-                if self.running:  # Check again after sleep
+                self._reconnecting = True
+                logger.info("Attempting to reconnect in 5 seconds...")
+
+                def reconnect():
                     try:
-                        self._run_websocket()
-                    except Exception as e:
-                        logger.error(f"Reconnection failed: {e}")
+                        time.sleep(5)
+                        # Check flags again after sleep
+                        if self.running and self._reconnecting:
+                            try:
+                                self._run_websocket()
+                            except Exception as e:
+                                logger.error(f"Reconnection failed: {e}")
+                    finally:
+                        # Reset reconnecting flag when done
+                        with self._threads_lock:
+                            self._reconnecting = False
 
-            # Spawn reconnection in new thread to avoid recursive stack buildup
-            reconnect_thread = threading.Thread(target=reconnect, daemon=True)
-            reconnect_thread.start()
+                # Spawn reconnection in new thread to avoid recursive stack buildup
+                # Track the thread to prevent leaks
+                self._reconnect_thread = threading.Thread(target=reconnect, daemon=True)
+                self._reconnect_thread.start()
         else:
             logger.info("WebSocket closed gracefully - not reconnecting as running=False")
 
@@ -959,7 +987,11 @@ class GrowwNATSWebSocket:
                     try:
                         unsub_cmd = self.nats_protocol.create_unsubscribe(str(i))
                         self.ws.send(unsub_cmd)
-                    except:
+                    except (websocket.WebSocketConnectionClosedException, BrokenPipeError, OSError) as e:
+                        logger.debug(f"Connection closed during cleanup at SID {i}: {e}")
+                        break
+                    except Exception as e:
+                        logger.warning(f"Unexpected error during UNSUB {i}: {e}")
                         break
 
                 # Give server time to process unsubscribes
@@ -995,8 +1027,10 @@ class GrowwNATSWebSocket:
                     try:
                         unsub_cmd = self.nats_protocol.create_unsubscribe(str(sid))
                         self.ws.send(unsub_cmd)
-                    except:
-                        pass
+                    except (websocket.WebSocketConnectionClosedException, BrokenPipeError, OSError) as e:
+                        logger.debug(f"Connection closed during final UNSUB for SID {sid}: {e}")
+                    except Exception as e:
+                        logger.debug(f"Could not send UNSUB for SID {sid}: {e}")
 
                 # Brief delay for server to process
                 time.sleep(0.2)  # Shorter delay
@@ -1010,9 +1044,11 @@ class GrowwNATSWebSocket:
                 self.ws.keep_running = False  # Tell WebSocketApp to stop
                 self.ws.close()
                 logger.info("✅ WebSocket closed")
-                self.ws = None  # Clear the WebSocket reference
             except Exception as e:
                 logger.error(f"Error closing WebSocket: {e}")
+            finally:
+                # Always clear the WebSocket reference, even if close() failed
+                self.ws = None
 
         if self.ws_thread:
             logger.info("⏳ Waiting for WebSocket thread to finish...")
@@ -1039,6 +1075,13 @@ class GrowwNATSWebSocket:
         self.nkey_seed = None
         self.ws = None
         self.subscription_id = None
+
+        # Clear thread references and flags
+        with self._threads_lock:
+            self._reconnecting = False
+            self._ping_thread = None
+            self._auth_check_thread = None
+            self._reconnect_thread = None
 
         logger.info("✅ Groww WebSocket disconnected and all resources cleared")
 
@@ -1073,5 +1116,13 @@ class GrowwNATSWebSocket:
             # Close HTTP session if still open
             if hasattr(self, "_http_session") and self._http_session:
                 self._http_session.close()
-        except Exception:
-            pass  # Ignore errors during destruction
+                self._http_session = None
+        except (AttributeError, TypeError, RuntimeError) as e:
+            # Ignore expected errors during destruction (interpreter shutdown)
+            pass
+        except Exception as e:
+            # Log unexpected errors but don't raise during destruction
+            try:
+                logger.debug(f"Unexpected error in __del__: {e}")
+            except Exception:
+                pass  # Logger may not be available during shutdown
