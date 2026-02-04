@@ -167,7 +167,9 @@ class BrokerData:
 
     def get_multiquotes(self, symbols: list) -> list:
         """
-        Get real-time quotes for multiple symbols with automatic batching
+        Get real-time quotes for multiple symbols by making concurrent requests.
+        Nubra does not have a batch quote API, so we fetch individually in parallel.
+        
         Args:
             symbols: List of dicts with 'symbol' and 'exchange' keys
                      Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
@@ -176,36 +178,46 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            BATCH_SIZE = 50  # Angel API limit: 50 symbols per request
-            RATE_LIMIT_DELAY = 1.0  # Angel rate limit: 1 request per second
+            import concurrent.futures
+            
+            # Limit concurrency to avoid hitting rate limits too hard
+            # Nubra Limit: ~10 requests/sec for standard users
+            MAX_WORKERS = 5
+            
+            results = []
+            
+            def fetch_single_quote(item):
+                symbol = item["symbol"]
+                exchange = item["exchange"]
+                try:
+                    quote_data = self.get_quotes(symbol, exchange)
+                    return {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "data": quote_data
+                    }
+                except Exception as e:
+                    logger.warning(f"Failed to fetch quote for {symbol}: {e}")
+                    return {
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "error": str(e)
+                    }
 
-            # If symbols exceed batch size, process in batches
-            if len(symbols) > BATCH_SIZE:
-                logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
-                all_results = []
-
-                # Split symbols into batches
-                for i in range(0, len(symbols), BATCH_SIZE):
-                    batch = symbols[i : i + BATCH_SIZE]
-                    logger.debug(
-                        f"Processing batch {i // BATCH_SIZE + 1}: symbols {i + 1} to {min(i + BATCH_SIZE, len(symbols))}"
-                    )
-
-                    # Process this batch
-                    batch_results = self._process_quotes_batch(batch)
-                    all_results.extend(batch_results)
-
-                    # Rate limit delay between batches
-                    if i + BATCH_SIZE < len(symbols):
-                        time.sleep(RATE_LIMIT_DELAY)
-
-                logger.info(
-                    f"Successfully processed {len(all_results)} quotes in {(len(symbols) + BATCH_SIZE - 1) // BATCH_SIZE} batches"
-                )
-                return all_results
-            else:
-                # Single batch processing
-                return self._process_quotes_batch(symbols)
+            # Use ThreadPoolExecutor for concurrent requests
+            with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                # Submit all tasks
+                future_to_symbol = {executor.submit(fetch_single_quote, item): item for item in symbols}
+                
+                # Collect results as they complete
+                for future in concurrent.futures.as_completed(future_to_symbol):
+                    try:
+                        result = future.result()
+                        results.append(result)
+                    except Exception as e:
+                        logger.error(f"Generate quote exception: {e}")
+            
+            return results
 
         except Exception as e:
             logger.exception("Error fetching multiquotes")
@@ -213,140 +225,10 @@ class BrokerData:
 
     def _process_quotes_batch(self, symbols: list) -> list:
         """
-        Process a single batch of symbols (internal method)
-        Args:
-            symbols: List of dicts with 'symbol' and 'exchange' keys (max 50)
-        Returns:
-            list: List of quote data for the batch
+        Deprecated: This was an Angel-specific batch method.
+        Redirecting to get_multiquotes for compatibility.
         """
-        # Group symbols by exchange and build token map
-        exchange_tokens = {}  # {exchange: [token1, token2, ...]}
-        token_map = {}  # {exchange:token -> {symbol, exchange, br_symbol}}
-        skipped_symbols = []  # Track symbols that couldn't be resolved
-
-        for item in symbols:
-            symbol = item["symbol"]
-            exchange = item["exchange"]
-
-            try:
-                br_symbol = get_br_symbol(symbol, exchange)
-                token = get_token(symbol, exchange)
-
-                # Track symbols that couldn't be resolved
-                if not token:
-                    logger.warning(
-                        f"Skipping symbol {symbol} on {exchange}: could not resolve token"
-                    )
-                    skipped_symbols.append(
-                        {"symbol": symbol, "exchange": exchange, "error": "Could not resolve token"}
-                    )
-                    continue
-
-                # Normalize exchange for indices
-                api_exchange = exchange
-                if exchange == "NSE_INDEX":
-                    api_exchange = "NSE"
-                elif exchange == "BSE_INDEX":
-                    api_exchange = "BSE"
-                elif exchange == "MCX_INDEX":
-                    api_exchange = "MCX"
-
-                # Add token to exchange group
-                if api_exchange not in exchange_tokens:
-                    exchange_tokens[api_exchange] = []
-                exchange_tokens[api_exchange].append(token)
-
-                # Store mapping for response parsing
-                token_map[f"{api_exchange}:{token}"] = {
-                    "symbol": symbol,
-                    "exchange": exchange,
-                    "br_symbol": br_symbol,
-                    "token": token,
-                }
-
-            except Exception as e:
-                logger.warning(f"Skipping symbol {symbol} on {exchange}: {str(e)}")
-                skipped_symbols.append({"symbol": symbol, "exchange": exchange, "error": str(e)})
-                continue
-
-        # Return skipped symbols if no valid tokens
-        if not exchange_tokens:
-            logger.warning("No valid tokens to fetch quotes for")
-            return skipped_symbols
-
-        # Prepare payload for Angel's quote API
-        payload = {"mode": "FULL", "exchangeTokens": exchange_tokens}
-
-        logger.info(
-            f"Requesting quotes for {sum(len(t) for t in exchange_tokens.values())} instruments across {len(exchange_tokens)} exchanges"
-        )
-        logger.debug(f"Exchange tokens: {exchange_tokens}")
-
-        # Make API call
-        response = get_api_response(
-            "/rest/secure/angelbroking/market/v1/quote/", self.auth_token, "POST", payload
-        )
-
-        if not response.get("status"):
-            error_msg = f"Error from Angel API: {response.get('message', 'Unknown error')}"
-            logger.error(error_msg)
-            raise Exception(error_msg)
-
-        # Parse response and build results
-        results = []
-        fetched_data = response.get("data", {}).get("fetched", [])
-        unfetched_data = response.get("data", {}).get("unfetched", [])
-
-        if unfetched_data:
-            logger.warning(f"Some symbols could not be fetched: {unfetched_data}")
-
-        # Create a lookup by exchange:token for quick access
-        quotes_by_token = {}
-        for quote in fetched_data:
-            exchange = quote.get("exchange")
-            token = quote.get("symbolToken")
-            if exchange and token:
-                quotes_by_token[f"{exchange}:{token}"] = quote
-
-        # Build results from token_map
-        for key, original in token_map.items():
-            quote = quotes_by_token.get(key)
-
-            if not quote:
-                logger.warning(f"No quote data found for {original['symbol']} ({key})")
-                results.append(
-                    {
-                        "symbol": original["symbol"],
-                        "exchange": original["exchange"],
-                        "error": "No quote data available",
-                    }
-                )
-                continue
-
-            # Parse and format quote data
-            depth = quote.get("depth", {})
-            bids = depth.get("buy", [])
-            asks = depth.get("sell", [])
-
-            result_item = {
-                "symbol": original["symbol"],
-                "exchange": original["exchange"],
-                "data": {
-                    "bid": float(bids[0].get("price", 0)) if bids else 0,
-                    "ask": float(asks[0].get("price", 0)) if asks else 0,
-                    "open": float(quote.get("open", 0)),
-                    "high": float(quote.get("high", 0)),
-                    "low": float(quote.get("low", 0)),
-                    "ltp": float(quote.get("ltp", 0)),
-                    "prev_close": float(quote.get("close", 0)),
-                    "volume": int(quote.get("tradeVolume", 0)),
-                    "oi": int(quote.get("opnInterest", 0)),
-                },
-            }
-            results.append(result_item)
-
-        # Include skipped symbols in results
-        return skipped_symbols + results
+        return self.get_multiquotes(symbols)
 
     def get_history(
         self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str
