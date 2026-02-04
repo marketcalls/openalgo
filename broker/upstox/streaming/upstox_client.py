@@ -30,8 +30,12 @@ class UpstoxWebSocketClient:
     HTTP_TIMEOUT = 10
 
     # Health check settings - detect silent stalls
-    HEALTH_CHECK_INTERVAL = 30  # Check every 30 seconds
-    DATA_TIMEOUT = 90  # Consider stalled if no data for 90 seconds
+    HEALTH_CHECK_INTERVAL = 10  # Check every 10 seconds (was 30)
+    DATA_TIMEOUT = 30  # Consider stalled if no data for 30 seconds (was 90)
+
+    # WebSocket heartbeat settings (RFC 6455 ping/pong)
+    WS_PING_INTERVAL = 5  # Send ping every 5 seconds
+    WS_PING_TIMEOUT = 10  # Wait 10 seconds for pong response
 
     def __init__(self, auth_token: str):
         self.auth_token = auth_token
@@ -208,10 +212,13 @@ class UpstoxWebSocketClient:
             return None
 
     async def _establish_connection(self, ws_url: str) -> None:
-        """Establish WebSocket connection using cached SSL context"""
+        """Establish WebSocket connection using cached SSL context with heartbeat"""
         self.logger.info(f"Connecting to WebSocket: {ws_url}")
         self.websocket = await websockets.connect(
-            ws_url, ssl=self._ssl_context, ping_interval=None, ping_timeout=None
+            ws_url,
+            ssl=self._ssl_context,
+            ping_interval=self.WS_PING_INTERVAL,  # Enable RFC 6455 ping/pong
+            ping_timeout=self.WS_PING_TIMEOUT,  # Detect dead connections faster
         )
 
     def _calculate_backoff_delay(self, attempt: int) -> int:

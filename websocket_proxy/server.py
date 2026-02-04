@@ -26,6 +26,160 @@ from .port_check import find_available_port, is_port_in_use
 logger = get_logger("websocket_proxy")
 
 
+class CircuitBreaker:
+    """
+    Circuit breaker pattern implementation for broker connections.
+
+    Prevents excessive retries when a broker connection repeatedly fails.
+    States:
+    - CLOSED: Normal operation, requests pass through
+    - OPEN: Failures exceeded threshold, requests are blocked
+    - HALF_OPEN: Testing if service recovered, allows one request
+
+    Usage:
+        breaker = CircuitBreaker(failure_threshold=5, reset_timeout=30)
+        if breaker.can_proceed():
+            try:
+                result = connect_to_broker()
+                breaker.record_success()
+            except Exception as e:
+                breaker.record_failure()
+    """
+
+    # Circuit breaker states
+    STATE_CLOSED = "closed"
+    STATE_OPEN = "open"
+    STATE_HALF_OPEN = "half_open"
+
+    def __init__(
+        self,
+        failure_threshold: int = 5,
+        reset_timeout: float = 30.0,
+        half_open_max_calls: int = 1,
+    ):
+        """
+        Initialize circuit breaker.
+
+        Args:
+            failure_threshold: Number of failures before opening circuit
+            reset_timeout: Seconds to wait before attempting half-open state
+            half_open_max_calls: Max calls allowed in half-open state
+        """
+        self.failure_threshold = failure_threshold
+        self.reset_timeout = reset_timeout
+        self.half_open_max_calls = half_open_max_calls
+
+        self._state = self.STATE_CLOSED
+        self._failures = 0
+        self._successes = 0
+        self._last_failure_time: float = 0
+        self._half_open_calls = 0
+        self._lock = threading.Lock()
+
+    @property
+    def state(self) -> str:
+        """Get current circuit breaker state."""
+        with self._lock:
+            return self._state
+
+    @property
+    def failures(self) -> int:
+        """Get current failure count."""
+        with self._lock:
+            return self._failures
+
+    def can_proceed(self) -> bool:
+        """
+        Check if a request can proceed.
+
+        Returns:
+            True if request should be allowed, False if circuit is open
+        """
+        with self._lock:
+            if self._state == self.STATE_CLOSED:
+                return True
+
+            if self._state == self.STATE_OPEN:
+                # Check if we should transition to half-open
+                if time.time() - self._last_failure_time >= self.reset_timeout:
+                    logger.info(
+                        f"Circuit breaker transitioning from OPEN to HALF_OPEN "
+                        f"after {self.reset_timeout}s timeout"
+                    )
+                    self._state = self.STATE_HALF_OPEN
+                    self._half_open_calls = 0
+                    return True
+                return False
+
+            if self._state == self.STATE_HALF_OPEN:
+                # Allow limited calls in half-open state
+                if self._half_open_calls < self.half_open_max_calls:
+                    self._half_open_calls += 1
+                    return True
+                return False
+
+            return False
+
+    def record_success(self):
+        """Record a successful request."""
+        with self._lock:
+            if self._state == self.STATE_HALF_OPEN:
+                self._successes += 1
+                # If successful in half-open, close the circuit
+                logger.info("Circuit breaker closing after successful half-open test")
+                self._state = self.STATE_CLOSED
+                self._failures = 0
+                self._successes = 0
+            elif self._state == self.STATE_CLOSED:
+                # Reset failure count on success
+                self._failures = 0
+
+    def record_failure(self):
+        """Record a failed request."""
+        with self._lock:
+            self._failures += 1
+            self._last_failure_time = time.time()
+
+            if self._state == self.STATE_HALF_OPEN:
+                # Failure in half-open state, back to open
+                logger.warning(
+                    f"Circuit breaker reopening after failure in half-open state"
+                )
+                self._state = self.STATE_OPEN
+            elif self._state == self.STATE_CLOSED:
+                if self._failures >= self.failure_threshold:
+                    logger.warning(
+                        f"Circuit breaker opening after {self._failures} consecutive failures"
+                    )
+                    self._state = self.STATE_OPEN
+
+    def reset(self):
+        """Reset the circuit breaker to closed state."""
+        with self._lock:
+            self._state = self.STATE_CLOSED
+            self._failures = 0
+            self._successes = 0
+            self._last_failure_time = 0
+            self._half_open_calls = 0
+
+    def get_status(self) -> dict:
+        """Get circuit breaker status for monitoring."""
+        with self._lock:
+            return {
+                "state": self._state,
+                "failures": self._failures,
+                "failure_threshold": self.failure_threshold,
+                "last_failure_time": self._last_failure_time,
+                "reset_timeout": self.reset_timeout,
+                "time_until_half_open": max(
+                    0,
+                    self.reset_timeout - (time.time() - self._last_failure_time)
+                    if self._state == self.STATE_OPEN
+                    else 0,
+                ),
+            }
+
+
 class WebSocketProxy:
     """
     WebSocket Proxy Server that handles client connections and authentication,
@@ -65,6 +219,20 @@ class WebSocketProxy:
         self.user_broker_mapping = {}  # Maps user_id to broker_name
         self.running = False
 
+        # CIRCUIT BREAKER: Per-broker circuit breakers to prevent excessive retries
+        # Maps broker_name -> CircuitBreaker instance
+        # NOTE: This only affects broker CONNECTION attempts, not data flow
+        self._circuit_breakers: dict[str, CircuitBreaker] = {}
+        self._circuit_breaker_config = {
+            "failure_threshold": 5,  # Open circuit after 5 consecutive failures
+            "reset_timeout": 30.0,   # Wait 30 seconds before half-open
+        }
+
+        # CONNECTION TIMEOUT: Track client activity to detect dead connections
+        self._client_last_activity: dict[int, float] = {}  # client_id -> last activity timestamp
+        self._connection_timeout = 300  # 5 minutes (300 seconds) - close inactive connections
+        self._activity_check_interval = 60  # Check every 60 seconds
+
         # PERFORMANCE OPTIMIZATION: Subscription index for O(1) lookup
         # Maps (symbol, exchange, mode) -> set of client_ids
         # This eliminates the need for nested loops in zmq_listener
@@ -89,6 +257,11 @@ class WebSocketProxy:
         # ZeroMQ context for subscribing to broker adapters
         self.context = zmq.asyncio.Context()
         self.socket = self.context.socket(zmq.SUB)
+
+        # Optimized receiver buffer settings for high-frequency market data
+        self.socket.setsockopt(zmq.RCVHWM, 10000)  # Receive high water mark (match publisher)
+        self.socket.setsockopt(zmq.RCVBUF, 4 * 1024 * 1024)  # 4MB receive buffer
+
         # Connecting to ZMQ
         ZMQ_HOST = os.getenv("ZMQ_HOST", "127.0.0.1")
         ZMQ_PORT = os.getenv("ZMQ_PORT")
@@ -110,6 +283,9 @@ class WebSocketProxy:
 
             # Create the ZMQ listener task
             zmq_task = loop.create_task(self.zmq_listener())
+
+            # Start connection timeout monitor to detect dead clients
+            timeout_monitor_task = loop.create_task(self._connection_timeout_monitor())
 
             # Start WebSocket server
             stop = aio.Future()  # Used to stop the server
@@ -165,10 +341,15 @@ class WebSocketProxy:
 
                 await stop  # Wait until stopped
 
-                # Cancel the monitor task
+                # Cancel the monitor tasks
                 monitor_task.cancel()
+                timeout_monitor_task.cancel()
                 try:
                     await monitor_task
+                except aio.CancelledError:
+                    pass
+                try:
+                    await timeout_monitor_task
                 except aio.CancelledError:
                     pass
 
@@ -341,7 +522,28 @@ class WebSocketProxy:
                 "last_cleanup_time": self._last_cleanup_time,
             },
             "zmq_resources": adapter_stats,
+            "circuit_breakers": {
+                broker: cb.get_status()
+                for broker, cb in self._circuit_breakers.items()
+            },
         }
+
+    def _get_circuit_breaker(self, broker_name: str) -> CircuitBreaker:
+        """
+        Get or create a circuit breaker for a broker.
+
+        Args:
+            broker_name: Name of the broker
+
+        Returns:
+            CircuitBreaker instance for the broker
+        """
+        if broker_name not in self._circuit_breakers:
+            self._circuit_breakers[broker_name] = CircuitBreaker(
+                failure_threshold=self._circuit_breaker_config["failure_threshold"],
+                reset_timeout=self._circuit_breaker_config["reset_timeout"],
+            )
+        return self._circuit_breakers[broker_name]
 
     def _cleanup_stale_throttle_entries(self):
         """
@@ -395,6 +597,9 @@ class WebSocketProxy:
         self.clients[client_id] = websocket
         self.subscriptions[client_id] = set()
 
+        # Track client activity for connection timeout
+        self._client_last_activity[client_id] = time.time()
+
         # Get path info from websocket if available
         path = getattr(websocket, "path", "/unknown")
         logger.info(f"Client connected: {client_id} from path: {path}")
@@ -403,6 +608,8 @@ class WebSocketProxy:
             # Process messages from the client
             async for message in websocket:
                 try:
+                    # Update activity timestamp for connection timeout tracking
+                    self._client_last_activity[client_id] = time.time()
                     # OPTIMIZATION: Remove debug logging from hot path
                     # logger.debug(f"Received message from client {client_id}: {message}")
                     await self.process_client_message(client_id, message)
@@ -431,6 +638,9 @@ class WebSocketProxy:
         # Remove client from tracking
         if client_id in self.clients:
             del self.clients[client_id]
+
+        # Remove activity tracking
+        self._client_last_activity.pop(client_id, None)
 
         # Clean up subscriptions
         if client_id in self.subscriptions:
@@ -509,6 +719,58 @@ class WebSocketProxy:
                         del self.user_broker_mapping[user_id]
 
             del self.user_mapping[client_id]
+
+    async def _connection_timeout_monitor(self):
+        """
+        Monitor for inactive client connections and close them.
+
+        This prevents resource leaks from clients that disconnect without proper cleanup
+        (e.g., network failures, crashed applications).
+        """
+        logger.debug(f"Connection timeout monitor started (timeout={self._connection_timeout}s)")
+
+        while self.running:
+            try:
+                await aio.sleep(self._activity_check_interval)
+
+                if not self.running:
+                    break
+
+                current_time = time.time()
+                clients_to_close = []
+
+                # Find inactive clients
+                for client_id, last_activity in list(self._client_last_activity.items()):
+                    inactive_time = current_time - last_activity
+                    if inactive_time > self._connection_timeout:
+                        clients_to_close.append((client_id, inactive_time))
+
+                # Close inactive connections
+                for client_id, inactive_time in clients_to_close:
+                    if client_id in self.clients:
+                        websocket = self.clients[client_id]
+                        logger.warning(
+                            f"Closing inactive client {client_id} "
+                            f"(no activity for {inactive_time:.1f}s, timeout={self._connection_timeout}s)"
+                        )
+                        try:
+                            # Send a close message before disconnecting
+                            await websocket.close(1000, "Connection timeout due to inactivity")
+                        except Exception as e:
+                            logger.debug(f"Error closing inactive client {client_id}: {e}")
+
+                        # Cleanup will be handled by handle_client's finally block
+
+                if clients_to_close:
+                    logger.info(f"Closed {len(clients_to_close)} inactive client connection(s)")
+
+            except aio.CancelledError:
+                logger.debug("Connection timeout monitor cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Error in connection timeout monitor: {e}")
+
+        logger.debug("Connection timeout monitor stopped")
 
     async def process_client_message(self, client_id, message):
         """
@@ -661,6 +923,22 @@ class WebSocketProxy:
         # Store the broker mapping for this user
         self.user_broker_mapping[user_id] = broker_name
 
+        # CIRCUIT BREAKER: Check if broker connections are allowed
+        circuit_breaker = self._get_circuit_breaker(broker_name)
+        if not circuit_breaker.can_proceed():
+            cb_status = circuit_breaker.get_status()
+            wait_time = cb_status.get("time_until_half_open", 0)
+            await self.send_error(
+                client_id,
+                "BROKER_CIRCUIT_OPEN",
+                f"Broker {broker_name} connections temporarily blocked due to repeated failures. "
+                f"Retry in {wait_time:.0f} seconds.",
+            )
+            logger.warning(
+                f"Circuit breaker OPEN for {broker_name}, rejecting connection for user {user_id}"
+            )
+            return
+
         # Create or reuse broker adapter
         if user_id not in self.broker_adapters:
             try:
@@ -758,16 +1036,23 @@ class WebSocketProxy:
                         if connect_is_error:
                             error_msg = connect_result.get("message", connect_result.get("error", "Failed to connect after retry"))
                             logger.error(f"Retry connection also failed for user {user_id}: {error_msg}")
+                            # CIRCUIT BREAKER: Record failure
+                            circuit_breaker.record_failure()
                             await self.send_error(client_id, "BROKER_CONNECTION_ERROR", error_msg)
                             return
 
                         logger.info(f"Retry successful for user {user_id}")
                     else:
+                        # CIRCUIT BREAKER: Record failure
+                        circuit_breaker.record_failure()
                         await self.send_error(client_id, "BROKER_CONNECTION_ERROR", error_msg)
                         return
 
                 # Store the adapter
                 self.broker_adapters[user_id] = adapter
+
+                # CIRCUIT BREAKER: Record success
+                circuit_breaker.record_success()
 
                 logger.info(
                     f"Successfully created and connected {broker_name} adapter for user {user_id}"
@@ -806,26 +1091,38 @@ class WebSocketProxy:
                                 )
                                 if not connect_is_error:
                                     self.broker_adapters[user_id] = adapter
+                                    # CIRCUIT BREAKER: Record success after retry
+                                    circuit_breaker.record_success()
                                     logger.info(f"Successfully connected {broker_name} adapter for user {user_id} after retry")
                                     # Fall through to success response
                                 else:
                                     error_msg = connect_result.get("message", connect_result.get("error", "Failed to connect after retry"))
+                                    # CIRCUIT BREAKER: Record failure
+                                    circuit_breaker.record_failure()
                                     await self.send_error(client_id, "BROKER_CONNECTION_ERROR", error_msg)
                                     return
                             else:
                                 error_msg = initialization_result.get("message", initialization_result.get("error", "Failed to initialize after retry"))
+                                # CIRCUIT BREAKER: Record failure
+                                circuit_breaker.record_failure()
                                 await self.send_error(client_id, "BROKER_INIT_ERROR", error_msg)
                                 return
                         else:
+                            # CIRCUIT BREAKER: Record failure
+                            circuit_breaker.record_failure()
                             await self.send_error(client_id, "BROKER_ERROR", f"Failed to create adapter for {broker_name}")
                             return
                     except Exception as retry_error:
                         logger.exception(f"Retry also failed for {broker_name}: {retry_error}")
+                        # CIRCUIT BREAKER: Record failure
+                        circuit_breaker.record_failure()
                         await self.send_error(client_id, "BROKER_ERROR", str(retry_error))
                         return
                 else:
                     import traceback
                     logger.exception(traceback.format_exc())
+                    # CIRCUIT BREAKER: Record failure
+                    circuit_breaker.record_failure()
                     await self.send_error(client_id, "BROKER_ERROR", error_str)
                     return
 
@@ -1253,6 +1550,24 @@ class WebSocketProxy:
             except websockets.exceptions.ConnectionClosed:
                 logger.info(f"Connection closed while sending message to client {client_id}")
 
+    async def _send_raw_bytes(self, client_id: int, message_bytes: bytes):
+        """
+        Send pre-serialized message bytes directly to client.
+
+        PERFORMANCE: Avoids repeated JSON serialization when sending same message
+        to multiple clients. Used by zmq_listener for broadcast optimization.
+
+        Args:
+            client_id: ID of the client
+            message_bytes: Pre-serialized JSON bytes
+        """
+        if client_id in self.clients:
+            websocket = self.clients[client_id]
+            try:
+                await websocket.send(message_bytes)
+            except websockets.exceptions.ConnectionClosed:
+                logger.info(f"Connection closed while sending to client {client_id}")
+
     async def send_error(self, client_id, code, message):
         """
         Send an error message to a client
@@ -1565,9 +1880,9 @@ class WebSocketProxy:
                     "data": market_data,
                 }
 
-                # OPTIMIZATION 5: Pre-serialize JSON once (not per-client)
-                # Most clients get the same message, so serialize once
-                base_message_str = None
+                # OPTIMIZATION 5: Cache messages by broker to avoid dict.copy() and
+                # JSON serialization per client. Most clients get the same broker.
+                messages_by_broker: dict[str, bytes] = {}
 
                 for client_id in client_ids:
                     # Verify client still exists
@@ -1584,12 +1899,17 @@ class WebSocketProxy:
                     if broker_name != "unknown" and client_broker and client_broker != broker_name:
                         continue
 
-                    # Add broker to message
-                    message = base_message.copy()
-                    message["broker"] = broker_name if broker_name != "unknown" else client_broker
+                    # Determine effective broker for this client
+                    effective_broker = broker_name if broker_name != "unknown" else (client_broker or "unknown")
 
-                    # Add to batch
-                    send_tasks.append(self.send_message(client_id, message))
+                    # Get or create cached serialized message for this broker
+                    if effective_broker not in messages_by_broker:
+                        msg = base_message.copy()
+                        msg["broker"] = effective_broker
+                        messages_by_broker[effective_broker] = json.dumps(msg).encode("utf-8")
+
+                    # Add to batch using pre-serialized bytes
+                    send_tasks.append(self._send_raw_bytes(client_id, messages_by_broker[effective_broker]))
 
                 # Send all messages in parallel (non-blocking)
                 if send_tasks:

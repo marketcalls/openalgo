@@ -181,12 +181,18 @@ class BaseBrokerWebSocketAdapter(ABC):
 
     def _create_socket(self):
         """
-        Create and configure ZeroMQ socket
+        Create and configure ZeroMQ socket with optimized buffer settings.
+
+        Socket options:
+        - LINGER=0: Don't wait for pending messages on close (faster shutdown)
+        - SNDHWM=10000: Send high water mark - buffer 10x more messages for 3000+ symbols
+        - SNDBUF=4MB: Larger send buffer to handle market open bursts
         """
         with self._context_lock:
             socket = self.context.socket(zmq.PUB)
-            socket.setsockopt(zmq.LINGER, 1000)  # 1 second linger
-            socket.setsockopt(zmq.SNDHWM, 1000)  # High water mark
+            socket.setsockopt(zmq.LINGER, 0)  # Faster shutdown (was 1000ms)
+            socket.setsockopt(zmq.SNDHWM, 10000)  # 10x capacity for high-frequency data
+            socket.setsockopt(zmq.SNDBUF, 4 * 1024 * 1024)  # 4MB send buffer
             return socket
 
     def _bind_to_available_port(self):

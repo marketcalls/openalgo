@@ -3,8 +3,82 @@ import asyncio
 import json
 import logging
 import threading
+import time
+from collections import OrderedDict
 from datetime import datetime
 from typing import Any, Dict, Optional
+
+
+class LRUCache:
+    """
+    Simple thread-safe LRU (Least Recently Used) cache implementation.
+
+    Used for caching symbol lookups to avoid repeated database queries
+    while preventing unbounded memory growth.
+    """
+
+    def __init__(self, maxsize: int = 5000):
+        """
+        Initialize LRU cache.
+
+        Args:
+            maxsize: Maximum number of items to cache
+        """
+        self._cache: OrderedDict = OrderedDict()
+        self._maxsize = maxsize
+        self._lock = threading.Lock()
+
+    def get(self, key):
+        """
+        Get item from cache, moving it to end (most recently used).
+
+        Args:
+            key: Cache key
+
+        Returns:
+            Cached value or None if not found
+        """
+        with self._lock:
+            if key in self._cache:
+                # Move to end (most recently used)
+                self._cache.move_to_end(key)
+                return self._cache[key]
+            return None
+
+    def put(self, key, value):
+        """
+        Put item in cache, evicting LRU item if full.
+
+        Args:
+            key: Cache key
+            value: Value to cache
+        """
+        with self._lock:
+            if key in self._cache:
+                # Update existing and move to end
+                self._cache.move_to_end(key)
+                self._cache[key] = value
+            else:
+                # Add new item
+                self._cache[key] = value
+                # Evict LRU if over capacity
+                while len(self._cache) > self._maxsize:
+                    self._cache.popitem(last=False)
+
+    def clear(self):
+        """Clear all cached items."""
+        with self._lock:
+            self._cache.clear()
+
+    def __contains__(self, key):
+        """Check if key exists in cache."""
+        with self._lock:
+            return key in self._cache
+
+    def __len__(self):
+        """Return number of cached items."""
+        with self._lock:
+            return len(self._cache)
 
 from database.auth_db import get_auth_token
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
@@ -40,7 +114,29 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.connected = False
         self.running = False
         self.lock = threading.Lock()  # Threading lock for subscription management
+        self._reconnect_lock = threading.Lock()  # Separate lock for reconnection flag
         self._reconnecting = False  # Prevent concurrent reconnection attempts
+
+        # PERFORMANCE: LRU cache for instrument key lookups to avoid repeated SymbolMapper lookups
+        # Maxsize 5000 prevents unbounded memory growth while caching most symbols
+        self._instrument_key_cache = LRUCache(maxsize=5000)
+
+        # PERFORMANCE: Adapter-level throttling (50ms minimum between publishes)
+        self._last_publish_time: dict[str, float] = {}  # correlation_id -> timestamp
+        self._throttle_interval = 0.05  # 50ms minimum between publishes per symbol
+
+        # STALENESS DETECTION: Track last data received time per symbol
+        self._last_data_time: dict[str, float] = {}  # correlation_id -> last data timestamp
+        self._staleness_threshold = 60.0  # Seconds without data before considering stale
+        self._staleness_check_interval = 10.0  # Check every 10 seconds
+        self._staleness_monitor_thread: threading.Thread | None = None
+        self._notified_stale: set[str] = set()  # Track which symbols we've notified as stale
+
+        # PERFORMANCE: Feed key index for O(1) subscription lookup (replaces O(n) loop)
+        # Maps instrument_key -> set of correlation_ids
+        self._feed_key_index: dict[str, set[str]] = {}
+        # Maps token -> set of correlation_ids (fallback for token-based matching)
+        self._token_index: dict[str, set[str]] = {}
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, Any] | None = None
@@ -82,6 +178,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if success:
                 self.connected = True
                 self.running = True
+                self._start_staleness_monitor()  # Start monitoring for stale data
                 self.logger.info("Connected to Upstox WebSocket")
                 return self._create_success_response("Connected to Upstox WebSocket")
             else:
@@ -116,14 +213,14 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "NOT_INITIALIZED", "WebSocket client not initialized"
             )
 
-        # Get token info
-        token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
-        if not token_info:
+        # Get token info (with caching for performance)
+        cached = self._get_cached_token_info(symbol, exchange)
+        if not cached:
             return self._create_error_response(
                 "SYMBOL_NOT_FOUND", f"Symbol {symbol} not found for exchange {exchange}"
             )
 
-        instrument_key = self._create_instrument_key(token_info)
+        token_info, instrument_key = cached
 
         # Generate unique correlation ID like Angel does
         correlation_id = f"{symbol}_{exchange}_{mode}"
@@ -148,6 +245,15 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Store subscription before sending request (Angel pattern)
         with self.lock:
             self.subscriptions[correlation_id] = subscription_info
+            # PERFORMANCE: Update feed key index for O(1) lookup
+            if instrument_key not in self._feed_key_index:
+                self._feed_key_index[instrument_key] = set()
+            self._feed_key_index[instrument_key].add(correlation_id)
+            # Also index by token for fallback matching
+            token = token_info["token"]
+            if token not in self._token_index:
+                self._token_index[token] = set()
+            self._token_index[token].add(correlation_id)
             self.logger.info(f"Stored subscription: {correlation_id} -> {subscription_info}")
 
         # Subscribe if connected (Angel pattern)
@@ -168,6 +274,8 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     # Clean up on failure
                     with self.lock:
                         self.subscriptions.pop(correlation_id, None)
+                        # Clean up indexes
+                        self._remove_from_indexes(correlation_id, instrument_key, token_info["token"])
                     return self._create_error_response(
                         "SUBSCRIBE_FAILED", f"Failed to subscribe to {symbol} on {exchange}"
                     )
@@ -177,6 +285,8 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Clean up on error
                 with self.lock:
                     self.subscriptions.pop(correlation_id, None)
+                    # Clean up indexes
+                    self._remove_from_indexes(correlation_id, instrument_key, token_info["token"])
                 return self._create_error_response("SUBSCRIPTION_ERROR", str(e))
 
         # Return success response (subscription will be processed when connected)
@@ -223,6 +333,8 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if future.result(timeout=5):
                 with self.lock:
                     self.subscriptions.pop(correlation_id, None)
+                    # Clean up indexes
+                    self._remove_from_indexes(correlation_id, instrument_key, token_info["token"])
                 self.logger.info(f"Unsubscribed from {symbol} on {exchange}")
                 return self._create_success_response(f"Unsubscribed from {symbol} on {exchange}")
             else:
@@ -241,6 +353,9 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.connected = False
             self._reconnecting = False
 
+            # Stop staleness monitor first
+            self._stop_staleness_monitor()
+
             if self.ws_client and self.event_loop:
                 try:
                     future = asyncio.run_coroutine_threadsafe(
@@ -252,9 +367,16 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             self._stop_event_loop()
 
-            # Clear subscriptions
+            # Clear subscriptions and performance caches
             with self.lock:
                 self.subscriptions.clear()
+                self._instrument_key_cache.clear()
+                self._last_publish_time.clear()
+                self._last_data_time.clear()
+                self._notified_stale.clear()
+                # Clear feed key indexes
+                self._feed_key_index.clear()
+                self._token_index.clear()
 
             self.cleanup_zmq()
             self.logger.info("Disconnected from Upstox WebSocket")
@@ -272,6 +394,9 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         This method should be called before discarding the adapter instance.
         """
         try:
+            # Stop staleness monitor first
+            self._stop_staleness_monitor()
+
             # Disconnect WebSocket if connected
             if self.ws_client:
                 try:
@@ -288,12 +413,19 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Stop event loop
             self._stop_event_loop()
 
-            # Reset adapter state
+            # Reset adapter state and clear caches
             with self.lock:
                 self.running = False
                 self.connected = False
                 self._reconnecting = False
                 self.subscriptions.clear()
+                self._instrument_key_cache.clear()
+                self._last_publish_time.clear()
+                self._last_data_time.clear()
+                self._notified_stale.clear()
+                # Clear feed key indexes
+                self._feed_key_index.clear()
+                self._token_index.clear()
 
             # Clean up ZMQ resources
             self.cleanup_zmq()
@@ -378,6 +510,244 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             token = token.split("|")[-1]
 
         return f"{brexchange}|{token}"
+
+    def _get_cached_token_info(self, symbol: str, exchange: str) -> tuple[dict, str] | None:
+        """
+        Get token info and instrument key with LRU caching.
+
+        PERFORMANCE: Avoids repeated SymbolMapper database lookups for the same symbol.
+        Uses LRU cache (maxsize=5000) to prevent unbounded memory growth.
+        Cache is cleared on disconnect.
+
+        Args:
+            symbol: Trading symbol (e.g., 'RELIANCE')
+            exchange: Exchange code (e.g., 'NSE')
+
+        Returns:
+            Tuple of (token_info dict, instrument_key string) or None if not found
+        """
+        cache_key = (symbol, exchange)
+
+        # Fast path: check LRU cache first
+        cached_result = self._instrument_key_cache.get(cache_key)
+        if cached_result is not None:
+            return cached_result
+
+        # Slow path: lookup and cache
+        token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
+        if not token_info:
+            return None
+
+        instrument_key = self._create_instrument_key(token_info)
+        result = (token_info, instrument_key)
+        self._instrument_key_cache.put(cache_key, result)
+        return result
+
+    def _remove_from_indexes(self, correlation_id: str, instrument_key: str, token: str):
+        """
+        Remove a subscription from the feed key indexes.
+
+        MUST be called with self.lock held.
+
+        Args:
+            correlation_id: The subscription correlation ID
+            instrument_key: The instrument key to remove from index
+            token: The token to remove from index
+        """
+        # Remove from feed key index
+        if instrument_key in self._feed_key_index:
+            self._feed_key_index[instrument_key].discard(correlation_id)
+            if not self._feed_key_index[instrument_key]:
+                del self._feed_key_index[instrument_key]
+
+        # Remove from token index
+        if token in self._token_index:
+            self._token_index[token].discard(correlation_id)
+            if not self._token_index[token]:
+                del self._token_index[token]
+
+    def _should_throttle(self, correlation_id: str, mode: int) -> bool:
+        """
+        Check if we should throttle this publish (LTP mode only).
+
+        PERFORMANCE: Reduces ZMQ traffic by skipping rapid-fire updates
+        for the same symbol within the throttle interval.
+
+        Args:
+            correlation_id: Unique subscription identifier
+            mode: Subscription mode (1=LTP, 2=Quote, 3=Depth)
+
+        Returns:
+            True if should skip this publish, False otherwise
+        """
+        current_time = time.time()
+
+        # Always update data received time (for staleness tracking)
+        self._last_data_time[correlation_id] = current_time
+
+        # Clear stale notification since we received data
+        self._notified_stale.discard(correlation_id)
+
+        # Only throttle LTP mode
+        if mode != 1:
+            return False
+
+        last_time = self._last_publish_time.get(correlation_id, 0)
+
+        if current_time - last_time < self._throttle_interval:
+            return True
+
+        self._last_publish_time[correlation_id] = current_time
+        return False
+
+    def _start_staleness_monitor(self):
+        """Start the staleness monitoring thread"""
+        if self._staleness_monitor_thread and self._staleness_monitor_thread.is_alive():
+            return  # Already running
+
+        self._staleness_monitor_thread = threading.Thread(
+            target=self._staleness_monitor_loop,
+            daemon=True,
+            name="upstox_staleness_monitor"
+        )
+        self._staleness_monitor_thread.start()
+        self.logger.info("Staleness monitor started")
+
+    def _stop_staleness_monitor(self):
+        """Stop the staleness monitoring thread"""
+        # Thread will exit when self.running becomes False
+        if self._staleness_monitor_thread:
+            self._staleness_monitor_thread.join(timeout=2.0)
+            self._staleness_monitor_thread = None
+
+    def _staleness_monitor_loop(self):
+        """Monitor for stale data and notify clients / trigger reconnection"""
+        while self.running:
+            try:
+                time.sleep(self._staleness_check_interval)
+
+                if not self.running or not self.connected:
+                    continue
+
+                current_time = time.time()
+                stale_symbols = []
+
+                with self.lock:
+                    for correlation_id, sub_info in self.subscriptions.items():
+                        last_data = self._last_data_time.get(correlation_id)
+
+                        # Skip if we haven't received any data yet (just subscribed)
+                        if last_data is None:
+                            continue
+
+                        elapsed = current_time - last_data
+
+                        if elapsed > self._staleness_threshold:
+                            # Only notify once per stale period
+                            if correlation_id not in self._notified_stale:
+                                stale_symbols.append({
+                                    "correlation_id": correlation_id,
+                                    "symbol": sub_info["symbol"],
+                                    "exchange": sub_info["exchange"],
+                                    "mode": sub_info["mode"],
+                                    "elapsed": elapsed
+                                })
+                                self._notified_stale.add(correlation_id)
+
+                # Notify clients about stale data (outside lock)
+                for stale_info in stale_symbols:
+                    self._publish_stale_data_warning(stale_info)
+
+                # If multiple symbols are stale, likely a connection issue - trigger reconnect
+                if len(stale_symbols) >= 3 and not self._reconnecting:
+                    self.logger.warning(
+                        f"Multiple symbols ({len(stale_symbols)}) have stale data. "
+                        "Triggering reconnection..."
+                    )
+                    self._trigger_reconnection()
+
+            except Exception as e:
+                self.logger.error(f"Error in staleness monitor: {e}")
+
+    def _publish_stale_data_warning(self, stale_info: dict):
+        """Publish a warning message about stale data to clients"""
+        symbol = stale_info["symbol"]
+        exchange = stale_info["exchange"]
+        mode = stale_info["mode"]
+        elapsed = stale_info["elapsed"]
+
+        warning_data = {
+            "type": "data_warning",
+            "warning": "STALE_DATA",
+            "symbol": symbol,
+            "exchange": exchange,
+            "message": f"No data received for {elapsed:.1f} seconds. Connection may be interrupted.",
+            "last_update_seconds_ago": elapsed,
+            "timestamp": int(time.time() * 1000)
+        }
+
+        # Create topic for this symbol
+        mode_map = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}
+        mode_str = mode_map.get(mode, "QUOTE")
+        topic = f"{exchange}_{symbol}_{mode_str}"
+
+        self.logger.warning(
+            f"STALE DATA: {symbol}.{exchange} - no update for {elapsed:.1f}s"
+        )
+
+        # Publish warning via ZMQ so proxy can forward to clients
+        self.publish_market_data(topic, warning_data)
+
+    def _trigger_reconnection(self):
+        """Trigger a WebSocket reconnection (thread-safe)"""
+        # Use lock to prevent race condition between check and set
+        with self._reconnect_lock:
+            if self._reconnecting:
+                return
+            self._reconnecting = True
+
+        self.logger.info("Triggering WebSocket reconnection due to stale data...")
+
+        try:
+            # Disconnect and reconnect via the event loop
+            if self.ws_client and self.event_loop and self.event_loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    self._async_reconnect(),
+                    self.event_loop
+                )
+        except Exception as e:
+            self.logger.error(f"Error triggering reconnection: {e}")
+            with self._reconnect_lock:
+                self._reconnecting = False
+
+    async def _async_reconnect(self):
+        """Async reconnection handler"""
+        try:
+            self.logger.info("Disconnecting WebSocket for reconnection...")
+            if self.ws_client:
+                await self.ws_client.disconnect()
+
+            # Wait a moment before reconnecting
+            await asyncio.sleep(2.0)
+
+            self.logger.info("Reconnecting WebSocket...")
+            if self.ws_client:
+                success = await self.ws_client.connect()
+                if success:
+                    self.connected = True
+                    self.logger.info("Reconnection successful")
+
+                    # Clear stale tracking
+                    self._notified_stale.clear()
+                    self._last_data_time.clear()
+                else:
+                    self.logger.error("Reconnection failed")
+                    self.connected = False
+        except Exception as e:
+            self.logger.error(f"Reconnection error: {e}")
+        finally:
+            with self._reconnect_lock:
+                self._reconnecting = False
 
     def _get_upstox_mode(self, mode: int, depth_level: int) -> str:
         """Convert internal mode to Upstox mode string"""
@@ -523,25 +893,29 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.logger.debug(f"Market status update: {self.market_status['segmentStatus']}")
 
     def _process_feed(self, feed_key: str, feed_data: dict[str, Any], current_ts: int):
-        """Process individual feed data"""
+        """Process individual feed data using O(1) index lookup"""
         try:
-            # Find all subscriptions that match this feed key (could be multiple modes)
+            # PERFORMANCE: O(1) lookup using feed key index (replaces O(n) loop)
             matching_subscriptions = []
             with self.lock:
                 self.logger.debug(f"Looking for matches for feed_key: {feed_key}")
-                self.logger.debug(f"Available subscriptions: {list(self.subscriptions.keys())}")
 
-                for correlation_id, sub_info in self.subscriptions.items():
-                    # Check instrument_key match
-                    if sub_info.get("instrument_key") == feed_key:
+                # First try direct instrument_key match (O(1))
+                correlation_ids = self._feed_key_index.get(feed_key, set())
+
+                # Fallback: try token-based match if no direct match
+                if not correlation_ids and "|" in feed_key:
+                    token = feed_key.split("|")[-1]
+                    correlation_ids = self._token_index.get(token, set())
+                    # Also try full feed_key as token
+                    if not correlation_ids:
+                        correlation_ids = self._token_index.get(feed_key, set())
+
+                # Build matching subscriptions list from correlation IDs
+                for correlation_id in correlation_ids:
+                    sub_info = self.subscriptions.get(correlation_id)
+                    if sub_info:
                         matching_subscriptions.append((correlation_id, sub_info))
-                        self.logger.debug(f"Matched by instrument_key: {correlation_id}")
-                    # Check token match as fallback
-                    elif "|" in feed_key:
-                        token = feed_key.split("|")[-1]
-                        if sub_info.get("token") == token or sub_info.get("token") == feed_key:
-                            matching_subscriptions.append((correlation_id, sub_info))
-                            self.logger.debug(f"Matched by token: {correlation_id}")
 
                 self.logger.debug(
                     f"Found {len(matching_subscriptions)} matching subscriptions for {feed_key}"
@@ -557,6 +931,10 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 exchange = sub_info["exchange"]
                 mode = sub_info["mode"]
                 token = sub_info["token"]
+
+                # PERFORMANCE: Throttling check - skip rapid-fire updates
+                if self._should_throttle(correlation_id, mode):
+                    continue
 
                 topic = self._create_topic(exchange, symbol, mode)
                 market_data = self._extract_market_data(feed_data, sub_info, current_ts)
