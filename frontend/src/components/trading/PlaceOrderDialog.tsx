@@ -78,9 +78,11 @@ function adjustPrice(price: number, tickSize: number, direction: 'up' | 'down'):
   return Math.max(0, Number((rounded - tickSize).toFixed(2)))
 }
 
-// Check if exchange is F&O
+// Check if exchange is F&O/Commodity/Currency (uses NRML/MIS)
+// NSE, BSE = Equity → CNC/MIS
+// NFO, BFO, CDS, BCD, MCX, NCDEX = F&O/Currency/Commodity → NRML/MIS
 function isFnOExchange(exchange: string): boolean {
-  return ['NFO', 'BFO', 'MCX', 'CDS', 'BCD'].includes(exchange)
+  return ['NFO', 'BFO', 'MCX', 'CDS', 'BCD', 'NCDEX'].includes(exchange)
 }
 
 export function PlaceOrderDialog({
@@ -254,7 +256,7 @@ export function PlaceOrderDialog({
       // Note: orderid is at root level, not in data field
       const orderid = (response as unknown as { orderid?: string }).orderid
       if (response.status === 'success' && orderid) {
-        showToast.success(`Order placed: ${orderid}`, 'orders')
+        // Toast is shown by useSocket when WebSocket receives order update
         onSuccess?.(orderid)
         onOpenChange(false)
       } else {
@@ -319,7 +321,6 @@ export function PlaceOrderDialog({
         <div className="space-y-4 py-2">
           {/* Quote Header - merged WebSocket + REST data */}
           <QuoteHeader
-            symbol={symbol}
             exchange={exchange}
             ltp={mergedData.ltp}
             prevClose={mergedData.close}
