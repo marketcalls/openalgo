@@ -190,6 +190,12 @@ export default function Playground() {
     }
   };
 
+  // Dynamic logo based on light/dark mode and app mode
+  const logoSrc =
+    mode === 'dark' || appMode === 'analyzer'
+      ? '/darkMode.png'
+      : '/whiteMode.jpeg'
+
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
   const [endpoints, setEndpoints] = useState<EndpointsByCategory>({});
@@ -616,15 +622,15 @@ export default function Playground() {
             className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent"
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
           >
-            <Menu className="h-4 w-4" />
+            <Menu className="h-8 w-20" />
           </Button>
           <div className="flex items-center gap-2 px-2">
             <img
-              src="/images/android-chrome-192x192.png"
-              alt="OpenAlgo"
+              src={logoSrc}
+              alt="Zenxo"
               className="w-6 h-6"
             />
-            <span className="font-semibold text-sm">openalgo</span>
+            {/* <span className="font-semibold text-sm">openalgo</span> */}
           </div>
         </div>
 
@@ -1216,9 +1222,9 @@ export default function Playground() {
             /* Empty State */
             <div className="flex-1 flex flex-col items-center justify-center text-center bg-background">
               <img
-                src="/images/android-chrome-192x192.png"
-                alt="OpenAlgo"
-                className="w-16 h-16 mb-4"
+                src={logoSrc}
+                alt="Zenxo"
+                className="w-16 h-35 mb-4"
               />
               <h2 className="text-lg font-semibold text-foreground/80 mb-2">
                 API Playground [WS-TEST]
