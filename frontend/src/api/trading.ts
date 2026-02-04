@@ -135,7 +135,7 @@ export const tradingApi = {
    * Place order
    */
   placeOrder: async (order: PlaceOrderRequest): Promise<ApiResponse<{ orderid: string }>> => {
-    const response = await apiClient.post<ApiResponse<{ orderid: string }>>('/place_order', order)
+    const response = await apiClient.post<ApiResponse<{ orderid: string }>>('/placeorder', order)
     return response.data
   },
 
