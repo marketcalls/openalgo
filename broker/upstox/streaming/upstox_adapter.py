@@ -116,6 +116,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.lock = threading.Lock()  # Threading lock for subscription management
         self._reconnect_lock = threading.Lock()  # Separate lock for reconnection flag
         self._reconnecting = False  # Prevent concurrent reconnection attempts
+        self._intentional_disconnect = False  # Flag to prevent double-reconnect race
 
         # PERFORMANCE: LRU cache for instrument key lookups to avoid repeated SymbolMapper lookups
         # Maxsize 5000 prevents unbounded memory growth while caching most symbols
@@ -352,6 +353,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.running = False
             self.connected = False
             self._reconnecting = False
+            self._intentional_disconnect = False
 
             # Stop staleness monitor first
             self._stop_staleness_monitor()
@@ -418,6 +420,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.running = False
                 self.connected = False
                 self._reconnecting = False
+                self._intentional_disconnect = False
                 self.subscriptions.clear()
                 self._instrument_key_cache.clear()
                 self._last_publish_time.clear()
@@ -723,6 +726,10 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
     async def _async_reconnect(self):
         """Async reconnection handler"""
         try:
+            # Set flag to prevent _on_close from triggering _attempt_reconnect
+            # This avoids double-reconnect race condition
+            self._intentional_disconnect = True
+
             self.logger.info("Disconnecting WebSocket for reconnection...")
             if self.ws_client:
                 await self.ws_client.disconnect()
@@ -746,6 +753,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception as e:
             self.logger.error(f"Reconnection error: {e}")
         finally:
+            self._intentional_disconnect = False
             with self._reconnect_lock:
                 self._reconnecting = False
 
@@ -827,7 +835,8 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.error(f"WebSocket error: {error}")
         self.connected = False
 
-        if self.running:
+        # Only auto-reconnect if running and not an intentional disconnect
+        if self.running and not self._intentional_disconnect:
             await self._attempt_reconnect()
 
     async def _on_close(self):
@@ -835,7 +844,10 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.logger.info("WebSocket connection closed")
         self.connected = False
 
-        if self.running:
+        # Only auto-reconnect if running and not an intentional disconnect
+        # The _intentional_disconnect flag prevents double-reconnect when
+        # _async_reconnect() triggers disconnect-then-reconnect cycle
+        if self.running and not self._intentional_disconnect:
             await self._attempt_reconnect()
 
     async def _attempt_reconnect(self):

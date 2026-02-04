@@ -523,27 +523,32 @@ class WebSocketProxy:
             },
             "zmq_resources": adapter_stats,
             "circuit_breakers": {
-                broker: cb.get_status()
-                for broker, cb in self._circuit_breakers.items()
+                f"{key[0]}:{key[1]}": cb.get_status()
+                for key, cb in self._circuit_breakers.items()
             },
         }
 
-    def _get_circuit_breaker(self, broker_name: str) -> CircuitBreaker:
+    def _get_circuit_breaker(self, broker_name: str, user_id: str) -> CircuitBreaker:
         """
-        Get or create a circuit breaker for a broker.
+        Get or create a circuit breaker for a specific broker-user combination.
+
+        Circuit breakers are keyed by (broker_name, user_id) to prevent one user's
+        failures from blocking all users of the same broker.
 
         Args:
             broker_name: Name of the broker
+            user_id: User identifier
 
         Returns:
-            CircuitBreaker instance for the broker
+            CircuitBreaker instance for the broker-user combination
         """
-        if broker_name not in self._circuit_breakers:
-            self._circuit_breakers[broker_name] = CircuitBreaker(
+        key = (broker_name, user_id)
+        if key not in self._circuit_breakers:
+            self._circuit_breakers[key] = CircuitBreaker(
                 failure_threshold=self._circuit_breaker_config["failure_threshold"],
                 reset_timeout=self._circuit_breaker_config["reset_timeout"],
             )
-        return self._circuit_breakers[broker_name]
+        return self._circuit_breakers[key]
 
     def _cleanup_stale_throttle_entries(self):
         """
@@ -923,8 +928,8 @@ class WebSocketProxy:
         # Store the broker mapping for this user
         self.user_broker_mapping[user_id] = broker_name
 
-        # CIRCUIT BREAKER: Check if broker connections are allowed
-        circuit_breaker = self._get_circuit_breaker(broker_name)
+        # CIRCUIT BREAKER: Check if broker connections are allowed (per user)
+        circuit_breaker = self._get_circuit_breaker(broker_name, user_id)
         if not circuit_breaker.can_proceed():
             cb_status = circuit_breaker.get_status()
             wait_time = cb_status.get("time_until_half_open", 0)
@@ -1552,19 +1557,24 @@ class WebSocketProxy:
 
     async def _send_raw_bytes(self, client_id: int, message_bytes: bytes):
         """
-        Send pre-serialized message bytes directly to client.
+        Send pre-serialized message bytes directly to client as text frame.
 
         PERFORMANCE: Avoids repeated JSON serialization when sending same message
         to multiple clients. Used by zmq_listener for broadcast optimization.
 
+        NOTE: We decode to string before sending to ensure WebSocket sends a text
+        frame (opcode 0x01) rather than a binary frame (opcode 0x02). JSON data
+        should always be sent as text frames per WebSocket conventions.
+
         Args:
             client_id: ID of the client
-            message_bytes: Pre-serialized JSON bytes
+            message_bytes: Pre-serialized JSON bytes (UTF-8 encoded)
         """
         if client_id in self.clients:
             websocket = self.clients[client_id]
             try:
-                await websocket.send(message_bytes)
+                # Send as text frame, not binary frame
+                await websocket.send(message_bytes.decode('utf-8'))
             except websockets.exceptions.ConnectionClosed:
                 logger.info(f"Connection closed while sending to client {client_id}")
 
