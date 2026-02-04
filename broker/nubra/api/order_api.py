@@ -361,7 +361,10 @@ def modify_order(data, auth):
     """
     Modify an order using Nubra's API.
     
-    Nubra API: PUT /orders/{order_id}
+    Nubra API: POST /orders/v2/modify/{order_id}
+    
+    Compulsory fields: order_price, order_qty, exchange, order_type
+    For ORDER_TYPE_STOPLOSS: also requires trigger_price in algo_params
     """
     AUTH_TOKEN = auth
     device_id = "OPENALGO"  # Fixed device ID, same as auth_api.py
@@ -369,10 +372,9 @@ def modify_order(data, auth):
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
-    token = get_token(data["symbol"], data["exchange"])
-
     # Transform OpenAlgo data to Nubra modify order format
-    transformed_data = transform_modify_order_data(data, token)
+    # Note: token/ref_id is not needed for modify order
+    transformed_data = transform_modify_order_data(data, None)
     
     # Get order_id from the data
     orderid = data.get("orderid", "")
@@ -388,9 +390,9 @@ def modify_order(data, auth):
     
     logger.info(f"Nubra modify order payload: {payload}")
 
-    # Make the PUT request using the shared client
-    response = client.put(
-        f"{NUBRA_BASE_URL}/orders/{orderid}",
+    # Make the POST request using the shared client
+    response = client.post(
+        f"{NUBRA_BASE_URL}/orders/v2/modify/{orderid}",
         headers=headers,
         content=payload,
     )
@@ -411,11 +413,18 @@ def modify_order(data, auth):
         logger.error(f"Failed to parse modify order response: {response.text}")
         return {"status": "error", "message": "Failed to parse response"}, response.status_code
 
+    logger.info(f"Nubra modify order response (status={response.status_code}): {response_data}")
+
     # Check if the request was successful
-    if response.status_code in [200, 204] and response_data.get("order_id"):
-        return {"status": "success", "orderid": str(response_data["order_id"])}, 200
-    elif response.status_code in [200, 204]:
-        return {"status": "success", "orderid": orderid}, 200
+    # Nubra returns {"message": "update request pushed"} on success
+    if response.status_code in [200, 201]:
+        if response_data.get("message") == "update request pushed":
+            return {"status": "success", "orderid": orderid}, 200
+        elif response_data.get("order_id"):
+            return {"status": "success", "orderid": str(response_data["order_id"])}, 200
+        else:
+            # Assume success if status code is 200/201
+            return {"status": "success", "orderid": orderid}, 200
     else:
         return {
             "status": "error",
