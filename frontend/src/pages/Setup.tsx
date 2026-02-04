@@ -1,7 +1,7 @@
 import { Check, Info, Loader2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -116,7 +116,7 @@ export default function Setup() {
 
       // If setup was successful (response ok or redirected), go to login
       if (response.ok || response.redirected) {
-        toast.success('Account created successfully')
+        showToast.success('Account created successfully')
         // Clear any existing session by calling logout
         try {
           await fetch('/auth/logout', {

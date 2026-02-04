@@ -1,7 +1,7 @@
 import { ArrowLeft, Clock, Pencil, Save, Search, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { adminApi } from '@/api/admin'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -47,7 +47,7 @@ export default function MarketTimingsPage() {
       setToday(response.today)
     } catch (error) {
       console.error('Error fetching timings:', error)
-      toast.error('Failed to load market timings')
+      showToast.error('Failed to load market timings', 'admin')
     } finally {
       setIsLoading(false)
     }
@@ -61,14 +61,14 @@ export default function MarketTimingsPage() {
 
   const handleSaveEdit = async (exchange: string) => {
     if (!editStartTime || !editEndTime) {
-      toast.error('Please enter both start and end times')
+      showToast.error('Please enter both start and end times', 'admin')
       return
     }
 
     // Validate time format
     const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/
     if (!timeRegex.test(editStartTime) || !timeRegex.test(editEndTime)) {
-      toast.error('Invalid time format. Use HH:MM')
+      showToast.error('Invalid time format. Use HH:MM', 'admin')
       return
     }
 
@@ -80,15 +80,15 @@ export default function MarketTimingsPage() {
       })
 
       if (response.status === 'success') {
-        toast.success(response.message || 'Timing updated successfully')
+        showToast.success(response.message || 'Timing updated successfully', 'admin')
         setEditingExchange(null)
         fetchTimings()
       } else {
-        toast.error(response.message || 'Failed to update timing')
+        showToast.error(response.message || 'Failed to update timing', 'admin')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to update timing')
+      showToast.error(err.response?.data?.message || 'Failed to update timing', 'admin')
     } finally {
       setIsSaving(false)
     }
@@ -96,7 +96,7 @@ export default function MarketTimingsPage() {
 
   const handleCheckTimings = async () => {
     if (!checkDate) {
-      toast.error('Please select a date')
+      showToast.error('Please select a date', 'admin')
       return
     }
 
@@ -106,7 +106,7 @@ export default function MarketTimingsPage() {
       setCheckTimings(response.timings)
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to check timings')
+      showToast.error(err.response?.data?.message || 'Failed to check timings', 'admin')
     } finally {
       setIsChecking(false)
     }

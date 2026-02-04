@@ -1,7 +1,7 @@
 import { ArrowLeft, Clock, FileCode, Info, Upload } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { pythonStrategyApi } from '@/api/python-strategy'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -106,13 +106,13 @@ export default function NewPythonStrategy() {
     if (selectedFile) {
       // Validate file extension
       if (!selectedFile.name.endsWith('.py')) {
-        toast.error('Please select a Python file (.py)')
+        showToast.error('Please select a Python file (.py)', 'pythonStrategy')
         return
       }
       // Validate file size (max 1MB for Python scripts)
       const maxSizeBytes = 1024 * 1024 // 1MB
       if (selectedFile.size > maxSizeBytes) {
-        toast.error('File size must be less than 1MB')
+        showToast.error('File size must be less than 1MB', 'pythonStrategy')
         return
       }
       setFile(selectedFile)
@@ -128,7 +128,7 @@ export default function NewPythonStrategy() {
     e.preventDefault()
 
     if (!validateForm()) {
-      toast.error('Please fix the form errors')
+      showToast.error('Please fix the form errors', 'pythonStrategy')
       return
     }
 
@@ -142,15 +142,15 @@ export default function NewPythonStrategy() {
       })
 
       if (response.status === 'success') {
-        toast.success('Strategy uploaded with schedule')
+        showToast.success('Strategy uploaded with schedule', 'pythonStrategy')
         navigate('/python')
       } else {
-        toast.error(response.message || 'Failed to upload strategy')
+        showToast.error(response.message || 'Failed to upload strategy', 'pythonStrategy')
       }
     } catch (error: unknown) {
       console.error('Failed to upload strategy:', error)
       const errorMessage = error instanceof Error ? error.message : 'Failed to upload strategy'
-      toast.error(errorMessage)
+      showToast.error(errorMessage, 'pythonStrategy')
     } finally {
       setLoading(false)
     }
@@ -364,7 +364,7 @@ export default function NewPythonStrategy() {
                 className="mt-4"
                 onClick={() => {
                   navigator.clipboard.writeText(EXAMPLE_STRATEGY)
-                  toast.success('Copied to clipboard')
+                  showToast.success('Copied to clipboard', 'clipboard')
                 }}
               >
                 Copy Template

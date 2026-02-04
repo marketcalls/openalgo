@@ -11,7 +11,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { fetchCSRFToken } from '@/api/client'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -248,7 +248,7 @@ export default function ResetPassword() {
 
       if (data.status === 'success') {
         setSuccess('Password reset successfully! Redirecting to login...')
-        toast.success('Password reset successfully!')
+        showToast.success('Password reset successfully!')
         setTimeout(() => {
           window.location.href = '/login'
         }, 2000)

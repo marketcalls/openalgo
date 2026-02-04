@@ -4,7 +4,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import {
   AlertCircle,
   CheckCircle2,
@@ -87,10 +87,10 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
     mutationFn: () => activateWorkflow(workflow.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: flowQueryKeys.workflows() })
-      toast.success('Workflow activated')
+      showToast.success('Workflow activated', 'flow')
     },
     onError: (error: Error) => {
-      toast.error(error.message)
+      showToast.error(error.message, 'flow')
     },
   })
 
@@ -98,10 +98,10 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
     mutationFn: () => deactivateWorkflow(workflow.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: flowQueryKeys.workflows() })
-      toast.success('Workflow deactivated')
+      showToast.success('Workflow deactivated', 'flow')
     },
     onError: (error: Error) => {
-      toast.error(error.message)
+      showToast.error(error.message, 'flow')
     },
   })
 
@@ -109,10 +109,10 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
     mutationFn: () => deleteWorkflow(workflow.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: flowQueryKeys.workflows() })
-      toast.success('Workflow deleted')
+      showToast.success('Workflow deleted', 'flow')
     },
     onError: (error: Error) => {
-      toast.error(error.message)
+      showToast.error(error.message, 'flow')
     },
   })
 
@@ -127,10 +127,10 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
     mutationFn: () => enableWebhook(workflow.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: flowQueryKeys.webhook(workflow.id) })
-      toast.success('Webhook enabled')
+      showToast.success('Webhook enabled', 'flow')
     },
     onError: (error: Error) => {
-      toast.error(error.message)
+      showToast.error(error.message, 'flow')
     },
   })
 
@@ -138,10 +138,10 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
     mutationFn: () => disableWebhook(workflow.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: flowQueryKeys.webhook(workflow.id) })
-      toast.success('Webhook disabled')
+      showToast.success('Webhook disabled', 'flow')
     },
     onError: (error: Error) => {
-      toast.error(error.message)
+      showToast.error(error.message, 'flow')
     },
   })
 
@@ -149,10 +149,10 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
     mutationFn: () => regenerateWebhook(workflow.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: flowQueryKeys.webhook(workflow.id) })
-      toast.success('Webhook URL and secret regenerated')
+      showToast.success('Webhook URL and secret regenerated', 'flow')
     },
     onError: (error: Error) => {
-      toast.error(error.message)
+      showToast.error(error.message, 'flow')
     },
   })
 
@@ -160,16 +160,16 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
     mutationFn: (authType: 'payload' | 'url') => updateWebhookAuthType(workflow.id, authType),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: flowQueryKeys.webhook(workflow.id) })
-      toast.success('Authentication type updated')
+      showToast.success('Authentication type updated', 'flow')
     },
     onError: (error: Error) => {
-      toast.error(error.message)
+      showToast.error(error.message, 'flow')
     },
   })
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text)
-    toast.success(`${label} copied to clipboard`)
+    showToast.success(`${label} copied to clipboard`, 'clipboard')
   }
 
   return (
@@ -538,7 +538,7 @@ export default function FlowIndex() {
       navigate(`/flow/editor/${data.id}`)
     },
     onError: (error: Error) => {
-      toast.error(error.message)
+      showToast.error(error.message, 'flow')
     },
   })
 
@@ -549,11 +549,11 @@ export default function FlowIndex() {
       setIsImportOpen(false)
       setImportJson('')
       setImportError(null)
-      toast.success(`Workflow "${data.name}" imported`)
+      showToast.success(`Workflow "${data.name}" imported`, 'flow')
       navigate(`/flow/editor/${data.id}`)
     },
     onError: (error: Error) => {
-      toast.error(error.message)
+      showToast.error(error.message, 'flow')
     },
   })
 

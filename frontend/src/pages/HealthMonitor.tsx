@@ -27,7 +27,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import {
   acknowledgeAlert,
   exportMetricsCSV,
@@ -167,7 +167,7 @@ export default function HealthMonitor() {
   const memorySeriesRef = useRef<ISeriesApi<'Line'> | null>(null)
 
   // Fetch all data
-  const fetchData = async (showToast = false) => {
+  const fetchData = async (displayToast = false) => {
     try {
       setRefreshing(true)
 
@@ -183,12 +183,12 @@ export default function HealthMonitor() {
       setStats(statsData)
       setAlerts(alertsData)
 
-      if (showToast) {
-        toast.success('Metrics refreshed')
+      if (displayToast) {
+        showToast.success('Metrics refreshed', 'monitoring')
       }
     } catch (error) {
       console.error('Error fetching health metrics:', error)
-      toast.error('Failed to fetch health metrics')
+      showToast.error('Failed to fetch health metrics', 'monitoring')
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -392,17 +392,17 @@ export default function HealthMonitor() {
   const handleAcknowledgeAlert = async (alertId: number) => {
     try {
       await acknowledgeAlert(alertId)
-      toast.success('Alert acknowledged')
+      showToast.success('Alert acknowledged', 'monitoring')
       fetchData()
     } catch (error) {
       console.error('Error acknowledging alert:', error)
-      toast.error('Failed to acknowledge alert')
+      showToast.error('Failed to acknowledge alert', 'monitoring')
     }
   }
 
   const handleExport = () => {
     window.open(exportMetricsCSV(24), '_blank')
-    toast.success('Exporting metrics to CSV')
+    showToast.success('Exporting metrics to CSV', 'monitoring')
   }
 
   if (loading) {

@@ -1,7 +1,7 @@
 import { ArrowLeft, CheckCircle, Download, Gauge, RefreshCw, XCircle, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { webClient } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -92,7 +92,7 @@ export default function LatencyDashboard() {
       setStats(statsResponse.data)
     } catch (error) {
       console.error('Error fetching latency data:', error)
-      toast.error('Failed to load latency data')
+      showToast.error('Failed to load latency data', 'monitoring')
     } finally {
       setIsLoading(false)
     }
@@ -102,7 +102,7 @@ export default function LatencyDashboard() {
     setIsRefreshing(true)
     await fetchData()
     setIsRefreshing(false)
-    toast.success('Data refreshed')
+    showToast.success('Data refreshed', 'monitoring')
   }
 
   const handleExport = () => {

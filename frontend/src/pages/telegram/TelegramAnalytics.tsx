@@ -1,7 +1,7 @@
 import { ArrowLeft, BarChart3, Bell, MessageSquare, TrendingUp, Users } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { webClient } from '@/api/client'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -36,7 +36,7 @@ export default function TelegramAnalytics() {
       setAnalytics(response.data.data)
     } catch (error) {
       console.error('Error fetching analytics:', error)
-      toast.error('Failed to load analytics')
+      showToast.error('Failed to load analytics', 'telegram')
     } finally {
       setIsLoading(false)
     }

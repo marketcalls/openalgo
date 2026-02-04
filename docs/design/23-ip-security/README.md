@@ -302,5 +302,4 @@ def is_whitelisted(ip):
 | `utils/security_middleware.py` | WSGI middleware |
 | `utils/ip_helper.py` | IP resolution |
 | `database/traffic_db.py` | Ban tables |
-| `services/security.py` | Security service |
-| `blueprints/logs.py` | Security dashboard |
+| `blueprints/security.py` | Security dashboard and routes |

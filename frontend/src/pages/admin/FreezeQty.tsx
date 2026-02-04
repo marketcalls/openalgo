@@ -1,7 +1,7 @@
 import { ArrowLeft, Pencil, Plus, Save, Search, Snowflake, Trash2, Upload, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { adminApi } from '@/api/admin'
 import {
   AlertDialog,
@@ -95,7 +95,7 @@ export default function FreezeQtyPage() {
       setFilteredData(data)
     } catch (error) {
       console.error('Error fetching freeze data:', error)
-      toast.error('Failed to load freeze quantities')
+      showToast.error('Failed to load freeze quantities', 'admin')
     } finally {
       setIsLoading(false)
     }
@@ -103,7 +103,7 @@ export default function FreezeQtyPage() {
 
   const handleAdd = async () => {
     if (!newEntry.symbol || !newEntry.freeze_qty) {
-      toast.error('Please fill in all fields')
+      showToast.error('Please fill in all fields', 'admin')
       return
     }
 
@@ -116,16 +116,16 @@ export default function FreezeQtyPage() {
       })
 
       if (response.status === 'success') {
-        toast.success(response.message || 'Entry added successfully')
+        showToast.success(response.message || 'Entry added successfully', 'admin')
         setShowAddDialog(false)
         setNewEntry({ exchange: 'NFO', symbol: '', freeze_qty: '' })
         fetchFreezeData()
       } else {
-        toast.error(response.message || 'Failed to add entry')
+        showToast.error(response.message || 'Failed to add entry', 'admin')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to add entry')
+      showToast.error(err.response?.data?.message || 'Failed to add entry', 'admin')
     } finally {
       setIsAdding(false)
     }
@@ -138,7 +138,7 @@ export default function FreezeQtyPage() {
 
   const handleSaveEdit = async (id: number) => {
     if (!editValue) {
-      toast.error('Please enter a freeze quantity')
+      showToast.error('Please enter a freeze quantity', 'admin')
       return
     }
 
@@ -149,15 +149,15 @@ export default function FreezeQtyPage() {
       })
 
       if (response.status === 'success') {
-        toast.success(response.message || 'Entry updated successfully')
+        showToast.success(response.message || 'Entry updated successfully', 'admin')
         setEditingId(null)
         fetchFreezeData()
       } else {
-        toast.error(response.message || 'Failed to update entry')
+        showToast.error(response.message || 'Failed to update entry', 'admin')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to update entry')
+      showToast.error(err.response?.data?.message || 'Failed to update entry', 'admin')
     } finally {
       setIsSaving(false)
     }
@@ -171,15 +171,15 @@ export default function FreezeQtyPage() {
       const response = await adminApi.deleteFreeze(deleteEntry.id)
 
       if (response.status === 'success') {
-        toast.success(response.message || 'Entry deleted successfully')
+        showToast.success(response.message || 'Entry deleted successfully', 'admin')
         setDeleteEntry(null)
         fetchFreezeData()
       } else {
-        toast.error(response.message || 'Failed to delete entry')
+        showToast.error(response.message || 'Failed to delete entry', 'admin')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to delete entry')
+      showToast.error(err.response?.data?.message || 'Failed to delete entry', 'admin')
     } finally {
       setIsDeleting(false)
     }
@@ -187,7 +187,7 @@ export default function FreezeQtyPage() {
 
   const handleUpload = async () => {
     if (!uploadFile) {
-      toast.error('Please select a CSV file')
+      showToast.error('Please select a CSV file', 'admin')
       return
     }
 
@@ -196,16 +196,16 @@ export default function FreezeQtyPage() {
       const response = await adminApi.uploadFreezeCSV(uploadFile, uploadExchange)
 
       if (response.status === 'success') {
-        toast.success(response.message || 'CSV uploaded successfully')
+        showToast.success(response.message || 'CSV uploaded successfully', 'admin')
         setShowUploadDialog(false)
         setUploadFile(null)
         fetchFreezeData()
       } else {
-        toast.error(response.message || 'Failed to upload CSV')
+        showToast.error(response.message || 'Failed to upload CSV', 'admin')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to upload CSV')
+      showToast.error(err.response?.data?.message || 'Failed to upload CSV', 'admin')
     } finally {
       setIsUploading(false)
     }
