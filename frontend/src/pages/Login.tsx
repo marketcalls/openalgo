@@ -1,8 +1,8 @@
-import { Eye, EyeOff, Info, Loader2, LogIn } from 'lucide-react'
+import { Eye, EyeOff, Loader2, LogIn } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -20,7 +20,6 @@ export default function Login() {
   const [isCheckingSetup, setIsCheckingSetup] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const { mode } = useThemeStore()
-  
 
   // Dynamic logo based on light/dark mode
   const logoSrc = mode === 'dark' ? '/darkMode.png' : '/whiteMode.jpeg'
@@ -254,13 +253,13 @@ export default function Login() {
               trading strategies.
             </p>
 
-            <Alert className="mb-6">
+            {/* <Alert className="mb-6">
               <Info className="h-4 w-4" />
               <AlertTitle>First Time User?</AlertTitle>
               <AlertDescription>
                 Contact your administrator to set up your account.
               </AlertDescription>
-            </Alert>
+            </Alert> */}
 
             {/* <div className="flex justify-center lg:justify-start gap-4">
               <Button variant="outline" asChild>

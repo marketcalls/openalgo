@@ -10,8 +10,8 @@ interface StartStrategyWidgetProps {
 }
 
 export default function StartStrategyWidget({ strategyConfig, onStart }: StartStrategyWidgetProps) {
-    const { mode } = useThemeStore()
-    const darkMode = mode === 'dark';
+    const { mode, appMode } = useThemeStore()
+    const darkMode = mode === 'dark' || appMode === 'analyzer';
     
     const [showConfirmation, setShowConfirmation] = useState(false);
     const [isStarting, setIsStarting] = useState(false);

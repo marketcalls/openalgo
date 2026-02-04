@@ -10,8 +10,8 @@ interface ModalProps {
 }
 
 export default function Modal({ isOpen, onClose, children, title }: ModalProps) {
-    const { mode } = useThemeStore()
-    const darkMode = mode === 'dark';
+    const { mode, appMode } = useThemeStore()
+    const darkMode = mode === 'dark' || appMode === 'analyzer';
 
     // Prevent body scroll when modal is open
     useEffect(() => {

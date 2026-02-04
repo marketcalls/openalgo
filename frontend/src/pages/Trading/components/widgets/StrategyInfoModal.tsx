@@ -10,8 +10,8 @@ interface StrategyInfoModalProps {
 }
 
 export default function StrategyInfoModal({ isOpen, onClose, strategyId }: StrategyInfoModalProps) {
-    const { mode } = useThemeStore()
-    const darkMode = mode === 'dark';
+    const { mode, appMode } = useThemeStore()
+    const darkMode = mode === 'dark' || appMode === 'analyzer';
     
     const [loading, setLoading] = useState(false);
     const [strategyDetails, setStrategyDetails] = useState<any>(null);

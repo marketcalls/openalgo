@@ -11,8 +11,8 @@ export default function IndicatorListWidget({
     indicators, 
     onConfigureParameters 
 }: IndicatorListWidgetProps) {
-    const { mode } = useThemeStore();
-    const darkMode = mode === 'dark';
+    const { mode, appMode } = useThemeStore()
+    const darkMode = mode === 'dark' || appMode === 'analyzer';
 
     return (
         <div className="flex flex-col gap-3 my-4 max-h-[500px] overflow-y-auto hide-scrollbar">

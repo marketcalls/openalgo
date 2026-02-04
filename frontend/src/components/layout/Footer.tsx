@@ -167,8 +167,8 @@ function preprocessMarkdown(raw: string): string {
 }
 
 export const Footer: React.FC = () => {
-    const { mode } = useThemeStore()
-    const isDark = mode === 'dark';
+    const { mode, appMode } = useThemeStore()
+    const isDark = mode === 'dark' || appMode === 'analyzer';
     const subTextClass = isDark ? 'text-gray-400' : 'text-gray-600';
 
     const [activeModal, setActiveModal] = useState<FooterLink | null>(null);

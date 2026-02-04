@@ -15,8 +15,8 @@ export default function IndicatorParameterWidget({
     onSave, 
     onCancel 
 }: IndicatorParameterWidgetProps) {
-    const { mode } = useThemeStore()
-    const darkMode = mode === 'dark';
+    const { mode, appMode } = useThemeStore()
+    const darkMode = mode === 'dark' || appMode === 'analyzer';
     
     const [parameters, setParameters] = useState(indicator.indicatorParameters);
 

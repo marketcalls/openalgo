@@ -57,8 +57,8 @@ export default function ChatArea({
     selectedSymbolsList,
     handleFinalizeIndicators
 }: ChatAreaProps) {
-    const { mode } = useThemeStore()
-    const darkMode = mode === 'dark';
+    const { mode, appMode } = useThemeStore()
+    const darkMode = mode === 'dark' || appMode === 'analyzer';
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
 

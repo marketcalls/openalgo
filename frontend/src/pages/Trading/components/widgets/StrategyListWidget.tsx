@@ -10,8 +10,8 @@ interface StrategyListWidgetProps {
 }
 
 export default function StrategyListWidget({ strategies, selectedId, onSelect }: StrategyListWidgetProps) {
-    const { mode } = useThemeStore()
-    const darkMode = mode === 'dark';
+    const { mode, appMode } = useThemeStore()
+    const darkMode = mode === 'dark' || appMode === 'analyzer';
     const [searchQuery, setSearchQuery] = useState('');
 
     // Filter strategies based on search query

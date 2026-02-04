@@ -7,11 +7,11 @@ interface RiskManagementWidgetProps {
 }
 
 export default function RiskManagementWidget({ onSave }: RiskManagementWidgetProps) {
-    const { mode } = useThemeStore()
-    const darkMode = mode === 'dark';
+    const { mode, appMode } = useThemeStore()
+    const darkMode = mode === 'dark' || appMode === 'analyzer';
     
-    const [maxPositionSize, setMaxPositionSize] = useState<string>('');
-    const [maxDailyLoss, setMaxDailyLoss] = useState<string>('');
+    const [maxPositionSize, setMaxPositionSize] = useState<string>('10000');
+    const [maxDailyLoss, setMaxDailyLoss] = useState<string>('5000');
     const [errors, setErrors] = useState<{ maxPositionSize?: string; maxDailyLoss?: string }>({});
 
     const validate = () => {

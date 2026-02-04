@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { BROKERS, WATCHLIST, MOCK_USER_STRATEGIES, MOCK_INDICATORS, MOCK_STRATEGY_PARAMETERS, mockBrokers, mockSymbolMetaData } from './mockData';
+import { BROKERS, WATCHLIST, MOCK_USER_STRATEGIES, MOCK_INDICATORS, MOCK_STRATEGY_PARAMETERS, mockBrokers } from './mockData';
 import IndicatorParameterWidget from './components/widgets/IndicatorParameterWidget';
 import Modal from './components/widgets/Modal';
 // import { getAllSymbols } from '../../services/Register';
@@ -30,9 +30,14 @@ export default function Trading() {
         filterSymbols: []
     });
 
-    const { mode } = useThemeStore()
-    const darkMode = mode === 'dark';
-    const userName = localStorage.getItem("userName")
+    const storedState = localStorage.getItem("openalgo-auth");
+    console.log(storedState, 'storedState')
+
+    const { mode, appMode } = useThemeStore()
+    const darkMode = mode === 'dark' || appMode === 'analyzer';
+    const userName = storedState
+        ? JSON.parse(storedState)?.state?.user?.username || ""
+        : "";
     const [_strategyConfig, setStrategyConfig] = useState<StrategyConfig>({
         brokerName: null,
         exchange: null,
@@ -55,12 +60,12 @@ export default function Trading() {
     const [strategies, setStrategies] = useState([
         { id: 1, name: 'Untitled', status: 'inactive' }
     ]);
-    const [selectedBroker, ] = useState(BROKERS[0]);
+    const [selectedBroker,] = useState(BROKERS[0]);
     const [inputValue, setInputValue] = useState('');
     const [activeTab, setActiveTab] = useState('orders');
     const [panelHeight, setPanelHeight] = useState(250);
     const [isResizing, setIsResizing] = useState(false);
-    const [isPanelVisible, setIsPanelVisible] = useState(true);
+    const [isPanelVisible, setIsPanelVisible] = useState(false);
 
     // const textareaRef = useRef<HTMLTextAreaElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -78,9 +83,9 @@ export default function Trading() {
     const [indicatorConfigs, setIndicatorConfigs] = useState<IndicatorConfig[]>(MOCK_INDICATORS);
     const [isParameterModalOpen, setIsParameterModalOpen] = useState(false);
     const [currentConfigIndicatorId, setCurrentConfigIndicatorId] = useState<string | null>(null);
-    const [availableSymbols, setAvailableSymbols] = useState<SymbolMetaData[]>([]);
-    const [selectedSymbolsList, setSelectedSymbolsList] = useState<string[]>([]);
-    const [_symbolsLoading, setSymbolsLoading] = useState(false);
+    const [availableSymbols] = useState<SymbolMetaData[]>([]);
+    const [selectedSymbolsList] = useState<string[]>([]);
+    const [_symbolsLoading] = useState(false);
     const [brokersLoading, setBrokersLoading] = useState(false);
     const [isStrategyStarted, setIsStrategyStarted] = useState(false);
     const [isStrategyInfoOpen, setIsStrategyInfoOpen] = useState(false);
@@ -130,25 +135,50 @@ export default function Trading() {
         fetchBrokers();
     }, []);
 
-    // Separate useEffect to update messages when brokers are loaded
     useEffect(() => {
         if (availableBrokers.length > 0) {
-            setMessages([
-                {
-                    id: 1,
-                    type: 'ai',
-                    content: `**Welcome to AI Trading Assistant, ${userName}! 🚀**\n\nI\'m here to help you set up and manage your trading strategies. Let\'s get started!\n\nFirst, please select your broker:`,
-                    widget: {
-                        type: 'broker-list',
-                        data: {
-                            brokers: availableBrokers,
-                            onSelect: (brokerName: string) => handleBrokerSelect(brokerName)
-                        }
-                    }
-                }
-            ]);
+            const defaultBroker = availableBrokers[0];
+
+            setSelectedBrokerName(defaultBroker.brokerName);
+            configRef.current.brokerName = defaultBroker.brokerName;
+
+            showExchangeSelection(defaultBroker);
         }
     }, [availableBrokers]);
+
+    const showExchangeSelection = (broker: any) => {
+        const exchanges =
+            broker.supportedExchanges && broker.supportedExchanges.length > 0
+                ? broker.supportedExchanges
+                : ['NSE', 'BSE'];
+
+        const exchangeMessage: Message = {
+            id: Date.now(),
+            type: 'ai',
+            content: `**Welcome to AI Trading Assistant, ${userName}! 🚀**\n\n` +
+                `You're trading with ${broker.brokerName} 🎯\n\n` +
+                `${broker.description || 'Professional trading platform'}\n\n` +
+                `Please choose your exchange:`,
+            widget: {
+                type: 'radio',
+                data: {
+                    options: exchanges.map((exchange: any) => ({
+                        value: exchange,
+                        label: exchange,
+                        description:
+                            exchange === 'NSE'
+                                ? 'National Stock Exchange'
+                                : exchange === 'BSE'
+                                    ? 'Bombay Stock Exchange'
+                                    : `${exchange} Exchange`
+                    })),
+                    onSelect: (exchange: string) => handleExchangeSelect(exchange)
+                }
+            }
+        };
+
+        setMessages([exchangeMessage]);
+    };
 
     // Update initial messages state to show loading
     const [messages, setMessages] = useState<Message[]>([
@@ -231,68 +261,68 @@ export default function Trading() {
     // );
 
     // Update handleBrokerSelect 
-    const handleBrokerSelect = (brokerName: string) => {
-        setSelectedBrokerName(brokerName);
-        configRef.current.brokerName = brokerName;
+    // const handleBrokerSelect = (brokerName: string) => {
+    //     setSelectedBrokerName(brokerName);
+    //     configRef.current.brokerName = brokerName;
 
-        const broker = availableBrokers.find(b => b.brokerName === brokerName);
+    //     const broker = availableBrokers.find(b => b.brokerName === brokerName);
 
-        if (broker) {
-            // If broker has supported exchanges, show exchange selection
-            if (broker.supportedExchanges && broker.supportedExchanges.length > 0) {
-                const exchangeMessage: Message = {
-                    id: Date.now(),
-                    type: 'ai',
-                    content: `**Great! You've selected ${brokerName} 🎯**\n\n${broker.description || 'Professional trading platform'}\n\nNow, please choose your exchange:`,
-                    widget: {
-                        type: 'radio',
-                        data: {
-                            options: broker.supportedExchanges.map(exchange => ({
-                                value: exchange,
-                                label: exchange,
-                                description: exchange === 'NSE'
-                                    ? 'National Stock Exchange'
-                                    : exchange === 'BSE'
-                                        ? 'Bombay Stock Exchange'
-                                        : `${exchange} Exchange`
-                            })),
-                            onSelect: (exchange: string) => handleExchangeSelect(exchange)
-                        }
-                    }
-                };
-                setMessages(prev => [...prev, exchangeMessage]);
-            } else {
-                // If no supported exchanges, use default (NSE, BSE)
-                const defaultExchangeMessage: Message = {
-                    id: Date.now(),
-                    type: 'ai',
-                    content: `**Great! You've selected ${brokerName} 🎯**\n\n${broker.description || 'Professional trading platform'}\n\nThis broker supports all exchanges. Please choose your exchange:`,
-                    widget: {
-                        type: 'radio',
-                        data: {
-                            options: [
-                                {
-                                    value: 'NSE',
-                                    label: 'NSE',
-                                    description: 'National Stock Exchange'
-                                },
-                                {
-                                    value: 'BSE',
-                                    label: 'BSE',
-                                    description: 'Bombay Stock Exchange'
-                                }
-                            ],
-                            onSelect: (exchange: string) => handleExchangeSelect(exchange)
-                        }
-                    }
-                };
-                setMessages(prev => [...prev, defaultExchangeMessage]);
-            }
-        } else {
-            console.error('Broker not found:', brokerName);
-            console.error('Available broker names:', availableBrokers.map(b => b.brokerName));
-        }
-    };
+    //     if (broker) {
+    //         // If broker has supported exchanges, show exchange selection
+    //         if (broker.supportedExchanges && broker.supportedExchanges.length > 0) {
+    //             const exchangeMessage: Message = {
+    //                 id: Date.now(),
+    //                 type: 'ai',
+    //                 content: `**Great! You've selected ${brokerName} 🎯**\n\n${broker.description || 'Professional trading platform'}\n\nNow, please choose your exchange:`,
+    //                 widget: {
+    //                     type: 'radio',
+    //                     data: {
+    //                         options: broker.supportedExchanges.map(exchange => ({
+    //                             value: exchange,
+    //                             label: exchange,
+    //                             description: exchange === 'NSE'
+    //                                 ? 'National Stock Exchange'
+    //                                 : exchange === 'BSE'
+    //                                     ? 'Bombay Stock Exchange'
+    //                                     : `${exchange} Exchange`
+    //                         })),
+    //                         onSelect: (exchange: string) => handleExchangeSelect(exchange)
+    //                     }
+    //                 }
+    //             };
+    //             setMessages(prev => [...prev, exchangeMessage]);
+    //         } else {
+    //             // If no supported exchanges, use default (NSE, BSE)
+    //             const defaultExchangeMessage: Message = {
+    //                 id: Date.now(),
+    //                 type: 'ai',
+    //                 content: `**Great! You've selected ${brokerName} 🎯**\n\n${broker.description || 'Professional trading platform'}\n\nThis broker supports all exchanges. Please choose your exchange:`,
+    //                 widget: {
+    //                     type: 'radio',
+    //                     data: {
+    //                         options: [
+    //                             {
+    //                                 value: 'NSE',
+    //                                 label: 'NSE',
+    //                                 description: 'National Stock Exchange'
+    //                             },
+    //                             {
+    //                                 value: 'BSE',
+    //                                 label: 'BSE',
+    //                                 description: 'Bombay Stock Exchange'
+    //                             }
+    //                         ],
+    //                         onSelect: (exchange: string) => handleExchangeSelect(exchange)
+    //                     }
+    //                 }
+    //             };
+    //             setMessages(prev => [...prev, defaultExchangeMessage]);
+    //         }
+    //     } else {
+    //         console.error('Broker not found:', brokerName);
+    //         console.error('Available broker names:', availableBrokers.map(b => b.brokerName));
+    //     }
+    // };
 
     // Update exchange selection handler
     const handleExchangeSelect = (exchange: string) => {
@@ -438,30 +468,31 @@ export default function Trading() {
 
     // Handle time in force selection
     const handleTimeInForceSelect = (timeInForce: string) => {
+        handleFinalizeIndicators()
         setSelectedTimeInForce(timeInForce);
-        configRef.current.timeInForce = timeInForce;
-        setStrategyConfig(prev => ({ ...prev, timeInForce }));
+        // configRef.current.timeInForce = timeInForce;
+        // setStrategyConfig(prev => ({ ...prev, timeInForce }));
 
-        const indicatorMessage: Message = {
-            id: Date.now(),
-            type: 'ai',
-            content: `**Time in Force set to ${timeInForce}! 📊**\n\nNow, let's configure your technical indicators. Review and customize the parameters for each indicator:`,
-            widget: {
-                type: 'indicator-list',
-                data: {
-                    indicators: indicatorConfigs,
-                    onConfigureParameters: (indicatorId: string) => handleConfigureIndicator(indicatorId)
-                }
-            }
-        };
-        setMessages(prev => [...prev, indicatorMessage]);
+        // const indicatorMessage: Message = {
+        //     id: Date.now(),
+        //     type: 'ai',
+        //     content: `**Time in Force set to ${timeInForce}! 📊**\n\nNow, let's configure your technical indicators. Review and customize the parameters for each indicator:`,
+        //     widget: {
+        //         type: 'indicator-list',
+        //         data: {
+        //             indicators: indicatorConfigs,
+        //             onConfigureParameters: () => handleFinalizeIndicators()
+        //         }
+        //     }
+        // };
+        // setMessages(prev => [...prev, indicatorMessage]);
     };
 
     // Update handleConfigureIndicator
-    const handleConfigureIndicator = (indicatorId: string) => {
-        setCurrentConfigIndicatorId(indicatorId);
-        setIsParameterModalOpen(true);
-    };
+    // const handleConfigureIndicator = (indicatorId: string) => {
+    //     setCurrentConfigIndicatorId(indicatorId);
+    //     setIsParameterModalOpen(true);
+    // };
 
     // Update handleSaveIndicatorParameters
     const handleSaveIndicatorParameters = (indicatorId: string, parameters: Record<string, any>) => {
@@ -498,7 +529,7 @@ export default function Trading() {
         const strategyParamsMessage: Message = {
             id: Date.now(),
             type: 'ai',
-            content: `**Indicators Configured! 📊**\n\nAll ${allIndicatorsConfig.length} indicators have been set up with their parameters.\n\nNow, let's set up your strategy parameters for risk management and trading rules:`,
+            content: `Now, let's set up your strategy parameters for risk management and trading rules:`,
             widget: {
                 type: 'strategy-parameters',
                 data: {
@@ -524,7 +555,10 @@ export default function Trading() {
                 type: 'risk-management',
                 data: {
                     onSave: (riskConfig: { maxPositionSize: number; maxDailyLoss: number }) =>
-                        handleSaveRiskManagement(riskConfig)
+                    {
+                        handleSaveRiskManagement(riskConfig);
+                        handleSaveSymbols([]);
+                    }
                 }
             }
         };
@@ -537,64 +571,65 @@ export default function Trading() {
         setStrategyConfig(prev => ({ ...prev, riskManagement: riskConfig }));
 
         // Show loading message
-        const loadingMessage: Message = {
-            id: Date.now(),
-            type: 'ai',
-            content: `**Risk Management Saved! ✅**\n\nFetching available symbols from exchange...`
-        };
-        setMessages(prev => [...prev, loadingMessage]);
+        // const loadingMessage: Message = {
+        //     id: Date.now(),
+        //     type: 'ai',
+        //     content: `**Risk Management Saved! ✅**\n\nFetching available symbols from exchange...`
+        // };
+        // setMessages(prev => [...prev, loadingMessage]);
 
         // Fetch symbols
-        try {
-            setSymbolsLoading(true);
-            // const symbolsData = await getAllSymbols();
-            const symbolsData: any = mockSymbolMetaData
-            setAvailableSymbols(symbolsData);
+        // try {
+        //     setSymbolsLoading(true);
+        //     // const symbolsData = await getAllSymbols();
+        //     const symbolsData: any = mockSymbolMetaData
+        //     setAvailableSymbols(symbolsData);
 
-            // If there are pre-selected symbols in config, use them
-            const preSelectedSymbols = configRef.current.filterSymbols || [];
-            setSelectedSymbolsList(preSelectedSymbols);
+        //     // If there are pre-selected symbols in config, use them
+        //     const preSelectedSymbols = configRef.current.filterSymbols || [];
+        //     setSelectedSymbolsList(preSelectedSymbols);
 
-            const symbolFilterMessage: Message = {
-                id: Date.now(),
-                type: 'ai',
-                content: `**${symbolsData.length} Symbols Loaded! 🎯**\n\nSelect the symbols you want to trade with this strategy:`,
-                widget: {
-                    type: 'symbol-filter',
-                    data: {
-                        symbols: symbolsData,
-                        selectedSymbols: preSelectedSymbols,
-                        loading: false,
-                        onToggle: (symbol: string) => handleSymbolToggle(symbol),
-                        onSave: (selectedSymbols: string[]) => handleSaveSymbols(selectedSymbols)
-                    }
-                }
-            };
-            setMessages(prev => [...prev, symbolFilterMessage]);
-        } catch (error) {
-            console.error('Error fetching symbols:', error);
-            const errorMessage: Message = {
-                id: Date.now(),
-                type: 'ai',
-                content: `**Error loading symbols** ❌\n\nFailed to fetch symbols from exchange. Please try again or contact support.`
-            };
-            setMessages(prev => [...prev, errorMessage]);
-        } finally {
-            setSymbolsLoading(false);
-        }
+        //     const symbolFilterMessage: Message = {
+        //         id: Date.now(),
+        //         type: 'ai',
+        //         content: `**${symbolsData.length} Symbols Loaded! 🎯**\n\nSelect the symbols you want to trade with this strategy:`,
+        //         widget: {
+        //             type: 'symbol-filter',
+        //             data: {
+        //                 symbols: symbolsData,
+        //                 selectedSymbols: preSelectedSymbols,
+        //                 loading: false,
+        //                 onToggle: (symbol: string) => handleSymbolToggle(symbol),
+        //                 onSave: (selectedSymbols: string[]) => handleSaveSymbols(selectedSymbols)
+        //             }
+        //         }
+        //     };
+        //     setMessages(prev => [...prev, symbolFilterMessage]);
+        // } catch (error) {
+        //     console.error('Error fetching symbols:', error);
+        //     const errorMessage: Message = {
+        //         id: Date.now(),
+        //         type: 'ai',
+        //         content: `**Error loading symbols** ❌\n\nFailed to fetch symbols from exchange. Please try again or contact support.`
+        //     };
+        //     setMessages(prev => [...prev, errorMessage]);
+        // } finally {
+        //     setSymbolsLoading(false);
+        // }
     };
 
-    const handleSymbolToggle = (tokenNumber: string) => {
-        setSelectedSymbolsList(prev => {
-            if (prev.includes(tokenNumber)) {
-                return prev.filter(s => s !== tokenNumber);
-            } else {
-                return [...prev, tokenNumber];
-            }
-        });
-    };
+    // const handleSymbolToggle = (tokenNumber: string) => {
+    //     setSelectedSymbolsList(prev => {
+    //         if (prev.includes(tokenNumber)) {
+    //             return prev.filter(s => s !== tokenNumber);
+    //         } else {
+    //             return [...prev, tokenNumber];
+    //         }
+    //     });
+    // };
 
     // Update handleSaveSymbols to accept empty array
+    
     const handleSaveSymbols = (selectedTokens: string[]) => {
         configRef.current.filterSymbols = selectedTokens;
         setStrategyConfig(prev => ({ ...prev, filterSymbols: selectedTokens }));
@@ -835,7 +870,7 @@ export default function Trading() {
             )}
 
             {/* Main Content Area: Chat + Watchlist */}
-            <div className="flex-1 flex overflow-hidden">
+            <div className="flex-1 flex overflow-hidden max-h-[75vh]">
                 <ChatArea
                     messages={messages}
                     inputValue={inputValue}

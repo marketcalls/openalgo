@@ -8,8 +8,8 @@ interface ReRunConfirmationWidgetProps {
 }
 
 export default function ReRunConfirmationWidget({ profit, onConfirm, onStop }: ReRunConfirmationWidgetProps) {
-    const { mode } = useThemeStore()
-    const darkMode = mode === 'dark';
+    const { mode, appMode } = useThemeStore()
+    const darkMode = mode === 'dark' || appMode === 'analyzer';
 
     return (
         <div className={`my-4 p-5 rounded-xl border ${

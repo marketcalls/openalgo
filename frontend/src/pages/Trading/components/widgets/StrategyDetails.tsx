@@ -8,8 +8,8 @@ interface StrategyDetailsProps {
 }
 
 export default function StrategyDetails({ config }: StrategyDetailsProps) {
-    const { mode } = useThemeStore()
-    const darkMode = mode === 'dark';
+    const { mode, appMode } = useThemeStore()
+    const darkMode = mode === 'dark' || appMode === 'analyzer';
 
     const strategyName = config.strategyId 
         ? MOCK_USER_STRATEGIES.find(s => s.id === config.strategyId)?.name 

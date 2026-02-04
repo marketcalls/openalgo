@@ -8,8 +8,8 @@ interface BrokerListWidgetProps {
 }
 
 export default function BrokerListWidget({ brokers, selectedBroker, onSelect }: BrokerListWidgetProps) {
-    const { mode } = useThemeStore()
-    const darkMode = mode === 'dark';
+    const { mode, appMode } = useThemeStore()
+    const darkMode = mode === 'dark' || appMode === 'analyzer';
 
    return (
         <div className="grid grid-cols-2 gap-3 my-4">

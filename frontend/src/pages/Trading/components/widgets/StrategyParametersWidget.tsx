@@ -12,8 +12,8 @@ export default function StrategyParametersWidget({
     parameters, 
     onSave 
 }: StrategyParametersWidgetProps) {
-    const { mode } = useThemeStore()
-    const darkMode = mode === 'dark';
+    const { mode, appMode } = useThemeStore()
+    const darkMode = mode === 'dark' || appMode === 'analyzer';
     
     const [paramValues, setParamValues] = useState<Record<string, any>>(
         parameters.reduce((acc, param) => ({

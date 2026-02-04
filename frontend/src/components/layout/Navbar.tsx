@@ -25,8 +25,11 @@ export function Navbar() {
   const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
 
-  // Dynamic logo based on light/dark mode
-  const logoSrc = mode === 'dark' ? '/darkMode.png' : '/whiteMode.jpeg'
+  // Dynamic logo based on light/dark mode and app mode
+  const logoSrc =
+    mode === 'dark' || appMode === 'analyzer'
+      ? '/darkMode.png'
+      : '/whiteMode.jpeg'
 
   const handleLogout = async () => {
     try {
