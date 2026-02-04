@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw, TrendingUp, Wifi, WifiOff } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
 import { useOptionChainLive } from '@/hooks/useOptionChainLive'
@@ -133,7 +133,7 @@ interface PlaceOrderParams {
 
 interface OptionChainRowProps {
   strike: OptionStrike
-  previousData: Map<number, OptionStrike>
+  previousStrike: OptionStrike | undefined
   maxBarValue: number
   visibleCeColumns: ColumnKey[]
   visiblePeColumns: ColumnKey[]
@@ -143,9 +143,10 @@ interface OptionChainRowProps {
   onPlaceOrder: (params: PlaceOrderParams) => void
 }
 
-function OptionChainRow({
+// Memoized row component to prevent unnecessary re-renders
+const OptionChainRow = React.memo(function OptionChainRow({
   strike,
-  previousData,
+  previousStrike,
   maxBarValue,
   visibleCeColumns,
   visiblePeColumns,
@@ -154,7 +155,6 @@ function OptionChainRow({
   optionExchange,
   onPlaceOrder,
 }: OptionChainRowProps) {
-  const previous = previousData.get(strike.strike)
   const ce = strike.ce
   const pe = strike.pe
   const label = ce?.label ?? pe?.label ?? ''
@@ -165,11 +165,12 @@ function OptionChainRow({
   const isCeOTM = label.startsWith('OTM')
   const isPeOTM = label.startsWith('ITM')
 
-  const ceLtpChanged = previous?.ce?.ltp !== ce?.ltp
-  const peLtpChanged = previous?.pe?.ltp !== pe?.ltp
+  // Flash animation for LTP changes
+  const ceLtpChanged = previousStrike?.ce?.ltp !== undefined && previousStrike.ce.ltp !== ce?.ltp
+  const peLtpChanged = previousStrike?.pe?.ltp !== undefined && previousStrike.pe.ltp !== pe?.ltp
 
-  const ceFlashClass = ceLtpChanged ? (ce && previous?.ce && ce.ltp > previous.ce.ltp ? 'bg-green-500/30' : 'bg-red-500/30') : ''
-  const peFlashClass = peLtpChanged ? (pe && previous?.pe && pe.ltp > previous.pe.ltp ? 'bg-green-500/30' : 'bg-red-500/30') : ''
+  const ceFlashClass = ceLtpChanged ? (ce && previousStrike?.ce && ce.ltp > previousStrike.ce.ltp ? 'bg-green-500/30' : 'bg-red-500/30') : ''
+  const peFlashClass = peLtpChanged ? (pe && previousStrike?.pe && pe.ltp > previousStrike.pe.ltp ? 'bg-green-500/30' : 'bg-red-500/30') : ''
 
   const ceSpread = ce && ce.bid > 0 && ce.ask > 0 ? ce.ask - ce.bid : 0
   const peSpread = pe && pe.bid > 0 && pe.ask > 0 ? pe.ask - pe.bid : 0
@@ -407,7 +408,7 @@ function OptionChainRow({
       )}
     </TableRow>
   )
-}
+})
 
 export default function OptionChain() {
   const { apiKey } = useAuthStore()
@@ -429,7 +430,8 @@ export default function OptionChain() {
 
   const [selectedExpiry, setSelectedExpiry] = useState('')
   const [expiries, setExpiries] = useState<string[]>([])
-  const [previousData, setPreviousData] = useState<Map<number, OptionStrike>>(new Map())
+  // Use ref for previous data to avoid causing re-renders and enable proper flash animation
+  const previousDataRef = useRef<Map<number, OptionStrike>>(new Map())
   const [orderDialog, setOrderDialog] = useState<{
     open: boolean
     symbol: string
@@ -462,28 +464,34 @@ export default function OptionChain() {
         const response = await optionChainApi.getExpiries(apiKey, selectedUnderlying, optionExchange)
         if (response.status === 'success' && response.data.length > 0) {
           setExpiries(response.data)
-          if (!selectedExpiry) {
-            setSelectedExpiry(response.data[0])
-          }
+          // Only set expiry if not already set (avoid overwriting user selection)
+          setSelectedExpiry(prev => prev || response.data[0])
         } else {
-          showToast.error(response.message || 'Failed to load expiries', 'orders')
+          showToast.error(response.message || 'Failed to load expiries')
         }
       } catch (err) {
         console.error('Error loading expiries:', err)
-        showToast.error('Failed to load expiry dates', 'orders')
+        showToast.error('Failed to load expiry dates')
       }
     }
 
     loadExpiries()
-  }, [apiKey, selectedUnderlying, optionExchange, selectedExpiry])
+    // Note: selectedExpiry removed from deps to prevent re-fetch on expiry change
+  }, [apiKey, selectedUnderlying, optionExchange])
 
+  // Update previous data ref after render (for flash animation)
+  // Using useEffect to update AFTER the current data is rendered
   useEffect(() => {
     if (data?.chain) {
-      const newMap = new Map<number, OptionStrike>()
-      data.chain.forEach((strike) => {
-        newMap.set(strike.strike, strike)
-      })
-      setPreviousData(newMap)
+      // Schedule the ref update for after render so the current render uses old previous data
+      const timeoutId = setTimeout(() => {
+        const newMap = new Map<number, OptionStrike>()
+        data.chain.forEach((strike) => {
+          newMap.set(strike.strike, strike)
+        })
+        previousDataRef.current = newMap
+      }, 100) // Short delay to allow flash animation to show
+      return () => clearTimeout(timeoutId)
     }
   }, [data?.chain])
 
@@ -510,6 +518,11 @@ export default function OptionChain() {
       lotSize: params.lotSize,
       tickSize: params.tickSize,
     })
+  }, [])
+
+  // Memoized callback for dialog close to prevent re-renders
+  const handleOrderDialogClose = useCallback((open: boolean) => {
+    if (!open) setOrderDialog(null)
   }, [])
 
   const pcr = useMemo(() => (data?.chain ? calculatePCR(data.chain) : 0), [data?.chain])
@@ -741,7 +754,7 @@ export default function OptionChain() {
                       <OptionChainRow
                         key={strike.strike}
                         strike={strike}
-                        previousData={previousData}
+                        previousStrike={previousDataRef.current.get(strike.strike)}
                         maxBarValue={maxBarValue}
                         visibleCeColumns={visibleCeColumns}
                         visiblePeColumns={visiblePeColumns}
@@ -787,9 +800,7 @@ export default function OptionChain() {
       {/* Place Order Dialog */}
       <PlaceOrderDialog
         open={orderDialog?.open ?? false}
-        onOpenChange={(open) => {
-          if (!open) setOrderDialog(null)
-        }}
+        onOpenChange={handleOrderDialogClose}
         symbol={orderDialog?.symbol}
         exchange={orderDialog?.exchange}
         action={orderDialog?.action}
