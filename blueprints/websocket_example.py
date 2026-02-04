@@ -40,19 +40,7 @@ socketio_subscribers = {}
 def get_username_from_session():
     """Get username from current session"""
     username = session.get("user")
-    if username:
-        logger.info(f"Debug: username='{username}'")
-
-        # Check if API key exists for this user (using username directly)
-        from database.auth_db import get_api_key_for_tradingview
-
-        api_key = get_api_key_for_tradingview(username)
-        logger.info(f"Debug: API key found for username '{username}': {bool(api_key)}")
-
-        return username
-    else:
-        logger.warning("Debug: No username in session")
-    return None
+    return username if username else None
 
 
 @websocket_bp.route("/websocket/dashboard")
