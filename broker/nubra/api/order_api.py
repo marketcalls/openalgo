@@ -3,7 +3,7 @@ import os
 
 import httpx
 
-from broker.angel.mapping.transform_data import (
+from broker.nubra.mapping.transform_data import (
     map_product_type,
     reverse_map_product_type,
     transform_data,
@@ -16,10 +16,13 @@ from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
+# Nubra API Base URL
+NUBRA_BASE_URL = "https://api.nubra.io"
+
 
 def get_api_response(endpoint, auth, method="GET", payload=""):
     AUTH_TOKEN = auth
-    api_key = os.getenv("BROKER_API_KEY")
+    device_id = "OPENALGO"  # Fixed device ID, same as auth_api.py
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -28,15 +31,10 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
         "Authorization": f"Bearer {AUTH_TOKEN}",
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "X-UserType": "USER",
-        "X-SourceID": "WEB",
-        "X-ClientLocalIP": "CLIENT_LOCAL_IP",
-        "X-ClientPublicIP": "CLIENT_PUBLIC_IP",
-        "X-MACAddress": "MAC_ADDRESS",
-        "X-PrivateKey": api_key,
+        "x-device-id": device_id,
     }
 
-    url = f"https://apiconnect.angelbroking.com{endpoint}"
+    url = f"{NUBRA_BASE_URL}{endpoint}"
 
     if method == "GET":
         response = client.get(url, headers=headers)
@@ -60,7 +58,13 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
 
 def get_order_book(auth):
-    return get_api_response("/rest/secure/angelbroking/order/v1/getOrderBook", auth)
+    """
+    Fetch all orders for the day from Nubra API.
+    
+    Nubra API: GET /orders/v2
+    Returns list of orders with their current status.
+    """
+    return get_api_response("/orders/v2", auth)
 
 
 def get_trade_book(auth):
@@ -68,7 +72,15 @@ def get_trade_book(auth):
 
 
 def get_positions(auth):
-    return get_api_response("/rest/secure/angelbroking/order/v1/getPosition", auth)
+    """
+    Fetch positions from Nubra's API.
+    
+    Nubra API: GET /portfolio/positions
+    Returns list of positions with fields like ref_id, ref_data, quantity, etc.
+    """
+    response = get_api_response("/portfolio/positions", auth)
+    logger.info(f"Nubra Raw position book response: {response}")
+    return response
 
 
 def get_holdings(auth):
@@ -76,85 +88,124 @@ def get_holdings(auth):
 
 
 def get_open_position(tradingsymbol, exchange, producttype, auth):
+    """
+    Get the net quantity for a specific position.
+    Uses Nubra's position data format with portfolio.stock_positions, fut_positions, opt_positions.
+    """
     # Convert Trading Symbol from OpenAlgo Format to Broker Format Before Search in OpenPosition
     tradingsymbol = get_br_symbol(tradingsymbol, exchange)
     positions_data = get_positions(auth)
 
-    logger.debug(f"{positions_data}")
+    logger.debug(f"Nubra positions data: {positions_data}")
 
     net_qty = "0"
 
-    if positions_data and positions_data.get("status") and positions_data.get("data"):
-        for position in positions_data["data"]:
-            if (
-                position.get("tradingsymbol") == tradingsymbol
-                and position.get("exchange") == exchange
-                and position.get("producttype") == producttype
-            ):
-                net_qty = position.get("netqty", "0")
-                break  # Assuming you need the first match
+    # Nubra returns positions in portfolio.stock_positions, portfolio.fut_positions, portfolio.opt_positions
+    positions = []
+    if isinstance(positions_data, dict):
+        portfolio = positions_data.get("portfolio", positions_data)
+        
+        stock_positions = portfolio.get("stock_positions") or []
+        fut_positions = portfolio.get("fut_positions") or []
+        opt_positions = portfolio.get("opt_positions") or []
+        
+        positions = stock_positions + fut_positions + opt_positions
+    elif isinstance(positions_data, list):
+        positions = positions_data
+
+    for position in positions:
+        pos_exchange = position.get("exchange", "")
+        pos_symbol = position.get("symbol", position.get("display_name", ""))
+        ref_id = str(position.get("ref_id", ""))
+        
+        # Map product type from Nubra format
+        product = position.get("product", "")
+        if product == "ORDER_DELIVERY_TYPE_CNC":
+            pos_producttype = "CNC"
+        elif product == "ORDER_DELIVERY_TYPE_IDAY":
+            pos_producttype = "MIS"
+        elif product == "ORDER_DELIVERY_TYPE_NRML":
+            pos_producttype = "NRML"
+        else:
+            pos_producttype = product
+        
+        # Check for matching position
+        if pos_exchange == exchange and pos_producttype == producttype:
+            # Match by symbol or ref_id
+            symbol_from_db = get_symbol(ref_id, pos_exchange)
+            
+            if symbol_from_db == tradingsymbol or pos_symbol == tradingsymbol:
+                # Nubra uses 'qty' for position quantity
+                qty = position.get("qty", position.get("quantity", 0)) or 0
+                order_side = position.get("order_side", "BUY")
+                # For sell positions, return negative quantity
+                net_qty = str(qty) if order_side == "BUY" else str(-qty)
+                break
 
     return net_qty
 
 
 def place_order_api(data, auth):
+    """
+    Place a single order using Nubra's API.
+    
+    Nubra API: POST /orders/v2/single
+    """
     AUTH_TOKEN = auth
-    BROKER_API_KEY = os.getenv("BROKER_API_KEY")
-    data["apikey"] = BROKER_API_KEY
+    device_id = "OPENALGO"  # Fixed device ID, same as auth_api.py
+    
+    # Get token (ref_id) for the symbol
     token = get_token(data["symbol"], data["exchange"])
-    newdata = transform_data(data, token)
+    
+    logger.info(f"Nubra order - Symbol: {data['symbol']}, Exchange: {data['exchange']}, Token: {token}")
+    
+    # Transform OpenAlgo data to Nubra format
+    nubra_data = transform_data(data, token)
+    
     headers = {
         "Authorization": f"Bearer {AUTH_TOKEN}",
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "X-UserType": "USER",
-        "X-SourceID": "WEB",
-        "X-ClientLocalIP": "CLIENT_LOCAL_IP",
-        "X-ClientPublicIP": "CLIENT_PUBLIC_IP",
-        "X-MACAddress": "MAC_ADDRESS",
-        "X-PrivateKey": newdata["apikey"],
+        "x-device-id": device_id,
     }
-    payload = json.dumps(
-        {
-            "variety": newdata.get("variety", "NORMAL"),
-            "tradingsymbol": newdata["tradingsymbol"],
-            "symboltoken": newdata["symboltoken"],
-            "transactiontype": newdata["transactiontype"],
-            "exchange": newdata["exchange"],
-            "ordertype": newdata.get("ordertype", "MARKET"),
-            "producttype": newdata.get("producttype", "INTRADAY"),
-            "duration": newdata.get("duration", "DAY"),
-            "price": newdata.get("price", "0"),
-            "triggerprice": newdata.get("triggerprice", "0"),
-            "squareoff": newdata.get("squareoff", "0"),
-            "stoploss": newdata.get("stoploss", "0"),
-            "quantity": newdata["quantity"],
-        }
-    )
-
-    logger.debug(f"{payload}")
+    
+    payload = json.dumps(nubra_data)
+    
+    logger.info(f"Nubra place order payload: {payload}")
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
     # Make the request using the shared client
     response = client.post(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/placeOrder",
+        f"{NUBRA_BASE_URL}/orders/v2/single",
         headers=headers,
         content=payload,
     )
 
-    # Add status attribute to make response compatible with http.client response
-    # as the rest of the codebase expects .status instead of .status_code
-    response.status = response.status_code
-
     # Parse the JSON response
-    response_data = response.json()
+    try:
+        response_data = response.json()
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse order response: {response.text}")
+        response_data = {"error": "Failed to parse response"}
+        return response, response_data, None
 
-    if response_data["status"] == True:
-        orderid = response_data["data"]["orderid"]
+    logger.info(f"Nubra place order response (status={response.status_code}): {response_data}")
+
+    # Nubra returns 201 (Created) on success with order_id in response
+    if response.status_code in [200, 201] and "order_id" in response_data:
+        orderid = str(response_data["order_id"])
+        # Normalize response format for OpenAlgo compatibility
+        response_data["status"] = True
+        response_data["data"] = {"orderid": orderid}
+        # OpenAlgo service layer expects status 200 for success
+        response.status = 200
     else:
         orderid = None
+        response_data["status"] = False
+        response.status = response.status_code
+        
     return response, response_data, orderid
 
 
@@ -172,7 +223,7 @@ def place_smartorder_api(data, auth):
 
     # Get current open position for the symbol
     current_position = int(
-        get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
+        get_open_position(symbol, exchange, product, AUTH_TOKEN)
     )
 
     logger.info(f"position_size : {position_size}")
@@ -244,60 +295,103 @@ def place_smartorder_api(data, auth):
 
 
 def close_all_positions(current_api_key, auth):
-    # Fetch the current open positions
+    """
+    Close all open positions using Nubra's API.
+    
+    Fetches positions from portfolio.stock_positions, portfolio.fut_positions,
+    portfolio.opt_positions and places market orders to close each one.
+    """
     AUTH_TOKEN = auth
 
     positions_response = get_positions(AUTH_TOKEN)
+    
+    logger.info(f"Nubra positions response: {positions_response}")
 
-    # Check if the positions data is null or empty
-    if positions_response["data"] is None or not positions_response["data"]:
+    # Handle Nubra's response format - portfolio contains stock_positions, fut_positions, opt_positions
+    positions = []
+    if isinstance(positions_response, dict):
+        portfolio = positions_response.get("portfolio", positions_response)
+        
+        # Collect positions from all position types
+        stock_positions = portfolio.get("stock_positions") or []
+        fut_positions = portfolio.get("fut_positions") or []
+        opt_positions = portfolio.get("opt_positions") or []
+        
+        positions = stock_positions + fut_positions + opt_positions
+        
+        if positions_response.get("error"):
+            logger.warning(f"Nubra positions error: {positions_response}")
+            return {"message": "Failed to fetch positions"}, 500
+    elif isinstance(positions_response, list):
+        positions = positions_response
+
+    # Check if positions is empty
+    if not positions:
         return {"message": "No Open Positions Found"}, 200
 
-    if positions_response["status"]:
-        # Loop through each position to close
-        for position in positions_response["data"]:
-            # Skip if net quantity is zero
-            if int(position["netqty"]) == 0:
-                continue
+    # Loop through each position to close
+    for position in positions:
+        # Get quantity - Nubra uses 'qty' in position data
+        qty = int(position.get("qty", position.get("quantity", 0)) or 0)
+        
+        # Skip if quantity is zero
+        if qty == 0:
+            continue
 
-            # Determine action based on net quantity
-            action = "SELL" if int(position["netqty"]) > 0 else "BUY"
-            quantity = abs(int(position["netqty"]))
+        # Determine action based on order_side (opposite to close)
+        order_side = position.get("order_side", "BUY")
+        # To close, we do the opposite action
+        action = "SELL" if order_side == "BUY" else "BUY"
+        quantity = abs(qty)
 
-            # get openalgo symbol to send to placeorder function
-            symbol = get_symbol(position["symboltoken"], position["exchange"])
-            logger.info(f"The Symbol is {symbol}")
+        # Get exchange from position
+        exchange = position.get("exchange", "NSE")
+        
+        # Get symbol from position - use 'symbol' field
+        symbol = position.get("symbol", position.get("display_name", ""))
+        ref_id = str(position.get("ref_id", ""))
+        
+        # Try to get OpenAlgo symbol from database using ref_id
+        oa_symbol = get_symbol(ref_id, exchange)
+        if oa_symbol:
+            symbol = oa_symbol
+        
+        logger.info(f"Closing position - Symbol: {symbol}, Exchange: {exchange}, Qty: {quantity}, Action: {action}")
 
-            # Prepare the order payload
-            place_order_payload = {
-                "apikey": current_api_key,
-                "strategy": "Squareoff",
-                "symbol": symbol,
-                "action": action,
-                "exchange": position["exchange"],
-                "pricetype": "MARKET",
-                "product": reverse_map_product_type(position["producttype"]),
-                "quantity": str(quantity),
-            }
+        # Map product type - Nubra uses 'product' like ORDER_DELIVERY_TYPE_CNC
+        product_type = position.get("product", "ORDER_DELIVERY_TYPE_IDAY")
+        product = reverse_map_product_type(product_type)
 
-            logger.info(f"{place_order_payload}")
+        # Prepare the order payload
+        place_order_payload = {
+            "apikey": current_api_key,
+            "strategy": "Squareoff",
+            "symbol": symbol,
+            "action": action,
+            "exchange": exchange,
+            "pricetype": "MARKET",
+            "product": product,
+            "quantity": str(quantity),
+        }
 
-            # Place the order to close the position
-            res, response, orderid = place_order_api(place_order_payload, auth)
+        logger.info(f"Close position payload: {place_order_payload}")
 
-            # logger.info(f"{res}")
-            # logger.info(f"{response}")
-            # logger.info(f"{orderid}")
-
-            # Note: Ensure place_order_api handles any errors and logs accordingly
+        # Place the order to close the position
+        res, response, orderid = place_order_api(place_order_payload, auth)
+        
+        logger.info(f"Close position response: {response}, orderid: {orderid}")
 
     return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
 
 
 def cancel_order(orderid, auth):
-    # Assuming you have a function to get the authentication token
+    """
+    Cancel an order using Nubra's API.
+    
+    Nubra API: DELETE /orders/{order_id}
+    """
     AUTH_TOKEN = auth
-    api_key = os.getenv("BROKER_API_KEY")
+    device_id = "OPENALGO"  # Fixed device ID, same as auth_api.py
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -307,77 +401,87 @@ def cancel_order(orderid, auth):
         "Authorization": f"Bearer {AUTH_TOKEN}",
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "X-UserType": "USER",
-        "X-SourceID": "WEB",
-        "X-ClientLocalIP": "CLIENT_LOCAL_IP",
-        "X-ClientPublicIP": "CLIENT_PUBLIC_IP",
-        "X-MACAddress": "MAC_ADDRESS",
-        "X-PrivateKey": api_key,
+        "x-device-id": device_id,
     }
 
-    # Prepare the payload
-    payload = json.dumps(
-        {
-            "variety": "NORMAL",
-            "orderid": orderid,
-        }
-    )
-
-    # Make the request using the shared client
-    response = client.post(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/cancelOrder",
+    # Make the DELETE request using the shared client
+    response = client.delete(
+        f"{NUBRA_BASE_URL}/orders/{orderid}",
         headers=headers,
-        content=payload,
     )
 
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
 
-    data = json.loads(response.text)
+    # Handle empty response
+    if not response.text:
+        if response.status_code in [200, 204]:
+            return {"status": "success", "orderid": orderid}, 200
+        else:
+            return {"status": "error", "message": "Empty response from API"}, response.status_code
+
+    try:
+        data = json.loads(response.text)
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse cancel order response: {response.text}")
+        return {"status": "error", "message": "Failed to parse response"}, response.status_code
+
+    logger.info(f"Nubra cancel order response (status={response.status_code}): {data}")
 
     # Check if the request was successful
-    if data.get("status"):
-        # Return a success response
-        return {"status": "success", "orderid": orderid}, 200
+    # Nubra returns {"message": "delete request pushed"} on success
+    if response.status_code in [200, 204]:
+        if data.get("message") == "delete request pushed":
+            return {"status": "success", "orderid": orderid}, 200
+        elif data.get("order_id") or data.get("status") == "cancelled":
+            return {"status": "success", "orderid": orderid}, 200
+        else:
+            # Assume success if status code is 200/204
+            return {"status": "success", "orderid": orderid}, 200
     else:
         # Return an error response
         return {
             "status": "error",
-            "message": data.get("message", "Failed to cancel order"),
-        }, response.status
+            "message": data.get("message", data.get("error", "Failed to cancel order")),
+        }, response.status_code
 
 
 def modify_order(data, auth):
-    # Assuming you have a function to get the authentication token
+    """
+    Modify an order using Nubra's API.
+    
+    Nubra API: POST /orders/v2/modify/{order_id}
+    
+    Compulsory fields: order_price, order_qty, exchange, order_type
+    For ORDER_TYPE_STOPLOSS: also requires trigger_price in algo_params
+    """
     AUTH_TOKEN = auth
-    api_key = os.getenv("BROKER_API_KEY")
+    device_id = "OPENALGO"  # Fixed device ID, same as auth_api.py
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
-    token = get_token(data["symbol"], data["exchange"])
-    data["symbol"] = get_br_symbol(data["symbol"], data["exchange"])
-
-    transformed_data = transform_modify_order_data(
-        data, token
-    )  # You need to implement this function
+    # Transform OpenAlgo data to Nubra modify order format
+    # Note: token/ref_id is not needed for modify order
+    transformed_data = transform_modify_order_data(data, None)
+    
+    # Get order_id from the data
+    orderid = data.get("orderid", "")
+    
     # Set up the request headers
     headers = {
         "Authorization": f"Bearer {AUTH_TOKEN}",
         "Content-Type": "application/json",
         "Accept": "application/json",
-        "X-UserType": "USER",
-        "X-SourceID": "WEB",
-        "X-ClientLocalIP": "CLIENT_LOCAL_IP",
-        "X-ClientPublicIP": "CLIENT_PUBLIC_IP",
-        "X-MACAddress": "MAC_ADDRESS",
-        "X-PrivateKey": api_key,
+        "x-device-id": device_id,
     }
     payload = json.dumps(transformed_data)
+    
+    logger.info(f"Nubra modify order payload: {payload}")
 
-    # Make the request using the shared client
+    # Make the POST request using the shared client
     response = client.post(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/modifyOrder",
+        f"{NUBRA_BASE_URL}/orders/v2/modify/{orderid}",
         headers=headers,
         content=payload,
     )
@@ -385,32 +489,74 @@ def modify_order(data, auth):
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
 
-    data = json.loads(response.text)
+    # Handle empty response
+    if not response.text:
+        if response.status_code in [200, 204]:
+            return {"status": "success", "orderid": orderid}, 200
+        else:
+            return {"status": "error", "message": "Empty response from API"}, response.status_code
 
-    if data.get("status") == "true" or data.get("message") == "SUCCESS":
-        return {"status": "success", "orderid": data["data"]["orderid"]}, 200
+    try:
+        response_data = json.loads(response.text)
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse modify order response: {response.text}")
+        return {"status": "error", "message": "Failed to parse response"}, response.status_code
+
+    logger.info(f"Nubra modify order response (status={response.status_code}): {response_data}")
+
+    # Check if the request was successful
+    # Nubra returns {"message": "update request pushed"} on success
+    if response.status_code in [200, 201]:
+        if response_data.get("message") == "update request pushed":
+            return {"status": "success", "orderid": orderid}, 200
+        elif response_data.get("order_id"):
+            return {"status": "success", "orderid": str(response_data["order_id"])}, 200
+        else:
+            # Assume success if status code is 200/201
+            return {"status": "success", "orderid": orderid}, 200
     else:
         return {
             "status": "error",
-            "message": data.get("message", "Failed to modify order"),
-        }, response.status
+            "message": response_data.get("message", response_data.get("error", "Failed to modify order")),
+        }, response.status_code
 
 
 def cancel_all_orders_api(data, auth):
-    # Get the order book
-
+    """
+    Cancel all open orders using Nubra's API.
+    
+    Nubra API returns orders as a list with order_id and order_status fields.
+    """
     AUTH_TOKEN = auth
 
     order_book_response = get_order_book(AUTH_TOKEN)
     # logger.info(f"{order_book_response}")
-    if order_book_response["status"] != True:
-        return [], []  # Return empty lists indicating failure to retrieve the order book
+    
+    # Nubra returns a list directly, or could return error dict
+    if isinstance(order_book_response, dict):
+        if order_book_response.get("error"):
+            return [], []  # Return empty lists indicating failure to retrieve the order book
+        orders = order_book_response.get("data", []) if "data" in order_book_response else []
+    elif isinstance(order_book_response, list):
+        orders = order_book_response
+    else:
+        return [], []
 
-    # Filter orders that are in 'open' or 'trigger_pending' state
+    if not orders:
+        return [], []
+
+    # Filter orders that are in 'open' or 'pending' state
+    # Nubra uses ORDER_STATUS_OPEN, ORDER_STATUS_PENDING
+    open_statuses = [
+        "ORDER_STATUS_OPEN", 
+        "ORDER_STATUS_PENDING",
+        "ORDER_STATUS_TRIGGER_PENDING",
+    ]
+    
     orders_to_cancel = [
         order
-        for order in order_book_response.get("data", [])
-        if order["status"] in ["open", "trigger pending"]
+        for order in orders
+        if order.get("order_status") in open_statuses
     ]
     # logger.info(f"{orders_to_cancel}")
     canceled_orders = []
@@ -418,11 +564,12 @@ def cancel_all_orders_api(data, auth):
 
     # Cancel the filtered orders
     for order in orders_to_cancel:
-        orderid = order["orderid"]
-        cancel_response, status_code = cancel_order(orderid, auth)
-        if status_code == 200:
-            canceled_orders.append(orderid)
-        else:
-            failed_cancellations.append(orderid)
+        orderid = str(order.get("order_id", ""))
+        if orderid:
+            cancel_response, status_code = cancel_order(orderid, auth)
+            if status_code == 200:
+                canceled_orders.append(orderid)
+            else:
+                failed_cancellations.append(orderid)
 
     return canceled_orders, failed_cancellations
