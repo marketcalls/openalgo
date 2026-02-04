@@ -22,7 +22,7 @@ import {
 } from '@/components/ui/select'
 import { useAuthStore } from '@/stores/authStore'
 import { useMarketData } from '@/hooks/useMarketData'
-import { tradingApi, type QuotesData } from '@/api/trading'
+import { tradingApi, type QuotesData, type DepthData } from '@/api/trading'
 import { showToast } from '@/utils/toast'
 import { cn } from '@/lib/utils'
 import { QuoteHeader } from './QuoteHeader'
@@ -115,8 +115,9 @@ export function PlaceOrderDialog({
   const [quantityMode, setQuantityMode] = useState<'lots' | 'shares'>('lots')
   const [lotMultiplier, setLotMultiplier] = useState(1)
 
-  // REST API fallback quotes (like useLivePrice pattern)
+  // REST API fallback data (like useLivePrice pattern)
   const [restQuotes, setRestQuotes] = useState<QuotesData | null>(null)
+  const [restDepth, setRestDepth] = useState<DepthData | null>(null)
   const [isLoadingQuotes, setIsLoadingQuotes] = useState(false)
 
   // Get available product types based on exchange
@@ -137,6 +138,21 @@ export function PlaceOrderDialog({
       console.debug('REST quotes fetch failed')
     } finally {
       setIsLoadingQuotes(false)
+    }
+  }, [apiKey, symbol, exchange])
+
+  // Fetch depth via REST API (fallback when WebSocket depth not available)
+  const fetchDepth = useCallback(async () => {
+    if (!apiKey || !symbol || !exchange) return
+
+    try {
+      const response = await tradingApi.getDepth(apiKey, symbol, exchange)
+      if (response.status === 'success' && response.data) {
+        setRestDepth(response.data)
+      }
+    } catch {
+      // Silently fail - REST depth is a fallback mechanism
+      console.debug('REST depth fetch failed')
     }
   }, [apiKey, symbol, exchange])
 
@@ -161,11 +177,13 @@ export function PlaceOrderDialog({
       setQuantityMode('lots')
       setLotMultiplier(1)
       setRestQuotes(null)
+      setRestDepth(null)
 
-      // Fetch REST quotes immediately when dialog opens
+      // Fetch REST quotes and depth immediately when dialog opens
       fetchQuotes()
+      fetchDepth()
     }
-  }, [open, initialAction, initialQuantity, lotSize, initialPriceType, initialProduct, exchange, fetchQuotes])
+  }, [open, initialAction, initialQuantity, lotSize, initialPriceType, initialProduct, exchange, fetchQuotes, fetchDepth])
 
   // Real-time market data via WebSocket
   const { data: marketDataMap, isConnected } = useMarketData({
@@ -176,20 +194,26 @@ export function PlaceOrderDialog({
 
   const wsData = marketDataMap.get(`${exchange}:${symbol}`)?.data
 
+  // Convert REST depth format (bids/asks) to WebSocket depth format (buy/sell)
+  const restDepthConverted = restDepth ? {
+    buy: restDepth.bids.map(level => ({ price: level.price, quantity: level.quantity })),
+    sell: restDepth.asks.map(level => ({ price: level.price, quantity: level.quantity })),
+  } : undefined
+
   // Merge WebSocket and REST data - WebSocket takes priority when available
   // This ensures data shows immediately from REST, then updates from WebSocket
   const mergedData = {
-    ltp: wsData?.ltp ?? restQuotes?.ltp,
-    close: wsData?.close ?? restQuotes?.prev_close,
+    ltp: wsData?.ltp ?? restDepth?.ltp ?? restQuotes?.ltp,
+    close: wsData?.close ?? restDepth?.prev_close ?? restQuotes?.prev_close,
     change: wsData?.change,
     change_percent: wsData?.change_percent,
-    // Bid/Ask: prefer depth data, then WebSocket quote data, then REST
-    bidPrice: wsData?.depth?.buy?.[0]?.price ?? wsData?.bid_price ?? restQuotes?.bid,
-    askPrice: wsData?.depth?.sell?.[0]?.price ?? wsData?.ask_price ?? restQuotes?.ask,
-    bidSize: wsData?.depth?.buy?.[0]?.quantity ?? wsData?.bid_size,
-    askSize: wsData?.depth?.sell?.[0]?.quantity ?? wsData?.ask_size,
-    // Depth only from WebSocket
-    depth: wsData?.depth,
+    // Bid/Ask: prefer WebSocket depth, then REST depth, then WebSocket quote, then REST quotes
+    bidPrice: wsData?.depth?.buy?.[0]?.price ?? restDepthConverted?.buy?.[0]?.price ?? wsData?.bid_price ?? restQuotes?.bid,
+    askPrice: wsData?.depth?.sell?.[0]?.price ?? restDepthConverted?.sell?.[0]?.price ?? wsData?.ask_price ?? restQuotes?.ask,
+    bidSize: wsData?.depth?.buy?.[0]?.quantity ?? restDepthConverted?.buy?.[0]?.quantity ?? wsData?.bid_size,
+    askSize: wsData?.depth?.sell?.[0]?.quantity ?? restDepthConverted?.sell?.[0]?.quantity ?? wsData?.ask_size,
+    // Depth: prefer WebSocket, fallback to REST depth
+    depth: wsData?.depth ?? restDepthConverted,
   }
 
   // Calculate change from REST data if WebSocket doesn't have it
