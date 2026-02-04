@@ -138,6 +138,43 @@ export function useMarketData({
     [isAuthenticated, mode]
   )
 
+  // Unsubscribe from symbols no longer needed
+  const unsubscribeFromSymbols = useCallback(
+    (symbolsToUnsubscribe: Array<{ symbol: string; exchange: string }>) => {
+      if (
+        !socketRef.current ||
+        socketRef.current.readyState !== WebSocket.OPEN ||
+        symbolsToUnsubscribe.length === 0
+      ) {
+        return
+      }
+
+      socketRef.current.send(
+        JSON.stringify({
+          action: 'unsubscribe',
+          symbols: symbolsToUnsubscribe,
+        })
+      )
+
+      // Remove from tracked subscriptions and market data
+      symbolsToUnsubscribe.forEach((s) => {
+        const key = `${s.exchange}:${s.symbol}`
+        subscribedSymbolsRef.current.delete(key)
+      })
+
+      // Clean up market data for unsubscribed symbols
+      setMarketData((prev) => {
+        const updated = new Map(prev)
+        symbolsToUnsubscribe.forEach((s) => {
+          const key = `${s.exchange}:${s.symbol}`
+          updated.delete(key)
+        })
+        return updated
+      })
+    },
+    []
+  )
+
   // Handle incoming WebSocket messages
   const handleMessage = useCallback(
     (event: MessageEvent) => {
@@ -332,12 +369,32 @@ export function useMarketData({
     }
   }, [enabled, symbols.length, isConnected, isConnecting, connect])
 
-  // Subscribe to new symbols when authenticated
+  // Track previous symbols to detect changes
+  const prevSymbolsRef = useRef<Array<{ symbol: string; exchange: string }>>([])
+
+  // Subscribe to new symbols and unsubscribe from old ones when authenticated
   useEffect(() => {
-    if (isAuthenticated && symbols.length > 0) {
+    if (!isAuthenticated) return
+
+    // Find symbols to unsubscribe (were in prev but not in current)
+    const currentKeys = new Set(symbols.map(s => `${s.exchange}:${s.symbol}`))
+    const symbolsToUnsubscribe = prevSymbolsRef.current.filter(
+      s => !currentKeys.has(`${s.exchange}:${s.symbol}`)
+    )
+
+    // Unsubscribe from old symbols
+    if (symbolsToUnsubscribe.length > 0) {
+      unsubscribeFromSymbols(symbolsToUnsubscribe)
+    }
+
+    // Subscribe to new symbols
+    if (symbols.length > 0) {
       subscribeToSymbols(symbols)
     }
-  }, [isAuthenticated, symbols, subscribeToSymbols])
+
+    // Update previous symbols ref
+    prevSymbolsRef.current = [...symbols]
+  }, [isAuthenticated, symbols, subscribeToSymbols, unsubscribeFromSymbols])
 
   // Cleanup on unmount
   useEffect(() => {
