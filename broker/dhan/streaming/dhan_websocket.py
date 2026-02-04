@@ -185,7 +185,7 @@ class DhanWebSocket:
                     reconnect_attempt = 0
 
     def disconnect(self):
-        """Disconnect from WebSocket"""
+        """Disconnect from WebSocket with proper resource cleanup"""
         # Store connected state before clearing
         was_connected = self.connected
 
@@ -201,19 +201,27 @@ class DhanWebSocket:
             except Exception as e:
                 self.logger.debug(f"Error sending disconnect message: {e}")
 
-        # Close WebSocket
+        # Close WebSocket with try/finally to ensure reference is cleared
         if self.ws:
             try:
                 self.ws.close()
             except Exception as e:
                 self.logger.debug(f"Error closing WebSocket: {e}")
+            finally:
+                self.ws = None  # Always clear WebSocket reference
 
         # Wait for WebSocket thread to finish
         if self.ws_thread and self.ws_thread.is_alive():
             self.ws_thread.join(timeout=2)
-            self.logger.debug(
-                f"WebSocket thread {'stopped' if not self.ws_thread.is_alive() else 'timeout'}"
-            )
+            if self.ws_thread.is_alive():
+                self.logger.debug("WebSocket thread timeout - will be orphaned (daemon)")
+            else:
+                self.logger.debug("WebSocket thread stopped")
+        self.ws_thread = None  # Clear thread reference
+
+        # Clear subscription tracking
+        with self.lock:
+            self.subscriptions.clear()
 
     def subscribe(self, instruments: list[dict[str, str]], mode: str = "FULL"):
         """
@@ -617,3 +625,35 @@ class DhanWebSocket:
 
             reason = disconnect_reasons.get(disconnect_code, "Unknown reason")
             self.logger.warning(f"Disconnect reason: {reason}")
+
+    def cleanup(self):
+        """
+        Full cleanup of all resources. Call this when completely done with the instance.
+        """
+        self.logger.debug("Running full cleanup of DhanWebSocket...")
+        self.disconnect()
+
+        # Clear all callbacks to prevent circular references
+        self.on_open = None
+        self.on_message = None
+        self.on_data = None
+        self.on_error = None
+        self.on_close = None
+
+        self.logger.debug("DhanWebSocket cleanup completed")
+
+    def __del__(self):
+        """Destructor to ensure resources are cleaned up"""
+        try:
+            if hasattr(self, 'running') and self.running:
+                self.running = False
+                self.connected = False
+                # Try to close WebSocket if still open
+                if hasattr(self, 'ws') and self.ws:
+                    try:
+                        self.ws.close()
+                    except Exception:
+                        pass
+                    self.ws = None
+        except Exception:
+            pass  # Ignore errors during destruction

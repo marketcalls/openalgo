@@ -157,20 +157,55 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.ws_client_20depth.connect()
 
     def disconnect(self) -> None:
-        """Disconnect from Dhan WebSocket endpoints"""
+        """Disconnect from Dhan WebSocket endpoints with proper resource cleanup"""
+        self.logger.debug("Starting Dhan adapter disconnect sequence...")
         self.running = False
 
-        if self.ws_client_5depth:
-            self.ws_client_5depth.disconnect()
+        # Store references before clearing (prevents double cleanup attempts)
+        ws_5depth = self.ws_client_5depth
+        ws_20depth = self.ws_client_20depth
+        self.ws_client_5depth = None
+        self.ws_client_20depth = None
 
-        if self.ws_client_20depth:
-            self.ws_client_20depth.disconnect()
+        try:
+            # Disconnect 5-depth WebSocket
+            if ws_5depth:
+                try:
+                    ws_5depth.cleanup()
+                    self.logger.debug("5-depth WebSocket disconnected and cleaned up")
+                except Exception as e:
+                    self.logger.debug(f"Error disconnecting 5-depth WebSocket: {e}")
 
-        # Clean up ZeroMQ resources
-        self.cleanup_zmq()
+            # Disconnect 20-depth WebSocket
+            if ws_20depth:
+                try:
+                    ws_20depth.cleanup()
+                    self.logger.debug("20-depth WebSocket disconnected and cleaned up")
+                except Exception as e:
+                    self.logger.debug(f"Error disconnecting 20-depth WebSocket: {e}")
 
-        # Stop fallback monitor
-        self.stop_fallback_monitor()
+            # Stop fallback monitor thread
+            self._stop_fallback_monitor_internal()
+
+            # Clear all state for clean reconnection
+            with self.lock:
+                self.subscriptions_5depth.clear()
+                self.subscriptions_20depth.clear()
+                self.subscriptions.clear()
+                self.depth_20_accumulator.clear()
+                self.depth_20_timeouts.clear()
+                self.depth_20_data_received.clear()
+                self.depth_20_fallbacks.clear()
+                self.connected = False
+
+            self.logger.debug("Dhan adapter state cleared")
+
+        finally:
+            # Always clean up ZeroMQ resources
+            try:
+                self.cleanup_zmq()
+            except Exception as e:
+                self.logger.warning(f"ZMQ cleanup error: {e}")
 
     def subscribe(
         self, symbol: str, exchange: str, mode: int = 2, depth_level: int = 5
@@ -445,43 +480,13 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         Returns:
             Dict: Response with status
         """
-        unsubscribed_count = 0
-
-        # Stop fallback monitor first
-        self.stop_fallback_monitor()
-
+        # Count subscriptions before disconnect clears them
         with self.lock:
-            # Count total subscriptions before clearing
             unsubscribed_count = len(self.subscriptions_5depth) + len(self.subscriptions_20depth)
 
-            # Clear all subscriptions
-            self.subscriptions_5depth.clear()
-            self.subscriptions_20depth.clear()
-            self.subscriptions.clear()
+        # Centralized teardown - disconnect() handles all cleanup
+        self.disconnect()
 
-            # Clear fallback tracking
-            self.depth_20_timeouts.clear()
-            self.depth_20_data_received.clear()
-            self.depth_20_fallbacks.clear()
-            self.depth_20_accumulator.clear()
-
-        # Disconnect from WebSocket servers
-        if self.ws_client_5depth:
-            try:
-                self.ws_client_5depth.disconnect()
-                self.logger.debug("Disconnected from Dhan 5-depth WebSocket")
-            except Exception as e:
-                self.logger.error(f"Error disconnecting 5-depth WebSocket: {e}")
-
-        if self.ws_client_20depth:
-            try:
-                self.ws_client_20depth.disconnect()
-                self.logger.debug("Disconnected from Dhan 20-depth WebSocket")
-            except Exception as e:
-                self.logger.error(f"Error disconnecting 20-depth WebSocket: {e}")
-
-        # Clean up ZeroMQ resources
-        self.cleanup_zmq()
         self.logger.info(
             f"Dhan adapter disconnected and cleaned up after unsubscribing {unsubscribed_count} instruments"
         )
@@ -761,11 +766,19 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.debug("Started fallback monitor thread")
 
     def stop_fallback_monitor(self):
-        """Stop the fallback monitoring thread"""
+        """Stop the fallback monitoring thread (also stops the adapter)"""
         self.running = False
+        self._stop_fallback_monitor_internal()
+
+    def _stop_fallback_monitor_internal(self):
+        """Internal method to stop fallback monitor without affecting running flag"""
         if self.fallback_monitor_thread and self.fallback_monitor_thread.is_alive():
             self.fallback_monitor_thread.join(timeout=2)
-            self.logger.debug("Stopped fallback monitor thread")
+            if self.fallback_monitor_thread.is_alive():
+                self.logger.debug("Fallback monitor thread timeout - will be orphaned (daemon)")
+            else:
+                self.logger.debug("Fallback monitor thread stopped")
+        self.fallback_monitor_thread = None  # Clear thread reference
 
     def _fallback_monitor_loop(self):
         """Monitor 20-depth subscriptions and fallback to 5-depth if no data received"""
@@ -862,3 +875,61 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         except Exception as e:
             self.logger.error(f"Error performing fallback for {correlation_id}: {e}", exc_info=True)
+
+    def cleanup(self) -> None:
+        """
+        Full cleanup of all resources. Call this when completely done with the adapter.
+        """
+        self.logger.info("Running full cleanup of Dhan adapter...")
+
+        try:
+            # Disconnect handles all cleanup
+            self.disconnect()
+        except Exception as e:
+            self.logger.error(f"Error during cleanup disconnect: {e}")
+            # Force cleanup even if disconnect fails
+            try:
+                self._stop_fallback_monitor_internal()
+            except Exception:
+                pass
+            try:
+                self.cleanup_zmq()
+            except Exception:
+                pass
+
+        # Clear all references
+        self.ws_client_5depth = None
+        self.ws_client_20depth = None
+        self.fallback_monitor_thread = None
+
+        self.logger.info("Dhan adapter cleanup completed")
+
+    def __del__(self):
+        """Destructor to ensure resources are cleaned up"""
+        try:
+            # During garbage collection, logger may not be available
+            if hasattr(self, 'running') and self.running:
+                self.running = False
+
+            # Try to clean up WebSocket clients
+            if hasattr(self, 'ws_client_5depth') and self.ws_client_5depth:
+                try:
+                    self.ws_client_5depth.disconnect()
+                except Exception:
+                    pass
+                self.ws_client_5depth = None
+
+            if hasattr(self, 'ws_client_20depth') and self.ws_client_20depth:
+                try:
+                    self.ws_client_20depth.disconnect()
+                except Exception:
+                    pass
+                self.ws_client_20depth = None
+
+            # Try to clean up ZMQ
+            try:
+                self.cleanup_zmq()
+            except Exception:
+                pass
+        except Exception:
+            pass  # Ignore all errors during destruction
