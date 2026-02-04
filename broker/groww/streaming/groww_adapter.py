@@ -207,13 +207,19 @@ class GrowwWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.running = False
 
         try:
-            # Disconnect WebSocket client
+            # Disconnect WebSocket client with full cleanup
             if self.ws_client:
                 try:
-                    self.ws_client.disconnect()
-                    self.logger.info("🔗 WebSocket client disconnected")
+                    # Use cleanup() for full resource release including HTTP session
+                    self.ws_client.cleanup()
+                    self.logger.info("🔗 WebSocket client disconnected and cleaned up")
                 except Exception as e:
                     self.logger.error(f"Error disconnecting WebSocket client: {e}")
+                    # Try basic disconnect as fallback
+                    try:
+                        self.ws_client.disconnect()
+                    except:
+                        pass
 
             # Clear all state for clean reconnection
             self.connected = False
