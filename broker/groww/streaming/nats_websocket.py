@@ -63,17 +63,17 @@ class GrowwNATSWebSocket:
         self.authenticated = False
         self.server_nonce = None  # Server nonce for signing
 
+        # Thread tracking for cleanup (prevents thread leaks on reconnection)
+        self._ping_thread = None
+        self._auth_check_thread = None
+        self._threads_lock = threading.Lock()
+
+        # HTTP session for connection reuse (prevents socket exhaustion)
+        self._http_session = requests.Session()
+
         # Groww URLs
         self.ws_url = "wss://socket-api.groww.in"
         self.token_url = "https://api.groww.in/v1/api/apex/v1/socket/token/create/"
-
-    def _default_on_data(self, data: dict[str, Any]):
-        """Default data handler"""
-        logger.info(f"Data received: {data}")
-
-    def _default_on_error(self, error: str):
-        """Default error handler"""
-        logger.error(f"WebSocket error: {error}")
 
     def _default_on_data(self, data: dict[str, Any]):
         """Default data handler"""
@@ -128,6 +128,11 @@ class GrowwNATSWebSocket:
             return
 
         try:
+            # Clear old NATS protocol handler to free pending_data buffer
+            if self.nats_protocol:
+                self.nats_protocol.pending_data = ""
+                self.nats_protocol.subscriptions.clear()
+
             # Create fresh NATS protocol handler for this connection
             self.nats_protocol = groww_nats.NATSProtocol()
 
@@ -139,26 +144,28 @@ class GrowwNATSWebSocket:
             self.ws_thread = threading.Thread(target=self._run_websocket, daemon=True)
             self.ws_thread.start()
 
-            # Wait for connection
-            timeout = 10
+            # Wait for WebSocket connection
+            timeout = 5
             start_time = time.time()
             while not self.connected and time.time() - start_time < timeout:
-                time.sleep(0.1)
+                time.sleep(0.05)
 
             if not self.connected:
                 raise TimeoutError("Failed to connect to Groww WebSocket within timeout")
 
-            # Wait for authentication
-            timeout = 3
+            # CRITICAL: Wait for NATS authentication to complete
+            # The server sends INFO -> we send CONNECT -> server sends PONG/+OK
+            # Only then can we send subscriptions
+            logger.info("WebSocket connected, waiting for NATS authentication...")
+            timeout = 5
             start_time = time.time()
             while not self.authenticated and time.time() - start_time < timeout:
-                time.sleep(0.1)
+                time.sleep(0.05)
 
             if not self.authenticated:
-                logger.warning("No explicit authentication confirmation received")
-                # For Groww, assume authenticated if connected
-                self.authenticated = True
-                logger.info("Proceeding with assumed authentication")
+                logger.warning("NATS authentication timeout - will retry on first subscription")
+
+            logger.info("Connection and authentication complete")
 
         except Exception as e:
             logger.error(f"Failed to connect to Groww: {e}")
@@ -189,7 +196,7 @@ class GrowwNATSWebSocket:
 
             request_body = {"socketKey": key_pair.public_key.decode("utf-8")}
 
-            response = requests.post(self.token_url, json=request_body, headers=headers, timeout=15)
+            response = self._http_session.post(self.token_url, json=request_body, headers=headers, timeout=15)
 
             if response.status_code == 200:
                 token_data = response.json()
@@ -260,33 +267,40 @@ class GrowwNATSWebSocket:
             if self.running:  # Only report error if we're supposed to be running
                 self.on_error(str(e))
 
+    def _stop_background_threads(self):
+        """Stop background threads (ping and auth check) to prevent leaks on reconnection"""
+        with self._threads_lock:
+            # Signal threads to stop by setting connected=False temporarily handled by flags
+            # The threads check self.connected and self.running, which are already managed
+
+            # Wait briefly for auth check thread if it exists
+            if self._auth_check_thread and self._auth_check_thread.is_alive():
+                logger.debug("Waiting for auth check thread to finish...")
+                self._auth_check_thread.join(timeout=0.5)
+                if self._auth_check_thread.is_alive():
+                    logger.debug("Auth check thread still running, will be orphaned (daemon)")
+                self._auth_check_thread = None
+
+            # Ping thread will exit on its own when connected/running become False
+            # Just clear the reference
+            if self._ping_thread:
+                if self._ping_thread.is_alive():
+                    logger.debug("Ping thread still running, will exit on flag check")
+                self._ping_thread = None
+
     def _on_open(self, ws):
         """Handle WebSocket open"""
         logger.info("WebSocket connected to Groww")
         self.connected = True
 
         # NATS protocol: Server sends INFO first, then we respond with CONNECT
-        # Don't send CONNECT immediately, wait for INFO message
         logger.info("Waiting for server INFO message...")
 
-        # For Groww, we might not get explicit +OK, so mark as authenticated after a delay
-        def check_auth_status():
-            import time
-
-            time.sleep(2)
-            if self.connected and not self.authenticated:
-                logger.info("No explicit +OK received, assuming authenticated")
-                self.authenticated = True
-                self._resubscribe_all()
-
-        import threading
-
-        threading.Thread(target=check_auth_status, daemon=True).start()
+        # Stop existing threads before creating new ones (prevents thread leaks)
+        self._stop_background_threads()
 
         # Start periodic PING to keep connection alive and check if we're receiving data
         def periodic_ping():
-            import time
-
             ping_count = 0
             while self.connected and self.running:  # Check both connected and running flags
                 time.sleep(10)  # Send PING every 10 seconds
@@ -303,7 +317,9 @@ class GrowwNATSWebSocket:
                         break  # Exit on error
             logger.info("🛑 Ping thread exiting")
 
-        threading.Thread(target=periodic_ping, daemon=True).start()
+        with self._threads_lock:
+            self._ping_thread = threading.Thread(target=periodic_ping, daemon=True)
+            self._ping_thread.start()
 
     def _process_binary_nats_message(self, data: bytes):
         """Process binary NATS message directly"""
@@ -516,6 +532,10 @@ class GrowwNATSWebSocket:
 
         elif msg_type == "PONG":
             logger.info("✅ Received PONG from server - Connection alive")
+            # PONG after CONNECT means authentication successful (Groww doesn't always send +OK)
+            if not self.authenticated:
+                logger.info("NATS: PONG received - Authentication successful")
+                self.authenticated = True
 
         elif msg_type == "MSG":
             # Market data message
@@ -535,14 +555,24 @@ class GrowwNATSWebSocket:
         self.connected = False
         self.authenticated = False
 
+        # Stop background threads to prevent leaks
+        self._stop_background_threads()
+
         # Only attempt reconnection if still running (not manually disconnected)
         if self.running:
-            logger.info("Attempting to reconnect...")
-            time.sleep(5)
-            try:
-                self._run_websocket()
-            except Exception as e:
-                logger.error(f"Reconnection failed: {e}")
+            logger.info("Attempting to reconnect in 5 seconds...")
+
+            def reconnect():
+                time.sleep(5)
+                if self.running:  # Check again after sleep
+                    try:
+                        self._run_websocket()
+                    except Exception as e:
+                        logger.error(f"Reconnection failed: {e}")
+
+            # Spawn reconnection in new thread to avoid recursive stack buildup
+            reconnect_thread = threading.Thread(target=reconnect, daemon=True)
+            reconnect_thread.start()
         else:
             logger.info("WebSocket closed gracefully - not reconnecting as running=False")
 
@@ -933,8 +963,6 @@ class GrowwNATSWebSocket:
                         break
 
                 # Give server time to process unsubscribes
-                import time
-
                 time.sleep(1)
 
                 logger.info("✅ Server cleanup commands sent")
@@ -955,6 +983,9 @@ class GrowwNATSWebSocket:
         self.connected = False  # Set this immediately to stop ping thread
         self.authenticated = False  # Reset authentication status
 
+        # Stop background threads first
+        self._stop_background_threads()
+
         # Send NATS cleanup commands before closing if still connected
         if self.ws and self.nats_protocol:
             try:
@@ -968,8 +999,6 @@ class GrowwNATSWebSocket:
                         pass
 
                 # Brief delay for server to process
-                import time
-
                 time.sleep(0.2)  # Shorter delay
             except Exception as e:
                 logger.warning(f"Final cleanup warning: {e}")
@@ -990,6 +1019,14 @@ class GrowwNATSWebSocket:
             self.ws_thread.join(timeout=5)
             if self.ws_thread.is_alive():
                 logger.warning("⚠️ WebSocket thread did not finish gracefully")
+            # Always clear the reference to prevent issues on next connect
+            self.ws_thread = None
+
+        # Clear NATS protocol handler to free memory
+        if self.nats_protocol:
+            self.nats_protocol.pending_data = ""
+            self.nats_protocol.subscriptions.clear()
+            self.nats_protocol = None
 
         # Clear all state for clean reconnection
         self.connected = False
@@ -1001,13 +1038,40 @@ class GrowwNATSWebSocket:
         self.socket_token = None
         self.nkey_seed = None
         self.ws = None
-        self.ws_thread = None
-
-        logger.info("✅ Groww WebSocket disconnected and all resources cleared")
         self.subscription_id = None
 
-        logger.info("Disconnected from Groww WebSocket and cleared state")
+        logger.info("✅ Groww WebSocket disconnected and all resources cleared")
 
     def is_connected(self) -> bool:
         """Check if WebSocket is connected"""
         return self.connected
+
+    def cleanup(self):
+        """
+        Full cleanup of all resources. Call this when completely done with the instance.
+        """
+        logger.info("🧹 Running full cleanup of GrowwNATSWebSocket...")
+
+        # Disconnect if still connected
+        if self.connected or self.running:
+            self.disconnect()
+
+        # Close HTTP session to release connection pool
+        if self._http_session:
+            try:
+                self._http_session.close()
+                logger.info("✅ HTTP session closed")
+            except Exception as e:
+                logger.warning(f"Error closing HTTP session: {e}")
+            self._http_session = None
+
+        logger.info("✅ Full cleanup completed")
+
+    def __del__(self):
+        """Destructor to ensure resources are cleaned up"""
+        try:
+            # Close HTTP session if still open
+            if hasattr(self, "_http_session") and self._http_session:
+                self._http_session.close()
+        except Exception:
+            pass  # Ignore errors during destruction
