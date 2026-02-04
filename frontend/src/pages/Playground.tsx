@@ -628,7 +628,7 @@ export default function Playground() {
             <img
               src={logoSrc}
               alt="Zenxo"
-              className="w-6 h-6"
+              className="h-8 w-20"
             />
             {/* <span className="font-semibold text-sm">openalgo</span> */}
           </div>
@@ -1224,7 +1224,7 @@ export default function Playground() {
               <img
                 src={logoSrc}
                 alt="Zenxo"
-                className="w-16 h-35 mb-4"
+                className="h-16 w-35 mb-4"
               />
               <h2 className="text-lg font-semibold text-foreground/80 mb-2">
                 API Playground [WS-TEST]
