@@ -29,11 +29,12 @@ import { QuoteHeader } from './QuoteHeader'
 import { MarketDepthPanel } from './MarketDepthPanel'
 
 // Price types for order dialog
+// Backend API accepts: MARKET, LIMIT, SL (Stop Loss Limit), SL-M (Stop Loss Market)
 const PRICE_TYPES = [
   { value: 'MARKET', label: 'Market' },
   { value: 'LIMIT', label: 'Limit' },
-  { value: 'SL', label: 'SL' },
-  { value: 'SL-LIMIT', label: 'SL-Limit' },
+  { value: 'SL-M', label: 'SL-M' },      // Stop Loss Market (trigger only)
+  { value: 'SL', label: 'SL-L' },         // Stop Loss Limit (trigger + price)
 ] as const
 
 // Product types based on exchange
@@ -57,7 +58,7 @@ export interface PlaceOrderDialogProps {
   lotSize?: number
   tickSize?: number
   product?: 'MIS' | 'NRML' | 'CNC'
-  priceType?: 'MARKET' | 'LIMIT' | 'SL' | 'SL-LIMIT'
+  priceType?: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
   strategy?: string
   onSuccess?: (orderId: string) => void
   onError?: (error: string) => void
@@ -142,9 +143,15 @@ export function PlaceOrderDialog({
       setFormAction(initialAction)
       setFormQuantity(initialQuantity ?? lotSize)
       setFormPriceType(initialPriceType)
-      // Set default product based on exchange
-      const defaultProduct = isFnOExchange(exchange) ? 'NRML' : 'CNC'
-      setFormProduct(initialProduct || defaultProduct)
+      // Set default product based on exchange, validate initialProduct is valid for exchange
+      const isFnO = isFnOExchange(exchange)
+      const defaultProduct = isFnO ? 'NRML' : 'CNC'
+      // Validate product: CNC not valid for F&O, NRML not valid for equity
+      const validProducts = isFnO ? ['NRML', 'MIS'] : ['CNC', 'MIS']
+      const productToUse = initialProduct && validProducts.includes(initialProduct)
+        ? initialProduct
+        : defaultProduct
+      setFormProduct(productToUse)
       setFormPrice(0)
       setFormTriggerPrice(0)
       setIsDepthExpanded(false)
@@ -193,9 +200,12 @@ export function PlaceOrderDialog({
     }
   }, [formPriceType, mergedData.ltp, formPrice, tickSize])
 
-  // Validation
-  const needsPrice = formPriceType === 'LIMIT' || formPriceType === 'SL' || formPriceType === 'SL-LIMIT'
-  const needsTrigger = formPriceType === 'SL' || formPriceType === 'SL-LIMIT'
+  // Validation - determine which price fields are needed:
+  // LIMIT: price only
+  // SL-M (Stop Loss Market): trigger price only
+  // SL (Stop Loss Limit): both price and trigger price
+  const needsPrice = formPriceType === 'LIMIT' || formPriceType === 'SL'
+  const needsTrigger = formPriceType === 'SL-M' || formPriceType === 'SL'
 
   const isValid = useCallback(() => {
     if (!symbol || !exchange) return false
@@ -221,8 +231,9 @@ export function PlaceOrderDialog({
 
     setIsSubmitting(true)
     try {
-      // Convert SL-LIMIT to SL-M for API
-      const apiPriceType = formPriceType === 'SL-LIMIT' ? 'SL-M' : formPriceType as 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
+      // Price types are now directly mapped to API values
+      // Backend accepts: MARKET, LIMIT, SL (Stop Loss Limit), SL-M (Stop Loss Market)
+      const apiPriceType = formPriceType as 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
 
       const orderRequest = {
         apikey: apiKey,
