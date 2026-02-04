@@ -192,24 +192,27 @@ const OptionChainRow = React.memo(function OptionChainRow({
     ? 'bg-gradient-to-l from-red-500/25 to-transparent'
     : 'bg-red-500/20'
 
+  // Use tabular-nums for consistent number widths to prevent layout shifts
+  const numClass = 'font-mono tabular-nums text-xs'
+
   const getCeColumnValue = (key: ColumnKey) => {
     switch (key) {
       case 'ce_oi':
-        return <span className="font-mono text-xs">{formatInLakhs(ce?.oi)}</span>
+        return <span className={numClass}>{formatInLakhs(ce?.oi)}</span>
       case 'ce_volume':
-        return <span className="font-mono text-xs">{formatInLakhs(ce?.volume)}</span>
+        return <span className={numClass}>{formatInLakhs(ce?.volume)}</span>
       case 'ce_bid_qty':
-        return <span className="text-xs">{ce?.bid_qty ?? 0}</span>
+        return <span className={numClass}>{ce?.bid_qty ?? 0}</span>
       case 'ce_bid':
-        return <span className="text-red-500 text-xs">{formatPrice(ce?.bid)}</span>
+        return <span className={cn(numClass, 'text-red-500')}>{formatPrice(ce?.bid)}</span>
       case 'ce_ltp':
-        return <span className={cn('font-semibold text-xs', ceFlashClass)}>{formatPrice(ce?.ltp)}</span>
+        return <span className={cn(numClass, 'font-semibold', ceFlashClass)}>{formatPrice(ce?.ltp)}</span>
       case 'ce_ask':
-        return <span className="text-green-500 text-xs">{formatPrice(ce?.ask)}</span>
+        return <span className={cn(numClass, 'text-green-500')}>{formatPrice(ce?.ask)}</span>
       case 'ce_ask_qty':
-        return <span className="text-xs">{ce?.ask_qty ?? 0}</span>
+        return <span className={numClass}>{ce?.ask_qty ?? 0}</span>
       case 'ce_spread':
-        return <span className={cn('text-xs', ceSpreadClass)}>{formatPrice(ceSpread)}</span>
+        return <span className={cn(numClass, ceSpreadClass)}>{formatPrice(ceSpread)}</span>
       default:
         return null
     }
@@ -218,21 +221,21 @@ const OptionChainRow = React.memo(function OptionChainRow({
   const getPeColumnValue = (key: ColumnKey) => {
     switch (key) {
       case 'pe_oi':
-        return <span className="font-mono text-xs">{formatInLakhs(pe?.oi)}</span>
+        return <span className={numClass}>{formatInLakhs(pe?.oi)}</span>
       case 'pe_volume':
-        return <span className="font-mono text-xs">{formatInLakhs(pe?.volume)}</span>
+        return <span className={numClass}>{formatInLakhs(pe?.volume)}</span>
       case 'pe_bid_qty':
-        return <span className="text-xs">{pe?.bid_qty ?? 0}</span>
+        return <span className={numClass}>{pe?.bid_qty ?? 0}</span>
       case 'pe_bid':
-        return <span className="text-red-500 text-xs">{formatPrice(pe?.bid)}</span>
+        return <span className={cn(numClass, 'text-red-500')}>{formatPrice(pe?.bid)}</span>
       case 'pe_ltp':
-        return <span className={cn('font-semibold text-xs', peFlashClass)}>{formatPrice(pe?.ltp)}</span>
+        return <span className={cn(numClass, 'font-semibold', peFlashClass)}>{formatPrice(pe?.ltp)}</span>
       case 'pe_ask':
-        return <span className="text-green-500 text-xs">{formatPrice(pe?.ask)}</span>
+        return <span className={cn(numClass, 'text-green-500')}>{formatPrice(pe?.ask)}</span>
       case 'pe_ask_qty':
-        return <span className="text-xs">{pe?.ask_qty ?? 0}</span>
+        return <span className={numClass}>{pe?.ask_qty ?? 0}</span>
       case 'pe_spread':
-        return <span className={cn('text-xs', peSpreadClass)}>{formatPrice(peSpread)}</span>
+        return <span className={cn(numClass, peSpreadClass)}>{formatPrice(peSpread)}</span>
       default:
         return null
     }
@@ -662,9 +665,9 @@ export default function OptionChain() {
               <CardContent className="p-4">
                 <div className="text-sm text-muted-foreground">Total OI</div>
                 <div className="text-sm mt-1">
-                  <span className="text-green-500 font-mono">{formatInLakhs(totals.ceOi)}</span>
+                  <span className="text-green-500 font-mono tabular-nums">{formatInLakhs(totals.ceOi)}</span>
                   <span className="mx-2 text-muted-foreground">|</span>
-                  <span className="text-red-500 font-mono">{formatInLakhs(totals.peOi)}</span>
+                  <span className="text-red-500 font-mono tabular-nums">{formatInLakhs(totals.peOi)}</span>
                 </div>
                 <div className="h-2 bg-muted rounded-full overflow-hidden mt-2">
                   <div
@@ -682,7 +685,7 @@ export default function OptionChain() {
           <Card>
             <CardContent className="p-0">
               <div className="overflow-x-auto">
-                <Table className="w-full">
+                <Table className="w-full table-fixed">
                   <TableHeader>
                     {/* Section headers row */}
                     <TableRow className="bg-muted/30 border-b-0">
