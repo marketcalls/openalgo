@@ -223,7 +223,7 @@ def place_smartorder_api(data, auth):
 
     # Get current open position for the symbol
     current_position = int(
-        get_open_position(symbol, exchange, map_product_type(product), AUTH_TOKEN)
+        get_open_position(symbol, exchange, product, AUTH_TOKEN)
     )
 
     logger.info(f"position_size : {position_size}")
