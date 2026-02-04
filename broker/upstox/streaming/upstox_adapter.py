@@ -396,6 +396,10 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         This method should be called before discarding the adapter instance.
         """
         try:
+            # Set flags BEFORE disconnect to prevent _on_close from triggering reconnect
+            self.running = False
+            self._intentional_disconnect = True
+
             # Stop staleness monitor first
             self._stop_staleness_monitor()
 
