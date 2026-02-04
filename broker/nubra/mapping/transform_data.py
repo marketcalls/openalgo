@@ -34,6 +34,14 @@ def transform_data(data, token):
     
     pricetype = data.get("pricetype", "MARKET")
     
+    # Determine validity type based on price type
+    # MARKET and SL-M orders require IOC (Immediate or Cancel)
+    # LIMIT and SL orders use DAY validity
+    if pricetype in ["MARKET", "SL-M"]:
+        validity_type = "IOC"
+    else:
+        validity_type = "DAY"
+    
     # Build the transformed data structure for Nubra API
     transformed = {
         "ref_id": int(token),  # Instrument reference ID from token
@@ -42,7 +50,7 @@ def transform_data(data, token):
         "order_type": map_order_type(pricetype),
         "price_type": map_price_type(pricetype),
         "order_qty": int(data["quantity"]),
-        "validity_type": "DAY",
+        "validity_type": validity_type,
         "order_price": price_in_paise,
         "tag": data.get("strategy", "openalgo"),
     }

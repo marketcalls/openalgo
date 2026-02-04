@@ -343,12 +343,18 @@ def cancel_order(orderid, auth):
         logger.error(f"Failed to parse cancel order response: {response.text}")
         return {"status": "error", "message": "Failed to parse response"}, response.status_code
 
+    logger.info(f"Nubra cancel order response (status={response.status_code}): {data}")
+
     # Check if the request was successful
-    # Nubra returns 200 on success
+    # Nubra returns {"message": "delete request pushed"} on success
     if response.status_code in [200, 204]:
-        return {"status": "success", "orderid": orderid}, 200
-    elif data.get("order_id") or data.get("status") == "cancelled":
-        return {"status": "success", "orderid": orderid}, 200
+        if data.get("message") == "delete request pushed":
+            return {"status": "success", "orderid": orderid}, 200
+        elif data.get("order_id") or data.get("status") == "cancelled":
+            return {"status": "success", "orderid": orderid}, 200
+        else:
+            # Assume success if status code is 200/204
+            return {"status": "success", "orderid": orderid}, 200
     else:
         # Return an error response
         return {
