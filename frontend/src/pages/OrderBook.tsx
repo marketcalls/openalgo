@@ -10,7 +10,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { type QuotesData, tradingApi } from '@/api/trading'
 import {
   AlertDialog,
@@ -168,15 +168,15 @@ export default function OrderBook() {
     try {
       const response = await tradingApi.cancelOrder(orderid)
       if (response.status === 'success') {
-        toast.success(`Order cancelled: ${orderid}`)
+        showToast.success(`Order cancelled: ${orderid}`, 'orders')
         setTimeout(() => fetchOrders(true), 1000)
       } else {
-        toast.error(response.message || 'Failed to cancel order')
+        showToast.error(response.message || 'Failed to cancel order', 'orders')
       }
     } catch (error) {
       const axiosError = error as { response?: { data?: { message?: string } } }
       const message = axiosError.response?.data?.message || 'Failed to cancel order'
-      toast.error(message)
+      showToast.error(message, 'orders')
     }
   }
 
@@ -184,18 +184,18 @@ export default function OrderBook() {
     try {
       const response = await tradingApi.cancelAllOrders()
       if (response.status === 'success') {
-        toast.success(response.message || 'All orders cancelled')
+        showToast.success(response.message || 'All orders cancelled', 'orders')
         // Delay refresh to allow broker to process cancellations
         setTimeout(() => fetchOrders(true), 2000)
       } else if (response.status === 'info') {
-        toast.info(response.message || 'No open orders to cancel')
+        showToast.info(response.message || 'No open orders to cancel', 'orders')
       } else {
-        toast.error(response.message || 'Failed to cancel all orders')
+        showToast.error(response.message || 'Failed to cancel all orders', 'orders')
       }
     } catch (error) {
       const axiosError = error as { response?: { data?: { message?: string } } }
       const message = axiosError.response?.data?.message || 'Failed to cancel all orders'
-      toast.error(message)
+      showToast.error(message, 'orders')
     }
   }
 
@@ -242,16 +242,16 @@ export default function OrderBook() {
         trigger_price: modifyForm.trigger_price,
       })
       if (response.status === 'success') {
-        toast.success(`Order modified: ${modifyingOrder.orderid}`)
+        showToast.success(`Order modified: ${modifyingOrder.orderid}`, 'orders')
         setModifyDialogOpen(false)
         setTimeout(() => fetchOrders(true), 1000)
       } else {
-        toast.error(response.message || 'Failed to modify order')
+        showToast.error(response.message || 'Failed to modify order', 'orders')
       }
     } catch (error) {
       const axiosError = error as { response?: { data?: { message?: string } } }
       const message = axiosError.response?.data?.message || 'Failed to modify order'
-      toast.error(message)
+      showToast.error(message, 'orders')
     }
   }
 

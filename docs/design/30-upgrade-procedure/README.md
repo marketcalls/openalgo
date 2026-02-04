@@ -88,15 +88,17 @@ diff .env .sample.env
 # Add any new variables from .sample.env to .env
 ```
 
-### Step 5: Run Migrations (if any)
+### Step 5: Database Initialization
+
+OpenAlgo uses automatic database initialization on startup. New tables are created automatically when the application starts - no manual migrations are required.
 
 ```bash
-# Check for migration scripts
-ls migrations/
-
-# Run migration if available
-uv run python migrations/upgrade_to_v2.py
+# Start the app to initialize any new database tables
+# Tables are created if they don't exist (safe - won't overwrite existing data)
+uv run app.py
 ```
+
+> **Note**: There is no `migrations/` directory. Database schema updates are handled automatically by SQLAlchemy's `create_all()` during app startup.
 
 ### Step 6: Start OpenAlgo
 
@@ -109,20 +111,30 @@ uv run app.py
 
 ### Upgrading to v2.0.0
 
+**CRITICAL**: v2.0.0 requires building the React frontend. The `frontend/dist/` directory is gitignored and must be built locally.
+
 Major changes:
-- React frontend added
-- New database tables
-- Updated .env variables
+- React 19 frontend replaces Jinja2 templates for most UIs
+- New database tables (flow_workflows, action_center, etc.)
+- 40+ new environment variables (CORS, CSP, ZeroMQ, etc.)
+- Flow Visual Builder with 53 node types
+- Historify (DuckDB-based historical data)
 
 ```bash
-# Add new environment variables
-echo "WEBSOCKET_URL=ws://127.0.0.1:8765" >> .env
-
-# Build React frontend
+# REQUIRED: Build React frontend
 cd frontend
 npm install
 npm run build
+cd ..
+
+# Compare environment variables with new sample
+diff .env .sample.env
+
+# Add missing variables from .sample.env (especially CORS, ZeroMQ settings)
+# See docs/design/28-environment-config/ for full variable list
 ```
+
+> **Important**: Check `docs/CHANGELOG.md` for detailed v2.0.0 release notes.
 
 ### Database Schema Changes
 

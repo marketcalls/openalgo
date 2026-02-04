@@ -30,7 +30,7 @@ broker/
 │   └── ... (same structure)
 ├── angel/
 │   └── ... (same structure)
-└── ... (24+ brokers)
+└── ... (29 brokers total)
 ```
 
 ## File Explanations
@@ -208,29 +208,20 @@ class BrokerWebSocketAdapter:
 
 ### 8. plugin.json
 
-Broker metadata and configuration.
+Broker metadata file. This is a simple metadata file (NOT configuration).
 
 ```json
 {
-    "name": "zerodha",
-    "display_name": "Zerodha (Kite)",
-    "auth_type": "oauth2",
-    "login_url": "https://kite.zerodha.com/connect/login",
-    "api_base_url": "https://api.kite.trade",
-    "websocket_url": "wss://ws.kite.trade",
-    "supports": {
-        "equity": true,
-        "futures": true,
-        "options": true,
-        "currency": true,
-        "commodity": false
-    },
-    "rate_limits": {
-        "orders_per_second": 10,
-        "data_per_second": 3
-    }
+    "Plugin Name": "zerodha",
+    "Plugin URI": "https://openalgo.in",
+    "Description": "Zerodha OpenAlgo Plugin",
+    "Version": "1.0",
+    "Author": "Rajandran R",
+    "Author URI": "https://openalgo.in"
 }
 ```
+
+> **Important**: The `plugin.json` file is for **metadata only** - it identifies the plugin but does NOT contain configuration like API URLs or rate limits. Authentication methods, API endpoints, and WebSocket URLs are handled directly in the broker's Python code.
 
 ## Adding a New Broker
 

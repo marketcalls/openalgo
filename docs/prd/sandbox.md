@@ -1,5 +1,7 @@
 # PRD: Sandbox - Paper Trading Environment
 
+> **Status:** ✅ Stable - Fully implemented, production-ready
+
 ## Overview
 
 Sandbox (Analyzer Mode) is an isolated paper trading environment with simulated capital for testing strategies without risking real money.
@@ -210,6 +212,15 @@ sandbox.db (separate from main)
 | [Sandbox Architecture](./sandbox-architecture.md) | Detailed system architecture |
 | [Execution Engine](./sandbox-execution-engine.md) | Order matching engine details |
 | [Margin System](./sandbox-margin-system.md) | Margin calculation and fund management |
+
+## Key Files Reference
+
+| File | Purpose |
+|------|---------|
+| `database/sandbox_db.py` | SQLAlchemy models for sandbox tables |
+| `blueprints/analyzer.py` | Web routes and API endpoints |
+| `services/sandbox_service.py` | Business logic and execution engine |
+| `frontend/src/pages/Analyzer.tsx` | React UI component |
 
 ## Success Metrics
 

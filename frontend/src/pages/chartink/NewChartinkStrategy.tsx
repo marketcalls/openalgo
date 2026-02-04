@@ -1,7 +1,7 @@
 import { ArrowLeft, Info, Zap } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { chartinkApi } from '@/api/chartink'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -63,7 +63,7 @@ export default function NewChartinkStrategy() {
     e.preventDefault()
 
     if (!validateForm()) {
-      toast.error('Please fix the form errors')
+      showToast.error('Please fix the form errors', 'chartink')
       return
     }
 
@@ -80,15 +80,15 @@ export default function NewChartinkStrategy() {
       })
 
       if (response.status === 'success') {
-        toast.success('Chartink strategy created successfully')
+        showToast.success('Chartink strategy created successfully', 'chartink')
         navigate(`/chartink/${response.data?.strategy_id}`)
       } else {
-        toast.error(response.message || 'Failed to create strategy')
+        showToast.error(response.message || 'Failed to create strategy', 'chartink')
       }
     } catch (error: unknown) {
       console.error('Failed to create strategy:', error)
       const errorMessage = error instanceof Error ? error.message : 'Failed to create strategy'
-      toast.error(errorMessage)
+      showToast.error(errorMessage, 'chartink')
     } finally {
       setLoading(false)
     }

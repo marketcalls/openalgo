@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import { toast } from 'sonner'
+import { useAlertStore, type AlertCategories } from '@/stores/alertStore'
 import { useAuthStore } from '@/stores/authStore'
 
 // Audio throttling configuration
@@ -50,6 +51,18 @@ interface AnalyzerUpdateData {
   }
 }
 
+// Helper to show toast only if enabled for category
+const showCategoryToast = (
+  type: 'success' | 'error' | 'warning' | 'info',
+  message: string,
+  category?: keyof AlertCategories
+) => {
+  const { shouldShowToast } = useAlertStore.getState()
+  if (shouldShowToast(category)) {
+    toast[type](message)
+  }
+}
+
 export function useSocket() {
   const { isAuthenticated } = useAuthStore()
   const socketRef = useRef<Socket | null>(null)
@@ -57,7 +70,13 @@ export function useSocket() {
   const lastAudioTimeRef = useRef<number>(0)
   const audioEnabledRef = useRef<boolean>(false)
 
-  const playAlertSound = useCallback(() => {
+  const playAlertSound = useCallback((category?: keyof AlertCategories) => {
+    // Check if sound should play based on alert settings
+    const { shouldPlaySound, shouldShowToast } = useAlertStore.getState()
+    if (!shouldPlaySound()) return
+    // If category specified, also check category is enabled
+    if (category && !shouldShowToast(category)) return
+
     const now = Date.now()
     const timeSinceLastAttempt = now - lastAudioTimeRef.current
 
@@ -135,45 +154,45 @@ export function useSocket() {
 
     // Password change notification
     socket.on('password_change', (data: { message: string }) => {
-      playAlertSound()
-      toast.info(data.message)
+      playAlertSound('system')
+      showCategoryToast('info', data.message, 'system')
     })
 
     // Master contract download notification
     socket.on('master_contract_download', (data: MasterContractData) => {
-      playAlertSound()
-      toast.info(`Master Contract: ${data.message}`)
+      playAlertSound('system')
+      showCategoryToast('info', `Master Contract: ${data.message}`, 'system')
     })
 
     // Cancel order notification - only play sound, UI handles toast
     socket.on('cancel_order_event', (data: CancelOrderEventData) => {
       if (!data.batch_order) {
-        playAlertSound()
+        playAlertSound('orders')
       }
     })
 
     // Modify order notification - only play sound, UI handles toast
     socket.on('modify_order_event', (_data: ModifyOrderEventData) => {
-      playAlertSound()
+      playAlertSound('orders')
     })
 
     // Close position notification - only play sound, UI handles toast
     socket.on('close_position_event', (_data: ClosePositionEventData) => {
-      playAlertSound()
+      playAlertSound('orders')
     })
 
     // Order placement notification
     socket.on('order_event', (data: OrderEventData) => {
       const shouldPlayAudio = !data.batch_order || data.is_last_order
       if (shouldPlayAudio) {
-        playAlertSound()
+        playAlertSound('orders')
       }
 
       const message = `${data.action.toUpperCase()} Order Placed for Symbol: ${data.symbol}, Order ID: ${data.orderid}`
       if (data.action.toUpperCase() === 'BUY') {
-        toast.success(message)
+        showCategoryToast('success', message, 'orders')
       } else {
-        toast.error(message)
+        showCategoryToast('error', message, 'orders')
       }
     })
 
@@ -181,7 +200,7 @@ export function useSocket() {
     socket.on(
       'order_notification',
       (data: { symbol?: string; status?: string; message?: string }) => {
-        playAlertSound()
+        playAlertSound('orders')
 
         let type: 'success' | 'error' | 'warning' | 'info' = 'info'
         if (data.status && typeof data.status === 'string') {
@@ -208,7 +227,7 @@ export function useSocket() {
           message += data.message
         }
 
-        toast[type](message)
+        showCategoryToast(type, message, 'orders')
       }
     )
 
@@ -225,7 +244,7 @@ export function useSocket() {
       const isPassiveMonitoring = passiveApiTypes.includes(data.request.api_type)
 
       if (!isPassiveMonitoring) {
-        playAlertSound()
+        playAlertSound('analyzer')
       }
 
       let message = ''
@@ -279,7 +298,7 @@ export function useSocket() {
       }
 
       if (message) {
-        toast[type](message)
+        showCategoryToast(type, message, 'analyzer')
       }
     })
 

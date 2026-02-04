@@ -2,7 +2,7 @@
 
 ## Overview
 
-OpenAlgo backend is a production-ready Flask application providing a unified API layer across 24+ Indian brokers. It features a plugin-based broker system, multi-database architecture, real-time WebSocket streaming, and comprehensive security layers.
+OpenAlgo backend is a production-ready Flask application providing a unified API layer across **28+ Indian brokers**. It features a plugin-based broker system, multi-database architecture, real-time WebSocket streaming, and comprehensive security layers.
 
 ## Technology Stack
 
@@ -33,7 +33,7 @@ OpenAlgo backend is a production-ready Flask application providing a unified API
 │          ▼                           ▼                           ▼           │
 │  ┌───────────────┐         ┌─────────────────┐         ┌───────────────────┐ │
 │  │  Blueprints   │         │   REST API v1   │         │    WebSocket      │ │
-│  │  (33 routes)  │         │   /api/v1/*     │         │    Proxy :8765    │ │
+│  │  (34 routes)  │         │   /api/v1/*     │         │    Proxy :8765    │ │
 │  └───────┬───────┘         └────────┬────────┘         └─────────┬─────────┘ │
 │          │                          │                            │           │
 │          └──────────────────────────┼────────────────────────────┘           │
@@ -48,7 +48,7 @@ OpenAlgo backend is a production-ready Flask application providing a unified API
 │                                   │                                           │
 │                                   ▼                                           │
 │  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │                      Broker Plugin System (24+)                         │  │
+│  │                      Broker Plugin System (28+)                         │  │
 │  │                                                                         │  │
 │  │   ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐          │  │
 │  │   │ Zerodha │ │  Dhan   │ │  Angel  │ │  Fyers  │ │ Upstox  │  ...     │  │
