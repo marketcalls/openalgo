@@ -68,7 +68,7 @@ class WebSocketExecutionEngine:
             logger.debug("WebSocket execution engine already running")
             return
 
-        logger.info("Starting WebSocket execution engine")
+        logger.debug("Starting WebSocket execution engine")
         self._running = True
 
         # Build initial order index from database
@@ -81,7 +81,7 @@ class WebSocketExecutionEngine:
                 filter_symbols=None,  # All symbols - we filter in callback
                 name="sandbox_websocket_execution_engine",
             )
-            logger.info(f"Subscribed to MarketDataService with ID: {self._subscriber_id}")
+            logger.debug(f"Subscribed to MarketDataService with ID: {self._subscriber_id}")
         except Exception as e:
             logger.exception(f"Failed to subscribe to MarketDataService: {e}")
             self._running = False
@@ -134,7 +134,7 @@ class WebSocketExecutionEngine:
                     self._monitored_symbols.add(symbol_key)
                     self._increment_user_symbol_refcount(order.user_id, symbol_key)
 
-                logger.info(
+                logger.debug(
                     f"Built order index: {len(pending_orders)} orders across {len(self._monitored_symbols)} symbols"
                 )
 
@@ -294,10 +294,10 @@ class WebSocketExecutionEngine:
                     )
 
                     if not is_fresh and self.fallback_enabled and not self._fallback_running:
-                        logger.warning("WebSocket data is stale, starting polling fallback")
+                        logger.debug("WebSocket data is stale, starting polling fallback")
                         self._start_fallback()
                     elif is_fresh and self._fallback_running:
-                        logger.info("WebSocket data recovered, stopping polling fallback")
+                        logger.debug("WebSocket data recovered, stopping polling fallback")
                         self._stop_fallback()
 
                 except Exception as e:
@@ -323,7 +323,7 @@ class WebSocketExecutionEngine:
             from sandbox.execution_engine import run_execution_engine_once
 
             check_interval = int(get_config("order_check_interval", "5"))
-            logger.info(f"Fallback polling started with {check_interval}s interval")
+            logger.debug(f"Fallback polling started with {check_interval}s interval")
 
             while self._fallback_running and self._running:
                 try:
@@ -337,7 +337,7 @@ class WebSocketExecutionEngine:
                         break
                     time.sleep(1)
 
-            logger.info("Fallback polling stopped")
+            logger.debug("Fallback polling stopped")
 
         self._fallback_thread = threading.Thread(
             target=fallback_loop, daemon=True, name="WSExecEngine-Fallback"
