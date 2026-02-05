@@ -1936,8 +1936,12 @@ def status():
             "scheduler_running": SCHEDULER is not None and SCHEDULER.running,
             "current_ist_time": get_ist_time().strftime("%H:%M:%S IST"),
             "platform": OS_TYPE,
+            # Legacy field names (for backward compatibility)
             "master_contracts_ready": contracts_ready,
             "master_contracts_message": contract_message,
+            # Fields expected by React frontend
+            "ready": contracts_ready,
+            "message": contract_message,
             "strategies": [
                 {
                     "id": sid,
@@ -1956,11 +1960,19 @@ def status():
 def check_contracts():
     """Check master contracts and start pending strategies"""
     try:
-        success, message = check_and_start_pending_strategies()
-        return jsonify({"success": success, "message": message})
+        success, started_count, message = check_and_start_pending_strategies()
+        return jsonify({
+            "status": "success" if success else "error",
+            "message": message,
+            "data": {"started": started_count}
+        })
     except Exception as e:
         logger.exception(f"Error checking contracts: {e}")
-        return jsonify({"success": False, "message": f"Error checking contracts: {str(e)}"}), 500
+        return jsonify({
+            "status": "error",
+            "message": f"Error checking contracts: {str(e)}",
+            "data": {"started": 0}
+        }), 500
 
 
 # =============================================================================
@@ -2580,10 +2592,14 @@ def restore_strategy_states():
 
 
 def check_and_start_pending_strategies():
-    """Check if master contracts are ready and start strategies that were waiting"""
+    """Check if master contracts are ready and start strategies that were waiting
+
+    Returns:
+        tuple: (success: bool, started_count: int, message: str)
+    """
     contracts_ready, contract_message = check_master_contract_ready()
     if not contracts_ready:
-        return False, contract_message
+        return False, 0, contract_message
 
     started_count = 0
     failed_count = 0
@@ -2617,9 +2633,9 @@ def check_and_start_pending_strategies():
 
     if started_count > 0 or failed_count > 0:
         save_configs()
-        return True, f"Started {started_count} strategies, {failed_count} failed"
+        return True, started_count, f"Started {started_count} strategies, {failed_count} failed"
 
-    return True, "No pending strategies to start"
+    return True, 0, "No pending strategies to start"
 
 
 def restore_strategies_after_login():
@@ -2630,8 +2646,8 @@ def restore_strategies_after_login():
     restore_strategy_states()
 
     # Then check and start any pending strategies
-    success, message = check_and_start_pending_strategies()
-    logger.info(f"Post-login strategy restoration: {message}")
+    success, started_count, message = check_and_start_pending_strategies()
+    logger.info(f"Post-login strategy restoration: {message} (started: {started_count})")
     return success, message
 
 
