@@ -264,8 +264,8 @@ def create_app():
         # Initialize health monitoring (background daemon thread)
         init_health_monitoring(app)
 
-        # Initialize Python strategy scheduler (registers cron jobs for scheduled strategies)
-        init_python_strategy()
+        # NOTE: Python strategy scheduler is initialized in setup_environment()
+        # AFTER database tables are created, to avoid "no such table" errors on fresh install
 
         # Auto-start Telegram bot if it was active (non-blocking)
         try:
@@ -510,6 +510,14 @@ def setup_environment(app):
 
         db_init_time = (time.time() - db_init_start) * 1000
         logger.debug(f"All databases initialized in parallel ({db_init_time:.0f}ms)")
+
+        # Initialize Python strategy scheduler (registers cron jobs for scheduled strategies)
+        # This must be AFTER database initialization to avoid "no such table" errors
+        try:
+            init_python_strategy()
+            logger.debug("Python strategy scheduler initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Python strategy scheduler: {e}")
 
         # Initialize Flow scheduler
         try:
