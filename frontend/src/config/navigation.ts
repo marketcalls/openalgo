@@ -6,6 +6,7 @@ import {
   Code2,
   Database,
   FileBarChart,
+  FileStack,
   FileText,
   FlaskConical,
   Key,
@@ -58,6 +59,7 @@ export const mobileSheetItems = navItems.filter((item) => !bottomNavPaths.includ
 export const profileMenuItems: NavItem[] = [
   { href: '/profile', label: 'Profile', icon: User },
   { href: '/apikey', label: 'API Key', icon: Key },
+  { href: '/master-contract', label: 'Master Contract', icon: FileStack },
   { href: '/telegram', label: 'Telegram Bot', icon: MessageSquare },
   { href: '/holdings', label: 'Holdings', icon: ClipboardList },
   { href: '/flow', label: 'Flow Editor', icon: Workflow },
