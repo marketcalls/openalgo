@@ -473,7 +473,7 @@ class MarketDataService:
                 "created_at": time.time(),
             }
 
-        logger.info(
+        logger.debug(
             f"Added priority subscriber {subscriber_id} ({name}) - priority={priority.name}, type={event_type}"
         )
         return subscriber_id

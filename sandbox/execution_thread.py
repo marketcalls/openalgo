@@ -146,7 +146,7 @@ def start_execution_engine(engine_type: str = None):
                     if success:
                         _websocket_engine = get_websocket_execution_engine()
                         _current_engine_type = "websocket"
-                        logger.info("WebSocket execution engine started (with built-in fallback)")
+                        logger.debug("WebSocket execution engine started (with built-in fallback)")
                         return True, "WebSocket execution engine started"
                     else:
                         logger.warning(
@@ -263,7 +263,7 @@ def _start_websocket_upgrade_watcher():
                     if success:
                         _websocket_engine = get_websocket_execution_engine()
                         _current_engine_type = "websocket"
-                        logger.info("WebSocket execution engine started (auto-upgrade)")
+                        logger.debug("WebSocket execution engine started (auto-upgrade)")
 
                         # Stop polling engine after successful upgrade
                         _execution_thread.stop()
