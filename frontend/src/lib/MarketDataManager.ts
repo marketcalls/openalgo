@@ -6,6 +6,12 @@
  * - Ref-counted subscriptions (only unsubscribe when last consumer leaves)
  * - Callback registry for data fan-out to multiple subscribers
  * - Connection lifecycle management (connect, pause, resume, disconnect)
+ * - REST API fallback when WebSocket is unavailable (e.g., after market hours)
+ *
+ * Fallback behavior:
+ * - After 3 consecutive WebSocket connection failures, switches to REST API polling
+ * - Polls /api/v1/multiquotes every 5 seconds for subscribed symbols
+ * - Automatically switches back to WebSocket when connection is restored
  */
 
 export interface DepthLevel {
@@ -51,6 +57,7 @@ export interface StateListener {
     isConnected: boolean
     isAuthenticated: boolean
     isPaused: boolean
+    isFallbackMode: boolean
     error: string | null
   }): void
 }
@@ -72,6 +79,31 @@ async function fetchCSRFToken(): Promise<string> {
   return data.csrf_token
 }
 
+// REST API response types
+interface QuotesApiData {
+  ltp?: number
+  open?: number
+  high?: number
+  low?: number
+  prev_close?: number
+  volume?: number
+  bid?: number
+  ask?: number
+  oi?: number
+}
+
+interface MultiQuotesResult {
+  symbol: string
+  exchange: string
+  data: QuotesApiData
+}
+
+interface MultiQuotesApiResponse {
+  status: 'success' | 'error'
+  results?: MultiQuotesResult[]
+  message?: string
+}
+
 export class MarketDataManager {
   private static instance: MarketDataManager | null = null
 
@@ -88,6 +120,14 @@ export class MarketDataManager {
   private maxReconnectAttempts: number = 10
   private userDisconnected: boolean = false
   private connectAbortController: AbortController | null = null
+
+  // REST API fallback properties
+  private fallbackMode: boolean = false
+  private fallbackPollingInterval: ReturnType<typeof setInterval> | null = null
+  private fallbackPollingRate: number = 5000 // Poll every 5 seconds in fallback mode
+  private apiKey: string | null = null
+  private consecutiveFailures: number = 0
+  private maxConsecutiveFailures: number = 3 // Switch to fallback after 3 consecutive connection failures
 
   private constructor() {
     // Private constructor for singleton pattern
@@ -152,6 +192,14 @@ export class MarketDataManager {
       // Send subscribe message if connected and authenticated
       if (this.connectionState === 'authenticated') {
         this.sendSubscribe([{ symbol, exchange }], mode)
+      } else if (this.fallbackMode && this.apiKey) {
+        // In fallback mode - start polling if not already running
+        if (!this.fallbackPollingInterval) {
+          this.startFallbackPolling()
+        } else {
+          // Fetch immediately for new subscription
+          this.fetchMarketDataViaRest()
+        }
       }
     }
 
@@ -194,6 +242,11 @@ export class MarketDataManager {
           this.sendUnsubscribe([{ symbol, exchange }])
         }
       }
+
+      // Stop fallback polling if no more subscriptions
+      if (this.subscriptions.size === 0 && this.fallbackMode) {
+        this.stopFallbackPolling()
+      }
     }
   }
 
@@ -217,8 +270,16 @@ export class MarketDataManager {
       isConnected: this.connectionState === 'connected' || this.connectionState === 'authenticating' || this.connectionState === 'authenticated',
       isAuthenticated: this.connectionState === 'authenticated',
       isPaused: this.connectionState === 'paused',
+      isFallbackMode: this.fallbackMode,
       error: this.error,
     }
+  }
+
+  /**
+   * Check if currently in REST API fallback mode
+   */
+  isFallback(): boolean {
+    return this.fallbackMode
   }
 
   /**
@@ -356,6 +417,11 @@ export class MarketDataManager {
           this.setConnectionState('disconnected')
         }
 
+        // Track consecutive failures for fallback trigger
+        if (!event.wasClean) {
+          this.consecutiveFailures++
+        }
+
         // Auto-reconnect if not clean close and not paused
         if (
           this.autoReconnect &&
@@ -366,10 +432,17 @@ export class MarketDataManager {
           this.reconnectAttempts++
           const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 30000) // Exponential backoff, max 30s
           this.reconnectTimeout = setTimeout(() => this.connect(), delay)
+        } else if (
+          this.reconnectAttempts >= this.maxReconnectAttempts ||
+          this.consecutiveFailures >= this.maxConsecutiveFailures
+        ) {
+          // Max reconnect attempts reached - switch to REST API fallback
+          this.enableFallbackMode()
         }
       }
 
       socket.onerror = () => {
+        this.consecutiveFailures++
         this.setError('WebSocket connection error')
       }
 
@@ -377,8 +450,14 @@ export class MarketDataManager {
 
       this.socket = socket
     } catch (err) {
+      this.consecutiveFailures++
       this.setError(`Connection failed: ${err}`)
       this.setConnectionState('disconnected')
+
+      // Check if we should switch to fallback mode
+      if (this.consecutiveFailures >= this.maxConsecutiveFailures) {
+        this.enableFallbackMode()
+      }
     }
   }
 
@@ -404,6 +483,11 @@ export class MarketDataManager {
       this.socket.close(1000, 'User disconnect')
       this.socket = null
     }
+
+    // Stop fallback polling on disconnect
+    this.stopFallbackPolling()
+    this.fallbackMode = false
+    this.consecutiveFailures = 0
 
     this.setConnectionState('disconnected')
   }
@@ -452,6 +536,9 @@ export class MarketDataManager {
           if (data.status === 'success') {
             this.setConnectionState('authenticated')
             this.error = null
+            this.consecutiveFailures = 0 // Reset failure count on successful auth
+            // Disable fallback mode now that WebSocket is working
+            this.disableFallbackMode()
             // Resubscribe to all active subscriptions
             this.resubscribeAll()
           } else {
@@ -571,6 +658,180 @@ export class MarketDataManager {
   private notifyStateListeners(): void {
     const state = this.getState()
     this.stateListeners.forEach((listener) => listener(state))
+  }
+
+  // ============================================================
+  // REST API Fallback Methods
+  // ============================================================
+
+  /**
+   * Switch to REST API fallback mode
+   * Called when WebSocket connection repeatedly fails
+   */
+  private async enableFallbackMode(): Promise<void> {
+    if (this.fallbackMode) return
+
+    console.log('[MarketDataManager] Switching to REST API fallback mode')
+    this.fallbackMode = true
+    this.notifyStateListeners()
+
+    // Fetch API key for REST calls
+    await this.fetchApiKeyForFallback()
+
+    // Start polling if we have subscriptions
+    if (this.subscriptions.size > 0 && this.apiKey) {
+      this.startFallbackPolling()
+    }
+  }
+
+  /**
+   * Disable REST API fallback mode (when WebSocket reconnects)
+   */
+  private disableFallbackMode(): void {
+    if (!this.fallbackMode) return
+
+    console.log('[MarketDataManager] Disabling REST API fallback mode - WebSocket restored')
+    this.fallbackMode = false
+    this.stopFallbackPolling()
+    this.consecutiveFailures = 0
+    this.notifyStateListeners()
+  }
+
+  /**
+   * Fetch API key for REST API calls
+   */
+  private async fetchApiKeyForFallback(): Promise<void> {
+    try {
+      const csrfToken = await fetchCSRFToken()
+      const response = await fetch('/api/websocket/apikey', {
+        headers: { 'X-CSRFToken': csrfToken },
+        credentials: 'include',
+      })
+      const data = await response.json()
+      if (data.status === 'success' && data.api_key) {
+        this.apiKey = data.api_key
+      }
+    } catch (err) {
+      console.error('[MarketDataManager] Failed to fetch API key for fallback:', err)
+    }
+  }
+
+  /**
+   * Start REST API polling for subscribed symbols
+   */
+  private startFallbackPolling(): void {
+    if (this.fallbackPollingInterval) return
+
+    console.log(`[MarketDataManager] Starting REST API polling (every ${this.fallbackPollingRate}ms)`)
+
+    // Fetch immediately
+    this.fetchMarketDataViaRest()
+
+    // Then poll at regular intervals
+    this.fallbackPollingInterval = setInterval(() => {
+      this.fetchMarketDataViaRest()
+    }, this.fallbackPollingRate)
+  }
+
+  /**
+   * Stop REST API polling
+   */
+  private stopFallbackPolling(): void {
+    if (this.fallbackPollingInterval) {
+      console.log('[MarketDataManager] Stopping REST API polling')
+      clearInterval(this.fallbackPollingInterval)
+      this.fallbackPollingInterval = null
+    }
+  }
+
+  /**
+   * Fetch market data via REST API (multiquotes endpoint)
+   */
+  private async fetchMarketDataViaRest(): Promise<void> {
+    if (!this.apiKey || this.subscriptions.size === 0) return
+
+    try {
+      // Collect unique symbols from subscriptions
+      const uniqueSymbols = new Map<string, { symbol: string; exchange: string }>()
+      this.subscriptions.forEach((entry) => {
+        const key = `${entry.exchange}:${entry.symbol}`
+        if (!uniqueSymbols.has(key)) {
+          uniqueSymbols.set(key, { symbol: entry.symbol, exchange: entry.exchange })
+        }
+      })
+
+      const symbolsArray = Array.from(uniqueSymbols.values())
+      if (symbolsArray.length === 0) return
+
+      // Call multiquotes API
+      const response = await fetch('/api/v1/multiquotes', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          apikey: this.apiKey,
+          symbols: symbolsArray,
+        }),
+      })
+
+      const data = await response.json() as MultiQuotesApiResponse
+
+      if (data.status === 'success' && data.results) {
+        // Process each result and update cache + notify subscribers
+        for (const result of data.results) {
+          const symbol = result.symbol.toUpperCase()
+          const exchange = result.exchange
+          const dataKey = `${exchange}:${symbol}`
+
+          // Update cache
+          const existing = this.dataCache.get(dataKey) || { symbol, exchange, data: {} }
+          const newData = { ...existing.data }
+
+          Object.assign(newData, {
+            ltp: result.data.ltp ?? newData.ltp,
+            open: result.data.open ?? newData.open,
+            high: result.data.high ?? newData.high,
+            low: result.data.low ?? newData.low,
+            close: result.data.prev_close ?? newData.close,
+            volume: result.data.volume ?? newData.volume,
+            bid_price: result.data.bid ?? newData.bid_price,
+            ask_price: result.data.ask ?? newData.ask_price,
+          })
+
+          const updatedSymbolData: SymbolData = {
+            ...existing,
+            data: newData,
+            lastUpdate: Date.now(),
+          }
+          this.dataCache.set(dataKey, updatedSymbolData)
+
+          // Fan out to all callbacks for this symbol
+          this.subscriptions.forEach((entry) => {
+            if (entry.symbol === symbol && entry.exchange === exchange) {
+              entry.callbacks.forEach((callback) => {
+                callback(updatedSymbolData)
+              })
+            }
+          })
+        }
+      }
+    } catch (err) {
+      console.error('[MarketDataManager] REST API fetch error:', err)
+    }
+  }
+
+  /**
+   * Set fallback polling rate in milliseconds
+   */
+  setFallbackPollingRate(rate: number): void {
+    this.fallbackPollingRate = rate
+    // Restart polling if currently active
+    if (this.fallbackPollingInterval) {
+      this.stopFallbackPolling()
+      this.startFallbackPolling()
+    }
   }
 }
 

@@ -31,6 +31,7 @@ interface UseMarketDataReturn {
   isAuthenticated: boolean
   isConnecting: boolean
   isPaused: boolean
+  isFallbackMode: boolean
   error: string | null
   connect: () => Promise<void>
   disconnect: () => void
@@ -57,6 +58,7 @@ export function useMarketData({
     isConnected: context?.isConnected ?? false,
     isAuthenticated: context?.isAuthenticated ?? false,
     isPaused: context?.isPaused ?? false,
+    isFallbackMode: false,
     error: context?.error ?? null,
   })
 
@@ -83,6 +85,7 @@ export function useMarketData({
         isConnected: state.isConnected,
         isAuthenticated: state.isAuthenticated,
         isPaused: state.isPaused,
+        isFallbackMode: state.isFallbackMode,
         error: state.error,
       })
       setIsConnecting(state.connectionState === 'connecting' || state.connectionState === 'authenticating')
@@ -190,6 +193,7 @@ export function useMarketData({
     isAuthenticated: connectionState.isAuthenticated,
     isConnecting,
     isPaused: connectionState.isPaused,
+    isFallbackMode: connectionState.isFallbackMode,
     error: connectionState.error,
     connect,
     disconnect,
