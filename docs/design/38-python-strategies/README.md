@@ -419,6 +419,39 @@ tail -f log/strategies/my_strategy.log
 cat log/strategies/my_strategy.log | tail -100
 ```
 
+## Resource Configuration
+
+### Memory Limits
+
+Each strategy subprocess has a configurable memory limit to prevent runaway strategies from crashing the system:
+
+```python
+# Default: 1024MB, configurable via environment variable
+STRATEGY_MEMORY_LIMIT_MB = int(os.environ.get('STRATEGY_MEMORY_LIMIT_MB', '1024'))
+```
+
+| Container RAM | Recommended Limit | Max Concurrent Strategies |
+|---------------|-------------------|---------------------------|
+| 2GB | 256MB | 5 |
+| 4GB | 512MB | 5-8 |
+| 8GB+ | 1024MB (default) | 10+ |
+
+### Thread Limiting for Docker
+
+When running strategies with numerical libraries (NumPy, SciPy, Numba) in Docker, thread limits prevent `RLIMIT_NPROC` exhaustion:
+
+| Variable | Purpose |
+|----------|---------|
+| `OPENBLAS_NUM_THREADS` | OpenBLAS thread limit |
+| `OMP_NUM_THREADS` | OpenMP thread limit |
+| `MKL_NUM_THREADS` | Intel MKL thread limit |
+| `NUMEXPR_NUM_THREADS` | NumExpr thread limit |
+| `NUMBA_NUM_THREADS` | Numba JIT thread limit |
+
+For 2GB containers, set all to `1`. For 4GB+, use `2`. See [Docker Configuration](../11-docker/README.md) for details.
+
+> **Reference**: [GitHub Issue #822](https://github.com/marketcalls/openalgo/issues/822)
+
 ## Key Files Reference
 
 | File | Purpose |

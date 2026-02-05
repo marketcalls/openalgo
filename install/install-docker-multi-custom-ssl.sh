@@ -445,7 +445,7 @@ SHM_SIZE_MB=$((RAM_PER_INSTANCE / 4))
 [ $SHM_SIZE_MB -gt 1024 ] && SHM_SIZE_MB=1024
 
 # Thread limits based on per-instance RAM (conservative)
-# <2GB: 1 thread | 2-4GB: 2 threads | 4GB+: min(2, cores/instances)
+# <2GB: 1 thread | 2-4GB: 2 threads | 4GB+: max(2, min(4, cores/instances))
 if [ $RAM_PER_INSTANCE -lt 2000 ]; then
     THREAD_LIMIT=1
 elif [ $RAM_PER_INSTANCE -lt 4000 ]; then

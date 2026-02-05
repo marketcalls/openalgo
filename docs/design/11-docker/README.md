@@ -390,6 +390,67 @@ APP_KEY=your_32_byte_hex_key
 API_KEY_PEPPER=your_32_byte_hex_pepper
 ```
 
+## Resource Configuration for Python Strategies
+
+Running Python strategies with numerical libraries (NumPy, SciPy, Numba) in Docker requires careful resource configuration to prevent `RLIMIT_NPROC` exhaustion errors.
+
+### Thread Limiting Environment Variables
+
+OpenBLAS, NumPy, and other numerical libraries spawn threads by default. In containers with limited process/thread limits, this causes crashes. The Dockerfile and docker-compose.yaml include these limits:
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `OPENBLAS_NUM_THREADS` | OpenBLAS thread limit | 2 |
+| `OMP_NUM_THREADS` | OpenMP thread limit | 2 |
+| `MKL_NUM_THREADS` | Intel MKL thread limit | 2 |
+| `NUMEXPR_NUM_THREADS` | NumExpr thread limit | 2 |
+| `NUMBA_NUM_THREADS` | Numba JIT thread limit | 2 |
+
+### Resource Scaling by Container RAM
+
+| Container RAM | Thread Limit | Strategy Memory | SHM Size | Max Strategies |
+|---------------|--------------|-----------------|----------|----------------|
+| 2GB | 1 | 256MB | 256MB | 5 |
+| 4GB | 2 | 512MB | 512MB | 5-8 |
+| 8GB | 2-4 | 1024MB | 1GB | 10+ |
+| 16GB+ | 4 | 1024MB | 2GB | 20+ |
+
+### Configuration in docker-compose.yaml
+
+```yaml
+services:
+  openalgo:
+    environment:
+      # Thread limits (adjust based on container RAM)
+      - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-2}
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-2}
+      - MKL_NUM_THREADS=${MKL_NUM_THREADS:-2}
+      - NUMEXPR_NUM_THREADS=${NUMEXPR_NUM_THREADS:-2}
+      - NUMBA_NUM_THREADS=${NUMBA_NUM_THREADS:-2}
+      # Strategy memory limit (MB)
+      - STRATEGY_MEMORY_LIMIT_MB=${STRATEGY_MEMORY_LIMIT_MB:-1024}
+    # Shared memory for scipy/numba (25% of container RAM)
+    shm_size: ${SHM_SIZE:-512m}
+```
+
+### Install Script Dynamic Calculation
+
+The `install-docker.sh` script automatically calculates optimal values:
+
+```bash
+# Thread limits based on RAM
+# <3GB: 1 thread | 3-6GB: 2 threads | 6GB+: min(4, cores)
+if [ $TOTAL_RAM_MB -lt 3000 ]; then
+    THREAD_LIMIT=1
+elif [ $TOTAL_RAM_MB -lt 6000 ]; then
+    THREAD_LIMIT=2
+else
+    THREAD_LIMIT=$((CPU_CORES < 4 ? CPU_CORES : 4))
+fi
+```
+
+> **Reference**: See [GitHub Issue #822](https://github.com/marketcalls/openalgo/issues/822) for details on the RLIMIT_NPROC fix.
+
 ## Security Considerations
 
 | Aspect | Implementation |
