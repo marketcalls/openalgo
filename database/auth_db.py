@@ -229,23 +229,16 @@ def upsert_auth(name, auth_token, broker, feed_token=None, user_id=None, revoke=
         db_session.add(auth_obj)
     db_session.commit()
 
-    # Update cache after successful database operation
-    cache_key_auth = f"auth-{name}"
-    cache_key_feed = f"feed-{name}"
-
-    if revoke:
-        # Clear cache entries when revoking
-        if cache_key_auth in auth_cache:
-            del auth_cache[cache_key_auth]
-        if cache_key_feed in feed_token_cache:
-            del feed_token_cache[cache_key_feed]
-        logger.info(f"Cleared cache entries for revoked tokens of user: {name}")
-    else:
-        # Populate cache immediately on login/update for faster subsequent access
-        auth_cache[cache_key_auth] = auth_obj
-        if auth_obj.feed_token:
-            feed_token_cache[cache_key_feed] = auth_obj
-        logger.debug(f"Auth cache populated for user: {name}")
+    # CRITICAL: Clear ENTIRE auth_cache on token update to prevent stale token issues
+    # This is necessary because get_auth_token_broker() uses a different cache key format
+    # (sha256(api_key)_include_feed_token) than upsert_auth() uses (auth-{name}).
+    # Without clearing all entries, old cached tokens from get_auth_token_broker()
+    # would persist and cause 401 Unauthorized errors after re-login.
+    # See GitHub issue #851 for details on this cache key mismatch bug.
+    auth_cache.clear()
+    feed_token_cache.clear()
+    broker_cache.clear()  # Also clear broker cache to ensure fresh data
+    logger.info(f"Cleared all auth caches after token update for user: {name}")
 
     # Publish cache invalidation event via ZeroMQ for other processes
     # This notifies WebSocket proxy and other processes to clear their stale caches
