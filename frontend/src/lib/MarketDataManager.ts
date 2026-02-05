@@ -86,6 +86,8 @@ export class MarketDataManager {
   private autoReconnect: boolean = true
   private reconnectAttempts: number = 0
   private maxReconnectAttempts: number = 10
+  private userDisconnected: boolean = false
+  private connectAbortController: AbortController | null = null
 
   private constructor() {
     // Private constructor for singleton pattern
@@ -234,6 +236,20 @@ export class MarketDataManager {
   }
 
   /**
+   * Set auto-reconnect behavior
+   */
+  setAutoReconnect(enabled: boolean): void {
+    this.autoReconnect = enabled
+  }
+
+  /**
+   * Get current auto-reconnect setting
+   */
+  getAutoReconnect(): boolean {
+    return this.autoReconnect
+  }
+
+  /**
    * Connect to WebSocket server
    */
   async connect(): Promise<void> {
@@ -249,16 +265,31 @@ export class MarketDataManager {
       return
     }
 
+    // Clear user disconnect flag when starting a new connection
+    this.userDisconnected = false
+
+    // Abort any previous connect attempt
+    this.connectAbortController?.abort()
+    this.connectAbortController = new AbortController()
+    const abortSignal = this.connectAbortController.signal
+
     this.setConnectionState('connecting')
     this.error = null
 
     try {
       const csrfToken = await fetchCSRFToken()
 
+      // Check if disconnect was called during async operation
+      if (this.userDisconnected || abortSignal.aborted) {
+        this.setConnectionState('disconnected')
+        return
+      }
+
       // Get WebSocket config
       const configResponse = await fetch('/api/websocket/config', {
         headers: { 'X-CSRFToken': csrfToken },
         credentials: 'include',
+        signal: abortSignal,
       })
       const configData = await configResponse.json()
 
@@ -266,21 +297,46 @@ export class MarketDataManager {
         throw new Error('Failed to get WebSocket configuration')
       }
 
+      // Check again after config fetch
+      if (this.userDisconnected || abortSignal.aborted) {
+        this.setConnectionState('disconnected')
+        return
+      }
+
       const wsUrl = configData.websocket_url
       const socket = new WebSocket(wsUrl)
 
       socket.onopen = async () => {
+        // Check if disconnect was called before socket opened
+        if (this.userDisconnected) {
+          socket.close(1000, 'User disconnect during connection')
+          return
+        }
+
         this.setConnectionState('connected')
         this.reconnectAttempts = 0
 
         try {
           // Get API key for authentication
           const authCsrfToken = await fetchCSRFToken()
+
+          // Check again after async operation
+          if (this.userDisconnected) {
+            socket.close(1000, 'User disconnect during authentication')
+            return
+          }
+
           const apiKeyResponse = await fetch('/api/websocket/apikey', {
             headers: { 'X-CSRFToken': authCsrfToken },
             credentials: 'include',
           })
           const apiKeyData = await apiKeyResponse.json()
+
+          // Check again after API key fetch
+          if (this.userDisconnected) {
+            socket.close(1000, 'User disconnect during authentication')
+            return
+          }
 
           if (apiKeyData.status === 'success' && apiKeyData.api_key) {
             this.setConnectionState('authenticating')
@@ -330,6 +386,15 @@ export class MarketDataManager {
    * Disconnect from WebSocket server
    */
   disconnect(): void {
+    // Mark as user-initiated disconnect to prevent zombie connections
+    this.userDisconnected = true
+
+    // Abort any in-progress connection attempt
+    if (this.connectAbortController) {
+      this.connectAbortController.abort()
+      this.connectAbortController = null
+    }
+
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout)
       this.reconnectTimeout = null
