@@ -1,17 +1,143 @@
 import importlib
+import os
 import re
+import time
+from datetime import datetime, date
 from threading import Thread
 
+import pytz
 from flask import current_app as app
 from flask import jsonify, redirect, request, session, url_for
 
 from database.auth_db import get_feed_token as db_get_feed_token
 from database.auth_db import upsert_auth
-from database.master_contract_status_db import init_broker_status, update_status
+from database.master_contract_status_db import (
+    get_exchange_stats_from_db,
+    get_last_download_time,
+    init_broker_status,
+    mark_status_ready_without_download,
+    update_download_stats,
+    update_status,
+)
 from utils.logging import get_logger
 from utils.session import get_session_expiry_time, set_session_login_time
 
 logger = get_logger(__name__)
+
+# IST timezone for cutoff time
+IST = pytz.timezone("Asia/Kolkata")
+
+
+def get_master_contract_cutoff():
+    """
+    Get master contract cutoff time from environment variable.
+    Returns tuple of (hour, minute) in IST.
+    Default: 08:00 IST
+    """
+    cutoff_time = os.getenv("MASTER_CONTRACT_CUTOFF_TIME", "08:00")
+    try:
+        parts = cutoff_time.split(":")
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+        return hour, minute
+    except (ValueError, IndexError):
+        logger.warning(f"Invalid MASTER_CONTRACT_CUTOFF_TIME: {cutoff_time}, using default 08:00")
+        return 8, 0
+
+
+def should_download_master_contract(broker):
+    """
+    Determine if master contract should be downloaded based on smart download logic.
+
+    Rules:
+    - If never downloaded before: always download
+    - If downloaded today after cutoff time (default 08:00 IST): skip download, use cached
+    - If downloaded before cutoff time today: download fresh
+    - If downloaded on previous day: download fresh
+
+    Returns:
+        tuple: (should_download: bool, reason: str)
+    """
+    last_download = get_last_download_time(broker)
+
+    if last_download is None:
+        return True, "No previous download found"
+
+    # Get cutoff time from environment
+    cutoff_hour, cutoff_minute = get_master_contract_cutoff()
+
+    # Get current time in IST
+    now_ist = datetime.now(IST)
+    today_ist = now_ist.date()
+
+    # Get the download time in IST
+    # Handle naive datetime by assuming it was stored in local time (IST)
+    if last_download.tzinfo is None:
+        last_download_ist = IST.localize(last_download)
+    else:
+        last_download_ist = last_download.astimezone(IST)
+
+    download_date = last_download_ist.date()
+    download_hour = last_download_ist.hour
+    download_minute = last_download_ist.minute
+
+    # If downloaded on a different day, download fresh
+    if download_date != today_ist:
+        return True, f"Last download was on {download_date}, today is {today_ist}"
+
+    # Downloaded today - check if it was after cutoff time
+    download_time_minutes = download_hour * 60 + download_minute
+    cutoff_time_minutes = cutoff_hour * 60 + cutoff_minute
+
+    if download_time_minutes >= cutoff_time_minutes:
+        return False, f"Already downloaded today at {last_download_ist.strftime('%H:%M')} IST (after {cutoff_hour:02d}:{cutoff_minute:02d} cutoff)"
+    else:
+        return True, f"Download was before {cutoff_hour:02d}:{cutoff_minute:02d} IST cutoff"
+
+
+def load_existing_master_contract(broker):
+    """
+    Load existing master contract data without re-downloading.
+
+    This function:
+    1. Marks the status as ready (using cached data)
+    2. Loads symbols into memory cache
+    3. Runs sandbox catch-up tasks
+
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Mark status as ready using cached data
+        if not mark_status_ready_without_download(broker):
+            logger.warning(f"No existing download found for {broker}, cannot use cache")
+            return False
+
+        # Load symbols into memory cache
+        try:
+            from database.master_contract_cache_hook import hook_into_master_contract_download
+
+            logger.info(f"Loading symbols from existing cache for broker: {broker}")
+            hook_into_master_contract_download(broker)
+        except Exception as cache_error:
+            logger.exception(f"Failed to load symbols into cache: {cache_error}")
+            # Don't fail if cache loading fails
+
+        # Run catch-up tasks for sandbox mode
+        try:
+            from sandbox.catch_up_processor import run_catch_up_tasks
+
+            run_catch_up_tasks()
+        except Exception as catch_up_error:
+            logger.exception(f"Failed to run catch-up tasks: {catch_up_error}")
+            # Don't fail if catch-up fails
+
+        logger.info(f"Successfully loaded existing master contract for {broker}")
+        return True
+
+    except Exception as e:
+        logger.exception(f"Error loading existing master contract for {broker}: {e}")
+        return False
 
 
 def is_ajax_request():
@@ -90,7 +216,11 @@ def async_master_contract_download(broker):
     """
     Asynchronously download the master contract and emit a WebSocket event upon completion,
     with the 'broker' parameter specifying the broker for which to download the contract.
+
+    Tracks download duration and exchange-wise statistics for smart download feature.
     """
+    start_time = time.time()
+
     # Update status to downloading
     update_status(broker, "downloading", "Master contract download in progress")
 
@@ -126,6 +256,14 @@ def async_master_contract_download(broker):
         )
         logger.info(f"Master contract download completed for {broker}")
 
+        # Calculate download duration and get exchange stats
+        duration_seconds = int(time.time() - start_time)
+        exchange_stats = get_exchange_stats_from_db()
+
+        # Update download statistics for smart download tracking
+        update_download_stats(broker, duration_seconds, exchange_stats)
+        logger.info(f"Download stats recorded: {duration_seconds}s, exchanges: {list(exchange_stats.keys())}")
+
         # Load symbols into memory cache after successful download
         try:
             from database.master_contract_cache_hook import hook_into_master_contract_download
@@ -160,7 +298,7 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
     Handles common tasks after successful authentication.
     - Sets session parameters
     - Stores auth token in the database
-    - Initiates asynchronous master contract download
+    - Initiates asynchronous master contract download (smart: skips if downloaded after 8 AM IST)
     """
     # Set session parameters
     session["logged_in"] = True
@@ -187,8 +325,21 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
         logger.info(f"Database record upserted with ID: {inserted_id}")
         # Initialize master contract status for this broker
         init_broker_status(broker)
-        thread = Thread(target=async_master_contract_download, args=(broker,))
-        thread.start()
+
+        # Smart download: Check if we need to download or can use cached data
+        should_download, reason = should_download_master_contract(broker)
+        logger.info(f"Smart download check for {broker}: should_download={should_download}, reason={reason}")
+
+        if should_download:
+            # Start async download in background thread
+            thread = Thread(target=async_master_contract_download, args=(broker,))
+            thread.start()
+        else:
+            # Use cached data - load existing master contract
+            logger.info(f"Skipping download for {broker}: {reason}")
+            thread = Thread(target=load_existing_master_contract, args=(broker,))
+            thread.start()
+
         # Return JSON for AJAX requests (React), redirect for OAuth callbacks
         if is_ajax_request():
             return jsonify(

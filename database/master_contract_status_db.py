@@ -1,8 +1,9 @@
+import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, date
 
-from sqlalchemy import Boolean, Column, DateTime, String, create_engine, text
+from sqlalchemy import Boolean, Column, Date, DateTime, Integer, String, Text, create_engine, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
@@ -42,6 +43,12 @@ class MasterContractStatus(Base):
     last_updated = Column(DateTime, default=datetime.now)
     total_symbols = Column(String, default="0")
     is_ready = Column(Boolean, default=False)
+
+    # Smart download tracking columns
+    last_download_time = Column(DateTime, nullable=True)  # When download completed successfully
+    download_date = Column(Date, nullable=True)           # Trading day of the download
+    exchange_stats = Column(Text, nullable=True)          # JSON: {"NSE": 2500, "NFO": 85000, ...}
+    download_duration_seconds = Column(Integer, nullable=True)  # How long download took
 
 
 # Create table if it doesn't exist
@@ -125,6 +132,14 @@ def get_status(broker):
         status = session.query(MasterContractStatus).filter_by(broker=broker).first()
 
         if status:
+            # Parse exchange_stats JSON if present
+            exchange_stats = None
+            if status.exchange_stats:
+                try:
+                    exchange_stats = json.loads(status.exchange_stats)
+                except json.JSONDecodeError:
+                    exchange_stats = None
+
             return {
                 "broker": status.broker,
                 "status": status.status,
@@ -132,6 +147,11 @@ def get_status(broker):
                 "last_updated": status.last_updated.isoformat() if status.last_updated else None,
                 "total_symbols": status.total_symbols,
                 "is_ready": status.is_ready,
+                # Smart download fields
+                "last_download_time": status.last_download_time.isoformat() if status.last_download_time else None,
+                "download_date": status.download_date.isoformat() if status.download_date else None,
+                "exchange_stats": exchange_stats,
+                "download_duration_seconds": status.download_duration_seconds,
             }
         else:
             return {
@@ -141,6 +161,10 @@ def get_status(broker):
                 "last_updated": None,
                 "total_symbols": "0",
                 "is_ready": False,
+                "last_download_time": None,
+                "download_date": None,
+                "exchange_stats": None,
+                "download_duration_seconds": None,
             }
     except Exception as e:
         logger.exception(f"Error getting status for {broker}: {str(e)}")
@@ -151,6 +175,10 @@ def get_status(broker):
             "last_updated": None,
             "total_symbols": "0",
             "is_ready": False,
+            "last_download_time": None,
+            "download_date": None,
+            "exchange_stats": None,
+            "download_duration_seconds": None,
         }
     finally:
         session.close()
@@ -167,3 +195,81 @@ def check_if_ready(broker):
         return False
     finally:
         session.close()
+
+
+def get_last_download_time(broker):
+    """Get the last successful download time for a broker"""
+    session = SessionLocal()
+    try:
+        status = session.query(MasterContractStatus).filter_by(broker=broker).first()
+        return status.last_download_time if status else None
+    except Exception as e:
+        logger.exception(f"Error getting last download time for {broker}: {str(e)}")
+        return None
+    finally:
+        session.close()
+
+
+def update_download_stats(broker, duration_seconds, exchange_stats=None):
+    """Update download statistics after successful download"""
+    session = SessionLocal()
+    try:
+        status = session.query(MasterContractStatus).filter_by(broker=broker).first()
+        if status:
+            status.last_download_time = datetime.now()
+            status.download_date = date.today()
+            status.download_duration_seconds = duration_seconds
+            if exchange_stats:
+                status.exchange_stats = json.dumps(exchange_stats)
+            session.commit()
+            logger.info(f"Updated download stats for {broker}: {duration_seconds}s")
+    except Exception as e:
+        logger.exception(f"Error updating download stats for {broker}: {str(e)}")
+        session.rollback()
+    finally:
+        session.close()
+
+
+def mark_status_ready_without_download(broker):
+    """Mark master contract as ready without downloading (using existing data)"""
+    session = SessionLocal()
+    try:
+        status = session.query(MasterContractStatus).filter_by(broker=broker).first()
+        if status and status.last_download_time:
+            status.is_ready = True
+            status.status = "success"
+            status.message = "Using cached master contract"
+            status.last_updated = datetime.now()
+            session.commit()
+            logger.info(f"Marked existing master contract as ready for {broker}")
+            return True
+        return False
+    except Exception as e:
+        logger.exception(f"Error marking status ready for {broker}: {str(e)}")
+        session.rollback()
+        return False
+    finally:
+        session.close()
+
+
+def get_exchange_stats_from_db():
+    """Get exchange-wise symbol counts from symtoken table"""
+    try:
+        # Query symtoken table directly using raw SQL
+        with engine.connect() as conn:
+            result = conn.execute(text("""
+                SELECT
+                    exchange,
+                    COUNT(*) as total
+                FROM symtoken
+                GROUP BY exchange
+                ORDER BY total DESC
+            """)).fetchall()
+
+            stats = {}
+            for row in result:
+                stats[row[0]] = row[1]
+            return stats
+    except Exception as e:
+        logger.exception(f"Error getting exchange stats: {str(e)}")
+        return {}
