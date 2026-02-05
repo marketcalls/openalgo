@@ -1,51 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { usePageVisibility } from './usePageVisibility'
+/**
+ * useMarketData - Hook for real-time market data via shared WebSocket connection
+ *
+ * This hook delegates to the MarketDataManager singleton via MarketDataContext,
+ * ensuring a single WebSocket connection is shared across all components.
+ *
+ * API is backward-compatible with the original implementation.
+ */
 
-// Fetch CSRF token for authenticated requests
-async function fetchCSRFToken(): Promise<string> {
-  const response = await fetch('/auth/csrf-token', { credentials: 'include' })
-  const data = await response.json()
-  return data.csrf_token
-}
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useMarketDataContextOptional } from '@/contexts/MarketDataContext'
+import { MarketDataManager, type SymbolData, type SubscriptionMode } from '@/lib/MarketDataManager'
 
-export interface DepthLevel {
-  price: number
-  quantity: number
-  orders?: number
-}
-
-export interface MarketData {
-  ltp?: number
-  open?: number
-  high?: number
-  low?: number
-  close?: number
-  volume?: number
-  change?: number
-  change_percent?: number
-  timestamp?: string
-  // Quote data - best bid/ask (available in Quote and Depth modes)
-  bid_price?: number
-  ask_price?: number
-  bid_size?: number
-  ask_size?: number
-  // Depth data - full order book (available in Depth mode only)
-  depth?: {
-    buy: DepthLevel[]
-    sell: DepthLevel[]
-  }
-}
-
-export interface SymbolData {
-  symbol: string
-  exchange: string
-  data: MarketData
-  lastUpdate?: number
-}
+// Re-export types for backward compatibility
+export type { DepthLevel, MarketData, SymbolData } from '@/lib/MarketDataManager'
 
 interface UseMarketDataOptions {
   symbols: Array<{ symbol: string; exchange: string }>
-  mode?: 'LTP' | 'Quote' | 'Depth'
+  mode?: SubscriptionMode
   enabled?: boolean
   autoReconnect?: boolean
   /** Pause WebSocket connection when tab is hidden (default: true) */
@@ -69,395 +40,113 @@ export function useMarketData({
   symbols,
   mode = 'LTP',
   enabled = true,
-  autoReconnect = true,
-  pauseWhenHidden = true,
-  pauseDelay = 5000,
 }: UseMarketDataOptions): UseMarketDataReturn {
+  // Try to get context (may be null if used outside provider, e.g., WebSocketTest page)
+  const context = useMarketDataContextOptional()
+
+  // Use context manager if available, otherwise get singleton directly (for standalone use)
+  const managerRef = useRef<MarketDataManager>(
+    context?.manager ?? MarketDataManager.getInstance()
+  )
+
   const [marketData, setMarketData] = useState<Map<string, SymbolData>>(new Map())
-  const [isConnected, setIsConnected] = useState(false)
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [connectionState, setConnectionState] = useState({
+    isConnected: context?.isConnected ?? false,
+    isAuthenticated: context?.isAuthenticated ?? false,
+    isPaused: context?.isPaused ?? false,
+    error: context?.error ?? null,
+  })
+
+  // Track if we're in the process of connecting
   const [isConnecting, setIsConnecting] = useState(false)
-  const [isPaused, setIsPaused] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
-  // Page visibility tracking
-  const { isVisible, wasHidden } = usePageVisibility()
-
-  const socketRef = useRef<WebSocket | null>(null)
-  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const pauseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const isPausePendingRef = useRef<boolean>(false) // Track pending pause to avoid race conditions
-  const subscribedSymbolsRef = useRef<Set<string>>(new Set())
-  const pendingSubscriptionsRef = useRef<Array<{ symbol: string; exchange: string }>>([])
-
-  const getCsrfToken = useCallback(async () => fetchCSRFToken(), [])
-
-  // Subscribe to symbols
-  const subscribeToSymbols = useCallback(
-    (symbolsToSubscribe: Array<{ symbol: string; exchange: string }>) => {
-      if (
-        !socketRef.current ||
-        socketRef.current.readyState !== WebSocket.OPEN ||
-        !isAuthenticated
-      ) {
-        // Queue for later when connected and authenticated
-        pendingSubscriptionsRef.current = symbolsToSubscribe
-        return
-      }
-
-      const newSymbols = symbolsToSubscribe.filter((s) => {
-        const key = `${s.exchange}:${s.symbol}`
-        return !subscribedSymbolsRef.current.has(key)
-      })
-
-      if (newSymbols.length === 0) return
-
-      socketRef.current.send(
-        JSON.stringify({
-          action: 'subscribe',
-          symbols: newSymbols,
-          mode,
-        })
-      )
-
-      // Track subscribed symbols
-      newSymbols.forEach((s) => {
-        const key = `${s.exchange}:${s.symbol}`
-        subscribedSymbolsRef.current.add(key)
-
-        // Initialize market data entry
-        setMarketData((prev) => {
-          const updated = new Map(prev)
-          if (!updated.has(key)) {
-            updated.set(key, { symbol: s.symbol, exchange: s.exchange, data: {} })
-          }
-          return updated
-        })
-      })
-    },
-    [isAuthenticated, mode]
+  // Stable symbol key for dependency tracking
+  const symbolsKey = useMemo(
+    () => symbols.map((s) => `${s.exchange}:${s.symbol}`).sort().join(','),
+    [symbols]
   )
 
-  // Unsubscribe from symbols no longer needed
-  const unsubscribeFromSymbols = useCallback(
-    (symbolsToUnsubscribe: Array<{ symbol: string; exchange: string }>) => {
-      if (
-        !socketRef.current ||
-        socketRef.current.readyState !== WebSocket.OPEN ||
-        symbolsToUnsubscribe.length === 0
-      ) {
-        return
-      }
-
-      socketRef.current.send(
-        JSON.stringify({
-          action: 'unsubscribe',
-          symbols: symbolsToUnsubscribe,
-        })
-      )
-
-      // Remove from tracked subscriptions and market data
-      symbolsToUnsubscribe.forEach((s) => {
-        const key = `${s.exchange}:${s.symbol}`
-        subscribedSymbolsRef.current.delete(key)
+  // Subscribe to connection state changes
+  useEffect(() => {
+    const manager = managerRef.current
+    const unsubscribe = manager.addStateListener((state) => {
+      setConnectionState({
+        isConnected: state.isConnected,
+        isAuthenticated: state.isAuthenticated,
+        isPaused: state.isPaused,
+        error: state.error,
       })
+      setIsConnecting(state.connectionState === 'connecting' || state.connectionState === 'authenticating')
+    })
 
-      // Clean up market data for unsubscribed symbols
-      setMarketData((prev) => {
-        const updated = new Map(prev)
-        symbolsToUnsubscribe.forEach((s) => {
-          const key = `${s.exchange}:${s.symbol}`
-          updated.delete(key)
-        })
-        return updated
-      })
-    },
-    []
-  )
+    return unsubscribe
+  }, [])
 
-  // Handle incoming WebSocket messages
-  const handleMessage = useCallback(
-    (event: MessageEvent) => {
-      try {
-        const data = JSON.parse(event.data)
-        const type = (data.type || data.status) as string
-
-        switch (type) {
-          case 'auth':
-            if (data.status === 'success') {
-              setIsAuthenticated(true)
-              setError(null)
-              // Process any pending subscriptions
-              if (pendingSubscriptionsRef.current.length > 0) {
-                // Small delay to ensure auth is fully processed
-                setTimeout(() => {
-                  subscribeToSymbols(pendingSubscriptionsRef.current)
-                  pendingSubscriptionsRef.current = []
-                }, 100)
-              }
-            } else {
-              setError(`Authentication failed: ${data.message}`)
-            }
-            break
-
-          case 'market_data': {
-            const symbol = (data.symbol as string).toUpperCase()
-            const exchange = data.exchange as string
-            const marketDataPayload = (data.data || {}) as MarketData
-            const key = `${exchange}:${symbol}`
-
-            setMarketData((prev) => {
-              const existing = prev.get(key)
-              if (!existing) return prev
-
-              const updated = new Map(prev)
-              const newData = { ...existing.data }
-
-              // Update with new market data
-              Object.assign(newData, {
-                ltp: marketDataPayload.ltp ?? newData.ltp,
-                open: marketDataPayload.open ?? newData.open,
-                high: marketDataPayload.high ?? newData.high,
-                low: marketDataPayload.low ?? newData.low,
-                close: marketDataPayload.close ?? newData.close,
-                volume: marketDataPayload.volume ?? newData.volume,
-                change: marketDataPayload.change ?? newData.change,
-                change_percent: marketDataPayload.change_percent ?? newData.change_percent,
-                timestamp: marketDataPayload.timestamp ?? newData.timestamp,
-                // Quote data - best bid/ask (from Quote mode or sf packets)
-                bid_price: marketDataPayload.bid_price ?? newData.bid_price,
-                ask_price: marketDataPayload.ask_price ?? newData.ask_price,
-                bid_size: marketDataPayload.bid_size ?? newData.bid_size,
-                ask_size: marketDataPayload.ask_size ?? newData.ask_size,
-                // Depth data - full order book (from Depth mode or dp packets)
-                depth: marketDataPayload.depth ?? newData.depth,
-              })
-
-              updated.set(key, { ...existing, data: newData, lastUpdate: Date.now() })
-              return updated
-            })
-            break
-          }
-
-          case 'subscribe':
-            // Subscription confirmed
-            break
-
-          case 'error':
-            setError(`WebSocket error: ${data.message}`)
-            break
-        }
-      } catch {
-        // Ignore parse errors for non-JSON messages
-      }
-    },
-    [subscribeToSymbols]
-  )
-
-  // Connect to WebSocket
-  const connect = useCallback(async () => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
+  // Subscribe to symbols when enabled
+  useEffect(() => {
+    if (!enabled || symbols.length === 0) {
+      // Clear data when disabled
+      setMarketData(new Map())
       return
     }
 
-    setIsConnecting(true)
-    setError(null)
+    const manager = managerRef.current
 
-    try {
-      const csrfToken = await getCsrfToken()
+    // Auto-connect if not connected (manager handles deduplication)
+    if (!connectionState.isConnected && !connectionState.isPaused) {
+      manager.connect()
+    }
 
-      // Get WebSocket config (URL from .env)
-      const configResponse = await fetch('/api/websocket/config', {
-        headers: { 'X-CSRFToken': csrfToken },
-        credentials: 'include',
+    // Subscribe to each symbol
+    const unsubscribes: Array<() => void> = []
+
+    for (const { symbol, exchange } of symbols) {
+      const unsubscribe = manager.subscribe(symbol, exchange, mode, (data: SymbolData) => {
+        setMarketData((prev) => {
+          const key = `${data.exchange}:${data.symbol}`
+          const updated = new Map(prev)
+          updated.set(key, data)
+          return updated
+        })
       })
-      const configData = await configResponse.json()
+      unsubscribes.push(unsubscribe)
 
-      if (configData.status !== 'success') {
-        throw new Error('Failed to get WebSocket configuration')
+      // Initialize with cached data if available
+      const cached = manager.getCachedData(symbol, exchange)
+      if (cached) {
+        const key = `${exchange}:${symbol}`
+        setMarketData((prev) => {
+          const updated = new Map(prev)
+          updated.set(key, cached)
+          return updated
+        })
       }
-
-      const wsUrl = configData.websocket_url
-
-      const socket = new WebSocket(wsUrl)
-
-      socket.onopen = async () => {
-        setIsConnected(true)
-        setIsConnecting(false)
-
-        try {
-          // Get API key for authentication
-          const authCsrfToken = await getCsrfToken()
-          const apiKeyResponse = await fetch('/api/websocket/apikey', {
-            headers: { 'X-CSRFToken': authCsrfToken },
-            credentials: 'include',
-          })
-          const apiKeyData = await apiKeyResponse.json()
-
-          if (apiKeyData.status === 'success' && apiKeyData.api_key) {
-            socket.send(JSON.stringify({ action: 'authenticate', api_key: apiKeyData.api_key }))
-          } else {
-            setError('No API key found - please generate one at /apikey')
-          }
-        } catch (err) {
-          setError(`Authentication error: ${err}`)
-        }
-      }
-
-      socket.onclose = (event) => {
-        setIsConnected(false)
-        setIsConnecting(false)
-        setIsAuthenticated(false)
-        subscribedSymbolsRef.current.clear()
-
-        // Only auto-reconnect if:
-        // 1. autoReconnect is enabled
-        // 2. Connection closed unexpectedly (not clean)
-        // 3. Hook is still enabled
-        // 4. Page is visible (don't reconnect in background)
-        const shouldReconnect =
-          autoReconnect &&
-          !event.wasClean &&
-          enabled &&
-          (!pauseWhenHidden || document.visibilityState === 'visible')
-
-        if (shouldReconnect) {
-          reconnectTimeoutRef.current = setTimeout(connect, 3000)
-        }
-      }
-
-      socket.onerror = () => {
-        setError('WebSocket connection error')
-        setIsConnecting(false)
-      }
-
-      socket.onmessage = handleMessage
-
-      socketRef.current = socket
-    } catch (err) {
-      setError(`Connection failed: ${err}`)
-      setIsConnecting(false)
     }
-  }, [getCsrfToken, handleMessage, autoReconnect, enabled, pauseWhenHidden])
 
-  // Disconnect from WebSocket
-  const disconnect = useCallback(() => {
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current)
-      reconnectTimeoutRef.current = null
+    return () => {
+      // Unsubscribe from all symbols
+      unsubscribes.forEach((unsub) => unsub())
     }
-    if (socketRef.current) {
-      socketRef.current.close(1000, 'User disconnect')
-      socketRef.current = null
-    }
-    setIsConnected(false)
-    setIsAuthenticated(false)
-    subscribedSymbolsRef.current.clear()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, symbolsKey, mode])
+
+  // Connect function (for manual connection)
+  const connect = useCallback(async () => {
+    await managerRef.current.connect()
   }, [])
 
-  // Auto-connect when enabled and symbols provided
-  useEffect(() => {
-    if (enabled && symbols.length > 0 && !isConnected && !isConnecting) {
-      connect()
-    }
-
-    return () => {
-      // Cleanup on unmount
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current)
-      }
-    }
-  }, [enabled, symbols.length, isConnected, isConnecting, connect])
-
-  // Track previous symbols to detect changes
-  const prevSymbolsRef = useRef<Array<{ symbol: string; exchange: string }>>([])
-
-  // Subscribe to new symbols and unsubscribe from old ones when authenticated
-  useEffect(() => {
-    if (!isAuthenticated) return
-
-    // Find symbols to unsubscribe (were in prev but not in current)
-    const currentKeys = new Set(symbols.map(s => `${s.exchange}:${s.symbol}`))
-    const symbolsToUnsubscribe = prevSymbolsRef.current.filter(
-      s => !currentKeys.has(`${s.exchange}:${s.symbol}`)
-    )
-
-    // Unsubscribe from old symbols
-    if (symbolsToUnsubscribe.length > 0) {
-      unsubscribeFromSymbols(symbolsToUnsubscribe)
-    }
-
-    // Subscribe to new symbols
-    if (symbols.length > 0) {
-      subscribeToSymbols(symbols)
-    }
-
-    // Update previous symbols ref
-    prevSymbolsRef.current = [...symbols]
-  }, [isAuthenticated, symbols, subscribeToSymbols, unsubscribeFromSymbols])
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      disconnect()
-    }
-  }, [disconnect])
-
-  // Handle page visibility changes - pause when hidden, resume when visible
-  useEffect(() => {
-    if (!pauseWhenHidden) return
-
-    if (!isVisible && isConnected) {
-      // Page became hidden - schedule disconnect after delay
-      // This allows brief tab switches without disconnecting
-      isPausePendingRef.current = true // Mark pause as pending (sync)
-      pauseTimeoutRef.current = setTimeout(() => {
-        isPausePendingRef.current = false
-        setIsPaused(true)
-        disconnect()
-      }, pauseDelay)
-    } else if (isVisible) {
-      // Page became visible
-      // Clear any pending pause timeout (user returned before delay elapsed)
-      if (pauseTimeoutRef.current) {
-        clearTimeout(pauseTimeoutRef.current)
-        pauseTimeoutRef.current = null
-        isPausePendingRef.current = false // Cancel pending pause
-      }
-
-      // If we were paused, reconnect
-      if (isPaused && enabled && symbols.length > 0) {
-        isPausePendingRef.current = false
-        setIsPaused(false)
-        connect()
-      }
-    }
-
-    return () => {
-      if (pauseTimeoutRef.current) {
-        clearTimeout(pauseTimeoutRef.current)
-        pauseTimeoutRef.current = null
-        isPausePendingRef.current = false
-      }
-    }
-  }, [isVisible, isConnected, isPaused, pauseWhenHidden, pauseDelay, enabled, symbols.length, connect, disconnect])
-
-  // When returning from hidden state, re-subscribe to all symbols
-  useEffect(() => {
-    if (wasHidden && isVisible && isAuthenticated && symbols.length > 0) {
-      // Clear tracked subscriptions to force re-subscribe
-      subscribedSymbolsRef.current.clear()
-      subscribeToSymbols(symbols)
-    }
-  }, [wasHidden, isVisible, isAuthenticated, symbols, subscribeToSymbols])
+  // Disconnect function (note: this disconnects the shared connection)
+  const disconnect = useCallback(() => {
+    managerRef.current.disconnect()
+  }, [])
 
   return {
     data: marketData,
-    isConnected,
-    isAuthenticated,
+    isConnected: connectionState.isConnected,
+    isAuthenticated: connectionState.isAuthenticated,
     isConnecting,
-    isPaused,
-    error,
+    isPaused: connectionState.isPaused,
+    error: connectionState.error,
     connect,
     disconnect,
   }
