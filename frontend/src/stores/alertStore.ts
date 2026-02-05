@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
-export type ToastPosition = 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left'
+export type ToastPosition = 'top-right' | 'top-center' | 'top-left' | 'bottom-right' | 'bottom-center' | 'bottom-left'
 
 export interface AlertCategories {
   // Real-time Socket.IO events (High-frequency)
