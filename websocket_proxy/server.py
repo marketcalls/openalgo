@@ -238,13 +238,7 @@ class WebSocketProxy:
         # This eliminates the need for nested loops in zmq_listener
         self.subscription_index: dict[tuple[str, str, int], set[int]] = defaultdict(set)
 
-        # PERFORMANCE OPTIMIZATION 2: Message throttling to avoid excessive updates
-        # Maps (symbol, exchange, mode) -> last message timestamp
-        # Prevents sending duplicate LTP updates faster than 50ms
-        self.last_message_time: dict[tuple[str, str, int], float] = {}
-        self.message_throttle_interval = 0.05  # 50ms minimum between messages
-
-        # PERFORMANCE OPTIMIZATION 3: Pre-compute mode mappings
+        # PERFORMANCE OPTIMIZATION 2: Pre-compute mode mappings
         self.MODE_MAP = {"LTP": 1, "QUOTE": 2, "DEPTH": 3}
 
         # RESOURCE MONITORING: Track metrics for health checks
@@ -252,7 +246,6 @@ class WebSocketProxy:
         self._messages_processed = 0
         self._last_cleanup_time = time.time()
         self._cleanup_interval = 300  # Clean stale entries every 5 minutes
-        self._throttle_entry_max_age = 60  # Remove throttle entries older than 60 seconds
 
         # ZeroMQ context for subscribing to broker adapters
         self.context = zmq.asyncio.Context()
@@ -492,7 +485,6 @@ class WebSocketProxy:
         # Calculate subscription index stats
         total_subscriptions = len(self.subscription_index)
         total_client_subscriptions = sum(len(clients) for clients in self.subscription_index.values())
-        throttle_entries = len(self.last_message_time)
 
         return {
             "server": {
@@ -517,7 +509,6 @@ class WebSocketProxy:
                 "brokers": list(self.user_broker_mapping.values()),
             },
             "performance": {
-                "throttle_entries": throttle_entries,
                 "messages_processed": self._messages_processed,
                 "last_cleanup_time": self._last_cleanup_time,
             },
@@ -550,45 +541,22 @@ class WebSocketProxy:
             )
         return self._circuit_breakers[key]
 
-    def _cleanup_stale_throttle_entries(self):
-        """
-        Remove stale entries from last_message_time dict.
-
-        This prevents unbounded memory growth from symbols that were
-        subscribed to but are no longer active.
-        """
+    def _log_resource_stats(self):
+        """Log resource stats periodically for monitoring."""
         current_time = time.time()
 
-        # Only run cleanup periodically
+        # Only run periodically
         if current_time - self._last_cleanup_time < self._cleanup_interval:
             return
 
         self._last_cleanup_time = current_time
-        initial_count = len(self.last_message_time)
 
-        # Find and remove stale entries
-        stale_keys = [
-            key for key, timestamp in self.last_message_time.items()
-            if current_time - timestamp > self._throttle_entry_max_age
-        ]
-
-        for key in stale_keys:
-            del self.last_message_time[key]
-
-        if stale_keys:
-            logger.info(
-                f"Cleaned up {len(stale_keys)} stale throttle entries "
-                f"(was {initial_count}, now {len(self.last_message_time)})"
-            )
-
-        # Log subscription index stats periodically
         total_subs = len(self.subscription_index)
         total_clients = len(self.clients)
         if total_subs > 0 or total_clients > 0:
             logger.debug(
                 f"Resource stats: {total_clients} clients, "
-                f"{total_subs} unique subscriptions, "
-                f"{len(self.last_message_time)} throttle entries"
+                f"{total_subs} unique subscriptions"
             )
 
     async def handle_client(self, websocket):
@@ -1802,8 +1770,8 @@ class WebSocketProxy:
                 if not self.running:
                     break
 
-                # RESOURCE CLEANUP: Periodically clean stale throttle entries
-                self._cleanup_stale_throttle_entries()
+                # Periodically log resource stats
+                self._log_resource_stats()
 
                 # OPTIMIZATION 1: Increased timeout to reduce busy-waiting
                 try:
@@ -1877,17 +1845,7 @@ class WebSocketProxy:
                     logger.warning(f"Invalid mode in topic: {mode_str}")
                     continue
 
-                # OPTIMIZATION: Message throttling for high-frequency updates
-                # Skip if we sent the same message too recently (reduces CPU on fast updates)
                 sub_key = (symbol, exchange, mode)
-                current_time = time.time()
-
-                # Only throttle LTP mode (mode 1), not Quote/Depth
-                if mode == 1:  # LTP mode
-                    last_time = self.last_message_time.get(sub_key, 0)
-                    if current_time - last_time < self.message_throttle_interval:
-                        continue  # Skip this update, too soon
-                    self.last_message_time[sub_key] = current_time
 
                 # Feed market data to MarketDataService for backend consumers
                 # (sandbox execution engine, position MTM, RMS, etc.)

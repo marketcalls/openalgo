@@ -122,10 +122,6 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Maxsize 5000 prevents unbounded memory growth while caching most symbols
         self._instrument_key_cache = LRUCache(maxsize=5000)
 
-        # PERFORMANCE: Adapter-level throttling (50ms minimum between publishes)
-        self._last_publish_time: dict[str, float] = {}  # correlation_id -> timestamp
-        self._throttle_interval = 0.05  # 50ms minimum between publishes per symbol
-
         # STALENESS DETECTION: Track last data received time per symbol
         self._last_data_time: dict[str, float] = {}  # correlation_id -> last data timestamp
         self._staleness_threshold = 60.0  # Seconds without data before considering stale
@@ -399,7 +395,6 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             with self.lock:
                 self.subscriptions.clear()
                 self._instrument_key_cache.clear()
-                self._last_publish_time.clear()
                 self._last_data_time.clear()
                 self._notified_stale.clear()
                 # Clear feed key indexes
@@ -453,7 +448,6 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self._intentional_disconnect = False
                 self.subscriptions.clear()
                 self._instrument_key_cache.clear()
-                self._last_publish_time.clear()
                 self._last_data_time.clear()
                 self._notified_stale.clear()
                 # Clear feed key indexes
@@ -599,39 +593,18 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if not self._token_index[token]:
                 del self._token_index[token]
 
-    def _should_throttle(self, correlation_id: str, mode: int) -> bool:
+    def _update_data_time(self, correlation_id: str) -> None:
         """
-        Check if we should throttle this publish (LTP mode only).
+        Update last data received time for staleness tracking.
 
-        PERFORMANCE: Reduces ZMQ traffic by skipping rapid-fire updates
-        for the same symbol within the throttle interval.
+        Called on every incoming feed to track whether data is flowing.
+        Does NOT throttle or drop any data - every tick is delivered.
 
         Args:
             correlation_id: Unique subscription identifier
-            mode: Subscription mode (1=LTP, 2=Quote, 3=Depth)
-
-        Returns:
-            True if should skip this publish, False otherwise
         """
-        current_time = time.time()
-
-        # Always update data received time (for staleness tracking)
-        self._last_data_time[correlation_id] = current_time
-
-        # Clear stale notification since we received data
+        self._last_data_time[correlation_id] = time.time()
         self._notified_stale.discard(correlation_id)
-
-        # Only throttle LTP mode
-        if mode != 1:
-            return False
-
-        last_time = self._last_publish_time.get(correlation_id, 0)
-
-        if current_time - last_time < self._throttle_interval:
-            return True
-
-        self._last_publish_time[correlation_id] = current_time
-        return False
 
     def _start_staleness_monitor(self):
         """Start the staleness monitoring thread"""
@@ -982,9 +955,8 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 mode = sub_info["mode"]
                 token = sub_info["token"]
 
-                # PERFORMANCE: Throttling check - skip rapid-fire updates
-                if self._should_throttle(correlation_id, mode):
-                    continue
+                # Update staleness tracking (every tick, no throttling)
+                self._update_data_time(correlation_id)
 
                 topic = self._create_topic(exchange, symbol, mode)
                 market_data = self._extract_market_data(feed_data, sub_info, current_ts)
