@@ -334,7 +334,8 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Generate unique correlation ID like Angel does
             correlation_id = f"{symbol}_{exchange}_{mode}"
 
-            # Check for subscription using correlation_id
+            # Check for subscription and determine if Upstox unsubscribe is needed
+            should_unsubscribe_from_upstox = False
             with self.lock:
                 if correlation_id not in self.subscriptions:
                     self.logger.info(f"Not subscribed to {symbol} on {exchange} with mode {mode}")
@@ -342,22 +343,31 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         f"Not subscribed to {symbol} on {exchange}"
                     )
 
-            # Send unsubscription request
-            future = asyncio.run_coroutine_threadsafe(
-                self.ws_client.unsubscribe([instrument_key]), self.event_loop
-            )
+                # Remove subscription and indexes FIRST
+                self.subscriptions.pop(correlation_id, None)
+                self._remove_from_indexes(correlation_id, instrument_key, token_info["token"])
 
-            if future.result(timeout=5):
-                with self.lock:
-                    self.subscriptions.pop(correlation_id, None)
-                    # Clean up indexes
-                    self._remove_from_indexes(correlation_id, instrument_key, token_info["token"])
-                self.logger.info(f"Unsubscribed from {symbol} on {exchange}")
-                return self._create_success_response(f"Unsubscribed from {symbol} on {exchange}")
-            else:
-                return self._create_error_response(
-                    "UNSUBSCRIBE_FAILED", f"Failed to unsubscribe from {symbol} on {exchange}"
+                # Check if OTHER subscriptions (different modes) still need this instrument.
+                # Upstox unsubscribe is per-instrument (not per-mode), so we must NOT
+                # unsubscribe from Upstox if other modes still reference this instrument.
+                remaining = self._feed_key_index.get(instrument_key, set())
+                if not remaining:
+                    should_unsubscribe_from_upstox = True
+                else:
+                    self.logger.info(
+                        f"Keeping Upstox subscription for {instrument_key}: "
+                        f"{len(remaining)} other mode(s) still active"
+                    )
+
+            if should_unsubscribe_from_upstox:
+                self.logger.info(f"Unsubscribing {instrument_key} from Upstox (no remaining modes)")
+                future = asyncio.run_coroutine_threadsafe(
+                    self.ws_client.unsubscribe([instrument_key]), self.event_loop
                 )
+                future.result(timeout=5)
+
+            self.logger.info(f"Unsubscribed from {symbol} on {exchange} mode {mode}")
+            return self._create_success_response(f"Unsubscribed from {symbol} on {exchange}")
 
         except Exception as e:
             self.logger.error(f"Unsubscribe error: {e}")

@@ -664,11 +664,21 @@ class WebSocketProxy:
                     should_unsubscribe_from_adapter = False
                     if sub_key in self.subscription_index:
                         self.subscription_index[sub_key].discard(client_id)
+                        remaining_clients = len(self.subscription_index[sub_key])
                         # Clean up empty entries and mark for adapter unsubscription
                         if not self.subscription_index[sub_key]:
                             del self.subscription_index[sub_key]
                             # Only unsubscribe from adapter when last client unsubscribes
                             should_unsubscribe_from_adapter = True
+                            logger.info(
+                                f"[cleanup] Last client {client_id} removed from {symbol}:{exchange} mode {mode}, "
+                                f"will unsubscribe from adapter"
+                            )
+                        else:
+                            logger.info(
+                                f"[cleanup] Client {client_id} removed from {symbol}:{exchange} mode {mode}, "
+                                f"{remaining_clients} client(s) still subscribed - keeping adapter subscription"
+                            )
 
                     # Get the user's broker adapter
                     # Only unsubscribe from adapter if this was the last client for this symbol
@@ -680,8 +690,8 @@ class WebSocketProxy:
                     ):
                         adapter = self.broker_adapters[user_id]
                         adapter.unsubscribe(symbol, exchange, mode)
-                        logger.debug(
-                            f"Last client unsubscribed from {symbol}:{exchange}, unsubscribing from adapter"
+                        logger.info(
+                            f"[cleanup] Unsubscribed {symbol}:{exchange} mode {mode} from adapter (last client gone)"
                         )
                 except json.JSONDecodeError as e:
                     logger.exception(f"Error parsing subscription: {sub_json}, Error: {e}")
@@ -1423,16 +1433,26 @@ class WebSocketProxy:
                         should_unsubscribe_from_adapter = False
                         if sub_key in self.subscription_index:
                             self.subscription_index[sub_key].discard(client_id)
+                            remaining_clients = len(self.subscription_index[sub_key])
                             # Only unsubscribe from adapter when last client unsubscribes
                             if not self.subscription_index[sub_key]:
                                 del self.subscription_index[sub_key]
                                 should_unsubscribe_from_adapter = True
+                                logger.info(
+                                    f"[unsubscribe_all] Last client unsubscribed from {symbol}:{exchange} mode {mode}, "
+                                    f"will unsubscribe from adapter"
+                                )
+                            else:
+                                logger.info(
+                                    f"[unsubscribe_all] Client {client_id} unsubscribed from {symbol}:{exchange} mode {mode}, "
+                                    f"{remaining_clients} client(s) still subscribed"
+                                )
 
                         # Only call adapter.unsubscribe if this was the last client for this symbol
                         if should_unsubscribe_from_adapter:
                             response = adapter.unsubscribe(symbol, exchange, mode)
-                            logger.debug(
-                                f"Last client unsubscribed from {symbol}:{exchange}, unsubscribing from adapter"
+                            logger.info(
+                                f"[unsubscribe_all] Unsubscribed {symbol}:{exchange} mode {mode} from adapter"
                             )
 
                             if response.get("status") != "success":
@@ -1473,10 +1493,20 @@ class WebSocketProxy:
                 should_unsubscribe_from_adapter = False
                 if sub_key in self.subscription_index:
                     self.subscription_index[sub_key].discard(client_id)
+                    remaining_clients = len(self.subscription_index[sub_key])
                     # Only unsubscribe from adapter when last client unsubscribes
                     if not self.subscription_index[sub_key]:
                         del self.subscription_index[sub_key]
                         should_unsubscribe_from_adapter = True
+                        logger.info(
+                            f"Last client unsubscribed from {symbol}:{exchange} mode {mode}, "
+                            f"will unsubscribe from adapter"
+                        )
+                    else:
+                        logger.info(
+                            f"Client {client_id} unsubscribed from {symbol}:{exchange} mode {mode}, "
+                            f"{remaining_clients} client(s) still subscribed"
+                        )
 
                 # Remove from client's subscription list
                 if client_id in self.subscriptions:
