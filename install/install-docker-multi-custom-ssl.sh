@@ -429,13 +429,44 @@ done
 
 log "\n=== Starting Deployment ===" "$BLUE"
 
-# Calculate dynamic shm_size based on available RAM (25% of total, min 256m, max 2g)
+# Calculate dynamic resource limits based on system specs and number of instances
 TOTAL_RAM_MB=$(($(grep MemTotal /proc/meminfo | awk '{print $2}') / 1024))
-SHM_SIZE_MB=$((TOTAL_RAM_MB / 4))
-# Clamp between 256MB and 2048MB
-[ $SHM_SIZE_MB -lt 256 ] && SHM_SIZE_MB=256
-[ $SHM_SIZE_MB -gt 2048 ] && SHM_SIZE_MB=2048
-log "System RAM: ${TOTAL_RAM_MB}MB, SHM size: ${SHM_SIZE_MB}MB" "$BLUE"
+CPU_CORES=$(nproc 2>/dev/null || echo 2)
+NUM_INSTANCES=${#CONF_DOMAINS[@]}
+
+# Calculate per-instance RAM (divide total by number of instances)
+RAM_PER_INSTANCE=$((TOTAL_RAM_MB / NUM_INSTANCES))
+log "System: ${TOTAL_RAM_MB}MB RAM, ${CPU_CORES} cores, ${NUM_INSTANCES} instances" "$BLUE"
+log "Per-instance allocation: ~${RAM_PER_INSTANCE}MB" "$BLUE"
+
+# shm_size: 25% of per-instance RAM (min 128MB, max 1GB for multi-instance)
+SHM_SIZE_MB=$((RAM_PER_INSTANCE / 4))
+[ $SHM_SIZE_MB -lt 128 ] && SHM_SIZE_MB=128
+[ $SHM_SIZE_MB -gt 1024 ] && SHM_SIZE_MB=1024
+
+# Thread limits based on per-instance RAM (conservative)
+# <2GB: 1 thread | 2-4GB: 2 threads | 4GB+: min(2, cores/instances)
+if [ $RAM_PER_INSTANCE -lt 2000 ]; then
+    THREAD_LIMIT=1
+elif [ $RAM_PER_INSTANCE -lt 4000 ]; then
+    THREAD_LIMIT=2
+else
+    CORES_PER_INSTANCE=$((CPU_CORES / NUM_INSTANCES))
+    THREAD_LIMIT=$((CORES_PER_INSTANCE < 2 ? 2 : CORES_PER_INSTANCE))
+    [ $THREAD_LIMIT -gt 4 ] && THREAD_LIMIT=4
+fi
+
+# Strategy memory limit based on per-instance RAM
+# <2GB: 256MB | 2-4GB: 512MB | 4GB+: 1024MB
+if [ $RAM_PER_INSTANCE -lt 2000 ]; then
+    STRATEGY_MEM_LIMIT=256
+elif [ $RAM_PER_INSTANCE -lt 4000 ]; then
+    STRATEGY_MEM_LIMIT=512
+else
+    STRATEGY_MEM_LIMIT=1024
+fi
+
+log "Config: shm=${SHM_SIZE_MB}MB, threads=${THREAD_LIMIT}, strategy_mem=${STRATEGY_MEM_LIMIT}MB" "$BLUE"
 
 # Base Dir
 mkdir -p "$INSTALL_BASE"
@@ -842,6 +873,14 @@ services:
       - FLASK_DEBUG=0
       - APP_MODE=standalone
       - TZ=Asia/Kolkata
+      # Resource limits auto-calculated for multi-instance deployment
+      # See: https://github.com/marketcalls/openalgo/issues/822
+      - OPENBLAS_NUM_THREADS=${THREAD_LIMIT}
+      - OMP_NUM_THREADS=${THREAD_LIMIT}
+      - MKL_NUM_THREADS=${THREAD_LIMIT}
+      - NUMEXPR_NUM_THREADS=${THREAD_LIMIT}
+      - NUMBA_NUM_THREADS=${THREAD_LIMIT}
+      - STRATEGY_MEMORY_LIMIT_MB=${STRATEGY_MEM_LIMIT}
     shm_size: '${SHM_SIZE_MB}m'
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:5000/auth/check-setup"]

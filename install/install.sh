@@ -974,6 +974,13 @@ Environment="TMPDIR=$OPENALGO_PATH/tmp"
 Environment="NUMBA_CACHE_DIR=$OPENALGO_PATH/tmp/numba_cache"
 Environment="LLVMLITE_TMPDIR=$OPENALGO_PATH/tmp"
 Environment="MPLCONFIGDIR=$OPENALGO_PATH/tmp/matplotlib"
+# Thread limits for OpenBLAS/NumPy to prevent RLIMIT_NPROC issues
+# See: https://github.com/marketcalls/openalgo/issues/822
+Environment="OPENBLAS_NUM_THREADS=2"
+Environment="OMP_NUM_THREADS=2"
+Environment="MKL_NUM_THREADS=2"
+Environment="NUMEXPR_NUM_THREADS=2"
+Environment="NUMBA_NUM_THREADS=2"
 # Simplified approach to ensure Python environment is properly loaded
 ExecStart=/bin/bash -c 'source $VENV_PATH/bin/activate && $VENV_PATH/bin/gunicorn \
     --worker-class eventlet \
