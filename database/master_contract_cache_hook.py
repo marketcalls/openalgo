@@ -170,13 +170,15 @@ def get_cache_health() -> dict:
         hit_rate = float(stats["stats"]["hit_rate"].rstrip("%"))
         cache_loaded = stats["cache_loaded"]
         cache_valid = stats["cache_valid"]
+        total_queries = stats["stats"].get("hits", 0) + stats["stats"].get("misses", 0)
 
         health_score = 100
         if not cache_loaded:
             health_score = 0
         elif not cache_valid:
             health_score = 50
-        elif hit_rate < 90:
+        elif total_queries > 10 and hit_rate < 90:
+            # Only penalize hit rate if there have been enough queries to be meaningful
             health_score = 75
 
         return {
@@ -219,9 +221,10 @@ def _get_health_recommendations(health_score: int, stats: dict) -> list:
         recommendations.append("Cache has expired. Login again or refresh master contract.")
     elif health_score == 75:
         hit_rate = float(stats["stats"]["hit_rate"].rstrip("%"))
-        if hit_rate < 90:
+        total_queries = stats["stats"].get("hits", 0) + stats["stats"].get("misses", 0)
+        if total_queries > 10 and hit_rate < 90:
             recommendations.append(
-                f"Cache hit rate is low ({hit_rate}%). Consider checking symbol mappings."
+                f"Cache hit rate is low ({hit_rate:.1f}%). Consider checking symbol mappings."
             )
 
     db_queries = stats["stats"].get("db_queries", 0)
