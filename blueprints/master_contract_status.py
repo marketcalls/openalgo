@@ -1,6 +1,13 @@
+from threading import Thread
+
 from flask import Blueprint, jsonify, request, session
 
-from database.master_contract_status_db import check_if_ready, get_status
+from database.master_contract_status_db import check_if_ready, get_status, init_broker_status
+from utils.auth_utils import (
+    async_master_contract_download,
+    get_master_contract_cutoff,
+    should_download_master_contract,
+)
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
@@ -151,3 +158,74 @@ def clear_cache():
     except Exception as e:
         logger.exception(f"Error clearing cache: {str(e)}")
         return jsonify({"status": "error", "message": f"Failed to clear cache: {str(e)}"}), 500
+
+
+@master_contract_status_bp.route("/master-contract/download", methods=["POST"])
+@check_session_validity
+def force_master_contract_download():
+    """Force a fresh master contract download regardless of smart download logic"""
+    try:
+        broker = session.get("broker")
+        if not broker:
+            return jsonify({"status": "error", "message": "No broker session found"}), 401
+
+        # Get request body for force flag
+        data = request.get_json(silent=True) or {}
+        force = data.get("force", False)
+
+        if not force:
+            # Check if download is needed using smart logic
+            should_download, reason = should_download_master_contract(broker)
+            if not should_download:
+                return jsonify({
+                    "status": "skipped",
+                    "message": reason,
+                    "should_download": False
+                }), 200
+
+        # Initialize status and start download
+        init_broker_status(broker)
+        thread = Thread(target=async_master_contract_download, args=(broker,))
+        thread.start()
+
+        return jsonify({
+            "status": "success",
+            "message": "Master contract download started",
+            "started": True
+        }), 200
+
+    except Exception as e:
+        logger.exception(f"Error starting master contract download: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": f"Failed to start download: {str(e)}"
+        }), 500
+
+
+@master_contract_status_bp.route("/master-contract/smart-status", methods=["GET"])
+@check_session_validity
+def get_smart_download_status():
+    """Get detailed status including smart download information"""
+    try:
+        broker = session.get("broker")
+        if not broker:
+            return jsonify({"status": "error", "message": "No broker session found"}), 401
+
+        # Get full status with smart download fields
+        status_data = get_status(broker)
+
+        # Add smart download recommendation
+        should_download, reason = should_download_master_contract(broker)
+        cutoff_hour, cutoff_minute = get_master_contract_cutoff()
+        status_data["smart_download"] = {
+            "should_download": should_download,
+            "reason": reason,
+            "cutoff_time": f"{cutoff_hour:02d}:{cutoff_minute:02d}",
+            "cutoff_timezone": "IST"
+        }
+
+        return jsonify(status_data), 200
+
+    except Exception as e:
+        logger.exception(f"Error getting smart download status: {str(e)}")
+        return jsonify({"status": "error", "message": "Failed to get status"}), 500
