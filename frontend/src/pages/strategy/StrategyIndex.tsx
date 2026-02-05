@@ -14,7 +14,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { strategyApi } from '@/api/strategy'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -37,7 +37,7 @@ export default function StrategyIndex() {
       setStrategies(data)
     } catch (error) {
       console.error('Failed to fetch strategies:', error)
-      toast.error('Failed to load strategies')
+      showToast.error('Failed to load strategies', 'strategy')
     } finally {
       setLoading(false)
     }
@@ -78,10 +78,10 @@ export default function StrategyIndex() {
     try {
       await navigator.clipboard.writeText(url)
       setCopiedId(webhookId)
-      toast.success('Webhook URL copied to clipboard')
+      showToast.success('Webhook URL copied to clipboard', 'clipboard')
       setTimeout(() => setCopiedId(null), 2000)
     } catch {
-      toast.error('Failed to copy URL')
+      showToast.error('Failed to copy URL', 'clipboard')
     }
   }
 

@@ -3,7 +3,7 @@ import { useWebSocketTester } from '@/hooks/useWebSocketTester'
 import { ConnectionPanel } from './ConnectionPanel'
 import { MessageComposer } from './MessageComposer'
 import { MessageLog } from './MessageLog'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 
 interface WebSocketTesterPanelProps {
   apiKey?: string
@@ -42,7 +42,7 @@ export function WebSocketTesterPanel({ apiKey, initialMessage }: WebSocketTester
   const handleSendMessage = (message: string) => {
     const success = sendMessage(message)
     if (success) {
-      toast.success('Message sent')
+      showToast.success('Message sent')
     }
   }
 

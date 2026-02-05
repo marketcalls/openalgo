@@ -53,6 +53,8 @@ RUN mkdir -p /app/log /app/log/strategies /app/db /app/tmp /app/tmp/numba_cache 
 COPY --chown=appuser:appuser start.sh /app/start.sh
 RUN sed -i 's/\r$//' /app/start.sh && chmod +x /app/start.sh
 # ---- RUNTIME ENVS --------------------------------------------------------- #
+# Limit OpenBLAS/NumPy threads to prevent RLIMIT_NPROC exhaustion in Docker
+# See: https://github.com/marketcalls/openalgo/issues/822
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -61,7 +63,12 @@ ENV PATH="/app/.venv/bin:$PATH" \
     TMPDIR=/app/tmp \
     NUMBA_CACHE_DIR=/app/tmp/numba_cache \
     LLVMLITE_TMPDIR=/app/tmp \
-    MPLCONFIGDIR=/app/tmp/matplotlib
+    MPLCONFIGDIR=/app/tmp/matplotlib \
+    OPENBLAS_NUM_THREADS=2 \
+    OMP_NUM_THREADS=2 \
+    MKL_NUM_THREADS=2 \
+    NUMEXPR_NUM_THREADS=2 \
+    NUMBA_NUM_THREADS=2
 # --------------------------------------------------------------------------- #
 USER appuser
 EXPOSE 5000

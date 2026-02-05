@@ -1,7 +1,7 @@
 import { ArrowLeft, Calendar, ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { adminApi } from '@/api/admin'
 import {
   AlertDialog,
@@ -92,7 +92,7 @@ export default function HolidaysPage() {
       setExchanges(response.exchanges)
     } catch (error) {
       console.error('Error fetching holidays:', error)
-      toast.error('Failed to load holidays')
+      showToast.error('Failed to load holidays', 'admin')
     } finally {
       setIsLoading(false)
     }
@@ -108,24 +108,24 @@ export default function HolidaysPage() {
 
   const handleAdd = async () => {
     if (!newHoliday.date || !newHoliday.description) {
-      toast.error('Please fill in date and description')
+      showToast.error('Please fill in date and description', 'admin')
       return
     }
 
     if (newHoliday.holiday_type === 'TRADING_HOLIDAY' && newHoliday.closed_exchanges.length === 0) {
-      toast.error('Please select at least one exchange to close')
+      showToast.error('Please select at least one exchange to close', 'admin')
       return
     }
 
     if (newHoliday.holiday_type === 'SPECIAL_SESSION') {
       if (newHoliday.open_exchanges.length === 0) {
-        toast.error('Please add at least one exchange with timings')
+        showToast.error('Please add at least one exchange with timings', 'admin')
         return
       }
       // Validate all exchanges have valid timings
       for (const ex of newHoliday.open_exchanges) {
         if (!ex.start_time || !ex.end_time) {
-          toast.error(`Please enter start and end time for ${ex.exchange}`)
+          showToast.error(`Please enter start and end time for ${ex.exchange}`, 'admin')
           return
         }
       }
@@ -149,7 +149,7 @@ export default function HolidaysPage() {
       })
 
       if (response.status === 'success') {
-        toast.success(response.message || 'Holiday added successfully')
+        showToast.success(response.message || 'Holiday added successfully', 'admin')
         setShowAddDialog(false)
         setNewHoliday({
           date: '',
@@ -160,11 +160,11 @@ export default function HolidaysPage() {
         })
         fetchHolidays(currentYear)
       } else {
-        toast.error(response.message || 'Failed to add holiday')
+        showToast.error(response.message || 'Failed to add holiday', 'admin')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to add holiday')
+      showToast.error(err.response?.data?.message || 'Failed to add holiday', 'admin')
     } finally {
       setIsAdding(false)
     }
@@ -178,15 +178,15 @@ export default function HolidaysPage() {
       const response = await adminApi.deleteHoliday(deleteHoliday.id)
 
       if (response.status === 'success') {
-        toast.success(response.message || 'Holiday deleted successfully')
+        showToast.success(response.message || 'Holiday deleted successfully', 'admin')
         setDeleteHoliday(null)
         fetchHolidays(currentYear)
       } else {
-        toast.error(response.message || 'Failed to delete holiday')
+        showToast.error(response.message || 'Failed to delete holiday', 'admin')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Failed to delete holiday')
+      showToast.error(err.response?.data?.message || 'Failed to delete holiday', 'admin')
     } finally {
       setIsDeleting(false)
     }

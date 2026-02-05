@@ -1,7 +1,7 @@
 import { AlertTriangle, ArrowLeft, Ban, Eye, EyeOff, Save, Shield, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { webClient } from '@/api/client'
 import {
   AlertDialog,
@@ -155,7 +155,7 @@ export default function SecurityDashboard() {
       }
     } catch (error) {
       console.error('Error fetching dashboard data:', error)
-      toast.error('Failed to load security data')
+      showToast.error('Failed to load security data', 'monitoring')
     } finally {
       setIsLoading(false)
     }
@@ -185,15 +185,15 @@ export default function SecurityDashboard() {
       )
 
       if (response.data.success) {
-        toast.success(response.data.message || 'Settings saved successfully')
+        showToast.success(response.data.message || 'Settings saved successfully', 'monitoring')
         setSettings(formSettings)
         fetchStats()
       } else {
-        toast.error(response.data.message || 'Failed to save settings')
+        showToast.error(response.data.message || 'Failed to save settings', 'monitoring')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string } } }
-      toast.error(err.response?.data?.error || 'Failed to save settings')
+      showToast.error(err.response?.data?.error || 'Failed to save settings', 'monitoring')
     } finally {
       setIsSavingSettings(false)
     }
@@ -201,7 +201,7 @@ export default function SecurityDashboard() {
 
   const handleBanIP = async () => {
     if (!banIP.trim()) {
-      toast.error('Please enter an IP address')
+      showToast.error('Please enter an IP address', 'monitoring')
       return
     }
 
@@ -218,18 +218,18 @@ export default function SecurityDashboard() {
       )
 
       if (response.data.success) {
-        toast.success(response.data.message || 'IP banned successfully')
+        showToast.success(response.data.message || 'IP banned successfully', 'monitoring')
         setBanIP('')
         setBanReason('')
         setBanDuration('24')
         fetchDashboardData()
         fetchStats()
       } else {
-        toast.error(response.data.error || 'Failed to ban IP')
+        showToast.error(response.data.error || 'Failed to ban IP', 'monitoring')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string } } }
-      toast.error(err.response?.data?.error || 'Failed to ban IP')
+      showToast.error(err.response?.data?.error || 'Failed to ban IP', 'monitoring')
     } finally {
       setIsBanning(false)
     }
@@ -237,7 +237,7 @@ export default function SecurityDashboard() {
 
   const handleBanHost = async () => {
     if (!banHost.trim()) {
-      toast.error('Please enter a host/domain')
+      showToast.error('Please enter a host/domain', 'monitoring')
       return
     }
 
@@ -253,17 +253,17 @@ export default function SecurityDashboard() {
       )
 
       if (response.data.success) {
-        toast.success(response.data.message || 'Host banned successfully')
+        showToast.success(response.data.message || 'Host banned successfully', 'monitoring')
         setBanHost('')
         setHostPermanent(false)
         fetchDashboardData()
         fetchStats()
       } else {
-        toast.error(response.data.error || 'Failed to ban host')
+        showToast.error(response.data.error || 'Failed to ban host', 'monitoring')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string; suggestion?: string } } }
-      toast.error(err.response?.data?.error || 'Failed to ban host')
+      showToast.error(err.response?.data?.error || 'Failed to ban host', 'monitoring')
     } finally {
       setIsBanningHost(false)
     }
@@ -282,16 +282,16 @@ export default function SecurityDashboard() {
       )
 
       if (response.data.success) {
-        toast.success(response.data.message || 'IP unbanned successfully')
+        showToast.success(response.data.message || 'IP unbanned successfully', 'monitoring')
         setUnbanIP(null)
         fetchDashboardData()
         fetchStats()
       } else {
-        toast.error(response.data.error || 'Failed to unban IP')
+        showToast.error(response.data.error || 'Failed to unban IP', 'monitoring')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string } } }
-      toast.error(err.response?.data?.error || 'Failed to unban IP')
+      showToast.error(err.response?.data?.error || 'Failed to unban IP', 'monitoring')
     } finally {
       setIsUnbanning(false)
     }
@@ -310,16 +310,16 @@ export default function SecurityDashboard() {
       )
 
       if (response.data.success) {
-        toast.success(response.data.message || 'Tracker cleared successfully')
+        showToast.success(response.data.message || 'Tracker cleared successfully', 'monitoring')
         setClearIP(null)
         fetchDashboardData()
         fetchStats()
       } else {
-        toast.error(response.data.error || 'Failed to clear tracker')
+        showToast.error(response.data.error || 'Failed to clear tracker', 'monitoring')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string } } }
-      toast.error(err.response?.data?.error || 'Failed to clear tracker')
+      showToast.error(err.response?.data?.error || 'Failed to clear tracker', 'monitoring')
     } finally {
       setIsClearing(false)
     }
@@ -338,15 +338,15 @@ export default function SecurityDashboard() {
       )
 
       if (response.data.success) {
-        toast.success(response.data.message || 'IP banned successfully')
+        showToast.success(response.data.message || 'IP banned successfully', 'monitoring')
         fetchDashboardData()
         fetchStats()
       } else {
-        toast.error(response.data.error || 'Failed to ban IP')
+        showToast.error(response.data.error || 'Failed to ban IP', 'monitoring')
       }
     } catch (error: unknown) {
       const err = error as { response?: { data?: { error?: string } } }
-      toast.error(err.response?.data?.error || 'Failed to ban IP')
+      showToast.error(err.response?.data?.error || 'Failed to ban IP', 'monitoring')
     }
   }
 

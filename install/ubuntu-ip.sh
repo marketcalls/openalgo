@@ -394,6 +394,13 @@ Environment="TMPDIR=$BASE_PATH/tmp"
 Environment="NUMBA_CACHE_DIR=$BASE_PATH/tmp/numba_cache"
 Environment="LLVMLITE_TMPDIR=$BASE_PATH/tmp"
 Environment="MPLCONFIGDIR=$BASE_PATH/tmp/matplotlib"
+# Thread limits for OpenBLAS/NumPy to prevent RLIMIT_NPROC issues
+# See: https://github.com/marketcalls/openalgo/issues/822
+Environment="OPENBLAS_NUM_THREADS=2"
+Environment="OMP_NUM_THREADS=2"
+Environment="MKL_NUM_THREADS=2"
+Environment="NUMEXPR_NUM_THREADS=2"
+Environment="NUMBA_NUM_THREADS=2"
 ExecStart=$VENV_PATH/bin/gunicorn --worker-class eventlet -w 1 --bind 0.0.0.0:80 --timeout 300 app:app
 Restart=always
 RestartSec=5

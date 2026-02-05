@@ -1,7 +1,7 @@
 import { ArrowLeft, FileText, Plus, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { toast } from 'sonner'
+import { showToast } from '@/utils/toast'
 import { strategyApi } from '@/api/strategy'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -79,7 +79,7 @@ export default function ConfigureSymbols() {
       setMappings(data.mappings || [])
     } catch (error) {
       console.error('Failed to fetch strategy:', error)
-      toast.error('Failed to load strategy')
+      showToast.error('Failed to load strategy', 'strategy')
     } finally {
       setLoading(false)
     }
@@ -131,19 +131,19 @@ export default function ConfigureSymbols() {
     e.preventDefault()
 
     if (!selectedSymbol) {
-      toast.error('Please select a symbol')
+      showToast.error('Please select a symbol', 'strategy')
       return
     }
     if (!exchange) {
-      toast.error('Please select an exchange')
+      showToast.error('Please select an exchange', 'strategy')
       return
     }
     if (!quantity || Number(quantity) < 1) {
-      toast.error('Quantity must be at least 1')
+      showToast.error('Quantity must be at least 1', 'strategy')
       return
     }
     if (!productType) {
-      toast.error('Please select a product type')
+      showToast.error('Please select a product type', 'strategy')
       return
     }
 
@@ -157,7 +157,7 @@ export default function ConfigureSymbols() {
       })
 
       if (response.status === 'success') {
-        toast.success('Symbol added successfully')
+        showToast.success('Symbol added successfully', 'strategy')
         // Reset form
         setSelectedSymbol(null)
         setSymbolSearch('')
@@ -167,11 +167,11 @@ export default function ConfigureSymbols() {
         // Refresh mappings
         fetchStrategy()
       } else {
-        toast.error(response.message || 'Failed to add symbol')
+        showToast.error(response.message || 'Failed to add symbol', 'strategy')
       }
     } catch (error) {
       console.error('Failed to add symbol:', error)
-      toast.error('Failed to add symbol')
+      showToast.error('Failed to add symbol', 'strategy')
     } finally {
       setSubmitting(false)
     }
@@ -181,7 +181,7 @@ export default function ConfigureSymbols() {
     e.preventDefault()
 
     if (!csvData.trim()) {
-      toast.error('Please enter CSV data')
+      showToast.error('Please enter CSV data', 'strategy')
       return
     }
 
@@ -191,15 +191,15 @@ export default function ConfigureSymbols() {
 
       if (response.status === 'success') {
         const { added = 0, failed = 0 } = response.data || {}
-        toast.success(`Added ${added} symbols${failed > 0 ? `, ${failed} failed` : ''}`)
+        showToast.success(`Added ${added} symbols${failed > 0 ? `, ${failed} failed` : ''}`, 'strategy')
         setCsvData('')
         fetchStrategy()
       } else {
-        toast.error(response.message || 'Failed to add symbols')
+        showToast.error(response.message || 'Failed to add symbols', 'strategy')
       }
     } catch (error) {
       console.error('Failed to add bulk symbols:', error)
-      toast.error('Failed to add symbols')
+      showToast.error('Failed to add symbols', 'strategy')
     } finally {
       setSubmitting(false)
     }
@@ -212,13 +212,13 @@ export default function ConfigureSymbols() {
       const response = await strategyApi.deleteSymbolMapping(Number(strategyId), mappingToDelete)
       if (response.status === 'success') {
         setMappings(mappings.filter((m) => m.id !== mappingToDelete))
-        toast.success('Symbol removed')
+        showToast.success('Symbol removed', 'strategy')
       } else {
-        toast.error(response.message || 'Failed to remove symbol')
+        showToast.error(response.message || 'Failed to remove symbol', 'strategy')
       }
     } catch (error) {
       console.error('Failed to delete mapping:', error)
-      toast.error('Failed to remove symbol')
+      showToast.error('Failed to remove symbol', 'strategy')
     } finally {
       setDeleteDialogOpen(false)
       setMappingToDelete(null)
