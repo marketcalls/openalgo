@@ -736,9 +736,11 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
     async def _async_reconnect(self):
         """Async reconnection handler"""
         try:
-            # Set flag to prevent _on_close from triggering _attempt_reconnect
-            # This avoids double-reconnect race condition
-            self._intentional_disconnect = True
+            # Set flag under lock to ensure visibility across threads
+            # Prevents _on_close from triggering _attempt_reconnect during
+            # intentional disconnect-reconnect cycle
+            with self._reconnect_lock:
+                self._intentional_disconnect = True
 
             self.logger.info("Disconnecting WebSocket for reconnection...")
             if self.ws_client:
