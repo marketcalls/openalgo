@@ -257,12 +257,28 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self._token_index[token].add(correlation_id)
             self.logger.info(f"Stored subscription: {correlation_id} -> {subscription_info}")
 
+        # Determine the highest mode already subscribed for this instrument.
+        # Upstox only supports ONE mode per instrument - the last subscribe wins.
+        # To avoid downgrading (e.g. "full" → "ltpc"), only send subscribe if
+        # the new mode is higher than what's already active.
+        highest_existing_mode = 0
+        with self.lock:
+            for cid in self._feed_key_index.get(instrument_key, set()):
+                if cid != correlation_id:
+                    existing_sub = self.subscriptions.get(cid)
+                    if existing_sub:
+                        highest_existing_mode = max(highest_existing_mode, existing_sub["mode"])
+
+        # Determine which Upstox mode to actually send
+        effective_mode = max(mode, highest_existing_mode)
+        upstox_mode = self._get_upstox_mode(effective_mode, depth_level)
+
         # Subscribe if connected (Angel pattern)
         if self.connected and self.ws_client:
             try:
                 future = asyncio.run_coroutine_threadsafe(
                     self.ws_client.subscribe(
-                        [instrument_key], self._get_upstox_mode(mode, depth_level)
+                        [instrument_key], upstox_mode
                     ),
                     self.event_loop,
                 )
@@ -1010,11 +1026,29 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _extract_ltp_data(
         self, feed_data: dict[str, Any], base_data: dict[str, Any]
     ) -> dict[str, Any]:
-        """Extract LTP data from feed"""
+        """Extract LTP data from feed.
+
+        Handles both Upstox data formats:
+        - "ltpc" mode: top-level {"ltpc": {...}}
+        - "full" mode: {"fullFeed": {"marketFF"|"indexFF": {"ltpc": {...}, ...}}}
+
+        When both LTP and Quote/Depth subscriptions exist for the same symbol,
+        Upstox upgrades to "full" mode. This method must read LTP from both formats.
+        """
         market_data = base_data.copy()
 
+        ltpc = None
+
+        # Primary: top-level "ltpc" key (when subscribed in ltpc mode only)
         if "ltpc" in feed_data:
             ltpc = feed_data["ltpc"]
+        # Fallback: extract from fullFeed (when Upstox upgraded to full mode)
+        elif "fullFeed" in feed_data:
+            full_feed = feed_data["fullFeed"]
+            ff = full_feed.get("marketFF") or full_feed.get("indexFF", {})
+            ltpc = ff.get("ltpc")
+
+        if ltpc:
             market_data.update(
                 {
                     "ltp": float(ltpc.get("ltp", 0)),
