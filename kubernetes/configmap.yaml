@@ -16,6 +16,14 @@ data:
   
   # Timezone
   TZ: "Asia/Kolkata"
+  # Thread limiting for scientific libraries (numpy, scipy, pandas)
+  # Prevents thread oversubscription in containerized environments
+  # Ref: Issue #787 - limits each library to single-threaded mode
+  OPENBLAS_NUM_THREADS: "1"
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  NUMEXPR_NUM_THREADS: "1"
+  NUMBA_NUM_THREADS: "1"
   
   # Add other non-sensitive environment variables here
   # Example:

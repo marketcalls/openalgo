@@ -540,3 +540,44 @@ For issues, questions, or contributions:
 ## License
 
 Same as OpenAlgo project license.
+
+
+
+## ⚠️ Important: Configure Secrets First
+
+The `secrets-template.yaml` is intentionally **NOT** included in `kustomization.yaml` to prevent accidental deployment with placeholder credentials.
+
+**Before deploying, you MUST:**
+
+1. Copy the template:
+```bash
+   cp kubernetes/secrets-template.yaml kubernetes/secrets.yaml
+```
+
+2. Edit `secrets.yaml` with your actual broker credentials and API keys:
+```bash
+   nano kubernetes/secrets.yaml  # or use your preferred editor
+```
+
+3. Ensure `secrets.yaml` is in `.gitignore`:
+```bash
+   echo "kubernetes/secrets.yaml" >> .gitignore
+```
+
+4. **Only then** proceed with deployment:
+```bash
+   kubectl apply -k kubernetes/
+```
+
+**Why this matters:** Deploying with placeholder secrets expose your deployment to security risks. The deployment will fail without proper secrets configured - this is by design.
+### NetworkPolicy Support
+
+**⚠️ Important for K3s users:**
+
+K3s with default Flannel CNI does **not** support NetworkPolicy enforcement. The policy will be created but not enforced. 
+
+If you need NetworkPolicy enforcement, you must:
+- Use K3s with Calico: `curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--flannel-backend=none --disable-network-policy" sh -`
+- Then install Calico or Cilium
+
+For testing/homelab use, NetworkPolicy enforcement is optional. For production, it's highly recommended.

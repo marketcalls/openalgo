@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
       - name: openalgo
-        image: openalgo:latest
+        image: felixopk101/openalgo:latest 
         imagePullPolicy: IfNotPresent
         
         ports:
@@ -60,7 +60,7 @@ spec:
           httpGet:
             path: /auth/check-setup
             port: 5000
-          initialDelaySeconds: 60
+          initialDelaySeconds: 120
           periodSeconds: 30
           timeoutSeconds: 10
           failureThreshold: 3
