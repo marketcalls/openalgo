@@ -1029,8 +1029,11 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             full_feed = feed_data["fullFeed"]
             ff = full_feed.get("marketFF") or full_feed.get("indexFF", {})
             ltpc = ff.get("ltpc")
+        # Fallback: extract from firstLevelWithGreeks (option_greeks mode)
+        elif "firstLevelWithGreeks" in feed_data:
+            ltpc = feed_data["firstLevelWithGreeks"].get("ltpc")
 
-        if ltpc:
+        if ltpc is not None:
             market_data.update(
                 {
                     "ltp": float(ltpc.get("ltp", 0)),
@@ -1039,6 +1042,14 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     "cp": float(ltpc.get("cp", 0)),
                 }
             )
+        else:
+            # No LTPC data found - log and return empty to prevent publishing
+            # a message without "ltp" that clients silently drop
+            self.logger.warning(
+                f"No LTPC data found for {base_data.get('symbol')}. "
+                f"Feed keys: {list(feed_data.keys())}"
+            )
+            return {}
 
         return market_data
 
