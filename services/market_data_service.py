@@ -127,13 +127,21 @@ class MarketDataValidator:
         # Check for stale timestamp
         timestamp = market_data.get("timestamp")
         if timestamp:
-            # Handle both epoch seconds and milliseconds
-            if timestamp > 1e12:  # Milliseconds
-                timestamp = timestamp / 1000
+            # Convert string timestamp to number if needed (some brokers send string)
+            if isinstance(timestamp, str):
+                try:
+                    timestamp = float(timestamp)
+                except (ValueError, TypeError):
+                    timestamp = None
 
-            data_age = time.time() - timestamp
-            if data_age > self.MAX_DATA_AGE_SECONDS:
-                warnings.append(f"Data is {data_age:.1f} seconds old")
+            if timestamp:
+                # Handle both epoch seconds and milliseconds
+                if timestamp > 1e12:  # Milliseconds
+                    timestamp = timestamp / 1000
+
+                data_age = time.time() - timestamp
+                if data_age > self.MAX_DATA_AGE_SECONDS:
+                    warnings.append(f"Data is {data_age:.1f} seconds old")
 
         # Circuit breaker check - large price changes
         symbol_key = f"{exchange}:{symbol}"
