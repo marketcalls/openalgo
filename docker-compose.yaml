@@ -19,10 +19,15 @@ services:
       - openalgo_tmp:/app/tmp            # Temporary directory for numba/scipy (named volume)
       - ./.env:/app/.env:ro
 
-    # (optional) extra env-vars that are NOT in .env
+    # Environment variables - these OVERRIDE values in .env file
+    # IMPORTANT: WebSocket and ZMQ must bind to 0.0.0.0 in Docker to accept external connections
     environment:
       - FLASK_ENV=${FLASK_ENV:-production}
       - FLASK_DEBUG=${FLASK_DEBUG:-0}
+      # Docker networking fix: bind to all interfaces, not just localhost
+      - WEBSOCKET_HOST=0.0.0.0
+      - ZMQ_HOST=0.0.0.0
+      - FLASK_HOST_IP=0.0.0.0
       - TZ=Asia/Kolkata
       # Limit OpenBLAS/NumPy threads to prevent RLIMIT_NPROC exhaustion
       # See: https://github.com/marketcalls/openalgo/issues/822

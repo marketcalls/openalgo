@@ -81,8 +81,10 @@ class SharedZmqPublisher:
         self.logger = get_logger("shared_zmq_publisher")
         self.context = zmq.Context()
         self.socket = self.context.socket(zmq.PUB)
-        self.socket.setsockopt(zmq.LINGER, 1000)
-        self.socket.setsockopt(zmq.SNDHWM, 1000)
+        # Optimized socket settings for high-frequency market data
+        self.socket.setsockopt(zmq.LINGER, 0)  # Faster shutdown (was 1000ms)
+        self.socket.setsockopt(zmq.SNDHWM, 10000)  # 10x capacity (was 1000)
+        self.socket.setsockopt(zmq.SNDBUF, 4 * 1024 * 1024)  # 4MB send buffer
         self.zmq_port = None
         self._bound = False
         self._publish_lock = threading.Lock()

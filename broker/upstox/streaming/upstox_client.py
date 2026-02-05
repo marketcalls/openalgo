@@ -27,11 +27,15 @@ class UpstoxWebSocketClient:
     AUTH_ENDPOINT = f"{API_URL}/feed/market-data-feed/authorize"
 
     # HTTP request timeout
-    HTTP_TIMEOUT = 10
+    HTTP_TIMEOUT = 15  # Increased to handle slow Upstox Auth API
 
     # Health check settings - detect silent stalls
-    HEALTH_CHECK_INTERVAL = 30  # Check every 30 seconds
-    DATA_TIMEOUT = 90  # Consider stalled if no data for 90 seconds
+    HEALTH_CHECK_INTERVAL = 1  # Check every second (HFT)
+    DATA_TIMEOUT = 15  # Consider stalled if no data for 15 seconds
+
+    # WebSocket heartbeat settings (RFC 6455 ping/pong)
+    WS_PING_INTERVAL = 3  # Send ping every 3 seconds
+    WS_PING_TIMEOUT = 3  # Wait 3 seconds for pong response
 
     def __init__(self, auth_token: str):
         self.auth_token = auth_token
@@ -48,7 +52,8 @@ class UpstoxWebSocketClient:
             "on_error": None,
             "on_close": None,
         }
-        self._reconnect_config = {"max_attempts": 5, "base_delay": 2, "max_delay": 30}
+        # HFT aggressive reconnect: retry fast
+        self._reconnect_config = {"max_attempts": 10, "base_delay": 0.5, "max_delay": 5}
 
         # Cache SSL context to avoid creating it on every connection
         self._ssl_context = ssl.create_default_context()
@@ -65,8 +70,8 @@ class UpstoxWebSocketClient:
 
                 ws_url = await self._get_websocket_url()
                 if not ws_url:
-                    await self._trigger_error("Failed to get WebSocket URL")
-                    return False
+                    # Raise exception to trigger the retry logic in the except block
+                    raise Exception("Failed to get WebSocket URL")
 
                 await self._establish_connection(ws_url)
                 self.logger.info("Connected to Upstox WebSocket")
@@ -182,12 +187,18 @@ class UpstoxWebSocketClient:
     async def _get_websocket_url(self) -> str | None:
         """Get WebSocket URL from Upstox authorization endpoint"""
         try:
+            loop = asyncio.get_running_loop()
             headers = {"Accept": "application/json", "Authorization": f"Bearer {self.auth_token}"}
 
             self.logger.debug("Requesting WebSocket authorization")
-            response = requests.get(
-                self.AUTH_ENDPOINT, headers=headers, timeout=self.HTTP_TIMEOUT
-            )
+            
+            def fetch_url():
+                return requests.get(
+                    self.AUTH_ENDPOINT, headers=headers, timeout=self.HTTP_TIMEOUT
+                )
+            
+            # Run blocking HTTP request in executor
+            response = await loop.run_in_executor(None, fetch_url)
             response.raise_for_status()
 
             auth_data = response.json()
@@ -208,10 +219,13 @@ class UpstoxWebSocketClient:
             return None
 
     async def _establish_connection(self, ws_url: str) -> None:
-        """Establish WebSocket connection using cached SSL context"""
+        """Establish WebSocket connection using cached SSL context with heartbeat"""
         self.logger.info(f"Connecting to WebSocket: {ws_url}")
         self.websocket = await websockets.connect(
-            ws_url, ssl=self._ssl_context, ping_interval=None, ping_timeout=None
+            ws_url,
+            ssl=self._ssl_context,
+            ping_interval=self.WS_PING_INTERVAL,  # Enable RFC 6455 ping/pong
+            ping_timeout=self.WS_PING_TIMEOUT,  # Detect dead connections faster
         )
 
     def _calculate_backoff_delay(self, attempt: int) -> int:

@@ -55,6 +55,32 @@ All data is stored locally in the script directory:
 - `log/` - Application and strategy logs
 - `.env` - Configuration file
 
+## Troubleshooting
+
+### WebSocket Disconnections
+If WebSocket connections keep disconnecting in Docker:
+
+1. **Ensure docker-compose.yaml has the correct environment variables** (already set by default):
+   ```yaml
+   environment:
+     - WEBSOCKET_HOST=0.0.0.0
+     - ZMQ_HOST=0.0.0.0
+   ```
+
+2. **Check your .env file** - If you're mounting a local `.env`, the `docker-compose.yaml` environment variables will override `WEBSOCKET_HOST` and `ZMQ_HOST` automatically.
+
+3. **Verify WebSocket port is exposed**:
+   ```yaml
+   ports:
+     - "8765:8765"
+   ```
+
+4. **Test WebSocket connectivity**:
+   ```bash
+   # From host machine
+   curl -i -N -H "Connection: Upgrade" -H "Upgrade: websocket" http://127.0.0.1:8765/
+   ```
+
 ## Documentation
 
 - **Full Docs**: https://docs.openalgo.in
