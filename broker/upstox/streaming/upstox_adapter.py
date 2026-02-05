@@ -722,6 +722,12 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     self._async_reconnect(),
                     self.event_loop
                 )
+            else:
+                self.logger.warning(
+                    "Cannot reconnect: WebSocket client or event loop not available"
+                )
+                with self._reconnect_lock:
+                    self._reconnecting = False
         except Exception as e:
             self.logger.error(f"Error triggering reconnection: {e}")
             with self._reconnect_lock:

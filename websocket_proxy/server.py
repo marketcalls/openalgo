@@ -219,10 +219,10 @@ class WebSocketProxy:
         self.user_broker_mapping = {}  # Maps user_id to broker_name
         self.running = False
 
-        # CIRCUIT BREAKER: Per-broker circuit breakers to prevent excessive retries
-        # Maps broker_name -> CircuitBreaker instance
+        # CIRCUIT BREAKER: Per-user circuit breakers to prevent excessive retries
+        # Maps (broker_name, user_id) -> CircuitBreaker instance
         # NOTE: This only affects broker CONNECTION attempts, not data flow
-        self._circuit_breakers: dict[str, CircuitBreaker] = {}
+        self._circuit_breakers: Dict[Tuple[str, str], CircuitBreaker] = {}
         self._circuit_breaker_config = {
             "failure_threshold": 5,  # Open circuit after 5 consecutive failures
             "reset_timeout": 30.0,   # Wait 30 seconds before half-open
@@ -722,6 +722,10 @@ class WebSocketProxy:
                     del self.broker_adapters[user_id]
                     if user_id in self.user_broker_mapping:
                         del self.user_broker_mapping[user_id]
+
+                # Clean up circuit breaker for this user to prevent unbounded growth
+                if broker_name:
+                    self._circuit_breakers.pop((broker_name, user_id), None)
 
             del self.user_mapping[client_id]
 
@@ -1575,6 +1579,8 @@ class WebSocketProxy:
             try:
                 # Send as text frame, not binary frame
                 await websocket.send(message_bytes.decode('utf-8'))
+                # Update activity so receive-only clients aren't timed out
+                self._client_last_activity[client_id] = time.time()
             except websockets.exceptions.ConnectionClosed:
                 logger.info(f"Connection closed while sending to client {client_id}")
 
