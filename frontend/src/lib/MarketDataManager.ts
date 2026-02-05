@@ -807,9 +807,9 @@ export class MarketDataManager {
           }
           this.dataCache.set(dataKey, updatedSymbolData)
 
-          // Fan out to all callbacks for this symbol
+          // Fan out to all callbacks for this symbol (case-insensitive comparison)
           this.subscriptions.forEach((entry) => {
-            if (entry.symbol === symbol && entry.exchange === exchange) {
+            if (entry.symbol.toUpperCase() === symbol && entry.exchange.toUpperCase() === exchange.toUpperCase()) {
               entry.callbacks.forEach((callback) => {
                 callback(updatedSymbolData)
               })
