@@ -685,8 +685,8 @@ class WebSocketProxy:
                 adapter = self.broker_adapters[user_id]
                 broker_name = self.user_broker_mapping.get(user_id)
 
-                # For Flattrade and Shoonya, keep the connection alive and just unsubscribe from data
-                if broker_name in ["flattrade", "shoonya"] and hasattr(adapter, "unsubscribe_all"):
+                # For Flattrade, Shoonya and Upstox, keep the connection alive and just unsubscribe from data
+                if broker_name in ["flattrade", "shoonya", "upstox"] and hasattr(adapter, "unsubscribe_all"):
                     logger.info(
                         f"{broker_name.title()} adapter for user {user_id}: last client disconnected. Unsubscribing all symbols instead of disconnecting."
                     )

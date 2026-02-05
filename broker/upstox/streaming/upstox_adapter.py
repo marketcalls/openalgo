@@ -146,6 +146,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             self.ws_client = UpstoxWebSocketClient(auth_token)
             self.ws_client.callbacks = {
+                "on_connect": self._on_connect,
                 "on_message": self._on_market_data,
                 "on_error": self._on_error,
                 "on_close": self._on_close,
@@ -173,10 +174,12 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             success = self._connect_websocket()
 
             if success:
-                self.connected = True
+                # Don't set self.connected = True here. 
+                # It will be set in _on_connect when the WebSocket actually connects.
+                # This prevents premature subscription attempts that would fail.
                 self.running = True
                 self._start_staleness_monitor()  # Start monitoring for stale data
-                self.logger.info("Connected to Upstox WebSocket")
+                self.logger.info("Initiated Upstox WebSocket connection in background")
                 return self._create_success_response("Connected to Upstox WebSocket")
             else:
                 # Clean up event loop on connection failure to prevent FD leak
@@ -201,10 +204,7 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "INVALID_MODE", f"Invalid mode {mode}. Must be 1 (LTP), 2 (Quote), or 3 (Depth)"
             )
 
-        # Check connection status
-        if not self.connected:
-            return self._create_error_response("NOT_CONNECTED", "WebSocket is not connected")
-
+        # Check initialization
         if not self.ws_client or not self.event_loop:
             return self._create_error_response(
                 "NOT_INITIALIZED", "WebSocket client not initialized"
@@ -369,6 +369,47 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.error(f"Unsubscribe error: {e}")
             return self._create_error_response("UNSUBSCRIBE_ERROR", str(e))
 
+    def unsubscribe_all(self) -> dict[str, Any]:
+        """
+        Unsubscribe from all symbols but keep the connection active.
+        Used for reusing the heavy upstream connection between client sessions.
+        """
+        if not self.ws_client or not self.connected:
+            return self._create_error_response("NOT_CONNECTED", "Not connected to Upstox")
+
+        try:
+            with self.lock:
+                if not self.subscriptions:
+                    return self._create_success_response("No subscriptions to clear")
+                
+                # Gather unique instrument keys
+                keys_to_unsubscribe = list({sub["instrument_key"] for sub in self.subscriptions.values()})
+                
+                # Clear local state
+                self.subscriptions.clear()
+                self._feed_key_index.clear()
+                self._token_index.clear()
+
+            if keys_to_unsubscribe:
+                self.logger.info(f"Unsubscribing from all {len(keys_to_unsubscribe)} instruments")
+                # Send bulk unsubscribe
+                future = asyncio.run_coroutine_threadsafe(
+                    self.ws_client.unsubscribe(keys_to_unsubscribe),
+                    self.event_loop
+                )
+                success = future.result(timeout=5)
+                
+                if success:
+                    return self._create_success_response("Unsubscribed from all instruments")
+                else:
+                    return self._create_error_response("UNSUBSCRIBE_FAILED", "Failed to send unsubscribe command")
+            
+            return self._create_success_response("No instruments to unsubscribe")
+
+        except Exception as e:
+            self.logger.error(f"Error in unsubscribe_all: {e}")
+            return self._create_error_response("ERROR", str(e))
+
     def disconnect(self) -> None:
         """Disconnect from WebSocket and cleanup resources"""
         try:
@@ -500,12 +541,19 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.event_loop.run_forever()
 
     def _connect_websocket(self) -> bool:
-        """Connect to WebSocket and return success status"""
+        """Connect to WebSocket in background and return True immediately.
+        
+        We don't wait for the result here because that would block the server thread,
+        causing the client's strict 5s auth timeout to fire.
+        Instead, we return True (connection accepted), let the client subscribe
+        (subscriptions will be queued), and the actual connection happens asynchronously.
+        """
         if not self.event_loop:
             return False
 
-        future = asyncio.run_coroutine_threadsafe(self.ws_client.connect(), self.event_loop)
-        return future.result(timeout=10)
+        # Schedule connection but don't wait
+        asyncio.run_coroutine_threadsafe(self.ws_client.connect(), self.event_loop)
+        return True
 
     def _stop_event_loop(self):
         """Stop event loop and wait for thread to finish"""
@@ -809,37 +857,49 @@ class UpstoxWebSocketAdapter(BaseBrokerWebSocketAdapter):
         return f"{exchange}_{symbol}_{mode_str}"
 
     # WebSocket event handlers
-    async def _on_open(self):
+    async def _on_connect(self):
         """Callback when WebSocket connection is opened"""
         self.logger.info("Upstox WebSocket connection opened")
         self.connected = True
+        
+        # Resubscribe to existing instruments asynchronously
+        await self._resubscribe_async()
 
-        # Resubscribe to existing subscriptions on reconnection (Angel pattern)
+    async def _resubscribe_async(self):
+        """Resubscribe to all stored subscriptions asynchronously.
+        
+        This overrides the duplication check in standard subscribe() because
+        on reconnection we MUST send the subscription command again even if
+        we already have it stored.
+        """
+        self.logger.info("Resubscribing to existing instruments...")
+        
+        # Create a copy to iterate safely
         with self.lock:
-            for correlation_id, sub in self.subscriptions.items():
-                try:
-                    instrument_key = sub["instrument_key"]
-                    mode = sub["mode"]
-                    depth_level = sub["depth_level"]
+            subscriptions = list(self.subscriptions.values())
 
-                    future = asyncio.run_coroutine_threadsafe(
-                        self.ws_client.subscribe(
-                            [instrument_key], self._get_upstox_mode(mode, depth_level)
-                        ),
-                        self.event_loop,
+        for sub in subscriptions:
+            try:
+                instrument_key = sub["instrument_key"]
+                mode = sub["mode"]
+                depth_level = sub["depth_level"]
+                upstox_mode = self._get_upstox_mode(mode, depth_level)
+                
+                # Direct await - no deadlock, no duplicate check
+                # We access ws_client directly to bypass adapter's subscribe() duplicate check
+                success = await self.ws_client.subscribe([instrument_key], upstox_mode)
+                
+                if success:
+                    self.logger.info(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
+                else:
+                    self.logger.warning(
+                        f"Failed to resubscribe to {sub['symbol']}.{sub['exchange']}"
                     )
 
-                    if future.result(timeout=5):
-                        self.logger.info(f"Resubscribed to {sub['symbol']}.{sub['exchange']}")
-                    else:
-                        self.logger.warning(
-                            f"Failed to resubscribe to {sub['symbol']}.{sub['exchange']}"
-                        )
-
-                except Exception as e:
-                    self.logger.error(
-                        f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}"
-                    )
+            except Exception as e:
+                self.logger.error(
+                    f"Error resubscribing to {sub['symbol']}.{sub['exchange']}: {e}"
+                )
 
     async def _on_error(self, error: str):
         """Handle WebSocket errors"""
