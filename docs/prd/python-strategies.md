@@ -90,9 +90,19 @@ A subprocess-based strategy execution system that:
 |-------------|--------|
 | Strategy startup time | < 5 seconds |
 | Log latency (event → display) | < 1 second |
-| Max concurrent strategies | 50 |
-| Memory per strategy | 512MB limit (Unix) |
+| Max concurrent strategies | 50 (system-dependent) |
+| Memory per strategy | 256MB-1024MB (configurable) |
 | Scheduler precision | ±1 minute |
+
+### Docker Resource Requirements
+
+| Container RAM | Thread Limit | Memory/Strategy | Max Strategies |
+|---------------|--------------|-----------------|----------------|
+| 2GB | 1 | 256MB | 5 |
+| 4GB | 2 | 512MB | 5-8 |
+| 8GB+ | 2-4 | 1024MB | 10+ |
+
+> **Note**: Thread limits (`OPENBLAS_NUM_THREADS`, etc.) prevent RLIMIT_NPROC exhaustion when using NumPy/SciPy/Numba. See [Issue #822](https://github.com/marketcalls/openalgo/issues/822).
 
 ## Architecture
 

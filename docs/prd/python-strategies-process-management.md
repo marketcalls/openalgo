@@ -183,12 +183,15 @@ def kill_strategy_force(strategy_id):
 ## Resource Limits (Unix)
 
 ```python
+# Configurable via environment variable (default: 1024MB)
+STRATEGY_MEMORY_LIMIT_MB = int(os.environ.get('STRATEGY_MEMORY_LIMIT_MB', '1024'))
+
 def set_resource_limits():
     """Set resource limits for subprocess (Unix only)"""
     import resource
 
-    # Memory limit: 512MB
-    memory_limit = 512 * 1024 * 1024
+    # Memory limit: configurable (default 1024MB)
+    memory_limit = STRATEGY_MEMORY_LIMIT_MB * 1024 * 1024
     resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
 
     # CPU time limit: No limit (managed by scheduler)
@@ -197,6 +200,28 @@ def set_resource_limits():
     # File descriptor limit: 1024
     resource.setrlimit(resource.RLIMIT_NOFILE, (1024, 1024))
 ```
+
+### Docker Thread Limiting
+
+When running in Docker, numerical libraries (OpenBLAS, NumPy, Numba) must be thread-limited to prevent `RLIMIT_NPROC` exhaustion:
+
+| Variable | Purpose | Recommended Value |
+|----------|---------|-------------------|
+| `OPENBLAS_NUM_THREADS` | OpenBLAS threads | 1-2 |
+| `OMP_NUM_THREADS` | OpenMP threads | 1-2 |
+| `MKL_NUM_THREADS` | Intel MKL threads | 1-2 |
+| `NUMEXPR_NUM_THREADS` | NumExpr threads | 1-2 |
+| `NUMBA_NUM_THREADS` | Numba JIT threads | 1-2 |
+
+### Resource Scaling Guidelines
+
+| Container RAM | Thread Limit | Memory/Strategy | Max Strategies |
+|---------------|--------------|-----------------|----------------|
+| 2GB | 1 | 256MB | 5 |
+| 4GB | 2 | 512MB | 5-8 |
+| 8GB+ | 2-4 | 1024MB | 10+ |
+
+> **Reference**: [GitHub Issue #822](https://github.com/marketcalls/openalgo/issues/822) documents the RLIMIT_NPROC fix.
 
 ## Process Monitoring
 
