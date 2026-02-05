@@ -1299,32 +1299,26 @@ class WebSocketProxy:
 
             logger.info(f"Received cache invalidation for user: {user_id}, type: {cache_type}")
 
-            # Clear auth caches for this user
-            cache_key_auth = f"auth-{user_id}"
-            cache_key_feed = f"feed-{user_id}"
-
+            # CRITICAL: Clear ALL cache entries to prevent stale token issues
+            # This is necessary because get_auth_token_broker() uses a different cache key format
+            # (sha256(api_key)_include_feed_token) than the user-id based keys.
+            # Without clearing all entries, old cached tokens would persist and cause
+            # 401 Unauthorized errors after re-login.
+            # See GitHub issue #851 for details on this cache key mismatch bug.
             caches_cleared = []
 
             if cache_type in ("AUTH", "ALL"):
-                if cache_key_auth in auth_cache:
-                    del auth_cache[cache_key_auth]
-                    caches_cleared.append("auth_cache")
+                auth_cache.clear()
+                caches_cleared.append("auth_cache")
 
             if cache_type in ("FEED", "ALL"):
-                if cache_key_feed in feed_token_cache:
-                    del feed_token_cache[cache_key_feed]
-                    caches_cleared.append("feed_token_cache")
+                feed_token_cache.clear()
+                caches_cleared.append("feed_token_cache")
 
             if cache_type == "ALL":
-                # Clear broker cache for this user
-                if cache_key_auth in broker_cache:
-                    del broker_cache[cache_key_auth]
-                    caches_cleared.append("broker_cache")
+                broker_cache.clear()
+                caches_cleared.append("broker_cache")
 
-                # Clear any cached API key verifications for this user
-                # We can't easily identify which API key hashes belong to this user,
-                # so we clear all API key caches as a safety measure
-                # This is acceptable since the cache will repopulate on next request
                 verified_api_key_cache.clear()
                 invalid_api_key_cache.clear()
                 caches_cleared.append("verified_api_key_cache")
