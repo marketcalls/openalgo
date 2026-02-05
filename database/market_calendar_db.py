@@ -639,6 +639,11 @@ def get_market_timings_for_date(query_date: date) -> list[dict[str, Any]]:
     if cache_key in _timings_cache:
         return _timings_cache[cache_key]
 
+    # Check if it's a weekend first (doesn't require database)
+    if query_date.weekday() >= 5:
+        _timings_cache[cache_key] = []
+        return []
+
     try:
         # Calculate midnight timestamp for the date in IST
         midnight_ist = datetime.combine(query_date, datetime.min.time())
@@ -738,33 +743,39 @@ def is_market_holiday(query_date: date, exchange: str = None) -> bool:
     Returns:
         True if it's a holiday (or weekend), False otherwise
     """
-    # Check for special session FIRST (before weekend check)
-    # This allows special sessions like Budget Day or Muhurat Trading on weekends
-    holiday = Holiday.query.filter(Holiday.holiday_date == query_date).first()
+    try:
+        # Check for special session FIRST (before weekend check)
+        # This allows special sessions like Budget Day or Muhurat Trading on weekends
+        holiday = Holiday.query.filter(Holiday.holiday_date == query_date).first()
 
-    # Special sessions are not holidays - markets are open with special timings
-    if holiday and holiday.holiday_type == "SPECIAL_SESSION":
-        return False
+        # Special sessions are not holidays - markets are open with special timings
+        if holiday and holiday.holiday_type == "SPECIAL_SESSION":
+            return False
 
-    # Weekend check (only if no special session)
-    if query_date.weekday() >= 5:
-        return True
+        # Weekend check (only if no special session)
+        if query_date.weekday() >= 5:
+            return True
 
-    if not holiday:
-        return False
+        if not holiday:
+            return False
 
-    if exchange:
-        # Check if specific exchange is closed
-        exchange_info = HolidayExchange.query.filter(
-            HolidayExchange.holiday_id == holiday.id,
-            HolidayExchange.exchange_code == exchange.upper(),
-        ).first()
+        if exchange:
+            # Check if specific exchange is closed
+            exchange_info = HolidayExchange.query.filter(
+                HolidayExchange.holiday_id == holiday.id,
+                HolidayExchange.exchange_code == exchange.upper(),
+            ).first()
 
-        if exchange_info:
-            return not exchange_info.is_open
-        return False  # Exchange not in holiday list means it's open
+            if exchange_info:
+                return not exchange_info.is_open
+            return False  # Exchange not in holiday list means it's open
 
-    return True  # It's a holiday
+        return True  # It's a holiday
+    except Exception as e:
+        # Handle case where tables don't exist yet (fresh installation)
+        # Fall back to simple weekend check
+        logger.debug(f"Holiday check unavailable (tables may not exist yet): {e}")
+        return query_date.weekday() >= 5  # Return True only for weekends
 
 
 def clear_market_calendar_cache():
