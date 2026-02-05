@@ -44,6 +44,17 @@ Result: 4 connections, 4 authentications, RELIANCE subscribed 3 times.
 - Multi-tab connection sharing (out of scope)
 - Modifying the WebSocket server protocol
 
+### REST API Fallback
+
+When WebSocket connections fail (e.g., after market hours when the broker WebSocket is unavailable), the system automatically falls back to REST API polling:
+
+| Scenario | Behavior |
+|----------|----------|
+| WebSocket connects successfully | Real-time data via WebSocket |
+| WebSocket fails 3 consecutive times | Automatic switch to REST API polling |
+| REST API polling | Fetches `/api/v1/multiquotes` every 5 seconds |
+| WebSocket restored | Automatic switch back to WebSocket |
+
 ### Success Metrics
 
 | Metric | Before | After | Target |
@@ -186,6 +197,7 @@ interface MarketDataContextValue {
   isConnected: boolean
   isAuthenticated: boolean
   isPaused: boolean
+  isFallbackMode: boolean  // NEW: true when using REST API polling
   error: string | null
   subscribe: (symbol, exchange, mode, callback) => () => void
   getCachedData: (symbol, exchange) => SymbolData | undefined
@@ -215,6 +227,7 @@ function useMarketData({
   isAuthenticated: boolean,
   isConnecting: boolean,
   isPaused: boolean,
+  isFallbackMode: boolean,  // NEW: true when using REST API polling
   error: string | null,
   connect: () => Promise<void>,
   disconnect: () => void,
@@ -260,6 +273,62 @@ function useMarketData({
     │
     └──────────────────────────────► connecting
 ```
+
+### REST API Fallback Mode
+
+When WebSocket connections fail repeatedly (e.g., after market hours), the system automatically switches to REST API polling:
+
+```
+WebSocket Connection Attempt
+           │
+     Connection fails
+           │
+           ▼
+┌──────────────────┐
+│ Increment failure│
+│ counter          │
+└────────┬─────────┘
+         │
+         ├───── failures < 3 ──────► Retry WebSocket
+         │
+         └───── failures >= 3
+                     │
+                     ▼
+          ┌─────────────────┐
+          │ Enable Fallback │
+          │    Mode         │
+          └────────┬────────┘
+                   │
+                   ▼
+          ┌─────────────────┐
+          │ Fetch API Key   │
+          │ from server     │
+          └────────┬────────┘
+                   │
+                   ▼
+          ┌─────────────────┐
+          │ Start polling   │
+          │ /api/v1/multi   │
+          │ quotes (5s)     │
+          └────────┬────────┘
+                   │
+     ┌─────────────┴─────────────┐
+     │                           │
+WebSocket restored        Continue polling
+     │                           │
+     ▼                           ▼
+┌─────────────────┐    ┌─────────────────┐
+│ Disable fallback│    │ Update market   │
+│ Stop polling    │    │ data cache      │
+│ Reset failures  │    │ Notify callbacks│
+└─────────────────┘    └─────────────────┘
+```
+
+**Key behaviors:**
+- **Trigger:** 3 consecutive WebSocket connection failures OR max reconnect attempts reached
+- **Polling interval:** 5 seconds (configurable via `setFallbackPollingRate()`)
+- **API endpoint:** `/api/v1/multiquotes` with all subscribed symbols
+- **Auto-recovery:** When WebSocket successfully reconnects, fallback mode is automatically disabled
 
 ### Data Flow
 
@@ -455,8 +524,20 @@ class MarketDataManager {
     isConnected: boolean
     isAuthenticated: boolean
     isPaused: boolean
+    isFallbackMode: boolean  // true when using REST API polling
     error: string | null
   }
+
+  /**
+   * Check if currently in fallback mode (REST API polling)
+   */
+  isFallback(): boolean
+
+  /**
+   * Set the polling rate for REST API fallback mode
+   * @param rate Polling interval in milliseconds (default: 5000)
+   */
+  setFallbackPollingRate(rate: number): void
 
   /**
    * Get cached data for a symbol (for immediate display)
@@ -521,6 +602,15 @@ interface MarketData {
 - [x] Navigation between pages doesn't create new connections
 - [x] Page refresh creates new connection (expected)
 
+### REST API Fallback Testing
+
+- [x] WebSocket fails 3+ times → switches to REST API polling
+- [x] Console shows `[MarketDataManager] Switching to REST API fallback mode`
+- [x] Market data still updates every 5 seconds in fallback mode
+- [x] `isFallbackMode` is `true` in fallback mode
+- [x] WebSocket restored → automatic switch back (console: `Disabling REST API fallback mode`)
+- [x] After-market-hours usage works with REST API polling
+
 ### How to Verify Single Connection
 
 1. Open DevTools → Network tab
@@ -569,9 +659,54 @@ Yes, pass `pauseWhenHidden: false` to the MarketDataProvider:
 
 Each subscription is keyed by `EXCHANGE:SYMBOL:MODE`. If two components subscribe to the same key, only one WebSocket subscription is created. A reference count tracks how many components are using it. The WebSocket unsubscribe is only sent when the last component unsubscribes.
 
+### Why is the app using REST API instead of WebSocket?
+
+This happens when the WebSocket connection fails repeatedly (3+ times). Common causes:
+- **After market hours:** Broker WebSocket servers may be unavailable
+- **Network issues:** Unstable connection causing frequent disconnects
+- **Server maintenance:** WebSocket server temporarily down
+
+The app automatically switches to REST API polling (`/api/v1/multiquotes`) every 5 seconds. When WebSocket becomes available again, it will automatically switch back.
+
+### How can I tell if I'm in fallback mode?
+
+Check the `isFallbackMode` property in your hook or context:
+
+```typescript
+const { isFallbackMode } = useMarketData({ symbols, mode: 'LTP' })
+
+if (isFallbackMode) {
+  console.log('Using REST API polling - WebSocket unavailable')
+}
+```
+
+### Can I change the REST API polling interval?
+
+Yes, use the `setFallbackPollingRate()` method on the MarketDataManager:
+
+```typescript
+const manager = MarketDataManager.getInstance()
+manager.setFallbackPollingRate(10000) // Poll every 10 seconds
+```
+
+### Why does REST API fallback need an API key?
+
+The `/api/v1/multiquotes` endpoint requires authentication. The MarketDataManager automatically fetches your API key from `/api/v1/apikey` when entering fallback mode.
+
 ---
 
 ## Changelog
+
+### v1.1.0 (REST API Fallback)
+
+- **NEW:** Automatic REST API fallback when WebSocket fails
+  - Triggers after 3 consecutive connection failures
+  - Polls `/api/v1/multiquotes` every 5 seconds
+  - Automatically recovers when WebSocket is restored
+- **NEW:** `isFallbackMode` state exposed in hook, context, and manager
+- **NEW:** `setFallbackPollingRate()` method to customize polling interval
+- **NEW:** `isFallback()` method on MarketDataManager
+- Improved reliability for after-market-hours usage
 
 ### v1.0.0 (Issue #848)
 
