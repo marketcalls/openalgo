@@ -385,9 +385,10 @@ export default function Positions() {
 
   // Calculate stats
   const stats = useMemo(() => {
-    const total = filteredPositions.length
     const long = filteredPositions.filter((p) => (p.quantity || 0) > 0).length
     const short = filteredPositions.filter((p) => (p.quantity || 0) < 0).length
+    // Only count positions with non-zero quantity as "open"
+    const total = long + short
     const totalPnl = filteredPositions.reduce((sum, p) => sum + (p.pnl || 0), 0)
     return { total, long, short, totalPnl }
   }, [filteredPositions])
@@ -740,7 +741,7 @@ export default function Positions() {
 
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button variant="destructive" size="sm" disabled={positions.length === 0}>
+              <Button variant="destructive" size="sm" disabled={stats.total === 0}>
                 <X className="h-4 w-4 mr-2" />
                 Close All
               </Button>
@@ -749,7 +750,7 @@ export default function Positions() {
               <AlertDialogHeader>
                 <AlertDialogTitle>Close All Positions?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This will close all {positions.length} open positions at market price. This action
+                  This will close all {stats.total} open positions at market price. This action
                   cannot be undone.
                 </AlertDialogDescription>
               </AlertDialogHeader>
