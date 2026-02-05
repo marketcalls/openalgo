@@ -58,7 +58,7 @@ export function useMarketData({
     isConnected: context?.isConnected ?? false,
     isAuthenticated: context?.isAuthenticated ?? false,
     isPaused: context?.isPaused ?? false,
-    isFallbackMode: false,
+    isFallbackMode: context?.isFallbackMode ?? false,
     error: context?.error ?? null,
   })
 

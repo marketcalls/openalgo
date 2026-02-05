@@ -61,12 +61,14 @@ export function MarketDataProvider({
   const managerRef = useRef<MarketDataManager>(MarketDataManager.getInstance())
   const { isVisible } = usePageVisibility()
 
-  const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected')
-  const [isConnected, setIsConnected] = useState(false)
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
-  const [isPaused, setIsPaused] = useState(false)
-  const [isFallbackMode, setIsFallbackMode] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // Initialize state from manager's current state
+  const initialState = managerRef.current.getState()
+  const [connectionState, setConnectionState] = useState<ConnectionState>(initialState.connectionState)
+  const [isConnected, setIsConnected] = useState(initialState.isConnected)
+  const [isAuthenticated, setIsAuthenticated] = useState(initialState.isAuthenticated)
+  const [isPaused, setIsPaused] = useState(initialState.isPaused)
+  const [isFallbackMode, setIsFallbackMode] = useState(initialState.isFallbackMode)
+  const [error, setError] = useState<string | null>(initialState.error)
 
   const pauseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const wasConnectedRef = useRef(false)
