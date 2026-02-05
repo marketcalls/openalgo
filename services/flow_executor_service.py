@@ -148,7 +148,7 @@ class NodeExecutor:
     def log(self, message: str, level: str = "info"):
         """Add log entry"""
         self.logs.append(
-            {"time": datetime.utcnow().isoformat(), "message": message, "level": level}
+            {"time": datetime.now().isoformat(), "message": message, "level": level}
         )
         if level == "error":
             logger.error(message)
@@ -1925,7 +1925,7 @@ def execute_workflow(
             logger.exception(f"Workflow execution failed: {e}")
             logs.append(
                 {
-                    "time": datetime.utcnow().isoformat(),
+                    "time": datetime.now().isoformat(),
                     "message": f"Error: {str(e)}",
                     "level": "error",
                 }
