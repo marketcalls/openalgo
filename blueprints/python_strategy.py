@@ -315,7 +315,12 @@ def create_subprocess_args():
 
 # Resource limits for strategy processes (Unix only)
 # Prevents buggy strategies from crashing the system
-STRATEGY_MEMORY_LIMIT_MB = 1024  # Max memory per strategy (1 GB - increased from 512MB for complex strategies)
+# Can be overridden via environment variable for low-memory containers
+# Recommended values:
+#   - 2GB container (5 strategies): STRATEGY_MEMORY_LIMIT_MB=256
+#   - 4GB container (3 strategies): STRATEGY_MEMORY_LIMIT_MB=512
+#   - 8GB+ container: STRATEGY_MEMORY_LIMIT_MB=1024 (default)
+STRATEGY_MEMORY_LIMIT_MB = int(os.environ.get('STRATEGY_MEMORY_LIMIT_MB', '1024'))
 STRATEGY_CPU_TIME_LIMIT_SEC = 3600  # Max CPU time (1 hour) - resets on each run
 
 

@@ -23,9 +23,23 @@ services:
     environment:
       - FLASK_ENV=${FLASK_ENV:-production}
       - FLASK_DEBUG=${FLASK_DEBUG:-0}
+      - TZ=Asia/Kolkata
+      # Limit OpenBLAS/NumPy threads to prevent RLIMIT_NPROC exhaustion
+      # See: https://github.com/marketcalls/openalgo/issues/822
+      - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-2}
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-2}
+      - MKL_NUM_THREADS=${MKL_NUM_THREADS:-2}
+      - NUMEXPR_NUM_THREADS=${NUMEXPR_NUM_THREADS:-2}
+      # Numba JIT compiler settings
+      - NUMBA_NUM_THREADS=${NUMBA_NUM_THREADS:-2}
+      # Strategy memory limit (MB) - reduce for low-memory containers
+      # 2GB container with 5 strategies: set to 256
+      - STRATEGY_MEMORY_LIMIT_MB=${STRATEGY_MEMORY_LIMIT_MB:-1024}
 
     # Shared memory for scipy/numba operations
-    shm_size: '2gb'
+    # Recommended: 25% of container RAM (min 128m, max 2g)
+    # 2GB container: 256m | 4GB: 512m | 8GB: 1g | 16GB+: 2g
+    shm_size: ${SHM_SIZE:-512m}
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:5000/auth/check-setup"]
