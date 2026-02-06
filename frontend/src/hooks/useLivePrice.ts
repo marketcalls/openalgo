@@ -85,7 +85,6 @@ export function useLivePrice<T extends PriceableItem>(
     useMultiQuotesFallback = true,
     multiQuotesRefreshInterval = 30000,
     pauseWhenHidden = true,
-    pauseDelay = 5000,
   } = options
 
   const { apiKey } = useAuthStore()
@@ -114,8 +113,6 @@ export function useLivePrice<T extends PriceableItem>(
     symbols,
     mode: 'LTP',
     enabled: enabled && items.length > 0,
-    pauseWhenHidden,
-    pauseDelay,
   })
 
   // Effective live status

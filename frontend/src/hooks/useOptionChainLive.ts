@@ -98,7 +98,6 @@ export function useOptionChainLive(
     symbols: wsSymbols,
     mode: 'Depth', // Get LTP + Bid/Ask depth
     enabled: enabled && wsSymbols.length > 0,
-    pauseWhenHidden,
   })
 
   // Track last LTP update time using ref to avoid triggering effect loops
