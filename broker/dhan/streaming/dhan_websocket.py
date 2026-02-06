@@ -401,8 +401,11 @@ class DhanWebSocket:
             elif feed_response_code == 50:  # Disconnect
                 self.logger.debug("Parsing DISCONNECT packet")
                 self._handle_disconnect_packet(payload)
+            elif feed_response_code == 0:
+                # Response code 0 is a heartbeat/acknowledgment from Dhan - silently ignore
+                pass
             else:
-                self.logger.warning(f"Unknown feed response code: {feed_response_code}")
+                self.logger.debug(f"Unknown feed response code: {feed_response_code}")
 
             if parsed_data and self.on_data:
                 self.logger.debug(f"Sending parsed data to callback: {parsed_data.get('type')}")
@@ -454,8 +457,11 @@ class DhanWebSocket:
                     self.on_data(self, parsed_data)
                 else:
                     self.logger.warning(f"Failed to parse 20-depth {side} data")
+            elif feed_response_code == 0:
+                # Response code 0 is a heartbeat/acknowledgment from Dhan - silently ignore
+                pass
             else:
-                self.logger.warning(f"Unknown 20-depth response code: {feed_response_code}")
+                self.logger.debug(f"Unknown 20-depth response code: {feed_response_code}")
 
             # Move to next message
             offset = payload_end

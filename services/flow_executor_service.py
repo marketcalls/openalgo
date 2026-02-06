@@ -740,6 +740,7 @@ class NodeExecutor:
         exchange = self.get_str(node_data, "exchange", "NSE")
         self.log(f"Getting depth for: {symbol}")
         result = self.client.get_depth(symbol=symbol, exchange=exchange)
+        self.log(f"Depth result received")
         self.store_output(node_data, result)
         return result
 
@@ -761,6 +762,7 @@ class NodeExecutor:
         result = self.client.get_open_position(
             symbol=symbol, exchange=exchange, product_type=product
         )
+        self.log(f"Open position result: {result}")
         self.store_output(node_data, result)
         return result
 
@@ -771,7 +773,7 @@ class NodeExecutor:
         interval = self.get_str(node_data, "interval", "5m")
         start_date = self.get_str(node_data, "startDate", "")
         end_date = self.get_str(node_data, "endDate", "")
-        self.log(f"Getting history for: {symbol}")
+        self.log(f"Getting history for: {symbol} ({interval})")
         result = self.client.get_history(
             symbol=symbol,
             exchange=exchange,
@@ -779,6 +781,7 @@ class NodeExecutor:
             start_date=start_date,
             end_date=end_date,
         )
+        self.log(f"History data received")
         self.store_output(node_data, result)
         return result
 
@@ -786,6 +789,7 @@ class NodeExecutor:
         """Execute OrderBook node"""
         self.log("Fetching order book")
         result = self.client.orderbook()
+        self.log(f"Order book received")
         self.store_output(node_data, result)
         return result
 
@@ -793,6 +797,7 @@ class NodeExecutor:
         """Execute TradeBook node"""
         self.log("Fetching trade book")
         result = self.client.tradebook()
+        self.log(f"Trade book received")
         self.store_output(node_data, result)
         return result
 
@@ -800,6 +805,7 @@ class NodeExecutor:
         """Execute PositionBook node"""
         self.log("Fetching position book")
         result = self.client.positionbook()
+        self.log(f"Position book received")
         self.store_output(node_data, result)
         return result
 
@@ -807,6 +813,7 @@ class NodeExecutor:
         """Execute Holdings node"""
         self.log("Fetching holdings")
         result = self.client.holdings()
+        self.log(f"Holdings received")
         self.store_output(node_data, result)
         return result
 
@@ -814,8 +821,246 @@ class NodeExecutor:
         """Execute Funds node"""
         self.log("Fetching funds")
         result = self.client.funds()
+        self.log(f"Funds received")
         self.store_output(node_data, result)
         return result
+
+    # === Additional Data Nodes ===
+
+    def execute_symbol(self, node_data: dict) -> dict:
+        """Execute Symbol node - get symbol info (lotsize, tick_size, etc.)"""
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        self.log(f"Getting symbol info for: {symbol} ({exchange})")
+        result = self.client.symbol(symbol=symbol, exchange=exchange)
+        self.log(f"Symbol result: {result}")
+        self.store_output(node_data, result)
+        return result
+
+    def execute_option_symbol(self, node_data: dict) -> dict:
+        """Execute OptionSymbol node - resolve option symbol from underlying"""
+        underlying = self.get_str(node_data, "underlying", "NIFTY")
+        exchange = self.get_str(node_data, "exchange", "NSE_INDEX")
+        expiry_date = self.get_str(node_data, "expiryDate", "")
+        offset = self.get_str(node_data, "offset", "ATM")
+        option_type = self.get_str(node_data, "optionType", "CE")
+        self.log(f"Resolving option symbol: {underlying} {option_type} {offset}")
+        result = self.client.optionsymbol(
+            underlying=underlying,
+            exchange=exchange,
+            expiry_date=expiry_date,
+            offset=offset,
+            option_type=option_type,
+        )
+        self.log(f"Option symbol result: {result}")
+        self.store_output(node_data, result)
+        return result
+
+    def execute_expiry(self, node_data: dict) -> dict:
+        """Execute Expiry node - get expiry dates for F&O"""
+        symbol = self.get_str(node_data, "symbol", "NIFTY")
+        exchange = self.get_str(node_data, "exchange", "NFO")
+        self.log(f"Getting expiry dates for: {symbol}")
+        result = self.client.get_expiry(symbol=symbol, exchange=exchange)
+        self.log(f"Expiry result: {result}")
+        self.store_output(node_data, result)
+        return result
+
+    def execute_intervals(self, node_data: dict) -> dict:
+        """Execute Intervals node - get available intervals for historical data"""
+        self.log("Getting available intervals")
+        result = self.client.get_intervals()
+        self.log(f"Intervals result: {result}")
+        self.store_output(node_data, result)
+        return result
+
+    def execute_multi_quotes(self, node_data: dict) -> dict:
+        """Execute Multi Quotes node - get quotes for multiple symbols"""
+        raw_symbols = node_data.get("symbols", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        # Convert comma-separated string to list of dicts expected by service
+        if isinstance(raw_symbols, str):
+            symbol_list = [s.strip() for s in raw_symbols.split(",") if s.strip()]
+        else:
+            symbol_list = raw_symbols
+        symbols = [{"symbol": s, "exchange": exchange} for s in symbol_list]
+        self.log(f"Getting quotes for {len(symbols)} symbols")
+        result = self.client.get_multi_quotes(symbols=symbols)
+        self.log(f"Multi quotes result: {result}")
+        self.store_output(node_data, result)
+        return result
+
+    def execute_option_chain(self, node_data: dict) -> dict:
+        """Execute OptionChain node - get option chain data"""
+        underlying = self.get_str(node_data, "underlying", "NIFTY")
+        exchange = self.get_str(node_data, "exchange", "NSE_INDEX")
+        expiry_date = self.get_str(node_data, "expiryDate", "")
+        self.log(f"Fetching option chain for: {underlying} expiry={expiry_date}")
+        result = self.client.optionchain(
+            symbol=underlying,
+            exchange=exchange,
+            expiry=expiry_date,
+        )
+        self.log(f"Option chain result received")
+        self.store_output(node_data, result)
+        return result
+
+    def execute_synthetic_future(self, node_data: dict) -> dict:
+        """Execute SyntheticFuture node - calculate synthetic future price"""
+        underlying = self.get_str(node_data, "underlying", "NIFTY")
+        exchange = self.get_str(node_data, "exchange", "NSE_INDEX")
+        expiry_date = self.get_str(node_data, "expiryDate", "")
+        self.log(f"Calculating synthetic future for: {underlying}")
+        result = self.client.syntheticfuture(
+            underlying=underlying,
+            exchange=exchange,
+            expiry_date=expiry_date,
+        )
+        self.log(f"Synthetic future result: {result}")
+        self.store_output(node_data, result)
+        return result
+
+    def execute_holidays(self, node_data: dict) -> dict:
+        """Execute Holidays node - get market holidays"""
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        self.log(f"Fetching holidays for exchange: {exchange}")
+        result = self.client.holidays(exchange=exchange)
+        self.log(f"Holidays result received")
+        self.store_output(node_data, result)
+        return result
+
+    def execute_timings(self, node_data: dict) -> dict:
+        """Execute Timings node - get market timings"""
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        self.log(f"Fetching market timings for exchange: {exchange}")
+        result = self.client.timings(exchange=exchange)
+        self.log(f"Timings result: {result}")
+        self.store_output(node_data, result)
+        return result
+
+    def execute_margin(self, node_data: dict) -> dict:
+        """Execute Margin node - calculate margin requirements"""
+        symbol = self.get_str(node_data, "symbol", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        quantity = self.get_int(node_data, "quantity", 1)
+        price = self.get_float(node_data, "price", 0)
+        product_type = self.get_str(node_data, "product", "MIS")
+        action = self.get_str(node_data, "action", "BUY")
+        price_type = self.get_str(node_data, "priceType", "MARKET")
+        self.log(f"Calculating margin for: {symbol} ({exchange})")
+        result = self.client.margin(
+            symbol=symbol,
+            exchange=exchange,
+            quantity=quantity,
+            price=price,
+            product_type=product_type,
+            action=action,
+            price_type=price_type,
+        )
+        self.log(f"Margin result: {result}")
+        self.store_output(node_data, result)
+        return result
+
+    def execute_math_expression(self, node_data: dict) -> dict:
+        """Execute Math Expression node - evaluate mathematical expressions
+
+        Supports:
+        - Basic operators: +, -, *, /, %, ** (power)
+        - Parentheses for grouping
+        - Variable interpolation: {{variableName}}
+        - Numbers (integers and decimals)
+
+        Example: ({{ltp}} * {{lotSize}}) + {{brokerage}}
+        """
+        expression = node_data.get("expression", "")
+        output_var = node_data.get("outputVariable", "result")
+
+        if not expression:
+            self.log("No expression provided", "error")
+            return {"status": "error", "message": "No expression provided"}
+
+        self.log(f"Evaluating: {expression}")
+
+        try:
+            # Step 1: Interpolate variables
+            interpolated = self.context.interpolate(expression)
+            self.log(f"Interpolated: {interpolated}")
+
+            # Step 2: Safely evaluate the expression
+            result = self._safe_eval_math(interpolated)
+
+            # Step 3: Store result in output variable
+            self.context.set_variable(output_var, result)
+            self.log(f"Result: {output_var} = {result}")
+
+            return {
+                "status": "success",
+                "expression": expression,
+                "interpolated": interpolated,
+                "result": result,
+                "outputVariable": output_var,
+            }
+
+        except Exception as e:
+            self.log(f"Math expression failed: {e}", "error")
+            return {"status": "error", "message": str(e)}
+
+    def _safe_eval_math(self, expression: str) -> float:
+        """Safely evaluate a mathematical expression
+
+        Uses Python's ast module to parse and evaluate only safe math operations.
+        Prevents arbitrary code execution.
+        """
+        import ast
+        import operator as op
+
+        # Supported operators
+        operators = {
+            ast.Add: op.add,
+            ast.Sub: op.sub,
+            ast.Mult: op.mul,
+            ast.Div: op.truediv,
+            ast.Mod: op.mod,
+            ast.Pow: op.pow,
+            ast.USub: op.neg,
+            ast.UAdd: op.pos,
+        }
+
+        def _eval(node):
+            if isinstance(node, ast.Constant):
+                if isinstance(node.value, (int, float)):
+                    return node.value
+                raise ValueError(f"Unsupported constant: {node.value}")
+            elif isinstance(node, ast.BinOp):
+                left = _eval(node.left)
+                right = _eval(node.right)
+                op_type = type(node.op)
+                if op_type not in operators:
+                    raise ValueError(f"Unsupported operator: {op_type.__name__}")
+                if op_type is ast.Pow:
+                    if abs(right) > 100:
+                        raise ValueError(f"Exponent too large: {right} (max 100)")
+                return operators[op_type](left, right)
+            elif isinstance(node, ast.UnaryOp):
+                operand = _eval(node.operand)
+                op_type = type(node.op)
+                if op_type not in operators:
+                    raise ValueError(f"Unsupported unary operator: {op_type.__name__}")
+                return operators[op_type](operand)
+            elif isinstance(node, ast.Expression):
+                return _eval(node.body)
+            else:
+                raise ValueError(f"Unsupported expression type: {type(node).__name__}")
+
+        cleaned = expression.strip()
+        if not cleaned:
+            raise ValueError("Empty expression")
+
+        try:
+            tree = ast.parse(cleaned, mode="eval")
+            return float(_eval(tree))
+        except SyntaxError as e:
+            raise ValueError(f"Invalid expression syntax: {e}")
 
     # === Utility Nodes ===
 
@@ -998,8 +1243,7 @@ class NodeExecutor:
         result = self.client.get_open_position(
             symbol=symbol, exchange=exchange, product_type=product
         )
-        data = result.get("data") or {}
-        quantity = int(data.get("quantity", 0) if data else 0)
+        quantity = int(result.get("quantity", 0))
         condition_met = self._evaluate_condition(quantity, operator, threshold)
         self.log(f"Position check: qty={quantity} {operator} {threshold} = {condition_met}")
         return {"status": "success", "condition": condition_met, "quantity": quantity}
@@ -1733,6 +1977,24 @@ def execute_node_chain(
         result = executor.execute_open_position(node_data)
     elif node_type == "history":
         result = executor.execute_history(node_data)
+    elif node_type == "symbol":
+        result = executor.execute_symbol(node_data)
+    elif node_type == "optionSymbol":
+        result = executor.execute_option_symbol(node_data)
+    elif node_type == "expiry":
+        result = executor.execute_expiry(node_data)
+    elif node_type == "intervals":
+        result = executor.execute_intervals(node_data)
+    elif node_type == "multiQuotes":
+        result = executor.execute_multi_quotes(node_data)
+    elif node_type == "optionChain":
+        result = executor.execute_option_chain(node_data)
+    elif node_type == "syntheticFuture":
+        result = executor.execute_synthetic_future(node_data)
+    elif node_type == "holidays":
+        result = executor.execute_holidays(node_data)
+    elif node_type == "timings":
+        result = executor.execute_timings(node_data)
     elif node_type == "orderBook":
         result = executor.execute_order_book(node_data)
     elif node_type == "tradeBook":
@@ -1743,6 +2005,8 @@ def execute_node_chain(
         result = executor.execute_holdings(node_data)
     elif node_type == "funds":
         result = executor.execute_funds(node_data)
+    elif node_type == "margin":
+        result = executor.execute_margin(node_data)
     elif node_type == "delay":
         result = executor.execute_delay(node_data)
     elif node_type == "waitUntil":
@@ -1751,6 +2015,11 @@ def execute_node_chain(
         result = executor.execute_log(node_data)
     elif node_type == "variable":
         result = executor.execute_variable(node_data)
+    elif node_type == "mathExpression":
+        result = executor.execute_math_expression(node_data)
+    elif node_type == "group":
+        # Group is just a container, pass through
+        pass
     elif node_type == "telegramAlert":
         result = executor.execute_telegram_alert(node_data)
     elif node_type == "httpRequest":

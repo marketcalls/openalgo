@@ -626,6 +626,68 @@ export const DEFAULT_NODE_DATA = {
     timeout: 30,
     outputVariable: '',
   },
+  symbol: {
+    symbol: '',
+    exchange: 'NSE',
+    outputVariable: '',
+  },
+  optionSymbol: {
+    underlying: 'NIFTY',
+    exchange: 'NSE_INDEX' as const,
+    expiryDate: '',
+    offset: 'ATM',
+    optionType: 'CE' as const,
+    outputVariable: '',
+  },
+  expiry: {
+    symbol: 'NIFTY',
+    exchange: 'NFO',
+    outputVariable: '',
+  },
+  intervals: {
+    outputVariable: '',
+  },
+  multiQuotes: {
+    symbols: '',
+    exchange: 'NSE',
+    outputVariable: '',
+  },
+  optionChain: {
+    underlying: 'NIFTY',
+    exchange: 'NSE_INDEX' as const,
+    expiryDate: '',
+    strikeCount: 10,
+    outputVariable: '',
+  },
+  syntheticFuture: {
+    underlying: 'NIFTY',
+    exchange: 'NSE_INDEX' as const,
+    expiryDate: '',
+    outputVariable: '',
+  },
+  holidays: {
+    exchange: 'NSE',
+    outputVariable: '',
+  },
+  timings: {
+    exchange: 'NSE',
+    outputVariable: '',
+  },
+  mathExpression: {
+    expression: '',
+    outputVariable: 'result',
+  },
+  margin: {
+    symbol: '',
+    exchange: 'NSE',
+    quantity: 1,
+    price: 0,
+    product: 'MIS' as const,
+    action: 'BUY' as const,
+    priceType: 'MARKET' as const,
+    outputVariable: '',
+  },
+  group: {},
 } as const
 
 // =============================================================================
