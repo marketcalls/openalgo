@@ -876,7 +876,14 @@ class NodeExecutor:
 
     def execute_multi_quotes(self, node_data: dict) -> dict:
         """Execute Multi Quotes node - get quotes for multiple symbols"""
-        symbols = node_data.get("symbols", [])
+        raw_symbols = node_data.get("symbols", "")
+        exchange = self.get_str(node_data, "exchange", "NSE")
+        # Convert comma-separated string to list of dicts expected by service
+        if isinstance(raw_symbols, str):
+            symbol_list = [s.strip() for s in raw_symbols.split(",") if s.strip()]
+        else:
+            symbol_list = raw_symbols
+        symbols = [{"symbol": s, "exchange": exchange} for s in symbol_list]
         self.log(f"Getting quotes for {len(symbols)} symbols")
         result = self.client.get_multi_quotes(symbols=symbols)
         self.log(f"Multi quotes result: {result}")
