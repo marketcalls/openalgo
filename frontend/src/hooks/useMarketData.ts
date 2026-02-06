@@ -19,10 +19,6 @@ interface UseMarketDataOptions {
   mode?: SubscriptionMode
   enabled?: boolean
   autoReconnect?: boolean
-  /** Pause WebSocket connection when tab is hidden (default: true) */
-  pauseWhenHidden?: boolean
-  /** Time in ms to wait before disconnecting when hidden (default: 5000) */
-  pauseDelay?: number
 }
 
 interface UseMarketDataReturn {
@@ -42,8 +38,6 @@ export function useMarketData({
   mode = 'LTP',
   enabled = true,
   autoReconnect = true,
-  pauseWhenHidden = true,
-  pauseDelay = 5000,
 }: UseMarketDataOptions): UseMarketDataReturn {
   // Try to get context (may be null if used outside provider, e.g., WebSocketTest page)
   const context = useMarketDataContextOptional()
@@ -93,41 +87,6 @@ export function useMarketData({
 
     return unsubscribe
   }, [])
-
-  // Handle visibility-based pause/resume
-  useEffect(() => {
-    if (!pauseWhenHidden || !enabled) {
-      return
-    }
-
-    const manager = managerRef.current
-    let pauseTimeout: ReturnType<typeof setTimeout> | null = null
-
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        // Tab is hidden - schedule pause after delay
-        pauseTimeout = setTimeout(() => {
-          manager.pauseConnection()
-        }, pauseDelay)
-      } else {
-        // Tab is visible - cancel pending pause and resume
-        if (pauseTimeout) {
-          clearTimeout(pauseTimeout)
-          pauseTimeout = null
-        }
-        manager.resumeConnection()
-      }
-    }
-
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-      if (pauseTimeout) {
-        clearTimeout(pauseTimeout)
-      }
-    }
-  }, [pauseWhenHidden, pauseDelay, enabled])
 
   // Subscribe to symbols when enabled
   useEffect(() => {
