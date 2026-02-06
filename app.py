@@ -33,6 +33,7 @@ from blueprints.dashboard import dashboard_bp
 from blueprints.flow import flow_bp  # Import the flow blueprint
 from blueprints.gc_json import gc_json_bp
 from blueprints.historify import historify_bp  # Import the historify blueprint
+from blueprints.ivchart import ivchart_bp  # Import the IV chart blueprint
 from blueprints.latency import latency_bp  # Import the latency blueprint
 from blueprints.health import health_bp  # Import the health monitoring blueprint
 from blueprints.log import log_bp
@@ -236,6 +237,7 @@ def create_app():
     app.register_blueprint(logging_bp)  # Register Logging blueprint
     app.register_blueprint(admin_bp)  # Register Admin blueprint
     app.register_blueprint(historify_bp)  # Register Historify blueprint
+    app.register_blueprint(ivchart_bp)  # Register IV chart blueprint
     app.register_blueprint(flow_bp)  # Register Flow blueprint
     app.register_blueprint(broker_credentials_bp)  # Register Broker credentials blueprint
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
