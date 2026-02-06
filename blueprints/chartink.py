@@ -860,6 +860,23 @@ def webhook(webhook_id):
                     {"status": "error", "error": "Cannot place entry orders after end time"}
                 ), 400
 
+        # Daily circuit breaker: block new entry signals if tripped
+        if is_entry_order:
+            try:
+                from services.strategy_risk_engine import risk_engine
+                cb_active, cb_reason = risk_engine.is_circuit_breaker_active(strategy.id, "chartink")
+                if cb_active:
+                    logger.info(
+                        f"Chartink strategy {strategy.id} circuit breaker active ({cb_reason}), "
+                        f"blocking entry signal"
+                    )
+                    return jsonify({
+                        "status": "error",
+                        "error": f"Daily circuit breaker active ({cb_reason}). Entry signals blocked."
+                    }), 403
+            except Exception as e:
+                logger.debug(f"Circuit breaker check error (proceeding): {e}")
+
         # Get symbols and trigger prices
         symbols = data.get("stocks", "").split(",")
         trigger_prices = data.get("trigger_prices", "").split(",")

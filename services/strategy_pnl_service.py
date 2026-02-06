@@ -26,6 +26,55 @@ PNL_SNAPSHOT_TIME = os.getenv("STRATEGY_PNL_SNAPSHOT_TIME", "15:35")
 
 
 # ──────────────────────────────────────────────────────────────
+# Today's Realized PnL (for circuit breaker startup recovery)
+# ──────────────────────────────────────────────────────────────
+
+
+def get_todays_realized_pnl_by_strategy():
+    """Get today's realized PnL grouped by (strategy_id, strategy_type).
+
+    Used by the risk engine on startup to recover daily circuit breaker state.
+    Queries strategy_trade for today's exit trades and sums their PnL.
+
+    Returns:
+        dict of {(strategy_id, strategy_type): float}
+    """
+    try:
+        from database.strategy_position_db import StrategyTrade, db_session
+
+        today = datetime.now(IST).date()
+
+        results = (
+            db_session.query(
+                StrategyTrade.strategy_id,
+                StrategyTrade.strategy_type,
+                sqlfunc.sum(StrategyTrade.pnl),
+            )
+            .filter(
+                StrategyTrade.trade_type == "exit",
+                sqlfunc.date(StrategyTrade.created_at) == today,
+            )
+            .group_by(StrategyTrade.strategy_id, StrategyTrade.strategy_type)
+            .all()
+        )
+
+        return {
+            (row[0], row[1]): round(row[2] or 0, 2)
+            for row in results
+        }
+
+    except Exception as e:
+        logger.exception(f"Error getting today's realized PnL: {e}")
+        return {}
+    finally:
+        try:
+            from database.strategy_position_db import db_session
+            db_session.remove()
+        except Exception:
+            pass
+
+
+# ──────────────────────────────────────────────────────────────
 # PnL Calculations
 # ──────────────────────────────────────────────────────────────
 

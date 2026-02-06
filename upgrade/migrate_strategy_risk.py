@@ -423,12 +423,34 @@ def add_mapping_columns_to_chartink_symbol_mappings(conn):
     logger.info(f"  {added} columns added to chartink_symbol_mappings")
 
 
+# Daily circuit breaker columns for strategies and chartink_strategies
+DAILY_CIRCUIT_BREAKER_COLUMNS = [
+    ("daily_stoploss_type", "VARCHAR(10)"),
+    ("daily_stoploss_value", "FLOAT"),
+    ("daily_target_type", "VARCHAR(10)"),
+    ("daily_target_value", "FLOAT"),
+    ("daily_trailstop_type", "VARCHAR(10)"),
+    ("daily_trailstop_value", "FLOAT"),
+]
+
+
 GROUP_RISK_COLUMNS = [
     ("entry_value", "FLOAT DEFAULT 0"),
     ("initial_stop", "FLOAT"),
     ("current_stop", "FLOAT"),
     ("exit_triggered", "BOOLEAN DEFAULT FALSE"),
 ]
+
+
+def add_daily_circuit_breaker_columns(conn):
+    """Add daily circuit breaker columns to strategies and chartink_strategies tables."""
+    logger.info("Adding daily circuit breaker columns to strategies...")
+    added = _add_columns_if_missing(conn, "strategies", DAILY_CIRCUIT_BREAKER_COLUMNS)
+    logger.info(f"  {added} columns added to strategies")
+
+    logger.info("Adding daily circuit breaker columns to chartink_strategies...")
+    added = _add_columns_if_missing(conn, "chartink_strategies", DAILY_CIRCUIT_BREAKER_COLUMNS)
+    logger.info(f"  {added} columns added to chartink_strategies")
 
 
 def add_group_risk_columns(conn):
@@ -463,6 +485,7 @@ def upgrade():
             add_mapping_columns_to_strategy_symbol_mappings(conn)
             add_mapping_columns_to_chartink_symbol_mappings(conn)
             add_group_risk_columns(conn)
+            add_daily_circuit_breaker_columns(conn)
 
         logger.info(f"Migration {MIGRATION_NAME} completed successfully")
         return True
@@ -552,6 +575,28 @@ def status():
             if missing_spg_cols:
                 logger.info(
                     f"Missing columns on strategy_position_group: {', '.join(missing_spg_cols)}"
+                )
+                logger.info("   Migration needed")
+                return False
+
+            # Check daily circuit breaker columns on strategies
+            missing_dcb_strategy = [
+                c for c, _ in DAILY_CIRCUIT_BREAKER_COLUMNS if c not in strategy_cols
+            ]
+            if missing_dcb_strategy:
+                logger.info(
+                    f"Missing daily circuit breaker columns on strategies: {', '.join(missing_dcb_strategy)}"
+                )
+                logger.info("   Migration needed")
+                return False
+
+            # Check daily circuit breaker columns on chartink_strategies
+            missing_dcb_chartink = [
+                c for c, _ in DAILY_CIRCUIT_BREAKER_COLUMNS if c not in chartink_cols
+            ]
+            if missing_dcb_chartink:
+                logger.info(
+                    f"Missing daily circuit breaker columns on chartink_strategies: {', '.join(missing_dcb_chartink)}"
                 )
                 logger.info("   Migration needed")
                 return False

@@ -2490,3 +2490,91 @@ MIGRATIONS = [
 | `frontend/src/hooks/useSocket.ts` | Handle new strategy risk SocketIO events |
 | `frontend/src/router.tsx` | Add `/strategy/dashboard` route |
 | `frontend/src/pages/strategy/` | Add options mapping UI to symbol configuration pages |
+
+---
+
+## 20. Strategy-Level Daily Circuit Breaker
+
+### 20.1 Overview
+
+When a strategy's aggregate daily P&L (realized + unrealized) hits a configured stoploss, target, or trailing stop — the system rejects all new entry signals for the rest of the day and closes all open positions. Exit signals remain allowed.
+
+### 20.2 Database Columns
+
+Six new columns on both `strategies` and `chartink_strategies` tables:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `daily_stoploss_type` | VARCHAR(10) | "points" only in V1 |
+| `daily_stoploss_value` | FLOAT | Max daily loss (positive number, e.g. 5000) |
+| `daily_target_type` | VARCHAR(10) | "points" only in V1 |
+| `daily_target_value` | FLOAT | Daily profit target |
+| `daily_trailstop_type` | VARCHAR(10) | "points" only in V1 |
+| `daily_trailstop_value` | FLOAT | Trail from peak daily P&L |
+
+### 20.3 In-Memory State
+
+`DailyCircuitBreakerState` dataclass per strategy in `StrategyRiskEngine`:
+- `is_tripped` — blocks new entries when True
+- `trip_reason` — "daily_stoploss", "daily_target", "daily_trailstop"
+- `daily_realized_pnl` — sum of today's exit trade PnLs (updated incrementally)
+- `daily_peak_pnl` — highest daily P&L seen (for TSL ratcheting)
+- `daily_current_stop` — current TSL stop level (ratchets up only)
+- `trading_date` — used for daily reset detection
+
+### 20.4 Behavior
+
+1. **On every LTP tick**: After per-leg and combined group checks, the risk engine checks affected strategies' daily circuit breakers
+2. **Daily SL**: Trips if `daily_pnl <= -abs(daily_stoploss_value)`
+3. **Daily Target**: Trips if `daily_pnl >= daily_target_value`
+4. **Daily TSL (AFL-style ratcheting)**:
+   - `peak_pnl = max(peak_pnl, daily_pnl)`
+   - `new_stop = -trail_value + peak_pnl`
+   - `current_stop = max(current_stop, new_stop)` (ratchet up)
+   - Trips if `daily_pnl <= current_stop`
+   - Near-zero guard: skip if `abs(daily_pnl) < 1.0`
+5. **On trip**: Set `is_tripped = True` immediately (blocks entries), emit SocketIO event, spawn daemon thread to close all open positions
+6. **Webhook blocking**: Entry signals return HTTP 403 when circuit breaker is active
+7. **Daily reset**: APScheduler at 09:00 IST reloads configs and resets all states
+
+### 20.5 SocketIO Events
+
+**`strategy_circuit_breaker`** — emitted on trip and daily reset:
+```json
+{
+  "strategy_id": 1,
+  "strategy_type": "webhook",
+  "action": "tripped",
+  "reason": "daily_stoploss",
+  "daily_pnl": -5200.50
+}
+```
+
+**`strategy_pnl_update`** — enhanced with circuit breaker fields:
+```json
+{
+  "strategy_id": 1,
+  "strategy_type": "webhook",
+  "total_unrealized_pnl": -1200.50,
+  "position_count": 3,
+  "daily_realized_pnl": -3000.00,
+  "daily_total_pnl": -4200.50,
+  "circuit_breaker_active": false,
+  "circuit_breaker_reason": ""
+}
+```
+
+### 20.6 Lock Ordering
+
+Critical for deadlock prevention:
+- Phase 1: `_positions_lock` → compute unrealized P&L per strategy
+- Phase 2: `_circuit_breaker_lock` → check thresholds
+- Never hold both simultaneously
+- Position closing on trip runs in a separate daemon thread (outside all locks)
+
+### 20.7 Startup Recovery
+
+On restart, the risk engine:
+1. Queries `strategy_trade` for today's exit PnLs → initializes `daily_realized_pnl`
+2. Loads daily risk configs from Strategy/ChartinkStrategy models
+3. Runs an immediate check in case limits were already exceeded before restart

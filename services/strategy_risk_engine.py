@@ -8,17 +8,20 @@ Singleton service that:
 4. Emits SocketIO events via a throttled emit thread (300ms)
 5. Handles restart recovery by reloading active positions
 6. Auto-falls back to REST polling if WebSocket data goes stale
+7. Daily circuit breaker: trips when strategy-level aggregate P&L hits configured limits
 
 Threading model:
 - LTP callback: runs on MarketDataService's thread (fast path)
 - SocketIO emit thread: separate daemon, 300ms interval
 - PositionUpdateBuffer: separate daemon, 1s flush interval
 - MIS auto-square-off: checked each minute via scheduler
+- Circuit breaker position close: spawned daemon thread on trip
 """
 
 import os
 import threading
 import time
+from dataclasses import dataclass, field
 from datetime import datetime
 
 import pytz
@@ -35,6 +38,18 @@ REST_POLL_INTERVAL = float(os.getenv("STRATEGY_REST_POLL_INTERVAL", "5"))
 STALE_THRESHOLD = float(os.getenv("STRATEGY_STALE_THRESHOLD", "30"))
 HEALTH_CHECK_INTERVAL = float(os.getenv("STRATEGY_HEALTH_CHECK_INTERVAL", "5"))
 PNL_SNAPSHOT_TIME = os.getenv("STRATEGY_PNL_SNAPSHOT_TIME", "15:35")
+
+
+@dataclass
+class DailyCircuitBreakerState:
+    """Per-strategy daily circuit breaker state, held in memory."""
+    is_tripped: bool = False
+    trip_reason: str = ""
+    trip_pnl: float = 0.0
+    daily_realized_pnl: float = 0.0
+    daily_peak_pnl: float = 0.0
+    daily_current_stop: float = None     # TSL ratcheting stop
+    trading_date: str = ""               # "2026-02-06" for daily reset
 
 
 class StrategyRiskEngine:
@@ -86,6 +101,11 @@ class StrategyRiskEngine:
         self._mode = "websocket"  # 'websocket' or 'rest_polling'
         self._last_ltp_time = 0
 
+        # Daily circuit breaker state
+        self._circuit_breakers = {}           # {(strategy_id, strategy_type): DailyCircuitBreakerState}
+        self._circuit_breaker_lock = threading.Lock()
+        self._daily_risk_config = {}          # {(strategy_id, strategy_type): config dict}
+
     def start(self):
         """Start the risk engine — load positions, subscribe to market data, start threads."""
         if self._running:
@@ -105,6 +125,9 @@ class StrategyRiskEngine:
 
         # Load active positions from DB into memory
         self._load_active_positions()
+
+        # Load daily circuit breaker state (configs + today's realized PnL)
+        self._load_daily_circuit_breaker_state()
 
         # Start the order poller
         self._start_order_poller()
@@ -211,11 +234,21 @@ class StrategyRiskEngine:
                 return
 
             # Process each position for this symbol
+            affected_strategies = set()
             for pos_id in position_ids:
                 self._process_position_tick(pos_id, ltp)
+                # Track which strategies were affected for circuit breaker check
+                with self._positions_lock:
+                    pos = self._positions.get(pos_id)
+                    if pos:
+                        affected_strategies.add((pos["strategy_id"], pos["strategy_type"]))
 
             # Check combined P&L groups after all per-leg updates
             self._check_combined_groups()
+
+            # Check daily circuit breakers for affected strategies
+            if affected_strategies:
+                self._check_daily_circuit_breakers(affected_strategies)
 
         except Exception as e:
             logger.exception(f"Error in on_ltp_update: {e}")
@@ -727,6 +760,289 @@ class StrategyRiskEngine:
                     )
 
     # ──────────────────────────────────────────────────────────────
+    # Daily Circuit Breaker
+    # ──────────────────────────────────────────────────────────────
+
+    def _load_daily_risk_configs(self):
+        """Load strategy daily risk config from DB.
+
+        Queries Strategy + ChartinkStrategy for any with daily_* values set.
+        Caches in self._daily_risk_config.
+        """
+        configs = {}
+        try:
+            from database.strategy_db import Strategy, db_session as strat_db
+
+            strategies = strat_db.query(Strategy).all()
+            for s in strategies:
+                if any([s.daily_stoploss_value, s.daily_target_value, s.daily_trailstop_value]):
+                    configs[(s.id, "webhook")] = {
+                        "daily_stoploss_type": s.daily_stoploss_type,
+                        "daily_stoploss_value": s.daily_stoploss_value,
+                        "daily_target_type": s.daily_target_type,
+                        "daily_target_value": s.daily_target_value,
+                        "daily_trailstop_type": s.daily_trailstop_type,
+                        "daily_trailstop_value": s.daily_trailstop_value,
+                    }
+        except Exception as e:
+            logger.debug(f"Error loading webhook strategy daily risk configs: {e}")
+
+        try:
+            from database.chartink_db import ChartinkStrategy, db_session as chartink_db
+
+            chartink_strategies = chartink_db.query(ChartinkStrategy).all()
+            for s in chartink_strategies:
+                if any([s.daily_stoploss_value, s.daily_target_value, s.daily_trailstop_value]):
+                    configs[(s.id, "chartink")] = {
+                        "daily_stoploss_type": s.daily_stoploss_type,
+                        "daily_stoploss_value": s.daily_stoploss_value,
+                        "daily_target_type": s.daily_target_type,
+                        "daily_target_value": s.daily_target_value,
+                        "daily_trailstop_type": s.daily_trailstop_type,
+                        "daily_trailstop_value": s.daily_trailstop_value,
+                    }
+        except Exception as e:
+            logger.debug(f"Error loading chartink strategy daily risk configs: {e}")
+
+        self._daily_risk_config = configs
+        if configs:
+            logger.info(f"Loaded daily risk configs for {len(configs)} strategies")
+
+    def _load_daily_circuit_breaker_state(self):
+        """Startup recovery: load today's realized PnL and initialize circuit breaker state."""
+        try:
+            today_str = datetime.now(IST).strftime("%Y-%m-%d")
+
+            # 1. Load daily risk configs from DB
+            self._load_daily_risk_configs()
+
+            if not self._daily_risk_config:
+                return
+
+            # 2. Get today's realized PnL per strategy
+            from services.strategy_pnl_service import get_todays_realized_pnl_by_strategy
+            realized_pnl = get_todays_realized_pnl_by_strategy()
+
+            # 3. Initialize states
+            with self._circuit_breaker_lock:
+                for key, config in self._daily_risk_config.items():
+                    state = DailyCircuitBreakerState(
+                        trading_date=today_str,
+                        daily_realized_pnl=realized_pnl.get(key, 0.0),
+                    )
+                    # Initialize TSL stop from config
+                    trail_value = config.get("daily_trailstop_value")
+                    if trail_value is not None:
+                        state.daily_current_stop = -abs(trail_value)
+
+                    self._circuit_breakers[key] = state
+
+            # 4. Do immediate check in case limits already exceeded
+            self._check_all_daily_circuit_breakers()
+
+            logger.info(
+                f"Daily circuit breaker state loaded for {len(self._circuit_breakers)} strategies"
+            )
+
+        except Exception as e:
+            logger.exception(f"Error loading daily circuit breaker state: {e}")
+
+    def _check_all_daily_circuit_breakers(self):
+        """Check all strategies' circuit breakers (used on startup)."""
+        with self._circuit_breaker_lock:
+            keys = list(self._circuit_breakers.keys())
+
+        if keys:
+            self._check_daily_circuit_breakers(keys)
+
+    def _check_daily_circuit_breakers(self, affected_strategies):
+        """Hot path check: evaluate circuit breaker thresholds for affected strategies.
+
+        Lock ordering (critical):
+        - Phase 1: _positions_lock → compute unrealized P&L per strategy
+        - Phase 2: _circuit_breaker_lock → check thresholds
+        Never hold both simultaneously.
+        """
+        if not affected_strategies:
+            return
+
+        # Phase 1: Collect unrealized PnL per strategy (under positions lock)
+        unrealized_by_strategy = {}
+        with self._positions_lock:
+            for key in affected_strategies:
+                if key not in self._daily_risk_config:
+                    continue
+                strategy_id, strategy_type = key
+                total_unrealized = 0
+                for pos in self._positions.values():
+                    if pos["strategy_id"] == strategy_id and pos["strategy_type"] == strategy_type:
+                        if pos.get("position_state") == "active":
+                            total_unrealized += pos.get("unrealized_pnl", 0)
+                unrealized_by_strategy[key] = total_unrealized
+
+        # Phase 2: Check thresholds (under circuit breaker lock)
+        trips = []  # Collect trips to act on outside the lock
+        with self._circuit_breaker_lock:
+            for key, unrealized in unrealized_by_strategy.items():
+                state = self._circuit_breakers.get(key)
+                config = self._daily_risk_config.get(key)
+                if not state or not config or state.is_tripped:
+                    continue
+
+                daily_pnl = state.daily_realized_pnl + unrealized
+
+                # --- Daily SL check ---
+                sl_value = config.get("daily_stoploss_value")
+                if sl_value is not None and daily_pnl <= -abs(sl_value):
+                    trips.append((key, state, "daily_stoploss", daily_pnl))
+                    continue
+
+                # --- Daily Target check ---
+                tgt_value = config.get("daily_target_value")
+                if tgt_value is not None and daily_pnl >= tgt_value:
+                    trips.append((key, state, "daily_target", daily_pnl))
+                    continue
+
+                # --- Daily TSL (AFL-style ratcheting) ---
+                trail_value = config.get("daily_trailstop_value")
+                if trail_value is not None:
+                    # Near-zero guard: skip TSL when P&L is negligible
+                    if abs(daily_pnl) < 1.0:
+                        continue
+
+                    # Update peak P&L (only moves up)
+                    state.daily_peak_pnl = max(state.daily_peak_pnl, daily_pnl)
+
+                    # Ratcheting stop: -trail_value + peak_pnl, only moves up
+                    new_stop = -abs(trail_value) + state.daily_peak_pnl
+                    if state.daily_current_stop is not None:
+                        state.daily_current_stop = max(state.daily_current_stop, new_stop)
+                    else:
+                        state.daily_current_stop = new_stop
+
+                    # Trip if P&L drops to or below the ratcheted stop
+                    if daily_pnl <= state.daily_current_stop:
+                        trips.append((key, state, "daily_trailstop", daily_pnl))
+                        continue
+
+        # Act on trips outside the lock
+        for key, state, reason, daily_pnl in trips:
+            self._trip_circuit_breaker(key, state, reason, daily_pnl)
+
+    def _trip_circuit_breaker(self, key, state, reason, daily_pnl):
+        """Trip a circuit breaker: block entries and close all positions.
+
+        Sets is_tripped immediately (blocks new entries), then spawns a daemon
+        thread to close all open positions. Must NOT hold _circuit_breaker_lock
+        while closing positions (deadlock risk with _positions_lock).
+        """
+        strategy_id, strategy_type = key
+
+        # Set tripped state (under lock for thread safety)
+        with self._circuit_breaker_lock:
+            state.is_tripped = True
+            state.trip_reason = reason
+            state.trip_pnl = round(daily_pnl, 2)
+
+        logger.warning(
+            f"CIRCUIT BREAKER TRIPPED: strategy={strategy_id}/{strategy_type} "
+            f"reason={reason} daily_pnl={daily_pnl:.2f}"
+        )
+
+        # Emit SocketIO event
+        try:
+            from extensions import socketio
+            socketio.emit("strategy_circuit_breaker", {
+                "strategy_id": strategy_id,
+                "strategy_type": strategy_type,
+                "action": "tripped",
+                "reason": reason,
+                "daily_pnl": round(daily_pnl, 2),
+            })
+        except Exception as e:
+            logger.debug(f"Error emitting circuit breaker event: {e}")
+
+        # Spawn daemon thread to close all positions (must not hold locks)
+        def _close_positions():
+            try:
+                self.close_all_positions(strategy_id)
+                logger.info(
+                    f"Circuit breaker closed all positions for strategy "
+                    f"{strategy_id}/{strategy_type}"
+                )
+            except Exception as e:
+                logger.exception(
+                    f"Error closing positions on circuit breaker trip: {e}"
+                )
+
+        t = threading.Thread(
+            target=_close_positions, daemon=True,
+            name=f"CB-Close-{strategy_id}",
+        )
+        t.start()
+
+    def is_circuit_breaker_active(self, strategy_id, strategy_type):
+        """Public API: check if circuit breaker is active for a strategy.
+
+        Thread-safe read check called by webhook handlers.
+
+        Returns:
+            (bool, str): (is_active, reason)
+        """
+        key = (strategy_id, strategy_type)
+        with self._circuit_breaker_lock:
+            state = self._circuit_breakers.get(key)
+            if state and state.is_tripped:
+                return True, state.trip_reason
+        return False, ""
+
+    def update_daily_realized_pnl(self, strategy_id, strategy_type, trade_pnl):
+        """Incremental update: add trade_pnl to daily realized PnL.
+
+        Called by StrategyPositionTracker.on_exit_fill() when a trade closes.
+        """
+        key = (strategy_id, strategy_type)
+        with self._circuit_breaker_lock:
+            state = self._circuit_breakers.get(key)
+            if state:
+                state.daily_realized_pnl += trade_pnl
+
+    def _reset_daily_circuit_breakers(self):
+        """Reset all daily circuit breaker states for a new trading day.
+
+        Called by APScheduler at 09:00 IST.
+        """
+        today_str = datetime.now(IST).strftime("%Y-%m-%d")
+
+        # Reload configs (strategies may have been updated)
+        self._load_daily_risk_configs()
+
+        with self._circuit_breaker_lock:
+            self._circuit_breakers.clear()
+            for key, config in self._daily_risk_config.items():
+                state = DailyCircuitBreakerState(trading_date=today_str)
+                # Initialize TSL stop from config
+                trail_value = config.get("daily_trailstop_value")
+                if trail_value is not None:
+                    state.daily_current_stop = -abs(trail_value)
+                self._circuit_breakers[key] = state
+
+        logger.info(
+            f"Daily circuit breakers reset for {today_str} — "
+            f"{len(self._circuit_breakers)} strategies configured"
+        )
+
+        # Emit reset event
+        try:
+            from extensions import socketio
+            socketio.emit("strategy_circuit_breaker", {
+                "action": "daily_reset",
+                "trading_date": today_str,
+            })
+        except Exception:
+            pass
+
+    # ──────────────────────────────────────────────────────────────
     # Position Management
     # ──────────────────────────────────────────────────────────────
 
@@ -891,10 +1207,20 @@ class StrategyRiskEngine:
                 id="strategy_daily_pnl_snapshot",
             )
 
+            # Daily circuit breaker reset: 09:00 IST (before market opens)
+            self._scheduler.add_job(
+                self._reset_daily_circuit_breakers,
+                "cron",
+                hour=9,
+                minute=0,
+                id="strategy_daily_circuit_breaker_reset",
+            )
+
             self._scheduler.start()
             logger.info(
                 f"Scheduler started: auto-squareoff (every min 9:15-15:30), "
-                f"PnL snapshot ({snapshot_hour:02d}:{snapshot_minute:02d})"
+                f"PnL snapshot ({snapshot_hour:02d}:{snapshot_minute:02d}), "
+                f"circuit breaker reset (09:00)"
             )
 
         except Exception as e:
@@ -1119,19 +1445,37 @@ class StrategyRiskEngine:
                         )
 
                         # Aggregate PnL for strategy
-                        total_pnl = 0
+                        total_unrealized = 0
                         with self._positions_lock:
                             for pos_id, pos in self._positions.items():
                                 if pos["strategy_id"] == strategy_id:
-                                    total_pnl += pos.get("unrealized_pnl", 0)
+                                    total_unrealized += pos.get("unrealized_pnl", 0)
+
+                        # Include daily circuit breaker info
+                        cb_key = (strategy_id, strategy_type)
+                        daily_realized = 0
+                        daily_total = 0
+                        cb_active = False
+                        cb_reason = ""
+                        with self._circuit_breaker_lock:
+                            cb_state = self._circuit_breakers.get(cb_key)
+                            if cb_state:
+                                daily_realized = cb_state.daily_realized_pnl
+                                daily_total = daily_realized + total_unrealized
+                                cb_active = cb_state.is_tripped
+                                cb_reason = cb_state.trip_reason
 
                         socketio.emit(
                             "strategy_pnl_update",
                             {
                                 "strategy_id": strategy_id,
                                 "strategy_type": strategy_type,
-                                "total_unrealized_pnl": round(total_pnl, 2),
+                                "total_unrealized_pnl": round(total_unrealized, 2),
                                 "position_count": len(positions),
+                                "daily_realized_pnl": round(daily_realized, 2),
+                                "daily_total_pnl": round(daily_total, 2),
+                                "circuit_breaker_active": cb_active,
+                                "circuit_breaker_reason": cb_reason,
                             },
                         )
 

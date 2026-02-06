@@ -1051,6 +1051,22 @@ def webhook(webhook_id):
         except Exception as e:
             logger.debug(f"Position state check error (proceeding): {e}")
 
+        # Daily circuit breaker: block new entry signals if tripped
+        if not is_exit_order:
+            try:
+                from services.strategy_risk_engine import risk_engine
+                cb_active, cb_reason = risk_engine.is_circuit_breaker_active(strategy.id, "webhook")
+                if cb_active:
+                    logger.info(
+                        f"Strategy {strategy.id} circuit breaker active ({cb_reason}), "
+                        f"blocking entry signal"
+                    )
+                    return jsonify({
+                        "error": f"Daily circuit breaker active ({cb_reason}). Entry signals blocked."
+                    }), 403
+            except Exception as e:
+                logger.debug(f"Circuit breaker check error (proceeding): {e}")
+
         # Get API key from database
         api_key = get_api_key_for_tradingview(strategy.user_id)
         if not api_key:

@@ -323,6 +323,13 @@ class StrategyPositionTracker:
                 pnl=trade_pnl,
             )
 
+            # Update daily circuit breaker realized PnL
+            try:
+                from services.strategy_risk_engine import risk_engine
+                risk_engine.update_daily_realized_pnl(strategy_id, strategy_type, trade_pnl)
+            except Exception as e:
+                logger.debug(f"Error updating circuit breaker realized PnL: {e}")
+
             # Update position
             now = datetime.utcnow()
             new_qty = max(0, position.quantity - filled_quantity)

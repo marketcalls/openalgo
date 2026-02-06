@@ -1187,3 +1187,63 @@ cd frontend && npm run dev    # Full page works end-to-end
 # Verify: SocketIO connection established
 # Verify: live P&L updates visible
 ```
+
+---
+
+## Appendix: Daily Circuit Breaker UI Integration
+
+### Updated `DashboardStrategy` Interface
+
+Add the following fields to the strategy type:
+
+```typescript
+interface DashboardStrategy {
+  // ... existing fields ...
+
+  // Daily circuit breaker config
+  daily_stoploss_type?: string;    // "points" only in V1
+  daily_stoploss_value?: number;
+  daily_target_type?: string;
+  daily_target_value?: number;
+  daily_trailstop_type?: string;
+  daily_trailstop_value?: number;
+}
+```
+
+### Enhanced `strategy_pnl_update` SocketIO Event
+
+```typescript
+interface StrategyPnlUpdate {
+  strategy_id: number;
+  strategy_type: string;
+  total_unrealized_pnl: number;
+  position_count: number;
+  daily_realized_pnl: number;      // NEW
+  daily_total_pnl: number;         // NEW
+  circuit_breaker_active: boolean;  // NEW
+  circuit_breaker_reason: string;   // NEW
+}
+```
+
+### New `strategy_circuit_breaker` SocketIO Event
+
+```typescript
+interface StrategyCircuitBreakerEvent {
+  strategy_id?: number;
+  strategy_type?: string;
+  action: "tripped" | "daily_reset";
+  reason?: string;
+  daily_pnl?: number;
+  trading_date?: string;  // For daily_reset action
+}
+```
+
+### Circuit Breaker Alert Component Spec
+
+When a circuit breaker trips, display an alert banner in the strategy card:
+
+- **Visual**: Red banner with `AlertTriangle` icon, reason text, and daily P&L at trip
+- **Position**: Below the strategy header, above the positions table
+- **Persistence**: Stays visible until daily reset (09:00 IST next day)
+- **Content**: "Circuit Breaker Active — {reason} at {daily_pnl}. New entries blocked."
+- **Daily reset**: On `strategy_circuit_breaker` event with `action: "daily_reset"`, clear all banners

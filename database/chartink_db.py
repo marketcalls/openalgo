@@ -57,6 +57,14 @@ class ChartinkStrategy(Base):
     auto_squareoff_time = Column(String(5), default="15:15")
     default_exit_execution = Column(String(20), default="market")
 
+    # Daily circuit breaker — strategy-level aggregate risk
+    daily_stoploss_type = Column(String(10))       # "points" only in V1
+    daily_stoploss_value = Column(Float)            # Max daily loss (positive number, e.g. 5000)
+    daily_target_type = Column(String(10))          # "points" only in V1
+    daily_target_value = Column(Float)              # Daily profit target
+    daily_trailstop_type = Column(String(10))       # "points" only in V1
+    daily_trailstop_value = Column(Float)           # Trail from peak daily P&L
+
     # Relationships
     symbol_mappings = relationship(
         "ChartinkSymbolMapping", back_populates="strategy", cascade="all, delete-orphan"
