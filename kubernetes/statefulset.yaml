@@ -20,8 +20,8 @@ spec:
     spec:
       containers:
       - name: openalgo
-        image: felixopk101/openalgo:latest 
-        imagePullPolicy: IfNotPresent
+        image:  marketcalls/openalgo:latest
+        imagePullPolicy: Always
         
         ports:
         - name: http

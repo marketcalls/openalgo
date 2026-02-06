@@ -13,6 +13,8 @@ resources:
   - statefulset.yaml
   - service.yaml
   - ingress.yaml
+  - secrets.yaml
+  - networkpolicy.yaml
 
 # Common labels applied to all resources
 commonLabels:
