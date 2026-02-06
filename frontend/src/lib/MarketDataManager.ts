@@ -153,11 +153,14 @@ export class MarketDataManager {
    * Returns an unsubscribe function
    */
   subscribe(
-    symbol: string,
-    exchange: string,
+    rawSymbol: string,
+    rawExchange: string,
     mode: SubscriptionMode,
     callback: DataCallback
   ): () => void {
+    // Normalize to uppercase for consistent cache keys across WebSocket and REST
+    const symbol = rawSymbol.toUpperCase()
+    const exchange = rawExchange.toUpperCase()
     const key = `${exchange}:${symbol}:${mode}`
     const dataKey = `${exchange}:${symbol}`
 
@@ -210,11 +213,13 @@ export class MarketDataManager {
   }
 
   private unsubscribe(
-    symbol: string,
-    exchange: string,
+    rawSymbol: string,
+    rawExchange: string,
     mode: SubscriptionMode,
     callback: DataCallback
   ): void {
+    const symbol = rawSymbol.toUpperCase()
+    const exchange = rawExchange.toUpperCase()
     const key = `${exchange}:${symbol}:${mode}`
     const entry = this.subscriptions.get(key)
 
@@ -286,7 +291,7 @@ export class MarketDataManager {
    * Get cached data for a symbol
    */
   getCachedData(symbol: string, exchange: string): SymbolData | undefined {
-    return this.dataCache.get(`${exchange}:${symbol}`)
+    return this.dataCache.get(`${exchange.toUpperCase()}:${symbol.toUpperCase()}`)
   }
 
   /**
@@ -488,6 +493,7 @@ export class MarketDataManager {
     this.stopFallbackPolling()
     this.fallbackMode = false
     this.consecutiveFailures = 0
+    this.apiKey = null
 
     this.setConnectionState('disconnected')
   }
@@ -548,7 +554,7 @@ export class MarketDataManager {
 
         case 'market_data': {
           const symbol = (data.symbol as string).toUpperCase()
-          const exchange = data.exchange as string
+          const exchange = (data.exchange as string).toUpperCase()
           const marketDataPayload = (data.data || {}) as MarketData
           const dataKey = `${exchange}:${symbol}`
 
@@ -782,7 +788,7 @@ export class MarketDataManager {
         // Process each result and update cache + notify subscribers
         for (const result of data.results) {
           const symbol = result.symbol.toUpperCase()
-          const exchange = result.exchange
+          const exchange = result.exchange.toUpperCase()
           const dataKey = `${exchange}:${symbol}`
 
           // Update cache
@@ -807,9 +813,9 @@ export class MarketDataManager {
           }
           this.dataCache.set(dataKey, updatedSymbolData)
 
-          // Fan out to all callbacks for this symbol (case-insensitive comparison)
+          // Fan out to all callbacks for this symbol (keys are already normalized to uppercase)
           this.subscriptions.forEach((entry) => {
-            if (entry.symbol.toUpperCase() === symbol && entry.exchange.toUpperCase() === exchange.toUpperCase()) {
+            if (entry.symbol === symbol && entry.exchange === exchange) {
               entry.callbacks.forEach((callback) => {
                 callback(updatedSymbolData)
               })

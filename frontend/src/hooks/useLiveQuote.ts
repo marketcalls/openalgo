@@ -107,7 +107,6 @@ export function useLiveQuote(
     useDepthFallback = true,
     staleThreshold = 5000,
     refreshInterval = 30000,
-    pauseWhenHidden = true,
   } = options
 
   const { apiKey } = useAuthStore()
@@ -134,7 +133,6 @@ export function useLiveQuote(
     symbols,
     mode,
     enabled: enabled && hasSymbol,
-    pauseWhenHidden,
   })
 
   const wsData = marketData.get(`${exchange}:${symbol}`)?.data
