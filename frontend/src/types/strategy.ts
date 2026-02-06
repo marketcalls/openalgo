@@ -115,11 +115,45 @@ export interface CreateStrategyRequest {
   squareoff_time?: string
 }
 
+export type OrderMode = 'equity' | 'futures' | 'single_option' | 'multi_leg'
+export type ExpiryType = 'current_week' | 'next_week' | 'current_month' | 'next_month'
+
+export const ORDER_MODES: { value: OrderMode; label: string }[] = [
+  { value: 'equity', label: 'Equity' },
+  { value: 'futures', label: 'Futures' },
+  { value: 'single_option', label: 'Single Option' },
+  { value: 'multi_leg', label: 'Multi Leg' },
+]
+
+export const EXPIRY_TYPES: { value: ExpiryType; label: string }[] = [
+  { value: 'current_week', label: 'Current Week' },
+  { value: 'next_week', label: 'Next Week' },
+  { value: 'current_month', label: 'Current Month' },
+  { value: 'next_month', label: 'Next Month' },
+]
+
+export const OFFSET_VALUES = [
+  'ATM',
+  ...Array.from({ length: 40 }, (_, i) => `ITM${i + 1}`),
+  ...Array.from({ length: 40 }, (_, i) => `OTM${i + 1}`),
+]
+
+export const OPTION_TYPES = ['CE', 'PE'] as const
+
 export interface AddSymbolRequest {
   symbol: string
   exchange: string
   quantity: number
   product_type: string
+  order_mode?: OrderMode
+  underlying?: string
+  underlying_exchange?: string
+  expiry_type?: ExpiryType
+  offset?: string
+  option_type?: string
+  risk_mode?: string
+  preset?: string
+  legs_config?: string
 }
 
 export interface BulkSymbolRequest {

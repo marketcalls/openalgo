@@ -109,6 +109,18 @@ export const strategyDashboardApi = {
     return response.data
   },
 
+  // Manual entry
+  manualEntry: async (
+    strategyId: number,
+    data: { mapping_id: number; action: string; quantity: number }
+  ): Promise<ApiResponse<void>> => {
+    const response = await webClient.post<ApiResponse<void>>(
+      `/strategy/api/strategy/${strategyId}/manual-entry`,
+      data
+    )
+    return response.data
+  },
+
   // Delete closed position
   deletePosition: async (
     strategyId: number,

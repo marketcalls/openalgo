@@ -675,12 +675,23 @@ def configure_symbols(strategy_id):
                 if quantity <= 0:
                     raise ValueError("Quantity must be greater than 0")
 
+                # Extract optional options/futures configuration fields
+                optional_fields = {}
+                for field in [
+                    "order_mode", "underlying", "underlying_exchange",
+                    "expiry_type", "offset", "option_type",
+                    "risk_mode", "preset", "legs_config",
+                ]:
+                    if field in data:
+                        optional_fields[field] = data[field]
+
                 mapping = add_symbol_mapping(
                     strategy_id=strategy_id,
                     symbol=symbol,
                     exchange=exchange,
                     quantity=quantity,
                     product_type=product_type,
+                    **optional_fields,
                 )
 
                 if mapping:
@@ -723,6 +734,54 @@ def delete_symbol(strategy_id, mapping_id):
     except Exception as e:
         logger.exception(f"Error deleting symbol mapping: {str(e)}")
         return jsonify({"status": "error", "error": str(e)}), 400
+
+
+@strategy_bp.route(
+    "/api/strategy/<int:strategy_id>/symbol/<int:mapping_id>", methods=["PUT"]
+)
+@check_session_validity
+def update_symbol(strategy_id, mapping_id):
+    """Update an existing symbol mapping (quantity, options config, etc.)"""
+    username = session.get("user")
+    if not username:
+        return jsonify({"status": "error", "message": "Session expired"}), 401
+
+    strategy = get_strategy(strategy_id)
+    if not strategy or strategy.user_id != username:
+        return jsonify({"status": "error", "message": "Strategy not found"}), 404
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"status": "error", "message": "No data provided"}), 400
+
+    try:
+        from database.strategy_db import StrategySymbolMapping, db_session
+
+        mapping = db_session.query(StrategySymbolMapping).get(mapping_id)
+        if not mapping or mapping.strategy_id != strategy_id:
+            return jsonify({"status": "error", "message": "Symbol mapping not found"}), 404
+
+        EDITABLE_FIELDS = {
+            "symbol", "exchange", "quantity", "product_type",
+            "order_mode", "underlying", "underlying_exchange",
+            "expiry_type", "offset", "option_type",
+            "risk_mode", "preset", "legs_config",
+        }
+        updates = {k: v for k, v in data.items() if k in EDITABLE_FIELDS}
+        if "quantity" in updates:
+            updates["quantity"] = int(updates["quantity"])
+            if updates["quantity"] <= 0:
+                return jsonify({"status": "error", "message": "Quantity must be > 0"}), 400
+
+        for key, value in updates.items():
+            setattr(mapping, key, value)
+        db_session.commit()
+
+        return jsonify({"status": "success", "message": "Symbol mapping updated"})
+
+    except Exception as e:
+        logger.exception(f"Error updating symbol mapping: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 400
 
 
 @strategy_bp.route("/search")

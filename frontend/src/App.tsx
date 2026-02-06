@@ -55,6 +55,7 @@ const OptionChain = lazy(() => import('@/pages/OptionChain'))
 
 // Strategy pages
 const StrategyHub = lazy(() => import('@/pages/strategy/StrategyHub'))
+const StrategyDetail = lazy(() => import('@/pages/strategy/StrategyDetail'))
 
 // Python Strategy pages
 const PythonStrategyIndex = lazy(() => import('@/pages/python-strategy/PythonStrategyIndex'))
@@ -144,8 +145,9 @@ function App() {
                 <Route path="/websocket/test/20" element={<WebSocketTest depthLevel={20} />} />
                 <Route path="/websocket/test/30" element={<WebSocketTest depthLevel={30} />} />
                 <Route path="/websocket/test/50" element={<WebSocketTest depthLevel={50} />} />
-                {/* Phase 6: Webhook Strategies — unified Strategy Hub */}
+                {/* Phase 6: Webhook Strategies — Strategy Hub + Detail */}
                 <Route path="/strategy" element={<StrategyHub />} />
+                <Route path="/strategy/:strategyId" element={<StrategyDetail />} />
                 {/* Phase 6: Python Strategies */}
                 <Route path="/python" element={<PythonStrategyIndex />} />
                 <Route path="/python/new" element={<NewPythonStrategy />} />

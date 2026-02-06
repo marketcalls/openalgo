@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { AlertTriangle } from 'lucide-react'
 import { strategyDashboardApi } from '@/api/strategy-dashboard'
 import { CreateStrategyDialog } from '@/components/strategy-dashboard/CreateStrategyDialog'
 import { DashboardHeader } from '@/components/strategy-dashboard/DashboardHeader'
 import { EmptyState } from '@/components/strategy-dashboard/EmptyState'
-import { RiskConfigDrawer } from '@/components/strategy-dashboard/RiskConfigDrawer'
-import { StrategyCard } from '@/components/strategy-dashboard/StrategyCard'
+import { StrategyListCard } from '@/components/strategy-dashboard/StrategyListCard'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -15,9 +14,9 @@ import { useStrategySocket } from '@/hooks/useStrategySocket'
 import { useStrategyDashboardStore } from '@/stores/strategyDashboardStore'
 
 export default function StrategyHub() {
+  const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
-  const [riskConfigStrategyId, setRiskConfigStrategyId] = useState<number | null>(null)
 
   // 1. Fetch initial data via TanStack Query
   const { data, isLoading, isError, refetch } = useQuery({
@@ -36,18 +35,15 @@ export default function StrategyHub() {
     }
   }, [data, setDashboardData])
 
-  // Auto-expand strategy from URL param ?expand=<id>
-  const toggleExpanded = useStrategyDashboardStore((s) => s.toggleExpanded)
-  const expandedStrategies = useStrategyDashboardStore((s) => s.expandedStrategies)
+  // Handle ?expand=<id> — redirect to detail page
   useEffect(() => {
     const expandId = searchParams.get('expand')
     if (expandId && data) {
       const id = Number(expandId)
-      if (id && !expandedStrategies.has(id)) {
-        toggleExpanded(id)
+      if (id) {
+        navigate(`/strategy/${id}`, { replace: true })
       }
     }
-    // Only run once when data first loads
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data])
 
@@ -60,9 +56,8 @@ export default function StrategyHub() {
   const strategies = useStrategyDashboardStore((s) => s.strategies)
   const summary = useStrategyDashboardStore((s) => s.summary)
   const connectionStatus = useStrategyDashboardStore((s) => s.connectionStatus)
-  const flashPositions = useStrategyDashboardStore((s) => s.flashPositions)
 
-  // 4. Connect SocketIO to strategy rooms
+  // 4. Connect SocketIO to strategy rooms (for live P&L on list page)
   const strategyIds = useMemo(() => strategies.map((s) => s.id), [strategies])
   useStrategySocket(strategyIds)
 
@@ -70,17 +65,12 @@ export default function StrategyHub() {
     refetch()
   }, [refetch])
 
-  const handleRiskConfigSaved = useCallback(() => {
-    refetch()
-  }, [refetch])
-
-  const handleCreated = useCallback((_strategyId: number) => {
-    refetch()
-  }, [refetch])
-
-  const riskConfigStrategy = riskConfigStrategyId
-    ? strategies.find((s) => s.id === riskConfigStrategyId)
-    : null
+  const handleCreated = useCallback(
+    (strategyId: number) => {
+      navigate(`/strategy/${strategyId}`)
+    },
+    [navigate]
+  )
 
   // Loading state
   if (isLoading) {
@@ -88,17 +78,12 @@ export default function StrategyHub() {
       <div className="space-y-6">
         <div className="space-y-4">
           <Skeleton className="h-8 w-64" />
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <Skeleton className="h-24" />
-            <Skeleton className="h-24" />
-            <Skeleton className="h-24" />
-            <Skeleton className="h-24" />
-          </div>
+          <Skeleton className="h-16 w-full" />
         </div>
-        <div className="space-y-4">
-          <Skeleton className="h-28" />
-          <Skeleton className="h-28" />
-          <Skeleton className="h-28" />
+        <div className="space-y-3">
+          <Skeleton className="h-20" />
+          <Skeleton className="h-20" />
+          <Skeleton className="h-20" />
         </div>
       </div>
     )
@@ -135,29 +120,11 @@ export default function StrategyHub() {
       {strategies.length === 0 ? (
         <EmptyState variant="no-strategies" />
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-3">
           {strategies.map((strategy) => (
-            <StrategyCard
-              key={strategy.id}
-              strategy={strategy}
-              isExpanded={expandedStrategies.has(strategy.id)}
-              flashMap={flashPositions}
-              onToggleExpand={() => toggleExpanded(strategy.id)}
-              onOpenRiskConfig={(id) => setRiskConfigStrategyId(id)}
-              onRefresh={handleRefresh}
-            />
+            <StrategyListCard key={strategy.id} strategy={strategy} />
           ))}
         </div>
-      )}
-
-      {/* Risk Config Drawer — page level */}
-      {riskConfigStrategy && (
-        <RiskConfigDrawer
-          open={true}
-          onOpenChange={(open) => !open && setRiskConfigStrategyId(null)}
-          strategy={riskConfigStrategy}
-          onSaved={handleRiskConfigSaved}
-        />
       )}
 
       {/* Create Strategy Dialog */}

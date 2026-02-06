@@ -14,9 +14,6 @@ interface StrategyDashboardState {
   initialized: boolean
   connectionStatus: 'connected' | 'disconnected' | 'stale'
 
-  // Expanded strategy cards (UI state)
-  expandedStrategies: Set<number>
-
   // Flash tracking for value changes
   flashPositions: Map<number, 'profit' | 'loss'>
 
@@ -30,7 +27,6 @@ interface StrategyDashboardState {
   removePosition: (strategyId: number, positionId: number) => void
 
   // Actions — UI
-  toggleExpanded: (strategyId: number) => void
   setConnectionStatus: (status: 'connected' | 'disconnected' | 'stale') => void
   clearFlash: (positionId: number) => void
   reset: () => void
@@ -43,33 +39,11 @@ const DEFAULT_SUMMARY: DashboardSummary = {
   total_pnl: 0,
 }
 
-// Restore expanded strategies from sessionStorage
-function loadExpandedStrategies(): Set<number> {
-  try {
-    const saved = sessionStorage.getItem('dashboard-expanded')
-    if (saved) {
-      return new Set(JSON.parse(saved) as number[])
-    }
-  } catch {
-    // ignore
-  }
-  return new Set()
-}
-
-function saveExpandedStrategies(ids: Set<number>) {
-  try {
-    sessionStorage.setItem('dashboard-expanded', JSON.stringify([...ids]))
-  } catch {
-    // ignore
-  }
-}
-
 export const useStrategyDashboardStore = create<StrategyDashboardState>()((set, get) => ({
   strategies: [],
   summary: DEFAULT_SUMMARY,
   initialized: false,
   connectionStatus: 'disconnected',
-  expandedStrategies: loadExpandedStrategies(),
   flashPositions: new Map(),
 
   setDashboardData: (strategies, summary) => {
@@ -169,18 +143,6 @@ export const useStrategyDashboardStore = create<StrategyDashboardState>()((set, 
       }
     })
     set({ strategies: newStrategies })
-  },
-
-  toggleExpanded: (strategyId) => {
-    const state = get()
-    const newExpanded = new Set(state.expandedStrategies)
-    if (newExpanded.has(strategyId)) {
-      newExpanded.delete(strategyId)
-    } else {
-      newExpanded.add(strategyId)
-    }
-    saveExpandedStrategies(newExpanded)
-    set({ expandedStrategies: newExpanded })
   },
 
   setConnectionStatus: (status) => {

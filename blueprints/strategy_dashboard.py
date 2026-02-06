@@ -16,6 +16,7 @@ Endpoints:
 - POST /strategy/api/strategy/<id>/risk/deactivate          — deactivate risk monitoring
 - POST /strategy/api/strategy/<id>/position/<pid>/close     — manual close
 - POST /strategy/api/strategy/<id>/positions/close-all      — close all positions
+- POST /strategy/api/strategy/<id>/manual-entry             — manual entry/exit order
 - DELETE /strategy/api/strategy/<id>/position/<pid>         — delete closed position record
 """
 
@@ -651,6 +652,118 @@ def api_close_all_positions(strategy_id):
 
     except Exception as e:
         logger.exception(f"Error closing all positions: {e}")
+        return jsonify({"status": "error", "message": "Internal server error"}), 500
+
+
+# ──────────────────────────────────────────────────────────────
+# Manual Entry
+# ──────────────────────────────────────────────────────────────
+
+
+@strategy_dashboard_bp.route(
+    "/api/strategy/<int:strategy_id>/manual-entry", methods=["POST"]
+)
+@check_session_validity
+def api_manual_entry(strategy_id):
+    """Manually place an entry/exit order for a strategy symbol mapping."""
+    user_id = _get_user_id()
+    if not user_id:
+        return jsonify({"status": "error", "message": "Session expired"}), 401
+
+    strategy_type = request.args.get("type", "webhook")
+    strategy, err = _verify_strategy_ownership(strategy_id, strategy_type, user_id)
+    if err:
+        return err
+
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"status": "error", "message": "No data provided"}), 400
+
+        mapping_id = data.get("mapping_id")
+        action = (data.get("action") or "").upper()
+        quantity = data.get("quantity")
+
+        if not mapping_id or not action or not quantity:
+            return jsonify({"status": "error", "message": "mapping_id, action, and quantity are required"}), 400
+        if action not in ("BUY", "SELL"):
+            return jsonify({"status": "error", "message": "action must be BUY or SELL"}), 400
+
+        quantity = int(quantity)
+        if quantity <= 0:
+            return jsonify({"status": "error", "message": "quantity must be > 0"}), 400
+
+        # Look up symbol mapping
+        if strategy_type == "chartink":
+            from database.chartink_db import ChartinkSymbolMapping, db_session as cdb
+            mapping = cdb.query(ChartinkSymbolMapping).get(mapping_id)
+        else:
+            from database.strategy_db import StrategySymbolMapping, db_session as sdb
+            mapping = sdb.query(StrategySymbolMapping).get(mapping_id)
+
+        if not mapping or mapping.strategy_id != strategy_id:
+            return jsonify({"status": "error", "message": "Symbol mapping not found"}), 404
+
+        # Determine if this is an entry (for circuit breaker check)
+        is_entry = True
+        if strategy.trading_mode == "LONG" and action == "SELL":
+            is_entry = False
+        elif strategy.trading_mode == "SHORT" and action == "BUY":
+            is_entry = False
+
+        # Circuit breaker check for entries
+        if is_entry:
+            try:
+                from services.strategy_risk_engine import risk_engine
+                cb_active, cb_reason = risk_engine.is_circuit_breaker_active(strategy_id, strategy_type)
+                if cb_active:
+                    return jsonify({
+                        "status": "error",
+                        "message": f"Daily circuit breaker active ({cb_reason}). Entry orders blocked.",
+                    }), 403
+            except Exception as e:
+                logger.debug(f"Circuit breaker check error (proceeding): {e}")
+
+        # Get API key
+        from database.auth_db import get_api_key_for_tradingview
+        api_key = get_api_key_for_tradingview(strategy.user_id)
+        if not api_key:
+            return jsonify({"status": "error", "message": "No API key found"}), 401
+
+        # Strategy tracking metadata
+        order_meta = {
+            "strategy_id": strategy_id,
+            "strategy_type": strategy_type,
+            "user_id": strategy.user_id,
+            "is_entry": is_entry,
+            "exit_reason": "manual" if not is_entry else None,
+        }
+
+        # Construct order payload
+        payload = {
+            "apikey": api_key,
+            "symbol": mapping.symbol,
+            "exchange": mapping.exchange,
+            "product": mapping.product_type,
+            "strategy": strategy.name,
+            "action": action,
+            "quantity": str(quantity),
+            "pricetype": "MARKET",
+        }
+
+        # Queue the order (late import to avoid circular dependency)
+        from blueprints.strategy import queue_order
+        queue_order("placeorder", payload, meta=order_meta)
+
+        return jsonify({
+            "status": "success",
+            "message": f"Manual {action} order queued for {mapping.symbol}",
+        })
+
+    except ValueError as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+    except Exception as e:
+        logger.exception(f"Error placing manual entry: {e}")
         return jsonify({"status": "error", "message": "Internal server error"}), 500
 
 

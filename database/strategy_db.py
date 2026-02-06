@@ -294,8 +294,18 @@ def update_strategy_times(strategy_id, start_time=None, end_time=None, squareoff
         return False
 
 
-def add_symbol_mapping(strategy_id, symbol, exchange, quantity, product_type):
-    """Add symbol mapping to strategy"""
+def add_symbol_mapping(strategy_id, symbol, exchange, quantity, product_type, **kwargs):
+    """Add symbol mapping to strategy.
+
+    Optional kwargs for options/futures configuration:
+        order_mode, underlying, underlying_exchange, expiry_type,
+        offset, option_type, risk_mode, preset, legs_config
+    """
+    ALLOWED_FIELDS = {
+        "order_mode", "underlying", "underlying_exchange", "expiry_type",
+        "offset", "option_type", "risk_mode", "preset", "legs_config",
+    }
+    optional = {k: v for k, v in kwargs.items() if k in ALLOWED_FIELDS and v is not None}
     try:
         mapping = StrategySymbolMapping(
             strategy_id=strategy_id,
@@ -303,6 +313,7 @@ def add_symbol_mapping(strategy_id, symbol, exchange, quantity, product_type):
             exchange=exchange,
             quantity=quantity,
             product_type=product_type,
+            **optional,
         )
         db_session.add(mapping)
         db_session.commit()
