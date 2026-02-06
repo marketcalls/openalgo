@@ -219,7 +219,8 @@ interface WebSocketTestProps {
 }
 
 export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
-  // Connection state
+  // Connection state - INDEPENDENT WebSocket (not shared with MarketDataManager)
+  // This page needs its own connection for testing/debugging purposes
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(false)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
@@ -691,7 +692,7 @@ export default function WebSocketTest({ depthLevel = 5 }: WebSocketTestProps) {
                   <p className="text-xs text-muted-foreground">
                     {depthLevel > 5
                       ? `${depthLevel}-level market depth testing (broker dependent)`
-                      : 'Real-time market data testing interface'}
+                      : 'Real-time market data testing interface (independent connection)'}
                   </p>
                 </div>
               </div>

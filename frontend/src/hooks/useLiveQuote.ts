@@ -66,6 +66,8 @@ export interface UseLiveQuoteResult {
   isLoading: boolean
   /** Whether WebSocket is paused due to tab being hidden */
   isPaused: boolean
+  /** Whether using REST API fallback instead of WebSocket */
+  isFallbackMode: boolean
   /** Data source: 'websocket', 'rest', or 'none' */
   dataSource: 'websocket' | 'rest' | 'none'
   /** Manually refresh REST data */
@@ -128,7 +130,7 @@ export function useLiveQuote(
     [symbol, exchange, hasSymbol]
   )
 
-  const { data: marketData, isConnected: wsConnected, isPaused: wsPaused } = useMarketData({
+  const { data: marketData, isConnected: wsConnected, isPaused: wsPaused, isFallbackMode } = useMarketData({
     symbols,
     mode,
     enabled: enabled && hasSymbol,
@@ -312,6 +314,7 @@ export function useLiveQuote(
     isConnected: wsConnected,
     isLoading: isLoadingRest && !restQuotes && !restDepth,
     isPaused: wsPaused,
+    isFallbackMode,
     dataSource,
     refresh: fetchRestData,
   }
