@@ -324,7 +324,7 @@ class FlowOpenAlgoClient:
         self, symbol: str, exchange: str, product_type: str = None
     ) -> dict[str, Any]:
         """Get open position for a specific symbol.
-        Returns flat response matching SDK format so {{variable.quantity}} works.
+        Returns quantity matching standard OpenAlgo API response.
         """
         result = self.positionbook()
         if result.get("status") != "success":
@@ -340,10 +340,7 @@ class FlowOpenAlgoClient:
                 pos_product = pos.get("product") or pos.get("product_type")
                 if product_type and pos_product != product_type:
                     continue
-                # Return flat response so {{var.quantity}} works in interpolation
-                flat_result = {"status": "success"}
-                flat_result.update(pos)
-                return flat_result
+                return {"status": "success", "quantity": pos.get("quantity", 0)}
 
         return {"status": "success", "quantity": 0}
 
