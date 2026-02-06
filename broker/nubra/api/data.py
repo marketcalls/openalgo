@@ -60,21 +60,28 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
 class BrokerData:
     def __init__(self, auth_token):
-        """Initialize Angel data handler with authentication token"""
+        """Initialize Nubra data handler with authentication token"""
         self.auth_token = auth_token
-        # Map common timeframe format to Angel resolutions
+        # Map OpenAlgo timeframe format to Nubra intervals
+        # Nubra supports: 1s, 1m, 2m, 3m, 5m, 15m, 30m, 1h, 1d, 1w, 1mt
         self.timeframe_map = {
+            # Seconds
+            "1s": "1s",
             # Minutes
-            "1m": "ONE_MINUTE",
-            "3m": "THREE_MINUTE",
-            "5m": "FIVE_MINUTE",
-            "10m": "TEN_MINUTE",
-            "15m": "FIFTEEN_MINUTE",
-            "30m": "THIRTY_MINUTE",
+            "1m": "1m",
+            "2m": "2m",
+            "3m": "3m",
+            "5m": "5m",
+            "15m": "15m",
+            "30m": "30m",
             # Hours
-            "1h": "ONE_HOUR",
+            "1h": "1h",
             # Daily
-            "D": "ONE_DAY",
+            "D": "1d",
+            # Weekly
+            "W": "1w",
+            # Monthly
+            "M": "1mt",
         }
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
@@ -234,169 +241,208 @@ class BrokerData:
         self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str
     ) -> pd.DataFrame:
         """
-        Get historical data for given symbol
+        Get historical data for given symbol using Nubra's timeseries API.
+        
         Args:
             symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX)
-            interval: Candle interval (1m, 3m, 5m, 10m, 15m, 30m, 1h, D)
+            exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX)
+            interval: Candle interval (1m, 3m, 5m, 15m, 30m, 1h, D)
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
-            include_oi: Include open interest data (only for F&O contracts)
         Returns:
-            pd.DataFrame: Historical data with columns [timestamp, open, high, low, close, volume, oi (if requested)]
+            pd.DataFrame: Historical data with columns [close, high, low, open, timestamp, volume, oi]
         """
         try:
-            # Convert symbol to broker format and get token
+            # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
-
-            token = get_token(symbol, exchange)
-            logger.debug(f"Debug - Broker Symbol: {br_symbol}, Token: {token}")
-
-            if exchange == "NSE_INDEX":
-                exchange = "NSE"
-            elif exchange == "BSE_INDEX":
-                exchange = "BSE"
-            elif exchange == "MCX_INDEX":
-                exchange = "MCX"
+            logger.debug(f"Debug - Broker Symbol: {br_symbol}")
 
             # Check for unsupported timeframes
             if interval not in self.timeframe_map:
                 supported = list(self.timeframe_map.keys())
                 raise Exception(
-                    f"Timeframe '{interval}' is not supported by Angel. Supported timeframes are: {', '.join(supported)}"
+                    f"Timeframe '{interval}' is not supported by Nubra. Supported timeframes are: {', '.join(supported)}"
                 )
 
-            # Convert dates to datetime objects
+            # Determine instrument type based on exchange
+            original_exchange = exchange
+            if exchange == "NSE_INDEX":
+                instrument_type = "INDEX"
+                api_exchange = "NSE"
+            elif exchange == "BSE_INDEX":
+                instrument_type = "INDEX"
+                api_exchange = "BSE"
+            elif exchange == "MCX_INDEX":
+                instrument_type = "INDEX"
+                api_exchange = "MCX"
+            elif exchange in ["NFO", "BFO"]:
+                # Determine if it's futures or options based on symbol pattern
+                if "CE" in symbol or "PE" in symbol:
+                    instrument_type = "OPT"
+                else:
+                    instrument_type = "FUT"
+                api_exchange = exchange
+            elif exchange in ["CDS", "BCD"]:
+                instrument_type = "FUT"  # Currency derivatives
+                api_exchange = exchange
+            elif exchange == "MCX":
+                instrument_type = "FUT"  # Commodity futures
+                api_exchange = exchange
+            else:
+                instrument_type = "STOCK"
+                api_exchange = exchange
+
+            # Convert dates to ISO format for Nubra API
             from_date = pd.to_datetime(start_date)
             to_date = pd.to_datetime(end_date)
 
-            # Set start time to 00:00 for the start date
-            from_date = from_date.replace(hour=0, minute=0)
-
-            # If end_date is today, set the end time to current time
+            # Set start time to market open (09:15 IST -> 03:45 UTC)
+            from_date = from_date.replace(hour=3, minute=45, second=0, microsecond=0)
+            
+            # If end_date is today, set end time to current time
             current_time = pd.Timestamp.now()
             if to_date.date() == current_time.date():
-                to_date = current_time.replace(
-                    second=0, microsecond=0
-                )  # Remove seconds and microseconds
+                # Convert current IST to approximate UTC
+                to_date = current_time - pd.Timedelta(hours=5, minutes=30)
             else:
-                # For past dates, set end time to 23:59
-                to_date = to_date.replace(hour=23, minute=59)
+                # For past dates, set end time to market close (15:30 IST -> 10:00 UTC)
+                to_date = to_date.replace(hour=10, minute=0, second=0, microsecond=0)
 
-            # Initialize empty list to store DataFrames
-            dfs = []
+            # Format dates as ISO strings with milliseconds
+            start_iso = from_date.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            end_iso = to_date.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-            # Set chunk size based on interval as per Angel API documentation
-            interval_limits = {
-                "1m": 30,  # ONE_MINUTE
-                "3m": 60,  # THREE_MINUTE
-                "5m": 100,  # FIVE_MINUTE
-                "10m": 100,  # TEN_MINUTE
-                "15m": 200,  # FIFTEEN_MINUTE
-                "30m": 200,  # THIRTY_MINUTE
-                "1h": 400,  # ONE_HOUR
-                "D": 2000,  # ONE_DAY
+            # Build Nubra timeseries request payload
+            payload = {
+                "query": [
+                    {
+                        "exchange": api_exchange,
+                        "type": instrument_type,
+                        "values": [br_symbol],
+                        "fields": ["open", "high", "low", "close", "tick_volume"],
+                        "startDate": start_iso,
+                        "endDate": end_iso,
+                        "interval": self.timeframe_map[interval],
+                        "intraDay": False,
+                        "realTime": False
+                    }
+                ]
             }
 
-            chunk_days = interval_limits.get(interval)
-            if not chunk_days:
-                supported = list(interval_limits.keys())
-                raise Exception(
-                    f"Interval '{interval}' not supported. Supported intervals: {', '.join(supported)}"
-                )
+            logger.debug(f"Debug - Nubra timeseries request: {payload}")
 
-            # Process data in chunks
-            current_start = from_date
-            while current_start <= to_date:
-                # Calculate chunk end date
-                current_end = min(current_start + timedelta(days=chunk_days - 1), to_date)
+            # Make API call to Nubra's timeseries endpoint
+            response = get_api_response(
+                "/charts/timeseries",
+                self.auth_token,
+                "POST",
+                payload,
+            )
 
-                # Prepare payload for historical data API
-                payload = {
-                    "exchange": exchange,
-                    "symboltoken": token,
-                    "interval": self.timeframe_map[interval],
-                    "fromdate": current_start.strftime("%Y-%m-%d %H:%M"),
-                    "todate": current_end.strftime("%Y-%m-%d %H:%M"),
-                }
-                logger.debug(f"Debug - Fetching chunk from {current_start} to {current_end}")
-                logger.debug(f"Debug - API Payload: {payload}")
+            logger.debug(f"Debug - Nubra timeseries response: {response}")
 
-                try:
-                    response = get_api_response(
-                        "/rest/secure/angelbroking/historical/v1/getCandleData",
-                        self.auth_token,
-                        "POST",
-                        payload,
-                    )
-                    logger.info(f"Debug - API Response Status: {response.get('status')}")
+            # Parse response
+            if not response or response.get("message") != "charts":
+                error_msg = response.get("message", "Unknown error") if response else "Empty response"
+                raise Exception(f"Error from Nubra API: {error_msg}")
 
-                    # Check if response is empty or invalid
-                    if not response:
-                        logger.debug(
-                            f"Debug - Empty response for chunk {current_start} to {current_end}"
-                        )
-                        current_start = current_end + timedelta(days=1)
-                        continue
+            # Extract result data
+            result = response.get("result", [])
+            if not result:
+                logger.debug("Debug - No data in result array")
+                return pd.DataFrame(columns=["close", "high", "low", "open", "timestamp", "volume", "oi"])
 
-                    if not response.get("status"):
-                        logger.info(
-                            f"Debug - Error response: {response.get('message', 'Unknown error')}"
-                        )
-                        current_start = current_end + timedelta(days=1)
-                        continue
+            # Get values array from first result
+            values_array = result[0].get("values", [])
+            if not values_array:
+                logger.debug("Debug - No values in result")
+                return pd.DataFrame(columns=["close", "high", "low", "open", "timestamp", "volume", "oi"])
 
-                except Exception as chunk_error:
-                    logger.error(
-                        f"Debug - Error fetching chunk {current_start} to {current_end}: {str(chunk_error)}"
-                    )
-                    current_start = current_end + timedelta(days=1)
-                    continue
+            # Find the symbol data in values array
+            symbol_data = None
+            for val in values_array:
+                if br_symbol in val:
+                    symbol_data = val[br_symbol]
+                    break
 
-                if not response.get("status"):
-                    raise Exception(
-                        f"Error from Angel API: {response.get('message', 'Unknown error')}"
-                    )
+            if not symbol_data:
+                logger.debug(f"Debug - Symbol {br_symbol} not found in response")
+                return pd.DataFrame(columns=["close", "high", "low", "open", "timestamp", "volume", "oi"])
 
-                # Extract candle data and create DataFrame
-                data = response.get("data", [])
-                if data:
-                    chunk_df = pd.DataFrame(
-                        data, columns=["timestamp", "open", "high", "low", "close", "volume"]
-                    )
-                    dfs.append(chunk_df)
-                    logger.debug(f"Debug - Received {len(data)} candles for chunk")
-                else:
-                    logger.debug("Debug - No data received for chunk")
+            # Extract OHLCV arrays
+            # Nubra format: {"open": [{"ts": nanoseconds, "v": value_in_paise}, ...], ...}
+            open_data = symbol_data.get("open", [])
+            high_data = symbol_data.get("high", [])
+            low_data = symbol_data.get("low", [])
+            close_data = symbol_data.get("close", [])
+            volume_data = symbol_data.get("tick_volume", []) or symbol_data.get("cumulative_volume", [])
 
-                # Move to next chunk
-                current_start = current_end + timedelta(days=1)
+            if not close_data:
+                logger.debug("Debug - No candle data received")
+                return pd.DataFrame(columns=["close", "high", "low", "open", "timestamp", "volume", "oi"])
 
-                # Rate limit delay between chunks (0.5 seconds)
-                if current_start <= to_date:
-                    time.sleep(0.5)
+            # Build a dictionary keyed by timestamp to align all fields
+            candle_dict = {}
+            
+            # Process each field
+            for item in open_data:
+                ts = item.get("ts", 0)
+                if ts not in candle_dict:
+                    candle_dict[ts] = {"timestamp": ts, "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0}
+                # Convert from paise to rupees
+                candle_dict[ts]["open"] = float(item.get("v", 0)) / 100
 
-            # If no data was found, return empty DataFrame
-            if not dfs:
-                logger.debug("Debug - No data received from API")
-                return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+            for item in high_data:
+                ts = item.get("ts", 0)
+                if ts not in candle_dict:
+                    candle_dict[ts] = {"timestamp": ts, "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0}
+                candle_dict[ts]["high"] = float(item.get("v", 0)) / 100
 
-            # Combine all chunks
-            df = pd.concat(dfs, ignore_index=True)
+            for item in low_data:
+                ts = item.get("ts", 0)
+                if ts not in candle_dict:
+                    candle_dict[ts] = {"timestamp": ts, "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0}
+                candle_dict[ts]["low"] = float(item.get("v", 0)) / 100
 
-            # Convert timestamp to datetime
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
+            for item in close_data:
+                ts = item.get("ts", 0)
+                if ts not in candle_dict:
+                    candle_dict[ts] = {"timestamp": ts, "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0}
+                candle_dict[ts]["close"] = float(item.get("v", 0)) / 100
 
-            # For daily timeframe, convert UTC to IST by adding 5 hours and 30 minutes
-            if interval == "D":
-                df["timestamp"] = df["timestamp"] + pd.Timedelta(hours=5, minutes=30)
+            for item in volume_data:
+                ts = item.get("ts", 0)
+                if ts in candle_dict:
+                    candle_dict[ts]["volume"] = int(item.get("v", 0))
 
-            # Convert timestamp to Unix epoch
-            df["timestamp"] = df["timestamp"].astype("int64") // 10**9  # Convert to Unix epoch
+            # Convert dictionary to list and sort by timestamp
+            candles = list(candle_dict.values())
+            candles.sort(key=lambda x: x["timestamp"])
 
-            # Ensure numeric columns and proper order
+            # Create DataFrame
+            df = pd.DataFrame(candles)
+
+            if df.empty:
+                return pd.DataFrame(columns=["close", "high", "low", "open", "timestamp", "volume", "oi"])
+
+            # Convert nanosecond timestamp to datetime
+            # Nubra timestamps are in nanoseconds
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ns")
+
+            # For daily/weekly/monthly intervals, normalize to midnight (start of day)
+            if interval in ["D", "W", "M"]:
+                df["timestamp"] = df["timestamp"].dt.normalize()
+
+            # Convert to Unix epoch (seconds)
+            df["timestamp"] = df["timestamp"].astype("int64") // 10**9
+
+            # Add OI column (Nubra doesn't provide OI in timeseries API)
+            df["oi"] = 0
+
+            # Ensure proper column types
             numeric_columns = ["open", "high", "low", "close", "volume"]
             df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric)
+            df["oi"] = df["oi"].astype(int)
 
             # Sort by timestamp and remove duplicates
             df = (
@@ -405,31 +451,10 @@ class BrokerData:
                 .reset_index(drop=True)
             )
 
-            # Always fetch OI data for F&O contracts
-            if exchange in ["NFO", "BFO", "CDS", "MCX"]:
-                try:
-                    oi_df = self.get_oi_history(symbol, exchange, interval, start_date, end_date)
-                    if not oi_df.empty:
-                        # Merge OI data with candle data
-                        df = pd.merge(df, oi_df, on="timestamp", how="left")
-                        # Fill any missing OI values with 0
-                        df["oi"] = df["oi"].fillna(0).astype(int)
-                    else:
-                        # Add empty OI column if no data available
-                        df["oi"] = 0
-                except Exception as oi_error:
-                    logger.error(f"Debug - Error fetching OI data: {str(oi_error)}")
-                    # Add empty OI column on error
-                    df["oi"] = 0
+            # Reorder columns to match OpenAlgo REST API format
+            df = df[["close", "high", "low", "open", "timestamp", "volume", "oi"]]
 
-            # Reorder columns to match REST API format
-            if "oi" in df.columns:
-                df = df[["close", "high", "low", "open", "timestamp", "volume", "oi"]]
-            else:
-                # Add OI column with zeros if not present
-                df["oi"] = 0
-                df = df[["close", "high", "low", "open", "timestamp", "volume", "oi"]]
-
+            logger.info(f"Debug - Received {len(df)} candles for {symbol}")
             return df
 
         except Exception as e:
@@ -440,137 +465,22 @@ class BrokerData:
         self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str
     ) -> pd.DataFrame:
         """
-        Get historical OI data for given symbol
+        Get historical OI data for given symbol.
+        
+        Note: Nubra's API does not provide a separate OI data endpoint.
+        This method returns an empty DataFrame to maintain API compatibility.
+        
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NFO, BFO, CDS, MCX)
-            interval: Candle interval (1m, 3m, 5m, 10m, 15m, 30m, 1h, D)
+            interval: Candle interval
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
         Returns:
-            pd.DataFrame: Historical OI data with columns [timestamp, oi]
+            pd.DataFrame: Empty DataFrame with columns [timestamp, oi]
         """
-        try:
-            # Get token for the symbol
-            token = get_token(symbol, exchange)
-
-            # Convert dates to datetime objects
-            from_date = pd.to_datetime(start_date)
-            to_date = pd.to_datetime(end_date)
-
-            # Set start time to 00:00 for the start date
-            from_date = from_date.replace(hour=0, minute=0)
-
-            # If end_date is today, set the end time to current time
-            current_time = pd.Timestamp.now()
-            if to_date.date() == current_time.date():
-                to_date = current_time.replace(second=0, microsecond=0)
-            else:
-                # For past dates, set end time to 23:59
-                to_date = to_date.replace(hour=23, minute=59)
-
-            # Initialize empty list to store DataFrames
-            dfs = []
-
-            # Set chunk size based on interval (same as candle data)
-            interval_limits = {
-                "1m": 30,  # ONE_MINUTE
-                "3m": 60,  # THREE_MINUTE
-                "5m": 100,  # FIVE_MINUTE
-                "10m": 100,  # TEN_MINUTE
-                "15m": 200,  # FIFTEEN_MINUTE
-                "30m": 200,  # THIRTY_MINUTE
-                "1h": 400,  # ONE_HOUR
-                "D": 2000,  # ONE_DAY
-            }
-
-            chunk_days = interval_limits.get(interval)
-            if not chunk_days:
-                raise Exception(f"Interval '{interval}' not supported for OI data")
-
-            # Process data in chunks
-            current_start = from_date
-            while current_start <= to_date:
-                # Calculate chunk end date
-                current_end = min(current_start + timedelta(days=chunk_days - 1), to_date)
-
-                # Prepare payload for OI data API
-                payload = {
-                    "exchange": exchange,
-                    "symboltoken": token,
-                    "interval": self.timeframe_map[interval],
-                    "fromdate": current_start.strftime("%Y-%m-%d %H:%M"),
-                    "todate": current_end.strftime("%Y-%m-%d %H:%M"),
-                }
-
-                try:
-                    response = get_api_response(
-                        "/rest/secure/angelbroking/historical/v1/getOIData",
-                        self.auth_token,
-                        "POST",
-                        payload,
-                    )
-
-                    if not response or not response.get("status"):
-                        logger.debug(
-                            f"Debug - No OI data for chunk {current_start} to {current_end}"
-                        )
-                        current_start = current_end + timedelta(days=1)
-                        continue
-
-                except Exception as chunk_error:
-                    logger.error(f"Debug - Error fetching OI chunk: {str(chunk_error)}")
-                    current_start = current_end + timedelta(days=1)
-                    continue
-
-                # Extract OI data and create DataFrame
-                data = response.get("data", [])
-                if data:
-                    chunk_df = pd.DataFrame(data)
-                    # Rename 'time' to 'timestamp' for consistency
-                    chunk_df.rename(columns={"time": "timestamp"}, inplace=True)
-                    dfs.append(chunk_df)
-
-                # Move to next chunk
-                current_start = current_end + timedelta(days=1)
-
-                # Rate limit delay between chunks (0.5 seconds)
-                if current_start <= to_date:
-                    time.sleep(0.5)
-
-            # If no data was found, return empty DataFrame
-            if not dfs:
-                return pd.DataFrame(columns=["timestamp", "oi"])
-
-            # Combine all chunks
-            df = pd.concat(dfs, ignore_index=True)
-
-            # Convert timestamp to datetime
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
-
-            # For daily timeframe, convert UTC to IST by adding 5 hours and 30 minutes
-            if interval == "D":
-                df["timestamp"] = df["timestamp"] + pd.Timedelta(hours=5, minutes=30)
-
-            # Convert timestamp to Unix epoch
-            df["timestamp"] = df["timestamp"].astype("int64") // 10**9
-
-            # Ensure oi column is numeric
-            df["oi"] = pd.to_numeric(df["oi"])
-
-            # Sort by timestamp and remove duplicates
-            df = (
-                df.sort_values("timestamp")
-                .drop_duplicates(subset=["timestamp"])
-                .reset_index(drop=True)
-            )
-
-            return df
-
-        except Exception as e:
-            logger.error(f"Debug - Error fetching OI data: {str(e)}")
-            # Return empty DataFrame on error
-            return pd.DataFrame(columns=["timestamp", "oi"])
+        logger.info(f"OI history not available from Nubra API for {symbol}")
+        return pd.DataFrame(columns=["timestamp", "oi"])
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
@@ -689,4 +599,17 @@ class BrokerData:
 
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
+
+    def get_intervals(self) -> list:
+        """
+        Get list of supported intervals for historical data.
+        
+        Based on Nubra API: 1s, 1m, 2m, 3m, 5m, 15m, 30m, 1h, 1d, 1w
+        OpenAlgo supported: 1m, 3m, 5m, 15m, 30m, 1h, D
+        
+        Returns:
+            list: List of supported interval strings
+        """
+        return list(self.timeframe_map.keys())
+
 
