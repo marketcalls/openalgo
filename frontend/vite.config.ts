@@ -59,9 +59,10 @@ export default defineConfig({
             if (id.includes('react-syntax-highlighter') || id.includes('prismjs') || id.includes('refractor')) {
               return 'vendor-syntax'
             }
-            // Charts - only needed on chart pages
+            // Charts (recharts + d3) — kept in default chunk to avoid
+            // circular dependency with vendor-react (recharts uses React.forwardRef)
             if (id.includes('recharts') || id.includes('d3-')) {
-              return 'vendor-charts'
+              return undefined
             }
           }
         },

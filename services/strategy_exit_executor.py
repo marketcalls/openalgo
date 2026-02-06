@@ -89,6 +89,11 @@ class MarketExecution(ExitExecutionStrategy):
                 logger.error(
                     f"Failed to place exit order for {symbol}/{exchange} qty={chunk_qty}"
                 )
+                self._emit_order_rejected(
+                    position=position,
+                    exit_reason=exit_reason,
+                    reason=f"Failed to place exit order for {symbol}/{exchange} qty={chunk_qty}",
+                )
 
         return orderids
 
@@ -118,15 +123,35 @@ class MarketExecution(ExitExecutionStrategy):
                 logger.info(f"Exit order placed: {symbol} {action} qty={quantity} orderid={orderid}")
                 return orderid
             else:
+                error_msg = response.get('message', 'unknown error') if response else 'unknown error'
                 logger.error(
-                    f"Exit order failed: {symbol} {action} qty={quantity} — "
-                    f"{response.get('message', 'unknown error')}"
+                    f"Exit order failed: {symbol} {action} qty={quantity} — {error_msg}"
                 )
                 return None
 
         except Exception as e:
             logger.exception(f"Error placing exit order: {e}")
             return None
+
+    def _emit_order_rejected(self, position, exit_reason, reason):
+        """Emit SocketIO event when an exit order fails to be placed."""
+        try:
+            from extensions import socketio
+
+            socketio.emit(
+                "strategy_order_rejected",
+                {
+                    "strategy_id": position.strategy_id,
+                    "strategy_type": position.strategy_type,
+                    "position_id": position.id,
+                    "symbol": position.symbol,
+                    "exchange": position.exchange,
+                    "exit_reason": exit_reason,
+                    "reason": reason,
+                },
+            )
+        except Exception:
+            pass
 
     def _save_exit_order(self, position, orderid, action, quantity, exit_reason):
         """Save the exit order to StrategyOrder table."""

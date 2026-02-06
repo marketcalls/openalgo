@@ -113,6 +113,23 @@ def create_app():
     # Initialize SocketIO
     socketio.init_app(app)  # Link SocketIO to the Flask app
 
+    # Register SocketIO room handlers for strategy dashboard
+    from flask_socketio import join_room, leave_room
+
+    @socketio.on("join_strategy_room")
+    def on_join_strategy_room(data):
+        """Join a strategy-specific room for scoped SocketIO events."""
+        room = data.get("room") if isinstance(data, dict) else None
+        if room and room.startswith("strategy_"):
+            join_room(room)
+
+    @socketio.on("leave_strategy_room")
+    def on_leave_strategy_room(data):
+        """Leave a strategy-specific room."""
+        room = data.get("room") if isinstance(data, dict) else None
+        if room and room.startswith("strategy_"):
+            leave_room(room)
+
     # Initialize CSRF protection
     csrf = CSRFProtect(app)
 

@@ -1396,6 +1396,7 @@ class StrategyRiskEngine:
                     is_safe, _ = mds.is_trade_management_safe()
                     if is_safe:
                         self._stop_rest_polling()
+                        self._emit_risk_resumed("WebSocket data recovered")
 
             except Exception as e:
                 logger.exception(f"Error in health loop: {e}")
@@ -1530,6 +1531,14 @@ class StrategyRiskEngine:
         try:
             from extensions import socketio
             socketio.emit("strategy_risk_paused", {"reason": reason})
+        except Exception:
+            pass
+
+    def _emit_risk_resumed(self, reason="Market data recovered"):
+        """Emit SocketIO event when risk engine resumes after stale data recovery."""
+        try:
+            from extensions import socketio
+            socketio.emit("strategy_risk_resumed", {"reason": reason})
         except Exception:
             pass
 

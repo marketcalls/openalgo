@@ -302,6 +302,79 @@ export function useSocket() {
       }
     })
 
+    // Strategy risk events — global toasts even when not on dashboard
+    socket.on(
+      'strategy_exit_triggered',
+      (data: { symbol: string; exit_reason: string; trigger_ltp: number }) => {
+        playAlertSound('strategyRisk')
+        const reasonLabels: Record<string, string> = {
+          stoploss: 'Stoploss',
+          target: 'Target',
+          trailstop: 'Trailing Stop',
+          breakeven_sl: 'Breakeven SL',
+          combined_sl: 'Combined SL',
+          combined_target: 'Combined Target',
+          combined_tsl: 'Combined TSL',
+          manual: 'Manual Close',
+          squareoff: 'Square Off',
+          auto_squareoff: 'Auto Square Off',
+        }
+        const label = reasonLabels[data.exit_reason] || data.exit_reason
+        showCategoryToast(
+          'warning',
+          `${data.symbol}: ${label} triggered at ${data.trigger_ltp}`,
+          'strategyRisk'
+        )
+      }
+    )
+
+    socket.on(
+      'strategy_order_rejected',
+      (data: { symbol: string; reason: string }) => {
+        playAlertSound('strategyRisk')
+        showCategoryToast('error', `${data.symbol}: Exit order failed — ${data.reason}`, 'strategyRisk')
+      }
+    )
+
+    socket.on(
+      'strategy_position_opened',
+      (data: { symbol: string; action: string; quantity: number; average_entry_price: number }) => {
+        playAlertSound('strategyRisk')
+        showCategoryToast(
+          'info',
+          `${data.symbol}: ${data.action} ${data.quantity} @ ${data.average_entry_price}`,
+          'strategyRisk'
+        )
+      }
+    )
+
+    socket.on(
+      'strategy_position_closed',
+      (data: { symbol: string; pnl: number }) => {
+        playAlertSound('strategyRisk')
+        const pnlStr = new Intl.NumberFormat('en-IN', {
+          style: 'currency',
+          currency: 'INR',
+          maximumFractionDigits: 2,
+        }).format(data.pnl)
+        if (data.pnl >= 0) {
+          showCategoryToast('success', `${data.symbol}: Closed +${pnlStr}`, 'strategyRisk')
+        } else {
+          showCategoryToast('error', `${data.symbol}: Closed ${pnlStr}`, 'strategyRisk')
+        }
+      }
+    )
+
+    socket.on('strategy_risk_paused', (data: { reason: string }) => {
+      playAlertSound('strategyRisk')
+      showCategoryToast('warning', `Risk monitoring paused: ${data.reason}`, 'strategyRisk')
+    })
+
+    socket.on('strategy_risk_resumed', (data: { reason: string }) => {
+      playAlertSound('strategyRisk')
+      showCategoryToast('success', `Risk monitoring resumed: ${data.reason}`, 'strategyRisk')
+    })
+
     // Circuit breaker trip notification
     socket.on(
       'strategy_circuit_breaker',
