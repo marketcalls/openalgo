@@ -40,16 +40,11 @@ class FlowOpenAlgoClient:
             Dictionary with 'status' and relevant data
         """
         if success:
-            # Return the response directly - it already has the right format
-            # Ensure status is set and orderid is at top level if present
-            result = {"status": "success", "orderid": response.get("orderid")}
-            # Add any additional data fields (excluding status to avoid nesting)
-            if "data" in response:
-                result["data"] = response["data"]
-            # Copy other useful fields like 'message', 'results', etc.
-            for key in ["message", "results", "mode"]:
-                if key in response:
-                    result[key] = response[key]
+            # Return all response fields, ensuring status is set
+            result = {"status": "success"}
+            for key, value in response.items():
+                if key != "status":
+                    result[key] = value
             return result
         else:
             return {
@@ -328,14 +323,16 @@ class FlowOpenAlgoClient:
     def get_open_position(
         self, symbol: str, exchange: str, product_type: str = None
     ) -> dict[str, Any]:
-        """Get open position for a specific symbol"""
+        """Get open position for a specific symbol.
+        Returns quantity matching standard OpenAlgo API response.
+        """
         result = self.positionbook()
         if result.get("status") != "success":
             return result
 
         positions = result.get("data", [])
         if not positions:
-            return {"status": "success", "data": None}
+            return {"status": "success", "quantity": 0}
 
         for pos in positions:
             if pos.get("symbol") == symbol and pos.get("exchange") == exchange:
@@ -343,9 +340,9 @@ class FlowOpenAlgoClient:
                 pos_product = pos.get("product") or pos.get("product_type")
                 if product_type and pos_product != product_type:
                     continue
-                return {"status": "success", "data": pos}
+                return {"status": "success", "quantity": pos.get("quantity", 0)}
 
-        return {"status": "success", "data": None}
+        return {"status": "success", "quantity": 0}
 
     # --- Options Operations ---
 
@@ -365,17 +362,23 @@ class FlowOpenAlgoClient:
         return self._handle_response(success, response, status_code)
 
     def optionsymbol(
-        self, symbol: str, exchange: str, expiry: str, option_type: str, strike_price: float
+        self,
+        underlying: str,
+        exchange: str,
+        expiry_date: str,
+        offset: str = "ATM",
+        option_type: str = "CE",
     ) -> dict[str, Any]:
-        """Get option symbol"""
+        """Get option symbol resolved from underlying/expiry/offset"""
         from services.option_symbol_service import get_option_symbol
 
         success, response, status_code = get_option_symbol(
-            symbol=symbol,
+            underlying=underlying,
             exchange=exchange,
-            expiry=expiry,
+            expiry_date=expiry_date,
+            strike_int=None,
+            offset=offset,
             option_type=option_type,
-            strike_price=strike_price,
             api_key=self.api_key,
         )
         return self._handle_response(success, response, status_code)
@@ -590,6 +593,13 @@ class FlowOpenAlgoClient:
         from services.symbol_service import get_symbol_info
 
         success, response, status_code = get_symbol_info(symbol, exchange, api_key=self.api_key)
+        return self._handle_response(success, response, status_code)
+
+    def get_intervals(self) -> dict[str, Any]:
+        """Get supported intervals for the broker"""
+        from services.intervals_service import get_intervals
+
+        success, response, status_code = get_intervals(api_key=self.api_key)
         return self._handle_response(success, response, status_code)
 
     def search_symbols(self, query: str, exchange: str = None) -> dict[str, Any]:
