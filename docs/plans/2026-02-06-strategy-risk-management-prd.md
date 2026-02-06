@@ -424,6 +424,36 @@ filling → active → exiting → closed
 - `closed`: All legs exited successfully.
 - `failed_exit`: One or more leg exit orders were rejected. CRITICAL alert to user. "Retry Exit" button shown in UI.
 
+### 5.8 AlertLog (New)
+
+Centralized log for all alert deliveries (strategy risk, chart alerts, indicator alerts).
+
+```sql
+CREATE TABLE alert_log (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id          VARCHAR(50) NOT NULL,               -- unique alert instance ID
+    alert_type        VARCHAR(20) NOT NULL,               -- 'price', 'indicator', 'strategy_risk', 'circuit_breaker', 'order_status', 'custom'
+    symbol            VARCHAR(50),
+    exchange          VARCHAR(10),
+    strategy_id       INTEGER,
+    strategy_type     VARCHAR(10),                        -- 'webhook' or 'chartink'
+    trigger_reason    VARCHAR(30),                        -- 'stoploss', 'target', 'trailstop', 'price_crossed', etc.
+    trigger_price     FLOAT,
+    ltp_at_trigger    FLOAT,
+    pnl               FLOAT,
+    message           TEXT,
+    channels_attempted JSON,                              -- {"toast": true, "telegram": true, "webhook": true}
+    channels_delivered JSON,                              -- {"toast": true, "telegram": false, "webhook": true}
+    errors            JSON,                               -- [{"channel": "telegram", "message": "Rate limited"}]
+    priority          VARCHAR(10) DEFAULT 'normal',       -- 'low', 'normal', 'high', 'critical'
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_alert_log_symbol ON alert_log(symbol, exchange);
+CREATE INDEX idx_alert_log_strategy ON alert_log(strategy_id, strategy_type);
+CREATE INDEX idx_alert_log_type ON alert_log(alert_type, created_at);
+```
+
 ---
 
 ## 6. Risk Parameter Resolution
@@ -1689,6 +1719,107 @@ Strategy risk events map to existing Telegram notification preferences:
 
 No new Telegram toggles required.
 
+### 13.4 Unified Alert Service
+
+All alert delivery (toast, Telegram, webhook) is routed through a centralized `UnifiedAlertService`. This enables consistent alert handling across strategy risk events, chart price alerts, and indicator alerts.
+
+**Alert Payload Structure:**
+
+```python
+@dataclass
+class UnifiedAlertPayload:
+    # Alert Identity
+    alert_type: str              # 'price' | 'indicator' | 'strategy_risk' | 'circuit_breaker' | 'order_status' | 'custom'
+    alert_id: str = None         # Optional reference to source alert
+    
+    # Context
+    symbol: str = None
+    exchange: str = None
+    strategy_id: int = None
+    strategy_type: str = None    # 'webhook' | 'chartink'
+    
+    # Trigger Details
+    trigger_reason: str = None   # 'stoploss' | 'target' | 'trailstop' | 'breakeven_sl' | 'daily_stoploss' | 'price_crossed' | 'indicator_condition'
+    trigger_price: float = None
+    ltp_at_trigger: float = None
+    pnl: float = None
+    
+    # Message
+    message: str = ''            # Pre-formatted or with {{placeholders}}
+    
+    # Delivery Channels (override user defaults if provided)
+    channels: AlertChannels = None
+    
+    # Metadata
+    timestamp: str = None        # ISO 8601, defaults to now
+    priority: str = 'normal'     # 'low' | 'normal' | 'high' | 'critical'
+
+@dataclass
+class AlertChannels:
+    toast: bool = True
+    sound: bool = True
+    telegram: bool = False
+    webhook: WebhookConfig = None
+
+@dataclass
+class WebhookConfig:
+    enabled: bool = False
+    mode: str = 'openalgo'       # 'openalgo' | 'custom'
+    url: str = None              # For custom mode
+    # OpenAlgo trading params (for mode='openalgo')
+    action: str = None           # 'BUY' | 'SELL'
+    product: str = None          # 'MIS' | 'CNC' | 'NRML'
+    quantity: int = None
+    pricetype: str = 'MARKET'    # 'MARKET' | 'LIMIT'
+```
+
+**Responsibilities:**
+- Accept alerts from any source (strategy risk engine, chart alerts, indicator alerts, external platforms)
+- Apply user's notification preferences from profile settings
+- Execute multi-channel delivery in parallel (toast + Telegram + webhook)
+- Support message template placeholders: `{{symbol}}`, `{{exchange}}`, `{{price}}`, `{{condition}}`, `{{time}}`, `{{pnl}}`, `{{direction}}`
+- Log all alerts to `alert_log` table for history and debugging
+- Handle delivery failures gracefully with retry logic for webhooks
+- Rate limit protection for Telegram (respects bot limits)
+
+**Channel Delivery:**
+
+| Channel | Mechanism | Notes |
+|---------|-----------|-------|
+| Toast | SocketIO `global_alert_notification` event | Immediate push to connected clients |
+| Sound | Bundled with toast event payload | Client plays audio if enabled |
+| Telegram | OpenAlgo Telegram bot API | Respects user's Telegram config |
+| Webhook (custom) | HTTP POST to user-specified URL | JSON payload with full alert data |
+| Webhook (OpenAlgo) | Internal trading API call | Executes trade via placeorder |
+
+**Message Template Processing:**
+
+```python
+def render_message(template: str, context: dict) -> str:
+    """Replace {{placeholders}} with actual values."""
+    result = template
+    for key, value in context.items():
+        result = result.replace(f"{{{{{key}}}}}", str(value))
+    return result
+
+# Example:
+# template = "{{symbol}} {{condition}} ₹{{price}} at {{time}}"
+# context = {"symbol": "SBIN", "condition": "crossed above", "price": 800.50, "time": "14:35"}
+# result = "SBIN crossed above ₹800.50 at 14:35"
+```
+
+**Integration Points:**
+
+| Source | When Called |
+|--------|-------------|
+| StrategyRiskEngine | SL/target/trail/breakeven trigger fires |
+| DailyCircuitBreaker | Daily limit hit |
+| OrderStatusPoller | Order fill/rejection |
+| MISAutoSquareOff | Auto square-off triggered |
+| Chart Price Alerts | Price level crossed |
+| Indicator Alerts | Indicator condition met |
+| External Platforms | Via REST API `/api/v1/alerts/send` |
+
 ---
 
 ## 14. Backend Services (New)
@@ -1932,6 +2063,204 @@ Response: {
 DELETE /strategy/api/strategy/<id>/position/<position_id>
 Response (if quantity > 0): { "status": "error", "message": "Close position before deleting" }
 Response (if quantity == 0): { "status": "success", "message": "Position record deleted" }
+```
+
+### 15.9 Unified Alert API
+
+Centralized alert endpoints for use by charts, strategies, and external platforms.
+
+#### Send Alert
+
+```
+POST /api/v1/alerts/send
+Body: {
+    "alert_type": "price",                          // required: 'price' | 'indicator' | 'strategy_risk' | 'circuit_breaker' | 'order_status' | 'custom'
+    "symbol": "SBIN",                               // required
+    "exchange": "NSE",                              // optional, default: NSE
+    "strategy_id": null,                            // optional: link to strategy
+    "strategy_type": null,                          // optional: 'webhook' | 'chartink'
+    "trigger_reason": "price_crossed",              // required
+    "trigger_price": 800.00,                        // optional
+    "ltp_at_trigger": 800.25,                       // optional
+    "pnl": null,                                    // optional
+    "message": "SBIN crossed ₹800",                 // required
+    "priority": "normal",                           // optional: 'low' | 'normal' | 'high' | 'critical'
+    "channels": {                                   // optional: override user defaults
+        "toast": true,
+        "sound": true,
+        "telegram": true,
+        "webhook": {
+            "enabled": true,
+            "mode": "openalgo",                     // 'openalgo' | 'custom'
+            "url": null,                            // for custom mode
+            "action": "BUY",                        // for openalgo mode
+            "product": "MIS",
+            "quantity": 100,
+            "pricetype": "MARKET"
+        }
+    }
+}
+
+Response: {
+    "status": "success",                            // 'success' | 'partial' | 'error'
+    "alert_id": "alert_1707234567890_abc123",
+    "delivered": {
+        "toast": true,
+        "telegram": true,
+        "webhook": true
+    },
+    "errors": []                                    // [{"channel": "telegram", "message": "Rate limited"}]
+}
+```
+
+#### Alert History
+
+```
+GET /api/v1/alerts/history
+Query: ?limit=50&strategy_id=1&alert_type=strategy_risk&since=2026-02-06T00:00:00Z&symbol=SBIN
+
+Response: {
+    "alerts": [
+        {
+            "alert_id": "alert_1707234567890_abc123",
+            "alert_type": "strategy_risk",
+            "symbol": "SBIN",
+            "exchange": "NSE",
+            "strategy_id": 1,
+            "trigger_reason": "stoploss",
+            "trigger_price": 784.00,
+            "ltp_at_trigger": 783.50,
+            "pnl": -1600.00,
+            "message": "SBIN SL hit at ₹783.50. P&L: -₹1,600",
+            "channels_delivered": {"toast": true, "telegram": true, "webhook": false},
+            "priority": "high",
+            "created_at": "2026-02-06T14:35:22+05:30"
+        }
+    ],
+    "total_count": 1,
+    "has_more": false
+}
+```
+
+#### Alert Configuration
+
+```
+GET /api/v1/alerts/config
+Response: {
+    "default_channels": {
+        "toast": true,
+        "sound": true,
+        "telegram": false,
+        "webhook": {
+            "enabled": false,
+            "mode": "openalgo",
+            "url": null
+        }
+    },
+    "telegram_configured": true,
+    "openalgo_configured": true
+}
+```
+
+```
+PUT /api/v1/alerts/config
+Body: {
+    "default_channels": {
+        "toast": true,
+        "sound": true,
+        "telegram": true,
+        "webhook": {
+            "enabled": true,
+            "mode": "custom",
+            "url": "https://my-server.com/webhook"
+        }
+    }
+}
+
+Response: { "status": "success", "message": "Alert configuration updated" }
+```
+
+#### Usage Examples
+
+**From Chart Price Alerts (Frontend):**
+```typescript
+// When chart price alert triggers in fi/
+async function onChartAlertTriggered(alert: PriceAlert, ltp: number) {
+  await fetch('/api/v1/alerts/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      alert_type: 'price',
+      symbol: alert.symbol,
+      exchange: alert.exchange,
+      trigger_reason: alert.condition,  // 'crossing_up', 'crossing_down', etc.
+      trigger_price: alert.targetPrice,
+      ltp_at_trigger: ltp,
+      message: alert.notifications?.message || `${alert.symbol} ${alert.condition} ₹${alert.targetPrice}`,
+      channels: alert.notifications ? {
+        toast: alert.notifications.showToast,
+        sound: alert.notifications.playSound,
+        telegram: alert.notifications.telegramEnabled,
+        webhook: alert.notifications.webhookEnabled ? {
+          enabled: true,
+          mode: alert.notifications.webhookMode,
+          url: alert.notifications.webhookUrl,
+          action: alert.notifications.openalgoAction,
+          product: alert.notifications.openalgoProduct,
+          quantity: alert.notifications.openalgoQuantity,
+          pricetype: alert.notifications.openalgoPricetype
+        } : undefined
+      } : undefined
+    })
+  });
+}
+```
+
+**From Strategy Risk Engine (Backend):**
+```python
+# In strategy_risk_engine.py when SL triggers
+from services.unified_alert_service import UnifiedAlertService
+
+def on_stoploss_triggered(position, ltp):
+    UnifiedAlertService.send(
+        alert_type='strategy_risk',
+        strategy_id=position.strategy_id,
+        strategy_type=position.strategy_type,
+        symbol=position.symbol,
+        exchange=position.exchange,
+        trigger_reason='stoploss',
+        trigger_price=position.stoploss_price,
+        ltp_at_trigger=ltp,
+        pnl=position.unrealized_pnl,
+        message=f'{position.symbol} SL hit at ₹{ltp:.2f}. P&L: ₹{position.unrealized_pnl:,.2f}',
+        priority='high'
+    )
+```
+
+**From External Platform (Webhook):**
+```bash
+curl -X POST http://localhost:5000/api/v1/alerts/send \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key" \
+  -d '{
+    "alert_type": "custom",
+    "symbol": "NIFTY",
+    "exchange": "NSE_INDEX",
+    "trigger_reason": "external_signal",
+    "message": "NIFTY buy signal from external scanner",
+    "channels": {
+      "toast": true,
+      "telegram": true,
+      "webhook": {
+        "enabled": true,
+        "mode": "openalgo",
+        "action": "BUY",
+        "product": "MIS",
+        "quantity": 50,
+        "pricetype": "MARKET"
+      }
+    }
+  }'
 ```
 
 ---
@@ -2467,10 +2796,14 @@ MIGRATIONS = [
 | `services/strategy_pnl_service.py` | PnL calculation and daily snapshots |
 | `services/strategy_options_resolver.py` | Resolve relative expiry, strike offset, fetch tick_size/lot_size/freeze_qty |
 | `services/strategy_exit_executor.py` | Pluggable exit execution strategies (MarketExecution in V1; future: mid, chase, TWAP) |
-| `database/strategy_position_db.py` | New table models (StrategyOrder, StrategyPosition, StrategyTrade, StrategyDailyPnL, StrategyPositionGroup) |
+| `services/unified_alert_service.py` | Centralized alert delivery (toast, Telegram, webhook) for all alert sources |
+| `database/strategy_position_db.py` | New table models (StrategyOrder, StrategyPosition, StrategyTrade, StrategyDailyPnL, StrategyPositionGroup, AlertLog) |
+| `blueprints/alerts.py` | REST API endpoints for unified alert system (`/api/v1/alerts/*`) |
 | `frontend/src/pages/StrategyDashboard.tsx` | Dashboard page |
 | `frontend/src/api/strategy-dashboard.ts` | API layer |
+| `frontend/src/api/alerts.ts` | Alert API layer for unified alert endpoints |
 | `frontend/src/types/strategy-dashboard.ts` | TypeScript types |
+| `frontend/src/types/alerts.ts` | TypeScript types for alert payloads and responses |
 | `frontend/src/components/strategy-dashboard/` | Dashboard components (StrategyCard, PositionTable, PositionGroupTable, OrdersDrawer, TradesDrawer, PnLDrawer) |
 | `frontend/src/components/strategy/FuturesOptionsLegEditor.tsx` | UI for configuring futures / single option / multi-leg with preset templates |
 | `frontend/src/components/strategy/UnderlyingSearch.tsx` | Typeahead search for underlying symbol selection |
@@ -2482,14 +2815,16 @@ MIGRATIONS = [
 | `upgrade/migrate_all.py` | Register `migrate_strategy_risk.py` in MIGRATIONS list |
 | `database/strategy_db.py` | Add risk + breakeven + options columns to Strategy + StrategySymbolMapping models |
 | `database/chartink_db.py` | Add risk + breakeven + options columns to ChartinkStrategy + ChartinkSymbolMapping models + add `trading_mode` |
-| `blueprints/strategy.py` | Integrate order tracking, options/futures routing, squareoff change, auto-split, dedup, position state checks |
+| `blueprints/strategy.py` | Integrate order tracking, options/futures routing, squareoff change, auto-split, dedup, position state checks; call UnifiedAlertService on triggers |
 | `blueprints/chartink.py` | Same as strategy.py |
-| `app.py` | Initialize StrategyRiskEngine on startup + restart recovery + broker reconciliation |
-| `frontend/src/stores/alertStore.ts` | Add `strategyRisk` category |
-| `frontend/src/pages/Profile.tsx` | Add strategyRisk to alert categories config |
-| `frontend/src/hooks/useSocket.ts` | Handle new strategy risk SocketIO events |
+| `app.py` | Initialize StrategyRiskEngine + UnifiedAlertService on startup + restart recovery + broker reconciliation |
+| `frontend/src/stores/alertStore.ts` | Add `strategyRisk` category; handle `global_alert_notification` SocketIO event |
+| `frontend/src/pages/Profile.tsx` | Add strategyRisk to alert categories config; add default alert channel settings |
+| `frontend/src/hooks/useSocket.ts` | Handle new strategy risk SocketIO events + `global_alert_notification` |
 | `frontend/src/router.tsx` | Add `/strategy/dashboard` route |
 | `frontend/src/pages/strategy/` | Add options mapping UI to symbol configuration pages |
+| `fi/src/plugins/line-tools/tools/user-price-alerts/` | Integrate with unified alert API on alert trigger |
+| `fi/src/services/globalAlertMonitor.ts` | Call unified alert API when indicator/price alerts trigger |
 
 ---
 
