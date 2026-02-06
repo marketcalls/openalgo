@@ -1,4 +1,4 @@
-import { Loader2, Settings } from 'lucide-react'
+import { Loader2, Settings, ShieldAlert } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { showToast } from '@/utils/toast'
 import { strategyDashboardApi } from '@/api/strategy-dashboard'
@@ -43,6 +43,10 @@ export function RiskConfigDrawer({
   const [breakeven, setBreakeven] = useState<RiskField>({ type: null, value: '' })
   const [exitExecution, setExitExecution] = useState('market')
   const [autoSquareoff, setAutoSquareoff] = useState('')
+  // Daily circuit breaker
+  const [dailyStoploss, setDailyStoploss] = useState<RiskField>({ type: null, value: '' })
+  const [dailyTarget, setDailyTarget] = useState<RiskField>({ type: null, value: '' })
+  const [dailyTrailstop, setDailyTrailstop] = useState<RiskField>({ type: null, value: '' })
 
   // Pre-populate from strategy
   useEffect(() => {
@@ -65,6 +69,19 @@ export function RiskConfigDrawer({
     })
     setExitExecution(strategy.default_exit_execution || 'market')
     setAutoSquareoff(strategy.auto_squareoff_time ?? '')
+    // Daily CB
+    setDailyStoploss({
+      type: (strategy.daily_stoploss_type as RiskType) ?? null,
+      value: strategy.daily_stoploss_value?.toString() ?? '',
+    })
+    setDailyTarget({
+      type: (strategy.daily_target_type as RiskType) ?? null,
+      value: strategy.daily_target_value?.toString() ?? '',
+    })
+    setDailyTrailstop({
+      type: (strategy.daily_trailstop_type as RiskType) ?? null,
+      value: strategy.daily_trailstop_value?.toString() ?? '',
+    })
   }, [open, strategy])
 
   const handleSave = async () => {
@@ -81,6 +98,13 @@ export function RiskConfigDrawer({
         default_breakeven_threshold: breakeven.type && breakeven.value ? Number(breakeven.value) : null,
         default_exit_execution: exitExecution,
         auto_squareoff_time: autoSquareoff || null,
+        // Daily circuit breaker
+        daily_stoploss_type: dailyStoploss.type,
+        daily_stoploss_value: dailyStoploss.type && dailyStoploss.value ? Number(dailyStoploss.value) : null,
+        daily_target_type: dailyTarget.type,
+        daily_target_value: dailyTarget.type && dailyTarget.value ? Number(dailyTarget.value) : null,
+        daily_trailstop_type: dailyTrailstop.type,
+        daily_trailstop_value: dailyTrailstop.type && dailyTrailstop.value ? Number(dailyTrailstop.value) : null,
       }
 
       const res = await strategyDashboardApi.updateRiskConfig(strategy.id, config)
@@ -112,6 +136,8 @@ export function RiskConfigDrawer({
         </SheetHeader>
 
         <div className="mt-6 space-y-6">
+          {/* ── Per-Position Risk Defaults ── */}
+
           {/* Stoploss */}
           <RiskFieldGroup
             label="Stoploss"
@@ -172,6 +198,47 @@ export function RiskConfigDrawer({
             </p>
           </div>
 
+          <Separator />
+
+          {/* ── Daily Risk Limits (Circuit Breaker) ── */}
+          <div className="space-y-1">
+            <Label className="flex items-center gap-1.5 text-base">
+              <ShieldAlert className="h-4 w-4" />
+              Daily Risk Limits
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              Strategy-level circuit breaker — halts all trading when daily P&L thresholds are hit
+            </p>
+          </div>
+
+          {/* Daily Stoploss */}
+          <RiskFieldGroup
+            label="Daily Stoploss"
+            field={dailyStoploss}
+            onChange={setDailyStoploss}
+            pointsOnly
+          />
+
+          <Separator />
+
+          {/* Daily Target */}
+          <RiskFieldGroup
+            label="Daily Target"
+            field={dailyTarget}
+            onChange={setDailyTarget}
+            pointsOnly
+          />
+
+          <Separator />
+
+          {/* Daily Trail Stop */}
+          <RiskFieldGroup
+            label="Daily Trail Stop"
+            field={dailyTrailstop}
+            onChange={setDailyTrailstop}
+            pointsOnly
+          />
+
           {/* Actions */}
           <div className="flex justify-end gap-2 pt-4">
             <Button variant="outline" onClick={() => onOpenChange(false)}>
@@ -194,10 +261,12 @@ function RiskFieldGroup({
   label,
   field,
   onChange,
+  pointsOnly = false,
 }: {
   label: string
   field: RiskField
   onChange: (field: RiskField) => void
+  pointsOnly?: boolean
 }) {
   const typeValue = field.type ?? 'none'
 
@@ -210,11 +279,18 @@ function RiskFieldGroup({
           onChange({ ...field, type: v === 'none' ? null : (v as RiskType) })
         }
       >
-        <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger value="percentage">Percentage</TabsTrigger>
-          <TabsTrigger value="points">Points</TabsTrigger>
-          <TabsTrigger value="none">None</TabsTrigger>
-        </TabsList>
+        {pointsOnly ? (
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="points">Points (₹)</TabsTrigger>
+            <TabsTrigger value="none">None</TabsTrigger>
+          </TabsList>
+        ) : (
+          <TabsList className="grid w-full grid-cols-3">
+            <TabsTrigger value="percentage">Percentage</TabsTrigger>
+            <TabsTrigger value="points">Points</TabsTrigger>
+            <TabsTrigger value="none">None</TabsTrigger>
+          </TabsList>
+        )}
       </Tabs>
       {field.type && (
         <Input
@@ -223,7 +299,7 @@ function RiskFieldGroup({
           min="0"
           value={field.value}
           onChange={(e) => onChange({ ...field, value: e.target.value })}
-          placeholder={field.type === 'percentage' ? '2.0' : '50'}
+          placeholder={pointsOnly ? '5000' : field.type === 'percentage' ? '2.0' : '50'}
           className="font-mono"
         />
       )}

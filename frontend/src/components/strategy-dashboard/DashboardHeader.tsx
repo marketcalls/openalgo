@@ -1,7 +1,7 @@
-import { Activity, BarChart3, Pause, Plus, RefreshCw, TrendingUp } from 'lucide-react'
+import { Plus, RefreshCw } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import type { DashboardSummary } from '@/types/strategy-dashboard'
 
 interface DashboardHeaderProps {
@@ -65,73 +65,36 @@ export function DashboardHeader({
         </div>
       </div>
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription className="flex items-center gap-1.5">
-              <Activity className="h-3.5 w-3.5" />
-              Active
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <CardTitle className="text-2xl tabular-nums">
-              {summary.active_strategies}
-            </CardTitle>
-            <p className="text-xs text-muted-foreground">strategies</p>
-          </CardContent>
-        </Card>
+      {/* Compact stat strip */}
+      <Card>
+        <CardContent className="py-3 px-4">
+          <div className="flex items-center divide-x">
+            <StatItem label="Active" value={summary.active_strategies} />
+            <StatItem label="Paused" value={summary.paused_strategies} />
+            <StatItem label="Positions" value={summary.open_positions} />
+            <div className="flex-1 px-4">
+              <p className="text-xs text-muted-foreground">Total P&L</p>
+              <p
+                className={`text-lg font-bold font-mono tabular-nums ${
+                  summary.total_pnl >= 0 ? 'text-green-600' : 'text-red-600'
+                }`}
+              >
+                {summary.total_pnl >= 0 ? '+' : ''}
+                {currencyFormat.format(summary.total_pnl)}
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription className="flex items-center gap-1.5">
-              <Pause className="h-3.5 w-3.5" />
-              Paused
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <CardTitle className="text-2xl tabular-nums">
-              {summary.paused_strategies}
-            </CardTitle>
-            <p className="text-xs text-muted-foreground">strategies</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription className="flex items-center gap-1.5">
-              <BarChart3 className="h-3.5 w-3.5" />
-              Open
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <CardTitle className="text-2xl tabular-nums">
-              {summary.open_positions}
-            </CardTitle>
-            <p className="text-xs text-muted-foreground">positions</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription className="flex items-center gap-1.5">
-              <TrendingUp className="h-3.5 w-3.5" />
-              Total P&L
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <CardTitle
-              className={`text-2xl font-mono tabular-nums ${
-                summary.total_pnl >= 0 ? 'text-green-600' : 'text-red-600'
-              }`}
-            >
-              {summary.total_pnl >= 0 ? '+' : ''}
-              {currencyFormat.format(summary.total_pnl)}
-            </CardTitle>
-            <p className="text-xs text-muted-foreground">all strategies</p>
-          </CardContent>
-        </Card>
-      </div>
+function StatItem({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex-1 px-4 first:pl-0">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="text-lg font-bold tabular-nums">{value}</p>
     </div>
   )
 }

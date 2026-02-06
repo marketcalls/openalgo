@@ -346,7 +346,8 @@ export function OverviewTab({ strategy: dashStrategy, onRefresh }: OverviewTabPr
   if (!strategy) return null
 
   const baseUrl = hostConfig?.host_server || window.location.origin
-  const webhookUrl = `${baseUrl}/strategy/webhook/${strategy.webhook_id}`
+  const webhookId = dashStrategy.webhook_id || strategy?.webhook_id || ''
+  const webhookUrl = webhookId ? `${baseUrl}/strategy/webhook/${webhookId}` : ''
 
   return (
     <div className="space-y-4">
@@ -419,11 +420,14 @@ export function OverviewTab({ strategy: dashStrategy, onRefresh }: OverviewTabPr
               <Webhook className="h-4 w-4" />
               Webhook URL
             </CardTitle>
+            <CardDescription className="text-xs">
+              Use this URL to receive signals from your trading platform
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex gap-2">
-              <code className="flex-1 p-2 bg-muted rounded text-xs font-mono break-all">
-                {webhookUrl}
+              <code className="flex-1 p-2.5 bg-muted rounded text-sm font-mono break-all select-all">
+                {webhookUrl || 'Loading...'}
               </code>
               <Button
                 variant="outline"
@@ -683,6 +687,7 @@ export function OverviewTab({ strategy: dashStrategy, onRefresh }: OverviewTabPr
                   <TableRow>
                     <TableHead>Symbol</TableHead>
                     <TableHead>Exchange</TableHead>
+                    <TableHead>Mode</TableHead>
                     <TableHead className="text-right">Qty</TableHead>
                     <TableHead>Product</TableHead>
                     <TableHead className="w-12"></TableHead>
@@ -694,6 +699,11 @@ export function OverviewTab({ strategy: dashStrategy, onRefresh }: OverviewTabPr
                       <TableCell className="font-medium">{mapping.symbol}</TableCell>
                       <TableCell>
                         <Badge variant="outline" className="text-xs">{mapping.exchange}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="secondary" className="text-xs capitalize">
+                          {(mapping.order_mode || 'equity').replace('_', ' ')}
+                        </Badge>
                       </TableCell>
                       <TableCell className="text-right font-mono tabular-nums">{mapping.quantity}</TableCell>
                       <TableCell>

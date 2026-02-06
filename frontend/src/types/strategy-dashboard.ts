@@ -311,4 +311,11 @@ export interface RiskConfigUpdate {
   default_exit_execution?: string
   auto_squareoff_time?: string | null
   risk_monitoring?: string
+  // Daily circuit breaker
+  daily_stoploss_type?: string | null
+  daily_stoploss_value?: number | null
+  daily_target_type?: string | null
+  daily_target_value?: number | null
+  daily_trailstop_type?: string | null
+  daily_trailstop_value?: number | null
 }

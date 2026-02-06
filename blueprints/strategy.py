@@ -636,7 +636,10 @@ def configure_symbols(strategy_id):
 
                 if mappings:
                     bulk_add_symbol_mappings(strategy_id, mappings)
-                    return jsonify({"status": "success"})
+                    return jsonify({
+                        "status": "success",
+                        "data": {"added": len(mappings), "failed": 0}
+                    })
 
             # Handle single symbol
             else:
@@ -810,6 +813,25 @@ def api_get_strategy(strategy_id):
                 "start_time": strategy.start_time,
                 "end_time": strategy.end_time,
                 "squareoff_time": strategy.squareoff_time,
+                "risk_monitoring": getattr(strategy, "risk_monitoring", "active"),
+                "auto_squareoff_time": strategy.auto_squareoff_time,
+                "default_exit_execution": getattr(strategy, "default_exit_execution", "market"),
+                # Risk defaults
+                "default_stoploss_type": strategy.default_stoploss_type,
+                "default_stoploss_value": strategy.default_stoploss_value,
+                "default_target_type": strategy.default_target_type,
+                "default_target_value": strategy.default_target_value,
+                "default_trailstop_type": strategy.default_trailstop_type,
+                "default_trailstop_value": strategy.default_trailstop_value,
+                "default_breakeven_type": strategy.default_breakeven_type,
+                "default_breakeven_threshold": strategy.default_breakeven_threshold,
+                # Daily circuit breaker
+                "daily_stoploss_type": strategy.daily_stoploss_type,
+                "daily_stoploss_value": strategy.daily_stoploss_value,
+                "daily_target_type": strategy.daily_target_type,
+                "daily_target_value": strategy.daily_target_value,
+                "daily_trailstop_type": strategy.daily_trailstop_type,
+                "daily_trailstop_value": strategy.daily_trailstop_value,
                 "created_at": strategy.created_at.isoformat() if strategy.created_at else None,
                 "updated_at": strategy.updated_at.isoformat() if strategy.updated_at else None,
             },
@@ -820,6 +842,33 @@ def api_get_strategy(strategy_id):
                     "exchange": m.exchange,
                     "quantity": m.quantity,
                     "product_type": m.product_type,
+                    # Options config
+                    "order_mode": m.order_mode or "equity",
+                    "underlying": m.underlying,
+                    "underlying_exchange": m.underlying_exchange,
+                    "expiry_type": m.expiry_type,
+                    "offset": m.offset,
+                    "option_type": m.option_type,
+                    "risk_mode": m.risk_mode,
+                    "preset": m.preset,
+                    "legs_config": m.legs_config,
+                    # Per-symbol risk overrides
+                    "stoploss_type": m.stoploss_type,
+                    "stoploss_value": m.stoploss_value,
+                    "target_type": m.target_type,
+                    "target_value": m.target_value,
+                    "trailstop_type": m.trailstop_type,
+                    "trailstop_value": m.trailstop_value,
+                    "breakeven_type": m.breakeven_type,
+                    "breakeven_threshold": m.breakeven_threshold,
+                    "exit_execution": m.exit_execution,
+                    # Combined risk (multi-leg)
+                    "combined_stoploss_type": m.combined_stoploss_type,
+                    "combined_stoploss_value": m.combined_stoploss_value,
+                    "combined_target_type": m.combined_target_type,
+                    "combined_target_value": m.combined_target_value,
+                    "combined_trailstop_type": m.combined_trailstop_type,
+                    "combined_trailstop_value": m.combined_trailstop_value,
                     "created_at": m.created_at.isoformat() if m.created_at else None,
                 }
                 for m in mappings

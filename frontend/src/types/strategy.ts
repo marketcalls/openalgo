@@ -11,8 +11,18 @@ export interface Strategy {
   start_time: string | null
   end_time: string | null
   squareoff_time: string | null
-  created_at: string
-  updated_at: string
+  risk_monitoring?: string
+  auto_squareoff_time?: string | null
+  default_exit_execution?: string
+  // Risk defaults
+  default_stoploss_type?: string | null
+  default_stoploss_value?: number | null
+  default_target_type?: string | null
+  default_target_value?: number | null
+  default_trailstop_type?: string | null
+  default_trailstop_value?: number | null
+  default_breakeven_type?: string | null
+  default_breakeven_threshold?: number | null
   // Daily circuit breaker configuration
   daily_stoploss_type?: string
   daily_stoploss_value?: number
@@ -20,6 +30,8 @@ export interface Strategy {
   daily_target_value?: number
   daily_trailstop_type?: string
   daily_trailstop_value?: number
+  created_at: string
+  updated_at: string
 }
 
 // Circuit breaker Socket.IO event types
@@ -58,11 +70,38 @@ export type CircuitBreakerReason = 'daily_stoploss' | 'daily_target' | 'daily_tr
 
 export interface StrategySymbolMapping {
   id: number
-  strategy_id: number
+  strategy_id?: number
   symbol: string
   exchange: string
   quantity: number
   product_type: 'MIS' | 'CNC' | 'NRML'
+  // Options config
+  order_mode?: string
+  underlying?: string | null
+  underlying_exchange?: string | null
+  expiry_type?: string | null
+  offset?: string | null
+  option_type?: string | null
+  risk_mode?: string | null
+  preset?: string | null
+  legs_config?: string | null
+  // Per-symbol risk overrides
+  stoploss_type?: string | null
+  stoploss_value?: number | null
+  target_type?: string | null
+  target_value?: number | null
+  trailstop_type?: string | null
+  trailstop_value?: number | null
+  breakeven_type?: string | null
+  breakeven_threshold?: number | null
+  exit_execution?: string | null
+  // Combined risk (multi-leg)
+  combined_stoploss_type?: string | null
+  combined_stoploss_value?: number | null
+  combined_target_type?: string | null
+  combined_target_value?: number | null
+  combined_trailstop_type?: string | null
+  combined_trailstop_value?: number | null
   created_at: string
 }
 
@@ -89,11 +128,8 @@ export interface BulkSymbolRequest {
 
 export interface SymbolSearchResult {
   symbol: string
-  brsymbol: string
   name: string
   exchange: string
-  token: string
-  lotsize: number
 }
 
 export type Platform = 'tradingview' | 'amibroker' | 'python' | 'metatrader' | 'excel' | 'others'

@@ -1,6 +1,8 @@
 import {
+  Check,
   ChevronDown,
   ChevronUp,
+  Copy,
   Loader2,
   Power,
   Settings,
@@ -63,6 +65,7 @@ export function StrategyCard({
 }: StrategyCardProps) {
   const [toggling, setToggling] = useState(false)
   const [closingAll, setClosingAll] = useState(false)
+  const [webhookCopied, setWebhookCopied] = useState(false)
   // Track which tabs have been activated for lazy loading
   const loadedTabs = useRef(new Set<string>(['positions']))
   const [activeTab, setActiveTab] = useState('positions')
@@ -125,6 +128,22 @@ export function StrategyCard({
     }
   }
 
+  const webhookUrl = strategy.webhook_id
+    ? `${window.location.origin}/strategy/webhook/${strategy.webhook_id}`
+    : ''
+
+  const handleCopyWebhook = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!webhookUrl) return
+    navigator.clipboard.writeText(webhookUrl).then(() => {
+      setWebhookCopied(true)
+      showToast.success('Webhook URL copied', 'clipboard')
+      setTimeout(() => setWebhookCopied(false), 2000)
+    }).catch(() => {
+      showToast.error('Failed to copy', 'clipboard')
+    })
+  }
+
   const handleTabChange = (value: string) => {
     setActiveTab(value)
     loadedTabs.current.add(value)
@@ -171,6 +190,23 @@ export function StrategyCard({
                   <span>·</span>
                   <span>{strategy.trade_count_today} trades today</span>
                 </div>
+                {webhookUrl && (
+                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-0.5">
+                    <span className="font-mono truncate max-w-[300px]">{webhookUrl}</span>
+                    <button
+                      type="button"
+                      onClick={handleCopyWebhook}
+                      className="inline-flex items-center justify-center h-5 w-5 rounded hover:bg-muted flex-shrink-0"
+                      title="Copy webhook URL"
+                    >
+                      {webhookCopied ? (
+                        <Check className="h-3 w-3 text-green-500" />
+                      ) : (
+                        <Copy className="h-3 w-3" />
+                      )}
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
 
