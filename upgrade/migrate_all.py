@@ -54,6 +54,7 @@ MIGRATIONS = [
     ("migrate_flow.py", "Flow Workflow Automation"),
     ("migrate_health_process_details.py", "Health Metrics Process Details"),
     ("migrate_master_contract_stats.py", "Master Contract Smart Download"),
+    ("migrate_strategy_risk.py", "Strategy Risk Management & Position Tracking"),
 ]
 
 

@@ -55,6 +55,7 @@ from blueprints.search import search_bp
 from blueprints.security import security_bp  # Import the security blueprint
 from blueprints.settings import settings_bp  # Import the settings blueprint
 from blueprints.strategy import strategy_bp  # Import the strategy blueprint
+from blueprints.strategy_dashboard import strategy_dashboard_bp  # Strategy risk management dashboard API
 from blueprints.system_permissions import (
     system_permissions_bp,  # Import the system permissions blueprint
 )
@@ -225,6 +226,7 @@ def create_app():
     app.register_blueprint(latency_bp)
     app.register_blueprint(health_bp)  # Register Health monitoring blueprint
     app.register_blueprint(strategy_bp)
+    app.register_blueprint(strategy_dashboard_bp)  # Strategy risk management dashboard API
     app.register_blueprint(master_contract_status_bp)
     app.register_blueprint(websocket_bp)  # Register WebSocket example blueprint
     app.register_blueprint(pnltracker_bp)  # Register PnL tracker blueprint
@@ -330,6 +332,14 @@ def create_app():
 
         except Exception as e:
             logger.error(f"Error auto-starting Telegram bot: {str(e)}")
+
+        # Initialize Strategy Risk Engine (background service for position monitoring)
+        try:
+            from services.strategy_risk_engine import risk_engine
+
+            risk_engine.start()
+        except Exception as e:
+            logger.error(f"Error starting Strategy Risk Engine: {str(e)}")
 
     @app.before_request
     def check_session_expiry():

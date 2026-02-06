@@ -116,6 +116,7 @@ def process_orders():
                         logger.info(
                             f"Smart order placed for {smart_order['payload']['symbol']} in strategy {smart_order['payload']['strategy']}"
                         )
+                        _track_order_response(response, smart_order)
                     else:
                         logger.error(
                             f"Error placing smart order for {smart_order['payload']['symbol']}: {response.text}"
@@ -153,6 +154,7 @@ def process_orders():
                                 f"Regular order placed for {regular_order['payload']['symbol']} in strategy {regular_order['payload']['strategy']}"
                             )
                             last_regular_orders.append(now)
+                            _track_order_response(response, regular_order)
                         else:
                             logger.error(
                                 f"Error placing regular order for {regular_order['payload']['symbol']}: {response.text}"
@@ -171,6 +173,71 @@ def process_orders():
             time_module.sleep(1)  # Sleep on error to prevent rapid retries
 
 
+def _track_order_response(response, order_item):
+    """Extract orderid from API response and feed into strategy tracking pipeline.
+
+    Only tracks orders that have strategy metadata attached (via queue_order meta param).
+    """
+    meta = order_item.get("meta", {})
+    if not meta or not meta.get("strategy_id"):
+        return  # Not a strategy-tracked order
+
+    try:
+        resp_data = response.json()
+        if resp_data.get("status") != "success":
+            return
+
+        orderid = resp_data.get("orderid")
+        if not orderid:
+            return
+
+        payload = order_item.get("payload", {})
+        strategy_id = meta["strategy_id"]
+        strategy_type = meta["strategy_type"]
+        user_id = meta["user_id"]
+        is_entry = meta.get("is_entry", True)
+        exit_reason = meta.get("exit_reason")
+
+        # Save StrategyOrder record
+        from database.strategy_position_db import create_strategy_order
+
+        create_strategy_order(
+            strategy_id=strategy_id,
+            strategy_type=strategy_type,
+            user_id=user_id,
+            orderid=orderid,
+            symbol=payload.get("symbol", ""),
+            exchange=payload.get("exchange", ""),
+            action=payload.get("action", ""),
+            quantity=int(payload.get("quantity", 0)),
+            product_type=payload.get("product", ""),
+            price_type=payload.get("pricetype", "MARKET"),
+            order_status="pending",
+            is_entry=is_entry,
+            exit_reason=exit_reason,
+        )
+
+        # Queue to OrderStatusPoller
+        from services.strategy_order_poller import order_poller
+
+        order_poller.queue_order(
+            orderid=orderid,
+            strategy_id=strategy_id,
+            strategy_type=strategy_type,
+            user_id=user_id,
+            is_entry=is_entry,
+            exit_reason=exit_reason,
+        )
+
+        logger.info(
+            f"Strategy order tracked: {orderid} strategy={strategy_id}/{strategy_type} "
+            f"{'entry' if is_entry else 'exit'}"
+        )
+
+    except Exception as e:
+        logger.exception(f"Error tracking order response: {e}")
+
+
 def ensure_order_processor():
     """Ensure the order processor is running"""
     global order_processor_running
@@ -180,13 +247,21 @@ def ensure_order_processor():
             order_processor_running = True
 
 
-def queue_order(endpoint, payload):
-    """Add order to appropriate queue"""
+def queue_order(endpoint, payload, meta=None):
+    """Add order to appropriate queue.
+
+    Args:
+        endpoint: 'placeorder' or 'placesmartorder'
+        payload: Order payload dict
+        meta: Optional dict with strategy tracking info:
+              {strategy_id, strategy_type, user_id, is_entry, exit_reason}
+    """
     ensure_order_processor()
+    item = {"payload": payload, "meta": meta or {}}
     if endpoint == "placesmartorder":
-        smart_order_queue.put({"payload": payload})
+        smart_order_queue.put(item)
     else:
-        regular_order_queue.put({"payload": payload})
+        regular_order_queue.put(item)
 
 
 def validate_strategy_times(start_time, end_time, squareoff_time):
@@ -859,26 +934,27 @@ def webhook(webhook_id):
         if not strategy.is_active:
             return jsonify({"error": "Strategy is inactive"}), 400
 
+        # Parse webhook data early (needed for all checks)
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data received"}), 400
+
+        action = data.get("action", "").upper()
+        position_size = int(data.get("position_size", 0))
+
+        # Determine if this is an entry or exit order
+        is_exit_order = False
+        if strategy.trading_mode == "LONG":
+            is_exit_order = action == "SELL"
+        elif strategy.trading_mode == "SHORT":
+            is_exit_order = action == "BUY"
+        else:  # BOTH mode
+            is_exit_order = position_size == 0
+
         # Check trading hours for intraday strategies
         if strategy.is_intraday:
             now = datetime.now(pytz.timezone("Asia/Kolkata"))
             current_time = now.strftime("%H:%M")
-
-            # Determine if this is an entry or exit order
-            data = request.get_json()
-            if not data:
-                return jsonify({"error": "No data received"}), 400
-
-            action = data["action"].upper()
-            position_size = int(data.get("position_size", 0))
-
-            is_exit_order = False
-            if strategy.trading_mode == "LONG":
-                is_exit_order = action == "SELL"
-            elif strategy.trading_mode == "SHORT":
-                is_exit_order = action == "BUY"
-            else:  # BOTH mode
-                is_exit_order = position_size == 0
 
             # For entry orders, check if within entry time window
             if not is_exit_order:
@@ -896,10 +972,14 @@ def webhook(webhook_id):
                 if strategy.squareoff_time and current_time > strategy.squareoff_time:
                     return jsonify({"error": "Exit orders not allowed after square off time"}), 400
 
-        # Parse webhook data
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "No data received"}), 400
+        # Webhook deduplication — reject duplicate signals within time window
+        try:
+            from services.strategy_concurrency import webhook_dedup
+
+            if webhook_dedup.is_duplicate(strategy.id, data.get("symbol", ""), action):
+                return jsonify({"error": "Duplicate webhook signal rejected"}), 409
+        except Exception as e:
+            logger.debug(f"Dedup check error (proceeding): {e}")
 
         # Validate required fields
         required_fields = ["symbol", "action"]
@@ -909,10 +989,6 @@ def webhook(webhook_id):
         missing_fields = [field for field in required_fields if field not in data]
         if missing_fields:
             return jsonify({"error": f"Missing required fields: {', '.join(missing_fields)}"}), 400
-
-        # Validate action based on trading mode
-        action = data["action"].upper()
-        position_size = int(data.get("position_size", 0))
 
         if strategy.trading_mode == "LONG":
             if action not in ["BUY", "SELL"]:
@@ -952,11 +1028,43 @@ def webhook(webhook_id):
         if not mapping:
             return jsonify({"error": f"No mapping found for symbol {data['symbol']}"}), 400
 
+        # Position state check — reject entries if already in position, reject exits if already exiting
+        try:
+            from database.strategy_position_db import get_active_position_for_symbol
+
+            existing_position = get_active_position_for_symbol(
+                strategy_id=strategy.id,
+                strategy_type="webhook",
+                symbol=mapping.symbol,
+                exchange=mapping.exchange,
+                product_type=mapping.product_type,
+            )
+            if existing_position:
+                if not is_exit_order and existing_position.position_state == "active":
+                    # Entry signal but already have an active position — skip
+                    # (this prevents doubling up; webhook strategies should send one entry)
+                    pass  # Allow it — some strategies intentionally add to positions
+                elif existing_position.position_state in ("exiting", "pending_entry"):
+                    return jsonify(
+                        {"error": f"Position is currently {existing_position.position_state}, cannot process new order"}
+                    ), 409
+        except Exception as e:
+            logger.debug(f"Position state check error (proceeding): {e}")
+
         # Get API key from database
         api_key = get_api_key_for_tradingview(strategy.user_id)
         if not api_key:
             logger.error(f"No API key found for user {strategy.user_id}")
             return jsonify({"error": "No API key found"}), 401
+
+        # Strategy tracking metadata — passed through queue to _track_order_response
+        order_meta = {
+            "strategy_id": strategy.id,
+            "strategy_type": "webhook",
+            "user_id": strategy.user_id,
+            "is_entry": not is_exit_order,
+            "exit_reason": "squareoff" if is_exit_order else None,
+        }
 
         # Prepare order payload
         payload = {
@@ -1005,8 +1113,8 @@ def webhook(webhook_id):
                 payload.update({"quantity": str(quantity)})
                 endpoint = "placeorder"
 
-        # Queue the order
-        queue_order(endpoint, payload)
+        # Queue the order with strategy tracking metadata
+        queue_order(endpoint, payload, meta=order_meta)
         return jsonify({"message": f"Order queued successfully for {data['symbol']}"}), 200
 
     except Exception as e:
