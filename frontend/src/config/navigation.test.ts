@@ -14,7 +14,7 @@ describe('Navigation Config', () => {
 
       const labels = navItems.map((item) => item.label)
       expect(labels).toContain('Dashboard')
-      expect(labels).toContain('Option Chain')
+      expect(labels).toContain('Tools')
       expect(labels).toContain('Orderbook')
       expect(labels).toContain('Positions')
       expect(labels).toContain('Strategy')
