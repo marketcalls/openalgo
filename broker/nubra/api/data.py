@@ -271,19 +271,27 @@ class BrokerData:
 
             # Determine instrument type based on exchange
             # Nubra only supports: NSE, BSE, NFO, BFO, NSE_INDEX, BSE_INDEX
+            # For NFO/BFO, Nubra expects exchange=NSE/BSE with type=FUT/OPT
             if exchange == "NSE_INDEX":
                 instrument_type = "INDEX"
                 api_exchange = "NSE"
             elif exchange == "BSE_INDEX":
                 instrument_type = "INDEX"
                 api_exchange = "BSE"
-            elif exchange in ["NFO", "BFO"]:
-                # Determine if it's futures or options based on symbol pattern
+            elif exchange == "NFO":
+                # NFO maps to NSE with FUT/OPT type
                 if "CE" in symbol or "PE" in symbol:
                     instrument_type = "OPT"
                 else:
                     instrument_type = "FUT"
-                api_exchange = exchange
+                api_exchange = "NSE"  # Nubra expects NSE for F&O
+            elif exchange == "BFO":
+                # BFO maps to BSE with FUT/OPT type
+                if "CE" in symbol or "PE" in symbol:
+                    instrument_type = "OPT"
+                else:
+                    instrument_type = "FUT"
+                api_exchange = "BSE"  # Nubra expects BSE for F&O
             elif exchange in ["NSE", "BSE"]:
                 instrument_type = "STOCK"
                 api_exchange = exchange
