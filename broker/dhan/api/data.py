@@ -1,6 +1,5 @@
 import json
 import os
-import threading
 import time
 import urllib.parse
 from datetime import datetime, timedelta
@@ -8,6 +7,16 @@ from datetime import datetime, timedelta
 import httpx
 import jwt
 import pandas as pd
+
+# Import eventlet for greenlet-compatible synchronization
+try:
+    import eventlet
+    from eventlet.semaphore import Semaphore as EventletSemaphore
+
+    _USE_EVENTLET = True
+except ImportError:
+    _USE_EVENTLET = False
+    import threading
 
 from broker.dhan.api.baseurl import get_url
 from broker.dhan.mapping.transform_data import map_exchange_type
@@ -18,8 +27,17 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 # Rate limiter for Dhan API - max 1 request per second
+# Use eventlet Semaphore when available (for compatibility with Flask/Gunicorn eventlet workers)
+# Fall back to threading.Lock for non-eventlet environments
 _last_api_call_time = 0
-_rate_limit_lock = threading.Lock()
+if _USE_EVENTLET:
+    _rate_limit_lock = EventletSemaphore(1)
+    logger.info("[DHAN_RATE_LIMIT] Using eventlet Semaphore for rate limiting")
+else:
+    _rate_limit_lock = threading.Lock()
+    logger.info(
+        "[DHAN_RATE_LIMIT] Using threading.Lock for rate limiting (eventlet not available)"
+    )
 DHAN_MIN_REQUEST_INTERVAL = 1.0  # seconds between requests
 
 
@@ -36,10 +54,13 @@ def _apply_rate_limit():
         # Update timestamp immediately to reserve this slot
         _last_api_call_time = current_time + sleep_time
 
-    # Sleep outside the lock to avoid blocking other threads
+    # Sleep outside the lock to avoid blocking other greenlets/threads
     if sleep_time > 0:
         logger.debug(f"Rate limiting: sleeping {sleep_time:.2f}s before Dhan API call")
-        time.sleep(sleep_time)
+        if _USE_EVENTLET:
+            eventlet.sleep(sleep_time)
+        else:
+            time.sleep(sleep_time)
 
 
 def get_api_response(endpoint, auth, method="POST", payload="", retry_count=0):
