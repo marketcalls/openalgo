@@ -65,6 +65,7 @@ export const profileMenuItems: NavItem[] = [
   { href: '/flow', label: 'Flow Editor', icon: Workflow },
   { href: '/python', label: 'Python Strategies', icon: Code2 },
   { href: '/pnl-tracker', label: 'PnL Tracker', icon: BarChart3 },
+  { href: '/intraday-pnl', label: 'Intraday P&L', icon: TrendingUp },
   { href: '/historify', label: 'Historify', icon: Database },
   { href: '/optionchain', label: 'Option Chain', icon: TrendingUp },
   { href: '/search/token', label: 'Search', icon: Search },
