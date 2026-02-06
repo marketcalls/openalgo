@@ -51,23 +51,25 @@ def get_margin_data(auth_token):
 
         # Map Nubra fields to OpenAlgo standard format
         try:
+            # Nubra API returns values in paise, convert to rupees by dividing by 100
+            
             # Available cash - using net_margin_available as available funds
-            availablecash = float(data.get("net_margin_available", 0) or 0)
+            availablecash = float(data.get("net_margin_available", 0) or 0) / 100
 
             # Collateral - total pledged collateral value
-            collateral = float(data.get("total_collateral", 0) or 0)
+            collateral = float(data.get("total_collateral", 0) or 0) / 100
 
             # M2M Realized - using derivative premium (realized P&L from derivatives)
-            m2mrealized = float(data.get("net_derivative_prem", 0) or 0)
+            m2mrealized = float(data.get("net_derivative_prem", 0) or 0) / 100
 
             # M2M Unrealized - combining equity intraday and delivery MTM
-            mtm_eq_iday = float(data.get("mtm_eq_iday_cnc", 0) or 0)
-            mtm_eq_delivery = float(data.get("mtm_eq_delivery", 0) or 0)
-            mtm_deriv = float(data.get("mtm_deriv", 0) or 0)
+            mtm_eq_iday = float(data.get("mtm_eq_iday_cnc", 0) or 0) / 100
+            mtm_eq_delivery = float(data.get("mtm_eq_delivery", 0) or 0) / 100
+            mtm_deriv = float(data.get("mtm_deriv", 0) or 0) / 100
             m2munrealized = mtm_eq_iday + mtm_eq_delivery + mtm_deriv
 
             # Utilised debits - total margin blocked/used
-            utiliseddebits = float(data.get("total_margin_blocked", 0) or 0)
+            utiliseddebits = float(data.get("total_margin_blocked", 0) or 0) / 100
 
         except (ValueError, TypeError) as e:
             logger.error(f"Error parsing Nubra margin data: {e}")
