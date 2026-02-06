@@ -1037,6 +1037,9 @@ class NodeExecutor:
                 op_type = type(node.op)
                 if op_type not in operators:
                     raise ValueError(f"Unsupported operator: {op_type.__name__}")
+                if op_type is ast.Pow:
+                    if abs(right) > 100:
+                        raise ValueError(f"Exponent too large: {right} (max 100)")
                 return operators[op_type](left, right)
             elif isinstance(node, ast.UnaryOp):
                 operand = _eval(node.operand)
