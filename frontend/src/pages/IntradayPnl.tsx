@@ -76,9 +76,8 @@ export default function IntradayPnl() {
             try {
                 const response = await tradingApi.getTrades(apiKey)
                 if (response.status === 'success' && response.data) {
-                    // Filter only intraday (MIS) trades
-                    const intradayTrades = response.data.filter((t) => t.product === 'MIS')
-                    setTrades(intradayTrades)
+                    // Use all trades from today's tradebook
+                    setTrades(response.data)
                     setError(null)
                 } else {
                     setError(response.message || 'Failed to fetch trades')
@@ -399,7 +398,7 @@ export default function IntradayPnl() {
             {strategies.length === 0 && !error && (
                 <Card>
                     <CardContent className="py-12 text-center">
-                        <p className="text-muted-foreground">No intraday trades found for today</p>
+                        <p className="text-muted-foreground">No trades found for today</p>
                     </CardContent>
                 </Card>
             )}
