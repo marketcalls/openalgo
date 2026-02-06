@@ -85,7 +85,7 @@ export type PositionState = 'pending_entry' | 'active' | 'exiting' | 'closed'
 
 export type ExitReason =
   | 'stoploss' | 'target' | 'trailstop' | 'breakeven_sl'
-  | 'combined_sl' | 'combined_target' | 'combined_trailstop'
+  | 'combined_sl' | 'combined_target' | 'combined_tsl'
   | 'manual' | 'squareoff' | 'auto_squareoff' | 'rejected'
 
 export type RiskMonitoringState = 'active' | 'paused' | null
@@ -113,9 +113,26 @@ export interface StrategyPosition {
   exit_reason: ExitReason | null
   exit_detail: string | null
   exit_price: number | null
-  group_id: number | null
+  group_id: string | null       // UUID linking legs in combined P&L mode
   opened_at: string
   closed_at: string | null
+}
+
+// ── Position Group (Combined P&L) ──────────────────
+
+export interface PositionGroup {
+  id: string                     // UUID
+  strategy_id: number
+  strategy_type: string
+  expected_legs: number
+  filled_legs: number
+  group_status: 'filling' | 'active' | 'exiting' | 'closed' | 'failed_exit'
+  combined_pnl: number
+  combined_peak_pnl: number
+  entry_value: number            // abs(Σ signed_entry_price × qty) — capital at risk
+  initial_stop: number | null    // TSL initial level (never changes after init)
+  current_stop: number | null    // ratcheted stop (only moves up, never down)
+  exit_triggered: boolean        // prevents duplicate exit attempts
 }
 
 // ── Strategy Dashboard ─────────────────────────────
@@ -605,7 +622,7 @@ Maps `position_state` + `exit_reason` to a color-coded badge:
 | `closed` + `breakeven_sl` | `BE-SL` | blue | — |
 | `closed` + `combined_sl` | `C-SL` | red | — |
 | `closed` + `combined_target` | `C-TGT` | green | — |
-| `closed` + `combined_trailstop` | `C-TSL` | amber | — |
+| `closed` + `combined_tsl` | `C-TSL` | amber | — |
 | `closed` + `manual` | `Manual` | gray | — |
 | `closed` + `squareoff` | `SQ-OFF` | gray | — |
 | `closed` + `rejected` | `Failed` | red | pulse |

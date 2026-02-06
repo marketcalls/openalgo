@@ -201,6 +201,11 @@ class StrategyPositionGroup(Base):
     group_status = Column(String(15), default="filling")  # filling, active, exiting, closed, failed_exit
     combined_peak_pnl = Column(Float, default=0)
     combined_pnl = Column(Float, default=0)
+    # Options spread risk fields (AFL-style TSL)
+    entry_value = Column(Float, default=0)  # abs(Σ signed_entry_price × qty) — capital at risk
+    initial_stop = Column(Float)  # TSL initial level: -entry_value × trail%/100 or -trail_value
+    current_stop = Column(Float)  # Ratcheting stop: only moves UP, never down
+    exit_triggered = Column(Boolean, default=False)  # Duplicate exit prevention
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 

@@ -443,26 +443,119 @@ class StrategyPositionTracker:
         return None, None
 
     def _update_group_on_fill(self, group_id):
-        """Update position group when a leg fills."""
+        """Update position group when a leg fills.
+
+        When all expected legs are filled, computes entry_value and initializes
+        AFL-style trailing stop from the combined net premium at entry.
+        """
         try:
-            from database.strategy_position_db import update_position_group
-
-            group = update_position_group(group_id, filled_legs=None)
-            if not group:
-                return
-
-            # Increment filled_legs
             from database.strategy_position_db import StrategyPositionGroup, db_session
 
             grp = StrategyPositionGroup.query.get(group_id)
-            if grp:
-                grp.filled_legs = (grp.filled_legs or 0) + 1
-                if grp.filled_legs >= grp.expected_legs:
-                    grp.group_status = "active"
-                    logger.info(f"Position group {group_id} all legs filled — now active")
-                db_session.commit()
+            if not grp:
+                return
+
+            grp.filled_legs = (grp.filled_legs or 0) + 1
+            if grp.filled_legs >= grp.expected_legs:
+                grp.group_status = "active"
+                logger.info(f"Position group {group_id} all legs filled — now active")
+                # Initialize combined risk (entry_value + TSL)
+                self._initialize_group_risk(grp)
+            db_session.commit()
         except Exception as e:
             logger.exception(f"Error updating group on fill: {e}")
+
+    def _initialize_group_risk(self, group):
+        """Compute entry_value and initial TSL for a newly-active position group.
+
+        AFL-style TSL initialization (Phase 1):
+        1. Calculate net premium: SELL legs = +price, BUY legs = -price
+        2. entry_value = abs(Σ signed_price × quantity)
+        3. Compute initial_stop from trail config:
+           - Percentage: initial_stop = -entry_value × (trail% / 100)
+           - Points:     initial_stop = -trail_value
+           - Amount:     initial_stop = -trail_value
+        4. Set current_stop = initial_stop, peak_pnl = 0
+        """
+        try:
+            from database.strategy_position_db import get_positions_by_group
+
+            legs = get_positions_by_group(group.id)
+            if not legs:
+                return
+
+            # Compute entry_value: abs(Σ signed_entry_price × quantity)
+            # SELL legs contribute positive premium (credit received)
+            # BUY legs contribute negative premium (debit paid)
+            net_premium = 0
+            for leg in legs:
+                if leg.quantity > 0:  # only open legs
+                    signed_price = leg.average_entry_price
+                    if leg.action == "BUY":
+                        signed_price = -signed_price
+                    # else SELL: positive (credit)
+                    net_premium += signed_price * leg.quantity
+
+            entry_value = abs(net_premium)
+            group.entry_value = round(entry_value, 2)
+            group.combined_peak_pnl = 0  # TSL starts from zero
+
+            # Get trailing stop config from symbol mapping
+            mapping = self._get_combined_risk_mapping(group)
+            if not mapping:
+                logger.info(
+                    f"Group {group.id}: entry_value={entry_value:.2f}, no TSL config"
+                )
+                return
+
+            tsl_type = mapping.get("combined_trailstop_type")
+            tsl_value = mapping.get("combined_trailstop_value")
+
+            if tsl_type and tsl_value is not None and entry_value > 0:
+                # Compute initial stop based on configured type
+                if tsl_type == "percentage":
+                    initial_stop = -entry_value * (tsl_value / 100)
+                else:  # points or amount — absolute value
+                    initial_stop = -tsl_value
+
+                group.initial_stop = round(initial_stop, 2)
+                group.current_stop = round(initial_stop, 2)
+
+                logger.info(
+                    f"Group {group.id}: entry_value={entry_value:.2f}, "
+                    f"initial_stop={initial_stop:.2f} ({tsl_type} {tsl_value})"
+                )
+            else:
+                logger.info(
+                    f"Group {group.id}: entry_value={entry_value:.2f}, TSL not configured"
+                )
+
+        except Exception as e:
+            logger.exception(f"Error initializing group risk for {group.id}: {e}")
+
+    def _get_combined_risk_mapping(self, group):
+        """Get the combined risk params from the symbol mapping for a group."""
+        try:
+            strategy_type = group.strategy_type
+            if strategy_type == "webhook":
+                from database.strategy_db import StrategySymbolMapping
+                mapping = StrategySymbolMapping.query.get(group.symbol_mapping_id)
+            else:
+                from database.chartink_db import ChartinkSymbolMapping
+                mapping = ChartinkSymbolMapping.query.get(group.symbol_mapping_id)
+
+            if mapping:
+                return {
+                    "combined_stoploss_type": mapping.combined_stoploss_type,
+                    "combined_stoploss_value": mapping.combined_stoploss_value,
+                    "combined_target_type": mapping.combined_target_type,
+                    "combined_target_value": mapping.combined_target_value,
+                    "combined_trailstop_type": mapping.combined_trailstop_type,
+                    "combined_trailstop_value": mapping.combined_trailstop_value,
+                }
+        except Exception as e:
+            logger.debug(f"Error fetching combined risk mapping for group {group.id}: {e}")
+        return None
 
     def _update_group_on_close(self, group_id):
         """Update position group when a leg closes."""

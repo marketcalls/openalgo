@@ -500,7 +500,16 @@ class StrategyRiskEngine:
     # ──────────────────────────────────────────────────────────────
 
     def _check_combined_groups(self):
-        """Check combined P&L triggers for multi-leg groups."""
+        """Check combined P&L triggers for multi-leg groups.
+
+        Implements AFL-style trailing stop logic (Phase 2 — ratcheting):
+        - Phase 1 (init) is handled in StrategyPositionTracker._initialize_group_risk()
+        - Phase 2 (here): peak_pnl = max(peak, current_pnl),
+          new_stop = initial_stop + peak_pnl, current_stop = max(new_stop, prev_stop)
+
+        Exit triggers checked in order: Max Loss → Max Profit → Trailing Stop.
+        The exit_triggered flag prevents duplicate exit attempts on the same group.
+        """
         try:
             from database.strategy_position_db import (
                 get_active_position_groups,
@@ -512,76 +521,102 @@ class StrategyRiskEngine:
                 if group.group_status != "active":
                     continue
 
+                # Duplicate exit prevention — once triggered, don't re-trigger
+                if group.exit_triggered:
+                    continue
+
                 legs = get_positions_by_group(group.id)
                 if not legs:
                     continue
 
-                # Calculate combined P&L from in-memory values
+                # Calculate combined P&L from in-memory values + count open legs
                 combined_pnl = 0
+                open_leg_count = 0
                 with self._positions_lock:
                     for leg in legs:
                         cached = self._positions.get(leg.id)
                         if cached:
                             combined_pnl += cached.get("unrealized_pnl", 0)
+                            if cached.get("quantity", 0) > 0:
+                                open_leg_count += 1
                         else:
                             combined_pnl += leg.unrealized_pnl or 0
+                            if (leg.quantity or 0) > 0:
+                                open_leg_count += 1
 
-                # Update combined peak PnL
-                if combined_pnl > (group.combined_peak_pnl or 0):
-                    group.combined_peak_pnl = combined_pnl
+                combined_pnl = round(combined_pnl, 2)
                 group.combined_pnl = combined_pnl
 
                 # Get mapping for combined risk params
                 mapping = self._get_mapping_for_group(group, legs)
-                if not mapping:
-                    continue
 
-                # Check combined SL
-                if mapping.get("combined_stoploss_type"):
+                # --- Max Loss check ---
+                if mapping and mapping.get("combined_stoploss_type"):
                     sl_threshold = self._compute_combined_threshold(
-                        mapping, "sl", legs
+                        mapping, "sl", group
                     )
                     if sl_threshold and combined_pnl <= -abs(sl_threshold):
+                        group.exit_triggered = True
                         self._close_all_group_legs(
                             group, legs, "stoploss", "combined_sl"
                         )
+                        self._persist_group_state(group, combined_pnl)
                         continue
 
-                # Check combined target
-                if mapping.get("combined_target_type"):
+                # --- Max Profit check ---
+                if mapping and mapping.get("combined_target_type"):
                     tgt_threshold = self._compute_combined_threshold(
-                        mapping, "target", legs
+                        mapping, "target", group
                     )
                     if tgt_threshold and combined_pnl >= tgt_threshold:
+                        group.exit_triggered = True
                         self._close_all_group_legs(
                             group, legs, "target", "combined_target"
                         )
+                        self._persist_group_state(group, combined_pnl)
                         continue
 
-                # Check combined trailing stop
-                if mapping.get("combined_trailstop_type"):
-                    trail_threshold = self._compute_combined_trail(
-                        mapping, group.combined_peak_pnl or 0, legs
-                    )
-                    if trail_threshold is not None and combined_pnl <= trail_threshold:
+                # --- AFL-Style Trailing Stop (Phase 2 Ratcheting) ---
+                if (group.initial_stop is not None and
+                        group.entry_value and group.entry_value > 0):
+                    # Safety guard: skip TSL when P&L is near-zero with open legs.
+                    # Prices may be unreliable right after entry; avoid polluting
+                    # peak_pnl with stale data or triggering on price flicker.
+                    if abs(combined_pnl) < 1.0 and open_leg_count > 0:
+                        self._persist_group_state(group, combined_pnl)
+                        continue
+
+                    # Update peak P&L (only moves up, never down)
+                    peak_pnl = max(group.combined_peak_pnl or 0, combined_pnl)
+                    group.combined_peak_pnl = peak_pnl
+
+                    # Ratcheting stop: initial_stop + peak_pnl, only moves up
+                    new_stop = group.initial_stop + peak_pnl
+                    current_stop = max(new_stop, group.current_stop or float("-inf"))
+                    group.current_stop = round(current_stop, 2)
+
+                    # TSL trigger: exit when P&L drops to or below the ratcheted stop
+                    if combined_pnl <= current_stop:
+                        group.exit_triggered = True
                         self._close_all_group_legs(
                             group, legs, "trailstop", "combined_tsl"
                         )
+                        self._persist_group_state(group, combined_pnl)
                         continue
 
-                # Persist group updates
-                try:
-                    from database.strategy_position_db import update_position_group
-                    update_position_group(
-                        group.id,
-                        combined_pnl=round(combined_pnl, 2),
-                        combined_peak_pnl=group.combined_peak_pnl,
-                    )
-                except Exception as e:
-                    logger.debug(f"Error updating group {group.id}: {e}")
+                # Persist group state (non-exit path)
+                self._persist_group_state(group, combined_pnl)
 
         except Exception as e:
             logger.exception(f"Error checking combined groups: {e}")
+        finally:
+            # Clean up thread-local DB session to prevent stale ORM objects
+            # on the MarketDataService callback thread
+            try:
+                from database.strategy_position_db import db_session
+                db_session.remove()
+            except Exception:
+                pass
 
     def _get_mapping_for_group(self, group, legs):
         """Get the symbol mapping with combined risk params for a group."""
@@ -618,11 +653,12 @@ class StrategyRiskEngine:
             logger.debug(f"Error fetching mapping for group {group.id}: {e}")
         return None
 
-    def _compute_combined_threshold(self, mapping, threshold_type, legs):
+    def _compute_combined_threshold(self, mapping, threshold_type, group):
         """Compute combined SL or target threshold as an absolute P&L value.
 
-        For percentage type: threshold = total_investment × percentage / 100
-        For points type: threshold = value (absolute P&L amount)
+        For percentage type: threshold = entry_value × percentage / 100
+          (entry_value = abs net premium at entry, computed in _initialize_group_risk)
+        For points/amount type: threshold = value (absolute P&L amount)
         """
         type_key = f"combined_{threshold_type if threshold_type == 'target' else 'stoploss'}_type"
         value_key = f"combined_{threshold_type if threshold_type == 'target' else 'stoploss'}_value"
@@ -635,42 +671,48 @@ class StrategyRiskEngine:
         if sl_type == "points":
             return sl_value  # Absolute P&L threshold
 
-        # Percentage: compute from total notional
-        total_notional = 0
-        with self._positions_lock:
-            for leg in legs:
-                cached = self._positions.get(leg.id)
-                if cached:
-                    total_notional += cached["average_entry_price"] * cached["quantity"]
-                else:
-                    total_notional += (leg.average_entry_price or 0) * (leg.quantity or 0)
-        return total_notional * sl_value / 100
-
-    def _compute_combined_trail(self, mapping, peak_pnl, legs):
-        """Compute combined trailing stop threshold from peak P&L."""
-        tsl_type = mapping.get("combined_trailstop_type")
-        tsl_value = mapping.get("combined_trailstop_value")
-
-        if not tsl_type or tsl_value is None or peak_pnl <= 0:
+        # Percentage: compute from entry_value (net premium at entry)
+        entry_value = group.entry_value or 0
+        if entry_value <= 0:
             return None
+        return entry_value * sl_value / 100
 
-        if tsl_type == "points":
-            return peak_pnl - tsl_value
-        else:  # percentage
-            return peak_pnl * (1 - tsl_value / 100)
+    def _persist_group_state(self, group, combined_pnl):
+        """Persist combined group state to DB after each check cycle."""
+        try:
+            from database.strategy_position_db import update_position_group
+
+            update_data = {
+                "combined_pnl": round(combined_pnl, 2),
+            }
+            if group.combined_peak_pnl is not None:
+                update_data["combined_peak_pnl"] = group.combined_peak_pnl
+            if group.current_stop is not None:
+                update_data["current_stop"] = group.current_stop
+            if group.exit_triggered:
+                update_data["exit_triggered"] = True
+            update_position_group(group.id, **update_data)
+        except Exception as e:
+            logger.debug(f"Error persisting group {group.id}: {e}")
 
     def _close_all_group_legs(self, group, legs, exit_reason, exit_detail):
         """Close all legs in a combined P&L group."""
         logger.info(
             f"Combined trigger: group={group.id} reason={exit_reason} "
-            f"detail={exit_detail} pnl={group.combined_pnl}"
+            f"detail={exit_detail} pnl={group.combined_pnl} "
+            f"current_stop={group.current_stop}"
         )
 
         try:
             from database.strategy_position_db import update_position_group
-            update_position_group(group.id, group_status="exiting")
-        except Exception:
-            pass
+            update_position_group(
+                group.id, group_status="exiting", exit_triggered=True
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to update group {group.id} status to exiting: {e}. "
+                f"Proceeding with leg exits — manual intervention may be needed."
+            )
 
         for leg in legs:
             if leg.quantity and leg.quantity > 0:
@@ -1317,7 +1359,7 @@ class StrategyRiskEngine:
             "tick_size": float(position.tick_size) if getattr(position, "tick_size", None) else 0.05,
             "risk_mode": position.risk_mode,
             "position_group_id": position.position_group_id,
-            "exit_execution": position.exit_execution,
+            "exit_execution": getattr(position, "exit_execution", None) or "market",
             "exit_reason": position.exit_reason,
             "exit_detail": position.exit_detail,
             "auto_squareoff_time": getattr(position, "_auto_squareoff_time", "15:15"),

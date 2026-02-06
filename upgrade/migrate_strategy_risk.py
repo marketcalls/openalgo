@@ -231,6 +231,10 @@ def create_new_tables(conn):
             group_status          VARCHAR(15) DEFAULT 'filling',
             combined_peak_pnl     FLOAT DEFAULT 0,
             combined_pnl          FLOAT DEFAULT 0,
+            entry_value           FLOAT DEFAULT 0,
+            initial_stop          FLOAT,
+            current_stop          FLOAT,
+            exit_triggered        BOOLEAN DEFAULT FALSE,
             created_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at            DATETIME DEFAULT CURRENT_TIMESTAMP
         )
@@ -419,6 +423,23 @@ def add_mapping_columns_to_chartink_symbol_mappings(conn):
     logger.info(f"  {added} columns added to chartink_symbol_mappings")
 
 
+GROUP_RISK_COLUMNS = [
+    ("entry_value", "FLOAT DEFAULT 0"),
+    ("initial_stop", "FLOAT"),
+    ("current_stop", "FLOAT"),
+    ("exit_triggered", "BOOLEAN DEFAULT FALSE"),
+]
+
+
+def add_group_risk_columns(conn):
+    """Add AFL-style TSL columns to strategy_position_group for existing databases."""
+    if not table_exists(conn, "strategy_position_group"):
+        return
+    logger.info("Adding risk columns to strategy_position_group...")
+    added = _add_columns_if_missing(conn, "strategy_position_group", GROUP_RISK_COLUMNS)
+    logger.info(f"  {added} columns added to strategy_position_group")
+
+
 def upgrade():
     """Apply complete strategy risk management setup."""
     try:
@@ -441,6 +462,7 @@ def upgrade():
             add_risk_columns_to_chartink(conn)
             add_mapping_columns_to_strategy_symbol_mappings(conn)
             add_mapping_columns_to_chartink_symbol_mappings(conn)
+            add_group_risk_columns(conn)
 
         logger.info(f"Migration {MIGRATION_NAME} completed successfully")
         return True
@@ -520,6 +542,16 @@ def status():
             if missing_csm_cols:
                 logger.info(
                     f"Missing columns on chartink_symbol_mappings: {', '.join(missing_csm_cols)}"
+                )
+                logger.info("   Migration needed")
+                return False
+
+            # Check group risk columns on strategy_position_group
+            spg_cols = get_table_columns(conn, "strategy_position_group")
+            missing_spg_cols = [c for c, _ in GROUP_RISK_COLUMNS if c not in spg_cols]
+            if missing_spg_cols:
+                logger.info(
+                    f"Missing columns on strategy_position_group: {', '.join(missing_spg_cols)}"
                 )
                 logger.info("   Migration needed")
                 return False

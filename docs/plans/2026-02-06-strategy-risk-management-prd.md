@@ -400,8 +400,12 @@ CREATE TABLE strategy_position_group (
     expected_legs         INTEGER NOT NULL,          -- total legs expected (from legs_config)
     filled_legs           INTEGER DEFAULT 0,         -- legs with complete fills
     group_status          VARCHAR(15) DEFAULT 'filling', -- 'filling', 'active', 'exiting', 'closed', 'failed_exit'
-    combined_peak_pnl     FLOAT DEFAULT 0,           -- highest combined PnL reached (for trailing stop)
+    combined_peak_pnl     FLOAT DEFAULT 0,           -- highest combined PnL reached (for trailing stop ratcheting)
     combined_pnl          FLOAT DEFAULT 0,           -- current combined unrealized PnL
+    entry_value           FLOAT DEFAULT 0,           -- abs(Σ signed_entry_price × qty) — capital at risk for risk calculations
+    initial_stop          FLOAT,                      -- TSL initial level: -entry_value × trail%/100 (never changes after init)
+    current_stop          FLOAT,                      -- ratcheting stop: moves up with peak_pnl, never down
+    exit_triggered        BOOLEAN DEFAULT FALSE,      -- prevents duplicate exit attempts on same group
     created_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at            DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -621,9 +625,56 @@ This enables strategies that combine futures hedging with options premium collec
 - All legs linked via `position_group_id` in `StrategyPosition`
 - Combined SL/target defined on aggregate unrealized P&L across all legs
 - When combined SL or target triggers → ALL legs in the group exit together via `placeorder` per leg
-- Combined trailing stop trails from peak combined profit
+- Combined trailing stop uses AFL-style ratcheting (see below)
 - Individual leg breakeven NOT available in combined mode
 - Individual leg SL/target/trail NOT active in combined mode (only combined triggers)
+- `exit_triggered` flag prevents duplicate exits on the same group
+
+#### Combined Premium Calculation
+
+For options spread strategies, entry_value is computed from signed leg premiums at entry:
+
+```
+SELL legs = +price (credit received)
+BUY legs  = -price (debit paid)
+net_premium = Σ (signed_entry_price × quantity) for all legs
+entry_value = abs(net_premium)
+```
+
+This `entry_value` is the capital at risk and serves as the base for percentage-based risk calculations (Max Loss, Max Profit, TSL).
+
+#### AFL-Style Trailing Stop Loss (Combined P&L)
+
+**Phase 1 — Initialization** (runs in `StrategyPositionTracker._initialize_group_risk()` when all legs fill):
+```
+entry_value  = abs(Σ signed_entry_price × quantity)
+initial_stop = -entry_value × (trail% / 100)     [percentage]
+             = -trail_value                        [points/amount]
+current_stop = initial_stop
+peak_pnl     = 0
+```
+
+**Phase 2 — Ratcheting** (runs in `StrategyRiskEngine._check_combined_groups()` on every tick):
+```
+peak_pnl     = max(peak_pnl, current_combined_pnl)
+new_stop     = initial_stop + peak_pnl
+current_stop = max(new_stop, current_stop)     -- ratchet: only moves UP, never down
+EXIT if:       combined_pnl <= current_stop
+```
+
+**Worked Example** (credit spread, entry_value=100, TSL=20%):
+```
+initial_stop = -100 × 0.20 = -20
+At entry (pnl=0):     new_stop = -20 + 0  = -20,  current_stop = -20   → no exit
+P&L rises to +50:     new_stop = -20 + 50 = +30,  current_stop = +30   → locks ₹30 profit
+P&L rises to +80:     new_stop = -20 + 80 = +60,  current_stop = +60   → locks ₹60 profit
+P&L drops to +55:     new_stop = -20 + 80 = +60,  current_stop = +60   → peak_pnl stays 80
+P&L drops to +60:     combined_pnl(60) <= current_stop(60) → EXIT ALL LEGS
+```
+
+**Safety Guards**:
+- Near-zero P&L guard: skip TSL check when `abs(combined_pnl) < 1.0` and legs are open (prices may be unreliable right after entry)
+- Duplicate exit prevention: `exit_triggered` flag set to TRUE on first trigger, subsequent ticks skip the group
 
 ### 7.7 Breakeven — Move SL to Entry
 
@@ -1029,35 +1080,43 @@ def on_ltp_update(symbol, exchange, ltp):
 
     # 10. Check combined P&L triggers (after all legs updated)
     for group in get_active_position_groups():
-        # Skip groups that are still filling (not all legs have filled yet)
         if group.group_status != 'active':
+            continue
+        if group.exit_triggered:              # duplicate prevention
             continue
 
         legs = get_positions_by_group(group.id)
         combined_pnl = sum(leg.unrealized_pnl for leg in legs)
-
-        # Update combined peak PnL on the group record
-        if combined_pnl > group.combined_peak_pnl:
-            group.combined_peak_pnl = combined_pnl
         group.combined_pnl = combined_pnl
-
         mapping = get_mapping_for_group(group.id)
 
-        # Combined SL check
-        if mapping.combined_stoploss_type and combined_pnl <= -abs(compute_combined_threshold(mapping, 'sl')):
-            group.group_status = 'exiting'
-            close_all_legs(group, legs, exit_reason='stoploss')
+        # Max Loss check (uses entry_value for percentage base)
+        if mapping.combined_stoploss_type:
+            sl_threshold = compute_combined_threshold(mapping, 'sl', group)
+            if combined_pnl <= -abs(sl_threshold):
+                group.exit_triggered = True
+                close_all_legs(group, legs, exit_reason='stoploss')
+                continue
 
-        # Combined target check
-        elif mapping.combined_target_type and combined_pnl >= compute_combined_threshold(mapping, 'target'):
-            group.group_status = 'exiting'
-            close_all_legs(group, legs, exit_reason='target')
+        # Max Profit check
+        if mapping.combined_target_type:
+            tgt_threshold = compute_combined_threshold(mapping, 'target', group)
+            if combined_pnl >= tgt_threshold:
+                group.exit_triggered = True
+                close_all_legs(group, legs, exit_reason='target')
+                continue
 
-        # Combined trailing stop check
-        elif mapping.combined_trailstop_type:
-            trail_threshold = compute_combined_trail(mapping, group.combined_peak_pnl)
-            if combined_pnl <= trail_threshold:
-                group.group_status = 'exiting'
+        # AFL-Style Trailing Stop (Phase 2 Ratcheting)
+        if group.initial_stop is not None and group.entry_value > 0:
+            if abs(combined_pnl) < 1.0:      # near-zero safety guard
+                continue
+            peak_pnl     = max(group.combined_peak_pnl, combined_pnl)
+            new_stop     = group.initial_stop + peak_pnl
+            current_stop = max(new_stop, group.current_stop)   # ratchet up only
+            group.combined_peak_pnl = peak_pnl
+            group.current_stop      = current_stop
+            if combined_pnl <= current_stop:
+                group.exit_triggered = True
                 close_all_legs(group, legs, exit_reason='trailstop')
 ```
 
@@ -1202,9 +1261,12 @@ Payload: {
     "position_group_id": "uuid-xxx",
     "combined_pnl": -2500.00,
     "combined_peak_pnl": 1200.00,
-    "combined_sl_price": -5000.00,    -- threshold value
-    "combined_target_price": 8000.00,
-    "combined_tsl_price": -3200.00,   -- trailing from peak
+    "entry_value": 6500.00,           -- abs(net premium at entry)
+    "initial_stop": -1300.00,         -- fixed at initialization
+    "current_stop": -100.00,          -- ratcheted stop (only moves up)
+    "combined_sl_price": -5000.00,    -- max loss threshold
+    "combined_target_price": 8000.00, -- max profit threshold
+    "exit_triggered": false,
     "legs": [
         {"position_id": 42, "symbol": "NIFTY..CE", "pnl": -1500},
         {"position_id": 43, "symbol": "NIFTY..PE", "pnl": -1000}
