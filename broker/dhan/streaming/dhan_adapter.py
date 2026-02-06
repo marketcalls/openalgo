@@ -575,15 +575,20 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             market_data = self._normalize_5depth_data(data, symbol, exchange)
             if market_data:
                 # Determine topic based on data type
+                # Only publish modes the server understands (LTP, QUOTE, DEPTH)
+                # OI and prev_close are Dhan-specific packet types already
+                # included in full/quote data - skip them as standalone topics
                 mode_map = {
                     "ticker": "LTP",
                     "quote": "QUOTE",
                     "full": "DEPTH",
-                    "oi": "OI",
-                    "prev_close": "PREV_CLOSE",
                 }
 
-                mode_str = mode_map.get(data_type, "UNKNOWN")
+                mode_str = mode_map.get(data_type)
+                if not mode_str:
+                    # oi and prev_close packets don't map to server modes - skip
+                    return
+
                 topic = f"{exchange}_{symbol}_{mode_str}"
 
                 self.publish_market_data(topic, market_data)
