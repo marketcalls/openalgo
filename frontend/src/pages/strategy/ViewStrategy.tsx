@@ -9,6 +9,7 @@ import {
   ExternalLink,
   Power,
   Settings,
+  ShieldCheck,
   Trash2,
   TrendingDown,
   TrendingUp,
@@ -18,6 +19,10 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { showToast } from '@/utils/toast'
 import { strategyApi } from '@/api/strategy'
+import {
+  CircuitBreakerBanner,
+  hasCircuitBreakerConfig,
+} from '@/components/strategy/CircuitBreakerBanner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -41,6 +46,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { useCircuitBreaker } from '@/hooks/useCircuitBreaker'
 import type { Strategy, StrategySymbolMapping } from '@/types/strategy'
 
 export default function ViewStrategy() {
@@ -55,6 +61,7 @@ export default function ViewStrategy() {
   const [copiedField, setCopiedField] = useState<string | null>(null)
   const [showCredentials, setShowCredentials] = useState(false)
   const [hostConfig, setHostConfig] = useState<{ host_server: string; is_localhost: boolean } | null>(null)
+  const { getStatus } = useCircuitBreaker()
 
   const fetchStrategy = async () => {
     if (!strategyId) return
@@ -411,6 +418,57 @@ export default function ViewStrategy() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Daily Risk Limits */}
+      {hasCircuitBreakerConfig(strategy) && (() => {
+        const cbStatus = getStatus(strategy.id)
+        const formatType = (type?: string) => type === 'points' ? 'pts' : type || ''
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <ShieldCheck className="h-5 w-5" />
+                Daily Risk Limits
+              </CardTitle>
+              <CardDescription>Circuit breaker configuration and real-time daily P&L</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                {strategy.daily_stoploss_value != null && strategy.daily_stoploss_value > 0 && (
+                  <div className="p-2 bg-muted rounded">
+                    <p className="text-xs text-muted-foreground">Daily Stoploss</p>
+                    <p className="font-mono font-medium">
+                      ₹{strategy.daily_stoploss_value.toLocaleString('en-IN')}{' '}
+                      <span className="text-xs text-muted-foreground">{formatType(strategy.daily_stoploss_type)}</span>
+                    </p>
+                  </div>
+                )}
+                {strategy.daily_target_value != null && strategy.daily_target_value > 0 && (
+                  <div className="p-2 bg-muted rounded">
+                    <p className="text-xs text-muted-foreground">Daily Target</p>
+                    <p className="font-mono font-medium">
+                      ₹{strategy.daily_target_value.toLocaleString('en-IN')}{' '}
+                      <span className="text-xs text-muted-foreground">{formatType(strategy.daily_target_type)}</span>
+                    </p>
+                  </div>
+                )}
+                {strategy.daily_trailstop_value != null && strategy.daily_trailstop_value > 0 && (
+                  <div className="p-2 bg-muted rounded">
+                    <p className="text-xs text-muted-foreground">Daily Trail Stop</p>
+                    <p className="font-mono font-medium">
+                      ₹{strategy.daily_trailstop_value.toLocaleString('en-IN')}{' '}
+                      <span className="text-xs text-muted-foreground">{formatType(strategy.daily_trailstop_type)}</span>
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Live P&L + Circuit Breaker Banner */}
+              <CircuitBreakerBanner status={cbStatus} strategy={strategy} />
+            </CardContent>
+          </Card>
+        )
+      })()}
 
       {/* Important Notes */}
       <Alert>

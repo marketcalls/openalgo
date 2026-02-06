@@ -302,6 +302,28 @@ export function useSocket() {
       }
     })
 
+    // Circuit breaker trip notification
+    socket.on(
+      'strategy_circuit_breaker',
+      (data: { strategy_id?: number; action: string; reason?: string; daily_pnl?: number }) => {
+        if (data.action === 'tripped') {
+          playAlertSound('strategyRisk')
+          const reasonLabels: Record<string, string> = {
+            daily_stoploss: 'Daily SL',
+            daily_target: 'Daily Target',
+            daily_trailstop: 'Daily TSL',
+          }
+          const label = (data.reason && reasonLabels[data.reason]) || data.reason || 'Unknown'
+          const pnl = data.daily_pnl != null ? ` (P&L: ₹${data.daily_pnl.toFixed(2)})` : ''
+          showCategoryToast(
+            'warning',
+            `Circuit Breaker: ${label} hit for strategy #${data.strategy_id}${pnl}`,
+            'strategyRisk'
+          )
+        }
+      }
+    )
+
     return () => {
       socket.disconnect()
       ;['click', 'touchstart', 'keydown'].forEach((eventType) => {

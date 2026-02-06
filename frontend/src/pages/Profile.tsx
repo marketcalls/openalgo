@@ -193,6 +193,11 @@ const ALERT_CATEGORIES_REALTIME: {
     label: 'Action Center',
     description: 'Pending order notifications in semi-auto mode',
   },
+  {
+    key: 'strategyRisk',
+    label: 'Strategy Risk',
+    description: 'Circuit breaker trip alerts when daily stoploss, target, or trailing stop is hit',
+  },
 ]
 
 const ALERT_CATEGORIES_TRADING: {

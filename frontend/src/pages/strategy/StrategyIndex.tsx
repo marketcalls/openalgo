@@ -16,11 +16,13 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { showToast } from '@/utils/toast'
 import { strategyApi } from '@/api/strategy'
+import { CircuitBreakerBanner } from '@/components/strategy/CircuitBreakerBanner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useCircuitBreaker } from '@/hooks/useCircuitBreaker'
 import type { Strategy } from '@/types/strategy'
 
 export default function StrategyIndex() {
@@ -29,6 +31,7 @@ export default function StrategyIndex() {
   const [loading, setLoading] = useState(true)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [hostConfig, setHostConfig] = useState<{ host_server: string; is_localhost: boolean } | null>(null)
+  const { getStatus } = useCircuitBreaker()
 
   const fetchStrategies = async () => {
     try {
@@ -178,12 +181,20 @@ export default function StrategyIndex() {
         </Card>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {strategies.map((strategy) => (
+          {strategies.map((strategy) => {
+            const cbStatus = getStatus(strategy.id)
+            const isTripped = cbStatus?.isTripped ?? false
+
+            return (
             <Card key={strategy.id} className="relative overflow-hidden">
               {/* Status indicator bar */}
               <div
                 className={`absolute top-0 left-0 right-0 h-1 ${
-                  strategy.is_active ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'
+                  isTripped
+                    ? 'bg-destructive animate-pulse'
+                    : strategy.is_active
+                      ? 'bg-green-500'
+                      : 'bg-gray-300 dark:bg-gray-600'
                 }`}
               />
 
@@ -193,9 +204,13 @@ export default function StrategyIndex() {
                     <CardTitle className="text-lg">{strategy.name}</CardTitle>
                     <CardDescription>{getPlatformLabel(strategy.platform)}</CardDescription>
                   </div>
-                  <Badge variant={strategy.is_active ? 'default' : 'secondary'}>
-                    {strategy.is_active ? 'Active' : 'Inactive'}
-                  </Badge>
+                  {isTripped ? (
+                    <Badge variant="destructive">CB Tripped</Badge>
+                  ) : (
+                    <Badge variant={strategy.is_active ? 'default' : 'secondary'}>
+                      {strategy.is_active ? 'Active' : 'Inactive'}
+                    </Badge>
+                  )}
                 </div>
               </CardHeader>
 
@@ -223,6 +238,9 @@ export default function StrategyIndex() {
                     </span>
                   </div>
                 )}
+
+                {/* Circuit Breaker Banner */}
+                <CircuitBreakerBanner status={cbStatus} strategy={strategy} compact />
 
                 {/* Webhook URL Copy */}
                 <div className="flex items-center gap-2">
@@ -258,7 +276,8 @@ export default function StrategyIndex() {
                 </div>
               </CardContent>
             </Card>
-          ))}
+            )
+          })}
         </div>
       )}
 

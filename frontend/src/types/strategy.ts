@@ -13,7 +13,48 @@ export interface Strategy {
   squareoff_time: string | null
   created_at: string
   updated_at: string
+  // Daily circuit breaker configuration
+  daily_stoploss_type?: string
+  daily_stoploss_value?: number
+  daily_target_type?: string
+  daily_target_value?: number
+  daily_trailstop_type?: string
+  daily_trailstop_value?: number
 }
+
+// Circuit breaker Socket.IO event types
+
+export interface CircuitBreakerEvent {
+  strategy_id?: number
+  strategy_type?: string
+  action: 'tripped' | 'daily_reset'
+  reason?: string
+  daily_pnl?: number
+  trading_date?: string
+}
+
+export interface StrategyPnlUpdate {
+  strategy_id: number
+  strategy_type: string
+  total_unrealized_pnl: number
+  position_count: number
+  daily_realized_pnl: number
+  daily_total_pnl: number
+  circuit_breaker_active: boolean
+  circuit_breaker_reason: string
+}
+
+export interface CircuitBreakerStatus {
+  isTripped: boolean
+  reason: string
+  dailyRealizedPnl: number
+  dailyTotalPnl: number
+  totalUnrealizedPnl: number
+  positionCount: number
+  lastUpdate: number
+}
+
+export type CircuitBreakerReason = 'daily_stoploss' | 'daily_target' | 'daily_trailstop'
 
 export interface StrategySymbolMapping {
   id: number
