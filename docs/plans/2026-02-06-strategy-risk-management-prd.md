@@ -191,7 +191,7 @@ breakeven_threshold FLOAT
         "offset": "OTM4",
         "option_type": "CE",
         "action": "SELL",
-        "quantity": 75,
+        "quantity": 65,
         "product_type": "NRML",
         "stoploss_type": "percentage",
         "stoploss_value": 30,
@@ -206,7 +206,7 @@ breakeven_threshold FLOAT
         "leg_type": "futures",
         "expiry_type": "current_month",
         "action": "BUY",
-        "quantity": 75,
+        "quantity": 65,
         "product_type": "NRML",
         "stoploss_type": "percentage",
         "stoploss_value": 2,
@@ -495,7 +495,7 @@ order_mode:         'futures'
 underlying:         'NIFTY'                    -- underlying symbol
 underlying_exchange:'NSE_INDEX'                -- underlying exchange (for LTP)
 expiry_type:        'current_month'            -- 'current_month' or 'next_month'
-quantity:           75                         -- total quantity (will auto-split if > freeze_qty)
+quantity:           65                         -- total quantity (will auto-split if > freeze_qty)
 product_type:       'NRML'                     -- NRML or MIS only
 ```
 
@@ -519,7 +519,7 @@ underlying_exchange:'NSE_INDEX'                -- underlying exchange
 expiry_type:        'current_week'             -- relative: current_week/next_week/current_month/next_month
 offset:             'ATM'                      -- ATM, ITM1-ITM40, OTM1-OTM40
 option_type:        'CE'                       -- CE or PE
-quantity:           75                         -- total quantity (will auto-split if > freeze_qty)
+quantity:           65                         -- total quantity (will auto-split if > freeze_qty)
 product_type:       'NRML'                     -- MIS or NRML
 ```
 
@@ -541,7 +541,7 @@ legs: [
         offset:       'OTM4',
         option_type:  'CE',
         action:       'SELL',
-        quantity:     75,
+        quantity:     65,
         product_type: 'NRML',
         -- Per-leg risk (used in per_leg mode, or always for breakeven):
         stoploss_type:     'percentage',
@@ -557,21 +557,21 @@ legs: [
         offset:       'OTM4',
         option_type:  'PE',
         action:       'SELL',
-        quantity:     75,
+        quantity:     65,
         ...per-leg risk params...
     },
     {
         offset:       'OTM6',
         option_type:  'CE',
         action:       'BUY',
-        quantity:     75,
+        quantity:     65,
         ...per-leg risk params...
     },
     {
         offset:       'OTM6',
         option_type:  'PE',
         action:       'BUY',
-        quantity:     75,
+        quantity:     65,
         ...per-leg risk params...
     }
 ]
@@ -603,8 +603,8 @@ Preset selection pre-fills the leg form. User can modify any field after selecti
 ```
 Preset: custom
 Legs:
-  Leg 1: { leg_type: "futures", expiry_type: "current_month", action: "BUY", quantity: 75, product_type: "NRML" }
-  Leg 2: { leg_type: "option", offset: "OTM2", option_type: "CE", action: "SELL", quantity: 75, product_type: "NRML" }
+  Leg 1: { leg_type: "futures", expiry_type: "current_month", action: "BUY", quantity: 65, product_type: "NRML" }
+  Leg 2: { leg_type: "option", offset: "OTM2", option_type: "CE", action: "SELL", quantity: 65, product_type: "NRML" }
 ```
 
 This enables strategies that combine futures hedging with options premium collection (covered calls, protective puts, synthetic positions).
@@ -1391,7 +1391,7 @@ When configuring a symbol mapping, the UI adapts based on the selected `order_mo
 │  Exchange:    [NFO ▼]    -- auto-set from underlying│
 │  Expiry:      [Current Month ▼]                     │
 │  Product:     [NRML ▼]  [MIS]                       │
-│  Quantity:    [75]       -- validated against lot size│
+│  Quantity:    [65]       -- validated against lot size│
 │                                                     │
 │  Auto Square-Off: [15:15] IST  -- MIS only          │
 └────────────────────────────────────────────────────┘
