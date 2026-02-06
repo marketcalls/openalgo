@@ -428,9 +428,8 @@ class BrokerData:
                     "oi": True,
                 }
 
-                # Add expiryCode only for EQUITY
-                if instrument_type == "EQUITY":
-                    request_data["expiryCode"] = 0
+                # Add expiryCode for all instruments (required by Dhan API)
+                request_data["expiryCode"] = 0
 
                 logger.debug(f"Making daily history request to {endpoint}")
                 logger.debug(f"Request data: {json.dumps(request_data, indent=2)}")
@@ -485,6 +484,7 @@ class BrokerData:
                         "fromDate": from_time,
                         "toDate": to_time,
                         "oi": True,
+                        "expiryCode": 0,
                     }
 
                     logger.debug(f"Making intraday history request to {endpoint}")
@@ -543,6 +543,7 @@ class BrokerData:
                             "fromDate": from_time,
                             "toDate": to_time,
                             "oi": True,
+                            "expiryCode": 0,
                         }
 
                         logger.debug(f"Making intraday history request to {endpoint}")
