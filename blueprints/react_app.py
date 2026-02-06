@@ -185,6 +185,18 @@ def react_pnltracker():
     return serve_react_app()
 
 
+# Tools overview (Option Chain, IV Chart, etc.)
+@react_bp.route("/tools")
+def react_tools():
+    return serve_react_app()
+
+
+# IV Chart for options implied volatility
+@react_bp.route("/ivchart")
+def react_ivchart():
+    return serve_react_app()
+
+
 # WebSocket market data test page
 @react_bp.route("/websocket/test")
 def react_websocket_test():
