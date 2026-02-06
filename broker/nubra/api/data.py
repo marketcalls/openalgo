@@ -243,10 +243,15 @@ class BrokerData:
         """
         Get historical data for given symbol using Nubra's timeseries API.
         
+        Data is fetched in chunks based on interval:
+        - Intraday (1s to 1h): 30-day chunks (API limit: 3 months)
+        - Daily: 365-day chunks (API limit: 10 years)
+        - Weekly/Monthly: 1000-day chunks (API limit: 10 years)
+        
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX)
-            interval: Candle interval (1m, 3m, 5m, 15m, 30m, 1h, D)
+            interval: Candle interval (1s, 1m, 2m, 3m, 5m, 15m, 30m, 1h, D, W, M)
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
         Returns:
@@ -292,141 +297,154 @@ class BrokerData:
                 instrument_type = "STOCK"
                 api_exchange = exchange
 
-            # Convert dates to ISO format for Nubra API
+            # Convert dates to datetime objects
             from_date = pd.to_datetime(start_date)
             to_date = pd.to_datetime(end_date)
 
-            # Set start time to market open (09:15 IST -> 03:45 UTC)
-            from_date = from_date.replace(hour=3, minute=45, second=0, microsecond=0)
-            
-            # If end_date is today, set end time to current time
-            current_time = pd.Timestamp.now()
-            if to_date.date() == current_time.date():
-                # Convert current IST to approximate UTC
-                to_date = current_time - pd.Timedelta(hours=5, minutes=30)
-            else:
-                # For past dates, set end time to market close (15:30 IST -> 10:00 UTC)
-                to_date = to_date.replace(hour=10, minute=0, second=0, microsecond=0)
-
-            # Format dates as ISO strings with milliseconds
-            start_iso = from_date.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-            end_iso = to_date.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-
-            # Build Nubra timeseries request payload
-            payload = {
-                "query": [
-                    {
-                        "exchange": api_exchange,
-                        "type": instrument_type,
-                        "values": [br_symbol],
-                        "fields": ["open", "high", "low", "close", "tick_volume"],
-                        "startDate": start_iso,
-                        "endDate": end_iso,
-                        "interval": self.timeframe_map[interval],
-                        "intraDay": False,
-                        "realTime": False
-                    }
-                ]
+            # Set chunk size based on interval
+            # Nubra limits: intraday = 3 months, daily+ = 10 years
+            chunk_limits = {
+                "1s": 7,      # 7 days for second data
+                "1m": 30,     # 30 days for minute data
+                "2m": 30,
+                "3m": 60,
+                "5m": 60,
+                "15m": 60,
+                "30m": 90,
+                "1h": 90,     # 90 days for hourly
+                "D": 365,     # 1 year chunks for daily
+                "W": 1000,    # ~3 years for weekly
+                "M": 1500,    # ~4 years for monthly
             }
+            chunk_days = chunk_limits.get(interval, 30)
 
-            logger.debug(f"Debug - Nubra timeseries request: {payload}")
+            # Initialize list to store all candle data
+            all_candles = {}
 
-            # Make API call to Nubra's timeseries endpoint
-            response = get_api_response(
-                "/charts/timeseries",
-                self.auth_token,
-                "POST",
-                payload,
-            )
+            # Process data in chunks
+            current_start = from_date
+            while current_start <= to_date:
+                # Calculate chunk end date
+                current_end = min(current_start + timedelta(days=chunk_days - 1), to_date)
 
-            logger.debug(f"Debug - Nubra timeseries response: {response}")
+                # Set start time to market open (09:15 IST -> 03:45 UTC)
+                chunk_start = current_start.replace(hour=3, minute=45, second=0, microsecond=0)
+                
+                # Set end time
+                current_time = pd.Timestamp.now()
+                if current_end.date() == current_time.date():
+                    # Convert current IST to approximate UTC
+                    chunk_end = current_time - pd.Timedelta(hours=5, minutes=30)
+                else:
+                    # For past dates, set end time to market close (15:30 IST -> 10:00 UTC)
+                    chunk_end = current_end.replace(hour=10, minute=0, second=0, microsecond=0)
 
-            # Parse response
-            if not response or response.get("message") != "charts":
-                error_msg = response.get("message", "Unknown error") if response else "Empty response"
-                raise Exception(f"Error from Nubra API: {error_msg}")
+                # Format dates as ISO strings
+                start_iso = chunk_start.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                end_iso = chunk_end.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-            # Extract result data
-            result = response.get("result", [])
-            if not result:
-                logger.debug("Debug - No data in result array")
+                logger.debug(f"Debug - Fetching chunk from {start_iso} to {end_iso}")
+
+                # Build Nubra timeseries request payload
+                payload = {
+                    "query": [
+                        {
+                            "exchange": api_exchange,
+                            "type": instrument_type,
+                            "values": [br_symbol],
+                            "fields": ["open", "high", "low", "close", "tick_volume"],
+                            "startDate": start_iso,
+                            "endDate": end_iso,
+                            "interval": self.timeframe_map[interval],
+                            "intraDay": False,
+                            "realTime": False
+                        }
+                    ]
+                }
+
+                try:
+                    # Make API call to Nubra's timeseries endpoint
+                    response = get_api_response(
+                        "/charts/timeseries",
+                        self.auth_token,
+                        "POST",
+                        payload,
+                    )
+
+                    # Parse response
+                    if response and response.get("message") == "charts":
+                        result = response.get("result", [])
+                        if result:
+                            values_array = result[0].get("values", [])
+                            symbol_data = None
+                            for val in values_array:
+                                if br_symbol in val:
+                                    symbol_data = val[br_symbol]
+                                    break
+
+                            if symbol_data:
+                                # Extract OHLCV arrays
+                                open_data = symbol_data.get("open", [])
+                                high_data = symbol_data.get("high", [])
+                                low_data = symbol_data.get("low", [])
+                                close_data = symbol_data.get("close", [])
+                                volume_data = symbol_data.get("tick_volume", []) or symbol_data.get("cumulative_volume", [])
+
+                                # Process each field and merge into all_candles
+                                for item in open_data:
+                                    ts = item.get("ts", 0)
+                                    if ts not in all_candles:
+                                        all_candles[ts] = {"timestamp": ts, "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0}
+                                    all_candles[ts]["open"] = float(item.get("v", 0)) / 100
+
+                                for item in high_data:
+                                    ts = item.get("ts", 0)
+                                    if ts not in all_candles:
+                                        all_candles[ts] = {"timestamp": ts, "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0}
+                                    all_candles[ts]["high"] = float(item.get("v", 0)) / 100
+
+                                for item in low_data:
+                                    ts = item.get("ts", 0)
+                                    if ts not in all_candles:
+                                        all_candles[ts] = {"timestamp": ts, "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0}
+                                    all_candles[ts]["low"] = float(item.get("v", 0)) / 100
+
+                                for item in close_data:
+                                    ts = item.get("ts", 0)
+                                    if ts not in all_candles:
+                                        all_candles[ts] = {"timestamp": ts, "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0}
+                                    all_candles[ts]["close"] = float(item.get("v", 0)) / 100
+
+                                for item in volume_data:
+                                    ts = item.get("ts", 0)
+                                    if ts in all_candles:
+                                        all_candles[ts]["volume"] = int(item.get("v", 0))
+
+                                logger.debug(f"Debug - Chunk received {len(close_data)} candles")
+
+                except Exception as chunk_error:
+                    logger.error(f"Debug - Error fetching chunk {current_start} to {current_end}: {str(chunk_error)}")
+
+                # Move to next chunk
+                current_start = current_end + timedelta(days=1)
+
+                # Rate limit delay between chunks (0.3 seconds)
+                if current_start <= to_date:
+                    time.sleep(0.3)
+
+            # If no data was found, return empty DataFrame
+            if not all_candles:
+                logger.debug("Debug - No data received from API")
                 return pd.DataFrame(columns=["close", "high", "low", "open", "timestamp", "volume", "oi"])
-
-            # Get values array from first result
-            values_array = result[0].get("values", [])
-            if not values_array:
-                logger.debug("Debug - No values in result")
-                return pd.DataFrame(columns=["close", "high", "low", "open", "timestamp", "volume", "oi"])
-
-            # Find the symbol data in values array
-            symbol_data = None
-            for val in values_array:
-                if br_symbol in val:
-                    symbol_data = val[br_symbol]
-                    break
-
-            if not symbol_data:
-                logger.debug(f"Debug - Symbol {br_symbol} not found in response")
-                return pd.DataFrame(columns=["close", "high", "low", "open", "timestamp", "volume", "oi"])
-
-            # Extract OHLCV arrays
-            # Nubra format: {"open": [{"ts": nanoseconds, "v": value_in_paise}, ...], ...}
-            open_data = symbol_data.get("open", [])
-            high_data = symbol_data.get("high", [])
-            low_data = symbol_data.get("low", [])
-            close_data = symbol_data.get("close", [])
-            volume_data = symbol_data.get("tick_volume", []) or symbol_data.get("cumulative_volume", [])
-
-            if not close_data:
-                logger.debug("Debug - No candle data received")
-                return pd.DataFrame(columns=["close", "high", "low", "open", "timestamp", "volume", "oi"])
-
-            # Build a dictionary keyed by timestamp to align all fields
-            candle_dict = {}
-            
-            # Process each field
-            for item in open_data:
-                ts = item.get("ts", 0)
-                if ts not in candle_dict:
-                    candle_dict[ts] = {"timestamp": ts, "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0}
-                # Convert from paise to rupees
-                candle_dict[ts]["open"] = float(item.get("v", 0)) / 100
-
-            for item in high_data:
-                ts = item.get("ts", 0)
-                if ts not in candle_dict:
-                    candle_dict[ts] = {"timestamp": ts, "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0}
-                candle_dict[ts]["high"] = float(item.get("v", 0)) / 100
-
-            for item in low_data:
-                ts = item.get("ts", 0)
-                if ts not in candle_dict:
-                    candle_dict[ts] = {"timestamp": ts, "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0}
-                candle_dict[ts]["low"] = float(item.get("v", 0)) / 100
-
-            for item in close_data:
-                ts = item.get("ts", 0)
-                if ts not in candle_dict:
-                    candle_dict[ts] = {"timestamp": ts, "open": 0, "high": 0, "low": 0, "close": 0, "volume": 0}
-                candle_dict[ts]["close"] = float(item.get("v", 0)) / 100
-
-            for item in volume_data:
-                ts = item.get("ts", 0)
-                if ts in candle_dict:
-                    candle_dict[ts]["volume"] = int(item.get("v", 0))
 
             # Convert dictionary to list and sort by timestamp
-            candles = list(candle_dict.values())
+            candles = list(all_candles.values())
             candles.sort(key=lambda x: x["timestamp"])
 
             # Create DataFrame
             df = pd.DataFrame(candles)
 
-            if df.empty:
-                return pd.DataFrame(columns=["close", "high", "low", "open", "timestamp", "volume", "oi"])
-
             # Convert nanosecond timestamp to datetime
-            # Nubra timestamps are in nanoseconds
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ns")
 
             # For daily/weekly/monthly intervals, normalize to midnight (start of day)
