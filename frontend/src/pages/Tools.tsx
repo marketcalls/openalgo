@@ -39,6 +39,24 @@ const tools = [
     href: '/volsurface',
     color: 'bg-rose-500',
   },
+  {
+    title: 'GEX Dashboard',
+    description: 'Gamma Exposure analysis with OI Walls, Net GEX per strike, and top gamma strikes',
+    href: '/gex',
+    color: 'bg-indigo-500',
+  },
+  {
+    title: 'IV Smile',
+    description: 'Implied Volatility smile with Call/Put IV curves, ATM IV, and skew analysis',
+    href: '/ivsmile',
+    color: 'bg-cyan-500',
+  },
+  {
+    title: 'OI Profile',
+    description: 'Futures candlestick with OI butterfly and daily OI change across strikes',
+    href: '/oiprofile',
+    color: 'bg-orange-500',
+  },
 ]
 
 export default function Tools() {

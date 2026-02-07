@@ -221,6 +221,24 @@ def react_volsurface():
     return serve_react_app()
 
 
+# GEX Dashboard - Gamma Exposure analysis
+@react_bp.route("/gex")
+def react_gex():
+    return serve_react_app()
+
+
+# IV Smile - Implied Volatility smile curve
+@react_bp.route("/ivsmile")
+def react_ivsmile():
+    return serve_react_app()
+
+
+# OI Profile - Open Interest Profile with futures candles
+@react_bp.route("/oiprofile")
+def react_oiprofile():
+    return serve_react_app()
+
+
 # WebSocket market data test page
 @react_bp.route("/websocket/test")
 def react_websocket_test():
