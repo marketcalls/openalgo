@@ -89,7 +89,7 @@ kubectl apply -f kubernetes/ingress.yaml
 Or deploy everything at once:
 
 ```bash
-kubectl apply -f kubernetes/
+kubectl apply  -k kubernetes/
 ```
 
 ### 5. Verify Deployment
