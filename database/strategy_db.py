@@ -267,6 +267,12 @@ def toggle_strategy(strategy_id):
 
         strategy.is_active = not strategy.is_active
         db_session.commit()
+
+        # Invalidate cache so dashboard re-fetch gets fresh data
+        user_cache_key = f"user_{strategy.user_id}"
+        if user_cache_key in _user_strategies_cache:
+            del _user_strategies_cache[user_cache_key]
+
         return strategy
     except Exception as e:
         logger.exception(f"Error toggling strategy {strategy_id}: {str(e)}")
@@ -360,6 +366,13 @@ def delete_symbol_mapping(mapping_id):
         logger.exception(f"Error deleting symbol mapping {mapping_id}: {str(e)}")
         db_session.rollback()
         return False
+
+
+def invalidate_user_strategies_cache(user_id):
+    """Invalidate cached strategies for a specific user after mutations."""
+    cache_key = f"user_{user_id}"
+    if cache_key in _user_strategies_cache:
+        del _user_strategies_cache[cache_key]
 
 
 def clear_strategy_cache():

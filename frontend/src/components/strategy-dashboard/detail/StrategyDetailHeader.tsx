@@ -1,8 +1,12 @@
 import {
   ArrowLeft,
   Loader2,
+  Pause,
   Power,
+  PowerOff,
   RefreshCw,
+  Shield,
+  ShieldOff,
   Trash2,
 } from 'lucide-react'
 import { useState } from 'react'
@@ -40,7 +44,6 @@ const currencyFormat = new Intl.NumberFormat('en-IN', {
 
 export function StrategyDetailHeader({
   strategy,
-  connectionStatus,
   onBack,
   onRefresh,
 }: StrategyDetailHeaderProps) {
@@ -77,9 +80,9 @@ export function StrategyDetailHeader({
       if (strategy.risk_monitoring === 'active') {
         const res = await strategyDashboardApi.deactivateRisk(strategy.id)
         if (res.status === 'success') {
-          showToast.success('Risk monitoring deactivated', 'strategyRisk')
+          showToast.success('Risk monitoring paused', 'strategyRisk')
         } else {
-          showToast.error(res.message || 'Failed to deactivate', 'strategyRisk')
+          showToast.error(res.message || 'Failed to pause', 'strategyRisk')
         }
       } else {
         const res = await strategyDashboardApi.activateRisk(strategy.id)
@@ -121,39 +124,15 @@ export function StrategyDetailHeader({
     setTimeout(() => setRefreshing(false), 500)
   }
 
-  const statusDot =
-    connectionStatus === 'connected'
-      ? 'bg-green-500'
-      : connectionStatus === 'stale'
-        ? 'bg-amber-500'
-        : 'bg-red-500'
-
   return (
-    <div className="space-y-3">
-      {/* Back + Title row */}
+    <div className="space-y-4">
+      {/* Row 1: Back + Title + Info badges + P&L */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={onBack} className="h-8 w-8">
             <ArrowLeft className="h-4 w-4" />
           </Button>
-          <div className="flex items-center gap-3">
-            {/* Status dot */}
-            <div className="relative flex-shrink-0">
-              <div
-                className={`h-3 w-3 rounded-full ${
-                  strategy.risk_monitoring === 'active'
-                    ? 'bg-green-500'
-                    : strategy.risk_monitoring === 'paused'
-                      ? 'bg-amber-500'
-                      : 'bg-gray-400'
-                }`}
-              />
-              {strategy.risk_monitoring === 'active' && (
-                <div className="absolute inset-0 h-3 w-3 rounded-full bg-green-500 animate-ping opacity-75" />
-              )}
-            </div>
-            <h1 className="text-2xl font-bold tracking-tight">{strategy.name}</h1>
-          </div>
+          <h1 className="text-2xl font-bold tracking-tight">{strategy.name}</h1>
           <div className="flex items-center gap-1.5">
             <Badge variant="outline" className="text-xs">
               {strategy.platform}
@@ -164,15 +143,6 @@ export function StrategyDetailHeader({
             <Badge variant="outline" className="text-xs">
               {strategy.is_intraday ? 'Intraday' : 'Positional'}
             </Badge>
-            {!strategy.is_active && (
-              <Badge variant="secondary" className="text-xs">
-                Inactive
-              </Badge>
-            )}
-          </div>
-          <div className="flex items-center gap-1.5 ml-2">
-            <div className={`h-2 w-2 rounded-full ${statusDot}`} />
-            <span className="text-xs text-muted-foreground capitalize">{connectionStatus}</span>
           </div>
         </div>
 
@@ -203,34 +173,58 @@ export function StrategyDetailHeader({
         </div>
       </div>
 
-      {/* Action buttons */}
-      <div className="flex items-center gap-2 pl-11">
+      {/* Row 2: Toggle buttons + Delete */}
+      <div className="flex items-center gap-3 pl-11">
+        {/* Strategy toggle — single button that shows state + acts as toggle */}
         <Button
-          variant={strategy.is_active ? 'outline' : 'default'}
+          variant="outline"
           size="sm"
           onClick={handleToggle}
           disabled={toggling}
+          className={
+            strategy.is_active
+              ? 'border-green-500 text-green-600 hover:bg-green-50 dark:text-green-400 dark:hover:bg-green-950'
+              : ''
+          }
         >
           {toggling ? (
-            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+            <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+          ) : strategy.is_active ? (
+            <Power className="h-4 w-4 mr-1.5" />
           ) : (
-            <Power className="h-4 w-4 mr-1" />
+            <PowerOff className="h-4 w-4 mr-1.5" />
           )}
-          {strategy.is_active ? 'Deactivate Strategy' : 'Activate Strategy'}
+          {strategy.is_active ? 'Active' : 'Inactive'}
         </Button>
 
+        {/* Risk monitor toggle — single button that shows state + acts as toggle */}
         <Button
-          variant={strategy.risk_monitoring === 'active' ? 'outline' : 'default'}
+          variant="outline"
           size="sm"
           onClick={handleToggleRisk}
           disabled={togglingRisk}
+          className={
+            strategy.risk_monitoring === 'active'
+              ? 'border-green-500 text-green-600 hover:bg-green-50 dark:text-green-400 dark:hover:bg-green-950'
+              : strategy.risk_monitoring === 'paused'
+                ? 'border-amber-500 text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-950'
+                : ''
+          }
         >
           {togglingRisk ? (
-            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+            <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+          ) : strategy.risk_monitoring === 'active' ? (
+            <Shield className="h-4 w-4 mr-1.5" />
+          ) : strategy.risk_monitoring === 'paused' ? (
+            <Pause className="h-4 w-4 mr-1.5" />
           ) : (
-            <Power className="h-4 w-4 mr-1" />
+            <ShieldOff className="h-4 w-4 mr-1.5" />
           )}
-          {strategy.risk_monitoring === 'active' ? 'Pause Risk Monitor' : 'Activate Risk Monitor'}
+          {strategy.risk_monitoring === 'active'
+            ? 'Risk On'
+            : strategy.risk_monitoring === 'paused'
+              ? 'Risk Paused'
+              : 'Risk Off'}
         </Button>
 
         <div className="flex-1" />

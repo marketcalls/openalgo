@@ -430,6 +430,10 @@ def api_update_risk(strategy_id):
             setattr(strategy, key, value)
         db_session.commit()
 
+        # Invalidate cache so dashboard re-fetch gets fresh data
+        from database.strategy_db import invalidate_user_strategies_cache
+        invalidate_user_strategies_cache(user_id)
+
         return jsonify({
             "status": "success",
             "message": "Risk configuration updated",
@@ -522,6 +526,10 @@ def api_activate_risk(strategy_id):
         strategy.risk_monitoring = "active"
         db_session.commit()
 
+        # Invalidate cache so dashboard re-fetch gets fresh data
+        from database.strategy_db import invalidate_user_strategies_cache
+        invalidate_user_strategies_cache(user_id)
+
         # Tell risk engine to subscribe this strategy's positions
         from services.strategy_risk_engine import risk_engine
 
@@ -560,6 +568,10 @@ def api_deactivate_risk(strategy_id):
 
         strategy.risk_monitoring = "paused"
         db_session.commit()
+
+        # Invalidate cache so dashboard re-fetch gets fresh data
+        from database.strategy_db import invalidate_user_strategies_cache
+        invalidate_user_strategies_cache(user_id)
 
         # Tell risk engine to unsubscribe this strategy's positions
         from services.strategy_risk_engine import risk_engine

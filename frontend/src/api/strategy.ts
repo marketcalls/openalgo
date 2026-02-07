@@ -102,17 +102,26 @@ export const strategyApi = {
   },
 
   /**
-   * Search symbols
+   * Search symbols (uses rich search API with instrumenttype, lotsize, etc.)
    */
   searchSymbols: async (query: string, exchange?: string): Promise<SymbolSearchResult[]> => {
     const params = new URLSearchParams({ q: query })
-    if (exchange) {
-      params.append('exchange', exchange)
-    }
+    if (exchange) params.append('exchange', exchange)
     const response = await webClient.get<{ results: SymbolSearchResult[] }>(
-      `/strategy/search?${params.toString()}`
+      `/search/api/search?${params.toString()}`
     )
     return response.data.results || []
+  },
+
+  /**
+   * Get available underlyings for a derivative exchange
+   */
+  searchUnderlyings: async (exchange: string): Promise<string[]> => {
+    const params = new URLSearchParams({ exchange })
+    const response = await webClient.get<{ underlyings: string[] }>(
+      `/search/api/underlyings?${params.toString()}`
+    )
+    return response.data.underlyings || []
   },
 
   /**

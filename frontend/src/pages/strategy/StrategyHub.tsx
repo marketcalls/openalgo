@@ -120,7 +120,7 @@ export default function StrategyHub() {
       {strategies.length === 0 ? (
         <EmptyState variant="no-strategies" />
       ) : (
-        <div className="space-y-3">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 items-start">
           {strategies.map((strategy) => (
             <StrategyListCard key={strategy.id} strategy={strategy} />
           ))}

@@ -118,13 +118,6 @@ export interface CreateStrategyRequest {
 export type OrderMode = 'equity' | 'futures' | 'single_option' | 'multi_leg'
 export type ExpiryType = 'current_week' | 'next_week' | 'current_month' | 'next_month'
 
-export const ORDER_MODES: { value: OrderMode; label: string }[] = [
-  { value: 'equity', label: 'Equity' },
-  { value: 'futures', label: 'Futures' },
-  { value: 'single_option', label: 'Single Option' },
-  { value: 'multi_leg', label: 'Multi Leg' },
-]
-
 export const EXPIRY_TYPES: { value: ExpiryType; label: string }[] = [
   { value: 'current_week', label: 'Current Week' },
   { value: 'next_week', label: 'Next Week' },
@@ -164,6 +157,11 @@ export interface SymbolSearchResult {
   symbol: string
   name: string
   exchange: string
+  instrumenttype?: string
+  lotsize?: number
+  expiry?: string
+  strike?: number
+  token?: string
 }
 
 export type Platform = 'tradingview' | 'amibroker' | 'python' | 'metatrader' | 'excel' | 'others'
@@ -177,11 +175,24 @@ export const PLATFORMS: { value: Platform; label: string }[] = [
   { value: 'others', label: 'Others' },
 ]
 
-export const EXCHANGES = ['NSE', 'BSE', 'NFO', 'CDS', 'BFO', 'BCD', 'MCX', 'NCDEX'] as const
+export const EXCHANGES = ['NSE', 'BSE', 'NFO', 'CDS', 'BFO', 'BCD', 'MCX'] as const
 export type Exchange = (typeof EXCHANGES)[number]
 
 export const EQUITY_EXCHANGES = ['NSE', 'BSE'] as const
-export const DERIVATIVE_EXCHANGES = ['NFO', 'CDS', 'BFO', 'BCD', 'MCX', 'NCDEX'] as const
+export const DERIVATIVE_EXCHANGES = ['NFO', 'CDS', 'BFO', 'BCD', 'MCX'] as const
+
+export function isDerivativeExchange(exchange: string): boolean {
+  return (DERIVATIVE_EXCHANGES as readonly string[]).includes(exchange)
+}
+
+/** Maps derivative exchange to its underlying's exchange */
+export const UNDERLYING_EXCHANGE_MAP: Record<string, string> = {
+  NFO: 'NSE',
+  BFO: 'BSE',
+  MCX: 'MCX',
+  CDS: 'NSE',
+  BCD: 'BSE',
+}
 
 export function getProductTypes(exchange: string): string[] {
   if (EQUITY_EXCHANGES.includes(exchange as (typeof EQUITY_EXCHANGES)[number])) {
