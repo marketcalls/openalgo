@@ -168,6 +168,12 @@ def get_iv_chart_data(
     try:
         ist = pytz.timezone("Asia/Kolkata")
         today = datetime.now(ist).date()
+        # If today is a weekend (Saturday=5, Sunday=6), use last Friday
+        weekday = today.weekday()
+        if weekday == 5:  # Saturday
+            today = today - timedelta(days=1)
+        elif weekday == 6:  # Sunday
+            today = today - timedelta(days=2)
         end_date_str = today.strftime("%Y-%m-%d")
         start_date_str = (today - timedelta(days=max(1, days) - 1)).strftime("%Y-%m-%d")
 

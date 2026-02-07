@@ -35,7 +35,7 @@ def get_csp_config():
         csp_config["style-src"] = style_src
 
     # Image source directive
-    img_src = os.getenv("CSP_IMG_SRC", "'self' data:")
+    img_src = os.getenv("CSP_IMG_SRC", "'self' data: blob:")
     if img_src:
         csp_config["img-src"] = img_src
 

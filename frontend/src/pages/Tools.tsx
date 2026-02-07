@@ -15,6 +15,18 @@ const tools = [
     href: '/ivchart',
     color: 'bg-violet-500',
   },
+  {
+    title: 'OI Tracker',
+    description: 'Open Interest analysis with CE/PE OI bars, PCR overlay, and ATM strike marker',
+    href: '/oitracker',
+    color: 'bg-blue-500',
+  },
+  {
+    title: 'Max Pain',
+    description: 'Max Pain strike calculation with visual pain distribution across strikes',
+    href: '/maxpain',
+    color: 'bg-amber-500',
+  },
 ]
 
 export default function Tools() {
