@@ -1,0 +1,1 @@
+import{v as s}from"./index-D9ef9b6u.js";const r={getOptionChain:async(t,e,o,i,n)=>(await s.post("/optionchain",{apikey:t,underlying:e,exchange:o,expiry_date:i,strike_count:n??20})).data,getExpiries:async(t,e,o,i="options")=>(await s.post("/expiry",{apikey:t,symbol:e,exchange:o,instrumenttype:i})).data};export{r as o};
