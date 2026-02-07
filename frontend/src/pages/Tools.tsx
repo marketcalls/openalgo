@@ -27,6 +27,12 @@ const tools = [
     href: '/maxpain',
     color: 'bg-amber-500',
   },
+  {
+    title: 'Straddle Chart',
+    description: 'Dynamic ATM Straddle chart with rolling strike, Spot, and Synthetic Futures overlay',
+    href: '/straddle',
+    color: 'bg-teal-500',
+  },
 ]
 
 export default function Tools() {

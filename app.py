@@ -35,6 +35,7 @@ from blueprints.gc_json import gc_json_bp
 from blueprints.historify import historify_bp  # Import the historify blueprint
 from blueprints.ivchart import ivchart_bp  # Import the IV chart blueprint
 from blueprints.oitracker import oitracker_bp  # Import the OI tracker blueprint
+from blueprints.straddle_chart import straddle_bp  # Import the straddle chart blueprint
 from blueprints.latency import latency_bp  # Import the latency blueprint
 from blueprints.health import health_bp  # Import the health monitoring blueprint
 from blueprints.log import log_bp
@@ -240,6 +241,7 @@ def create_app():
     app.register_blueprint(historify_bp)  # Register Historify blueprint
     app.register_blueprint(ivchart_bp)  # Register IV chart blueprint
     app.register_blueprint(oitracker_bp)  # Register OI tracker blueprint
+    app.register_blueprint(straddle_bp)  # Register straddle chart blueprint
     app.register_blueprint(flow_bp)  # Register Flow blueprint
     app.register_blueprint(broker_credentials_bp)  # Register Broker credentials blueprint
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint

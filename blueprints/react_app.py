@@ -209,6 +209,12 @@ def react_maxpain():
     return serve_react_app()
 
 
+# Straddle Chart - Dynamic ATM Straddle analysis
+@react_bp.route("/straddle")
+def react_straddle():
+    return serve_react_app()
+
+
 # WebSocket market data test page
 @react_bp.route("/websocket/test")
 def react_websocket_test():
