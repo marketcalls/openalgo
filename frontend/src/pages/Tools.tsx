@@ -33,6 +33,12 @@ const tools = [
     href: '/straddle',
     color: 'bg-teal-500',
   },
+  {
+    title: 'Vol Surface',
+    description: '3D Implied Volatility surface across strikes and expiries using live option chain data',
+    href: '/volsurface',
+    color: 'bg-rose-500',
+  },
 ]
 
 export default function Tools() {
