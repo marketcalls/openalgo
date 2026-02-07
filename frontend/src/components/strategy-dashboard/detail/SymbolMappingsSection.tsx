@@ -415,7 +415,11 @@ export function SymbolMappingsSection({
                           />
                           <CommandList>
                             <CommandEmpty>
-                              {searchLoading ? 'Searching...' : 'No symbols found.'}
+                              {searchLoading
+                                ? 'Searching...'
+                                : symbolSearch.length < 2
+                                  ? 'Type to search symbols...'
+                                  : 'No symbols found.'}
                             </CommandEmpty>
                             <CommandGroup>
                               {searchResults.map((result) => (
@@ -468,7 +472,11 @@ export function SymbolMappingsSection({
                           />
                           <CommandList>
                             <CommandEmpty>
-                              {underlyingsLoading ? 'Loading...' : 'No underlyings found.'}
+                              {underlyingsLoading
+                                ? 'Loading underlyings...'
+                                : underlyings.length === 0
+                                  ? 'No underlyings available.'
+                                  : 'No match found.'}
                             </CommandEmpty>
                             <CommandGroup>
                               {filteredUnderlyings.slice(0, 50).map((u) => (
