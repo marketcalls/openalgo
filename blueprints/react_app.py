@@ -197,6 +197,18 @@ def react_ivchart():
     return serve_react_app()
 
 
+# OI Tracker for open interest analysis
+@react_bp.route("/oitracker")
+def react_oitracker():
+    return serve_react_app()
+
+
+# Max Pain analysis
+@react_bp.route("/maxpain")
+def react_maxpain():
+    return serve_react_app()
+
+
 # WebSocket market data test page
 @react_bp.route("/websocket/test")
 def react_websocket_test():

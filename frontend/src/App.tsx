@@ -54,6 +54,8 @@ const HistorifyCharts = lazy(() => import('@/pages/HistorifyCharts'))
 const Tools = lazy(() => import('@/pages/Tools'))
 const OptionChain = lazy(() => import('@/pages/OptionChain'))
 const IVChart = lazy(() => import('@/pages/IVChart'))
+const OITracker = lazy(() => import('@/pages/OITracker'))
+const MaxPain = lazy(() => import('@/pages/MaxPain'))
 
 // Strategy pages
 const StrategyIndex = lazy(() => import('@/pages/strategy/StrategyIndex'))
@@ -147,6 +149,8 @@ function App() {
                 <Route path="/tools" element={<Tools />} />
                 <Route path="/optionchain" element={<OptionChain />} />
                 <Route path="/ivchart" element={<IVChart />} />
+                <Route path="/oitracker" element={<OITracker />} />
+                <Route path="/maxpain" element={<MaxPain />} />
                 <Route path="/websocket/test" element={<WebSocketTest />} />
                 <Route path="/websocket/test/20" element={<WebSocketTest depthLevel={20} />} />
                 <Route path="/websocket/test/30" element={<WebSocketTest depthLevel={30} />} />

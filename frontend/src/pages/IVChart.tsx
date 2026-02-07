@@ -19,6 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { showToast } from '@/utils/toast'
 
@@ -455,9 +456,9 @@ export default function IVChart() {
               </SelectContent>
             </Select>
 
-            {isLoading && (
-              <span className="text-sm text-muted-foreground ml-2">Loading...</span>
-            )}
+            <Button variant="outline" size="sm" onClick={loadData} disabled={isLoading}>
+              {isLoading ? 'Loading...' : 'Refresh'}
+            </Button>
           </div>
 
           {/* Info bar */}
