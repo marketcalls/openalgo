@@ -57,6 +57,7 @@ const IVChart = lazy(() => import('@/pages/IVChart'))
 const OITracker = lazy(() => import('@/pages/OITracker'))
 const MaxPain = lazy(() => import('@/pages/MaxPain'))
 const StraddleChart = lazy(() => import('@/pages/StraddleChart'))
+const VolSurface = lazy(() => import('@/pages/VolSurface'))
 
 // Strategy pages
 const StrategyIndex = lazy(() => import('@/pages/strategy/StrategyIndex'))
@@ -153,6 +154,7 @@ function App() {
                 <Route path="/oitracker" element={<OITracker />} />
                 <Route path="/maxpain" element={<MaxPain />} />
                 <Route path="/straddle" element={<StraddleChart />} />
+                <Route path="/volsurface" element={<VolSurface />} />
                 <Route path="/websocket/test" element={<WebSocketTest />} />
                 <Route path="/websocket/test/20" element={<WebSocketTest depthLevel={20} />} />
                 <Route path="/websocket/test/30" element={<WebSocketTest depthLevel={30} />} />

@@ -215,6 +215,12 @@ def react_straddle():
     return serve_react_app()
 
 
+# Vol Surface - 3D Implied Volatility surface
+@react_bp.route("/volsurface")
+def react_volsurface():
+    return serve_react_app()
+
+
 # WebSocket market data test page
 @react_bp.route("/websocket/test")
 def react_websocket_test():
