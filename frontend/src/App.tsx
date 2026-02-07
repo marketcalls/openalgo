@@ -58,6 +58,9 @@ const OITracker = lazy(() => import('@/pages/OITracker'))
 const MaxPain = lazy(() => import('@/pages/MaxPain'))
 const StraddleChart = lazy(() => import('@/pages/StraddleChart'))
 const VolSurface = lazy(() => import('@/pages/VolSurface'))
+const GEXDashboard = lazy(() => import('@/pages/GEXDashboard'))
+const IVSmile = lazy(() => import('@/pages/IVSmile'))
+const OIProfile = lazy(() => import('@/pages/OIProfile'))
 
 // Strategy pages
 const StrategyIndex = lazy(() => import('@/pages/strategy/StrategyIndex'))
@@ -155,6 +158,9 @@ function App() {
                 <Route path="/maxpain" element={<MaxPain />} />
                 <Route path="/straddle" element={<StraddleChart />} />
                 <Route path="/volsurface" element={<VolSurface />} />
+                <Route path="/gex" element={<GEXDashboard />} />
+                <Route path="/ivsmile" element={<IVSmile />} />
+                <Route path="/oiprofile" element={<OIProfile />} />
                 <Route path="/websocket/test" element={<WebSocketTest />} />
                 <Route path="/websocket/test/20" element={<WebSocketTest depthLevel={20} />} />
                 <Route path="/websocket/test/30" element={<WebSocketTest depthLevel={30} />} />

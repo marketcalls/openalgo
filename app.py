@@ -32,6 +32,9 @@ from blueprints.core import core_bp
 from blueprints.dashboard import dashboard_bp
 from blueprints.flow import flow_bp  # Import the flow blueprint
 from blueprints.gc_json import gc_json_bp
+from blueprints.gex import gex_bp  # Import the GEX blueprint
+from blueprints.ivsmile import ivsmile_bp  # Import the IV Smile blueprint
+from blueprints.oiprofile import oiprofile_bp  # Import the OI Profile blueprint
 from blueprints.historify import historify_bp  # Import the historify blueprint
 from blueprints.ivchart import ivchart_bp  # Import the IV chart blueprint
 from blueprints.oitracker import oitracker_bp  # Import the OI tracker blueprint
@@ -244,6 +247,9 @@ def create_app():
     app.register_blueprint(oitracker_bp)  # Register OI tracker blueprint
     app.register_blueprint(straddle_bp)  # Register straddle chart blueprint
     app.register_blueprint(vol_surface_bp)  # Register vol surface blueprint
+    app.register_blueprint(gex_bp)  # Register GEX blueprint
+    app.register_blueprint(ivsmile_bp)  # Register IV Smile blueprint
+    app.register_blueprint(oiprofile_bp)  # Register OI Profile blueprint
     app.register_blueprint(flow_bp)  # Register Flow blueprint
     app.register_blueprint(broker_credentials_bp)  # Register Broker credentials blueprint
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
