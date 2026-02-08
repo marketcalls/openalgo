@@ -130,6 +130,47 @@ Legend: `Y` = Supported | `-` = Not Implemented | `S` = Stub (function exists bu
 > `Y*` = Alice Blue: partial history support (some exchanges not supported)
 > **S** = Stub: function exists but returns empty data or raises NotImplementedError
 
+### WebSocket Streaming Depth Levels
+
+Most brokers provide only 5-level market depth via WebSocket. A few brokers support 20-level or 50-level depth for NSE/NFO exchanges.
+
+| Broker | 5-Depth | 20-Depth | 50-Depth | Notes |
+|--------|:-:|:-:|:-:|-------|
+| 5 Paisa | Y | **-** | **-** | 5 levels all exchanges |
+| 5 Paisa (XTS) | Y | Y | **-** | 20 depth for NSE/NFO only |
+| Alice Blue | Y | **-** | **-** | 5 levels all exchanges |
+| Angel One | Y | **-** | **-** | 5 levels all exchanges (best_5 data) |
+| CompositEdge | Y | Y | **-** | 20 depth for NSE/NFO only |
+| Definedge | Y | **-** | **-** | 5 levels all exchanges |
+| Dhan | Y | Y | **-** | 20 depth for NSE/NFO (max 50 instruments); auto-fallback to 5 |
+| Dhan (Sandbox) | Y | Y | **-** | 20 depth for NSE/NFO; separate 20-depth WebSocket connection |
+| Firstock | Y | **-** | **-** | 5 levels all exchanges |
+| Flattrade | Y | **-** | **-** | 5 levels all exchanges |
+| Fyers | Y | **-** | Y | 50 depth via TBT (Tick-by-Tick) WebSocket |
+| Groww | Y | **-** | **-** | 5 levels all exchanges |
+| Ibulls | Y | Y | **-** | 20 depth for NSE/NFO only |
+| IIFL | Y | Y | **-** | 20 depth for NSE/NFO only |
+| IndMoney | 1* | **-** | **-** | Best bid/ask only (1 level) |
+| JainamXts | Y | Y | **-** | 20 depth for NSE/NFO only |
+| Kotak Securities | Y | **-** | **-** | 5 levels all exchanges |
+| Motilal Oswal | Y | **-** | **-** | 5 levels all exchanges |
+| mStock | Y | **-** | **-** | 5 levels all exchanges |
+| Nubra | Y | **-** | **-** | 5 levels all exchanges (Angel-based) |
+| Paytm Money | Y | **-** | **-** | 5 levels all exchanges |
+| Pocketful | Y | **-** | **-** | 5 levels all exchanges |
+| Samco | Y | **-** | **-** | 5 levels all exchanges |
+| Shoonya | Y | **-** | **-** | 5 levels all exchanges |
+| Tradejini | Y | **-** | **-** | 5 levels all exchanges |
+| Upstox | Y | **-** | **-** | 5 levels via "full" mode |
+| Wisdom Capital | Y | Y | **-** | 20 depth for NSE/NFO only |
+| Zebu | Y | **-** | **-** | 5 levels all exchanges |
+| Zerodha | Y | **-** | **-** | 5 levels via MODE_FULL |
+
+> `1*` = IndMoney provides only best bid/ask (1 level depth), not full 5-level depth
+> 20-depth support is typically limited to **NSE and NFO** exchanges. BSE, MCX, CDS, BFO remain 5-depth only.
+> Fyers 50-depth uses a separate **TBT (Tick-by-Tick) WebSocket** connection.
+> Dhan limits 20-depth to a maximum of **50 instruments** per connection.
+
 ### Options & Analytics
 
 | Broker | Option Chain | Option Symbol | Options Order | Multi-Leg Options | Synthetic Future | Option Greeks | Multi Greeks |
@@ -379,6 +420,7 @@ Each broker implements its API through three core files in `broker/<name>/api/`:
 - **Funds**: get_margin_data
 - **Margin**: calculate_margin_api (**stub** — raises NotImplementedError)
 - **Streaming**: Yes
+- **WS Depth**: 5 + 20 levels (NSE/NFO only)
 
 #### Alice Blue (`aliceblue`)
 - **Auth**: TOTP
@@ -404,6 +446,7 @@ Each broker implements its API through three core files in `broker/<name>/api/`:
 - **Funds**: get_margin_data
 - **Margin**: calculate_margin_api (**stub** — raises NotImplementedError)
 - **Streaming**: Yes
+- **WS Depth**: 5 + 20 levels (NSE/NFO only)
 
 #### Definedge (`definedge`)
 - **Auth**: TOTP
@@ -422,6 +465,7 @@ Each broker implements its API through three core files in `broker/<name>/api/`:
 - **Funds**: get_margin_data
 - **Margin**: calculate_margin_api
 - **Streaming**: Yes
+- **WS Depth**: 5 + 20 levels (NSE/NFO; max 50 instruments for 20-depth; auto-fallback to 5)
 
 #### Dhan Sandbox (`dhan_sandbox`)
 - **Auth**: TOTP
@@ -431,6 +475,7 @@ Each broker implements its API through three core files in `broker/<name>/api/`:
 - **Funds**: get_margin_data
 - **Margin**: calculate_margin_api
 - **Streaming**: Yes
+- **WS Depth**: 5 + 20 levels (NSE/NFO; separate 20-depth WebSocket connection)
 
 #### Firstock (`firstock`)
 - **Auth**: TOTP
@@ -457,6 +502,7 @@ Each broker implements its API through three core files in `broker/<name>/api/`:
 - **Funds**: get_margin_data
 - **Margin**: calculate_margin_api
 - **Streaming**: Yes (HSM + TBT WebSocket)
+- **WS Depth**: 5 + **50 levels** (via TBT Tick-by-Tick WebSocket)
 
 #### Groww (`groww`)
 - **Auth**: TOTP
@@ -473,6 +519,7 @@ Each broker implements its API through three core files in `broker/<name>/api/`:
 - **Funds**: get_margin_data
 - **Margin**: calculate_margin_api (**stub** — raises NotImplementedError)
 - **Streaming**: Yes
+- **WS Depth**: 5 + 20 levels (NSE/NFO only)
 
 #### IIFL (`iifl`)
 - **Auth**: TOTP
@@ -481,6 +528,7 @@ Each broker implements its API through three core files in `broker/<name>/api/`:
 - **Funds**: get_margin_data
 - **Margin**: calculate_margin_api (**stub** — raises NotImplementedError)
 - **Streaming**: Yes
+- **WS Depth**: 5 + 20 levels (NSE/NFO only)
 
 #### IndMoney (`indmoney`)
 - **Auth**: TOTP
@@ -489,6 +537,7 @@ Each broker implements its API through three core files in `broker/<name>/api/`:
 - **Funds**: get_margin_data
 - **Margin**: calculate_margin_api
 - **Streaming**: Yes
+- **WS Depth**: 1 level only (best bid/ask)
 
 #### JainamXts (`jainamxts`)
 - **Auth**: TOTP
@@ -497,6 +546,7 @@ Each broker implements its API through three core files in `broker/<name>/api/`:
 - **Funds**: get_margin_data
 - **Margin**: calculate_margin_api (**stub** — raises NotImplementedError)
 - **Streaming**: Yes
+- **WS Depth**: 5 + 20 levels (NSE/NFO only)
 
 #### Kotak Securities (`kotak`)
 - **Auth**: TOTP
@@ -597,6 +647,7 @@ Each broker implements its API through three core files in `broker/<name>/api/`:
 - **Funds**: get_margin_data
 - **Margin**: calculate_margin_api (**stub** — raises NotImplementedError)
 - **Streaming**: Yes
+- **WS Depth**: 5 + 20 levels (NSE/NFO only)
 
 #### Zebu (`zebu`)
 - **Auth**: TOTP
@@ -633,6 +684,9 @@ Each broker implements its API through three core files in `broker/<name>/api/`:
 | Brokers with **Working** Intervals API | 14/29 (48%) |
 | Brokers with Streaming | 29/29 (100%) |
 | Brokers with **Working** Margin Calculator | 15/29 (52%) |
+| Brokers with **5-Depth** WebSocket | 28/29 (97%) |
+| Brokers with **20-Depth** WebSocket | 8/29 (28%) |
+| Brokers with **50-Depth** WebSocket | 1/29 (3%) |
 
 ### Feature Gap Summary
 
@@ -644,3 +698,6 @@ Each broker implements its API through three core files in `broker/<name>/api/`:
 | Intervals | **Stub** | Kotak, Motilal, Paytm, Pocketful | `/api/v1/intervals` returns empty data |
 | Margin Calc | **Stub** | 5 Paisa, 5 Paisa XTS, Alice Blue, CompositEdge, Firstock, Ibulls, IIFL, JainamXts, Motilal, Paytm, Pocketful, Tradejini, Wisdom, Zebu | `/api/v1/margin` raises NotImplementedError |
 | Multi Quotes | **Missing** | Dhan Sandbox | `/api/v1/multiquotes` endpoint unavailable |
+| WS Depth | **1 level only** | IndMoney | Best bid/ask only, no full 5-level depth |
+| WS 20-Depth | **Not supported** | 21 brokers | Only 5-level depth available via WebSocket |
+| WS 50-Depth | **Fyers only** | 28 brokers | Only Fyers supports 50-level TBT depth |
