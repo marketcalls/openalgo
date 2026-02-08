@@ -243,14 +243,13 @@ export default function BrokerSelect() {
                       <SelectValue placeholder="Select a Broker" />
                     </SelectTrigger>
                     <SelectContent>
-                      {allBrokers.map((broker) => {
-                        const isEnabled = broker.id === brokerConfig?.broker_name
-                        return (
-                          <SelectItem key={broker.id} value={broker.id} disabled={!isEnabled}>
-                            {broker.name} {!isEnabled && '(Disabled)'}
+                      {allBrokers
+                        .filter((broker) => broker.id === brokerConfig?.broker_name)
+                        .map((broker) => (
+                          <SelectItem key={broker.id} value={broker.id}>
+                            {broker.name}
                           </SelectItem>
-                        )
-                      })}
+                        ))}
                     </SelectContent>
                   </Select>
                 </div>
