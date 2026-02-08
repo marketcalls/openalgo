@@ -90,9 +90,8 @@ def _get_quote_exchange(base_symbol, underlying_exchange):
         return "NSE_INDEX"
     if base_symbol in BSE_INDEX_SYMBOLS:
         return "BSE_INDEX"
-    # If exchange is already an index exchange, use as-is
-    if underlying_exchange.upper() in ("NSE_INDEX", "BSE_INDEX"):
-        return underlying_exchange.upper()
+    if underlying_exchange.upper() in ("NFO", "BFO"):
+        return "NSE" if underlying_exchange.upper() == "NFO" else "BSE"
     return underlying_exchange.upper()
 
 

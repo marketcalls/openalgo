@@ -7,9 +7,7 @@ import {
   type IChartApi,
   type ISeriesApi,
 } from 'lightweight-charts'
-import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
-import { optionChainApi } from '@/api/option-chain'
 import { ivChartApi, type IVChartData } from '@/api/iv-chart'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
@@ -23,13 +21,15 @@ import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { showToast } from '@/utils/toast'
 
-const UNDERLYINGS = [
-  { value: 'NIFTY', label: 'NIFTY', exchange: 'NFO', brokerExchange: 'NSE_INDEX' },
-  { value: 'BANKNIFTY', label: 'BANKNIFTY', exchange: 'NFO', brokerExchange: 'NSE_INDEX' },
-  { value: 'SENSEX', label: 'SENSEX', exchange: 'BFO', brokerExchange: 'BSE_INDEX' },
-  { value: 'FINNIFTY', label: 'FINNIFTY', exchange: 'NFO', brokerExchange: 'NSE_INDEX' },
-  { value: 'MIDCPNIFTY', label: 'MIDCPNIFTY', exchange: 'NFO', brokerExchange: 'NSE_INDEX' },
+const FNO_EXCHANGES = [
+  { value: 'NFO', label: 'NFO' },
+  { value: 'BFO', label: 'BFO' },
 ]
+
+const DEFAULT_UNDERLYINGS: Record<string, string[]> = {
+  NFO: ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'],
+  BFO: ['SENSEX', 'BANKEX'],
+}
 
 const METRICS = ['iv', 'delta', 'theta', 'vega', 'gamma'] as const
 type MetricKey = (typeof METRICS)[number]
@@ -89,12 +89,13 @@ interface ChartInstance {
 export default function IVChart() {
   const { mode } = useThemeStore()
   const isDarkMode = mode === 'dark'
-  const { apiKey } = useAuthStore()
 
   // Control state
   const [isLoading, setIsLoading] = useState(false)
   const [activeTab, setActiveTab] = useState<MetricKey>('iv')
-  const [selectedUnderlying, setSelectedUnderlying] = useState(UNDERLYINGS[0].value)
+  const [selectedExchange, setSelectedExchange] = useState('NFO')
+  const [underlyings, setUnderlyings] = useState<string[]>(DEFAULT_UNDERLYINGS.NFO)
+  const [selectedUnderlying, setSelectedUnderlying] = useState('NIFTY')
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState('')
   const [intervals, setIntervals] = useState<string[]>([])
@@ -107,8 +108,7 @@ export default function IVChart() {
   const chartsRef = useRef<Map<string, ChartInstance>>(new Map())
   const chartDataRef = useRef<IVChartData | null>(null)
 
-  const underlyingConfig =
-    UNDERLYINGS.find((u) => u.value === selectedUnderlying) || UNDERLYINGS[0]
+  // Send NFO/BFO directly — backend resolves correct exchange for index vs stock
 
   // Stable ref callbacks - one per chart container, never recreated
   const refCallbacks = useMemo(() => {
@@ -311,26 +311,68 @@ export default function IVChart() {
     fetchIntervals()
   }, [])
 
+  // Fetch underlyings when exchange changes
   useEffect(() => {
-    const fetchExpiries = async () => {
-      if (!apiKey) return
+    const defaults = DEFAULT_UNDERLYINGS[selectedExchange] || []
+    setUnderlyings(defaults)
+    setSelectedUnderlying(defaults[0] || '')
+    setExpiries([])
+    setSelectedExpiry('')
+    setChartData(null)
+    chartDataRef.current = null
+
+    let cancelled = false
+    const fetchUnderlyings = async () => {
       try {
-        const res = await optionChainApi.getExpiries(
-          apiKey,
-          underlyingConfig.value,
-          underlyingConfig.exchange,
-          'options'
-        )
-        if (res.status === 'success' && res.data) {
-          setExpiries(res.data)
-          if (res.data.length > 0) setSelectedExpiry(res.data[0])
+        const response = await ivChartApi.getUnderlyings(selectedExchange)
+        if (cancelled) return
+        if (response.status === 'success' && response.underlyings.length > 0) {
+          setUnderlyings(response.underlyings)
+          if (!response.underlyings.includes(defaults[0])) {
+            setSelectedUnderlying(response.underlyings[0])
+          }
         }
       } catch {
+        // Keep defaults
+      }
+    }
+    fetchUnderlyings()
+    return () => {
+      cancelled = true
+    }
+  }, [selectedExchange])
+
+  // Fetch expiries when underlying changes
+  useEffect(() => {
+    if (!selectedUnderlying) return
+    setExpiries([])
+    setSelectedExpiry('')
+    setChartData(null)
+    chartDataRef.current = null
+
+    let cancelled = false
+    const fetchExpiries = async () => {
+      try {
+        const response = await ivChartApi.getExpiries(selectedExchange, selectedUnderlying)
+        if (cancelled) return
+        if (response.status === 'success' && response.expiries.length > 0) {
+          setExpiries(response.expiries)
+          setSelectedExpiry(response.expiries[0])
+        } else {
+          setExpiries([])
+          setSelectedExpiry('')
+        }
+      } catch {
+        if (cancelled) return
         showToast.error('Failed to fetch expiry dates', 'positions')
       }
     }
     fetchExpiries()
-  }, [apiKey, underlyingConfig.value, underlyingConfig.exchange])
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedUnderlying])
 
   // ── Load IV + Greeks data ───────────────────────────────────────
 
@@ -339,8 +381,8 @@ export default function IVChart() {
     setIsLoading(true)
     try {
       const res = await ivChartApi.getIVData({
-        underlying: underlyingConfig.value,
-        exchange: underlyingConfig.brokerExchange,
+        underlying: selectedUnderlying,
+        exchange: selectedExchange,
         expiry_date: convertExpiryForAPI(selectedExpiry),
         interval: selectedInterval,
         days: parseInt(selectedDays),
@@ -357,7 +399,7 @@ export default function IVChart() {
     } finally {
       setIsLoading(false)
     }
-  }, [selectedExpiry, selectedInterval, selectedDays, underlyingConfig, updateAllCharts])
+  }, [selectedExpiry, selectedInterval, selectedDays, selectedUnderlying, selectedExchange, updateAllCharts])
 
   useEffect(() => {
     loadData()
@@ -404,14 +446,27 @@ export default function IVChart() {
         <CardContent>
           {/* Controls */}
           <div className="flex flex-wrap items-center gap-3 mb-4">
+            <Select value={selectedExchange} onValueChange={setSelectedExchange}>
+              <SelectTrigger className="w-[100px]">
+                <SelectValue placeholder="Exchange" />
+              </SelectTrigger>
+              <SelectContent>
+                {FNO_EXCHANGES.map((ex) => (
+                  <SelectItem key={ex.value} value={ex.value}>
+                    {ex.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
             <Select value={selectedUnderlying} onValueChange={setSelectedUnderlying}>
               <SelectTrigger className="w-[140px]">
                 <SelectValue placeholder="Underlying" />
               </SelectTrigger>
               <SelectContent>
-                {UNDERLYINGS.map((u) => (
-                  <SelectItem key={u.value} value={u.value}>
-                    {u.label}
+                {underlyings.map((u) => (
+                  <SelectItem key={u} value={u}>
+                    {u}
                   </SelectItem>
                 ))}
               </SelectContent>

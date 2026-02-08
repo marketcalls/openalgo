@@ -3,6 +3,19 @@ import type { OptionChainResponse, OptionStrike } from '@/types/option-chain'
 import { useOptionChainPolling } from './useOptionChainPolling'
 import { useMarketData } from './useMarketData'
 
+// Index symbols that use NSE_INDEX/BSE_INDEX for quotes (matches backend lists)
+const NSE_INDEX_SYMBOLS = new Set([
+  'NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY',
+  'NIFTYNXT50', 'NIFTYIT', 'NIFTYPHARMA', 'NIFTYBANK',
+])
+const BSE_INDEX_SYMBOLS = new Set(['SENSEX', 'BANKEX', 'SENSEX50'])
+
+function getUnderlyingExchange(symbol: string, optionExchange: string): string {
+  if (NSE_INDEX_SYMBOLS.has(symbol)) return 'NSE_INDEX'
+  if (BSE_INDEX_SYMBOLS.has(symbol)) return 'BSE_INDEX'
+  return optionExchange === 'BFO' ? 'BSE' : 'NSE'
+}
+
 // Round price to nearest tick size (e.g., 0.05 for options)
 // Fixes broker WebSocket data that may not be aligned to tick size
 function roundToTickSize(price: number | undefined, tickSize: number | undefined): number | undefined {
@@ -68,10 +81,10 @@ export function useOptionChainLive(
   const wsSymbols = useMemo(() => {
     const symbols: Array<{ symbol: string; exchange: string }> = []
 
-    // Add underlying index symbol for real-time spot price
-    // Map exchange to index exchange (NSE_INDEX for NFO, BSE_INDEX for BFO)
-    const indexExchange = optionExchange === 'BFO' ? 'BSE_INDEX' : 'NSE_INDEX'
-    symbols.push({ symbol: underlying, exchange: indexExchange })
+    // Add underlying symbol for real-time spot price
+    // Use correct exchange based on whether it's an index or stock
+    const underlyingExch = getUnderlyingExchange(underlying, optionExchange)
+    symbols.push({ symbol: underlying, exchange: underlyingExch })
 
     // Add all option symbols
     if (polledData?.chain) {
@@ -180,8 +193,8 @@ export function useOptionChainLive(
     }
 
     // Get real-time underlying spot price from WebSocket
-    const indexExchange = optionExchange === 'BFO' ? 'BSE_INDEX' : 'NSE_INDEX'
-    const underlyingKey = `${indexExchange}:${underlying}`
+    const underlyingExch = getUnderlyingExchange(underlying, optionExchange)
+    const underlyingKey = `${underlyingExch}:${underlying}`
     const underlyingWsData = wsData.get(underlyingKey)
     const underlyingLtp = underlyingWsData?.data?.ltp ?? polledData.underlying_ltp
 
