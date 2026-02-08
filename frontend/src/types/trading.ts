@@ -34,6 +34,7 @@ export interface Trade {
   product: string
   orderid: string
   timestamp: string
+  strategy?: string
 }
 
 export interface Holding {
