@@ -17,12 +17,12 @@ from openalgo import api, ta
 from plotly.subplots import make_subplots
 
 # ───────────────────────── CONFIG ─────────────────────────
-API_KEY = "3f75e26648a543a886c9b38332a6942e30e0710bbf0488cf432ef27745de8ae7"
+API_KEY = "dfae8e3a1ce08f60754b0d3597553d7c14957542104b431e4b881c089864a35e"
 API_HOST = "http://127.0.0.1:5000"
 
-SYMBOL = "RELIANCE"
+SYMBOL = "SBIN"
 EXCHANGE = "NSE"
-INTERVAL = "1h"
+INTERVAL = "15m"
 
 # Date range controls (last 1 year)
 END_DATE = datetime.now().strftime("%Y-%m-%d")
@@ -53,6 +53,7 @@ def fetch_historical_data():
         interval=INTERVAL,
         start_date=START_DATE,
         end_date=END_DATE,
+        source = "db"
     )
 
     # Print the raw response info
