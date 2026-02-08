@@ -60,6 +60,16 @@ export interface IntervalsResponse {
   data?: IntervalsData
 }
 
+export interface UnderlyingsResponse {
+  status: 'success' | 'error'
+  underlyings: string[]
+}
+
+export interface ExpiriesResponse {
+  status: 'success' | 'error'
+  expiries: string[]
+}
+
 export const ivChartApi = {
   getIVData: async (params: {
     underlying: string
@@ -86,6 +96,20 @@ export const ivChartApi = {
 
   getIntervals: async (): Promise<IntervalsResponse> => {
     const response = await webClient.get<IntervalsResponse>('/ivchart/api/intervals')
+    return response.data
+  },
+
+  getUnderlyings: async (exchange: string): Promise<UnderlyingsResponse> => {
+    const response = await webClient.get<UnderlyingsResponse>(
+      `/search/api/underlyings?exchange=${exchange}`
+    )
+    return response.data
+  },
+
+  getExpiries: async (exchange: string, underlying: string): Promise<ExpiriesResponse> => {
+    const response = await webClient.get<ExpiriesResponse>(
+      `/search/api/expiries?exchange=${exchange}&underlying=${underlying}`
+    )
     return response.data
   },
 }

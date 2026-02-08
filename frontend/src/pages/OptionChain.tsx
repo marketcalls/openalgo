@@ -3,7 +3,7 @@ import { RefreshCw, TrendingUp, Wifi, WifiOff } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
 import { useOptionChainLive } from '@/hooks/useOptionChainLive'
 import { useOptionChainPreferences } from '@/hooks/useOptionChainPreferences'
-import { optionChainApi } from '@/api/option-chain'
+import { oiProfileApi } from '@/api/oi-profile'
 import type { BarDataSource, BarStyle, ColumnKey, OptionStrike } from '@/types/option-chain'
 import { COLUMN_DEFINITIONS } from '@/types/option-chain'
 import { BarSettingsDropdown, ColumnConfigDropdown, ColumnReorderPanel } from '@/components/option-chain'
@@ -29,13 +29,15 @@ import {
 import { showToast } from '@/utils/toast'
 import { cn } from '@/lib/utils'
 
-const UNDERLYINGS = [
-  { value: 'NIFTY', label: 'NIFTY', exchange: 'NFO', brokerExchange: 'NSE_INDEX' },
-  { value: 'BANKNIFTY', label: 'BANKNIFTY', exchange: 'NFO', brokerExchange: 'NSE_INDEX' },
-  { value: 'SENSEX', label: 'SENSEX', exchange: 'BFO', brokerExchange: 'BSE_INDEX' },
-  { value: 'FINNIFTY', label: 'FINNIFTY', exchange: 'NFO', brokerExchange: 'NSE_INDEX' },
-  { value: 'MIDCPNIFTY', label: 'MIDCPNIFTY', exchange: 'NFO', brokerExchange: 'NSE_INDEX' },
+const FNO_EXCHANGES = [
+  { value: 'NFO', label: 'NFO' },
+  { value: 'BFO', label: 'BFO' },
 ]
+
+const DEFAULT_UNDERLYINGS: Record<string, string[]> = {
+  NFO: ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'],
+  BFO: ['SENSEX', 'BANKEX'],
+}
 
 const STRIKE_COUNTS = [
   { value: 5, label: '5 strikes' },
@@ -431,6 +433,8 @@ export default function OptionChain() {
     resetToDefaults,
   } = useOptionChainPreferences()
 
+  const [selectedExchange, setSelectedExchange] = useState('NFO')
+  const [underlyings, setUnderlyings] = useState<string[]>(DEFAULT_UNDERLYINGS.NFO)
   const [selectedExpiry, setSelectedExpiry] = useState('')
   const [expiries, setExpiries] = useState<string[]>([])
   // Use ref for previous data to avoid causing re-renders and enable proper flash animation
@@ -445,9 +449,9 @@ export default function OptionChain() {
     tickSize: number
   } | null>(null)
 
-  const underlyingInfo = UNDERLYINGS.find((u) => u.value === selectedUnderlying)
-  const exchange = underlyingInfo?.brokerExchange ?? 'NSE_INDEX'
-  const optionExchange = underlyingInfo?.exchange ?? 'NFO'
+  const optionExchange = selectedExchange
+  // Send NFO/BFO directly — backend resolves correct exchange for index vs stock
+  const exchange = selectedExchange
 
   const { data, isConnected, isStreaming, isPaused, error, lastUpdate, refetch, isLoading, streamingSymbols } = useOptionChainLive(
     apiKey,
@@ -459,28 +463,64 @@ export default function OptionChain() {
     { enabled: !!selectedExpiry, oiRefreshInterval: 30000, pauseWhenHidden: true }
   )
 
+  // Fetch underlyings when exchange changes
   useEffect(() => {
-    const loadExpiries = async () => {
-      if (!apiKey || !selectedUnderlying) return
+    const defaults = DEFAULT_UNDERLYINGS[selectedExchange] || []
+    setUnderlyings(defaults)
+    setSelectedUnderlying(defaults[0] || '')
+    setExpiries([])
+    setSelectedExpiry('')
 
+    let cancelled = false
+    const fetchUnderlyings = async () => {
       try {
-        const response = await optionChainApi.getExpiries(apiKey, selectedUnderlying, optionExchange)
-        if (response.status === 'success' && response.data.length > 0) {
-          setExpiries(response.data)
-          // Only set expiry if not already set (avoid overwriting user selection)
-          setSelectedExpiry(prev => prev || response.data[0])
-        } else {
-          showToast.error(response.message || 'Failed to load expiries')
+        const response = await oiProfileApi.getUnderlyings(selectedExchange)
+        if (cancelled) return
+        if (response.status === 'success' && response.underlyings.length > 0) {
+          setUnderlyings(response.underlyings)
+          if (!response.underlyings.includes(defaults[0])) {
+            setSelectedUnderlying(response.underlyings[0])
+          }
         }
-      } catch (err) {
-        console.error('Error loading expiries:', err)
+      } catch {
+        // Keep defaults
+      }
+    }
+    fetchUnderlyings()
+    return () => {
+      cancelled = true
+    }
+  }, [selectedExchange])
+
+  // Fetch expiries when underlying changes
+  useEffect(() => {
+    if (!selectedUnderlying) return
+    setExpiries([])
+    setSelectedExpiry('')
+
+    let cancelled = false
+    const fetchExpiries = async () => {
+      try {
+        const response = await oiProfileApi.getExpiries(selectedExchange, selectedUnderlying)
+        if (cancelled) return
+        if (response.status === 'success' && response.expiries.length > 0) {
+          setExpiries(response.expiries)
+          setSelectedExpiry(response.expiries[0])
+        } else {
+          setExpiries([])
+          setSelectedExpiry('')
+        }
+      } catch {
+        if (cancelled) return
         showToast.error('Failed to load expiry dates')
       }
     }
-
-    loadExpiries()
-    // Note: selectedExpiry removed from deps to prevent re-fetch on expiry change
-  }, [apiKey, selectedUnderlying, optionExchange])
+    fetchExpiries()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedUnderlying])
 
   // Update previous data ref after render (for flash animation)
   // Using useEffect to update AFTER the current data is rendered
@@ -499,12 +539,9 @@ export default function OptionChain() {
   }, [data?.chain])
 
   const handleUnderlyingChange = (value: string) => {
-    const underlying = UNDERLYINGS.find((u) => u.value === value)
-    if (underlying) {
-      setSelectedUnderlying(value)
-      setSelectedExpiry('')
-      setExpiries([])
-    }
+    setSelectedUnderlying(value)
+    setSelectedExpiry('')
+    setExpiries([])
   }
 
   const handleRefresh = () => {
@@ -574,14 +611,26 @@ export default function OptionChain() {
           <h1 className="text-3xl font-bold">Option Chain</h1>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Select value={selectedExchange} onValueChange={setSelectedExchange}>
+            <SelectTrigger className="w-24">
+              <SelectValue placeholder="Exchange" />
+            </SelectTrigger>
+            <SelectContent>
+              {FNO_EXCHANGES.map((ex) => (
+                <SelectItem key={ex.value} value={ex.value}>
+                  {ex.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Select value={selectedUnderlying} onValueChange={handleUnderlyingChange}>
             <SelectTrigger className="w-36">
               <SelectValue placeholder="Select Underlying" />
             </SelectTrigger>
             <SelectContent>
-              {UNDERLYINGS.map((u) => (
-                <SelectItem key={u.value} value={u.value}>
-                  {u.label}
+              {underlyings.map((u) => (
+                <SelectItem key={u} value={u}>
+                  {u}
                 </SelectItem>
               ))}
             </SelectContent>
