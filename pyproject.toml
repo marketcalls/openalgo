@@ -193,6 +193,10 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = ["broker", "blueprints", "database", "services", "utils", "restx_api", "extensions", "limiter", "cors", "csp"]
 
+# This is not a distributable Python package — tell setuptools not to discover packages
+[tool.setuptools]
+packages = []
+
 # Pytest configuration
 [tool.pytest.ini_options]
 testpaths = ["test"]
