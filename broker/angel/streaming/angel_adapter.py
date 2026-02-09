@@ -752,8 +752,8 @@ class AngelWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         # If no depth data found, return empty levels as fallback
         if not depth:
-            self.logger.warning(
-                f"No {side_label} depth data found in message. Available keys: {message.keys()}"
+            self.logger.debug(
+                f"No {side_label} depth data in message (expected for indices). Keys: {message.keys()}"
             )
             for i in range(5):  # Default to 5 empty levels
                 depth.append({"price": 0.0, "quantity": 0, "orders": 0})
