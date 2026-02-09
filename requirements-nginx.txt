@@ -90,7 +90,7 @@ platformdirs==4.5.1
 plotly==6.5.2
 pluggy==1.6.0
 prompt-toolkit==3.0.52
-protobuf==6.33.4
+protobuf==6.33.5
 psutil==7.2.1
 ptyprocess==0.7.0
 pure-eval==0.2.3

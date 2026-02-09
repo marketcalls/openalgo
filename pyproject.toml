@@ -96,7 +96,7 @@ dependencies = [
   "plotly==6.5.2",
   "pluggy==1.6.0",
   "prompt-toolkit==3.0.52",
-  "protobuf==6.33.4",
+  "protobuf==6.33.5",
   "psutil==7.2.1",
   "ptyprocess==0.7.0",
   "pure-eval==0.2.3",
@@ -193,6 +193,10 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = ["broker", "blueprints", "database", "services", "utils", "restx_api", "extensions", "limiter", "cors", "csp"]
 
+# This is not a distributable Python package — tell setuptools not to discover packages
+[tool.setuptools]
+packages = []
+
 # Pytest configuration
 [tool.pytest.ini_options]
 testpaths = ["test"]
@@ -206,7 +210,7 @@ filterwarnings = [
 
 [dependency-groups]
 dev = [
-    "bandit>=1.9.3",
+    "bandit[sarif]>=1.9.3",
     "detect-secrets>=1.5.0",
     "pip-audit>=2.10.0",
     "pytest-timeout>=2.4.0",
