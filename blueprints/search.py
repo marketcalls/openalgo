@@ -210,4 +210,7 @@ def api_underlyings():
     logger.debug(f"Fetching underlyings: exchange={exchange}")
     underlyings = get_distinct_underlyings(exchange=exchange)
 
+    # Filter out exchange test symbols (e.g. 011NSETEST, 021BSETEST)
+    underlyings = [u for u in underlyings if "NSETEST" not in u and "BSETEST" not in u]
+
     return jsonify({"status": "success", "underlyings": underlyings})
