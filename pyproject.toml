@@ -206,7 +206,7 @@ filterwarnings = [
 
 [dependency-groups]
 dev = [
-    "bandit>=1.9.3",
+    "bandit[sarif]>=1.9.3",
     "detect-secrets>=1.5.0",
     "pip-audit>=2.10.0",
     "pytest-timeout>=2.4.0",
