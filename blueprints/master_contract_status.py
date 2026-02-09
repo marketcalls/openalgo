@@ -185,7 +185,7 @@ def force_master_contract_download():
 
         # Initialize status and start download
         init_broker_status(broker)
-        thread = Thread(target=async_master_contract_download, args=(broker,))
+        thread = Thread(target=async_master_contract_download, args=(broker,), daemon=True)
         thread.start()
 
         return jsonify({
