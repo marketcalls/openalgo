@@ -13,7 +13,6 @@ OpenAlgo is a production-ready algorithmic trading platform built with Flask (ba
 
 ### Prerequisites
 - Python 3.12+ (required per pyproject.toml)
-- Node.js 20+ for root-level CSS compilation
 - Node.js 20/22/24 for React frontend development
 - **uv package manager (required)** - Never use global Python
 
@@ -54,19 +53,6 @@ uv add package_name
 uv sync
 ```
 
-### CSS Development (Root Level - Jinja2 Templates)
-
-```bash
-# Development mode (auto-compile on changes)
-npm run dev
-
-# Production build (before committing)
-npm run build
-
-# NEVER edit static/css/main.css directly!
-# Only edit src/css/styles.css
-```
-
 ### React Frontend Development
 
 ```bash
@@ -94,14 +80,9 @@ npm run format
 
 ## Application Architecture
 
-### Dual Frontend System
+### Frontend
 
-OpenAlgo has TWO frontend systems that coexist:
-
-1. **Jinja2 Templates** (`/templates/`, `/static/`): Traditional Flask templates with Tailwind CSS 4 + DaisyUI
-2. **React 19 Frontend** (`/frontend/`): Modern SPA with TypeScript, Vite, shadcn/ui, TanStack Query
-
-Both frontends are served by the same Flask application. The React frontend is built and served from `/frontend/dist/`.
+**React 19 Frontend** (`/frontend/`): Modern SPA with TypeScript, Vite, shadcn/ui, TanStack Query. Built and served from `/frontend/dist/` by Flask via `blueprints/react_app.py`.
 
 ### Backend Structure
 
@@ -197,9 +178,6 @@ Most testing is currently manual via:
 ### Building for Production
 
 ```bash
-# Build Jinja2 frontend CSS
-npm run build
-
 # Build React frontend
 cd frontend
 npm run build
@@ -358,12 +336,6 @@ const { data, isLoading, error } = useQuery({
 ```
 
 ## Troubleshooting Common Issues
-
-### CSS Not Updating (Root Level)
-1. Clear browser cache
-2. Run `npm run build` in root directory
-3. Check that `node_modules` exists (run `npm install`)
-4. Never edit `static/css/main.css` directly
 
 ### WebSocket Connection Issues
 1. Ensure WebSocket server is running (starts with app.py)
