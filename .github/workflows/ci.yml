@@ -143,18 +143,6 @@ jobs:
         run: uv run pip-audit
         continue-on-error: true
 
-  # Root CSS build check
-  root-css-build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: 'npm'
-      - run: npm ci
-      - run: npm run build
-
   # Auto-commit built frontend dist (main branch only)
   commit-dist:
     runs-on: ubuntu-latest
@@ -171,10 +159,6 @@ jobs:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
-      - name: Build root CSS
-        run: |
-          npm ci
-          npm run build
       - name: Build frontend
         working-directory: frontend
         run: |
@@ -184,7 +168,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f frontend/dist/ static/css/main.css
+          git add -f frontend/dist/
           git diff --staged --quiet || git commit -m "chore: auto-build frontend dist [skip ci]"
           git push
 
