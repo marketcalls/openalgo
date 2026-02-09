@@ -1,4 +1,5 @@
 import importlib
+import time
 import traceback
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -11,6 +12,25 @@ from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
+
+# Rate limiter: max 3 broker history API requests per second
+_history_call_times: list[float] = []
+_HISTORY_RATE_LIMIT = 3
+
+
+def _enforce_rate_limit():
+    """Block until a request slot is available (max 3 per second)."""
+    now = time.monotonic()
+    # Remove calls older than 1 second
+    while _history_call_times and now - _history_call_times[0] >= 1.0:
+        _history_call_times.pop(0)
+    # If at the limit, wait until the oldest call expires
+    if len(_history_call_times) >= _HISTORY_RATE_LIMIT:
+        wait = 1.0 - (now - _history_call_times[0])
+        if wait > 0:
+            time.sleep(wait)
+        _history_call_times.pop(0)
+    _history_call_times.append(time.monotonic())
 
 
 def validate_symbol_exchange(symbol: str, exchange: str) -> tuple[bool, str | None]:
@@ -248,6 +268,9 @@ def get_history(
         )
 
     # Source: 'api' (default) - Fetch from broker API
+    # Enforce 3 requests/second rate limit for broker history calls
+    _enforce_rate_limit()
+
     # Case 1: API-based authentication
     if api_key and not (auth_token and broker):
         AUTH_TOKEN, FEED_TOKEN, broker_name = get_auth_token_broker(
