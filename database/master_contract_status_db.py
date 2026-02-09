@@ -1,7 +1,7 @@
 import json
 import logging
 import os
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 from sqlalchemy import Boolean, Column, Date, DateTime, Integer, String, Text, create_engine, text
 from sqlalchemy.ext.declarative import declarative_base
@@ -9,6 +9,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
 logger = logging.getLogger(__name__)
+
+# If a download stays in 'downloading' state longer than this, treat it as stuck/failed
+DOWNLOAD_TIMEOUT_MINUTES = 5
 
 # Get the database path from environment variable or use default
 DB_PATH = os.getenv("DATABASE_URL", "sqlite:///db/openalgo.db")
@@ -132,6 +135,25 @@ def get_status(broker):
         status = session.query(MasterContractStatus).filter_by(broker=broker).first()
 
         if status:
+            # Detect stuck downloads: if status is 'downloading' but last_updated
+            # is older than the timeout, auto-transition to 'error'
+            if (
+                status.status == "downloading"
+                and status.last_updated
+                and datetime.now() - status.last_updated > timedelta(minutes=DOWNLOAD_TIMEOUT_MINUTES)
+            ):
+                logger.warning(
+                    f"Download for {broker} stuck for >{DOWNLOAD_TIMEOUT_MINUTES}min, marking as error"
+                )
+                status.status = "error"
+                status.message = (
+                    f"Download timed out (stuck for >{DOWNLOAD_TIMEOUT_MINUTES} minutes). "
+                    "Click Force Download to retry."
+                )
+                status.last_updated = datetime.now()
+                status.is_ready = False
+                session.commit()
+
             # Parse exchange_stats JSON if present
             exchange_stats = None
             if status.exchange_stats:

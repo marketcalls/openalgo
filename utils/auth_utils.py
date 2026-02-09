@@ -332,12 +332,12 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
 
         if should_download:
             # Start async download in background thread
-            thread = Thread(target=async_master_contract_download, args=(broker,))
+            thread = Thread(target=async_master_contract_download, args=(broker,), daemon=True)
             thread.start()
         else:
             # Use cached data - load existing master contract
             logger.info(f"Skipping download for {broker}: {reason}")
-            thread = Thread(target=load_existing_master_contract, args=(broker,))
+            thread = Thread(target=load_existing_master_contract, args=(broker,), daemon=True)
             thread.start()
 
         # Return JSON for AJAX requests (React), redirect for OAuth callbacks
