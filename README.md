@@ -359,6 +359,7 @@ OpenAlgo is built upon the shoulders of giants. We extend our gratitude to all t
 
 ### Data Visualization
 - **[TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts)** - Apache 2.0 - Financial charting library for market data and P&L visualization
+- **[Plotly](https://plotly.com/javascript/)** - MIT License - Interactive charting library for options analytics and visualization
 - **[xyflow/React Flow](https://reactflow.dev)** - MIT License - Highly customizable library for building node-based visual strategy editors
 
 ### Code Editors

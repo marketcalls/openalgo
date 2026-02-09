@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Check, ChevronsUpDown } from 'lucide-react'
 import type * as PlotlyTypes from 'plotly.js'
 import { useThemeStore } from '@/stores/themeStore'
 import {
@@ -7,6 +8,15 @@ import {
   type CandleData,
 } from '@/api/oi-profile'
 import { Card, CardContent } from '@/components/ui/card'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -79,6 +89,7 @@ export default function OIProfile() {
 
   const [selectedExchange, setSelectedExchange] = useState('NFO')
   const [underlyings, setUnderlyings] = useState<string[]>(DEFAULT_UNDERLYINGS.NFO)
+  const [underlyingOpen, setUnderlyingOpen] = useState(false)
   const [selectedUnderlying, setSelectedUnderlying] = useState('NIFTY')
   const [expiries, setExpiries] = useState<string[]>([])
   const [selectedExpiry, setSelectedExpiry] = useState('')
@@ -483,18 +494,37 @@ export default function OIProfile() {
           </Select>
 
           {/* Underlying */}
-          <Select value={selectedUnderlying} onValueChange={setSelectedUnderlying}>
-            <SelectTrigger className="w-[160px]">
-              <SelectValue placeholder="Underlying" />
-            </SelectTrigger>
-            <SelectContent>
-              {underlyings.map((u) => (
-                <SelectItem key={u} value={u}>
-                  {u}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Popover open={underlyingOpen} onOpenChange={setUnderlyingOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="outline" role="combobox" aria-expanded={underlyingOpen} className="w-[160px] justify-between">
+                {selectedUnderlying || 'Underlying'}
+                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-48 p-0" align="start">
+              <Command>
+                <CommandInput placeholder="Search underlying..." />
+                <CommandList>
+                  <CommandEmpty>No underlying found</CommandEmpty>
+                  <CommandGroup>
+                    {underlyings.map((u) => (
+                      <CommandItem
+                        key={u}
+                        value={u}
+                        onSelect={() => {
+                          setSelectedUnderlying(u)
+                          setUnderlyingOpen(false)
+                        }}
+                      >
+                        <Check className={`mr-2 h-4 w-4 ${selectedUnderlying === u ? 'opacity-100' : 'opacity-0'}`} />
+                        {u}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
 
           {/* Expiry */}
           <Select
