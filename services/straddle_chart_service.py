@@ -8,34 +8,12 @@ then looks up the corresponding CE and PE option prices to compute:
 - Synthetic Future = Strike + CE - PE
 """
 
-import time
 from datetime import datetime, timedelta
 
 import pandas as pd
 import pytz
 
 from services.history_service import get_history
-
-
-# Rate limiter: max 3 history requests per second (Angel broker limit)
-_last_history_calls: list[float] = []
-_HISTORY_RATE_LIMIT = 3
-
-
-def _rate_limited_get_history(**kwargs):
-    """Wrapper around get_history that enforces max 3 requests/second."""
-    now = time.monotonic()
-    # Remove calls older than 1 second
-    while _last_history_calls and now - _last_history_calls[0] >= 1.0:
-        _last_history_calls.pop(0)
-    # If at the limit, wait until the oldest call expires
-    if len(_last_history_calls) >= _HISTORY_RATE_LIMIT:
-        wait = 1.0 - (now - _last_history_calls[0])
-        if wait > 0:
-            time.sleep(wait)
-        _last_history_calls.pop(0)
-    _last_history_calls.append(time.monotonic())
-    return get_history(**kwargs)
 from services.option_greeks_service import parse_option_symbol
 from services.option_symbol_service import (
     construct_option_symbol,
@@ -169,7 +147,7 @@ def get_straddle_chart_data(
             )
 
         # Step 3: Fetch underlying history
-        success_u, resp_u, _ = _rate_limited_get_history(
+        success_u, resp_u, _ = get_history(
             symbol=base_symbol,
             exchange=quote_exchange,
             interval=interval,
@@ -220,7 +198,7 @@ def get_straddle_chart_data(
             pe_symbol = construct_option_symbol(base_symbol, expiry_date.upper(), strike, "PE")
 
             # Fetch CE history
-            success_ce, resp_ce, _ = _rate_limited_get_history(
+            success_ce, resp_ce, _ = get_history(
                 symbol=ce_symbol,
                 exchange=options_exchange,
                 interval=interval,
@@ -230,7 +208,7 @@ def get_straddle_chart_data(
             )
 
             # Fetch PE history
-            success_pe, resp_pe, _ = _rate_limited_get_history(
+            success_pe, resp_pe, _ = get_history(
                 symbol=pe_symbol,
                 exchange=options_exchange,
                 interval=interval,
