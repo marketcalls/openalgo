@@ -237,58 +237,107 @@ def transform_order_data(orders):
 
 def map_trade_data(trade_data):
     """
-    Processes and modifies a list of order dictionaries based on specific conditions.
-
-    Parameters:
-    - order_data: A list of dictionaries, where each dictionary represents an order.
-
-    Returns:
-    - The modified order_data with updated 'tradingsymbol' and 'product' fields.
+    Map Nubra's orders response to tradebook format.
+    
+    Nubra doesn't have a separate tradebook API. This function takes the
+    orders response (from /orders/v2) and filters for filled orders,
+    mapping them to the normalized tradebook format.
+    
+    Nubra returns orders as a direct list (not wrapped in {"data": [...]}).
+    Prices are in paise (÷100 for rupees).
     """
-    # Check if 'data' is None
-    if trade_data["data"] is None:
-        # Handle the case where there is no data
-        # For example, you might want to display a message to the user
-        # or pass an empty list or dictionary to the template.
-        logger.info("No data available.")
-        trade_data = {}  # or set it to an empty list if it's supposed to be a list
+    # Handle Nubra's response format — direct list or dict with various shapes
+    if isinstance(trade_data, dict):
+        if "data" in trade_data and trade_data.get("data") is not None:
+            orders = trade_data["data"]
+        elif trade_data.get("status") == False or trade_data.get("error"):
+            logger.info(f"No trade data available or error: {trade_data}")
+            return []
+        else:
+            logger.info("No trade data available.")
+            return []
+    elif isinstance(trade_data, list):
+        orders = trade_data
     else:
-        trade_data = trade_data["data"]
+        logger.info("Unexpected trade_data format.")
+        return []
 
-    if trade_data:
-        for order in trade_data:
-            # Extract the instrument_token and exchange for the current order
-            symbol = order["tradingsymbol"]
-            exchange = order["exchange"]
+    if not orders:
+        return []
 
-            # Use the get_symbol function to fetch the symbol from the database
-            symbol_from_db = get_oa_symbol(symbol, exchange)
+    # Filter for filled/completed orders only (these are the "trades")
+    filled_orders = [
+        order for order in orders
+        if order.get("order_status") in ["ORDER_STATUS_FILLED", "ORDER_STATUS_PARTIALLY_FILLED"]
+    ]
 
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol_from_db:
-                order["tradingsymbol"] = symbol_from_db
-                if (order["exchange"] == "NSE" or order["exchange"] == "BSE") and order[
-                    "producttype"
-                ] == "DELIVERY":
-                    order["producttype"] = "CNC"
+    normalized_trades = []
+    for order in filled_orders:
+        ref_data = order.get("ref_data", {})
+        exchange = ref_data.get("exchange", "")
+        symboltoken = str(ref_data.get("token", order.get("ref_id", "")))
 
-                elif order["producttype"] == "INTRADAY":
-                    order["producttype"] = "MIS"
+        # Get OpenAlgo symbol
+        symbol_from_db = get_symbol(symboltoken, exchange)
+        tradingsymbol = symbol_from_db if symbol_from_db else order.get("display_name", ref_data.get("stock_name", ""))
 
-                elif (
-                    order["exchange"] in ["NFO", "MCX", "BFO", "CDS"]
-                    and order["producttype"] == "CARRYFORWARD"
-                ):
-                    order["producttype"] = "NRML"
-            else:
-                logger.info(
-                    f"Unable to find the symbol {symbol} and exchange {exchange}. Keeping original trading symbol."
-                )
+        # Map transaction type
+        order_side = order.get("order_side", "")
+        if order_side == "ORDER_SIDE_BUY":
+            transaction_type = "BUY"
+        elif order_side == "ORDER_SIDE_SELL":
+            transaction_type = "SELL"
+        else:
+            transaction_type = order_side.replace("ORDER_SIDE_", "") if order_side else ""
 
-    return trade_data
+        # Map product type
+        delivery_type = order.get("order_delivery_type", "")
+        product_map = {
+            "ORDER_DELIVERY_TYPE_CNC": "CNC",
+            "ORDER_DELIVERY_TYPE_IDAY": "MIS",
+            "ORDER_DELIVERY_TYPE_INTRADAY": "MIS",
+            "ORDER_DELIVERY_TYPE_MARGIN": "NRML",
+            "ORDER_DELIVERY_TYPE_NRML": "NRML",
+        }
+        producttype = product_map.get(delivery_type, delivery_type.replace("ORDER_DELIVERY_TYPE_", "") if delivery_type else "")
+
+        # Convert prices from paise to rupees
+        avg_filled_price = (order.get("avg_filled_price", 0) or 0) / 100
+        filled_qty = order.get("filled_qty", 0) or 0
+        trade_value = round(avg_filled_price * filled_qty, 2)
+
+        # Get fill time from order_time (nanosecond timestamp)
+        filltime = ""
+        order_time = order.get("order_time")
+        if order_time:
+            try:
+                from datetime import datetime
+                ts_seconds = order_time / 1_000_000_000
+                dt = datetime.fromtimestamp(ts_seconds)
+                filltime = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except (ValueError, OSError):
+                filltime = str(order_time)
+
+        normalized_trade = {
+            "tradingsymbol": tradingsymbol,
+            "exchange": exchange,
+            "producttype": producttype,
+            "transactiontype": transaction_type,
+            "quantity": filled_qty,
+            "fillprice": round(avg_filled_price, 2),
+            "tradevalue": trade_value,
+            "orderid": str(order.get("order_id", "")),
+            "filltime": filltime,
+        }
+        normalized_trades.append(normalized_trade)
+
+    return normalized_trades
 
 
 def transform_tradebook_data(tradebook_data):
+    """
+    Transform normalized trade data to final OpenAlgo UI format.
+    """
     transformed_data = []
     for trade in tradebook_data:
         transformed_trade = {
@@ -482,15 +531,26 @@ def transform_positions_data(positions_data):
 
 
 def transform_holdings_data(holdings_data):
+    """
+    Transform mapped Nubra holdings data to final OpenAlgo UI format.
+
+    Expects the output of map_portfolio_data():
+        {"holdings": [...mapped...], "holding_stats": {...}}
+
+    Returns a list of dicts with: symbol, exchange, quantity, product, pnl, pnlpercent.
+    """
     transformed_data = []
-    for holdings in holdings_data["holdings"]:
+
+    holdings_list = holdings_data.get("holdings", []) if isinstance(holdings_data, dict) else []
+
+    for holding in holdings_list:
         transformed_position = {
-            "symbol": holdings.get("tradingsymbol", ""),
-            "exchange": holdings.get("exchange", ""),
-            "quantity": holdings.get("quantity", 0),
-            "product": holdings.get("product", ""),
-            "pnl": holdings.get("profitandloss", 0.0),
-            "pnlpercent": holdings.get("pnlpercentage", 0.0),
+            "symbol": holding.get("tradingsymbol", ""),
+            "exchange": holding.get("exchange", ""),
+            "quantity": holding.get("quantity", 0),
+            "product": holding.get("product", ""),
+            "pnl": holding.get("pnl", 0.0),
+            "pnlpercent": holding.get("pnlpercent", 0.0),
         }
         transformed_data.append(transformed_position)
     return transformed_data
@@ -498,62 +558,109 @@ def transform_holdings_data(holdings_data):
 
 def map_portfolio_data(portfolio_data):
     """
-    Processes and modifies a list of Portfolio dictionaries based on specific conditions and
-    ensures both holdings and totalholding parts are transmitted in a single response.
+    Map Nubra's holdings response to a normalized internal format.
 
-    Parameters:
-    - portfolio_data: A dictionary, where keys are 'holdings' and 'totalholding',
-                      and values are lists/dictionaries representing the portfolio information.
+    Nubra API returns:
+        {
+            "message": "holdings",
+            "portfolio": {
+                "client_code": "...",
+                "holding_stats": { invested_amount, current_value, total_pnl, ... },
+                "holdings": [ { ref_id, symbol, exchange, qty, avg_price, ltp, net_pnl, ... } ]
+            }
+        }
+
+    Prices are in paise — this function converts them to rupees (÷100).
+    Symbols are mapped to OpenAlgo format via get_oa_symbol().
 
     Returns:
-    - The modified portfolio_data with 'product' fields changed for 'holdings' and 'totalholding' included.
+        {"holdings": [...normalized...], "holding_stats": {...converted...}}
     """
-    # Check if 'data' is None or doesn't contain 'holdings'
-    if portfolio_data.get("data") is None or "holdings" not in portfolio_data["data"]:
-        logger.info("No data available.")
-        # Return an empty structure or handle this scenario as needed
-        return {}
+    # Extract 'portfolio' from the Nubra response
+    portfolio = None
+    if isinstance(portfolio_data, dict):
+        portfolio = portfolio_data.get("portfolio")
 
-    # Directly work with 'data' for clarity and simplicity
-    data = portfolio_data["data"]
+    if not portfolio or "holdings" not in portfolio:
+        logger.info("Nubra Holdings - No portfolio data available.")
+        return {"holdings": [], "holding_stats": {}}
 
-    # Modify 'product' field for each holding if applicable
-    if data.get("holdings"):
-        for portfolio in data["holdings"]:
-            symbol = portfolio["tradingsymbol"]
-            exchange = portfolio["exchange"]
-            symbol_from_db = get_oa_symbol(symbol, exchange)
+    raw_holdings = portfolio.get("holdings") or []
+    raw_stats = portfolio.get("holding_stats") or {}
 
-            # Check if a symbol was found; if so, update the trading_symbol in the current order
-            if symbol_from_db:
-                portfolio["tradingsymbol"] = symbol_from_db
-            if portfolio["product"] == "DELIVERY":
-                portfolio["product"] = "CNC"  # Modify 'product' field
-            else:
-                logger.info("AngelOne Portfolio - Product Value for Delivery Not Found or Changed.")
+    logger.info(f"Nubra holdings: {len(raw_holdings)} items, stats keys: {list(raw_stats.keys())}")
 
-    # The function already works with 'data', which includes 'holdings' and 'totalholding',
-    # so we can return 'data' directly without additional modifications.
-    return data
+    mapped_holdings = []
+    for h in raw_holdings:
+        exchange = h.get("exchange", "NSE")
+        broker_symbol = h.get("symbol", h.get("displayName", ""))
+        ref_id = str(h.get("ref_id", ""))
+
+        # Look up OpenAlgo symbol from database using ref_id or broker symbol
+        oa_symbol = get_oa_symbol(broker_symbol, exchange)
+        tradingsymbol = oa_symbol if oa_symbol else broker_symbol
+
+        # Convert paise → rupees for price fields
+        avg_price = (h.get("avg_price", 0) or 0) / 100
+        ltp = (h.get("ltp", 0) or 0) / 100
+        prev_close = (h.get("prev_close", 0) or 0) / 100
+        invested_value = (h.get("invested_value", 0) or 0) / 100
+        current_value = (h.get("current_value", 0) or 0) / 100
+        net_pnl = (h.get("net_pnl", 0) or 0) / 100
+        day_pnl = (h.get("day_pnl", 0) or 0) / 100
+
+        mapped_holdings.append({
+            "tradingsymbol": tradingsymbol,
+            "exchange": exchange,
+            "quantity": h.get("qty", 0),
+            "product": "CNC",  # Holdings are always delivery
+            "average_price": round(avg_price, 2),
+            "ltp": round(ltp, 2),
+            "prev_close": round(prev_close, 2),
+            "invested_value": round(invested_value, 2),
+            "current_value": round(current_value, 2),
+            "pnl": round(net_pnl, 2),
+            "pnlpercent": round(h.get("net_pnl_chg", 0) or 0, 2),
+            "day_pnl": round(day_pnl, 2),
+            "day_pnl_chg": round(h.get("day_pnl", 0) or 0, 2),  # percentage from API? No, use ltp_chg
+            "ltp_chg": round(h.get("ltp_chg", 0) or 0, 2),
+            "ref_id": ref_id,
+        })
+
+    # Convert holding_stats paise → rupees
+    mapped_stats = {
+        "invested_amount": round((raw_stats.get("invested_amount", 0) or 0) / 100, 2),
+        "current_value": round((raw_stats.get("current_value", 0) or 0) / 100, 2),
+        "total_pnl": round((raw_stats.get("total_pnl", 0) or 0) / 100, 2),
+        "total_pnl_chg": round(raw_stats.get("total_pnl_chg", 0) or 0, 2),
+        "day_pnl": round((raw_stats.get("day_pnl", 0) or 0) / 100, 2),
+        "day_pnl_chg": round(raw_stats.get("day_pnl_chg", 0) or 0, 2),
+    }
+
+    return {"holdings": mapped_holdings, "holding_stats": mapped_stats}
 
 
 def calculate_portfolio_statistics(holdings_data):
-    if holdings_data["totalholding"] is None:
-        totalholdingvalue = 0
-        totalinvvalue = 0
-        totalprofitandloss = 0
-        totalpnlpercentage = 0
-    else:
-        totalholdingvalue = holdings_data["totalholding"]["totalholdingvalue"]
-        totalinvvalue = holdings_data["totalholding"]["totalinvvalue"]
-        totalprofitandloss = holdings_data["totalholding"]["totalprofitandloss"]
+    """
+    Calculate portfolio statistics from Nubra's mapped holdings data.
 
-        # To avoid division by zero in the case when total_investment_value is 0
-        totalpnlpercentage = holdings_data["totalholding"]["totalpnlpercentage"]
+    Reads from the 'holding_stats' key (already converted to rupees by map_portfolio_data).
+
+    Returns dict with: totalholdingvalue, totalinvvalue, totalprofitandloss, totalpnlpercentage.
+    """
+    stats = holdings_data.get("holding_stats") if isinstance(holdings_data, dict) else None
+
+    if not stats:
+        return {
+            "totalholdingvalue": 0,
+            "totalinvvalue": 0,
+            "totalprofitandloss": 0,
+            "totalpnlpercentage": 0,
+        }
 
     return {
-        "totalholdingvalue": totalholdingvalue,
-        "totalinvvalue": totalinvvalue,
-        "totalprofitandloss": totalprofitandloss,
-        "totalpnlpercentage": totalpnlpercentage,
+        "totalholdingvalue": stats.get("current_value", 0),
+        "totalinvvalue": stats.get("invested_amount", 0),
+        "totalprofitandloss": stats.get("total_pnl", 0),
+        "totalpnlpercentage": stats.get("total_pnl_chg", 0),
     }
