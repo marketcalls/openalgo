@@ -279,15 +279,36 @@ def process_angel_json(path):
     )
 
     # Common Index Symbol Formats
+    # For NSE_INDEX, derive symbol from 'name' column
+    # and normalize to OpenAlgo common format (uppercase, no spaces/hyphens)
+    idx_mask = df["exchange"] == "NSE_INDEX"
+    df.loc[idx_mask, "symbol"] = (
+        df.loc[idx_mask, "name"]
+        .str.upper()
+        .str.replace(" ", "", regex=False)
+        .str.replace("-", "", regex=False)
+    )
 
+    # For BSE_INDEX, derive symbol from 'name' column
+    # and normalize to OpenAlgo common format (uppercase, no spaces/hyphens, remove S&P prefix)
+    bse_idx_mask = df["exchange"] == "BSE_INDEX"
+    df.loc[bse_idx_mask, "symbol"] = (
+        df.loc[bse_idx_mask, "name"]
+        .str.upper()
+        .str.replace("S&P ", "", regex=False)
+        .str.replace(" ", "", regex=False)
+        .str.replace("-", "", regex=False)
+    )
+
+    # Override for major indices where normalized name differs from OpenAlgo standard
     df["symbol"] = df["symbol"].replace(
         {
-            "Nifty 50": "NIFTY",
-            "Nifty Next 50": "NIFTYNXT50",
-            "Nifty Fin Service": "FINNIFTY",
-            "Nifty Bank": "BANKNIFTY",
-            "NIFTY MID SELECT": "MIDCPNIFTY",
-            "India VIX": "INDIAVIX",
+            "NIFTY50": "NIFTY",
+            "NIFTYBANK": "BANKNIFTY",
+            "NIFTYFINSERVICE": "FINNIFTY",
+            "NIFTYNEXT50": "NIFTYNXT50",
+            "NIFTYMIDSELECT": "MIDCPNIFTY",
+            "NIFTYMIDCAPSELECT": "MIDCPNIFTY",
             "SNSX50": "SENSEX50",
         }
     )

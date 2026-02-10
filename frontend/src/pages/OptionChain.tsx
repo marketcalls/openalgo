@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { RefreshCw, TrendingUp, Wifi, WifiOff } from 'lucide-react'
+import { Check, ChevronsUpDown, RefreshCw, TrendingUp, Wifi, WifiOff } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
 import { useOptionChainLive } from '@/hooks/useOptionChainLive'
 import { useOptionChainPreferences } from '@/hooks/useOptionChainPreferences'
@@ -11,6 +11,15 @@ import { PlaceOrderDialog } from '@/components/trading'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -435,6 +444,7 @@ export default function OptionChain() {
 
   const [selectedExchange, setSelectedExchange] = useState('NFO')
   const [underlyings, setUnderlyings] = useState<string[]>(DEFAULT_UNDERLYINGS.NFO)
+  const [underlyingOpen, setUnderlyingOpen] = useState(false)
   const [selectedExpiry, setSelectedExpiry] = useState('')
   const [expiries, setExpiries] = useState<string[]>([])
   // Use ref for previous data to avoid causing re-renders and enable proper flash animation
@@ -623,18 +633,37 @@ export default function OptionChain() {
               ))}
             </SelectContent>
           </Select>
-          <Select value={selectedUnderlying} onValueChange={handleUnderlyingChange}>
-            <SelectTrigger className="w-36">
-              <SelectValue placeholder="Select Underlying" />
-            </SelectTrigger>
-            <SelectContent>
-              {underlyings.map((u) => (
-                <SelectItem key={u} value={u}>
-                  {u}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Popover open={underlyingOpen} onOpenChange={setUnderlyingOpen}>
+            <PopoverTrigger asChild>
+              <Button variant="outline" role="combobox" aria-expanded={underlyingOpen} className="w-36 justify-between">
+                {selectedUnderlying || 'Select Underlying'}
+                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-48 p-0" align="start">
+              <Command>
+                <CommandInput placeholder="Search underlying..." />
+                <CommandList>
+                  <CommandEmpty>No underlying found</CommandEmpty>
+                  <CommandGroup>
+                    {underlyings.map((u) => (
+                      <CommandItem
+                        key={u}
+                        value={u}
+                        onSelect={() => {
+                          handleUnderlyingChange(u)
+                          setUnderlyingOpen(false)
+                        }}
+                      >
+                        <Check className={`mr-2 h-4 w-4 ${selectedUnderlying === u ? 'opacity-100' : 'opacity-0'}`} />
+                        {u}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
           <Select value={selectedExpiry} onValueChange={setSelectedExpiry} disabled={expiries.length === 0}>
             <SelectTrigger className="w-36">
               <SelectValue placeholder="Select Expiry" />

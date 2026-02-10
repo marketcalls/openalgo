@@ -1064,6 +1064,9 @@ def get_fno_underlyings(exchange: str = None) -> tuple[bool, dict[str, Any], int
 
         underlyings = get_distinct_underlyings(exchange.upper() if exchange else None)
 
+        # Filter out exchange test symbols (e.g. 011NSETEST, 021BSETEST)
+        underlyings = [u for u in underlyings if "NSETEST" not in u and "BSETEST" not in u]
+
         return (
             True,
             {

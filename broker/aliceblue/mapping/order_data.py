@@ -1,4 +1,5 @@
 import json
+from datetime import date
 
 from database.token_db import get_oa_symbol, get_symbol
 from utils.logging import get_logger
@@ -228,7 +229,7 @@ def transform_tradebook_data(tradebook_data):
             "average_price": average_price,
             "trade_value": quantity * average_price,
             "orderid": trade.get("Nstordno", ""),
-            "timestamp": trade.get("Filltime", ""),  # Use Filltime which contains HH:MM:SS format
+            "timestamp": f"{date.today()} {trade.get('Filltime', '')}" if trade.get("Filltime") else "",
         }
         transformed_data.append(transformed_trade)
     return transformed_data
