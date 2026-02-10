@@ -292,10 +292,77 @@ def process_nubra_indexes(path):
         )
     )
     
-    # Common Index Symbol Formats 
-    df['symbol'] = df['symbol'].replace({
+    # Common Index Symbol Formats - map Nubra INDEX_SYMBOL to OpenAlgo standard
+    # Reference: OpenAlgo symbols.md
+    nubra_to_openalgo_index = {
+        # ---- NSE Indexes ----
         'INDIA_VIX': 'INDIAVIX',
-    })
+        'NIFTYALPHA': 'NIFTYALPHA50',
+        'NIFTYCDTY': 'NIFTYCOMMODITIES',
+        'NIFTYCONSUMP': 'NIFTYCONSUMPTION',
+        'NIFTYDIVOPPT': 'NIFTYDIVOPPS50',
+        'NIFTYGSCOMP': 'NIFTYGSCOMPSITE',
+        'NIFTYINFRAST': 'NIFTYINFRA',
+        'LIX15MIDCAP': 'NIFTYMIDLIQ15',
+        'NIFTYMIDCAP': 'NIFTYMIDCAP100',
+        'NIFTYSMALL': 'NIFTYSMLCAP100',
+        'NIFTYSMALLCAP250': 'NIFTYSMLCAP250',
+        'NIFTYSMALLCAP50': 'NIFTYSMLCAP50',
+        'NIFTYMIDSMALL400': 'NIFTYMIDSML400',
+        'NIFTYEQWGT': 'NIFTY50EQLWGT',
+        'NIFTY100WEIGHT': 'NIFTY100EQLWGT',
+        'LIQ15': 'NIFTY100LIQ15',
+        'NIFTYLOWVOL': 'NIFTY100LOWVOL30',
+        'NSEQ30': 'NIFTY100QUALTY30',
+        'NIFTY200QLTY30': 'NIFTY200QUALTY30',
+        'NIFTYPR1X': 'NIFTY50PR1XINV',
+        'NIFTYPR2X': 'NIFTY50PR2XLEV',
+        'NIFTYTR1X': 'NIFTY50TR1XINV',
+        'NIFTYTR2X': 'NIFTY50TR2XLEV',
+        'NIFTYV20': 'NIFTY50VALUE20',
+        'NIFTY10YRBMGSEC': 'NIFTYGS10YR',
+        'NIFTY10YRBMSECCP': 'NIFTYGS10YRCLN',
+        'NIFTY11-15YRGSEC': 'NIFTYGS1115YR',
+        'NIFTY15YRABOVEGSEC': 'NIFTYGS15YRPLUS',
+        'NIFTY4-8YRGESC': 'NIFTYGS48YR',
+        'NIFTY8-13YRGSEC': 'NIFTYGS813YR',
+        'NIFTYSERVICE': 'NIFTYSERVSECTOR',
+        'NIFTYPTBNK': 'NIFTYPVTBANK',
+        'NIFTY50DIVPOINT': 'NIFTY50DIVPOINT',
+        # ---- BSE Indexes ----
+        'SNXT50': 'BSESENSEXNEXT50',
+        'MID150': 'BSE150MIDCAPINDEX',
+        'LMI250': 'BSE250LARGEMIDCAPINDEX',
+        'MSL400': 'BSE400MIDSMALLCAPINDEX',
+        'AUTO': 'BSEAUTO',
+        'BSECG': 'BSECAPITALGOODS',
+        'BSECD': 'BSECONSUMERDURABLES',
+        'CPSE': 'BSECPSE',
+        'DOL100': 'BSEDOLLEX100',
+        'DOL200': 'BSEDOLLEX200',
+        'DOL30': 'BSEDOLLEX30',
+        'ENERGY': 'BSEENERGY',
+        'BSEFMC': 'BSEFASTMOVINGCONSUMERGOODS',
+        'FINSER': 'BSEFINANCIALSERVICES',
+        'BSEHC': 'BSEHEALTHCARE',
+        'INDSTR': 'BSEINDUSTRIALS',
+        'BSEIT': 'BSEINFORMATIONTECHNOLOGY',
+        'BSEIPO': 'BSEIPO',
+        'LRGCAP': 'BSELARGECAP',
+        'METAL': 'BSEMETAL',
+        'MIDCAP': 'BSEMIDCAP',
+        'MIDSEL': 'BSEMIDCAPSELECTINDEX',
+        'OILGAS': 'BSEOIL&GAS',
+        'POWER': 'BSEPOWER',
+        'BSEPSU': 'BSEPSU',
+        'REALTY': 'BSEREALTY',
+        'SMLCAP': 'BSESMALLCAP',
+        'SMLSEL': 'BSESMALLCAPSELECTINDEX',
+        'SMEIPO': 'BSESMEIPO',
+        'TECK': 'BSETECK',
+        'TELCOM': 'BSETELECOM',
+    }
+    df['symbol'] = df['symbol'].replace(nubra_to_openalgo_index)
     
     # Index-specific fields
     df['instrumenttype'] = 'INDEX'
