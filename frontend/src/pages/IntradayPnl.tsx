@@ -15,6 +15,7 @@ import { useAuthStore } from '@/stores/authStore'
 interface TradeLeg extends PriceableItem {
     symbol: string
     exchange: string
+    strategy: string
     buyQty: number
     sellQty: number
     netQty: number
@@ -132,6 +133,7 @@ export default function IntradayPnl() {
                 legMap.set(key, {
                     symbol: trade.symbol,
                     exchange: trade.exchange,
+                    strategy,
                     buyQty: isBuy ? trade.quantity : 0,
                     sellQty: isBuy ? 0 : trade.quantity,
                     netQty: isBuy ? trade.quantity : -trade.quantity,
@@ -161,18 +163,9 @@ export default function IntradayPnl() {
     const strategies = useMemo((): StrategyGroup[] => {
         const strategyMap = new Map<string, StrategyGroup>()
 
-        // Map legs back to original trades to get strategy name
-        const legToStrategy = new Map<string, string>()
-        trades.forEach((trade) => {
-            const strategy = trade.strategy || 'Untagged'
-            const key = `${trade.symbol}:${trade.exchange}`
-            legToStrategy.set(key, strategy)
-        })
-
         legsWithLtp.forEach((leg) => {
-            // Find strategy from original trades
-            const legKey = `${leg.symbol}:${leg.exchange}`
-            const strategyName = legToStrategy.get(legKey) || 'Untagged'
+            // Strategy is carried directly on the leg (set during grouping)
+            const strategyName = leg.strategy || 'Untagged'
 
             // Calculate P&L for this leg
             const closedQty = Math.min(leg.buyQty, leg.sellQty)
@@ -224,7 +217,7 @@ export default function IntradayPnl() {
 
         // Sort strategies by name
         return Array.from(strategyMap.values()).sort((a, b) => a.name.localeCompare(b.name))
-    }, [legsWithLtp, trades])
+    }, [legsWithLtp])
 
     // Calculate totals
     const totals = useMemo(() => {
