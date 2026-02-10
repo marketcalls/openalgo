@@ -290,11 +290,12 @@ def process_angel_json(path):
     )
 
     # For BSE_INDEX, derive symbol from 'name' column
-    # and normalize to OpenAlgo common format (uppercase, no spaces/hyphens)
+    # and normalize to OpenAlgo common format (uppercase, no spaces/hyphens, remove S&P prefix)
     bse_idx_mask = df["exchange"] == "BSE_INDEX"
     df.loc[bse_idx_mask, "symbol"] = (
         df.loc[bse_idx_mask, "name"]
         .str.upper()
+        .str.replace("S&P ", "", regex=False)
         .str.replace(" ", "", regex=False)
         .str.replace("-", "", regex=False)
     )
