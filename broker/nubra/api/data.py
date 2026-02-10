@@ -100,43 +100,44 @@ class BrokerData:
             NubraWebSocket instance or None if creation fails
         """
         with self._ws_lock:
+            # Check if existing connection is valid
             if not force_new and self._websocket and self._websocket.is_connected:
                 return self._websocket
 
-        try:
-            if not self.auth_token:
-                logger.error("Auth token not available for WebSocket")
+            try:
+                if not self.auth_token:
+                    logger.error("Auth token not available for WebSocket")
+                    return None
+
+                # Clean up existing connection
+                if self._websocket:
+                    try:
+                        self._websocket.close()
+                    except Exception:
+                        pass
+
+                logger.info("Creating new Nubra WebSocket connection")
+                ws = NubraWebSocket(self.auth_token)
+                ws.connect()
+
+                # Wait for connection to establish
+                wait_time = 0
+                max_wait = 10
+                while wait_time < max_wait and not ws.is_connected:
+                    time.sleep(0.5)
+                    wait_time += 0.5
+
+                if not ws.is_connected:
+                    logger.warning("Nubra WebSocket connection timed out")
+                    return None
+
+                self._websocket = ws
+                logger.info("Nubra WebSocket connected successfully")
+                return self._websocket
+
+            except Exception as e:
+                logger.error(f"Error creating Nubra WebSocket: {e}")
                 return None
-
-            # Clean up existing connection
-            if self._websocket:
-                try:
-                    self._websocket.close()
-                except Exception:
-                    pass
-
-            logger.info("Creating new Nubra WebSocket connection")
-            ws = NubraWebSocket(self.auth_token)
-            ws.connect()
-
-            # Wait for connection to establish
-            wait_time = 0
-            max_wait = 10
-            while wait_time < max_wait and not ws.is_connected:
-                time.sleep(0.5)
-                wait_time += 0.5
-
-            if not ws.is_connected:
-                logger.warning("Nubra WebSocket connection timed out")
-                return None
-
-            self._websocket = ws
-            logger.info("Nubra WebSocket connected successfully")
-            return self._websocket
-
-        except Exception as e:
-            logger.error(f"Error creating Nubra WebSocket: {e}")
-            return None
 
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
@@ -327,6 +328,10 @@ class BrokerData:
             }
 
         except Exception as e:
+            # Propagate authentication errors
+            if "Authentication failed" in str(e):
+                raise
+            
             logger.error(f"REST quote error for {symbol} on {exchange}: {str(e)}")
             return None
 
