@@ -9,7 +9,6 @@ Supports split orders per leg if splitsize is specified.
 import copy
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
 
 from database.analyzer_db import async_log_analyzer
@@ -434,81 +433,30 @@ def process_multiorder_with_auth(
         else:
             logger.warning(f"Failed to fetch underlying LTP: {error_msg}. Will retry per leg.")
 
-    # Check if any leg has splitsize > 0 (requires sequential processing to avoid broker rate limits)
+    # Check if any leg has splitsize > 0 (requires delay between orders)
     has_split_orders = any(leg.get("splitsize", 0) > 0 for _, leg in buy_legs + sell_legs)
+    order_delay = get_order_rate_limit() if has_split_orders else 0
 
-    if has_split_orders:
-        # Process legs sequentially when splits are involved to avoid broker rate limits
-        order_delay = get_order_rate_limit()
+    # Process all legs sequentially (avoids ThreadPoolExecutor + eventlet hang)
+    # Process BUY legs first
+    for i, (orig_idx, leg) in enumerate(buy_legs):
+        if order_delay and i > 0:
+            time.sleep(order_delay)
+        result = resolve_and_place_leg(
+            leg, common_data, api_key, orig_idx, total_legs, auth_token, broker, underlying_ltp
+        )
+        if result:
+            results.append(result)
 
-        # Process BUY legs first (sequentially)
-        for i, (orig_idx, leg) in enumerate(buy_legs):
-            if i > 0:
-                time.sleep(order_delay)
-            result = resolve_and_place_leg(
-                leg, common_data, api_key, orig_idx, total_legs, auth_token, broker, underlying_ltp
-            )
-            if result:
-                results.append(result)
-
-        # Then process SELL legs (sequentially)
-        for i, (orig_idx, leg) in enumerate(sell_legs):
-            if i > 0 or buy_legs:  # Delay after BUY legs or between SELL legs
-                time.sleep(order_delay)
-            result = resolve_and_place_leg(
-                leg, common_data, api_key, orig_idx, total_legs, auth_token, broker, underlying_ltp
-            )
-            if result:
-                results.append(result)
-    else:
-        # No splits - process legs in parallel for speed
-        # Process BUY legs first (in parallel)
-        if buy_legs:
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                buy_futures = []
-                for orig_idx, leg in buy_legs:
-                    buy_futures.append(
-                        executor.submit(
-                            resolve_and_place_leg,
-                            leg,
-                            common_data,
-                            api_key,
-                            orig_idx,
-                            total_legs,
-                            auth_token,
-                            broker,
-                            underlying_ltp,
-                        )
-                    )
-
-                for future in as_completed(buy_futures):
-                    result = future.result()
-                    if result:
-                        results.append(result)
-
-        # Then process SELL legs (in parallel)
-        if sell_legs:
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                sell_futures = []
-                for orig_idx, leg in sell_legs:
-                    sell_futures.append(
-                        executor.submit(
-                            resolve_and_place_leg,
-                            leg,
-                            common_data,
-                            api_key,
-                            orig_idx,
-                            total_legs,
-                            auth_token,
-                            broker,
-                            underlying_ltp,
-                        )
-                    )
-
-                for future in as_completed(sell_futures):
-                    result = future.result()
-                    if result:
-                        results.append(result)
+    # Then process SELL legs
+    for i, (orig_idx, leg) in enumerate(sell_legs):
+        if order_delay and (i > 0 or buy_legs):
+            time.sleep(order_delay)
+        result = resolve_and_place_leg(
+            leg, common_data, api_key, orig_idx, total_legs, auth_token, broker, underlying_ltp
+        )
+        if result:
+            results.append(result)
 
     # Sort results by leg number
     results.sort(key=lambda x: x.get("leg", 0))
