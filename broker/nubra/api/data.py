@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import time
 import urllib.parse
 from datetime import datetime, timedelta
@@ -10,6 +11,8 @@ import pandas as pd
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+
+from .nubrawebsocket import NubraWebSocket
 
 logger = get_logger(__name__)
 
@@ -62,6 +65,8 @@ class BrokerData:
     def __init__(self, auth_token):
         """Initialize Nubra data handler with authentication token"""
         self.auth_token = auth_token
+        self._websocket = None
+        self._ws_lock = threading.Lock()
         # Map OpenAlgo timeframe format to Nubra intervals
         # Nubra supports: 1s, 1m, 2m, 3m, 5m, 15m, 30m, 1h, 1d, 1w, 1mt
         self.timeframe_map = {
@@ -84,14 +89,64 @@ class BrokerData:
             "M": "1mt",
         }
 
+    def get_websocket(self, force_new=False):
+        """
+        Get or create the Nubra WebSocket instance for real-time data.
+
+        Args:
+            force_new: Force creation of a new connection
+
+        Returns:
+            NubraWebSocket instance or None if creation fails
+        """
+        with self._ws_lock:
+            # Check if existing connection is valid
+            if not force_new and self._websocket and self._websocket.is_connected:
+                return self._websocket
+
+            try:
+                if not self.auth_token:
+                    logger.error("Auth token not available for WebSocket")
+                    return None
+
+                # Clean up existing connection
+                if self._websocket:
+                    try:
+                        self._websocket.close()
+                    except Exception:
+                        pass
+
+                logger.info("Creating new Nubra WebSocket connection")
+                ws = NubraWebSocket(self.auth_token)
+                ws.connect()
+
+                # Wait for connection to establish
+                wait_time = 0
+                max_wait = 10
+                while wait_time < max_wait and not ws.is_connected:
+                    time.sleep(0.5)
+                    wait_time += 0.5
+
+                if not ws.is_connected:
+                    logger.warning("Nubra WebSocket connection timed out")
+                    return None
+
+                self._websocket = ws
+                logger.info("Nubra WebSocket connected successfully")
+                return self._websocket
+
+            except Exception as e:
+                logger.error(f"Error creating Nubra WebSocket: {e}")
+                return None
+
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
-        Get real-time quotes for given symbol using Nubra's orderbooks API.
+        Get real-time quotes for given symbol.
         
-        Nubra API: GET /orderbooks/{ref_id}?levels=1
-        
-        Note: Nubra's orderbook API requires numeric ref_id. Index symbols 
-        don't have ref_id in Nubra's API, so quotes are not available for indices.
+        Strategy:
+        1. Try WebSocket index channel first (works for indices AND instruments)
+        2. Fall back to REST API /orderbooks/{ref_id} for instruments
+        3. Return zeros if nothing works (e.g. index with no WS)
         
         Args:
             symbol: Trading symbol
@@ -100,33 +155,142 @@ class BrokerData:
             dict: Quote data with required fields
         """
         try:
-            # Check if this is an index - Nubra orderbook API doesn't support indices
-            # Return zeros gracefully instead of throwing an error
-            if exchange.endswith('_INDEX'):
-                logger.info(f"Index quotes not available from Nubra for {symbol} on {exchange}")
+            # --- Attempt 1: WebSocket index channel ---
+            ws_quote = self._get_quotes_via_websocket(symbol, exchange)
+            if ws_quote:
+                return ws_quote
+
+            # --- Attempt 2: REST API (only for non-index symbols) ---
+            if not exchange.endswith('_INDEX'):
+                rest_quote = self._get_quotes_via_rest(symbol, exchange)
+                if rest_quote:
+                    return rest_quote
+
+            # --- Fallback: return zeros ---
+            logger.info(f"No quote data available for {symbol} on {exchange}")
+            return {
+                "bid": 0,
+                "ask": 0,
+                "open": 0,
+                "high": 0,
+                "low": 0,
+                "ltp": 0,
+                "prev_close": 0,
+                "volume": 0,
+                "oi": 0,
+            }
+
+        except Exception as e:
+            logger.error(f"Error fetching quotes for {symbol} on {exchange}: {str(e)}")
+            raise Exception(f"Error fetching quotes: {str(e)}")
+
+    def _get_quotes_via_websocket(self, symbol: str, exchange: str) -> dict:
+        """
+        Try to get quotes via WebSocket index channel.
+        Subscribes, waits for data, unsubscribes, and returns the quote.
+        
+        Returns:
+            dict: Quote data in OpenAlgo format, or None if not available
+        """
+        try:
+            websocket = self.get_websocket()
+            if not websocket or not websocket.is_connected:
+                logger.debug("WebSocket not available, skipping WS quotes")
+                return None
+
+            # Determine the broker symbol and WS exchange
+            br_symbol = get_br_symbol(symbol, exchange) or symbol
+            if exchange == "NSE_INDEX":
+                ws_exchange = "NSE"
+            elif exchange == "BSE_INDEX":
+                ws_exchange = "BSE"
+            elif exchange in ("NFO", "CDS"):
+                ws_exchange = "NSE"
+            elif exchange == "BFO":
+                ws_exchange = "BSE"
+            else:
+                ws_exchange = exchange
+
+            # Subscribe to index channel (or OHLVC if Index)
+            # Broaden check: Use OHLVC if exchange says INDEX OR if symbol is a known Index
+            known_indices = {"NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "SENSEX50"}
+            is_index_symbol = br_symbol.upper() in known_indices
+            is_index_request = exchange in ("NSE_INDEX", "BSE_INDEX") or is_index_symbol
+
+            if is_index_request:
+                 logger.info(f"Subscribing to WS OHLVC (1m) for {br_symbol} on {ws_exchange}")
+                 success = websocket.subscribe_ohlcv([br_symbol], "1m", ws_exchange)
+            else:
+                 logger.info(f"Subscribing to WS index for {br_symbol} on {ws_exchange}")
+                 success = websocket.subscribe_index([br_symbol], ws_exchange)
+
+            if not success:
+                return None
+
+            # Wait for data to arrive
+            time.sleep(2.0)
+
+            # Retrieve cached quote - get_quote takes (exchange, symbol)
+            quote = websocket.get_quote(ws_exchange, br_symbol)
+
+            # Unsubscribe after retrieval
+            if is_index_request:
+                 websocket.unsubscribe_ohlcv([br_symbol], "1m", ws_exchange)
+            else:
+                 websocket.unsubscribe_index([br_symbol], ws_exchange)
+
+            if quote and quote.get("ltp", 0) > 0:
+                logger.info(f"WS quote for {symbol}: LTP={quote['ltp']}")
                 return {
-                    "bid": 0,
-                    "ask": 0,
-                    "open": 0,
-                    "high": 0,
-                    "low": 0,
-                    "ltp": 0,
-                    "prev_close": 0,
-                    "volume": 0,
-                    "oi": 0,
+                    "bid": float(quote.get("bid", 0)),
+                    "ask": float(quote.get("ask", 0)),
+                    "open": float(quote.get("open", 0)),
+                    "high": float(quote.get("high", 0)),
+                    "low": float(quote.get("low", 0)),
+                    "ltp": float(quote.get("ltp", 0)),
+                    "prev_close": float(quote.get("prev_close", 0)),
+                    "volume": int(quote.get("volume", 0)),
+                    "oi": int(quote.get("volume_oi", 0)),  # Index channel provides volume_oi
                 }
+
+            logger.debug(f"No WS quote data for {symbol}")
+            return None
+
+        except Exception as e:
+            logger.warning(f"WebSocket quote failed for {symbol}: {e}")
+            return None
+
+    def _get_quotes_via_rest(self, symbol: str, exchange: str) -> dict:
+        """
+        Get quotes via Nubra's REST orderbooks API.
+        Original REST implementation preserved as fallback.
+        
+        Nubra API: GET /orderbooks/{ref_id}?levels=1
+        
+        Note: Nubra's orderbook API requires numeric ref_id. Index symbols 
+        don't have ref_id in Nubra's API, so quotes are not available for indices.
+        
+        Returns:
+            dict: Quote data in OpenAlgo format, or None if failed
+        """
+        try:
+            # Indices not supported by REST orderbook API
+            if exchange.endswith('_INDEX'):
+                return None
 
             # Get token (ref_id) for the symbol
             token = get_token(symbol, exchange)
             
             if not token:
-                raise Exception(f"Could not find token for symbol {symbol} on {exchange}")
+                logger.warning(f"Could not find token for symbol {symbol} on {exchange}")
+                return None
 
-            # Verify token is numeric (ref_id) - indices have text tokens which won't work
+            # Verify token is numeric (ref_id)
             if not str(token).isdigit():
-                raise Exception(f"Invalid token '{token}' for {symbol}. Nubra orderbook API requires numeric ref_id.")
+                logger.warning(f"Invalid token '{token}' for {symbol}. REST API requires numeric ref_id.")
+                return None
 
-            logger.info(f"Fetching quotes for {symbol} on {exchange} with token {token}")
+            logger.info(f"Fetching REST quotes for {symbol} on {exchange} with token {token}")
 
             # Call Nubra's orderbooks API with 1 level of depth for quotes
             response = get_api_response(
@@ -138,39 +302,38 @@ class BrokerData:
             # Extract orderBook data from response
             orderbook = response.get("orderBook", {})
             
-            # Check if we got valid data
             if not orderbook:
                 logger.warning(f"Empty orderbook response for {symbol} on {exchange}")
-                raise Exception("No quote data received")
+                return None
 
             # Parse bid/ask from arrays
-            # Nubra format: {"p": price, "q": quantity, "o": num_orders}
             # Prices are in paise, need to convert to rupees (divide by 100)
             bids = orderbook.get("bid", [])
             asks = orderbook.get("ask", [])
             
-            # For some instruments, bid/ask might be empty - that's ok, we still have LTP
             bid_price = float(bids[0].get("p", 0)) / 100 if bids else 0
             ask_price = float(asks[0].get("p", 0)) / 100 if asks else 0
             ltp = float(orderbook.get("ltp", 0)) / 100
 
-            # Return quote in OpenAlgo format
-            # Note: Nubra doesn't provide open/high/low/close/oi in orderbook API
             return {
                 "bid": bid_price,
                 "ask": ask_price,
-                "open": 0,  # Not available in Nubra orderbook API
-                "high": 0,  # Not available in Nubra orderbook API
-                "low": 0,   # Not available in Nubra orderbook API
+                "open": 0,  # Not available in Nubra orderbook REST API
+                "high": 0,
+                "low": 0,
                 "ltp": ltp,
-                "prev_close": 0,  # Not available in Nubra orderbook API
+                "prev_close": 0,
                 "volume": int(orderbook.get("volume", 0)),
-                "oi": 0,  # Not available in Nubra orderbook API
+                "oi": 0,
             }
 
         except Exception as e:
-            logger.error(f"Error fetching quotes for {symbol} on {exchange}: {str(e)}")
-            raise Exception(f"Error fetching quotes: {str(e)}")
+            # Propagate authentication errors
+            if "Authentication failed" in str(e):
+                raise
+            
+            logger.error(f"REST quote error for {symbol} on {exchange}: {str(e)}")
+            return None
 
     def get_multiquotes(self, symbols: list) -> list:
         """
@@ -503,73 +666,155 @@ class BrokerData:
 
     def get_depth(self, symbol: str, exchange: str) -> dict:
         """
-        Get market depth for given symbol using Nubra's orderbooks API.
+        Get market depth for given symbol.
         
-        Nubra API: GET /orderbooks/{ref_id}?levels=5
-        
-        Note: Nubra's orderbook API requires numeric ref_id. Index symbols 
-        don't have ref_id in Nubra's API, so depth is not available for indices.
+        Strategy:
+        1. Try WebSocket orderbook channel first (works for instruments)
+        2. Fall back to REST API /orderbooks/{ref_id}?levels=5
+        3. Return zeros for indices (no depth available)
         
         Args:
             symbol: Trading symbol
-            exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX)
+            exchange: Exchange (e.g., NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX)
         Returns:
             dict: Market depth data with bids, asks and other details
         """
         try:
-            # Check if this is an index - Nubra orderbook API doesn't support indices
-            # Return zeros gracefully instead of throwing an error
+            # --- Attempt 1: WebSocket orderbook channel (non-index only) ---
+            if not exchange.endswith('_INDEX'):
+                ws_depth = self._get_depth_via_websocket(symbol, exchange)
+                if ws_depth:
+                    return ws_depth
+
+                # --- Attempt 2: REST API fallback ---
+                rest_depth = self._get_depth_via_rest(symbol, exchange)
+                if rest_depth:
+                    return rest_depth
+
+            # --- Fallback: return zeros (indices or no data) ---
             if exchange.endswith('_INDEX'):
-                logger.info(f"Index depth not available from Nubra for {symbol} on {exchange}")
+                logger.info(f"Index depth not available for {symbol} on {exchange}")
+            return {
+                "bids": [{"price": 0, "quantity": 0} for _ in range(5)],
+                "asks": [{"price": 0, "quantity": 0} for _ in range(5)],
+                "high": 0,
+                "low": 0,
+                "ltp": 0,
+                "ltq": 0,
+                "open": 0,
+                "prev_close": 0,
+                "volume": 0,
+                "oi": 0,
+                "totalbuyqty": 0,
+                "totalsellqty": 0,
+            }
+
+        except Exception as e:
+            raise Exception(f"Error fetching market depth: {str(e)}")
+
+    def _get_depth_via_websocket(self, symbol: str, exchange: str) -> dict:
+        """
+        Try to get market depth via WebSocket orderbook channel.
+        
+        Returns:
+            dict: Depth data in OpenAlgo format, or None if not available
+        """
+        try:
+            websocket = self.get_websocket()
+            if not websocket or not websocket.is_connected:
+                logger.debug("WebSocket not available, skipping WS depth")
+                return None
+
+            # Get token (ref_id) for orderbook subscription
+            token = get_token(symbol, exchange)
+            if not token or not str(token).isdigit():
+                logger.debug(f"No numeric token for {symbol}, can't use WS orderbook")
+                return None
+
+            # Subscribe to orderbook channel (expects list of ints)
+            token_int = int(token)
+            logger.info(f"Subscribing to WS orderbook for token {token_int}")
+            success = websocket.subscribe_orderbook([token_int])
+            if not success:
+                return None
+
+            # Wait for data
+            time.sleep(2.0)
+
+            # Retrieve cached depth (expects int ref_id)
+            depth = websocket.get_market_depth(token_int)
+
+            # Unsubscribe after retrieval
+            websocket.unsubscribe_orderbook([token_int])
+
+            if depth and depth.get("ltp", 0) > 0:
+                logger.info(f"WS depth for {symbol}: LTP={depth['ltp']}")
                 return {
-                    "bids": [{"price": 0, "quantity": 0} for _ in range(5)],
-                    "asks": [{"price": 0, "quantity": 0} for _ in range(5)],
+                    "bids": depth.get("bids", [{"price": 0, "quantity": 0}] * 5),
+                    "asks": depth.get("asks", [{"price": 0, "quantity": 0}] * 5),
                     "high": 0,
                     "low": 0,
-                    "ltp": 0,
-                    "ltq": 0,
+                    "ltp": float(depth.get("ltp", 0)),
+                    "ltq": int(depth.get("ltq", 0)),
                     "open": 0,
                     "prev_close": 0,
-                    "volume": 0,
+                    "volume": int(depth.get("volume", 0)),
                     "oi": 0,
-                    "totalbuyqty": 0,
-                    "totalsellqty": 0,
+                    "totalbuyqty": int(depth.get("totalbuyqty", 0)),
+                    "totalsellqty": int(depth.get("totalsellqty", 0)),
                 }
 
-            # Get token (ref_id) for the symbol
+            logger.debug(f"No WS depth data for {symbol}")
+            return None
+
+        except Exception as e:
+            logger.warning(f"WebSocket depth failed for {symbol}: {e}")
+            return None
+
+    def _get_depth_via_rest(self, symbol: str, exchange: str) -> dict:
+        """
+        Get market depth via Nubra's REST orderbooks API.
+        Original REST implementation preserved as fallback.
+        
+        Nubra API: GET /orderbooks/{ref_id}?levels=5
+        
+        Returns:
+            dict: Depth data in OpenAlgo format, or None if failed
+        """
+        try:
+            if exchange.endswith('_INDEX'):
+                return None
+
             token = get_token(symbol, exchange)
             
             if not token:
-                raise Exception(f"Could not find token for symbol {symbol} on {exchange}")
+                logger.warning(f"Could not find token for symbol {symbol} on {exchange}")
+                return None
 
-            # Verify token is numeric (ref_id) - indices have text tokens which won't work
             if not str(token).isdigit():
-                raise Exception(f"Invalid token '{token}' for {symbol}. Nubra orderbook API requires numeric ref_id.")
+                logger.warning(f"Invalid token '{token}' for {symbol}. REST requires numeric ref_id.")
+                return None
 
-            logger.info(f"Fetching depth for {symbol} on {exchange} with token {token}")
+            logger.info(f"Fetching REST depth for {symbol} on {exchange} with token {token}")
 
-            # Call Nubra's orderbooks API with 5 levels of depth
             response = get_api_response(
                 f"/orderbooks/{token}?levels=5", self.auth_token, "GET"
             )
 
-            # Extract orderBook data from response
             orderbook = response.get("orderBook", {})
             if not orderbook:
-                raise Exception("No depth data received")
+                logger.warning(f"Empty orderbook response for {symbol}")
+                return None
 
             # Parse bid/ask from arrays
             # Nubra format: {"p": price in paise, "q": quantity, "o": num_orders}
             bid_orders = orderbook.get("bid", [])
             ask_orders = orderbook.get("ask", [])
             
-            # Format bids and asks with exactly 5 entries each
-            # Convert price from paise to rupees (divide by 100)
             bids = []
             asks = []
 
-            # Process buy orders (top 5)
-            for i in range(5):  # Ensure exactly 5 entries
+            for i in range(5):
                 if i < len(bid_orders):
                     bid = bid_orders[i]
                     bids.append({
@@ -579,8 +824,7 @@ class BrokerData:
                 else:
                     bids.append({"price": 0, "quantity": 0})
 
-            # Process sell orders (top 5)
-            for i in range(5):  # Ensure exactly 5 entries
+            for i in range(5):
                 if i < len(ask_orders):
                     ask = ask_orders[i]
                     asks.append({
@@ -590,34 +834,31 @@ class BrokerData:
                 else:
                     asks.append({"price": 0, "quantity": 0})
 
-            # Calculate total buy and sell quantities
             totalbuyqty = sum(bid.get("q", 0) for bid in bid_orders)
             totalsellqty = sum(ask.get("q", 0) for ask in ask_orders)
             
-            # LTP and other values - convert from paise to rupees
             ltp = float(orderbook.get("ltp", 0)) / 100
             ltq = int(orderbook.get("ltq", 0))
             volume = int(orderbook.get("volume", 0))
 
-            # Return depth data in OpenAlgo format
-            # Note: Nubra orderbook API doesn't provide open/high/low/close/oi
             return {
                 "bids": bids,
                 "asks": asks,
-                "high": 0,  # Not available in Nubra orderbook API
-                "low": 0,   # Not available in Nubra orderbook API
+                "high": 0,
+                "low": 0,
                 "ltp": ltp,
                 "ltq": ltq,
-                "open": 0,  # Not available in Nubra orderbook API
-                "prev_close": 0,  # Not available in Nubra orderbook API
+                "open": 0,
+                "prev_close": 0,
                 "volume": volume,
-                "oi": 0,  # Not available in Nubra orderbook API
+                "oi": 0,
                 "totalbuyqty": totalbuyqty,
                 "totalsellqty": totalsellqty,
             }
 
         except Exception as e:
-            raise Exception(f"Error fetching market depth: {str(e)}")
+            logger.error(f"REST depth error for {symbol} on {exchange}: {str(e)}")
+            return None
 
     def get_intervals(self) -> list:
         """

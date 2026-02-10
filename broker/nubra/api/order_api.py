@@ -68,7 +68,15 @@ def get_order_book(auth):
 
 
 def get_trade_book(auth):
-    return get_api_response("/rest/secure/angelbroking/order/v1/getTradeBook", auth)
+    """
+    Fetch trade book from Nubra's API.
+    
+    Nubra doesn't have a separate tradebook endpoint.
+    Trades are derived from the orders endpoint (filled orders).
+    
+    Nubra API: GET /orders/v2
+    """
+    return get_api_response("/orders/v2", auth)
 
 
 def get_positions(auth):
@@ -84,7 +92,14 @@ def get_positions(auth):
 
 
 def get_holdings(auth):
-    return get_api_response("/rest/secure/angelbroking/portfolio/v1/getAllHolding", auth)
+    """
+    Fetch portfolio holdings from Nubra's API.
+    
+    Nubra API: GET /portfolio/holdings
+    Returns portfolio with holdings list and holding_stats.
+    Prices are in paise (divide by 100 for rupees).
+    """
+    return get_api_response("/portfolio/holdings", auth)
 
 
 def get_open_position(tradingsymbol, exchange, producttype, auth):
