@@ -91,15 +91,19 @@ export default function Search() {
       if (response.ok) {
         const data = await response.json()
         setResults(data.results || [])
+      } else if (response.status === 401 || response.status === 403) {
+        setError('Session expired. Please log in again.')
+        showToast.error('Session expired. Please log in again.', 'system')
+        setResults([])
       } else {
         setError('Search failed. Please try again.')
-        showToast.error('Failed to search symbols')
+        showToast.error('Failed to search symbols', 'system')
         setResults([])
       }
-    } catch (error) {
-      console.error('Search error:', error)
+    } catch (err) {
+      console.error('Search error:', err)
       setError('Failed to search symbols. Please check your connection.')
-      showToast.error('Failed to search symbols')
+      showToast.error('Failed to search symbols', 'system')
       setResults([])
     } finally {
       setIsLoading(false)
