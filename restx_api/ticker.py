@@ -1,6 +1,6 @@
 import importlib
 import os
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone, date
 
 import pandas as pd
 import pytz
@@ -17,6 +17,7 @@ from .data_schemas import TickerSchema
 from types import ModuleType
 
 
+
 API_RATE_LIMIT = os.getenv("API_RATE_LIMIT", "10 per second")
 api = Namespace("ticker", description="Stock Ticker Data API")
 
@@ -27,7 +28,7 @@ logger = get_logger(__name__)
 ticker_schema = TickerSchema()
 
 
-def import_broker_module(broker_name: str)-> ModuleType | None:
+def import_broker_module(broker_name: str) -> ModuleType | None:
     try:
         module_path = f"broker.{broker_name}.api.data"
         broker_module = importlib.import_module(module_path)
@@ -49,7 +50,7 @@ class TextResponse(Response):
         self._json = value
 
 
-def convert_timestamp(timestamp: float, interval: str)-> str | tuple[str,str]:
+def convert_timestamp(timestamp: float, interval: str) -> str | tuple[str, str]:
     """Convert timestamp to appropriate format based on interval"""
     # Convert timestamp to datetime in UTC
     dt = datetime.fromtimestamp(timestamp, tz=UTC)
@@ -67,10 +68,10 @@ def convert_timestamp(timestamp: float, interval: str)-> str | tuple[str,str]:
 
 
 def validate_and_adjust_date_range(
-    start_date:str,
-    end_date: str,
-    interval: str
-    )->tuple[str, str, bool]:
+    start_date: str | date,
+    end_date: str | date,
+    interval: str,
+) -> tuple[str | date, str | date, bool]:
     """
     Validate and adjust date range based on interval to prevent large queries
 
