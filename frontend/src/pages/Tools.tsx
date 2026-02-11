@@ -57,6 +57,12 @@ const tools = [
     href: '/oiprofile',
     color: 'bg-orange-500',
   },
+  {
+    title: 'Trending OI',
+    description: 'Intraday OI timeseries with Put/Call aggregation, PCR, and heatmap visualization',
+    href: '/trendingoi',
+    color: 'bg-pink-500',
+  },
 ]
 
 export default function Tools() {
