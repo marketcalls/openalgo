@@ -10,6 +10,8 @@ from utils.logging import get_logger
 # Initialize logger
 logger = get_logger(__name__)
 
+BROKER_INIT_ARGS_WITH_AUTH = 2
+
 
 def validate_symbol_exchange(symbol: str, exchange: str) -> tuple[bool, str | None]:
     """
@@ -128,7 +130,7 @@ def get_quotes_with_auth(
         if hasattr(broker_module.BrokerData.__init__, "__code__"):
             # Check number of parameters the broker's __init__ accepts
             param_count = broker_module.BrokerData.__init__.__code__.co_argcount
-            if param_count > 2:  # More than self and auth_token
+            if param_count > BROKER_INIT_ARGS_WITH_AUTH:  # More than self and auth_token
                 data_handler = broker_module.BrokerData(auth_token, feed_token)
             else:
                 data_handler = broker_module.BrokerData(auth_token)
@@ -260,7 +262,7 @@ def get_multiquotes_with_auth(
         if hasattr(broker_module.BrokerData.__init__, "__code__"):
             # Check number of parameters the broker's __init__ accepts
             param_count = broker_module.BrokerData.__init__.__code__.co_argcount
-            if param_count > 2:  # More than self and auth_token
+            if param_count > BROKER_INIT_ARGS_WITH_AUTH:  # More than self and auth_token
                 data_handler = broker_module.BrokerData(auth_token, feed_token)
             else:
                 data_handler = broker_module.BrokerData(auth_token)

@@ -10,6 +10,9 @@ from utils.logging import get_logger
 # Initialize logger
 logger = get_logger(__name__)
 
+BROKER_INIT_ARGS_WITH_AUTH = 2
+BROKER_INIT_ARGS_WITH_FEED = 3
+
 
 def validate_symbol_exchange(symbol: str, exchange: str) -> tuple[bool, str | None]:
     """
@@ -96,9 +99,9 @@ def get_depth_with_auth(
         if hasattr(broker_module.BrokerData.__init__, "__code__"):
             # Check number of parameters the broker's __init__ accepts
             param_count = broker_module.BrokerData.__init__.__code__.co_argcount
-            if param_count > 3:  # More than self, auth_token, and feed_token
+            if param_count > BROKER_INIT_ARGS_WITH_FEED:  # More than self, auth_token, and feed_token
                 data_handler = broker_module.BrokerData(auth_token, feed_token, user_id)
-            elif param_count > 2:  # More than self and auth_token
+            elif param_count > BROKER_INIT_ARGS_WITH_AUTH:  # More than self and auth_token
                 data_handler = broker_module.BrokerData(auth_token, feed_token)
             else:
                 data_handler = broker_module.BrokerData(auth_token)

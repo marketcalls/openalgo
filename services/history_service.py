@@ -13,6 +13,8 @@ from utils.logging import get_logger
 # Initialize logger
 logger = get_logger(__name__)
 
+BROKER_INIT_ARGS_WITH_AUTH = 2
+
 # Rate limiter: max 3 broker history API requests per second
 # Uses minimum interval between calls to prevent burst requests
 _last_history_call: float = 0.0
@@ -118,7 +120,7 @@ def get_history_with_auth(
         if hasattr(broker_module.BrokerData.__init__, "__code__"):
             # Check number of parameters the broker's __init__ accepts
             param_count = broker_module.BrokerData.__init__.__code__.co_argcount
-            if param_count > 2:  # More than self and auth_token
+            if param_count > BROKER_INIT_ARGS_WITH_AUTH:  # More than self and auth_token
                 data_handler = broker_module.BrokerData(auth_token, feed_token)
             else:
                 data_handler = broker_module.BrokerData(auth_token)
