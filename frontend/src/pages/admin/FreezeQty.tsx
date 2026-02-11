@@ -329,6 +329,7 @@ export default function FreezeQtyPage() {
                               onChange={(e) => setEditValue(e.target.value)}
                               className="w-24 h-8"
                               min={1}
+                              aria-label={`Freeze quantity for ${entry.symbol}`}
                             />
                             <Button
                               size="icon"
