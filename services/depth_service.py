@@ -4,14 +4,11 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database.auth_db import Auth, db_session, get_auth_token_broker, verify_api_key
 from database.token_db import get_token
-from utils.constants import VALID_EXCHANGES
+from utils.constants import BROKER_INIT_ARGS_WITH_AUTH, BROKER_INIT_ARGS_WITH_FEED, VALID_EXCHANGES
 from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
-
-BROKER_INIT_ARGS_WITH_AUTH = 2
-BROKER_INIT_ARGS_WITH_FEED = 3
 
 
 def validate_symbol_exchange(symbol: str, exchange: str) -> tuple[bool, str | None]:

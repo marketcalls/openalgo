@@ -7,13 +7,11 @@ import pandas as pd
 
 from database.auth_db import get_auth_token_broker
 from database.token_db import get_token
-from utils.constants import VALID_EXCHANGES
+from utils.constants import BROKER_INIT_ARGS_WITH_AUTH, VALID_EXCHANGES
 from utils.logging import get_logger
 
 # Initialize logger
 logger = get_logger(__name__)
-
-BROKER_INIT_ARGS_WITH_AUTH = 2
 
 # Rate limiter: max 3 broker history API requests per second
 # Uses minimum interval between calls to prevent burst requests
