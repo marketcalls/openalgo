@@ -155,12 +155,12 @@ def download_csv_fyers_data(output_path: str) -> tuple[bool, list[str], str | No
 
     # URLs of the CSV files to be downloaded
     csv_urls = {
-        "NSE_CD": "https://public.fyers.in/sym_details/NSE_CD.csv",
+        "NSE_CD": "https://public.fyers.in/sym_details/NSE_CD_sym_master.json",
         "NSE_FO": "https://public.fyers.in/sym_details/NSE_FO.csv",
         "NSE_CM": "https://public.fyers.in/sym_details/NSE_CM.csv",
         "BSE_CM": "https://public.fyers.in/sym_details/BSE_CM.csv",
         "BSE_FO": "https://public.fyers.in/sym_details/BSE_FO.csv",
-        "MCX_COM": "https://public.fyers.in/sym_details/MCX_COM.csv",
+        "MCX_COM": "https://public.fyers.in/sym_details/MCX_COM_sym_master.json",
     }
 
     downloaded_files = []
@@ -175,7 +175,8 @@ def download_csv_fyers_data(output_path: str) -> tuple[bool, list[str], str | No
                 response = client.get(url, timeout=30.0)
                 response.raise_for_status()  # Raises an exception for 4XX/5XX responses
 
-                file_path = os.path.join(output_path, f"{key}.csv")
+                ext = ".json" if url.endswith(".json") else ".csv"
+                file_path = os.path.join(output_path, f"{key}{ext}")
                 with open(file_path, "wb") as file:
                     file.write(response.content)
                 downloaded_files.append(file_path)
@@ -480,73 +481,65 @@ def process_fyers_nfo_csv(path):
     return token_df
 
 
-def process_fyers_cds_csv(path):
+def process_fyers_cds_json(path):
     """
-    Processes the Fyers CSV file to fit the existing database schema and performs exchange name mapping.
+    Processes the Fyers CDS JSON file to fit the existing database schema.
+    Uses qtyMultiplier for accurate CDS lot sizes.
     """
-    logger.info("Processing Fyers CDS CSV Data")
-    file_path = f"{path}/NSE_CD.csv"
+    logger.info("Processing Fyers CDS JSON Data")
+    file_path = f"{path}/NSE_CD.json"
 
-    df = pd.read_csv(file_path, names=headers, dtype=data_types)
+    with open(file_path, "r") as f:
+        data = json.load(f)
 
-    df["token"] = df["Fytoken"]
-    df["name"] = df["Symbol Details"]
+    # Convert dict-of-dicts to DataFrame
+    df = pd.DataFrame(list(data.values()))
 
-    # Convert 'Expiry date' from Unix timestamp to datetime
-    # First convert string to numeric to avoid FutureWarning
-    df["expiry"] = pd.to_datetime(pd.to_numeric(df["Expiry date"], errors="coerce"), unit="s")
+    # Map JSON fields to OpenAlgo schema
+    df["token"] = df["fyToken"]
+    df["name"] = df["symbolDetails"]
 
-    # Format the datetime object to the desired format '15-APR-24'
+    # Convert 'expiryDate' from Unix timestamp to datetime
+    df["expiry"] = pd.to_datetime(pd.to_numeric(df["expiryDate"], errors="coerce"), unit="s")
     df["expiry"] = df["expiry"].dt.strftime("%d-%b-%y").str.upper()
 
-    df["strike"] = df["Strike price"]
-    df["lotsize"] = df["Minimum lot size"]
-    df["tick_size"] = df["Tick size"]
-    df["brsymbol"] = df["Symbol ticker"]
+    df["strike"] = df["strikePrice"]
+    df["lotsize"] = df["qtyMultiplier"].astype(int)
+    df["tick_size"] = df["tickSize"]
+    df["brsymbol"] = df["symTicker"]
     df["brexchange"] = "CDS"
     df["exchange"] = "CDS"
-    df["instrumenttype"] = df["Option type"].str.replace("XX", "FUT")
+    df["instrumenttype"] = df["optType"].str.replace("XX", "FUT")
 
-    # Apply the function to rows where 'Option type' is 'XX'
-    df.loc[df["Option type"] == "XX", "symbol"] = df["Symbol Details"].apply(
+    # Build symbol using reformat_symbol_detail on symDetails
+    df.loc[df["optType"] == "XX", "symbol"] = df["symDetails"].apply(
         lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x
     )
-    df.loc[df["Option type"] == "CE", "symbol"] = (
-        df["Symbol Details"].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)
+    df.loc[df["optType"] == "CE", "symbol"] = (
+        df["symDetails"].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)
         + "CE"
     )
-    df.loc[df["Option type"] == "PE", "symbol"] = (
-        df["Symbol Details"].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)
+    df.loc[df["optType"] == "PE", "symbol"] = (
+        df["symDetails"].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)
         + "PE"
     )
 
-    # List of columns to remove
-    columns_to_remove = [
-        "Fytoken",
-        "Symbol Details",
-        "Exchange Instrument type",
-        "Minimum lot size",
-        "Tick size",
-        "ISIN",
-        "Trading Session",
-        "Last update date",
-        "Expiry date",
-        "Symbol ticker",
-        "Exchange",
-        "Segment",
-        "Scrip code",
-        "Underlying symbol",
-        "Underlying scrip code",
-        "Strike price",
-        "Option type",
-        "Underlying FyToken",
-        "Reserved column1",
-        "Reserved column2",
-        "Reserved column3",
-    ]
-
-    # Removing the specified columns
-    token_df = df.drop(columns=columns_to_remove)
+    # Keep only the columns needed for the database schema
+    token_df = df[
+        [
+            "symbol",
+            "brsymbol",
+            "name",
+            "exchange",
+            "brexchange",
+            "token",
+            "expiry",
+            "strike",
+            "lotsize",
+            "instrumenttype",
+            "tick_size",
+        ]
+    ].copy()
 
     return token_df
 
@@ -622,73 +615,65 @@ def process_fyers_bfo_csv(path):
     return token_df
 
 
-def process_fyers_mcx_csv(path):
+def process_fyers_mcx_json(path):
     """
-    Processes the Fyers CSV file to fit the existing database schema and performs exchange name mapping.
+    Processes the Fyers MCX JSON file to fit the existing database schema.
+    Uses qtyMultiplier for accurate MCX lot sizes.
     """
-    logger.info("Processing Fyers MCX CSV Data")
-    file_path = f"{path}/MCX_COM.csv"
+    logger.info("Processing Fyers MCX JSON Data")
+    file_path = f"{path}/MCX_COM.json"
 
-    df = pd.read_csv(file_path, names=headers, dtype=data_types)
+    with open(file_path, "r") as f:
+        data = json.load(f)
 
-    df["token"] = df["Fytoken"]
-    df["name"] = df["Symbol Details"]
+    # Convert dict-of-dicts to DataFrame
+    df = pd.DataFrame(list(data.values()))
 
-    # Convert 'Expiry date' from Unix timestamp to datetime
-    # First convert string to numeric to avoid FutureWarning
-    df["expiry"] = pd.to_datetime(pd.to_numeric(df["Expiry date"], errors="coerce"), unit="s")
+    # Map JSON fields to OpenAlgo schema
+    df["token"] = df["fyToken"]
+    df["name"] = df["symbolDetails"]
 
-    # Format the datetime object to the desired format '15-APR-24'
+    # Convert 'expiryDate' from Unix timestamp to datetime
+    df["expiry"] = pd.to_datetime(pd.to_numeric(df["expiryDate"], errors="coerce"), unit="s")
     df["expiry"] = df["expiry"].dt.strftime("%d-%b-%y").str.upper()
 
-    df["strike"] = df["Strike price"]
-    df["lotsize"] = df["Minimum lot size"]
-    df["tick_size"] = df["Tick size"]
-    df["brsymbol"] = df["Symbol ticker"]
+    df["strike"] = df["strikePrice"]
+    df["lotsize"] = df["qtyMultiplier"].astype(int)
+    df["tick_size"] = df["tickSize"]
+    df["brsymbol"] = df["symTicker"]
     df["brexchange"] = "MCX"
     df["exchange"] = "MCX"
-    df["instrumenttype"] = df["Option type"].str.replace("XX", "FUT")
+    df["instrumenttype"] = df["optType"].str.replace("XX", "FUT")
 
-    # Apply the function to rows where 'Option type' is 'XX'
-    df.loc[df["Option type"] == "XX", "symbol"] = df["Symbol Details"].apply(
+    # Build symbol using reformat_symbol_detail on symDetails
+    df.loc[df["optType"] == "XX", "symbol"] = df["symDetails"].apply(
         lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x
     )
-    df.loc[df["Option type"] == "CE", "symbol"] = (
-        df["Symbol Details"].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)
+    df.loc[df["optType"] == "CE", "symbol"] = (
+        df["symDetails"].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)
         + "CE"
     )
-    df.loc[df["Option type"] == "PE", "symbol"] = (
-        df["Symbol Details"].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)
+    df.loc[df["optType"] == "PE", "symbol"] = (
+        df["symDetails"].apply(lambda x: reformat_symbol_detail(x) if pd.notnull(x) else x)
         + "PE"
     )
 
-    # List of columns to remove
-    columns_to_remove = [
-        "Fytoken",
-        "Symbol Details",
-        "Exchange Instrument type",
-        "Minimum lot size",
-        "Tick size",
-        "ISIN",
-        "Trading Session",
-        "Last update date",
-        "Expiry date",
-        "Symbol ticker",
-        "Exchange",
-        "Segment",
-        "Scrip code",
-        "Underlying symbol",
-        "Underlying scrip code",
-        "Strike price",
-        "Option type",
-        "Underlying FyToken",
-        "Reserved column1",
-        "Reserved column2",
-        "Reserved column3",
-    ]
-
-    # Removing the specified columns
-    token_df = df.drop(columns=columns_to_remove)
+    # Keep only the columns needed for the database schema
+    token_df = df[
+        [
+            "symbol",
+            "brsymbol",
+            "name",
+            "exchange",
+            "brexchange",
+            "token",
+            "expiry",
+            "strike",
+            "lotsize",
+            "instrumenttype",
+            "tick_size",
+        ]
+    ].copy()
 
     return token_df
 
@@ -699,7 +684,7 @@ def delete_fyers_temp_data(output_path):
         # Construct the full file path
         file_path = os.path.join(output_path, filename)
         # If the file is a CSV, delete it
-        if filename.endswith(".csv") and os.path.isfile(file_path):
+        if (filename.endswith(".csv") or filename.endswith(".json")) and os.path.isfile(file_path):
             try:
                 os.remove(file_path)
                 logger.info(f"Deleted {file_path}")
@@ -722,9 +707,9 @@ def master_contract_download():
         copy_from_dataframe(token_df)
         token_df = process_fyers_nfo_csv(output_path)
         copy_from_dataframe(token_df)
-        token_df = process_fyers_cds_csv(output_path)
+        token_df = process_fyers_cds_json(output_path)
         copy_from_dataframe(token_df)
-        token_df = process_fyers_mcx_csv(output_path)
+        token_df = process_fyers_mcx_json(output_path)
         copy_from_dataframe(token_df)
         delete_fyers_temp_data(output_path)
         # token_df['token'] = pd.to_numeric(token_df['token'], errors='coerce').fillna(-1).astype(int)
