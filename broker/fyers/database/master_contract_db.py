@@ -249,6 +249,19 @@ def process_fyers_nse_csv(path):
     df_filtered = df[df["exchange"].isin(["NSE", "NSE_INDEX"])].copy()
 
     df_filtered.loc[:, "symbol"] = df_filtered["Underlying symbol"]
+
+    # Normalize NSE_INDEX symbols: remove spaces and hyphens
+    nse_idx_mask = df_filtered["exchange"] == "NSE_INDEX"
+    df_filtered.loc[nse_idx_mask, "symbol"] = (
+        df_filtered.loc[nse_idx_mask, "symbol"]
+        .str.replace(" ", "", regex=False)
+        .str.replace("-", "", regex=False)
+    )
+    # Override specific symbols where normalized name differs from OpenAlgo standard
+    df_filtered.loc[nse_idx_mask, "symbol"] = df_filtered.loc[nse_idx_mask, "symbol"].replace(
+        {"NIFTYMID50": "NIFTYMIDCAP50"}
+    )
+
     df_filtered["brexchange"] = "NSE"
 
     # List of columns to remove
@@ -312,6 +325,56 @@ def process_fyers_bse_csv(path):
     df_filtered = df[df["Exchange Instrument type"].isin([0, 4, 10, 50])].copy()
 
     df_filtered.loc[:, "symbol"] = df_filtered["Underlying symbol"]
+
+    # Normalize BSE_INDEX symbols to OpenAlgo standard format
+    bse_idx_mask = df_filtered["exchange"] == "BSE_INDEX"
+    bse_index_map = {
+        "SENSEX": "SENSEX",
+        "SENSEX50": "SENSEX50",
+        "BANKEX": "BANKEX",
+        "SNXT50": "BSESENSEXNEXT50",
+        "100": "BSE100",
+        "200": "BSE200",
+        "500": "BSE500",
+        "150MIDCAP": "BSE150MIDCAPINDEX",
+        "250LARGEMIDCAP": "BSE250LARGEMIDCAPINDEX",
+        "400MIDSMALLCAP": "BSE400MIDSMALLCAPINDEX",
+        "AUTO": "BSEAUTO",
+        "CG": "BSECAPITALGOODS",
+        "CARBONEX": "BSECARBONEX",
+        "CD": "BSECONSUMERDURABLES",
+        "CPSE": "BSECPSE",
+        "DOL100": "BSEDOLLEX100",
+        "DOL200": "BSEDOLLEX200",
+        "DOL30": "BSEDOLLEX30",
+        "ENERGY": "BSEENERGY",
+        "FMC": "BSEFASTMOVINGCONSUMERGOODS",
+        "FIN": "BSEFINANCIALSERVICES",
+        "GREENEX": "BSEGREENEX",
+        "HC": "BSEHEALTHCARE",
+        "INFRA": "BSEINDIAINFRASTRUCTUREINDEX",
+        "INDSTR": "BSEINDUSTRIALS",
+        "IT": "BSEINFORMATIONTECHNOLOGY",
+        "IPO": "BSEIPO",
+        "LRGCAP": "BSELARGECAP",
+        "METAL": "BSEMETAL",
+        "MIDCAP": "BSEMIDCAP",
+        "MIDSEL": "BSEMIDCAPSELECTINDEX",
+        "OILGAS": "BSEOIL&GAS",
+        "POWER": "BSEPOWER",
+        "PSU": "BSEPSU",
+        "REALTY": "BSEREALTY",
+        "SMLCAP": "BSESMALLCAP",
+        "SMLSEL": "BSESMALLCAPSELECTINDEX",
+        "SME IPO": "BSESMEIPO",
+        "TECK": "BSETECK",
+        "TELCOM": "BSETELECOM",
+    }
+    original_bse = df_filtered.loc[bse_idx_mask, "symbol"]
+    mapped_bse = original_bse.map(bse_index_map)
+    # For values not in the map, prepend "BSE" and remove spaces
+    fallback_bse = "BSE" + original_bse.str.replace(" ", "", regex=False)
+    df_filtered.loc[bse_idx_mask, "symbol"] = mapped_bse.fillna(fallback_bse)
 
     df_filtered["brexchange"] = "BSE"
 
