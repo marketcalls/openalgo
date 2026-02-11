@@ -642,6 +642,227 @@ def get_pnl_data():
                 logger.exception(f"Error processing trades for {symbol}: {e}")
                 continue
 
+        # Process carry-forward positions (open positions from previous days not in today's trades,
+        # and positions opened previously but closed today via exit-only trades)
+        has_carryforward_positions = False
+
+        if current_positions:
+            ist = pytz.timezone("Asia/Kolkata")
+
+            for pos_key, pos_data in current_positions.items():
+                parts = pos_key.rsplit("_", 1)
+                if len(parts) != 2:
+                    logger.warning(f"Could not parse position key: {pos_key}")
+                    continue
+
+                symbol, exchange = parts
+                pnl_col = f"{symbol}_pnl"
+                qty = pos_data["quantity"]
+                avg_price = pos_data["average_price"]
+                position_pnl_value = pos_data["pnl"]
+
+                # Case 1: Open carry-forward position (no trades today for this symbol)
+                if qty != 0 and pos_key not in symbol_trades:
+                    try:
+                        history_rate_limiter.wait()
+                        success, hist_response, _ = get_history(
+                            symbol=symbol,
+                            exchange=exchange,
+                            interval="1m",
+                            start_date=today_str,
+                            end_date=today_str,
+                            api_key=api_key,
+                        )
+
+                        if success and "data" in hist_response:
+                            df_hist = pd.DataFrame(hist_response["data"])
+                            if not df_hist.empty:
+                                df_hist = convert_timestamp_to_ist(df_hist, symbol)
+
+                                if df_hist is not None:
+                                    current_time = datetime.now(ist)
+                                    market_open = df_hist.index[0].replace(
+                                        hour=9, minute=15, second=0, microsecond=0
+                                    )
+                                    df_hist = df_hist[df_hist.index >= market_open]
+                                    df_hist = df_hist[df_hist.index <= current_time]
+
+                                    df_hist = df_hist[["close"]].copy()
+                                    df_hist.rename(
+                                        columns={"close": f"{symbol}_price"}, inplace=True
+                                    )
+
+                                    if qty > 0:
+                                        df_hist[pnl_col] = (
+                                            df_hist[f"{symbol}_price"] - avg_price
+                                        ) * qty
+                                    else:
+                                        df_hist[pnl_col] = (
+                                            avg_price - df_hist[f"{symbol}_price"]
+                                        ) * abs(qty)
+
+                                    if portfolio_pnl is None:
+                                        portfolio_pnl = df_hist[[pnl_col]].copy()
+                                    else:
+                                        portfolio_pnl = portfolio_pnl.join(
+                                            df_hist[[pnl_col]], how="outer"
+                                        )
+
+                                    has_carryforward_positions = True
+                                    logger.info(
+                                        f"Added PnL for carry-forward position {symbol}: "
+                                        f"{len(df_hist)} data points"
+                                    )
+                        else:
+                            logger.warning(
+                                f"Could not get historical data for carry-forward position {symbol}"
+                            )
+
+                    except Exception as e:
+                        logger.exception(
+                            f"Error processing carry-forward position {symbol}: {e}"
+                        )
+                        continue
+
+                # Case 2: Closed carry-forward position (exit-only trades today, no entry trade)
+                elif qty == 0 and position_pnl_value != 0 and pos_key in symbol_trades:
+                    trades_for_symbol = symbol_trades[pos_key]
+                    if not trades_for_symbol:
+                        continue
+
+                    # Check if only exit trades exist (not a same-day round-trip)
+                    actions = [t.get("action") for t in trades_for_symbol]
+                    if "BUY" in actions and "SELL" in actions:
+                        continue  # Same-day round-trip, trade processing handled it
+
+                    if all(a == "SELL" for a in actions):
+                        was_long = True
+                    elif all(a == "BUY" for a in actions):
+                        was_long = False
+                    else:
+                        continue
+
+                    total_exit_qty = sum(
+                        float(t.get("quantity", 0)) for t in trades_for_symbol
+                    )
+                    if total_exit_qty == 0:
+                        continue
+
+                    total_value = sum(
+                        float(t.get("average_price", 0)) * float(t.get("quantity", 0))
+                        for t in trades_for_symbol
+                    )
+                    exit_price = total_value / total_exit_qty
+
+                    # Reconstruct entry price from realized PnL
+                    if was_long:
+                        entry_price = exit_price - position_pnl_value / total_exit_qty
+                    else:
+                        entry_price = exit_price + position_pnl_value / total_exit_qty
+
+                    close_time = trades_for_symbol[-1].get("parsed_time")
+
+                    try:
+                        history_rate_limiter.wait()
+                        success, hist_response, _ = get_history(
+                            symbol=symbol,
+                            exchange=exchange,
+                            interval="1m",
+                            start_date=today_str,
+                            end_date=today_str,
+                            api_key=api_key,
+                        )
+
+                        if success and "data" in hist_response:
+                            df_hist = pd.DataFrame(hist_response["data"])
+                            if not df_hist.empty:
+                                df_hist = convert_timestamp_to_ist(df_hist, symbol)
+
+                                if df_hist is not None:
+                                    current_time = datetime.now(ist)
+                                    market_open = df_hist.index[0].replace(
+                                        hour=9, minute=15, second=0, microsecond=0
+                                    )
+                                    df_hist = df_hist[df_hist.index >= market_open]
+                                    df_hist = df_hist[df_hist.index <= current_time]
+
+                                    df_hist = df_hist[["close"]].copy()
+                                    df_hist.rename(
+                                        columns={"close": f"{symbol}_price"},
+                                        inplace=True,
+                                    )
+
+                                    # MTM before close, realized PnL after close
+                                    df_hist[pnl_col] = 0.0
+
+                                    if close_time:
+                                        before_close = df_hist.index <= close_time
+                                        after_close = df_hist.index > close_time
+                                    else:
+                                        before_close = pd.Series(
+                                            True, index=df_hist.index
+                                        )
+                                        after_close = pd.Series(
+                                            False, index=df_hist.index
+                                        )
+
+                                    if was_long:
+                                        df_hist.loc[before_close, pnl_col] = (
+                                            df_hist.loc[
+                                                before_close, f"{symbol}_price"
+                                            ]
+                                            - entry_price
+                                        ) * total_exit_qty
+                                    else:
+                                        df_hist.loc[before_close, pnl_col] = (
+                                            entry_price
+                                            - df_hist.loc[
+                                                before_close, f"{symbol}_price"
+                                            ]
+                                        ) * total_exit_qty
+
+                                    if after_close.any():
+                                        df_hist.loc[after_close, pnl_col] = (
+                                            position_pnl_value
+                                        )
+
+                                    # Remove incorrect trade-based column if present
+                                    if (
+                                        portfolio_pnl is not None
+                                        and pnl_col in portfolio_pnl.columns
+                                    ):
+                                        portfolio_pnl.drop(
+                                            columns=[pnl_col], inplace=True
+                                        )
+                                        if len(portfolio_pnl.columns) == 0:
+                                            portfolio_pnl = None
+
+                                    if portfolio_pnl is None:
+                                        portfolio_pnl = df_hist[[pnl_col]].copy()
+                                    else:
+                                        portfolio_pnl = portfolio_pnl.join(
+                                            df_hist[[pnl_col]], how="outer"
+                                        )
+
+                                    has_carryforward_positions = True
+                                    logger.info(
+                                        f"Added PnL for carry-forward closed position {symbol}: "
+                                        f"{len(df_hist)} data points, "
+                                        f"entry={entry_price:.2f}, exit={exit_price:.2f}, "
+                                        f"realized PnL={position_pnl_value}"
+                                    )
+                        else:
+                            logger.warning(
+                                f"Could not get historical data for carry-forward "
+                                f"closed position {symbol}"
+                            )
+
+                    except Exception as e:
+                        logger.exception(
+                            f"Error processing carry-forward closed position {symbol}: {e}"
+                        )
+                        continue
+
         # If we have no portfolio data but have positions, fetch historical data for positions
         if portfolio_pnl is None and current_positions:
             logger.info(
@@ -751,9 +972,14 @@ def get_pnl_data():
                 # Use current position P&L as constant value
                 total_pnl = sum(pos["pnl"] for pos in current_positions.values())
                 portfolio_pnl["Total_PnL"] = total_pnl
+            else:
+                # Historical data was fetched for positions - calculate Total_PnL
+                portfolio_pnl = portfolio_pnl.ffill().fillna(0)
+                portfolio_pnl["Total_PnL"] = portfolio_pnl.sum(axis=1)
         elif portfolio_pnl is not None:
             # Add zero PnL data from market open to first trade if needed
-            if first_trade_time and trades:
+            # Skip when carry-forward positions exist (they already have data from market open)
+            if first_trade_time and trades and not has_carryforward_positions:
                 ist = pytz.timezone("Asia/Kolkata")
                 market_open = first_trade_time.replace(hour=9, minute=15, second=0, microsecond=0)
 
