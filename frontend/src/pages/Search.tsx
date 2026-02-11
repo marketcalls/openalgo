@@ -49,6 +49,7 @@ export default function Search() {
   const [searchParams] = useSearchParams()
   const [results, setResults] = useState<SearchResult[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
   const [currentPage, setCurrentPage] = useState(1)
@@ -61,6 +62,7 @@ export default function Search() {
 
   const fetchResults = async () => {
     setIsLoading(true)
+    setError(null)
     try {
       // Build URL with all search params - use the API endpoint
       const params = new URLSearchParams()
@@ -90,10 +92,14 @@ export default function Search() {
         const data = await response.json()
         setResults(data.results || [])
       } else {
+        setError('Search failed. Please try again.')
+        showToast.error('Failed to search symbols')
         setResults([])
       }
     } catch (error) {
       console.error('Search error:', error)
+      setError('Failed to search symbols. Please check your connection.')
+      showToast.error('Failed to search symbols')
       setResults([])
     } finally {
       setIsLoading(false)
@@ -221,7 +227,11 @@ export default function Search() {
                 {paginatedResults.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                      No results found
+                      {error ? (
+                        <span className="text-destructive">{error}</span>
+                      ) : (
+                        'No results found'
+                      )}
                     </TableCell>
                   </TableRow>
                 ) : (
