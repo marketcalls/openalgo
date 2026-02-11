@@ -12,7 +12,7 @@ bidict==0.23.1
 blinker==1.9.0
 cachetools==5.3.3
 certifi==2024.7.4
-cffi==1.17.1
+cffi==2.0.0
 charset-normalizer==3.4.4
 choreographer==1.2.1
 click==8.3.1
