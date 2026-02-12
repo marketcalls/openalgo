@@ -62,7 +62,6 @@ export default function PythonStrategyIndex() {
       setStrategies(strategiesData)
       setMasterStatus(statusData)
     } catch (error) {
-      console.error('Failed to fetch data:', error)
       if (!silent) showToast.error('Failed to load strategies', 'pythonStrategy')
     } finally {
       if (!silent) setLoading(false)
@@ -81,13 +80,11 @@ export default function PythonStrategyIndex() {
       try {
         const data = JSON.parse(event.data)
         if (data.type === 'connected') {
-          console.log('SSE connected for strategy status updates')
           return
         }
 
         // Refresh data silently when we receive a status update
         if (data.strategy_id && data.status) {
-          console.log(`Strategy ${data.strategy_id} status: ${data.status}`)
           fetchData(true) // Silent refresh
         }
       } catch (e) {
@@ -96,7 +93,6 @@ export default function PythonStrategyIndex() {
     }
 
     eventSource.onerror = () => {
-      console.log('SSE connection error, will auto-reconnect')
     }
 
     return () => {
@@ -118,7 +114,6 @@ export default function PythonStrategyIndex() {
         showToast.error(response.message || 'Failed to start strategy', 'pythonStrategy')
       }
     } catch (error: unknown) {
-      console.error('Failed to start strategy:', error)
       // Extract error message from Axios response
       const axiosError = error as { response?: { data?: { message?: string } } }
       const errorMessage = axiosError.response?.data?.message || 'Failed to start strategy'
@@ -140,7 +135,6 @@ export default function PythonStrategyIndex() {
         showToast.error(response.message || 'Failed to stop strategy', 'pythonStrategy')
       }
     } catch (error) {
-      console.error('Failed to stop strategy:', error)
       showToast.error('Failed to stop strategy', 'pythonStrategy')
     } finally {
       setActionLoading(null)
@@ -158,7 +152,6 @@ export default function PythonStrategyIndex() {
         showToast.error(response.message || 'Failed to clear error', 'pythonStrategy')
       }
     } catch (error) {
-      console.error('Failed to clear error:', error)
       showToast.error('Failed to clear error', 'pythonStrategy')
     } finally {
       setActionLoading(null)
@@ -177,7 +170,6 @@ export default function PythonStrategyIndex() {
         showToast.error(response.message || 'Failed to delete strategy', 'pythonStrategy')
       }
     } catch (error) {
-      console.error('Failed to delete strategy:', error)
       showToast.error('Failed to delete strategy', 'pythonStrategy')
     } finally {
       setActionLoading(null)
@@ -199,7 +191,6 @@ export default function PythonStrategyIndex() {
       URL.revokeObjectURL(url)
       showToast.success('Strategy exported', 'pythonStrategy')
     } catch (error) {
-      console.error('Failed to export strategy:', error)
       showToast.error('Failed to export strategy', 'pythonStrategy')
     }
   }
@@ -216,7 +207,6 @@ export default function PythonStrategyIndex() {
         showToast.error(response.message || 'Failed to check contracts', 'pythonStrategy')
       }
     } catch (error) {
-      console.error('Failed to check contracts:', error)
       showToast.error('Failed to check contracts', 'pythonStrategy')
     } finally {
       setActionLoading(null)

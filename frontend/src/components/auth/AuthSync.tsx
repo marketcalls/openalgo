@@ -57,7 +57,6 @@ export function AuthSync({ children }: AuthSyncProps) {
           logout()
         }
       } catch (error) {
-        console.error('Failed to sync session:', error)
         // On error, don't change auth state - let existing state persist
       } finally {
         setIsChecking(false)
