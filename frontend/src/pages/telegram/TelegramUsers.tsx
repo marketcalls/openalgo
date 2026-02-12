@@ -84,7 +84,6 @@ export default function TelegramUsers() {
       setFilteredUsers(fetchedUsers)
       setStats(fetchedStats)
     } catch (error) {
-      console.error('Error fetching users:', error)
       showToast.error('Failed to load users', 'telegram')
     } finally {
       setIsLoading(false)

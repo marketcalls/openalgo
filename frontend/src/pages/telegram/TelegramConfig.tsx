@@ -43,7 +43,6 @@ export default function TelegramConfig() {
       setBroadcastEnabled(configData.broadcast_enabled)
       setRateLimit(configData.rate_limit_per_minute)
     } catch (error) {
-      console.error('Error fetching config:', error)
       showToast.error('Failed to load configuration', 'telegram')
     } finally {
       setIsLoading(false)

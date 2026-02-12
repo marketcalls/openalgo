@@ -49,7 +49,6 @@ export default function PythonStrategyLogs() {
         setSelectedLog(logsData[0].name)
       }
     } catch (error) {
-      console.error('Failed to fetch data:', error)
       showToast.error('Failed to load logs', 'pythonStrategy')
     } finally {
       setLoading(false)
@@ -66,7 +65,6 @@ export default function PythonStrategyLogs() {
       const content = await pythonStrategyApi.getLogContent(strategyId, logName)
       setLogContent(content)
     } catch (error) {
-      console.error('Failed to fetch log content:', error)
       // Only show toast for manual fetch, not auto-refresh
       if (showLoading) {
         showToast.error('Failed to load log content', 'pythonStrategy')
@@ -119,7 +117,6 @@ export default function PythonStrategyLogs() {
         showToast.error(response.message || 'Failed to clear logs', 'pythonStrategy')
       }
     } catch (error) {
-      console.error('Failed to clear logs:', error)
       showToast.error('Failed to clear logs', 'pythonStrategy')
     } finally {
       setClearing(false)

@@ -36,7 +36,6 @@ export default function StrategyIndex() {
       const data = await strategyApi.getStrategies()
       setStrategies(data)
     } catch (error) {
-      console.error('Failed to fetch strategies:', error)
       showToast.error('Failed to load strategies', 'strategy')
     } finally {
       setLoading(false)
@@ -51,7 +50,6 @@ export default function StrategyIndex() {
         const data = await response.json()
         setHostConfig(data)
       } catch (error) {
-        console.error('Failed to fetch host config:', error)
         // Fallback to window.location.origin if config fetch fails
         setHostConfig({
           host_server: window.location.origin,
