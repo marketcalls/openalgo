@@ -81,7 +81,18 @@ def map_order_data(order_data):
             if price_type == "MARKET":
                 ordertype = "SL-M"
             else:
-                ordertype = "SL"
+                # Check if it's our emulated SL-M (Limit price == Trigger price)
+                # Need to read prices first to compare
+                op_paise = order.get("order_price", 0)
+                tp_paise = order.get("trigger_price", 0)
+                if not tp_paise:
+                    ap = order.get("algo_params") or {}
+                    tp_paise = ap.get("trigger_price", 0)
+                
+                if op_paise > 0 and op_paise == tp_paise:
+                    ordertype = "SL-M"
+                else:
+                    ordertype = "SL"
         elif price_type == "MARKET":
             ordertype = "MARKET"
         elif price_type == "LIMIT":
@@ -116,6 +127,10 @@ def map_order_data(order_data):
         order_price_paise = order.get("order_price", 0)
         avg_price_paise = order.get("avg_filled_price", 0)
         trigger_price_paise = order.get("trigger_price", 0)
+        # Fallback: Nubra returns trigger_price inside algo_params for stoploss orders
+        if not trigger_price_paise:
+            algo_params = order.get("algo_params") or {}
+            trigger_price_paise = algo_params.get("trigger_price", 0)
         
         normalized_order = {
             "orderid": str(order.get("order_id", "")),
@@ -549,8 +564,16 @@ def transform_holdings_data(holdings_data):
             "exchange": holding.get("exchange", ""),
             "quantity": holding.get("quantity", 0),
             "product": holding.get("product", ""),
+            "average_price": holding.get("average_price", 0.0),
+            "ltp": holding.get("ltp", 0.0),
             "pnl": holding.get("pnl", 0.0),
             "pnlpercent": holding.get("pnlpercent", 0.0),
+            "invested_value": holding.get("invested_value", 0.0),
+            "current_value": holding.get("current_value", 0.0),
+            "day_pnl": holding.get("day_pnl", 0.0),
+            "day_pnl_chg": holding.get("day_pnl_chg", 0.0),
+            "ltp_chg": holding.get("ltp_chg", 0.0),
+            "ref_id": holding.get("ref_id", ""),
         }
         transformed_data.append(transformed_position)
     return transformed_data
@@ -589,6 +612,7 @@ def map_portfolio_data(portfolio_data):
     raw_stats = portfolio.get("holding_stats") or {}
 
     logger.info(f"Nubra holdings: {len(raw_holdings)} items, stats keys: {list(raw_stats.keys())}")
+    logger.info(f"Nubra Raw Holdings Data: {raw_holdings}")
 
     mapped_holdings = []
     for h in raw_holdings:
