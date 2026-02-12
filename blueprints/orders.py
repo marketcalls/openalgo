@@ -13,6 +13,7 @@ from services.holdings_service import get_holdings
 from services.orderbook_service import get_orderbook
 from services.place_smart_order_service import place_smart_order
 from services.positionbook_service import get_positionbook
+from services.telegram_alert_service import telegram_alert_service
 from services.tradebook_service import get_tradebook
 from utils.logging import get_logger
 from utils.session import check_session_validity
@@ -603,6 +604,19 @@ def close_position():
                 "orderid": orderid,
             }
             status_code = 200
+
+            # Send Telegram alert for individual position close
+            api_key = get_api_key_for_tradingview(login_username)
+            if api_key:
+                from extensions import socketio
+
+                socketio.start_background_task(
+                    telegram_alert_service.send_order_alert,
+                    "closeposition",
+                    order_data,
+                    response_data,
+                    api_key,
+                )
         else:
             # No orderid, definite error
             response_data = {

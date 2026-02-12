@@ -46,7 +46,6 @@ export default function MarketTimingsPage() {
       setTodayTimings(response.today_timings)
       setToday(response.today)
     } catch (error) {
-      console.error('Error fetching timings:', error)
       showToast.error('Failed to load market timings', 'admin')
     } finally {
       setIsLoading(false)

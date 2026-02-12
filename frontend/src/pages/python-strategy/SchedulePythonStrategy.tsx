@@ -33,7 +33,6 @@ export default function SchedulePythonStrategy() {
         if (data.schedule_stop_time) setStopTime(data.schedule_stop_time)
         if (data.schedule_days?.length) setSelectedDays(data.schedule_days)
       } catch (error) {
-        console.error('Failed to fetch strategy:', error)
         showToast.error('Failed to load strategy', 'pythonStrategy')
         navigate('/python')
       } finally {
@@ -82,7 +81,6 @@ export default function SchedulePythonStrategy() {
         showToast.error(response.message || 'Failed to save schedule', 'pythonStrategy')
       }
     } catch (error) {
-      console.error('Failed to schedule:', error)
       showToast.error('Failed to save schedule', 'pythonStrategy')
     } finally {
       setSaving(false)

@@ -178,14 +178,48 @@ def map_position_data(position_data):
 
 
 def transform_positions_data(positions_data):
+    # Dhan's /v2/positions doesn't include LTP unlike other brokers
+    # Fetch LTP via multiquotes service (same pattern as sandbox mode)
+    ltp_map = {}
+    if positions_data:
+        try:
+            from database.auth_db import ApiKeys, decrypt_token
+            from services.quotes_service import get_multiquotes
+
+            api_key_obj = ApiKeys.query.first()
+            if api_key_obj:
+                api_key = decrypt_token(api_key_obj.api_key_encrypted)
+                symbols_payload = [
+                    {"symbol": pos.get("tradingSymbol", ""), "exchange": pos.get("exchangeSegment", "")}
+                    for pos in positions_data
+                    if pos.get("tradingSymbol") and pos.get("exchangeSegment")
+                ]
+                if symbols_payload:
+                    success, response, _ = get_multiquotes(symbols=symbols_payload, api_key=api_key)
+                    if success and "results" in response:
+                        for result in response["results"]:
+                            if "data" in result and result["data"]:
+                                key = f"{result['exchange']}:{result['symbol']}"
+                                ltp_map[key] = float(result["data"].get("ltp", 0))
+        except Exception as e:
+            logger.warning(f"Failed to fetch LTP via multiquotes: {e}")
+
     transformed_data = []
     for position in positions_data:
+        realized_pnl = float(position.get("realizedProfit", 0))
+        unrealized_pnl = float(position.get("unrealizedProfit", 0))
+        symbol = position.get("tradingSymbol", "")
+        exchange = position.get("exchangeSegment", "")
+        ltp = ltp_map.get(f"{exchange}:{symbol}", 0.0)
+
         transformed_position = {
-            "symbol": position.get("tradingSymbol", ""),
-            "exchange": position.get("exchangeSegment", ""),
+            "symbol": symbol,
+            "exchange": exchange,
             "product": position.get("productType", ""),
             "quantity": position.get("netQty", 0),
             "average_price": position.get("costPrice", 0.0),
+            "ltp": round(ltp, 2),
+            "pnl": round(realized_pnl + unrealized_pnl, 2),
         }
         transformed_data.append(transformed_position)
     return transformed_data
