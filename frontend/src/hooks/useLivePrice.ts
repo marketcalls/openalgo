@@ -224,13 +224,14 @@ export function useLivePrice<T extends PriceableItem>(
         dataSource = 'rest'
       }
 
-      // For closed positions (qty=0), preserve PNL from REST API (realized values)
-      // but still apply live LTP for display purposes
+      // For closed positions (qty=0), preserve ALL REST API values including LTP
+      // This ensures P&L% calculation remains stable (realized values don't change)
       if (qty === 0) {
         return {
           ...item,
-          ltp: currentLtp || item.ltp,
-          _dataSource: currentLtp ? dataSource : 'rest',
+          // Keep item.ltp from REST API - don't update with live data
+          // This prevents P&L% from recalculating with changing LTP
+          _dataSource: 'rest',
         } as T & { _dataSource: string }
       }
 
