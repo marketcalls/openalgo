@@ -370,7 +370,7 @@ export default function TrendingOI() {
     // Effective strikes based on current mode
     const effectiveStrikes = useMemo(() => {
         if (!availableStrikes.length) return []
-        if (strikeMode === 'custom') return customStrikes.sort((a, b) => a - b)
+        if (strikeMode === 'custom') return [...customStrikes].sort((a, b) => a - b)
         // Range mode
         const center = atmMode === 'fixed' && fixedCenterStrike != null
             ? fixedCenterStrike
@@ -784,7 +784,7 @@ export default function TrendingOI() {
                     /* Custom mode: multi-select strikes */
                     <div className="flex items-center gap-1 flex-wrap min-w-[200px]">
                         {/* Selected strike tags */}
-                        {customStrikes.sort((a, b) => a - b).map((s) => (
+                        {[...customStrikes].sort((a, b) => a - b).map((s) => (
                             <Badge key={s} variant="secondary" className="text-xs px-2 py-0.5 gap-1">
                                 {s}{s === chainData?.atm_strike ? '*' : ''}
                                 <button
