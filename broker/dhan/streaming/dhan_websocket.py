@@ -76,6 +76,7 @@ class DhanWebSocket:
 
         # Logging
         self.logger = logging.getLogger(f"dhan_websocket_{'20depth' if is_20_depth else '5depth'}")
+        self.logger.setLevel(logging.INFO)  # Set to INFO to prevent DEBUG log spam
 
         # Build WebSocket URL
         self._build_url()
@@ -366,9 +367,11 @@ class DhanWebSocket:
             exchange_segment = struct.unpack("<B", data[offset + 3 : offset + 4])[0]
             security_id = struct.unpack("<I", data[offset + 4 : offset + 8])[0]
 
-            self.logger.debug(
-                f"Parsed header - Code: {feed_response_code}, Length: {message_length}, Exchange: {exchange_segment}, Security: {security_id}"
-            )
+            # Skip logging empty/keepalive packets to prevent log spam
+            if feed_response_code != 0 or message_length != 0:
+                self.logger.debug(
+                    f"Parsed header - Code: {feed_response_code}, Length: {message_length}, Exchange: {exchange_segment}, Security: {security_id}"
+                )
 
             # Parse payload based on response code
             payload_start = offset + 8
