@@ -37,7 +37,7 @@ def transform_data(data, token):
     # Determine validity type based on price type
     # MARKET and SL-M orders require IOC (Immediate or Cancel)
     # LIMIT and SL orders use DAY validity
-    if pricetype in ["MARKET", "SL-M"]:
+    if pricetype == "MARKET":
         validity_type = "IOC"
     else:
         validity_type = "DAY"
@@ -60,6 +60,11 @@ def transform_data(data, token):
         transformed["algo_params"] = {
             "trigger_price": trigger_price_in_paise
         }
+        # For SL-M orders, Nubra requires order_price >= trigger_price
+        # Set order_price = trigger_price to pass validation;
+        # actual execution happens at market price since price_type is MARKET
+        if pricetype == "SL-M" and not price_in_paise:
+            transformed["order_price"] = trigger_price_in_paise
     
     return transformed
 
@@ -150,7 +155,7 @@ def map_price_type(pricetype):
         "MARKET": "MARKET",
         "LIMIT": "LIMIT",
         "SL": "LIMIT",      # Stoploss Limit
-        "SL-M": "MARKET",   # Stoploss Market
+        "SL-M": "LIMIT",    # Nubra doesn't support stoploss+market; use LIMIT with price=trigger
     }
     return price_type_mapping.get(pricetype.upper(), "MARKET")
 

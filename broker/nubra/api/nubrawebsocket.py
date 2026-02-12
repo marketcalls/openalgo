@@ -63,8 +63,9 @@ class NubraWebSocket:
     WebSocket client for streaming Nubra market data.
     """
 
-    def __init__(self, auth_token: str):
+    def __init__(self, auth_token: str, device_id: str = "OPENALGO"):
         self.bt = auth_token
+        self.device_id = device_id
         self.url = WS_URL
         self.ws: Optional[websocket.WebSocketApp] = None
         
@@ -98,8 +99,16 @@ class NubraWebSocket:
         while not self._stop_event.is_set():
             try:
                 logger.info("Connecting to Nubra WebSocket...")
+                
+                # Headers are required for strict auth channels (like Orderbook)
+                headers = {
+                    "Authorization": f"Bearer {self.bt}",
+                    "x-device-id": self.device_id
+                }
+                
                 self.ws = websocket.WebSocketApp(
                     self.url,
+                    header=headers,
                     on_open=self._on_open,
                     on_message=self._on_message,
                     on_error=self._on_error,
@@ -193,7 +202,7 @@ class NubraWebSocket:
             inner = ProtoAny()
             inner.ParseFromString(wrapper.value)
             
-            # logger.info(f"Received Protobuf Message: {inner.type_url}")
+            logger.info(f"Received Protobuf Message: {inner.type_url}")
 
             if inner.type_url.endswith("BatchWebSocketIndexMessage"):
                 msg = nubrafrontend_pb2.BatchWebSocketIndexMessage()
@@ -254,23 +263,44 @@ class NubraWebSocket:
         }
 
     def _process_orderbook_batch(self, msg):
+        logger.info(f"Received orderbook batch with {len(msg.instruments)} instruments")
         for obj in msg.instruments:
             self._cache_orderbook_data(obj)
 
     def _cache_orderbook_data(self, obj):
+        # Use ref_id if available, else fall back to inst_id
         ref_id = obj.ref_id if obj.ref_id else 0
+        inst_id = obj.inst_id if obj.inst_id else 0
+        logger.info(f"Orderbook data received: inst_id={inst_id}, ref_id={ref_id}, bids={len(obj.bids)}, asks={len(obj.asks)}, ltp={obj.ltp}")
+        
         if not ref_id:
-            return
+            if inst_id:
+                logger.warning(f"ref_id is 0, using inst_id={inst_id} as key")
+                ref_id = inst_id
+            else:
+                logger.warning("Both ref_id and inst_id are 0, skipping")
+                return
 
-        bids = [{"price": (b.price/100.0 if b.price else 0), "quantity": b.quantity, "orders": b.orders} for b in obj.bids]
-        asks = [{"price": (a.price/100.0 if a.price else 0), "quantity": a.quantity, "orders": a.orders} for a in obj.asks]
+        bids = [{"price": (b.price/100.0 if b.price else 0), "quantity": b.quantity or 0, "orders": b.orders or 0} for b in obj.bids]
+        asks = [{"price": (a.price/100.0 if a.price else 0), "quantity": a.quantity or 0, "orders": a.orders or 0} for a in obj.asks]
+
+        # Pad to exactly 5 levels
+        while len(bids) < 5:
+            bids.append({"price": 0, "quantity": 0, "orders": 0})
+        while len(asks) < 5:
+            asks.append({"price": 0, "quantity": 0, "orders": 0})
+
+        totalbuyqty = sum(b["quantity"] for b in bids)
+        totalsellqty = sum(a["quantity"] for a in asks)
 
         self.last_depth[ref_id] = {
             "ltp": obj.ltp / 100.0 if obj.ltp else 0,
             "ltq": obj.ltq if obj.ltq else 0,
             "volume": obj.volume if obj.volume else 0,
-            "bids": bids,
-            "asks": asks,
+            "bids": bids[:5],
+            "asks": asks[:5],
+            "totalbuyqty": totalbuyqty,
+            "totalsellqty": totalsellqty,
             "timestamp": obj.timestamp if obj.timestamp else 0,
             "ref_id": ref_id,
         }
@@ -411,16 +441,29 @@ class NubraWebSocket:
                 msg = f"batch_subscribe {self.bt} index {json.dumps(payload, separators=(',', ':'))} {exchange or 'NSE'}"
                 logger.info(f"Subscribing to INDEX: {msg}")
             elif data_type == "ohlcv":
-                # Matches SDK: batch_subscribe {token} index_bucket {payload} {interval} {exchange}
                 msg = f"batch_subscribe {self.bt} index_bucket {json.dumps(payload, separators=(',', ':'))} {interval} {exchange or 'NSE'}"
                 logger.info(f"Subscribing to OHLVC: {msg}")
             else:
                 msg = f"batch_subscribe {self.bt} {data_type} {json.dumps(payload, separators=(',', ':'))}"
+                logger.info(f"Subscribing to {data_type}: {msg}")
 
             self.ws.send(msg)
             return True
         except Exception as e:
             logger.error(f"Send subscribe failed: {e}")
+            return False
+
+    def change_orderbook_depth(self, depth: int = 5) -> bool:
+        """Set the orderbook depth level (default 5, max 20)."""
+        try:
+            if not self.ws or not self.ws.sock:
+                return False
+            msg = f"batch_subscribe {self.bt} orderbook_depth {depth}"
+            logger.info(f"Setting orderbook depth: {msg}")
+            self.ws.send(msg)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to set orderbook depth: {e}")
             return False
 
     def _send_unsubscribe_batch(self, data_type: str, ref_ids=None, index_symbol=None, exchange=None, interval=None) -> bool:
