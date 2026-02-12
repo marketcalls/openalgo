@@ -193,7 +193,6 @@ export default function Positions() {
           })
       }
     } catch (e) {
-      // Silently fail - continue with defaults
     }
   }, [])
 
