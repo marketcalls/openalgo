@@ -180,7 +180,18 @@ class TelegramAlertService:
 
             elif order_type == "closeposition":
                 if response.get("status") == "success":
-                    details.append("✅ All positions closed successfully")
+                    # Individual position close includes symbol details
+                    if order_data.get("symbol"):
+                        details.extend(
+                            [
+                                f"Symbol: `{order_data.get('symbol', 'N/A')}`",
+                                f"Exchange: {order_data.get('exchange', 'N/A')}",
+                                f"Product: {order_data.get('product', 'N/A')}",
+                                f"Order ID: `{response.get('orderid', 'N/A')}`",
+                            ]
+                        )
+                    else:
+                        details.append("✅ All positions closed successfully")
                 else:
                     details.append(f"❌ Error: {response.get('message', 'Failed')}")
 
