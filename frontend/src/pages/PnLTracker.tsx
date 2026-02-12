@@ -274,7 +274,6 @@ export default function PnLTracker() {
         showToast.error(result.message || 'Failed to load PnL data', 'positions')
       }
     } catch (error) {
-      console.error('Error loading PnL data:', error)
       showToast.error('Failed to load PnL data. Please try again.', 'positions')
     } finally {
       setIsLoading(false)
@@ -314,7 +313,6 @@ export default function PnLTracker() {
         1.0
       )
     } catch (error) {
-      console.error('Screenshot error:', error)
       showToast.error('Failed to capture screenshot', 'positions')
     } finally {
       setIsCapturing(false)

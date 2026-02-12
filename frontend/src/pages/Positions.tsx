@@ -193,7 +193,6 @@ export default function Positions() {
           })
       }
     } catch (e) {
-      console.error('Error loading preferences:', e)
     }
   }, [])
 
@@ -451,7 +450,6 @@ export default function Positions() {
         showToast.error(response.message || 'Failed to close position', 'positions')
       }
     } catch (err) {
-      console.error('Close position error:', err)
       showToast.error('Failed to close position', 'positions')
     }
   }
@@ -466,7 +464,6 @@ export default function Positions() {
         showToast.error(response.message || 'Failed to close all positions', 'positions')
       }
     } catch (err) {
-      console.error('Close all positions error:', err)
       showToast.error('Failed to close all positions', 'positions')
     }
   }

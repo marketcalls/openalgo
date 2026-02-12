@@ -86,7 +86,6 @@ export default function NewChartinkStrategy() {
         showToast.error(response.message || 'Failed to create strategy', 'chartink')
       }
     } catch (error: unknown) {
-      console.error('Failed to create strategy:', error)
       const errorMessage = error instanceof Error ? error.message : 'Failed to create strategy'
       showToast.error(errorMessage, 'chartink')
     } finally {

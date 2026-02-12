@@ -677,7 +677,6 @@ export class MarketDataManager {
   private async enableFallbackMode(): Promise<void> {
     if (this.fallbackMode) return
 
-    console.log('[MarketDataManager] Switching to REST API fallback mode')
     this.fallbackMode = true
     this.notifyStateListeners()
 
@@ -696,7 +695,6 @@ export class MarketDataManager {
   private disableFallbackMode(): void {
     if (!this.fallbackMode) return
 
-    console.log('[MarketDataManager] Disabling REST API fallback mode - WebSocket restored')
     this.fallbackMode = false
     this.stopFallbackPolling()
     this.consecutiveFailures = 0
@@ -718,7 +716,6 @@ export class MarketDataManager {
         this.apiKey = data.api_key
       }
     } catch (err) {
-      console.error('[MarketDataManager] Failed to fetch API key for fallback:', err)
     }
   }
 
@@ -728,7 +725,6 @@ export class MarketDataManager {
   private startFallbackPolling(): void {
     if (this.fallbackPollingInterval) return
 
-    console.log(`[MarketDataManager] Starting REST API polling (every ${this.fallbackPollingRate}ms)`)
 
     // Fetch immediately
     this.fetchMarketDataViaRest()
@@ -744,7 +740,6 @@ export class MarketDataManager {
    */
   private stopFallbackPolling(): void {
     if (this.fallbackPollingInterval) {
-      console.log('[MarketDataManager] Stopping REST API polling')
       clearInterval(this.fallbackPollingInterval)
       this.fallbackPollingInterval = null
     }
@@ -824,7 +819,6 @@ export class MarketDataManager {
         }
       }
     } catch (err) {
-      console.error('[MarketDataManager] REST API fetch error:', err)
     }
   }
 

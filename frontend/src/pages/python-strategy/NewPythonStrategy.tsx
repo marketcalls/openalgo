@@ -148,7 +148,6 @@ export default function NewPythonStrategy() {
         showToast.error(response.message || 'Failed to upload strategy', 'pythonStrategy')
       }
     } catch (error: unknown) {
-      console.error('Failed to upload strategy:', error)
       const errorMessage = error instanceof Error ? error.message : 'Failed to upload strategy'
       showToast.error(errorMessage, 'pythonStrategy')
     } finally {

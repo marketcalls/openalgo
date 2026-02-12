@@ -145,7 +145,6 @@ export default function MasterContract() {
         }
       }
     } catch (error) {
-      console.error('Error fetching status:', error)
     } finally {
       setIsLoading(false)
     }
@@ -161,7 +160,6 @@ export default function MasterContract() {
         setCacheHealth(data)
       }
     } catch (error) {
-      console.error('Error fetching cache health:', error)
     }
   }, [])
 
@@ -207,7 +205,6 @@ export default function MasterContract() {
         showToast.error(data.message || 'Failed to start download')
       }
     } catch (error) {
-      console.error('Error starting download:', error)
       showToast.error('Failed to start download')
     } finally {
       setIsDownloading(false)
@@ -235,7 +232,6 @@ export default function MasterContract() {
         showToast.error(data.message || 'Failed to reload cache')
       }
     } catch (error) {
-      console.error('Error reloading cache:', error)
       showToast.error('Failed to reload cache')
     } finally {
       setIsReloadingCache(false)
