@@ -176,9 +176,14 @@ export function useSocket() {
       playAlertSound('orders')
     })
 
-    // Close position notification - only play sound, UI handles toast
-    socket.on('close_position_event', (_data: ClosePositionEventData) => {
+    // Close position notification
+    socket.on('close_position_event', (data: ClosePositionEventData) => {
       playAlertSound('orders')
+      showCategoryToast(
+        'success',
+        data.message || 'All Open Positions Squared Off',
+        'positions'
+      )
     })
 
     // Order placement notification
@@ -251,49 +256,48 @@ export function useSocket() {
       let type: 'success' | 'error' | 'info' =
         data.response.status === 'success' ? 'success' : 'error'
 
-      // Skip toast for cancelorder/modifyorder/cancelallorder/closeposition - UI handles these
-      if (
-        data.request.api_type === 'cancelorder' ||
-        data.request.api_type === 'modifyorder' ||
-        data.request.api_type === 'cancelallorder' ||
-        data.request.api_type === 'closeposition'
+      const action = data.request.action || ''
+      const symbol = data.request.symbol || ''
+      const quantity = data.request.quantity || ''
+      const orderid = data.response.orderid || data.request.orderid || ''
+      const apiType = data.request.api_type || ''
+
+      if (data.response.status === 'error') {
+        message = `Error: ${data.response.message}`
+        if (symbol) message = `${symbol} - ${message}`
+      } else if (apiType === 'cancelorder') {
+        message = orderid ? `Order Cancelled - ID: ${orderid}` : 'Order Cancelled'
+      } else if (apiType === 'cancelallorder') {
+        message = data.response.message || 'All Orders Cancelled'
+      } else if (apiType === 'modifyorder') {
+        message = orderid ? `Order Modified - ID: ${orderid}` : 'Order Modified'
+      } else if (apiType === 'closeposition') {
+        message = data.response.message || 'Position Closed'
+      } else if (
+        apiType === 'placesmartorder' &&
+        data.response.message &&
+        (data.response.message.includes('Positions Already Matched') ||
+          data.response.message.includes('No OpenPosition Found'))
       ) {
-        return
+        message = data.response.message
+        type = 'info'
       } else {
-        const action = data.request.action || ''
-        const symbol = data.request.symbol || ''
-        const quantity = data.request.quantity || ''
-        const orderid = data.response.orderid || ''
+        if (!action && !symbol && !orderid) {
+          return
+        }
 
-        if (data.response.status === 'error') {
-          message = `Error: ${data.response.message}`
-          if (symbol) message = `${symbol} - ${message}`
-        } else if (
-          data.request.api_type === 'placesmartorder' &&
-          data.response.message &&
-          (data.response.message.includes('Positions Already Matched') ||
-            data.response.message.includes('No OpenPosition Found'))
-        ) {
-          message = data.response.message
-          type = 'info'
+        if (action && symbol) {
+          message = `${action} Order Placed for Symbol: ${symbol}`
+          if (quantity) message += `, Qty: ${quantity}`
+          if (orderid) message += `, Order ID: ${orderid}`
+
+          if (apiType === 'placesmartorder' && data.request.position_size) {
+            message += `, Size: ${data.request.position_size}`
+          }
+        } else if (orderid) {
+          message = `Order Placed - ID: ${orderid}`
         } else {
-          if (!action && !symbol && !orderid) {
-            return
-          }
-
-          if (action && symbol) {
-            message = `${action} Order Placed for Symbol: ${symbol}`
-            if (quantity) message += `, Qty: ${quantity}`
-            if (orderid) message += `, Order ID: ${orderid}`
-
-            if (data.request.api_type === 'placesmartorder' && data.request.position_size) {
-              message += `, Size: ${data.request.position_size}`
-            }
-          } else if (orderid) {
-            message = `Order Placed - ID: ${orderid}`
-          } else {
-            return
-          }
+          return
         }
       }
 

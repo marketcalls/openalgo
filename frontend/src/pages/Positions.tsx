@@ -444,7 +444,10 @@ export default function Positions() {
         position.product
       )
       if (response.status === 'success') {
-        // Toast handled by order_event socket
+        showToast.success(
+          response.message || `Position closed for ${position.symbol}`,
+          'positions'
+        )
         fetchPositions(true)
       } else {
         showToast.error(response.message || 'Failed to close position', 'positions')
@@ -458,7 +461,7 @@ export default function Positions() {
     try {
       const response = await tradingApi.closeAllPositions()
       if (response.status === 'success') {
-        showToast.success('All positions closed', 'positions')
+        // Toast handled by close_position_event socket
         fetchPositions(true)
       } else {
         showToast.error(response.message || 'Failed to close all positions', 'positions')
