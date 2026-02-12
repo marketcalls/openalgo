@@ -81,7 +81,18 @@ def map_order_data(order_data):
             if price_type == "MARKET":
                 ordertype = "SL-M"
             else:
-                ordertype = "SL"
+                # Check if it's our emulated SL-M (Limit price == Trigger price)
+                # Need to read prices first to compare
+                op_paise = order.get("order_price", 0)
+                tp_paise = order.get("trigger_price", 0)
+                if not tp_paise:
+                    ap = order.get("algo_params") or {}
+                    tp_paise = ap.get("trigger_price", 0)
+                
+                if op_paise > 0 and op_paise == tp_paise:
+                    ordertype = "SL-M"
+                else:
+                    ordertype = "SL"
         elif price_type == "MARKET":
             ordertype = "MARKET"
         elif price_type == "LIMIT":
@@ -116,6 +127,10 @@ def map_order_data(order_data):
         order_price_paise = order.get("order_price", 0)
         avg_price_paise = order.get("avg_filled_price", 0)
         trigger_price_paise = order.get("trigger_price", 0)
+        # Fallback: Nubra returns trigger_price inside algo_params for stoploss orders
+        if not trigger_price_paise:
+            algo_params = order.get("algo_params") or {}
+            trigger_price_paise = algo_params.get("trigger_price", 0)
         
         normalized_order = {
             "orderid": str(order.get("order_id", "")),
