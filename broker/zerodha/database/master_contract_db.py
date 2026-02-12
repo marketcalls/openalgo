@@ -274,14 +274,8 @@ def process_zerodha_csv(path):
         .str.replace("-", "", regex=False)
     )
     bse_index_map = {
-        "SENSEX": "SENSEX",
-        "BANKEX": "BANKEX",
         "SNSX50": "SENSEX50",
-        "SENSEX50": "SENSEX50",
         "SNXT50": "BSESENSEXNEXT50",
-        "BSE100": "BSE100",
-        "BSE200": "BSE200",
-        "BSE500": "BSE500",
         "MID150": "BSE150MIDCAPINDEX",
         "LMI250": "BSE250LARGEMIDCAPINDEX",
         "MSL400": "BSE400MIDSMALLCAPINDEX",
@@ -305,7 +299,6 @@ def process_zerodha_csv(path):
         "GREENEX": "BSEGREENEX",
         "INFRA": "BSEINDIAINFRASTRUCTUREINDEX",
         "INDSTR": "BSEINDUSTRIALS",
-        "BSEIPO": "BSEIPO",
         "IPO": "BSEIPO",
         "LRGCAP": "BSELARGECAP",
         "METAL": "BSEMETAL",
@@ -313,7 +306,6 @@ def process_zerodha_csv(path):
         "MIDSEL": "BSEMIDCAPSELECTINDEX",
         "OILGAS": "BSEOIL&GAS",
         "POWER": "BSEPOWER",
-        "BSEPSU": "BSEPSU",
         "PSU": "BSEPSU",
         "REALTY": "BSEREALTY",
         "SMLCAP": "BSESMALLCAP",
@@ -324,8 +316,11 @@ def process_zerodha_csv(path):
     }
     original_bse = df.loc[bse_idx_mask, "symbol"]
     mapped_bse = original_bse.map(bse_index_map)
-    # For unmapped values: prepend "BSE" if not already prefixed
-    fallback_bse = original_bse.where(original_bse.str.startswith("BSE"), "BSE" + original_bse)
+    # For unmapped values: preserve if already prefixed with BSE/SENSEX/BANKEX, otherwise prepend "BSE"
+    fallback_bse = original_bse.where(
+        original_bse.str.match(r"^(BSE|SENSEX|BANKEX)"),
+        "BSE" + original_bse,
+    )
     df.loc[bse_idx_mask, "symbol"] = mapped_bse.fillna(fallback_bse)
 
     return df
