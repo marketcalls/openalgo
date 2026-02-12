@@ -86,43 +86,7 @@ def get_trade_book(auth):
 
 
 def get_positions(auth):
-    positions_data = get_api_response("/v2/positions", auth)
-
-    # Enrich positions with LTP from marketfeed API
-    # Dhan's /v2/positions doesn't include LTP unlike other brokers
-    # Use data.py's get_api_response which includes the required client-id header
-    if isinstance(positions_data, list) and positions_data:
-        try:
-            from broker.dhan.api.data import get_api_response as data_api_response
-
-            # Group security IDs by exchange segment
-            exchange_securities = {}
-            for pos in positions_data:
-                seg = pos.get("exchangeSegment", "")
-                sec_id = pos.get("securityId", "")
-                if seg and sec_id:
-                    if seg not in exchange_securities:
-                        exchange_securities[seg] = []
-                    exchange_securities[seg].append(int(sec_id))
-
-            if exchange_securities:
-                response = data_api_response(
-                    "/v2/marketfeed/ltp", auth, "POST",
-                    json.dumps(exchange_securities)
-                )
-                ltp_data = response.get("data", {}) if isinstance(response, dict) else {}
-
-                # Merge LTP into each position
-                for pos in positions_data:
-                    seg = pos.get("exchangeSegment", "")
-                    sec_id = str(pos.get("securityId", ""))
-                    quote = ltp_data.get(seg, {}).get(sec_id, {})
-                    last_price = quote.get("last_price") or quote.get("lastPrice") or 0
-                    pos["lastTradedPrice"] = float(last_price)
-        except Exception as e:
-            logger.warning(f"Failed to enrich positions with LTP: {e}")
-
-    return positions_data
+    return get_api_response("/v2/positions", auth)
 
 
 def get_holdings(auth):
