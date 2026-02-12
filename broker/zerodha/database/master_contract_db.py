@@ -245,17 +245,88 @@ def process_zerodha_csv(path):
         + df["instrumenttype"]
     )
 
-    df["symbol"] = df["symbol"].replace(
+    # Normalize NSE_INDEX symbols to OpenAlgo standard format
+    nse_idx_mask = df["exchange"] == "NSE_INDEX"
+    df.loc[nse_idx_mask, "symbol"] = (
+        df.loc[nse_idx_mask, "symbol"]
+        .str.upper()
+        .str.replace(" ", "", regex=False)
+        .str.replace("-", "", regex=False)
+    )
+    # Override specific symbols where normalized name differs from OpenAlgo standard
+    df.loc[nse_idx_mask, "symbol"] = df.loc[nse_idx_mask, "symbol"].replace(
         {
-            "NIFTY 50": "NIFTY",
-            "NIFTY NEXT 50": "NIFTYNXT50",
-            "NIFTY FIN SERVICE": "FINNIFTY",
-            "NIFTY BANK": "BANKNIFTY",
-            "NIFTY MID SELECT": "MIDCPNIFTY",
-            "INDIA VIX": "INDIAVIX",
-            "SNSX50": "SENSEX50",
+            "NIFTY50": "NIFTY",
+            "NIFTYBANK": "BANKNIFTY",
+            "NIFTYFINSERVICE": "FINNIFTY",
+            "NIFTYNEXT50": "NIFTYNXT50",
+            "NIFTYMIDSELECT": "MIDCPNIFTY",
+            "NIFTYMIDCAPSELECT": "MIDCPNIFTY",
         }
     )
+
+    # Normalize BSE_INDEX symbols to OpenAlgo standard format
+    bse_idx_mask = df["exchange"] == "BSE_INDEX"
+    df.loc[bse_idx_mask, "symbol"] = (
+        df.loc[bse_idx_mask, "symbol"]
+        .str.upper()
+        .str.replace(" ", "", regex=False)
+        .str.replace("-", "", regex=False)
+    )
+    bse_index_map = {
+        "SENSEX": "SENSEX",
+        "BANKEX": "BANKEX",
+        "SNSX50": "SENSEX50",
+        "SENSEX50": "SENSEX50",
+        "SNXT50": "BSESENSEXNEXT50",
+        "BSE100": "BSE100",
+        "BSE200": "BSE200",
+        "BSE500": "BSE500",
+        "MID150": "BSE150MIDCAPINDEX",
+        "LMI250": "BSE250LARGEMIDCAPINDEX",
+        "MSL400": "BSE400MIDSMALLCAPINDEX",
+        "AUTO": "BSEAUTO",
+        "BSECG": "BSECAPITALGOODS",
+        "BSECD": "BSECONSUMERDURABLES",
+        "BSEHC": "BSEHEALTHCARE",
+        "BSEIT": "BSEINFORMATIONTECHNOLOGY",
+        "CARBON": "BSECARBONEX",
+        "CARBONEX": "BSECARBONEX",
+        "CPSE": "BSECPSE",
+        "DOL100": "BSEDOLLEX100",
+        "DOL200": "BSEDOLLEX200",
+        "DOL30": "BSEDOLLEX30",
+        "ENERGY": "BSEENERGY",
+        "BSEFMC": "BSEFASTMOVINGCONSUMERGOODS",
+        "FMC": "BSEFASTMOVINGCONSUMERGOODS",
+        "FINSER": "BSEFINANCIALSERVICES",
+        "FIN": "BSEFINANCIALSERVICES",
+        "GREENX": "BSEGREENEX",
+        "GREENEX": "BSEGREENEX",
+        "INFRA": "BSEINDIAINFRASTRUCTUREINDEX",
+        "INDSTR": "BSEINDUSTRIALS",
+        "BSEIPO": "BSEIPO",
+        "IPO": "BSEIPO",
+        "LRGCAP": "BSELARGECAP",
+        "METAL": "BSEMETAL",
+        "MIDCAP": "BSEMIDCAP",
+        "MIDSEL": "BSEMIDCAPSELECTINDEX",
+        "OILGAS": "BSEOIL&GAS",
+        "POWER": "BSEPOWER",
+        "BSEPSU": "BSEPSU",
+        "PSU": "BSEPSU",
+        "REALTY": "BSEREALTY",
+        "SMLCAP": "BSESMALLCAP",
+        "SMLSEL": "BSESMALLCAPSELECTINDEX",
+        "SMEIPO": "BSESMEIPO",
+        "TECK": "BSETECK",
+        "TELCOM": "BSETELECOM",
+    }
+    original_bse = df.loc[bse_idx_mask, "symbol"]
+    mapped_bse = original_bse.map(bse_index_map)
+    # For unmapped values: prepend "BSE" if not already prefixed
+    fallback_bse = original_bse.where(original_bse.str.startswith("BSE"), "BSE" + original_bse)
+    df.loc[bse_idx_mask, "symbol"] = mapped_bse.fillna(fallback_bse)
 
     return df
 
