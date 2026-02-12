@@ -180,12 +180,17 @@ def map_position_data(position_data):
 def transform_positions_data(positions_data):
     transformed_data = []
     for position in positions_data:
+        realized_pnl = float(position.get("realizedProfit", 0))
+        unrealized_pnl = float(position.get("unrealizedProfit", 0))
+
         transformed_position = {
             "symbol": position.get("tradingSymbol", ""),
             "exchange": position.get("exchangeSegment", ""),
             "product": position.get("productType", ""),
             "quantity": position.get("netQty", 0),
             "average_price": position.get("costPrice", 0.0),
+            "ltp": 0.0,
+            "pnl": round(realized_pnl + unrealized_pnl, 2),
         }
         transformed_data.append(transformed_position)
     return transformed_data
