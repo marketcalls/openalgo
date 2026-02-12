@@ -111,7 +111,6 @@ export default function SandboxPnL() {
         }
       }
     } catch (error) {
-      console.error('Error fetching data:', error)
     } finally {
       setIsLoading(false)
     }

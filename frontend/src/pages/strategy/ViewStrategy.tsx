@@ -64,7 +64,6 @@ export default function ViewStrategy() {
       setStrategy(data.strategy)
       setMappings(data.mappings || [])
     } catch (error) {
-      console.error('Failed to fetch strategy:', error)
       showToast.error('Failed to load strategy', 'strategy')
       navigate('/strategy')
     } finally {
@@ -80,7 +79,6 @@ export default function ViewStrategy() {
         const data = await response.json()
         setHostConfig(data)
       } catch (error) {
-        console.error('Failed to fetch host config:', error)
         // Fallback to window.location.origin if config fetch fails
         setHostConfig({
           host_server: window.location.origin,
@@ -119,7 +117,6 @@ export default function ViewStrategy() {
         showToast.error(response.message || 'Failed to toggle strategy', 'strategy')
       }
     } catch (error) {
-      console.error('Failed to toggle strategy:', error)
       showToast.error('Failed to toggle strategy', 'strategy')
     } finally {
       setToggling(false)
@@ -138,7 +135,6 @@ export default function ViewStrategy() {
         showToast.error(response.message || 'Failed to delete strategy', 'strategy')
       }
     } catch (error) {
-      console.error('Failed to delete strategy:', error)
       showToast.error('Failed to delete strategy', 'strategy')
     } finally {
       setDeleting(false)
@@ -157,7 +153,6 @@ export default function ViewStrategy() {
         showToast.error(response.message || 'Failed to delete mapping', 'strategy')
       }
     } catch (error) {
-      console.error('Failed to delete mapping:', error)
       showToast.error('Failed to delete mapping', 'strategy')
     }
   }

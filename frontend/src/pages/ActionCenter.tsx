@@ -122,7 +122,6 @@ export default function ActionCenterPage() {
         )
       }
     } catch (error) {
-      console.error('Error fetching action center data:', error)
       showToast.error('Failed to load action center data', 'actionCenter')
     } finally {
       setIsLoading(false)
