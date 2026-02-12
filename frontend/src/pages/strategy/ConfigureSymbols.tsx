@@ -78,7 +78,6 @@ export default function ConfigureSymbols() {
       setStrategy(data.strategy)
       setMappings(data.mappings || [])
     } catch (error) {
-      console.error('Failed to fetch strategy:', error)
       showToast.error('Failed to load strategy', 'strategy')
     } finally {
       setLoading(false)
@@ -102,7 +101,6 @@ export default function ConfigureSymbols() {
         const results = await strategyApi.searchSymbols(query, exchange || undefined)
         setSearchResults(results)
       } catch (error) {
-        console.error('Search failed:', error)
       } finally {
         setSearchLoading(false)
       }
@@ -170,7 +168,6 @@ export default function ConfigureSymbols() {
         showToast.error(response.message || 'Failed to add symbol', 'strategy')
       }
     } catch (error) {
-      console.error('Failed to add symbol:', error)
       showToast.error('Failed to add symbol', 'strategy')
     } finally {
       setSubmitting(false)
@@ -198,7 +195,6 @@ export default function ConfigureSymbols() {
         showToast.error(response.message || 'Failed to add symbols', 'strategy')
       }
     } catch (error) {
-      console.error('Failed to add bulk symbols:', error)
       showToast.error('Failed to add symbols', 'strategy')
     } finally {
       setSubmitting(false)
@@ -217,7 +213,6 @@ export default function ConfigureSymbols() {
         showToast.error(response.message || 'Failed to remove symbol', 'strategy')
       }
     } catch (error) {
-      console.error('Failed to delete mapping:', error)
       showToast.error('Failed to remove symbol', 'strategy')
     } finally {
       setDeleteDialogOpen(false)

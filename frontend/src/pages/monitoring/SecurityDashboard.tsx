@@ -154,7 +154,6 @@ export default function SecurityDashboard() {
         setFormSettings(response.data.security_settings)
       }
     } catch (error) {
-      console.error('Error fetching dashboard data:', error)
       showToast.error('Failed to load security data', 'monitoring')
     } finally {
       setIsLoading(false)
@@ -166,7 +165,6 @@ export default function SecurityDashboard() {
       const response = await webClient.get<SecurityStats>('/security/stats')
       setStats(response.data)
     } catch (error) {
-      console.error('Error fetching stats:', error)
     }
   }
 

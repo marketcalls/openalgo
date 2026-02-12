@@ -25,7 +25,6 @@ export default function AdminIndex() {
         const data = await adminApi.getStats()
         setStats(data)
       } catch (error) {
-        console.error('Error fetching admin stats:', error)
       } finally {
         setIsLoading(false)
       }

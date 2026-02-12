@@ -107,7 +107,6 @@ export default function Token() {
           }
         }
       } catch (error) {
-        console.error('Error fetching F&O data:', error)
       } finally {
         if (requestId === fnoRequestIdRef.current) {
           setIsFnoLoading(false)
@@ -135,7 +134,6 @@ export default function Token() {
           }
         }
       } catch (error) {
-        console.error('Error fetching expiries:', error)
       }
     }
 
@@ -169,7 +167,6 @@ export default function Token() {
         setSearchResults((data.results || []).slice(0, 10))
         setShowResults(true)
       } catch (error) {
-        console.error('Search error:', error)
         setSearchResults([])
       } finally {
         setIsLoading(false)

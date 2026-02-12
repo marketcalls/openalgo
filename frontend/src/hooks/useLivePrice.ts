@@ -144,7 +144,6 @@ export function useLivePrice<T extends PriceableItem>(
       }
     } catch {
       // Silently fail - MultiQuotes is a fallback mechanism
-      console.debug('MultiQuotes fetch failed, using cached/REST data')
     }
   }, [apiKey, items, useMultiQuotesFallback])
 

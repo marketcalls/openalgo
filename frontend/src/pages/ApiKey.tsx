@@ -73,12 +73,10 @@ export default function ApiKey() {
           setOrderMode(data.order_mode || 'auto')
         } else {
           // Backend returned HTML - this shouldn't happen now
-          console.error('Backend returned HTML instead of JSON')
           showToast.error('Failed to load API key - please refresh', 'system')
         }
       }
     } catch (error) {
-      console.error('Error fetching API key:', error)
       showToast.error('Failed to load API key', 'system')
     } finally {
       setIsLoading(false)
@@ -126,7 +124,6 @@ export default function ApiKey() {
         showToast.error(data.error || 'Failed to generate API key', 'system')
       }
     } catch (error) {
-      console.error('Error regenerating API key:', error)
       showToast.error('Failed to generate API key', 'system')
     } finally {
       setIsRegenerating(false)
@@ -162,7 +159,6 @@ export default function ApiKey() {
         showToast.error(data.error || 'Failed to update order mode', 'system')
       }
     } catch (error) {
-      console.error('Error toggling order mode:', error)
       showToast.error('Failed to update order mode', 'system')
     } finally {
       setIsTogglingMode(false)
