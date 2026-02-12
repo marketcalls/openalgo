@@ -91,7 +91,6 @@ export default function LatencyDashboard() {
       setLogs(Array.isArray(logsResponse.data) ? logsResponse.data : [])
       setStats(statsResponse.data)
     } catch (error) {
-      console.error('Error fetching latency data:', error)
       showToast.error('Failed to load latency data', 'monitoring')
     } finally {
       setIsLoading(false)

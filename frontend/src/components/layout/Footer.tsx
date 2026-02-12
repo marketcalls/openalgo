@@ -20,7 +20,6 @@ export function Footer({ className }: FooterProps) {
           setVersion(data.version)
         }
       } catch (error) {
-        console.error('Failed to fetch version:', error)
       }
     }
 

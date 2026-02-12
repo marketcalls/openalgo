@@ -131,7 +131,6 @@ export default function Setup() {
         setError('Setup failed. Please try again.')
       }
     } catch (err) {
-      console.error('Setup error:', err)
       setError('Setup failed. Please check your connection and try again.')
     } finally {
       setIsLoading(false)

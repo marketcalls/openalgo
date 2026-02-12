@@ -96,7 +96,6 @@ export default function NewStrategy() {
         showToast.error(response.message || 'Failed to create strategy', 'strategy')
       }
     } catch (error: unknown) {
-      console.error('Failed to create strategy:', error)
       const errorMessage = error instanceof Error ? error.message : 'Failed to create strategy'
       showToast.error(errorMessage, 'strategy')
     } finally {

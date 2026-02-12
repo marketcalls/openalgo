@@ -34,7 +34,6 @@ export default function ChartinkIndex() {
       const data = await chartinkApi.getStrategies()
       setStrategies(data)
     } catch (error) {
-      console.error('Failed to fetch strategies:', error)
       showToast.error('Failed to load Chartink strategies', 'chartink')
     } finally {
       setLoading(false)
@@ -49,7 +48,6 @@ export default function ChartinkIndex() {
         const data = await response.json()
         setHostConfig(data)
       } catch (error) {
-        console.error('Failed to fetch host config:', error)
         // Fallback to window.location.origin if config fetch fails
         setHostConfig({
           host_server: window.location.origin,

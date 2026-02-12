@@ -101,7 +101,6 @@ export default function Sandbox() {
         }
       }
     } catch (error) {
-      console.error('Error fetching configs:', error)
       showToast.error('Failed to load configuration', 'analyzer')
     } finally {
       setIsLoading(false)
@@ -165,7 +164,6 @@ export default function Sandbox() {
         showToast.error(data.message, 'analyzer')
       }
     } catch (error) {
-      console.error('Error saving config:', error)
       showToast.error('Failed to save configuration', 'analyzer')
     }
   }
@@ -197,7 +195,6 @@ export default function Sandbox() {
         showToast.error(data.message, 'analyzer')
       }
     } catch (error) {
-      console.error('Error resetting config:', error)
       showToast.error('Failed to reset configuration', 'analyzer')
     } finally {
       setIsResetting(false)

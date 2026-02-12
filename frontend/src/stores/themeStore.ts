@@ -138,7 +138,6 @@ export const useThemeStore = create<ThemeStore>()(
             return { success: false, message: data.message || 'Failed to toggle mode' }
           }
         } catch (error) {
-          console.error('Failed to toggle app mode:', error)
           return { success: false, message: 'Network error' }
         } finally {
           set({ isTogglingMode: false })
@@ -166,7 +165,6 @@ export const useThemeStore = create<ThemeStore>()(
           // If request fails (401, etc.) - user is logged out, keep current appMode
           // This preserves the theme across logout for visual continuity
         } catch (error) {
-          console.error('Failed to sync app mode:', error)
           // On error, keep current appMode - preserves theme across logout
         }
       },

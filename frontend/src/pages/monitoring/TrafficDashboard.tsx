@@ -81,7 +81,6 @@ export default function TrafficDashboard() {
       setLogs(Array.isArray(logsResponse.data) ? logsResponse.data : [])
       setStats(statsResponse.data)
     } catch (error) {
-      console.error('Error fetching traffic data:', error)
       showToast.error('Failed to load traffic data', 'monitoring')
     } finally {
       setIsLoading(false)
