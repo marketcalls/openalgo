@@ -76,7 +76,6 @@ export default function TelegramIndex() {
       )
       setData(response.data.data)
     } catch (error) {
-      console.error('Error fetching telegram data:', error)
       showToast.error('Failed to load Telegram data', 'telegram')
     } finally {
       setIsLoading(false)

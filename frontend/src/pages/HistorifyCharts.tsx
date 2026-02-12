@@ -432,7 +432,6 @@ export default function HistorifyCharts() {
         setCatalog(data.data || [])
       }
     } catch (error) {
-      console.error('Error loading catalog:', error)
     }
   }
 
@@ -461,7 +460,6 @@ export default function HistorifyCharts() {
         showToast.error(data.message || 'Failed to load chart data', 'historify')
       }
     } catch (error) {
-      console.error('Error loading chart data:', error)
       showToast.error('Failed to load chart data', 'historify')
     } finally {
       setIsLoading(false)

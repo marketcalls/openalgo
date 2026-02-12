@@ -35,7 +35,6 @@ export default function TelegramAnalytics() {
       )
       setAnalytics(response.data.data)
     } catch (error) {
-      console.error('Error fetching analytics:', error)
       showToast.error('Failed to load analytics', 'telegram')
     } finally {
       setIsLoading(false)

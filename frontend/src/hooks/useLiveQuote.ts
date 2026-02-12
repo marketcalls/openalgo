@@ -168,7 +168,6 @@ export function useLiveQuote(
               }
             })
             .catch(() => {
-              console.debug('REST quotes fetch failed')
             })
         )
       }
@@ -182,7 +181,6 @@ export function useLiveQuote(
               }
             })
             .catch(() => {
-              console.debug('REST depth fetch failed')
             })
         )
       }
