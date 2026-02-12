@@ -184,6 +184,7 @@ export default function MarketTimingsPage() {
                             value={editStartTime}
                             onChange={(e) => setEditStartTime(e.target.value)}
                             className="w-28 h-8"
+                            aria-label={`Start time for ${timing.exchange}`}
                           />
                         ) : (
                           <span className="font-mono">{timing.start_time}</span>
@@ -196,6 +197,7 @@ export default function MarketTimingsPage() {
                             value={editEndTime}
                             onChange={(e) => setEditEndTime(e.target.value)}
                             className="w-28 h-8"
+                            aria-label={`End time for ${timing.exchange}`}
                           />
                         ) : (
                           <span className="font-mono">{timing.end_time}</span>

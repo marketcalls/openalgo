@@ -553,6 +553,7 @@ export default function HolidaysPage() {
                             updateSpecialSessionTime(ex.exchange, 'start_time', e.target.value)
                           }
                           className="w-[110px]"
+                          aria-label={`Start time for ${ex.exchange}`}
                         />
                         <span className="text-muted-foreground">to</span>
                         <Input
@@ -562,6 +563,7 @@ export default function HolidaysPage() {
                             updateSpecialSessionTime(ex.exchange, 'end_time', e.target.value)
                           }
                           className="w-[110px]"
+                          aria-label={`End time for ${ex.exchange}`}
                         />
                         <Button
                           variant="ghost"
