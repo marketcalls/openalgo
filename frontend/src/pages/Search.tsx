@@ -49,6 +49,7 @@ export default function Search() {
   const [searchParams] = useSearchParams()
   const [results, setResults] = useState<SearchResult[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
   const [currentPage, setCurrentPage] = useState(1)
@@ -61,6 +62,7 @@ export default function Search() {
 
   const fetchResults = async () => {
     setIsLoading(true)
+    setError(null)
     try {
       // Build URL with all search params - use the API endpoint
       const params = new URLSearchParams()
@@ -89,11 +91,19 @@ export default function Search() {
       if (response.ok) {
         const data = await response.json()
         setResults(data.results || [])
+      } else if (response.status === 401 || response.status === 403) {
+        setError('Session expired. Please log in again.')
+        showToast.error('Session expired. Please log in again.', 'system')
+        setResults([])
       } else {
+        setError('Search failed. Please try again.')
+        showToast.error('Failed to search symbols', 'system')
         setResults([])
       }
-    } catch (error) {
-      console.error('Search error:', error)
+    } catch (err) {
+      console.error('Search error:', err)
+      setError('Failed to search symbols. Please check your connection.')
+      showToast.error('Failed to search symbols', 'system')
       setResults([])
     } finally {
       setIsLoading(false)
@@ -221,7 +231,11 @@ export default function Search() {
                 {paginatedResults.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                      No results found
+                      {error ? (
+                        <span className="text-destructive">{error}</span>
+                      ) : (
+                        'No results found'
+                      )}
                     </TableCell>
                   </TableRow>
                 ) : (
