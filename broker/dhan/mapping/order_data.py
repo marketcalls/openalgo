@@ -189,7 +189,7 @@ def transform_positions_data(positions_data):
             "product": position.get("productType", ""),
             "quantity": position.get("netQty", 0),
             "average_price": position.get("costPrice", 0.0),
-            "ltp": 0.0,
+            "ltp": round(float(position.get("lastTradedPrice", 0.0)), 2),
             "pnl": round(realized_pnl + unrealized_pnl, 2),
         }
         transformed_data.append(transformed_position)
