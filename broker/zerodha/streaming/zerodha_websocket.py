@@ -190,10 +190,8 @@ class ZerodhaWebSocket:
                     else:
                         self.logger.error(f"❌ Runtime error in WebSocket thread: {e}")
                 except Exception as e:
-                    self.logger.error(f"❌ Error in WebSocket thread: {e}")
-                    import traceback
-
-                    traceback.print_exc()
+                    self.logger.exception(f"❌ Error in WebSocket thread: {e}")
+                    
                 finally:
                     # Clean up the event loop
                     try:

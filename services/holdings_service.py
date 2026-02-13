@@ -1,5 +1,4 @@
 import importlib
-import traceback
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from database.auth_db import get_auth_token_broker
@@ -136,8 +135,7 @@ def get_holdings_with_auth(
             200,
         )
     except Exception as e:
-        logger.error(f"Error processing holdings data: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error processing holdings data: {e}")
         return False, {"status": "error", "message": str(e)}, 500
 
 

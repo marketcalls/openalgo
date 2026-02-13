@@ -1,6 +1,5 @@
 import copy
 import importlib
-import traceback
 from typing import Any, Dict, Optional, Tuple
 
 from database.analyzer_db import async_log_analyzer
@@ -114,8 +113,7 @@ def modify_order_with_auth(
         # Use the dynamically imported module's function to modify the order
         response_message, status_code = broker_module.modify_order(order_data, auth_token)
     except Exception as e:
-        logger.error(f"Error in broker_module.modify_order: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error in broker_module.modify_order: {e}")
         error_response = {
             "status": "error",
             "message": "Failed to modify order due to internal error",
