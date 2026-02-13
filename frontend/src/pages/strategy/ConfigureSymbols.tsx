@@ -478,6 +478,8 @@ export default function ConfigureSymbols() {
                           setMappingToDelete(mapping.id)
                           setDeleteDialogOpen(true)
                         }}
+                        title="Delete mapping"
+                        aria-label="Delete mapping"
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>

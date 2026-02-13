@@ -336,6 +336,8 @@ export default function FreezeQtyPage() {
                               className="h-8 w-8"
                               onClick={() => handleSaveEdit(entry.id)}
                               disabled={isSaving}
+                              title="Save freeze quantity"
+                              aria-label="Save freeze quantity"
                             >
                               <Save className="h-4 w-4" />
                             </Button>
@@ -344,6 +346,8 @@ export default function FreezeQtyPage() {
                               variant="ghost"
                               className="h-8 w-8"
                               onClick={() => setEditingId(null)}
+                              title="Cancel editing"
+                              aria-label="Cancel editing"
                             >
                               <X className="h-4 w-4" />
                             </Button>
@@ -360,6 +364,8 @@ export default function FreezeQtyPage() {
                               variant="ghost"
                               className="h-8 w-8"
                               onClick={() => handleEdit(entry)}
+                              title="Edit entry"
+                              aria-label={`Edit entry ${entry.id}`}
                             >
                               <Pencil className="h-4 w-4" />
                             </Button>
@@ -368,6 +374,8 @@ export default function FreezeQtyPage() {
                               variant="ghost"
                               className="h-8 w-8 text-destructive hover:text-destructive"
                               onClick={() => setDeleteEntry(entry)}
+                              title="Delete entry"
+                              aria-label={`Delete entry ${entry.id}`}
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>

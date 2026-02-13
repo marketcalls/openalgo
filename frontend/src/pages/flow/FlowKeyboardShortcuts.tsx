@@ -79,7 +79,13 @@ export default function FlowKeyboardShortcuts() {
   return (
     <div className="mx-auto max-w-3xl px-6 py-8">
       <div className="mb-8 flex items-center gap-4">
-        <Button variant="ghost" size="icon" asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          asChild
+          title="Go back"
+          aria-label="Go back"
+        >
           <Link to="/flow">
             <ArrowLeft className="h-4 w-4" />
           </Link>
@@ -100,11 +106,10 @@ export default function FlowKeyboardShortcuts() {
               {section.shortcuts.map((shortcut, index) => (
                 <div
                   key={shortcut.description}
-                  className={`flex items-center justify-between px-4 py-3 ${
-                    index !== section.shortcuts.length - 1
+                  className={`flex items-center justify-between px-4 py-3 ${index !== section.shortcuts.length - 1
                       ? 'border-b border-border'
                       : ''
-                  }`}
+                    }`}
                 >
                   <span className="text-sm">{shortcut.description}</span>
                   <div className="flex items-center gap-1">

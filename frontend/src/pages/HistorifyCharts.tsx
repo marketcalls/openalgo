@@ -511,7 +511,14 @@ export default function HistorifyCharts() {
     >
       {/* Header */}
       <div className="h-14 border-b border-border flex items-center px-4 bg-card/50">
-        <Button variant="ghost" size="icon" className="mr-2" asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="mr-2"
+          asChild
+          title="Go back"
+          aria-label="Go back"
+        >
           <Link to="/historify">
             <ArrowLeft className="h-5 w-5" />
           </Link>
@@ -639,7 +646,14 @@ export default function HistorifyCharts() {
             />
           </div>
 
-          <Button variant="outline" size="icon" onClick={loadChartData} disabled={isLoading}>
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={loadChartData}
+            disabled={isLoading}
+            title="Reload chart data"
+            aria-label="Reload chart data"
+          >
             <RefreshCw className={cn('h-4 w-4', isLoading && 'animate-spin')} />
           </Button>
         </div>
@@ -676,6 +690,7 @@ export default function HistorifyCharts() {
             onClick={handleModeToggle}
             disabled={isTogglingMode}
             title={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
+            aria-label={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
           >
             {isTogglingMode ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -694,11 +709,18 @@ export default function HistorifyCharts() {
             onClick={toggleMode}
             disabled={appMode !== 'live'}
             title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+            aria-label={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
           >
             {mode === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
 
-          <Button variant="ghost" size="icon" onClick={toggleFullscreen}>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleFullscreen}
+            title="Toggle fullscreen"
+            aria-label="Toggle fullscreen"
+          >
             {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </Button>
           <Button variant="ghost" size="sm" className="h-8 text-xs" asChild>
@@ -715,6 +737,8 @@ export default function HistorifyCharts() {
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 rounded-full bg-primary text-primary-foreground"
+                title="Open user menu"
+                aria-label="Open user menu"
               >
                 <span className="text-sm font-medium">
                   {user?.username?.[0]?.toUpperCase() || 'O'}
