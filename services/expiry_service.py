@@ -159,10 +159,9 @@ def get_expiry_dates(
         filtered_expiry_dates = set()
         for result in results:
             symbol_name, expiry_date, _ = result
-            logger.debug(f"Checking symbol: {symbol_name} against pattern: {pattern}")
+            # Removed excessive debug logging - was causing performance issues
             if re.match(pattern, symbol_name):
                 filtered_expiry_dates.add(expiry_date)
-                logger.debug(f"Pattern matched: {symbol_name} -> {expiry_date}")
 
         # If no exact matches found, let's be more lenient and check different patterns
         if not filtered_expiry_dates:
