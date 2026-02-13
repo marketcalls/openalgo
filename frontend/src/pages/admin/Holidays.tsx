@@ -417,7 +417,7 @@ export default function HolidaysPage() {
                           className="h-8 w-8 text-destructive hover:text-destructive"
                           onClick={() => setDeleteHoliday(holiday)}
                           title="Delete holiday"
-                          aria-label={`Delete holiday ${holiday.name ?? ""}`}
+                          aria-label="Delete holiday"
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
