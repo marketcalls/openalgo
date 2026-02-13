@@ -373,8 +373,8 @@ def process_fyers_bse_csv(path):
     }
     original_bse = df_filtered.loc[bse_idx_mask, "symbol"]
     mapped_bse = original_bse.map(bse_index_map)
-    # For values not in the map, prepend "BSE" and remove spaces
-    fallback_bse = "BSE" + original_bse.str.replace(" ", "", regex=False)
+    # For unmapped symbols, keep raw broker symbol with basic cleanup (uppercase, no spaces)
+    fallback_bse = original_bse.str.upper().str.replace(" ", "", regex=False)
     df_filtered.loc[bse_idx_mask, "symbol"] = mapped_bse.fillna(fallback_bse)
 
     df_filtered["brexchange"] = "BSE"
