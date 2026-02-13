@@ -221,9 +221,12 @@ def get_memory_metrics():
         memory_percent = process.memory_percent()
         available_mb = system_mem.available / (1024 * 1024)
 
-        # Get swap usage
-        swap = psutil.swap_memory()
-        swap_mb = swap.used / (1024 * 1024)
+        # Get swap usage (may fail on Windows if Performance Counters are disabled)
+        try:
+            swap = psutil.swap_memory()
+            swap_mb = swap.used / (1024 * 1024)
+        except Exception:
+            swap_mb = 0
 
         # Determine status
         if rss_mb >= MEMORY_CRITICAL_THRESHOLD:
