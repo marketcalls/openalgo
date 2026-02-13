@@ -16,6 +16,7 @@ from database.auth_db import get_api_key_for_tradingview
 from services.timeseries_service import get_timeseries_chain_data, get_multi_symbol_history
 from utils.logging import get_logger
 from utils.session import check_session_validity
+from utils.datetime_utils import get_ist_date_str
 
 logger = get_logger(__name__)
 
@@ -125,7 +126,7 @@ def get_data():
 
         symbols = data.get("symbols", [])
         interval = str(data.get("interval") or "1m").strip()[:5]
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = get_ist_date_str()
         start_date = str(data.get("start_date") or today).strip()[:10]
         end_date = str(data.get("end_date") or today).strip()[:10]
 
