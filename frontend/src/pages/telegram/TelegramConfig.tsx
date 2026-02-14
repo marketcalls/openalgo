@@ -146,6 +146,8 @@ export default function TelegramConfig() {
                     size="icon"
                     className="absolute right-0 top-0 h-full px-3"
                     onClick={() => setShowToken(!showToken)}
+                    title={showToken ? "Hide token" : "Show token"}
+                    aria-label={showToken ? "Hide token" : "Show token"}
                   >
                     {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </Button>

@@ -423,6 +423,7 @@ function FlowEditorContent() {
             onClick={handleModeToggle}
             disabled={isTogglingMode}
             title={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
+            aria-label={`Switch to ${appMode === 'live' ? 'Analyze' : 'Live'} mode`}
           >
             {isTogglingMode ? (
               <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
@@ -441,6 +442,7 @@ function FlowEditorContent() {
             onClick={toggleMode}
             disabled={appMode !== 'live'}
             title={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+            aria-label={mode === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
           >
             {mode === 'light' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
@@ -459,6 +461,8 @@ function FlowEditorContent() {
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 rounded-full bg-primary text-primary-foreground"
+                title="User menu"
+                aria-label="Open user menu"
               >
                 <span className="text-sm font-medium">
                   {user?.username?.[0]?.toUpperCase() || 'O'}
@@ -503,7 +507,12 @@ function FlowEditorContent() {
       {/* Workflow Toolbar */}
       <div className="flex items-center justify-between border-b border-border bg-card px-4 py-2">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => navigate('/flow')}>
+          <Button variant="ghost"
+            size="icon" 
+            onClick={() => navigate('/flow')}
+            title="Go back"
+            aria-label="Go back"
+            >
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <Input
@@ -559,7 +568,11 @@ function FlowEditorContent() {
           )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon">
+              <Button variant="ghost"
+               size="icon"
+               title="More options"
+               aria-label="Open more options"              
+               >
                 <MoreVertical className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>

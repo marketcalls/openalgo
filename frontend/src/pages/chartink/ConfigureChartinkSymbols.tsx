@@ -504,6 +504,8 @@ export default function ConfigureChartinkSymbols() {
                           setMappingToDelete(mapping.id)
                           setDeleteDialogOpen(true)
                         }}
+                        title="Delete mapping"
+                        aria-label={`Delete mapping ${mapping.id}`}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>

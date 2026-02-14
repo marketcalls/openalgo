@@ -555,6 +555,8 @@ export default function OrderBook() {
                               size="icon"
                               className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
                               onClick={() => handleCancelOrder(order.orderid)}
+                              title="Cancel order"
+                              aria-label="Cancel order"
                             >
                               <X className="h-4 w-4" />
                             </Button>
@@ -567,6 +569,8 @@ export default function OrderBook() {
                               size="icon"
                               className="h-8 w-8 text-blue-500 hover:text-blue-600"
                               onClick={() => openModifyDialog(order)}
+                              title="Modify order"
+                              aria-label="Modify order"
                             >
                               <Pencil className="h-4 w-4" />
                             </Button>

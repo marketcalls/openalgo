@@ -397,7 +397,12 @@ export default function PythonStrategyIndex() {
                     </Tooltip>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          title="More options"
+                          aria-label="Open more options"
+                        >
                           <MoreVertical className="h-4 w-4" />
                         </Button>
                       </DropdownMenuTrigger>

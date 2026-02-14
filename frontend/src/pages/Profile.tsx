@@ -173,98 +173,98 @@ const ALERT_CATEGORIES_REALTIME: {
   label: string
   description: string
 }[] = [
-  {
-    key: 'orders',
-    label: 'Order Notifications',
-    description: 'Real-time BUY/SELL order placement, cancellation, and modification alerts',
-  },
-  {
-    key: 'analyzer',
-    label: 'Analyzer Mode',
-    description: 'Real-time sandbox/analyzer mode operation notifications',
-  },
-  {
-    key: 'system',
-    label: 'System Alerts',
-    description: 'Password changes, master contract downloads, and system events',
-  },
-  {
-    key: 'actionCenter',
-    label: 'Action Center',
-    description: 'Pending order notifications in semi-auto mode',
-  },
-]
+    {
+      key: 'orders',
+      label: 'Order Notifications',
+      description: 'Real-time BUY/SELL order placement, cancellation, and modification alerts',
+    },
+    {
+      key: 'analyzer',
+      label: 'Analyzer Mode',
+      description: 'Real-time sandbox/analyzer mode operation notifications',
+    },
+    {
+      key: 'system',
+      label: 'System Alerts',
+      description: 'Password changes, master contract downloads, and system events',
+    },
+    {
+      key: 'actionCenter',
+      label: 'Action Center',
+      description: 'Pending order notifications in semi-auto mode',
+    },
+  ]
 
 const ALERT_CATEGORIES_TRADING: {
   key: keyof AlertCategories
   label: string
   description: string
 }[] = [
-  {
-    key: 'positions',
-    label: 'Positions',
-    description: 'Position close/update operations and P&L notifications',
-  },
-  {
-    key: 'strategy',
-    label: 'Strategy Management',
-    description: 'Strategy creation, symbol configuration, and webhook operations',
-  },
-  {
-    key: 'chartink',
-    label: 'Chartink',
-    description: 'Chartink strategy operations and scanner integrations',
-  },
-]
+    {
+      key: 'positions',
+      label: 'Positions',
+      description: 'Position close/update operations and P&L notifications',
+    },
+    {
+      key: 'strategy',
+      label: 'Strategy Management',
+      description: 'Strategy creation, symbol configuration, and webhook operations',
+    },
+    {
+      key: 'chartink',
+      label: 'Chartink',
+      description: 'Chartink strategy operations and scanner integrations',
+    },
+  ]
 
 const ALERT_CATEGORIES_DATA: {
   key: keyof AlertCategories
   label: string
   description: string
 }[] = [
-  {
-    key: 'historify',
-    label: 'Historify',
-    description: 'Historical data jobs, file uploads, downloads, and schedules',
-  },
-  {
-    key: 'pythonStrategy',
-    label: 'Python Strategy',
-    description: 'Python strategy uploads, execution, logs, and scheduling',
-  },
-  {
-    key: 'flow',
-    label: 'Flow Workflows',
-    description: 'Visual workflow creation, execution, and management',
-  },
-]
+    {
+      key: 'historify',
+      label: 'Historify',
+      description: 'Historical data jobs, file uploads, downloads, and schedules',
+    },
+    {
+      key: 'pythonStrategy',
+      label: 'Python Strategy',
+      description: 'Python strategy uploads, execution, logs, and scheduling',
+    },
+    {
+      key: 'flow',
+      label: 'Flow Workflows',
+      description: 'Visual workflow creation, execution, and management',
+    },
+  ]
 
 const ALERT_CATEGORIES_ADMIN: {
   key: keyof AlertCategories
   label: string
   description: string
 }[] = [
-  {
-    key: 'telegram',
-    label: 'Telegram Bot',
-    description: 'Telegram bot operations, broadcasts, and user management',
-  },
-  {
-    key: 'admin',
-    label: 'Admin Panel',
-    description: 'Market timings, holidays, freeze quantities, and admin settings',
-  },
-  {
-    key: 'monitoring',
-    label: 'Monitoring',
-    description: 'Health monitor, latency dashboard, and security alerts',
-  },
-  {
-    key: 'clipboard',
-    label: 'Clipboard',
-    description: 'Copy to clipboard confirmation messages',
-  },
-]
+    {
+      key: 'telegram',
+      label: 'Telegram Bot',
+      description: 'Telegram bot operations, broadcasts, and user management',
+    },
+    {
+      key: 'admin',
+      label: 'Admin Panel',
+      description: 'Market timings, holidays, freeze quantities, and admin settings',
+    },
+    {
+      key: 'monitoring',
+      label: 'Monitoring',
+      description: 'Health monitor, latency dashboard, and security alerts',
+    },
+    {
+      key: 'clipboard',
+      label: 'Clipboard',
+      description: 'Copy to clipboard confirmation messages',
+    },
+  ]
 
 export default function ProfilePage() {
   const user = useAuthStore((s) => s.user)
@@ -486,16 +486,16 @@ export default function ProfilePage() {
 
   const hasCredentialChanges = Boolean(
     brokerApiKey ||
-      brokerApiSecret ||
-      brokerApiKeyMarket ||
-      brokerApiSecretMarket ||
-      (selectedBroker && selectedBroker !== brokerCredentials?.current_broker)
+    brokerApiSecret ||
+    brokerApiKeyMarket ||
+    brokerApiSecretMarket ||
+    (selectedBroker && selectedBroker !== brokerCredentials?.current_broker)
   )
 
   const hasNgrokChanges = Boolean(
     ngrokEnabled !== brokerCredentials?.ngrok_allow ||
-      (hostServer && hostServer !== brokerCredentials?.host_server) ||
-      (websocketUrl && websocketUrl !== brokerCredentials?.websocket_url)
+    (hostServer && hostServer !== brokerCredentials?.host_server) ||
+    (websocketUrl && websocketUrl !== brokerCredentials?.websocket_url)
   )
 
   const handleNgrokSave = async () => {
@@ -878,11 +878,10 @@ export default function ProfilePage() {
                     {Object.entries(passwordRequirements).map(([key, met]) => (
                       <div
                         key={key}
-                        className={`flex items-center gap-1 px-2 py-1 rounded-full border ${
-                          met
+                        className={`flex items-center gap-1 px-2 py-1 rounded-full border ${met
                             ? 'bg-green-500/10 border-green-500 text-green-600'
                             : 'bg-muted border-border text-muted-foreground'
-                        }`}
+                          }`}
                       >
                         {met ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
                         <span>
@@ -1706,11 +1705,10 @@ export default function ProfilePage() {
                   {permissionsData.checks.map((check) => (
                     <div
                       key={check.path}
-                      className={`flex items-start gap-3 p-3 rounded-lg border ${
-                        check.is_correct
+                      className={`flex items-start gap-3 p-3 rounded-lg border ${check.is_correct
                           ? 'bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-800'
                           : 'bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800'
-                      }`}
+                        }`}
                     >
                       {/* Status Icon */}
                       <div className="mt-0.5">
@@ -1882,11 +1880,10 @@ export default function ProfilePage() {
                       key={themeOption.value}
                       onClick={() => handleThemeModeChange(themeOption.value)}
                       disabled={isAnalyzerMode}
-                      className={`flex items-start gap-4 p-4 rounded-lg border-2 transition-all text-left ${
-                        isSelected
+                      className={`flex items-start gap-4 p-4 rounded-lg border-2 transition-all text-left ${isSelected
                           ? 'border-primary bg-primary/5'
                           : 'border-border hover:border-primary/50'
-                      } ${isAnalyzerMode ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+                        } ${isAnalyzerMode ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                     >
                       <div
                         className={`p-2 rounded-lg ${isSelected ? 'bg-primary text-primary-foreground' : 'bg-muted'}`}
@@ -1925,11 +1922,10 @@ export default function ProfilePage() {
                       key={accentColor.value}
                       onClick={() => handleAccentColorChange(accentColor.value)}
                       disabled={isAnalyzerMode}
-                      className={`flex flex-col items-center gap-2 p-3 rounded-lg border-2 transition-all ${
-                        isSelected
+                      className={`flex flex-col items-center gap-2 p-3 rounded-lg border-2 transition-all ${isSelected
                           ? 'border-primary bg-primary/5'
                           : 'border-border hover:border-primary/50'
-                      } ${isAnalyzerMode ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+                        } ${isAnalyzerMode ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                       title={accentColor.label}
                     >
                       <div
@@ -2199,6 +2195,8 @@ export default function ProfilePage() {
                         size="icon"
                         variant="outline"
                         onClick={() => copyToClipboard(profileData.totp_secret!)}
+                        title="Copy TOTP secret"
+                        aria-label="Copy TOTP secret to clipboard"
                       >
                         <Copy className="h-4 w-4" />
                       </Button>

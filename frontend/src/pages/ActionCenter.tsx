@@ -162,7 +162,7 @@ export default function ActionCenterPage() {
 
       // Play alert sound if enabled
       if (shouldPlaySound() && shouldShowToast('actionCenter') && audioRef.current) {
-        audioRef.current.play().catch(() => {})
+        audioRef.current.play().catch(() => { })
       }
 
       // Show toast notification (showToast handles category filtering)
@@ -534,11 +534,10 @@ export default function ActionCenterPage() {
                         </TableCell>
                         <TableCell>
                           <Badge
-                            className={`gap-1 ${
-                              order.action === 'BUY'
+                            className={`gap-1 ${order.action === 'BUY'
                                 ? 'bg-green-500 hover:bg-green-600'
                                 : 'bg-red-500 hover:bg-red-600'
-                            }`}
+                              }`}
                           >
                             {order.action === 'BUY' ? (
                               <ArrowUp className="h-3 w-3" />
@@ -571,6 +570,8 @@ export default function ActionCenterPage() {
                               variant="ghost"
                               className="h-8 w-8"
                               onClick={() => toggleExpanded(order.id)}
+                              title="Toggle order details"
+                              aria-label="Toggle order details"
                             >
                               {expandedOrders.has(order.id) ? (
                                 <ChevronUp className="h-4 w-4" />
@@ -632,7 +633,7 @@ export default function ActionCenterPage() {
 
                                   {/* Order Type Specific Details */}
                                   {order.api_type === 'basketorder' &&
-                                  order.raw_order_data.orders ? (
+                                    order.raw_order_data.orders ? (
                                     <div className="space-y-3">
                                       <p className="text-sm text-muted-foreground">
                                         Basket Order with{' '}

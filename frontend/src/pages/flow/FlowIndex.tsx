@@ -194,7 +194,13 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
             </div>
             <DropdownMenu>
               <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                <Button variant="ghost" size="icon" className="h-8 w-8">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  title="More options"
+                  aria-label="Open more options"
+                >
                   <MoreVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -366,6 +372,8 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
                     variant="outline"
                     size="icon"
                     onClick={() => copyToClipboard(webhookQuery.data.webhook_url, 'URL')}
+                    title="Copy webhook URL"
+                    aria-label="Copy webhook URL to clipboard"
                   >
                     <Copy className="h-4 w-4" />
                   </Button>
@@ -385,6 +393,8 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
                     variant="outline"
                     size="icon"
                     onClick={() => copyToClipboard(webhookQuery.data.webhook_url_with_symbol, 'URL')}
+                    title="Copy webhook URL with symbol"
+                    aria-label="Copy webhook URL with symbol to clipboard"
                   >
                     <Copy className="h-4 w-4" />
                   </Button>
@@ -410,6 +420,8 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
                       size="icon"
                       className="absolute right-0 top-0 h-full"
                       onClick={() => setShowSecret(!showSecret)}
+                      title={showSecret ? "Hide secret" : "Show secret"}
+                      aria-label={showSecret ? "Hide secret" : "Show secret"}
                     >
                       {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </Button>
@@ -418,6 +430,8 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
                     variant="outline"
                     size="icon"
                     onClick={() => copyToClipboard(webhookQuery.data.webhook_secret, 'Secret')}
+                    title="Copy webhook secret"
+                    aria-label="Copy webhook secret to clipboard"
                   >
                     <Copy className="h-4 w-4" />
                   </Button>
@@ -443,6 +457,8 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
                       variant="outline"
                       size="icon"
                       onClick={() => copyToClipboard(webhookQuery.data.webhook_url_with_secret!, 'URL with secret')}
+                      title="Copy webhook URL with secret"
+                      aria-label="Copy webhook URL with secret to clipboard"
                     >
                       <Copy className="h-4 w-4" />
                     </Button>
@@ -461,7 +477,7 @@ function WorkflowCard({ workflow }: { workflow: WorkflowListItem }) {
                     <>
                       <p className="text-xs text-muted-foreground mb-2">For Chartink (secret in URL):</p>
                       <pre className="text-xs font-mono overflow-x-auto">
-{`POST ${webhookQuery.data.webhook_url}?secret=${showSecret ? webhookQuery.data.webhook_secret : '........'}
+                        {`POST ${webhookQuery.data.webhook_url}?secret=${showSecret ? webhookQuery.data.webhook_secret : '........'}
 
 Chartink payload (sent as-is):
 {
@@ -477,7 +493,7 @@ Chartink payload (sent as-is):
                     <>
                       <p className="text-xs text-muted-foreground mb-2">For TradingView (secret in payload):</p>
                       <pre className="text-xs font-mono overflow-x-auto">
-{`POST ${webhookQuery.data.webhook_url}
+                        {`POST ${webhookQuery.data.webhook_url}
 
 {
   "secret": "${showSecret ? webhookQuery.data.webhook_secret : '................'}",

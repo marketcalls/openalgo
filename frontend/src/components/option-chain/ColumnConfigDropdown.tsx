@@ -30,7 +30,7 @@ export function ColumnConfigDropdown({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="icon" className="h-9 w-9">
+        <Button variant="outline" size="icon" className="h-9 w-9" title="Column settings">
           <Settings2 className="h-4 w-4" />
           <span className="sr-only">Column settings</span>
         </Button>

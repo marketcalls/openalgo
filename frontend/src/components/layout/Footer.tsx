@@ -55,7 +55,7 @@ export function Footer({ className }: FooterProps) {
 
         {/* Social Links */}
         <div className="flex justify-center gap-2 mt-4">
-          <Button variant="ghost" size="icon" asChild className="h-8 w-8">
+          <Button variant="ghost" size="icon" asChild className="h-8 w-8" title="Open link" aria-label="Open link">
             <a
               href="https://github.com/marketcalls/openalgo"
               target="_blank"
@@ -71,6 +71,7 @@ export function Footer({ className }: FooterProps) {
             asChild
             className="h-8 w-8"
             title="Join our Discord community"
+            aria-label="Join our Discord community"
           >
             <a
               href="https://openalgo.in/discord"
@@ -83,7 +84,7 @@ export function Footer({ className }: FooterProps) {
               </svg>
             </a>
           </Button>
-          <Button variant="ghost" size="icon" asChild className="h-8 w-8" title="Follow us on X">
+          <Button variant="ghost" size="icon" asChild className="h-8 w-8" title="Follow us on X" aria-label="Follow us on X">
             <a
               href="https://x.com/openalgoHQ"
               target="_blank"
@@ -101,6 +102,7 @@ export function Footer({ className }: FooterProps) {
             asChild
             className="h-8 w-8"
             title="Subscribe to our YouTube channel"
+            aria-label="Subscribe to our YouTube channel"
           >
             <a
               href="https://www.youtube.com/@openalgo"
