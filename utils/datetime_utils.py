@@ -40,3 +40,25 @@ def to_ist_epoch(dt: Any) -> int:
     if isinstance(dt, pd.Timestamp):
         return int(dt.tz_convert(pytz.UTC).timestamp())
     return int(dt.astimezone(pytz.UTC).timestamp())
+
+def to_ist_epoch_series(s: pd.Series) -> pd.Series:
+    """
+    Vectorized version of to_ist_epoch for pandas Series.
+    Treats naive timestamps as IST and converts to Unix epoch.
+    """
+    if s.empty:
+        return s
+        
+    # Ensure it's datetime64
+    if not pd.api.types.is_datetime64_any_dtype(s):
+        s = pd.to_datetime(s)
+        
+    # If naive, localize to IST (UTC+5:30)
+    if s.dt.tz is None:
+        s = s.dt.tz_localize(IST)
+    else:
+        # If already localized, convert to IST for consistency
+        s = s.dt.tz_convert(IST)
+        
+    # Convert to UTC and get Unix epoch (seconds)
+    return s.dt.tz_convert(pytz.UTC).astype("int64") // 10**9

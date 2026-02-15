@@ -10,7 +10,7 @@ import pandas as pd
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
-from utils.datetime_utils import get_ist_now, to_ist_epoch
+from utils.datetime_utils import get_ist_now, to_ist_epoch, to_ist_epoch_series
 
 logger = get_logger(__name__)
 
@@ -645,8 +645,8 @@ class BrokerData:
             if interval == "D":
                 df["timestamp"] = df["timestamp"] + pd.Timedelta(hours=5, minutes=30)
 
-            # Convert timestamp to Unix epoch using IST-aware logic
-            df["timestamp"] = df["timestamp"].apply(to_ist_epoch)
+            # Convert timestamp to Unix epoch using vectorized IST-aware logic
+            df["timestamp"] = to_ist_epoch_series(df["timestamp"])
 
             # Ensure oi column is numeric
             df["oi"] = pd.to_numeric(df["oi"])
