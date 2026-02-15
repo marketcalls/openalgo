@@ -49,6 +49,11 @@ def to_ist_epoch_series(s: pd.Series) -> pd.Series:
     if s.empty:
         return s
         
+    # If already numeric (integers/floats), assume they are epoch seconds and return as-is
+    # This mirrors the behavior of the scalar to_ist_epoch helper.
+    if pd.api.types.is_numeric_dtype(s):
+        return s.astype("int64")
+        
     # Ensure it's datetime64
     if not pd.api.types.is_datetime64_any_dtype(s):
         s = pd.to_datetime(s)

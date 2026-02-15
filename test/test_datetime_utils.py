@@ -73,6 +73,14 @@ def test_to_ist_epoch_series_empty():
     result = to_ist_epoch_series(s)
     assert result.empty
 
+def test_to_ist_epoch_series_numeric():
+    """Verify that to_ist_epoch_series preserves numeric inputs (epochs)."""
+    epochs = [1739245500, 1739245560]
+    s = pd.Series(epochs)
+    result = to_ist_epoch_series(s)
+    
+    assert list(result) == epochs
+
 if __name__ == "__main__":
     # This allows running the test file directly with 'python test/test_datetime_utils.py'
     # It will produce formatted output similar to the 'pytest' command.
