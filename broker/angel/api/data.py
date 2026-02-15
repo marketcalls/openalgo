@@ -484,8 +484,8 @@ class BrokerData:
             if interval == "D":
                 df["timestamp"] = df["timestamp"] + pd.Timedelta(hours=5, minutes=30)
 
-            # Convert timestamp to Unix epoch using IST-aware logic
-            df["timestamp"] = df["timestamp"].apply(to_ist_epoch)
+            # Convert timestamp to Unix epoch using IST-aware logic (Vectorized)
+            df["timestamp"] = to_ist_epoch_series(df["timestamp"])
 
             # Ensure numeric columns and proper order
             numeric_columns = ["open", "high", "low", "close", "volume"]

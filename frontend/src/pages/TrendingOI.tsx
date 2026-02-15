@@ -314,7 +314,7 @@ export default function TrendingOI() {
     const { mode, appMode } = useThemeStore()
     const isDark = mode === 'dark' || appMode === 'analyzer'
 
-    // Selection states
+    // State
     const [selectedExchange, setSelectedExchange] = useState('NFO')
     const [underlyings, setUnderlyings] = useState<string[]>(DEFAULT_UNDERLYINGS.NFO)
     const [underlyingOpen, setUnderlyingOpen] = useState(false)
@@ -322,7 +322,11 @@ export default function TrendingOI() {
     const [expiries, setExpiries] = useState<string[]>([])
     const [selectedExpiry, setSelectedExpiry] = useState('')
     const [selectedInterval, setSelectedInterval] = useState('3m')
-    const [historicalDate, setHistoricalDate] = useState(new Date().toISOString().split('T')[0])
+
+    // Default to Today in IST (YYYY-MM-DD)
+    const [historicalDate, setHistoricalDate] = useState(() => {
+        return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })
+    })
     const [strikeRange, setStrikeRange] = useState(3)
     const [sortAsc, setSortAsc] = useState(false)
 

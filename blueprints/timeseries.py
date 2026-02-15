@@ -17,17 +17,20 @@ from services.timeseries_service import get_timeseries_chain_data, get_multi_sym
 from utils.logging import get_logger
 from utils.session import check_session_validity
 from utils.datetime_utils import get_ist_date_str
+from limiter import limiter
 
 logger = get_logger(__name__)
 
 # Allowed intervals for intraday timeseries
 ALLOWED_INTERVALS = {"1m", "3m", "5m", "15m", "1h"}
+MAX_SYMBOLS = 100
 
 timeseries_bp = Blueprint("timeseries_bp", __name__, url_prefix="/")
 
 
 @timeseries_bp.route("/timeseries/api/chain", methods=["POST"])
 @cross_origin()
+@limiter.limit("10 per minute")
 @check_session_validity
 def get_chain():
     """Get option chain symbols for timeseries analysis."""
@@ -93,6 +96,7 @@ def get_chain():
 
 @timeseries_bp.route("/timeseries/api/data", methods=["POST"])
 @cross_origin()
+@limiter.limit("10 per minute")
 @check_session_validity
 def get_data():
     """
@@ -134,6 +138,12 @@ def get_data():
             return jsonify({
                 "status": "error",
                 "message": "symbols list is required",
+            }), 400
+
+        if len(symbols) > MAX_SYMBOLS:
+            return jsonify({
+                "status": "error",
+                "message": f"Maximum {MAX_SYMBOLS} symbols allowed per request",
             }), 400
 
         if interval not in ALLOWED_INTERVALS:
