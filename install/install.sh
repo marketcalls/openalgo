@@ -606,18 +606,72 @@ if ! command -v certbot >/dev/null 2>&1; then
 fi
 log_message "Certbot installed successfully" "$GREEN"
 
-# Check and handle existing OpenAlgo installation
-handle_existing "$BASE_PATH" "installation directory" "OpenAlgo directory for $DEPLOY_NAME"
+# Check if OpenAlgo installation already exists
+if [ -d "$OPENALGO_PATH" ] && [ -d "$OPENALGO_PATH/.git" ]; then
+    log_message "\nExisting OpenAlgo installation detected at $OPENALGO_PATH" "$YELLOW"
+    read -p "Would you like to update the existing installation? (y/n): " update_choice
+    if [[ $update_choice =~ ^[Yy]$ ]]; then
+        log_message "Updating existing installation..." "$BLUE"
+        
+        # Get current commit
+        cd "$OPENALGO_PATH"
+        CURRENT_BRANCH=$(sudo -u $WEB_USER git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+        CURRENT_COMMIT=$(sudo -u $WEB_USER git rev-parse HEAD 2>/dev/null)
+        
+        log_message "Current branch: $CURRENT_BRANCH" "$BLUE"
+        log_message "Current commit: ${CURRENT_COMMIT:0:8}..." "$BLUE"
+        
+        # Fetch latest changes
+        log_message "Fetching latest changes..." "$BLUE"
+        sudo -u $WEB_USER git fetch origin 2>&1
+        check_status "Failed to fetch from remote"
+        
+        # Check for uncommitted changes
+        if [ -n "$(sudo -u $WEB_USER git status --porcelain 2>/dev/null)" ]; then
+            log_message "Warning: Uncommitted changes detected. Stashing changes..." "$YELLOW"
+            sudo -u $WEB_USER git stash push -m "Auto-stash before install update $(date +%Y%m%d_%H%M%S)" 2>/dev/null || {
+                log_message "Error: Could not stash changes. Please commit or discard changes manually." "$RED"
+                exit 1
+            }
+            # Capture the specific stash ref we just created to avoid popping unrelated entries
+            STASH_REF=$(sudo -u $WEB_USER git stash list | grep -m1 "Auto-stash before install update" | awk -F: '{print $1}')
+        fi
+        
+        # Pull latest changes
+        log_message "Pulling latest changes..." "$BLUE"
+        sudo -u $WEB_USER git pull origin ${CURRENT_BRANCH:-main} 2>&1
+        check_status "Failed to pull latest changes"
+        
+        # Restore stashed changes if any
+        if [ -n "$STASH_REF" ]; then
+            log_message "Restoring stashed changes..." "$YELLOW"
+            sudo -u $WEB_USER git stash pop "$STASH_REF" 2>/dev/null || log_message "Warning: Could not restore stashed changes" "$YELLOW"
+        fi
+        
+        NEW_COMMIT=$(sudo -u $WEB_USER git rev-parse HEAD)
+        log_message "Updated to commit: ${NEW_COMMIT:0:8}..." "$GREEN"
+        log_message "Repository updated successfully" "$GREEN"
+        SKIP_CLONE=true
+    else
+        handle_existing "$BASE_PATH" "installation directory" "OpenAlgo directory for $DEPLOY_NAME"
+        SKIP_CLONE=false
+    fi
+else
+    handle_existing "$BASE_PATH" "installation directory" "OpenAlgo directory for $DEPLOY_NAME"
+    SKIP_CLONE=false
+fi
 
 # Create base directory
 log_message "\nCreating base directory..." "$BLUE"
 sudo mkdir -p $BASE_PATH
 check_status "Failed to create base directory"
 
-# Clone repository
-log_message "\nCloning OpenAlgo repository..." "$BLUE"
-sudo git clone https://github.com/marketcalls/openalgo.git $OPENALGO_PATH
-check_status "Failed to clone OpenAlgo repository"
+# Clone repository if needed
+if [ "$SKIP_CLONE" != "true" ]; then
+    log_message "\nCloning OpenAlgo repository..." "$BLUE"
+    sudo git clone https://github.com/marketcalls/openalgo.git $OPENALGO_PATH
+    check_status "Failed to clone OpenAlgo repository"
+fi
 
 # Create virtual environment using uv
 log_message "\nSetting up Python virtual environment with uv..." "$BLUE"
@@ -1097,3 +1151,119 @@ log_message "Restart OpenAlgo: sudo systemctl restart $SERVICE_NAME" "$BLUE"
 log_message "View Logs: sudo journalctl -u $SERVICE_NAME" "$BLUE"
 log_message "Check Status: sudo systemctl status $SERVICE_NAME" "$BLUE"
 log_message "View Installation Log: cat $LOG_FILE" "$BLUE"
+log_message "\nUpdate Commands:" "$YELLOW"
+log_message "Update this installation: cd $OPENALGO_PATH && sudo -u $WEB_USER git pull origin main" "$BLUE"
+log_message "Use update script (recommended): sudo bash $OPENALGO_PATH/install/update.sh" "$BLUE"
+log_message "Update specific installation: sudo bash $OPENALGO_PATH/install/update.sh $BASE_PATH" "$BLUE"
+
+# Ask about automated updates
+log_message "\nAutomated Updates:" "$YELLOW"
+read -p "Would you like to set up automated daily git pulls? (y/n): " auto_update_choice
+if [[ $auto_update_choice =~ ^[Yy]$ ]]; then
+    log_message "Setting up automated daily updates..." "$BLUE"
+    
+    # Create update script wrapper for this specific installation
+    UPDATE_SCRIPT_WRAPPER="$BASE_PATH/update-openalgo.sh"
+    sudo tee "$UPDATE_SCRIPT_WRAPPER" > /dev/null << EOUPDATESCRIPT
+#!/bin/bash
+# Auto-generated update script for $DEPLOY_NAME
+# This script updates this specific OpenAlgo installation
+
+cd "$OPENALGO_PATH"
+sudo -u $WEB_USER git fetch origin
+CURRENT_BRANCH=\$(sudo -u $WEB_USER git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+CURRENT_COMMIT=\$(sudo -u $WEB_USER git rev-parse HEAD)
+REMOTE_COMMIT=\$(sudo -u $WEB_USER git rev-parse origin/\${CURRENT_BRANCH})
+
+if [ "\$CURRENT_COMMIT" != "\$REMOTE_COMMIT" ]; then
+    echo "[\$(date)] Updating $DEPLOY_NAME from \${CURRENT_COMMIT:0:8} to \${REMOTE_COMMIT:0:8}..."
+    
+    # Stash any local changes
+    sudo -u $WEB_USER git stash push -m "Auto-stash before scheduled update \$(date +%Y%m%d_%H%M%S)" 2>/dev/null
+    
+    # Pull updates
+    sudo -u $WEB_USER git pull origin \${CURRENT_BRANCH} > /dev/null 2>&1
+    
+    if [ \$? -eq 0 ]; then
+        # Get the new commit after pull
+        NEW_COMMIT=\$(sudo -u $WEB_USER git rev-parse HEAD)
+        
+        # Check if requirements changed and update dependencies if needed
+        if [ -f "$VENV_PATH/bin/activate" ]; then
+            if sudo -u $WEB_USER git diff --name-only \$CURRENT_COMMIT \$NEW_COMMIT | grep -q "requirements"; then
+                # Detect uv command
+                if command -v uv >/dev/null 2>&1; then
+                    UV_CMD="uv"
+                elif python3 -m uv --version >/dev/null 2>&1; then
+                    UV_CMD="python3 -m uv"
+                fi
+                
+                if [ -n "\$UV_CMD" ]; then
+                    sudo \$UV_CMD pip install --python $VENV_PATH/bin/python -r $OPENALGO_PATH/requirements-nginx.txt > /dev/null 2>&1
+                fi
+            fi
+        fi
+        
+        # Restart service
+        systemctl restart $SERVICE_NAME > /dev/null 2>&1
+        echo "[\$(date)] Update completed successfully for $DEPLOY_NAME"
+    else
+        echo "[\$(date)] Error: Failed to update $DEPLOY_NAME"
+        # Restore stashed changes on failure
+        sudo -u $WEB_USER git stash pop 2>/dev/null
+    fi
+else
+    echo "[\$(date)] $DEPLOY_NAME is already up to date"
+fi
+EOUPDATESCRIPT
+    
+    sudo chmod +x "$UPDATE_SCRIPT_WRAPPER"
+    sudo chown $WEB_USER:$WEB_GROUP "$UPDATE_SCRIPT_WRAPPER"
+    
+    # Create systemd timer for daily updates
+    TIMER_NAME="openalgo-update-$DEPLOY_NAME"
+    TIMER_SERVICE="${TIMER_NAME}.timer"
+    TIMER_PATH="/etc/systemd/system/${TIMER_SERVICE}"
+    
+    sudo tee "$TIMER_PATH" > /dev/null << EOTIMER
+[Unit]
+Description=Daily update timer for OpenAlgo ($DEPLOY_NAME)
+Requires=${TIMER_NAME}.service
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=3600
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOTIMER
+    
+    # Create corresponding service
+    SERVICE_PATH="/etc/systemd/system/${TIMER_NAME}.service"
+    sudo tee "$SERVICE_PATH" > /dev/null << EOSERVICE
+[Unit]
+Description=Update OpenAlgo ($DEPLOY_NAME)
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=$UPDATE_SCRIPT_WRAPPER
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOSERVICE
+    
+    # Enable and start timer
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$TIMER_SERVICE"
+    sudo systemctl start "$TIMER_SERVICE"
+    
+    check_status "Failed to set up automated updates"
+    log_message "Automated daily updates configured" "$GREEN"
+    log_message "Update script: $UPDATE_SCRIPT_WRAPPER" "$BLUE"
+    log_message "Timer service: $TIMER_SERVICE" "$BLUE"
+    log_message "Check timer status: sudo systemctl status $TIMER_SERVICE" "$BLUE"
+    log_message "Check last run: sudo journalctl -u ${TIMER_NAME}.service -n 20" "$BLUE"
+fi
