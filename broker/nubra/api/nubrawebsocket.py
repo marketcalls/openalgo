@@ -83,7 +83,10 @@ class NubraWebSocket:
 
     @property
     def is_connected(self) -> bool:
-        return self._connected_event.is_set() and self.ws and self.ws.sock and self.ws.sock.connected
+        try:
+            return self._connected_event.is_set() and self.ws and self.ws.sock and self.ws.sock.connected
+        except (AttributeError, OSError):
+            return False
 
     def connect(self):
         """Start the WebSocket connection in a background thread."""
@@ -91,21 +94,36 @@ class NubraWebSocket:
             return
 
         self._stop_event.clear()
-        self.wst = threading.Thread(target=self._run_forever, daemon=True)
+        self.wst = threading.Thread(
+            target=self._run_forever, daemon=True, name="NubraWS"
+        )
         self.wst.start()
 
     def _run_forever(self):
-        """Main WebSocket loop with auto-reconnect."""
+        """Main WebSocket loop with auto-reconnect and exponential backoff."""
+        reconnect_attempts = 0
+        max_reconnect_attempts = 50
+        base_delay = 2.0
+        max_delay = 60.0
+
         while not self._stop_event.is_set():
             try:
-                logger.info("Connecting to Nubra WebSocket...")
-                
+                logger.info(f"Connecting to Nubra WebSocket (attempt {reconnect_attempts + 1})...")
+
+                # Close old socket before creating new one (prevent FD leak)
+                if self.ws:
+                    try:
+                        self.ws.close()
+                    except Exception:
+                        pass
+                    self.ws = None
+
                 # Headers are required for strict auth channels (like Orderbook)
                 headers = {
                     "Authorization": f"Bearer {self.bt}",
                     "x-device-id": self.device_id
                 }
-                
+
                 self.ws = websocket.WebSocketApp(
                     self.url,
                     header=headers,
@@ -114,28 +132,37 @@ class NubraWebSocket:
                     on_error=self._on_error,
                     on_close=self._on_close,
                 )
-                
+
                 # Run blocking call (blocking until close)
                 # SDK uses 20s ping interval
                 self.ws.run_forever(ping_interval=20, ping_timeout=10)
-                
+
             except Exception as e:
                 logger.error(f"WebSocket run error: {e}")
-            
+
             if self._stop_event.is_set():
                 break
-                
-            logger.info("WebSocket disconnected. Reconnecting in 2s...")
+
+            reconnect_attempts += 1
+            if reconnect_attempts >= max_reconnect_attempts:
+                logger.error(f"Max reconnect attempts ({max_reconnect_attempts}) reached. Giving up.")
+                break
+
+            # Exponential backoff: 2s, 4s, 8s, ... capped at 60s
+            delay = min(base_delay * (2 ** min(reconnect_attempts - 1, 5)), max_delay)
+            logger.info(f"WebSocket disconnected. Reconnecting in {delay:.0f}s (attempt {reconnect_attempts}/{max_reconnect_attempts})...")
             self._connected_event.clear()
-            time.sleep(2)
+            # Clear stale cached data on disconnect
+            self.last_quotes.clear()
+            self.last_depth.clear()
+            self._stop_event.wait(timeout=delay)  # Interruptible sleep
 
     def _on_open(self, ws):
         """Called when connection is established."""
-        logger.info("✅ Connected to Nubra WebSocket")
+        logger.info("Connected to Nubra WebSocket")
         self._connected_event.set()
-        
-        # Re-subscribe
-        # Re-subscribe
+
+        # Re-subscribe on reconnect
         if self.subscriptions_batch:
             logger.info(f"Resubscribing to {len(self.subscriptions_batch)} items")
             for item in self.subscriptions_batch.copy():
@@ -434,16 +461,34 @@ class NubraWebSocket:
     def close(self):
         """Close connection and stop thread."""
         self._stop_event.set()
+        self._connected_event.clear()
         if self.ws:
-            self.ws.close()
+            try:
+                self.ws.close()
+            except Exception:
+                pass
+            self.ws = None
         if self.wst and self.wst.is_alive():
-            self.wst.join(timeout=2)
+            self.wst.join(timeout=5)
+            if self.wst.is_alive():
+                logger.warning("NubraWS thread did not terminate within 5s timeout")
+        self.wst = None
+        self.last_quotes.clear()
+        self.last_depth.clear()
+
+    def __del__(self):
+        """Safety net destructor to ensure resources are cleaned up."""
+        try:
+            self.close()
+        except Exception:
+            pass
 
     # ─── Internal Send Methods ───────────────────────────────────────────
 
     def _send_subscribe_batch(self, data_type: str, ref_ids=None, index_symbol=None, exchange=None, interval=None) -> bool:
         try:
-            if not self.ws or not self.ws.sock:
+            ws = self.ws  # Capture local ref to avoid TOCTOU race
+            if not ws or not ws.sock:
                 return False
 
             payload = {
@@ -461,7 +506,7 @@ class NubraWebSocket:
                 msg = f"batch_subscribe {self.bt} {data_type} {json.dumps(payload, separators=(',', ':'))}"
                 logger.info(f"Subscribing to {data_type}: {msg}")
 
-            self.ws.send(msg)
+            ws.send(msg)
             return True
         except Exception as e:
             logger.error(f"Send subscribe failed: {e}")
@@ -470,11 +515,12 @@ class NubraWebSocket:
     def change_orderbook_depth(self, depth: int = 5) -> bool:
         """Set the orderbook depth level (default 5, max 20)."""
         try:
-            if not self.ws or not self.ws.sock:
+            ws = self.ws  # Capture local ref to avoid TOCTOU race
+            if not ws or not ws.sock:
                 return False
             msg = f"batch_subscribe {self.bt} orderbook_depth {depth}"
             logger.info(f"Setting orderbook depth: {msg}")
-            self.ws.send(msg)
+            ws.send(msg)
             return True
         except Exception as e:
             logger.error(f"Failed to set orderbook depth: {e}")
@@ -482,7 +528,8 @@ class NubraWebSocket:
 
     def _send_unsubscribe_batch(self, data_type: str, ref_ids=None, index_symbol=None, exchange=None, interval=None) -> bool:
         try:
-            if not self.ws or not self.ws.sock:
+            ws = self.ws  # Capture local ref to avoid TOCTOU race
+            if not ws or not ws.sock:
                 return False
 
             payload = {
@@ -497,7 +544,7 @@ class NubraWebSocket:
             else:
                 msg = f"batch_unsubscribe {self.bt} {data_type} {json.dumps(payload, separators=(',', ':'))}"
 
-            self.ws.send(msg)
+            ws.send(msg)
             return True
         except Exception as e:
             logger.error(f"Send unsubscribe failed: {e}")
