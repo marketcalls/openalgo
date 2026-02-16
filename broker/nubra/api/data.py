@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 
 
 def get_api_response(endpoint, auth, method="GET", payload=""):
-    """Helper function to make API calls to Nubra"""
+    """Helper function to make API calls to Nubra with 429 rate limit handling."""
     AUTH_TOKEN = auth
     device_id = "OPENALGO"  # Fixed device ID
 
@@ -38,27 +38,45 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
     # Nubra base URL
     url = f"https://api.nubra.io{endpoint}"
 
-    try:
-        if method == "GET":
-            response = client.get(url, headers=headers)
-        elif method == "POST":
-            response = client.post(url, headers=headers, content=payload)
-        else:
-            response = client.request(method, url, headers=headers, content=payload)
+    max_retries = 3
+    base_delay = 1.0
 
-        # Add status attribute for compatibility with the existing codebase
-        response.status = response.status_code
+    for attempt in range(max_retries):
+        try:
+            if method == "GET":
+                response = client.get(url, headers=headers)
+            elif method == "POST":
+                response = client.post(url, headers=headers, content=payload)
+            else:
+                response = client.request(method, url, headers=headers, content=payload)
 
-        if response.status_code == 403:
-            logger.debug(f"Debug - API returned 403 Forbidden. Headers: {headers}")
+            # Handle rate limiting with exponential backoff
+            if response.status_code == 429:
+                delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    f"Rate limit hit (429) on {endpoint}, retrying in {delay:.1f}s "
+                    f"(attempt {attempt + 1}/{max_retries})"
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(f"Rate limit exceeded after {max_retries} retries on {endpoint}")
+                    raise Exception(f"Rate limit exceeded on {endpoint}. Please reduce request frequency.")
+
+            # Add status attribute for compatibility with the existing codebase
+            response.status = response.status_code
+
+            if response.status_code == 403:
+                logger.debug(f"Debug - API returned 403 Forbidden. Headers: {headers}")
+                logger.debug(f"Debug - Response text: {response.text}")
+                raise Exception("Authentication failed. Please check your auth token.")
+
+            return json.loads(response.text)
+        except json.JSONDecodeError:
+            logger.error(f"Debug - Failed to parse response. Status code: {response.status_code}")
             logger.debug(f"Debug - Response text: {response.text}")
-            raise Exception("Authentication failed. Please check your auth token.")
-
-        return json.loads(response.text)
-    except json.JSONDecodeError:
-        logger.error(f"Debug - Failed to parse response. Status code: {response.status_code}")
-        logger.debug(f"Debug - Response text: {response.text}")
-        raise Exception(f"Failed to parse API response (status {response.status_code})")
+            raise Exception(f"Failed to parse API response (status {response.status_code})")
 
 
 class BrokerData:
@@ -788,9 +806,9 @@ class BrokerData:
                 # Move to next chunk
                 current_start = current_end + timedelta(days=1)
 
-                # Rate limit delay between chunks (0.3 seconds)
+                # Rate limit: 60 req/min = 1 req/sec (Nubra historical data limit)
                 if current_start <= to_date:
-                    time.sleep(0.3)
+                    time.sleep(1.0)
 
             # If no data was found, return empty DataFrame
             if not all_candles:
