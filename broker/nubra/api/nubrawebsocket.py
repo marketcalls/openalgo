@@ -292,6 +292,7 @@ class NubraWebSocket:
             "ask": 0,
             "open": existing.get("open", 0),
             "close": existing.get("close", 0),
+            "_has_index": True,
         }
 
     def _process_orderbook_batch(self, msg):
@@ -360,29 +361,30 @@ class NubraWebSocket:
         if "NIFTY" in name:
              logger.info(f"Caching OHLVC: name={name}, open={obj.open}, close={obj.close}")
 
-        # Merge OHLCV into existing quote (don't overwrite index channel data)
+        # Merge OHLCV into existing quote.
         # Index channel provides: ltp, high, low, prev_close, changepercent
         # OHLCV channel provides: open, high, low, close, volume
-        # When only OHLCV is subscribed (e.g., index requests), close serves as LTP
+        # When only OHLCV is subscribed (e.g., index requests), close serves as LTP.
+        # If index channel is active (_has_index flag), it is authoritative for
+        # ltp/high/low/volume/timestamp — OHLCV only contributes open/close.
+        # If OHLCV is the sole source, refresh all fields on every message.
         key = (exchange, name)
         existing = self.last_quotes.get(key, {})
+        has_index = existing.get("_has_index", False)
         close_val = obj.close / 100.0 if obj.close else 0
         existing["open"] = obj.open / 100.0 if obj.open else existing.get("open", 0)
         existing["close"] = close_val or existing.get("close", 0)
-        # Set LTP from close if index channel hasn't provided one yet
-        if not existing.get("ltp") and close_val:
-            existing["ltp"] = close_val
-        # Update high/low from OHLCV if index channel hasn't provided them
-        if obj.high and not existing.get("high"):
-            existing["high"] = obj.high / 100.0
-        if obj.low and not existing.get("low"):
-            existing["low"] = obj.low / 100.0
-        # Update volume from OHLCV if index channel hasn't provided it yet
-        if not existing.get("volume"):
+        if not has_index:
+            # OHLCV is the only data source — always refresh
+            if close_val:
+                existing["ltp"] = close_val
+            if obj.high:
+                existing["high"] = obj.high / 100.0
+            if obj.low:
+                existing["low"] = obj.low / 100.0
             existing["volume"] = obj.cumulative_volume if obj.cumulative_volume else (obj.bucket_volume or 0)
-        # Ensure timestamp exists
-        if not existing.get("timestamp") and obj.timestamp:
-            existing["timestamp"] = obj.timestamp
+            if obj.timestamp:
+                existing["timestamp"] = obj.timestamp
         self.last_quotes[key] = existing
 
     # ─── Public Methods ──────────────────────────────────────────────────
