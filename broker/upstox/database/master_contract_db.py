@@ -174,7 +174,113 @@ def process_upstox_json(path):
     df["symbol"] = df.apply(reformat_symbol, axis=1)
     df["brexchange"] = segment_copy
 
-    df["symbol"] = df["symbol"].replace({"INDIA VIX": "INDIAVIX"})
+    # NSE Index Symbol Mapping (Upstox trading_symbol → OpenAlgo format)
+    df["symbol"] = df["symbol"].replace({
+        # Major NSE Indices
+        "NIFTY 50": "NIFTY",
+        "NIFTY NEXT 50": "NIFTYNXT50",
+        "NIFTY FIN SERVICE": "FINNIFTY",
+        "NIFTY BANK": "BANKNIFTY",
+        "NIFTY MID SELECT": "MIDCPNIFTY",
+        "INDIA VIX": "INDIAVIX",
+        "HANGSENG BEES NAV": "HANGSENGBEESNAV",
+        # Broad Market Indices
+        "NIFTY 100": "NIFTY100",
+        "NIFTY 200": "NIFTY200",
+        "NIFTY 500": "NIFTY500",
+        # Sectoral Indices
+        "NIFTY ALPHA 50": "NIFTYALPHA50",
+        "NIFTY AUTO": "NIFTYAUTO",
+        "NIFTY COMMODITIES": "NIFTYCOMMODITIES",
+        "NIFTY CONSUMPTION": "NIFTYCONSUMPTION",
+        "NIFTY CPSE": "NIFTYCPSE",
+        "NIFTY DIV OPPS 50": "NIFTYDIVOPPS50",
+        "NIFTY ENERGY": "NIFTYENERGY",
+        "NIFTY FMCG": "NIFTYFMCG",
+        "NIFTY GROWSECT 15": "NIFTYGROWSECT15",
+        "NIFTY INFRA": "NIFTYINFRA",
+        "NIFTY IT": "NIFTYIT",
+        "NIFTY MEDIA": "NIFTYMEDIA",
+        "NIFTY METAL": "NIFTYMETAL",
+        "NIFTY MNC": "NIFTYMNC",
+        "NIFTY PHARMA": "NIFTYPHARMA",
+        "NIFTY PSE": "NIFTYPSE",
+        "NIFTY PSU BANK": "NIFTYPSUBANK",
+        "NIFTY PVT BANK": "NIFTYPVTBANK",
+        "NIFTY REALTY": "NIFTYREALTY",
+        "NIFTY SERV SECTOR": "NIFTYSERVSECTOR",
+        # Market Cap Indices
+        "NIFTY MID LIQ 15": "NIFTYMIDLIQ15",
+        "NIFTY MIDCAP 50": "NIFTYMIDCAP50",
+        "NIFTY MIDCAP 100": "NIFTYMIDCAP100",
+        "NIFTY MIDCAP 150": "NIFTYMIDCAP150",
+        "NIFTY MIDSML 400": "NIFTYMIDSML400",
+        "NIFTY SMLCAP 50": "NIFTYSMLCAP50",
+        "NIFTY SMLCAP 100": "NIFTYSMLCAP100",
+        "NIFTY SMLCAP 250": "NIFTYSMLCAP250",
+        # Strategy Indices
+        "NIFTY100 EQL WGT": "NIFTY100EQLWGT",
+        "NIFTY100 LIQ 15": "NIFTY100LIQ15",
+        "NIFTY100 LOWVOL30": "NIFTY100LOWVOL30",
+        "NIFTY100 QUALTY30": "NIFTY100QUALTY30",
+        "NIFTY200 QUALTY30": "NIFTY200QUALTY30",
+        "NIFTY50 DIV POINT": "NIFTY50DIVPOINT",
+        "NIFTY50 EQL WGT": "NIFTY50EQLWGT",
+        "NIFTY50 PR 1X INV": "NIFTY50PR1XINV",
+        "NIFTY50 PR 2X LEV": "NIFTY50PR2XLEV",
+        "NIFTY50 TR 1X INV": "NIFTY50TR1XINV",
+        "NIFTY50 TR 2X LEV": "NIFTY50TR2XLEV",
+        "NIFTY50 VALUE 20": "NIFTY50VALUE20",
+        # Government Securities Indices
+        "NIFTY GS 10YR": "NIFTYGS10YR",
+        "NIFTY GS 10YR CLN": "NIFTYGS10YRCLN",
+        "NIFTY GS 11 15YR": "NIFTYGS1115YR",
+        "NIFTY GS 15YRPLUS": "NIFTYGS15YRPLUS",
+        "NIFTY GS 4 8YR": "NIFTYGS48YR",
+        "NIFTY GS 8 13YR": "NIFTYGS813YR",
+        "NIFTY GS COMPSITE": "NIFTYGSCOMPSITE",
+    })
+
+    # BSE Index Symbol Mapping (applied only to BSE_INDEX rows to avoid
+    # conflicts with equity symbols that may share short names like AUTO, METAL)
+    bse_idx_mask = df["exchange"] == "BSE_INDEX"
+    df.loc[bse_idx_mask, "symbol"] = df.loc[bse_idx_mask, "symbol"].replace({
+        "SNSX50": "SENSEX50",
+        "SNXT50": "BSESENSEXNEXT50",
+        "MID150": "BSE150MIDCAPINDEX",
+        "LMI250": "BSE250LARGEMIDCAPINDEX",
+        "MSL400": "BSE400MIDSMALLCAPINDEX",
+        "AUTO": "BSEAUTO",
+        "BSE CG": "BSECAPITALGOODS",
+        "CARBON": "BSECARBONEX",
+        "BSE CD": "BSECONSUMERDURABLES",
+        "CPSE": "BSECPSE",
+        "DOL100": "BSEDOLLEX100",
+        "DOL200": "BSEDOLLEX200",
+        "DOL30": "BSEDOLLEX30",
+        "ENERGY": "BSEENERGY",
+        "BSEFMC": "BSEFASTMOVINGCONSUMERGOODS",
+        "FINSER": "BSEFINANCIALSERVICES",
+        "GREENX": "BSEGREENEX",
+        "BSE HC": "BSEHEALTHCARE",
+        "INFRA": "BSEINDIAINFRASTRUCTUREINDEX",
+        "INDSTR": "BSEINDUSTRIALS",
+        "BSE IT": "BSEINFORMATIONTECHNOLOGY",
+        "BSEIPO": "BSEIPO",
+        "LRGCAP": "BSELARGECAP",
+        "METAL": "BSEMETAL",
+        "MIDCAP": "BSEMIDCAP",
+        "MIDSEL": "BSEMIDCAPSELECTINDEX",
+        "OILGAS": "BSEOIL&GAS",
+        "POWER": "BSEPOWER",
+        "BSEPSU": "BSEPSU",
+        "REALTY": "BSEREALTY",
+        "SMLCAP": "BSESMALLCAP",
+        "SMLSEL": "BSESMALLCAPSELECTINDEX",
+        "SMEIPO": "BSESMEIPO",
+        "TECK": "BSETECK",
+        "TELCOM": "BSETELECOM",
+    })
 
     return df
 
