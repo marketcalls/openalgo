@@ -895,11 +895,13 @@ class NodeExecutor:
         underlying = self.get_str(node_data, "underlying", "NIFTY")
         exchange = self.get_str(node_data, "exchange", "NSE_INDEX")
         expiry_date = self.get_str(node_data, "expiryDate", "")
+        strike_count = self.get_int(node_data, "strikeCount", 10)
         self.log(f"Fetching option chain for: {underlying} expiry={expiry_date}")
         result = self.client.optionchain(
-            symbol=underlying,
+            underlying=underlying,
             exchange=exchange,
-            expiry=expiry_date,
+            expiry_date=expiry_date,
+            strike_count=strike_count,
         )
         self.log(f"Option chain result received")
         self.store_output(node_data, result)
