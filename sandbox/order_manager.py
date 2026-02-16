@@ -334,6 +334,47 @@ class OrderManager:
                     f"Using trigger price {margin_calculation_price} for {price_type} order margin calculation"
                 )
 
+                # Fetch current LTP to check if trigger is already met
+                # If so, execute immediately instead of waiting for next tick
+                for attempt in range(3):
+                    try:
+                        from sandbox.execution_engine import ExecutionEngine
+
+                        engine = ExecutionEngine()
+                        quote = engine._fetch_quote(symbol, exchange)
+                        if quote and quote.get("ltp") and Decimal(str(quote["ltp"])) > 0:
+                            current_ltp = Decimal(str(quote["ltp"]))
+                            trigger_met = False
+
+                            if action == "BUY" and current_ltp >= trigger_price:
+                                trigger_met = True
+                            elif action == "SELL" and current_ltp <= trigger_price:
+                                trigger_met = True
+
+                            if trigger_met:
+                                if price_type == "SL-M":
+                                    # SL-M: trigger met → execute as market order
+                                    cached_quote = quote
+                                    logger.info(
+                                        f"SL-M order trigger already met: {action} trigger={trigger_price}, LTP={current_ltp}"
+                                    )
+                                elif price_type == "SL":
+                                    # SL: trigger met → check limit price too
+                                    if (action == "BUY" and current_ltp <= price) or (
+                                        action == "SELL" and current_ltp >= price
+                                    ):
+                                        cached_quote = quote
+                                        logger.info(
+                                            f"SL order trigger+limit already met: {action} trigger={trigger_price}, limit={price}, LTP={current_ltp}"
+                                        )
+                            break  # Quote fetched successfully, no need to retry
+                    except Exception as e:
+                        logger.debug(f"SL trigger check attempt {attempt + 1} failed: {e}")
+
+                    # Wait before retry (0.3s, 0.6s)
+                    if attempt < 2:
+                        time.sleep(0.3 * (attempt + 1))
+
             # Validate that we have a valid price for margin calculation
             if not margin_calculation_price or margin_calculation_price <= 0:
                 return (
@@ -544,24 +585,37 @@ class OrderManager:
             except Exception as e:
                 logger.debug(f"WebSocket execution engine notification skipped: {e}")
 
-            # Execute MARKET and marketable LIMIT orders immediately using cached quote
-            if price_type == "MARKET" or (price_type == "LIMIT" and cached_quote):
+            # Execute orders immediately when conditions are already met
+            # MARKET: always immediate, LIMIT: if marketable, SL/SL-M: if trigger already met
+            if price_type == "MARKET" or (cached_quote and price_type in ["LIMIT", "SL", "SL-M"]):
                 try:
                     from sandbox.execution_engine import ExecutionEngine
 
                     engine = ExecutionEngine()
 
-                    # Use cached quote from margin calculation (already fetched above)
+                    # Use cached quote from earlier check (already fetched above)
                     if cached_quote:
+                        ltp = Decimal(str(cached_quote.get("ltp", 0)))
+
                         if price_type == "LIMIT":
                             # Marketable LIMIT: fill at LTP (market price), not limit price
                             # In real exchanges, a marketable limit order gets price improvement
                             # e.g., BUY LIMIT 1500, LTP 1417 → fills at 1417
-                            ltp = Decimal(str(cached_quote.get("ltp", 0)))
                             if ltp > 0:
                                 engine._execute_order(order, ltp)
                                 logger.info(
                                     f"Marketable limit order {orderid} executed at LTP {ltp} (limit was {price})"
+                                )
+                            else:
+                                logger.warning(
+                                    f"Invalid LTP in cached quote for {symbol}, order remains open"
+                                )
+                        elif price_type in ["SL", "SL-M"]:
+                            # SL/SL-M with trigger already met: execute at LTP
+                            if ltp > 0:
+                                engine._execute_order(order, ltp)
+                                logger.info(
+                                    f"{price_type} order {orderid} executed at LTP {ltp} (trigger already met)"
                                 )
                             else:
                                 logger.warning(
