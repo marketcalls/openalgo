@@ -423,10 +423,17 @@ class NubraWebSocket:
         """Unsubscribe from index channel."""
         if not self.is_connected:
             return False
-            
+
         key = (tuple(symbols), "index", exchange)
         self.subscriptions_batch.discard(key)
-        
+
+        # Clear _has_index flag so OHLCV channel resumes full updates
+        for sym in symbols:
+            cache_key = (exchange, sym.upper())
+            cached = self.last_quotes.get(cache_key)
+            if cached:
+                cached.pop("_has_index", None)
+
         return self._send_unsubscribe_batch("index", index_symbol=symbols, exchange=exchange)
 
     def subscribe_orderbook(self, ref_ids: List[int]) -> bool:
