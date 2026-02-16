@@ -300,24 +300,31 @@ class OrderManager:
 
                 # Fetch current LTP to check if this LIMIT order is marketable
                 # Marketable = can be executed immediately at market price
-                try:
-                    from sandbox.execution_engine import ExecutionEngine
+                # Uses same retry logic as MARKET orders for reliability
+                for attempt in range(3):
+                    try:
+                        from sandbox.execution_engine import ExecutionEngine
 
-                    engine = ExecutionEngine()
-                    quote = engine._fetch_quote(symbol, exchange)
-                    if quote and quote.get("ltp") and Decimal(str(quote["ltp"])) > 0:
-                        current_ltp = Decimal(str(quote["ltp"]))
-                        # BUY LIMIT is marketable if limit >= LTP
-                        # SELL LIMIT is marketable if limit <= LTP
-                        if (action == "BUY" and current_ltp <= price) or (
-                            action == "SELL" and current_ltp >= price
-                        ):
-                            cached_quote = quote  # Cache for immediate execution at LTP
-                            logger.debug(
-                                f"LIMIT order is marketable: {action} limit={price}, LTP={current_ltp}"
-                            )
-                except Exception as e:
-                    logger.debug(f"Marketability check skipped: {e}")
+                        engine = ExecutionEngine()
+                        quote = engine._fetch_quote(symbol, exchange)
+                        if quote and quote.get("ltp") and Decimal(str(quote["ltp"])) > 0:
+                            current_ltp = Decimal(str(quote["ltp"]))
+                            # BUY LIMIT is marketable if limit >= LTP
+                            # SELL LIMIT is marketable if limit <= LTP
+                            if (action == "BUY" and current_ltp <= price) or (
+                                action == "SELL" and current_ltp >= price
+                            ):
+                                cached_quote = quote  # Cache for immediate execution
+                                logger.info(
+                                    f"LIMIT order is marketable: {action} limit={price}, LTP={current_ltp}"
+                                )
+                            break  # Quote fetched successfully, no need to retry
+                    except Exception as e:
+                        logger.debug(f"Marketability check attempt {attempt + 1} failed: {e}")
+
+                    # Wait before retry (0.3s, 0.6s)
+                    if attempt < 2:
+                        time.sleep(0.3 * (attempt + 1))
 
             elif price_type in ["SL", "SL-M"]:
                 # For SL/SL-M orders, use trigger price for margin calculation
@@ -546,11 +553,26 @@ class OrderManager:
 
                     # Use cached quote from margin calculation (already fetched above)
                     if cached_quote:
-                        # Process the order immediately with cached quote
-                        engine._process_order(order, cached_quote)
-                        logger.info(
-                            f"{'Market' if price_type == 'MARKET' else 'Marketable limit'} order {orderid} executed immediately"
-                        )
+                        if price_type == "LIMIT":
+                            # Marketable LIMIT: fill at LTP (market price), not limit price
+                            # In real exchanges, a marketable limit order gets price improvement
+                            # e.g., BUY LIMIT 1500, LTP 1417 → fills at 1417
+                            ltp = Decimal(str(cached_quote.get("ltp", 0)))
+                            if ltp > 0:
+                                engine._execute_order(order, ltp)
+                                logger.info(
+                                    f"Marketable limit order {orderid} executed at LTP {ltp} (limit was {price})"
+                                )
+                            else:
+                                logger.warning(
+                                    f"Invalid LTP in cached quote for {symbol}, order remains open"
+                                )
+                        else:
+                            # MARKET order: process normally (fills at bid/ask or LTP)
+                            engine._process_order(order, cached_quote)
+                            logger.info(
+                                f"Market order {orderid} executed immediately"
+                            )
                     else:
                         logger.warning(
                             f"Could not fetch quote for {symbol} on {exchange}, order remains open"
