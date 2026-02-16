@@ -298,6 +298,27 @@ class OrderManager:
                 margin_calculation_price = price
                 logger.debug(f"Using LIMIT price {margin_calculation_price} for margin calculation")
 
+                # Fetch current LTP to check if this LIMIT order is marketable
+                # Marketable = can be executed immediately at market price
+                try:
+                    from sandbox.execution_engine import ExecutionEngine
+
+                    engine = ExecutionEngine()
+                    quote = engine._fetch_quote(symbol, exchange)
+                    if quote and quote.get("ltp") and Decimal(str(quote["ltp"])) > 0:
+                        current_ltp = Decimal(str(quote["ltp"]))
+                        # BUY LIMIT is marketable if limit >= LTP
+                        # SELL LIMIT is marketable if limit <= LTP
+                        if (action == "BUY" and current_ltp <= price) or (
+                            action == "SELL" and current_ltp >= price
+                        ):
+                            cached_quote = quote  # Cache for immediate execution at LTP
+                            logger.debug(
+                                f"LIMIT order is marketable: {action} limit={price}, LTP={current_ltp}"
+                            )
+                except Exception as e:
+                    logger.debug(f"Marketability check skipped: {e}")
+
             elif price_type in ["SL", "SL-M"]:
                 # For SL/SL-M orders, use trigger price for margin calculation
                 # This represents the worst-case price at which order will be triggered
@@ -516,8 +537,8 @@ class OrderManager:
             except Exception as e:
                 logger.debug(f"WebSocket execution engine notification skipped: {e}")
 
-            # Execute MARKET orders immediately using cached quote (no re-fetch needed)
-            if price_type == "MARKET":
+            # Execute MARKET and marketable LIMIT orders immediately using cached quote
+            if price_type == "MARKET" or (price_type == "LIMIT" and cached_quote):
                 try:
                     from sandbox.execution_engine import ExecutionEngine
 
@@ -527,13 +548,15 @@ class OrderManager:
                     if cached_quote:
                         # Process the order immediately with cached quote
                         engine._process_order(order, cached_quote)
-                        logger.info(f"Market order {orderid} executed immediately")
+                        logger.info(
+                            f"{'Market' if price_type == 'MARKET' else 'Marketable limit'} order {orderid} executed immediately"
+                        )
                     else:
                         logger.warning(
                             f"Could not fetch quote for {symbol} on {exchange}, order remains open"
                         )
                 except Exception as e:
-                    logger.exception(f"Error executing market order immediately: {e}")
+                    logger.exception(f"Error executing order immediately: {e}")
                     # Order remains in 'open' status if execution fails
 
             return True, {"status": "success", "orderid": orderid, "mode": "analyze"}, 200
