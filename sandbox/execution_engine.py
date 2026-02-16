@@ -255,18 +255,16 @@ class ExecutionEngine:
                     execution_price = bid if bid > 0 else ltp
 
             elif order.price_type == "LIMIT":
-                # Limit BUY: Execute if LTP <= Limit Price (you get filled at LTP or better)
-                # Limit SELL: Execute if LTP >= Limit Price (you get filled at LTP or better)
+                # Limit BUY: Execute if LTP <= Limit Price, fill at limit price
+                # Limit SELL: Execute if LTP >= Limit Price, fill at limit price
+                # In real exchanges, limit orders sit on the book at the limit price
+                # and fill at that price when the market crosses through
                 if order.action == "BUY" and ltp <= order.price:
                     should_execute = True
-                    execution_price = (
-                        ltp  # Execute at current market price (LTP), which is better than limit
-                    )
+                    execution_price = order.price  # Fill at limit price
                 elif order.action == "SELL" and ltp >= order.price:
                     should_execute = True
-                    execution_price = (
-                        ltp  # Execute at current market price (LTP), which is better than limit
-                    )
+                    execution_price = order.price  # Fill at limit price
 
             elif order.price_type == "SL":
                 # Stop Loss Limit order
