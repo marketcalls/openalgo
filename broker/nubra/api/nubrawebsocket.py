@@ -248,7 +248,11 @@ class NubraWebSocket:
         if "NIFTY" in name:
              logger.info(f"Caching index: name={name}, exch={exchange}, val={obj.index_value}")
 
-        self.last_quotes[(exchange, name)] = {
+        # Preserve open/close from OHLCV cache (OHLCV may arrive before index data)
+        key = (exchange, name)
+        existing = self.last_quotes.get(key, {})
+
+        self.last_quotes[key] = {
             "ltp": obj.index_value / 100.0 if obj.index_value else 0,
             "high": obj.high_index_value / 100.0 if obj.high_index_value else 0,
             "low": obj.low_index_value / 100.0 if obj.low_index_value else 0,
@@ -259,7 +263,8 @@ class NubraWebSocket:
             "timestamp": obj.timestamp if obj.timestamp else 0,
             "bid": 0,
             "ask": 0,
-            "open": 0,
+            "open": existing.get("open", 0),
+            "close": existing.get("close", 0),
         }
 
     def _process_orderbook_batch(self, msg):
@@ -320,29 +325,38 @@ class NubraWebSocket:
         name = obj.indexname if obj.indexname else ""
         if not name:
             return
-        
+
         name = name.upper()
         if name in INDEX_NAME_MAP:
             name = INDEX_NAME_MAP[name]
-        
-        if "NIFTY" in name:
-             logger.info(f"Caching OHLVC: name={name}, close={obj.close}")
 
-        # Map Candle Close -> Quote LTP
-        # This allows get_quote() to work even if we are using OHLVC feed
-        self.last_quotes[(exchange, name)] = {
-            "ltp": obj.close if obj.close else 0,
-            "open": obj.open if obj.open else 0,
-            "high": obj.high if obj.high else 0,
-            "low": obj.low if obj.low else 0,
-            "close": obj.close if obj.close else 0, # Current close is LTP
-            "volume": obj.cumulative_volume if obj.cumulative_volume else (obj.bucket_volume or 0),
-            "timestamp": obj.timestamp if obj.timestamp else 0,
-            "bid": 0,
-            "ask": 0,
-            "prev_close": 0, # Not provided in OHLVC usually
-            "changepercent": 0 # Not calculated here
-        }
+        if "NIFTY" in name:
+             logger.info(f"Caching OHLVC: name={name}, open={obj.open}, close={obj.close}")
+
+        # Merge OHLCV into existing quote (don't overwrite index channel data)
+        # Index channel provides: ltp, high, low, prev_close, changepercent
+        # OHLCV channel provides: open, high, low, close, volume
+        # When only OHLCV is subscribed (e.g., index requests), close serves as LTP
+        key = (exchange, name)
+        existing = self.last_quotes.get(key, {})
+        close_val = obj.close / 100.0 if obj.close else 0
+        existing["open"] = obj.open / 100.0 if obj.open else existing.get("open", 0)
+        existing["close"] = close_val or existing.get("close", 0)
+        # Set LTP from close if index channel hasn't provided one yet
+        if not existing.get("ltp") and close_val:
+            existing["ltp"] = close_val
+        # Update high/low from OHLCV if index channel hasn't provided them
+        if obj.high and not existing.get("high"):
+            existing["high"] = obj.high / 100.0
+        if obj.low and not existing.get("low"):
+            existing["low"] = obj.low / 100.0
+        # Update volume from OHLCV if index channel hasn't provided it yet
+        if not existing.get("volume"):
+            existing["volume"] = obj.cumulative_volume if obj.cumulative_volume else (obj.bucket_volume or 0)
+        # Ensure timestamp exists
+        if not existing.get("timestamp") and obj.timestamp:
+            existing["timestamp"] = obj.timestamp
+        self.last_quotes[key] = existing
 
     # ─── Public Methods ──────────────────────────────────────────────────
 

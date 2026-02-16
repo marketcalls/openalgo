@@ -358,9 +358,12 @@ class BrokerData:
 
     def get_multiquotes(self, symbols: list) -> list:
         """
-        Get real-time quotes for multiple symbols by making concurrent requests.
-        Nubra does not have a batch quote API, so we fetch individually in parallel.
-        
+        Get real-time quotes for multiple symbols using batch WebSocket subscriptions.
+
+        Instead of subscribing/waiting/unsubscribing per symbol (2s+ each), this method
+        batch-subscribes ALL symbols at once, waits a single 2s window, then retrieves
+        all cached data. Falls back to REST for any symbols that didn't get WS data.
+
         Args:
             symbols: List of dicts with 'symbol' and 'exchange' keys
                      Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
@@ -369,50 +372,168 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            import concurrent.futures
-            
-            # Limit concurrency to avoid hitting rate limits too hard
-            # Nubra Limit: ~10 requests/sec for standard users
-            MAX_WORKERS = 5
-            
+            websocket = self.get_websocket()
+            if not websocket or not websocket.is_connected:
+                logger.info("WebSocket not available, using REST fallback for multiquotes")
+                return self._get_multiquotes_sequential(symbols)
+
             results = []
-            
-            def fetch_single_quote(item):
+            failed_symbols = []
+
+            # Classify symbols: orderbook (instruments) vs OHLCV (indices)
+            orderbook_items = []  # (symbol, exchange, token_int)
+            index_items = []      # (symbol, exchange, br_symbol, ws_exchange)
+
+            for item in symbols:
                 symbol = item["symbol"]
                 exchange = item["exchange"]
-                try:
-                    quote_data = self.get_quotes(symbol, exchange)
-                    return {
-                        "symbol": symbol,
-                        "exchange": exchange,
-                        "data": quote_data
-                    }
-                except Exception as e:
-                    logger.warning(f"Failed to fetch quote for {symbol}: {e}")
-                    return {
-                        "symbol": symbol,
-                        "exchange": exchange,
-                        "error": str(e)
-                    }
 
-            # Use ThreadPoolExecutor for concurrent requests
-            with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                # Submit all tasks
-                future_to_symbol = {executor.submit(fetch_single_quote, item): item for item in symbols}
-                
-                # Collect results as they complete
-                for future in concurrent.futures.as_completed(future_to_symbol):
+                if exchange.endswith("_INDEX"):
+                    br_symbol = get_br_symbol(symbol, exchange) or symbol
+                    ws_exchange = "NSE" if exchange == "NSE_INDEX" else "BSE"
+                    index_items.append((symbol, exchange, br_symbol, ws_exchange))
+                else:
+                    token = get_token(symbol, exchange)
+                    if token and str(token).isdigit():
+                        orderbook_items.append((symbol, exchange, int(token)))
+                    else:
+                        failed_symbols.append(item)
+
+            # --- Batch subscribe orderbook (instruments) ---
+            all_tokens = [t[2] for t in orderbook_items]
+            if all_tokens:
+                websocket.subscribe_orderbook(all_tokens)
+                websocket.change_orderbook_depth(5)
+                logger.info(f"Batch subscribed {len(all_tokens)} orderbook tokens")
+
+            # --- Batch subscribe OHLCV (indices) ---
+            index_by_exchange = {}
+            for symbol, exchange, br_symbol, ws_exchange in index_items:
+                index_by_exchange.setdefault(ws_exchange, []).append((symbol, exchange, br_symbol))
+
+            for ws_exchange, syms in index_by_exchange.items():
+                br_syms = [s[2] for s in syms]
+                websocket.subscribe_ohlcv(br_syms, "1m", ws_exchange)
+
+            # --- Single wait for all data to arrive ---
+            time.sleep(2.0)
+
+            # --- Collect orderbook results ---
+            for symbol, exchange, token_int in orderbook_items:
+                depth = websocket.get_market_depth(token_int)
+                if depth and depth.get("ltp", 0) > 0:
+                    best_bid = depth["bids"][0]["price"] if depth.get("bids") else 0
+                    best_ask = depth["asks"][0]["price"] if depth.get("asks") else 0
+                    results.append({
+                        "symbol": symbol,
+                        "exchange": exchange,
+                        "data": {
+                            "bid": best_bid,
+                            "ask": best_ask,
+                            "open": float(depth.get("open", 0)),
+                            "high": float(depth.get("high", 0)),
+                            "low": float(depth.get("low", 0)),
+                            "ltp": float(depth.get("ltp", 0)),
+                            "prev_close": float(depth.get("prev_close", 0)),
+                            "volume": int(depth.get("volume", 0)),
+                            "oi": int(depth.get("oi", 0)),
+                        }
+                    })
+                else:
+                    failed_symbols.append({"symbol": symbol, "exchange": exchange})
+
+            # --- Collect index results ---
+            for ws_exchange, syms in index_by_exchange.items():
+                for symbol, exchange, br_symbol in syms:
+                    quote = websocket.get_quote(ws_exchange, br_symbol)
+                    if quote and quote.get("ltp", 0) > 0:
+                        results.append({
+                            "symbol": symbol,
+                            "exchange": exchange,
+                            "data": {
+                                "bid": float(quote.get("bid", 0)),
+                                "ask": float(quote.get("ask", 0)),
+                                "open": float(quote.get("open", 0)),
+                                "high": float(quote.get("high", 0)),
+                                "low": float(quote.get("low", 0)),
+                                "ltp": float(quote.get("ltp", 0)),
+                                "prev_close": float(quote.get("prev_close", 0)),
+                                "volume": int(quote.get("volume", 0)),
+                                "oi": int(quote.get("volume_oi", 0)),
+                            }
+                        })
+                    else:
+                        failed_symbols.append({"symbol": symbol, "exchange": exchange})
+
+            # --- Batch unsubscribe ---
+            if all_tokens:
+                websocket.unsubscribe_orderbook(all_tokens)
+            for ws_exchange, syms in index_by_exchange.items():
+                br_syms = [s[2] for s in syms]
+                websocket.unsubscribe_ohlcv(br_syms, "1m", ws_exchange)
+
+            # --- REST fallback for any symbols that didn't get WS data ---
+            if failed_symbols:
+                logger.info(f"Batch WS: {len(failed_symbols)}/{len(symbols)} symbols need REST fallback")
+                for item in failed_symbols:
+                    sym = item["symbol"]
+                    exch = item["exchange"]
                     try:
-                        result = future.result()
-                        results.append(result)
+                        rest_quote = self._get_quotes_via_rest(sym, exch) if not exch.endswith("_INDEX") else None
+                        results.append({
+                            "symbol": sym,
+                            "exchange": exch,
+                            "data": rest_quote or {
+                                "bid": 0, "ask": 0, "open": 0, "high": 0,
+                                "low": 0, "ltp": 0, "prev_close": 0, "volume": 0, "oi": 0,
+                            }
+                        })
                     except Exception as e:
-                        logger.error(f"Generate quote exception: {e}")
-            
+                        logger.warning(f"REST fallback failed for {sym}: {e}")
+                        results.append({
+                            "symbol": sym,
+                            "exchange": exch,
+                            "data": {
+                                "bid": 0, "ask": 0, "open": 0, "high": 0,
+                                "low": 0, "ltp": 0, "prev_close": 0, "volume": 0, "oi": 0,
+                            }
+                        })
+
+            logger.info(f"Batch multiquotes: {len(results)} results for {len(symbols)} symbols")
             return results
 
         except Exception as e:
-            logger.exception("Error fetching multiquotes")
+            logger.exception("Error fetching multiquotes (batch)")
             raise Exception(f"Error fetching multiquotes: {e}")
+
+    def _get_multiquotes_sequential(self, symbols: list) -> list:
+        """
+        Fallback: fetch quotes one-by-one when WebSocket is not available.
+        Uses REST API with thread pool for concurrency.
+        """
+        import concurrent.futures
+
+        results = []
+
+        def fetch_single_quote(item):
+            symbol = item["symbol"]
+            exchange = item["exchange"]
+            try:
+                quote_data = self.get_quotes(symbol, exchange)
+                return {"symbol": symbol, "exchange": exchange, "data": quote_data}
+            except Exception as e:
+                logger.warning(f"Failed to fetch quote for {symbol}: {e}")
+                return {"symbol": symbol, "exchange": exchange, "error": str(e)}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_symbol = {executor.submit(fetch_single_quote, item): item for item in symbols}
+            for future in concurrent.futures.as_completed(future_to_symbol):
+                try:
+                    results.append(future.result())
+                except Exception as e:
+                    logger.error(f"Generate quote exception: {e}")
+
+        return results
 
     def _process_quotes_batch(self, symbols: list) -> list:
         """
