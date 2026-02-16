@@ -305,20 +305,25 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # (API docs show "TCS", "RELIANCE" in the indexes array)
             sub_name = symbol
 
-        # Only send WebSocket subscription if not already on index channel
-        if key not in self.index_channel_subscribed:
-            self.ws_client.subscribe_index([sub_name], exchange=nubra_exchange)
-            self.index_channel_subscribed.add(key)
-
-        # Also subscribe to index_bucket (OHLCV) to get open/close values
-        if key not in self.ohlcv_channel_subscribed:
-            self.ws_client.subscribe_ohlcv(
-                [sub_name], interval="1d", exchange=nubra_exchange
-            )
-            self.ohlcv_channel_subscribed.add(key)
-
-        # Track for incoming data routing
+        # Hold lock for entire subscribe + tracking to prevent race with callbacks
         with self.lock:
+            if not self.ws_client:
+                return self._create_error_response(
+                    "NOT_CONNECTED", "WebSocket client disconnected"
+                )
+
+            # Only send WebSocket subscription if not already on index channel
+            if key not in self.index_channel_subscribed:
+                self.ws_client.subscribe_index([sub_name], exchange=nubra_exchange)
+                self.index_channel_subscribed.add(key)
+
+            # Also subscribe to index_bucket (OHLCV) to get open/close values
+            if key not in self.ohlcv_channel_subscribed:
+                self.ws_client.subscribe_ohlcv(
+                    [sub_name], interval="1d", exchange=nubra_exchange
+                )
+                self.ohlcv_channel_subscribed.add(key)
+
             # Register the subscription name for data routing
             self.index_name_to_sub[sub_name.upper()] = (symbol, exchange)
 
@@ -395,13 +400,18 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
             )
             is_fallback = True
 
-        # Subscribe to orderbook channel if not already
-        if ref_id not in self.orderbook_subscribed:
-            self.ws_client.subscribe_orderbook([ref_id])
-            self.orderbook_subscribed.add(ref_id)
-
-        # Track for incoming data routing
+        # Hold lock for entire subscribe + tracking to prevent race with callbacks
         with self.lock:
+            if not self.ws_client:
+                return self._create_error_response(
+                    "NOT_CONNECTED", "WebSocket client disconnected"
+                )
+
+            # Subscribe to orderbook channel if not already
+            if ref_id not in self.orderbook_subscribed:
+                self.ws_client.subscribe_orderbook([ref_id])
+                self.orderbook_subscribed.add(ref_id)
+
             self.ref_id_to_symbol[ref_id] = (symbol, exchange)
 
             if key not in self.symbol_modes:
@@ -457,6 +467,9 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         del self.symbol_modes[key]
                         del self.subscribed_symbols[key]
 
+                        # Capture ws_client ref inside lock (safe from disconnect race)
+                        ws = self.ws_client
+
                         # Unsubscribe from index channel
                         if key in self.index_channel_subscribed:
                             sub_name = sub_info.get("sub_name", symbol)
@@ -464,8 +477,8 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
                                 "nubra_exchange",
                                 NubraExchangeMapper.to_nubra_exchange(exchange),
                             )
-                            if self.ws_client:
-                                self.ws_client.unsubscribe_index(
+                            if ws:
+                                ws.unsubscribe_index(
                                     [sub_name], exchange=nubra_exchange
                                 )
                             self.index_channel_subscribed.discard(key)
@@ -477,8 +490,8 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
                                 "nubra_exchange",
                                 NubraExchangeMapper.to_nubra_exchange(exchange),
                             )
-                            if self.ws_client:
-                                self.ws_client.unsubscribe_ohlcv(
+                            if ws:
+                                ws.unsubscribe_ohlcv(
                                     [sub_name],
                                     interval="1d",
                                     exchange=nubra_exchange,
@@ -497,8 +510,8 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         # Unsubscribe from orderbook channel
                         ref_id = sub_info.get("ref_id")
                         if ref_id is not None:
-                            if self.ws_client:
-                                self.ws_client.unsubscribe_orderbook([ref_id])
+                            if ws:
+                                ws.unsubscribe_orderbook([ref_id])
                             self.ref_id_to_symbol.pop(ref_id, None)
                             self.orderbook_subscribed.discard(ref_id)
 
@@ -531,12 +544,12 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             name_upper = name.upper()
 
-            # Route 1: Check INDEX_NAME_MAP for known index names
-            # e.g., "NIFTY 50" -> "NIFTY", "NIFTY BANK" -> "BANKNIFTY"
-            mapped_symbol = INDEX_NAME_MAP.get(name_upper)
-            if mapped_symbol:
-                # Find the subscribed exchange for this index
-                with self.lock:
+            # Single lock acquisition for all lookups
+            with self.lock:
+                # Route 1: Check INDEX_NAME_MAP for known index names
+                # e.g., "NIFTY 50" -> "NIFTY", "NIFTY BANK" -> "BANKNIFTY"
+                mapped_symbol = INDEX_NAME_MAP.get(name_upper)
+                if mapped_symbol:
                     symbol = mapped_symbol
                     exchange = None
                     for ex in ("NSE_INDEX", "BSE_INDEX"):
@@ -546,31 +559,27 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
                             break
                     if not exchange:
                         return
-            else:
-                # Route 2: Direct lookup from our subscription map
-                # e.g., "INFY" -> ("INFY", "NSE")
-                with self.lock:
+                else:
+                    # Route 2: Direct lookup from our subscription map
+                    # e.g., "INFY" -> ("INFY", "NSE")
                     lookup = self.index_name_to_sub.get(name_upper)
                     if not lookup:
                         return
                     symbol, exchange = lookup
 
-            key = f"{exchange}:{symbol}"
-
-            with self.lock:
+                key = f"{exchange}:{symbol}"
                 modes = self.symbol_modes.get(key, set()).copy()
+                ohlcv = self.ohlcv_cache.get(name_upper, {}).copy()
 
             if not modes:
                 return
 
-            # Extract data from protobuf
+            # Extract data from protobuf (no lock needed - read-only on obj)
             ltp = obj.index_value / 100.0 if obj.index_value else 0
             prev_close = obj.prev_close / 100.0 if obj.prev_close else 0
             timestamp = obj.timestamp if obj.timestamp else int(time.time() * 1000)
 
-            # Get open/close from OHLCV cache (index_bucket channel)
-            name_upper = (obj.indexname or "").upper()
-            ohlcv = self.ohlcv_cache.get(name_upper, {})
+            # Get open/close from OHLCV cache (already captured under lock)
             open_price = ohlcv.get("open", 0)
             close_price = ohlcv.get("close", prev_close)
 
@@ -629,9 +638,10 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "close": obj.close / 100.0 if obj.close else 0,
             }
 
-            self.ohlcv_cache[name_upper] = ohlcv_entry
-            if mapped:
-                self.ohlcv_cache[mapped] = ohlcv_entry
+            with self.lock:
+                self.ohlcv_cache[name_upper] = ohlcv_entry
+                if mapped:
+                    self.ohlcv_cache[mapped] = ohlcv_entry
 
         except Exception as e:
             self.logger.error(f"Error processing OHLCV data: {e}", exc_info=True)
@@ -649,18 +659,13 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if not ref_id:
                 return
 
-            # Look up symbol from ref_id
+            # Single lock acquisition for all lookups
             with self.lock:
                 symbol_info = self.ref_id_to_symbol.get(ref_id)
-
-            if not symbol_info:
-                return
-
-            symbol, exchange = symbol_info
-            key = f"{exchange}:{symbol}"
-
-            # Get subscribed modes
-            with self.lock:
+                if not symbol_info:
+                    return
+                symbol, exchange = symbol_info
+                key = f"{exchange}:{symbol}"
                 modes = self.symbol_modes.get(key, set()).copy()
 
             if not modes or 3 not in modes:
@@ -722,40 +727,19 @@ class NubraWebSocketAdapter(BaseBrokerWebSocketAdapter):
     # --- Connection Callbacks (tracked via ws_client events) ---
 
     def cleanup(self):
-        """Clean up all resources."""
+        """Clean up all resources. Delegates to disconnect() to avoid duplication."""
         try:
-            with self.lock:
-                if self.ws_client:
-                    try:
-                        self.ws_client.close()
-                        self.ws_client = None
-                    except Exception as ws_err:
-                        self.logger.error(
-                            f"Error stopping WebSocket during cleanup: {ws_err}"
-                        )
-
-                self.running = False
-                self.connected = False
-                self.subscribed_symbols.clear()
-                self.index_name_to_sub.clear()
-                self.ref_id_to_symbol.clear()
-                self.symbol_modes.clear()
-                self.index_channel_subscribed.clear()
-                self.orderbook_subscribed.clear()
-                self.ohlcv_channel_subscribed.clear()
-                self.ohlcv_cache.clear()
-
-            self.cleanup_zmq()
-            self.logger.info("Nubra adapter cleaned up completely")
-
+            self.disconnect()
         except Exception as e:
             self.logger.error(f"Error during cleanup: {e}")
+            # Last resort: ensure ZMQ is cleaned up
             try:
                 self.cleanup_zmq()
             except Exception:
                 pass
 
     def __del__(self):
+        """Safety net destructor."""
         try:
             self.cleanup()
         except Exception:

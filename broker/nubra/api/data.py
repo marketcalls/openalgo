@@ -89,6 +89,23 @@ class BrokerData:
             "M": "1mt",
         }
 
+    def close(self):
+        """Close the WebSocket connection and release resources."""
+        with self._ws_lock:
+            if self._websocket:
+                try:
+                    self._websocket.close()
+                except Exception:
+                    pass
+                self._websocket = None
+
+    def __del__(self):
+        """Safety net destructor to ensure WebSocket is cleaned up."""
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def get_websocket(self, force_new=False):
         """
         Get or create the Nubra WebSocket instance for real-time data.
@@ -120,15 +137,15 @@ class BrokerData:
                 ws = NubraWebSocket(self.auth_token)
                 ws.connect()
 
-                # Wait for connection to establish
-                wait_time = 0
-                max_wait = 10
-                while wait_time < max_wait and not ws.is_connected:
-                    time.sleep(0.5)
-                    wait_time += 0.5
+                # Wait for connection via event (more efficient than polling)
+                ws._connected_event.wait(timeout=10)
 
                 if not ws.is_connected:
                     logger.warning("Nubra WebSocket connection timed out")
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
                     return None
 
                 self._websocket = ws
@@ -186,12 +203,25 @@ class BrokerData:
 
     def _get_quotes_via_websocket(self, symbol: str, exchange: str) -> dict:
         """
-        Try to get quotes via WebSocket index channel.
-        Subscribes, waits for data, unsubscribes, and returns the quote.
-        
+        Try to get quotes via WebSocket channels.
+
+        For indices: subscribes to OHLCV channel.
+        For instruments: subscribes to BOTH index and orderbook channels in
+        parallel, waits once, then checks both — eliminating the double
+        subscribe/wait cycle that previously added ~5s latency.
+
+        Uses try/finally to guarantee unsubscribe even on exceptions.
+
         Returns:
             dict: Quote data in OpenAlgo format, or None if not available
         """
+        websocket = None
+        subscribed_type = None  # Track what we subscribed to for cleanup
+        br_symbol = None
+        ws_exchange = None
+        token_int = None
+        orderbook_subscribed = False
+
         try:
             websocket = self.get_websocket()
             if not websocket or not websocket.is_connected:
@@ -211,31 +241,36 @@ class BrokerData:
             else:
                 ws_exchange = exchange
 
-            # Subscribe to index channel (or OHLVC if Index)
-            # Use exchange suffix to determine if this is an index request
             is_index_request = exchange.endswith("_INDEX")
 
             if is_index_request:
-                 logger.info(f"Subscribing to WS OHLVC (1m) for {br_symbol} on {ws_exchange}")
-                 success = websocket.subscribe_ohlcv([br_symbol], "1m", ws_exchange)
+                logger.info(f"Subscribing to WS OHLVC (1m) for {br_symbol} on {ws_exchange}")
+                success = websocket.subscribe_ohlcv([br_symbol], "1m", ws_exchange)
+                if success:
+                    subscribed_type = "ohlcv"
             else:
-                 logger.info(f"Subscribing to WS index for {br_symbol} on {ws_exchange}")
-                 success = websocket.subscribe_index([br_symbol], ws_exchange)
+                logger.info(f"Subscribing to WS index for {br_symbol} on {ws_exchange}")
+                success = websocket.subscribe_index([br_symbol], ws_exchange)
+                if success:
+                    subscribed_type = "index"
+
+                # Also subscribe to orderbook in parallel as fallback
+                # (avoids a second subscribe/wait cycle if index channel yields no data)
+                token = get_token(symbol, exchange)
+                if token and str(token).isdigit():
+                    token_int = int(token)
+                    if websocket.subscribe_orderbook([token_int]):
+                        websocket.change_orderbook_depth(5)
+                        orderbook_subscribed = True
 
             if not success:
                 return None
 
-            # Wait for data to arrive
+            # Single wait for all channels to deliver data
             time.sleep(2.0)
 
-            # Retrieve cached quote - get_quote takes (exchange, symbol)
+            # Check index/OHLCV channel first
             quote = websocket.get_quote(ws_exchange, br_symbol)
-
-            # Unsubscribe after retrieval
-            if is_index_request:
-                 websocket.unsubscribe_ohlcv([br_symbol], "1m", ws_exchange)
-            else:
-                 websocket.unsubscribe_index([br_symbol], ws_exchange)
 
             if quote and quote.get("ltp", 0) > 0:
                 logger.info(f"WS quote for {symbol}: LTP={quote['ltp']}")
@@ -251,28 +286,25 @@ class BrokerData:
                     "oi": int(quote.get("volume_oi", 0)),
                 }
 
-            logger.info(f"No WS index data for {symbol}, trying orderbook channel...")
-            
-            # --- Fallback: Try Orderbook Channel (for derivatives like BFO) ---
-            # Reuse the existing _get_depth_via_websocket logic but extracting quote fields
-            depth_data = self._get_depth_via_websocket(symbol, exchange)
-            if depth_data:
-                logger.info(f"WS quote (via depth) for {symbol}: LTP={depth_data['ltp']}")
-                # Map depth data to quote format
-                best_bid = depth_data["bids"][0]["price"] if depth_data["bids"] else 0
-                best_ask = depth_data["asks"][0]["price"] if depth_data["asks"] else 0
-                
-                return {
-                    "bid": best_bid,
-                    "ask": best_ask,
-                    "open": depth_data.get("open", 0),
-                    "high": depth_data.get("high", 0),
-                    "low": depth_data.get("low", 0),
-                    "ltp": depth_data.get("ltp", 0),
-                    "prev_close": depth_data.get("prev_close", 0),
-                    "volume": depth_data.get("volume", 0),
-                    "oi": depth_data.get("oi", 0),
-                }
+            # Check orderbook channel (already subscribed in parallel for instruments)
+            if orderbook_subscribed and token_int is not None:
+                depth = websocket.get_market_depth(token_int)
+                if depth and depth.get("ltp", 0) > 0:
+                    logger.info(f"WS quote (via depth) for {symbol}: LTP={depth['ltp']}")
+                    best_bid = depth["bids"][0]["price"] if depth.get("bids") else 0
+                    best_ask = depth["asks"][0]["price"] if depth.get("asks") else 0
+
+                    return {
+                        "bid": best_bid,
+                        "ask": best_ask,
+                        "open": float(depth.get("open", 0)),
+                        "high": float(depth.get("high", 0)),
+                        "low": float(depth.get("low", 0)),
+                        "ltp": float(depth.get("ltp", 0)),
+                        "prev_close": float(depth.get("prev_close", 0)),
+                        "volume": int(depth.get("volume", 0)),
+                        "oi": int(depth.get("oi", 0)),
+                    }
 
             logger.debug(f"No WS quote data for {symbol} (checked index and orderbook)")
             return None
@@ -280,6 +312,19 @@ class BrokerData:
         except Exception as e:
             logger.warning(f"WebSocket quote failed for {symbol}: {e}")
             return None
+
+        finally:
+            # Guarantee unsubscribe even on exceptions
+            if websocket:
+                try:
+                    if subscribed_type == "ohlcv" and br_symbol and ws_exchange:
+                        websocket.unsubscribe_ohlcv([br_symbol], "1m", ws_exchange)
+                    elif subscribed_type == "index" and br_symbol and ws_exchange:
+                        websocket.unsubscribe_index([br_symbol], ws_exchange)
+                    if orderbook_subscribed and token_int is not None:
+                        websocket.unsubscribe_orderbook([token_int])
+                except Exception:
+                    pass
 
     def _get_quotes_via_rest(self, symbol: str, exchange: str) -> dict:
         """
@@ -363,6 +408,7 @@ class BrokerData:
         Instead of subscribing/waiting/unsubscribing per symbol (2s+ each), this method
         batch-subscribes ALL symbols at once, waits a single 2s window, then retrieves
         all cached data. Falls back to REST for any symbols that didn't get WS data.
+        Uses try/finally to guarantee batch unsubscribe even on exceptions.
 
         Args:
             symbols: List of dicts with 'symbol' and 'exchange' keys
@@ -371,6 +417,10 @@ class BrokerData:
             list: List of quote data for each symbol with format:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
+        websocket = None
+        all_tokens = []
+        index_by_exchange = {}
+
         try:
             websocket = self.get_websocket()
             if not websocket or not websocket.is_connected:
@@ -407,7 +457,6 @@ class BrokerData:
                 logger.info(f"Batch subscribed {len(all_tokens)} orderbook tokens")
 
             # --- Batch subscribe OHLCV (indices) ---
-            index_by_exchange = {}
             for symbol, exchange, br_symbol, ws_exchange in index_items:
                 index_by_exchange.setdefault(ws_exchange, []).append((symbol, exchange, br_symbol))
 
@@ -465,13 +514,6 @@ class BrokerData:
                     else:
                         failed_symbols.append({"symbol": symbol, "exchange": exchange})
 
-            # --- Batch unsubscribe ---
-            if all_tokens:
-                websocket.unsubscribe_orderbook(all_tokens)
-            for ws_exchange, syms in index_by_exchange.items():
-                br_syms = [s[2] for s in syms]
-                websocket.unsubscribe_ohlcv(br_syms, "1m", ws_exchange)
-
             # --- REST fallback for any symbols that didn't get WS data ---
             if failed_symbols:
                 logger.info(f"Batch WS: {len(failed_symbols)}/{len(symbols)} symbols need REST fallback")
@@ -505,6 +547,18 @@ class BrokerData:
         except Exception as e:
             logger.exception("Error fetching multiquotes (batch)")
             raise Exception(f"Error fetching multiquotes: {e}")
+
+        finally:
+            # Guarantee batch unsubscribe even on exceptions
+            if websocket:
+                try:
+                    if all_tokens:
+                        websocket.unsubscribe_orderbook(all_tokens)
+                    for ws_exchange, syms in index_by_exchange.items():
+                        br_syms = [s[2] for s in syms]
+                        websocket.unsubscribe_ohlcv(br_syms, "1m", ws_exchange)
+                except Exception:
+                    pass
 
     def _get_multiquotes_sequential(self, symbols: list) -> list:
         """
@@ -857,10 +911,15 @@ class BrokerData:
     def _get_depth_via_websocket(self, symbol: str, exchange: str) -> dict:
         """
         Try to get market depth via WebSocket orderbook channel.
-        
+        Uses try/finally to guarantee unsubscribe even on exceptions.
+
         Returns:
             dict: Depth data in OpenAlgo format, or None if not available
         """
+        websocket = None
+        token_int = None
+        subscribed = False
+
         try:
             websocket = self.get_websocket()
             if not websocket or not websocket.is_connected:
@@ -873,12 +932,12 @@ class BrokerData:
                 logger.debug(f"No numeric token for {symbol}, can't use WS orderbook")
                 return None
 
-            # Subscribe to orderbook channel (expects list of ints)
             token_int = int(token)
             logger.info(f"Subscribing to WS orderbook for token {token_int}")
             success = websocket.subscribe_orderbook([token_int])
             if not success:
                 return None
+            subscribed = True
 
             # Set orderbook depth (required to activate data flow, per SDK pattern)
             websocket.change_orderbook_depth(5)
@@ -891,17 +950,12 @@ class BrokerData:
                 if depth and depth.get("ltp", 0) > 0:
                     break
 
-            # Unsubscribe after retrieval
-            websocket.unsubscribe_orderbook([token_int])
-
             if depth and depth.get("ltp", 0) > 0:
                 logger.info(f"WS depth for {symbol}: LTP={depth['ltp']}")
 
-                # Bids and asks already padded to 5 levels in cache
                 bids = depth.get("bids", [{"price": 0, "quantity": 0}] * 5)
                 asks = depth.get("asks", [{"price": 0, "quantity": 0}] * 5)
 
-                # Strip 'orders' key to match Angel format (price + quantity only)
                 formatted_bids = [{"price": float(b.get("price", 0)), "quantity": int(b.get("quantity", 0))} for b in bids[:5]]
                 formatted_asks = [{"price": float(a.get("price", 0)), "quantity": int(a.get("quantity", 0))} for a in asks[:5]]
 
@@ -926,6 +980,14 @@ class BrokerData:
         except Exception as e:
             logger.warning(f"WebSocket depth failed for {symbol}: {e}")
             return None
+
+        finally:
+            # Guarantee unsubscribe even on exceptions
+            if websocket and subscribed and token_int is not None:
+                try:
+                    websocket.unsubscribe_orderbook([token_int])
+                except Exception:
+                    pass
 
     def _get_depth_via_rest(self, symbol: str, exchange: str) -> dict:
         """
