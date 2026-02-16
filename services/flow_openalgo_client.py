@@ -347,16 +347,16 @@ class FlowOpenAlgoClient:
     # --- Options Operations ---
 
     def optionchain(
-        self, symbol: str, exchange: str, expiry: str = None, strike_price: float = None
+        self, underlying: str, exchange: str, expiry_date: str = "", strike_count: int = 10
     ) -> dict[str, Any]:
         """Get option chain data"""
         from services.option_chain_service import get_option_chain
 
         success, response, status_code = get_option_chain(
-            symbol=symbol,
+            underlying=underlying,
             exchange=exchange,
-            expiry=expiry,
-            strike_price=strike_price,
+            expiry_date=expiry_date,
+            strike_count=strike_count,
             api_key=self.api_key,
         )
         return self._handle_response(success, response, status_code)
