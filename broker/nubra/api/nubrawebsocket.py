@@ -337,7 +337,10 @@ class NubraWebSocket:
         totalbuyqty = sum(b["quantity"] for b in bids)
         totalsellqty = sum(a["quantity"] for a in asks)
 
-        self.last_depth[ref_id] = {
+        # Preserve OI fields from greeks channel (orderbook doesn't carry OI)
+        existing = self.last_depth.get(ref_id, {})
+
+        existing.update({
             "ltp": obj.ltp / 100.0 if obj.ltp else 0,
             "ltq": obj.ltq if obj.ltq else 0,
             "volume": obj.volume if obj.volume else 0,
@@ -347,7 +350,8 @@ class NubraWebSocket:
             "totalsellqty": totalsellqty,
             "timestamp": obj.timestamp if obj.timestamp else 0,
             "ref_id": ref_id,
-        }
+        })
+        self.last_depth[ref_id] = existing
 
     def _process_greeks_batch(self, msg):
         """Process greeks data (WebSocketMsgOptionChainItem) and merge OI into orderbook cache."""
