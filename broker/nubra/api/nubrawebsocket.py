@@ -185,6 +185,12 @@ class NubraWebSocket:
                         data_type="orderbook",
                         ref_ids=ref_ids
                     )
+                elif data_type == "greeks":
+                    ref_ids = [int(s) for s in symbols_list if str(s).isdigit()]
+                    self._send_subscribe_batch(
+                        data_type="greeks",
+                        ref_ids=ref_ids
+                    )
                 elif data_type == "ohlcv":
                     interval = item[3]
                     self._send_subscribe_batch(
@@ -245,7 +251,12 @@ class NubraWebSocket:
                 msg = nubrafrontend_pb2.BatchWebSocketIndexBucketMessage()
                 inner.Unpack(msg)
                 self._process_index_bucket_batch(msg)
-                
+
+            elif inner.type_url.endswith("BatchWebSocketGreeksMessage"):
+                msg = nubrafrontend_pb2.BatchWebSocketGreeksMessage()
+                inner.Unpack(msg)
+                self._process_greeks_batch(msg)
+
         except Exception as e:
             logger.error(f"Protobuf decode error: {e}")
 
@@ -326,7 +337,10 @@ class NubraWebSocket:
         totalbuyqty = sum(b["quantity"] for b in bids)
         totalsellqty = sum(a["quantity"] for a in asks)
 
-        self.last_depth[ref_id] = {
+        # Preserve OI fields from greeks channel (orderbook doesn't carry OI)
+        existing = self.last_depth.get(ref_id, {})
+
+        existing.update({
             "ltp": obj.ltp / 100.0 if obj.ltp else 0,
             "ltq": obj.ltq if obj.ltq else 0,
             "volume": obj.volume if obj.volume else 0,
@@ -336,7 +350,34 @@ class NubraWebSocket:
             "totalsellqty": totalsellqty,
             "timestamp": obj.timestamp if obj.timestamp else 0,
             "ref_id": ref_id,
-        }
+        })
+        self.last_depth[ref_id] = existing
+
+    def _process_greeks_batch(self, msg):
+        """Process greeks data (WebSocketMsgOptionChainItem) and merge OI into orderbook cache."""
+        logger.info(f"Received greeks batch with {len(msg.instruments)} instruments")
+        for obj in msg.instruments:
+            ref_id = obj.ref_id if obj.ref_id else 0
+            if not ref_id:
+                continue
+
+            oi_val = obj.oi if obj.oi else 0
+            prev_oi = obj.prev_oi if obj.prev_oi else 0
+            ltp = obj.ltp / 100.0 if obj.ltp else 0
+            volume = obj.volume if obj.volume else 0
+
+            logger.info(f"Greeks data: ref_id={ref_id}, oi={oi_val}, prev_oi={prev_oi}, ltp={ltp}")
+
+            # Merge into existing orderbook cache if present, otherwise create entry
+            existing = self.last_depth.get(ref_id, {})
+            existing["oi"] = oi_val
+            existing["prev_oi"] = prev_oi
+            # Fill ltp/volume from greeks if orderbook hasn't arrived yet
+            if not existing.get("ltp"):
+                existing["ltp"] = ltp
+            if not existing.get("volume"):
+                existing["volume"] = volume
+            self.last_depth[ref_id] = existing
 
     def _process_index_bucket_batch(self, msg):
         """Process OHLVC candles (IndexBucket) and update quotes."""
@@ -450,11 +491,31 @@ class NubraWebSocket:
         """Unsubscribe from orderbook channel."""
         if not self.is_connected:
             return False
-            
+
         key = (tuple(str(r) for r in ref_ids), "orderbook", None)
         self.subscriptions_batch.discard(key)
-        
+
         return self._send_unsubscribe_batch("orderbook", ref_ids=ref_ids)
+
+    def subscribe_greeks(self, ref_ids: List[int]) -> bool:
+        """Subscribe to greeks channel (provides OI, IV, Greeks for options)."""
+        if not self.is_connected:
+            return False
+
+        key = (tuple(str(r) for r in ref_ids), "greeks", None)
+        self.subscriptions_batch.add(key)
+
+        return self._send_subscribe_batch("greeks", ref_ids=ref_ids)
+
+    def unsubscribe_greeks(self, ref_ids: List[int]) -> bool:
+        """Unsubscribe from greeks channel."""
+        if not self.is_connected:
+            return False
+
+        key = (tuple(str(r) for r in ref_ids), "greeks", None)
+        self.subscriptions_batch.discard(key)
+
+        return self._send_unsubscribe_batch("greeks", ref_ids=ref_ids)
 
     def get_quote(self, exchange: str, symbol: str) -> Optional[dict]:
         # Normalize symbol to upper

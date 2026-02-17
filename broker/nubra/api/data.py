@@ -272,13 +272,14 @@ class BrokerData:
                 if success:
                     subscribed_type = "index"
 
-                # Also subscribe to orderbook in parallel as fallback
+                # Also subscribe to orderbook + greeks in parallel as fallback
                 # (avoids a second subscribe/wait cycle if index channel yields no data)
                 token = get_token(symbol, exchange)
                 if token and str(token).isdigit():
                     token_int = int(token)
                     if websocket.subscribe_orderbook([token_int]):
                         websocket.change_orderbook_depth(5)
+                        websocket.subscribe_greeks([token_int])
                         orderbook_subscribed = True
 
             if not success:
@@ -341,6 +342,7 @@ class BrokerData:
                         websocket.unsubscribe_index([br_symbol], ws_exchange)
                     if orderbook_subscribed and token_int is not None:
                         websocket.unsubscribe_orderbook([token_int])
+                        websocket.unsubscribe_greeks([token_int])
                 except Exception:
                     pass
 
@@ -381,8 +383,6 @@ class BrokerData:
                 f"/orderbooks/{token}?levels=1", self.auth_token, "GET"
             )
             
-            logger.debug(f"Nubra orderbooks response: {response}")
-
             # Extract orderBook data from response
             orderbook = response.get("orderBook", {})
             
@@ -467,12 +467,13 @@ class BrokerData:
                     else:
                         failed_symbols.append(item)
 
-            # --- Batch subscribe orderbook (instruments) ---
+            # --- Batch subscribe orderbook + greeks (instruments) ---
             all_tokens = [t[2] for t in orderbook_items]
             if all_tokens:
                 websocket.subscribe_orderbook(all_tokens)
                 websocket.change_orderbook_depth(5)
-                logger.info(f"Batch subscribed {len(all_tokens)} orderbook tokens")
+                websocket.subscribe_greeks(all_tokens)
+                logger.info(f"Batch subscribed {len(all_tokens)} orderbook+greeks tokens")
 
             # --- Batch subscribe OHLCV (indices) ---
             for symbol, exchange, br_symbol, ws_exchange in index_items:
@@ -572,6 +573,7 @@ class BrokerData:
                 try:
                     if all_tokens:
                         websocket.unsubscribe_orderbook(all_tokens)
+                        websocket.unsubscribe_greeks(all_tokens)
                     for ws_exchange, syms in index_by_exchange.items():
                         br_syms = [s[2] for s in syms]
                         websocket.unsubscribe_ohlcv(br_syms, "1m", ws_exchange)
@@ -748,6 +750,8 @@ class BrokerData:
                         "POST",
                         payload,
                     )
+
+                    logger.debug(f"Nubra timeseries raw response: {json.dumps(response, indent=2) if isinstance(response, dict) else response}")
 
                     # Parse response
                     if response and response.get("message") == "charts":
@@ -951,7 +955,7 @@ class BrokerData:
                 return None
 
             token_int = int(token)
-            logger.info(f"Subscribing to WS orderbook for token {token_int}")
+            logger.info(f"Subscribing to WS orderbook+greeks for token {token_int}")
             success = websocket.subscribe_orderbook([token_int])
             if not success:
                 return None
@@ -959,6 +963,7 @@ class BrokerData:
 
             # Set orderbook depth (required to activate data flow, per SDK pattern)
             websocket.change_orderbook_depth(5)
+            websocket.subscribe_greeks([token_int])
 
             # Poll for data (check every 0.5s, up to 5s)
             depth = None
@@ -1004,6 +1009,7 @@ class BrokerData:
             if websocket and subscribed and token_int is not None:
                 try:
                     websocket.unsubscribe_orderbook([token_int])
+                    websocket.unsubscribe_greeks([token_int])
                 except Exception:
                     pass
 
@@ -1037,7 +1043,7 @@ class BrokerData:
                 f"/orderbooks/{token}?levels=5", self.auth_token, "GET"
             )
 
-            logger.debug(f"REST depth raw response keys for {symbol}: {list(response.keys()) if isinstance(response, dict) else type(response)}")
+            logger.debug(f"Nubra REST depth raw response: {json.dumps(response, indent=2) if isinstance(response, dict) else response}")
 
             orderbook = response.get("orderBook", {})
             if not orderbook:
