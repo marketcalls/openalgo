@@ -39,7 +39,9 @@
 ### Broker Setup (Required)
 - Choose your broker from the supported list:
   ```
-  fivepaisa, aliceblue, angel, dhan, fyers, icici, kotak, shoonya, upstox, zebu, zerodha
+  fivepaisa, fivepaisaxts, aliceblue, angel, compositedge, definedge, dhan, dhan_sandbox,
+  firstock, flattrade, fyers, groww, ibulls, iifl, indmoney, jainamxts, kotak, motilal,
+  mstock, nubra, paytm, pocketful, samco, shoonya, tradejini, upstox, wisdom, zebu, zerodha
   ```
 - Obtain your broker's API credentials:
   - API Key

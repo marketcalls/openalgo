@@ -1,5 +1,6 @@
 import json
 import os
+import time
 
 import httpx
 
@@ -19,6 +20,11 @@ logger = get_logger(__name__)
 # Nubra API Base URL
 NUBRA_BASE_URL = "https://api.nubra.io"
 
+# Nubra rate limits (per IP)
+# Trading APIs: 10 ops/sec (PROD), 100 ops/sec (UAT)
+_MAX_RETRIES = 3
+_RATE_LIMIT_BASE_DELAY = 1.0  # Base delay for 429 retry (seconds)
+
 
 def get_api_response(endpoint, auth, method="GET", payload=""):
     AUTH_TOKEN = auth
@@ -36,12 +42,29 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
 
     url = f"{NUBRA_BASE_URL}{endpoint}"
 
-    if method == "GET":
-        response = client.get(url, headers=headers)
-    elif method == "POST":
-        response = client.post(url, headers=headers, content=payload)
-    else:
-        response = client.request(method, url, headers=headers, content=payload)
+    for attempt in range(_MAX_RETRIES):
+        if method == "GET":
+            response = client.get(url, headers=headers)
+        elif method == "POST":
+            response = client.post(url, headers=headers, content=payload)
+        else:
+            response = client.request(method, url, headers=headers, content=payload)
+
+        # Handle rate limiting with exponential backoff
+        if response.status_code == 429:
+            delay = _RATE_LIMIT_BASE_DELAY * (2 ** attempt)
+            logger.warning(
+                f"Rate limit hit (429) on {endpoint}, retrying in {delay:.1f}s "
+                f"(attempt {attempt + 1}/{_MAX_RETRIES})"
+            )
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(delay)
+                continue
+            else:
+                logger.error(f"Rate limit exceeded after {_MAX_RETRIES} retries on {endpoint}")
+                return {"error": "Rate limit exceeded. Please reduce request frequency."}
+
+        break  # Non-429 response, proceed
 
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
@@ -191,12 +214,29 @@ def place_order_api(data, auth):
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
 
-    # Make the request using the shared client
-    response = client.post(
-        f"{NUBRA_BASE_URL}/orders/v2/single",
-        headers=headers,
-        content=payload,
-    )
+    # Make the request with 429 retry
+    response = None
+    for attempt in range(_MAX_RETRIES):
+        response = client.post(
+            f"{NUBRA_BASE_URL}/orders/v2/single",
+            headers=headers,
+            content=payload,
+        )
+        if response.status_code == 429:
+            delay = _RATE_LIMIT_BASE_DELAY * (2 ** attempt)
+            logger.warning(
+                f"Rate limit hit (429) placing order, retrying in {delay:.1f}s "
+                f"(attempt {attempt + 1}/{_MAX_RETRIES})"
+            )
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(delay)
+                continue
+            else:
+                logger.error("Rate limit exceeded placing order after retries")
+                response_data = {"error": "Rate limit exceeded", "status": False}
+                response.status = 429
+                return response, response_data, None
+        break
 
     # Parse the JSON response
     try:
@@ -344,7 +384,8 @@ def close_all_positions(current_api_key, auth):
     if not positions:
         return {"message": "No Open Positions Found"}, 200
 
-    # Loop through each position to close
+    # Loop through each position to close (throttled to 10 ops/sec per Nubra rate limit)
+    positions_closed = 0
     for position in positions:
         # Get quantity - Nubra uses 'qty' in position data
         qty = int(position.get("qty", position.get("quantity", 0)) or 0)
@@ -393,8 +434,12 @@ def close_all_positions(current_api_key, auth):
 
         # Place the order to close the position
         res, response, orderid = place_order_api(place_order_payload, auth)
-        
+        positions_closed += 1
+
         logger.info(f"Close position response: {response}, orderid: {orderid}")
+
+        # Rate limit: 10 ops/sec = 100ms gap between requests
+        time.sleep(0.1)
 
     return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
 
@@ -419,11 +464,26 @@ def cancel_order(orderid, auth):
         "x-device-id": device_id,
     }
 
-    # Make the DELETE request using the shared client
-    response = client.delete(
-        f"{NUBRA_BASE_URL}/orders/{orderid}",
-        headers=headers,
-    )
+    # Make the DELETE request with 429 retry
+    response = None
+    for attempt in range(_MAX_RETRIES):
+        response = client.delete(
+            f"{NUBRA_BASE_URL}/orders/{orderid}",
+            headers=headers,
+        )
+        if response.status_code == 429:
+            delay = _RATE_LIMIT_BASE_DELAY * (2 ** attempt)
+            logger.warning(
+                f"Rate limit hit (429) cancelling order {orderid}, retrying in {delay:.1f}s "
+                f"(attempt {attempt + 1}/{_MAX_RETRIES})"
+            )
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(delay)
+                continue
+            else:
+                logger.error(f"Rate limit exceeded cancelling order {orderid} after retries")
+                return {"status": "error", "message": "Rate limit exceeded"}, 429
+        break
 
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
@@ -494,12 +554,27 @@ def modify_order(data, auth):
     
     logger.info(f"Nubra modify order payload: {payload}")
 
-    # Make the POST request using the shared client
-    response = client.post(
-        f"{NUBRA_BASE_URL}/orders/v2/modify/{orderid}",
-        headers=headers,
-        content=payload,
-    )
+    # Make the POST request with 429 retry
+    response = None
+    for attempt in range(_MAX_RETRIES):
+        response = client.post(
+            f"{NUBRA_BASE_URL}/orders/v2/modify/{orderid}",
+            headers=headers,
+            content=payload,
+        )
+        if response.status_code == 429:
+            delay = _RATE_LIMIT_BASE_DELAY * (2 ** attempt)
+            logger.warning(
+                f"Rate limit hit (429) modifying order {orderid}, retrying in {delay:.1f}s "
+                f"(attempt {attempt + 1}/{_MAX_RETRIES})"
+            )
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(delay)
+                continue
+            else:
+                logger.error(f"Rate limit exceeded modifying order {orderid} after retries")
+                return {"status": "error", "message": "Rate limit exceeded"}, 429
+        break
 
     # Add status attribute for compatibility with the existing codebase
     response.status = response.status_code
@@ -577,8 +652,8 @@ def cancel_all_orders_api(data, auth):
     canceled_orders = []
     failed_cancellations = []
 
-    # Cancel the filtered orders
-    for order in orders_to_cancel:
+    # Cancel the filtered orders (throttled to 10 ops/sec per Nubra rate limit)
+    for i, order in enumerate(orders_to_cancel):
         orderid = str(order.get("order_id", ""))
         if orderid:
             cancel_response, status_code = cancel_order(orderid, auth)
@@ -586,5 +661,8 @@ def cancel_all_orders_api(data, auth):
                 canceled_orders.append(orderid)
             else:
                 failed_cancellations.append(orderid)
+            # Rate limit: 10 ops/sec = 100ms gap between requests
+            if i < len(orders_to_cancel) - 1:
+                time.sleep(0.1)
 
     return canceled_orders, failed_cancellations
