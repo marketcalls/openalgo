@@ -1,4 +1,5 @@
-import { ArrowLeft, Clock, Pencil, Save, Search, X } from 'lucide-react'
+import React from 'react'
+import { ArrowLeft, Clock, Pencil, Save, Search, X, CalendarOff } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { showToast } from '@/utils/toast'
@@ -15,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { EmptyState } from '@/components/ui/EmptyState'
 import type { MarketTiming, TodayTiming } from '@/types/admin'
 
 export default function MarketTimingsPage() {
@@ -64,7 +66,6 @@ export default function MarketTimingsPage() {
       return
     }
 
-    // Validate time format
     const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/
     if (!timeRegex.test(editStartTime) || !timeRegex.test(editEndTime)) {
       showToast.error('Invalid time format. Use HH:MM', 'admin')
@@ -134,7 +135,6 @@ export default function MarketTimingsPage() {
 
   return (
     <div className="py-6 space-y-6">
-      {/* Header */}
       <div>
         <div className="flex items-center gap-2 mb-2">
           <Link to="/admin" className="text-muted-foreground hover:text-foreground">
@@ -149,7 +149,6 @@ export default function MarketTimingsPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Default Timings */}
         <Card>
           <CardHeader>
             <CardTitle>Default Timings</CardTitle>
@@ -242,9 +241,7 @@ export default function MarketTimingsPage() {
           </CardContent>
         </Card>
 
-        {/* Today's Timings & Date Check */}
         <div className="space-y-6">
-          {/* Today's Timings */}
           <Card>
             <CardHeader>
               <CardTitle>Today&apos;s Timings</CardTitle>
@@ -252,9 +249,11 @@ export default function MarketTimingsPage() {
             </CardHeader>
             <CardContent>
               {todayTimings.length === 0 ? (
-                <div className="text-center text-muted-foreground py-4">
-                  Markets are closed today (Weekend/Holiday)
-                </div>
+                <EmptyState 
+                  icon={CalendarOff} 
+                  title="Markets Closed" 
+                  description="Markets are closed today (Weekend/Holiday)" 
+                />
               ) : (
                 <div className="space-y-2">
                   {todayTimings.map((timing) => (
@@ -275,7 +274,6 @@ export default function MarketTimingsPage() {
             </CardContent>
           </Card>
 
-          {/* Check Timings for Date */}
           <Card>
             <CardHeader>
               <CardTitle>Check Timings for Date</CardTitle>
@@ -301,9 +299,11 @@ export default function MarketTimingsPage() {
               {checkTimings !== null && (
                 <div className="border-t pt-4">
                   {checkTimings.length === 0 ? (
-                    <div className="text-center text-muted-foreground py-4">
-                      Markets are closed on {checkDate} (Weekend/Holiday)
-                    </div>
+                    <EmptyState 
+                      icon={CalendarOff} 
+                      title="Markets Closed" 
+                      description={`Markets are closed on ${checkDate} (Weekend/Holiday)`} 
+                    />
                   ) : (
                     <div className="space-y-2">
                       <p className="text-sm font-medium mb-2">Timings for {checkDate}:</p>
@@ -329,7 +329,6 @@ export default function MarketTimingsPage() {
         </div>
       </div>
 
-      {/* Info Section */}
       <Card>
         <CardHeader>
           <CardTitle>About Market Timings</CardTitle>
