@@ -1,4 +1,4 @@
-import React from 'react'
+import React from 'react';
 import { ArrowLeft, Clock, Pencil, Save, Search, X, CalendarOff } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'

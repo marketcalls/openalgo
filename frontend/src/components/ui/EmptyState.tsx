@@ -1,4 +1,4 @@
-import React from 'react'; // Add this line
+import React from 'react';
 import { LucideIcon } from 'lucide-react';
 
 interface EmptyStateProps {
