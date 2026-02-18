@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import httpx
 import pandas as pd
 
-from database.token_db import get_br_symbol, get_oa_symbol, get_token
+from database.token_db import get_br_symbol, get_oa_symbol, get_token, get_symbol_info
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
@@ -464,7 +464,11 @@ class BrokerData:
                 )
 
             # Convert symbol to broker format and get token
-            br_symbol = get_br_symbol(symbol, exchange)
+            # br_symbol = get_br_symbol(symbol, exchange)
+            symbol_info = get_symbol_info(symbol, exchange)  # Ensure symbol info is cached
+            br_symbol = symbol_info.brsymbol  # Use broker symbol for API calls
+            br_exchange = symbol_info.brexchange  # Use broker exchange for API calls
+            
             token = get_token(symbol, exchange)
 
             # Convert dates to epoch timestamps
@@ -490,7 +494,7 @@ class BrokerData:
             # For daily data, use EODChartData endpoint
             if interval == "D":
                 payload = {
-                    "sym": f"{exchange}:{br_symbol}",
+                    "sym": f"{br_exchange}:{br_symbol}",
                     "from": str(start_ts),
                     "to": str(end_ts),
                 }
@@ -508,7 +512,7 @@ class BrokerData:
                 # For intraday data, use TPSeries endpoint
                 payload = {
                     "uid": os.getenv("BROKER_API_KEY"),
-                    "exch": exchange,
+                    "exch": br_exchange,
                     "token": token,
                     "st": str(start_ts),
                     "et": str(end_ts),
@@ -588,7 +592,7 @@ class BrokerData:
                     if df.empty or df["timestamp"].max() < today_ts:
                         try:
                             # Get today's data from quotes
-                            payload = {"exch": exchange, "token": token}
+                            payload = {"exch": br_exchange, "token": token}
                             quotes_response = get_api_response(
                                 "/NorenWClientTP/GetQuotes", self.auth_token, payload=payload
                             )

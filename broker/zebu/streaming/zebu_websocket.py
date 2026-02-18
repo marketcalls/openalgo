@@ -276,7 +276,7 @@ class ZebuWebSocket:
         Returns:
             bool: True (message handled)
         """
-        if data.get("s") == self.AUTH_SUCCESS:
+        if data.get("s", "").lower() == self.AUTH_SUCCESS.lower():
             self.logger.info("Authentication successful")
         else:
             self.logger.error(f"Authentication failed: {data}")
