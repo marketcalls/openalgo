@@ -133,8 +133,8 @@ class BrokerData:
         """
         try:
             # Shoonya API uses NorenAPI (similar to Flattrade)
-            # Rate limits: ~40 requests/second (conservative estimate)
-            BATCH_SIZE = 40  # Process 40 symbols per batch
+            # Rate limits: ~20 requests/second (conservative estimate)
+            BATCH_SIZE = 20  # Process 40 symbols per batch
             RATE_LIMIT_DELAY = 1.0  # 1 second delay between batches
 
             if len(symbols) > BATCH_SIZE:

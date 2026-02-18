@@ -296,32 +296,29 @@ def process_basket_order_with_auth(
     ]
     sorted_orders = buy_orders + sell_orders
 
-    results = []
     total_orders = len(sorted_orders)
-    order_delay = get_order_rate_limit()
-    order_count = 0
 
-    # Process BUY orders first (sequentially with rate limiting)
-    for i, order in enumerate(buy_orders):
-        if order_count > 0:
-            time.sleep(order_delay)  # Rate limit delay between orders
-        # Create order with authentication fields without modifying original
-        order_with_auth = {**order, "apikey": api_key, "strategy": basket_data["strategy"]}
-        result = place_single_order(order_with_auth, broker_module, auth_token, total_orders, i)
-        if result:
-            results.append(result)
-        order_count += 1
+    # Prepare all orders with auth fields (BUY first, then SELL)
+    orders_with_auth = [
+        {**order, "apikey": api_key, "strategy": basket_data["strategy"]}
+        for order in sorted_orders
+    ]
 
-    # Then process SELL orders (sequentially with rate limiting)
-    for i, order in enumerate(sell_orders, start=len(buy_orders)):
-        if order_count > 0:
-            time.sleep(order_delay)  # Rate limit delay between orders
-        # Create order with authentication fields without modifying original
-        order_with_auth = {**order, "apikey": api_key, "strategy": basket_data["strategy"]}
-        result = place_single_order(order_with_auth, broker_module, auth_token, total_orders, i)
-        if result:
-            results.append(result)
-        order_count += 1
+    # Use broker's batch order API if available (concurrent execution),
+    # otherwise fall back to sequential processing
+    if hasattr(broker_module, "place_batch_orders_api"):
+        results = broker_module.place_batch_orders_api(orders_with_auth, auth_token)
+    else:
+        results = []
+        order_delay = get_order_rate_limit()
+        for i, order_with_auth in enumerate(orders_with_auth):
+            if i > 0:
+                time.sleep(order_delay)
+            result = place_single_order(
+                order_with_auth, broker_module, auth_token, total_orders, i
+            )
+            if result:
+                results.append(result)
 
     # Log the basket order results
     response_data = {"status": "success", "results": results}
