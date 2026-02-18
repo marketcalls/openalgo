@@ -130,7 +130,7 @@ def _place_order_for_batch(order_data, auth):
     """
     try:
         res, response_data, order_id = place_order_api(order_data, auth)
-        if res.status == 200:
+        if res.status == 200 and order_id is not None:
             return {"symbol": order_data["symbol"], "status": "success", "orderid": order_id}
         else:
             message = (

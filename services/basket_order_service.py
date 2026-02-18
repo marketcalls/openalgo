@@ -307,7 +307,14 @@ def process_basket_order_with_auth(
     # Use broker's batch order API if available (concurrent execution),
     # otherwise fall back to sequential processing
     if hasattr(broker_module, "place_batch_orders_api"):
-        results = broker_module.place_batch_orders_api(orders_with_auth, auth_token)
+        try:
+            results = broker_module.place_batch_orders_api(orders_with_auth, auth_token)
+        except Exception as e:
+            logger.exception(f"Error in batch order execution: {e}")
+            results = [
+                {"symbol": o.get("symbol", "Unknown"), "status": "error", "message": "Batch order execution failed"}
+                for o in orders_with_auth
+            ]
     else:
         results = []
         order_delay = get_order_rate_limit()
