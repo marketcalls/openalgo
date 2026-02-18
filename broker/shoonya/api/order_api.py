@@ -1,7 +1,5 @@
 import json
 import os
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import httpx
 
@@ -122,67 +120,6 @@ def place_order_api(data, auth):
         orderid = None
     return response, response_data, orderid
 
-
-def _place_order_for_batch(order_data, auth):
-    """
-    Place a single order and return a result dict for batch processing.
-    Used internally by place_batch_orders_api.
-    """
-    try:
-        res, response_data, order_id = place_order_api(order_data, auth)
-        if res.status == 200 and order_id is not None:
-            return {"symbol": order_data["symbol"], "status": "success", "orderid": order_id}
-        else:
-            message = (
-                response_data.get("message", "Failed to place order")
-                if isinstance(response_data, dict)
-                else "Failed to place order"
-            )
-            return {"symbol": order_data["symbol"], "status": "error", "message": message}
-    except Exception as e:
-        logger.exception(f"Error placing order for {order_data.get('symbol', 'Unknown')}: {e}")
-        return {
-            "symbol": order_data.get("symbol", "Unknown"),
-            "status": "error",
-            "message": "Failed to place order due to internal error",
-        }
-
-
-def place_batch_orders_api(orders_with_auth, auth):
-    """
-    Place multiple orders concurrently in batches.
-    Shoonya rate limit: 20 req/sec, 200 req/min.
-    Orders are fired concurrently within each batch of 10,
-    with a 1-second delay between batches.
-
-    Args:
-        orders_with_auth: List of order dicts (already enriched with apikey/strategy)
-        auth: Broker authentication token
-
-    Returns:
-        List of result dicts with symbol, status, and orderid/message
-    """
-    BATCH_SIZE = 10
-    results = []
-
-    for batch_start in range(0, len(orders_with_auth), BATCH_SIZE):
-        if batch_start > 0:
-            time.sleep(1.0)  # Rate limit delay between batches
-
-        batch = orders_with_auth[batch_start : batch_start + BATCH_SIZE]
-
-        with ThreadPoolExecutor(max_workers=len(batch)) as executor:
-            future_to_order = {
-                executor.submit(_place_order_for_batch, order_data, auth): order_data
-                for order_data in batch
-            }
-
-            for future in as_completed(future_to_order):
-                result = future.result()
-                if result:
-                    results.append(result)
-
-    return results
 
 
 def place_smartorder_api(data, auth):
