@@ -1,6 +1,5 @@
 import copy
 import importlib
-import os
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -26,16 +25,6 @@ from utils.logging import get_logger
 # Initialize logger
 logger = get_logger(__name__)
 
-
-# Get rate limit from environment (default: 10 per second)
-def get_order_rate_limit():
-    """Parse ORDER_RATE_LIMIT and return delay in seconds between orders"""
-    rate_limit_str = os.getenv("ORDER_RATE_LIMIT", "10 per second")
-    try:
-        rate = int(rate_limit_str.split()[0])
-        return 1.0 / rate if rate > 0 else 0.1
-    except (ValueError, IndexError):
-        return 0.1  # Default 100ms delay
 
 
 def emit_analyzer_error(request_data: dict[str, Any], error_message: str) -> dict[str, Any]:
@@ -304,28 +293,28 @@ def process_basket_order_with_auth(
         for order in sorted_orders
     ]
 
-    # Use broker's batch order API if available (concurrent execution),
-    # otherwise fall back to sequential processing
-    if hasattr(broker_module, "place_batch_orders_api"):
-        try:
-            results = broker_module.place_batch_orders_api(orders_with_auth, auth_token)
-        except Exception as e:
-            logger.exception(f"Error in batch order execution: {e}")
-            results = [
-                {"symbol": o.get("symbol", "Unknown"), "status": "error", "message": "Batch order execution failed"}
-                for o in orders_with_auth
-            ]
-    else:
-        results = []
-        order_delay = get_order_rate_limit()
-        for i, order_with_auth in enumerate(orders_with_auth):
-            if i > 0:
-                time.sleep(order_delay)
-            result = place_single_order(
-                order_with_auth, broker_module, auth_token, total_orders, i
-            )
-            if result:
-                results.append(result)
+    # Place orders concurrently in batches of 10 with 1s delay between batches
+    BATCH_SIZE = 10
+    results = []
+
+    for batch_start in range(0, total_orders, BATCH_SIZE):
+        if batch_start > 0:
+            time.sleep(1.0)  # Rate limit delay between batches
+
+        batch = orders_with_auth[batch_start : batch_start + BATCH_SIZE]
+
+        with ThreadPoolExecutor(max_workers=len(batch)) as executor:
+            future_to_order = {
+                executor.submit(
+                    place_single_order, order_data, broker_module, auth_token, total_orders, batch_start + idx
+                ): order_data
+                for idx, order_data in enumerate(batch)
+            }
+
+            for future in as_completed(future_to_order):
+                result = future.result()
+                if result:
+                    results.append(result)
 
     # Log the basket order results
     response_data = {"status": "success", "results": results}
