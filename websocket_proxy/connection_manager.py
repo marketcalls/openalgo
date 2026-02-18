@@ -456,13 +456,30 @@ class ConnectionPool:
         sub_key = (symbol, exchange, mode)
 
         with self.lock:
-            # Check if already subscribed
+            # Check if already subscribed in this exact mode
             if sub_key in self.subscription_map:
                 return {
                     "status": "success",
                     "message": f"Already subscribed to {symbol}.{exchange}",
                     "connection": self.subscription_map[sub_key] + 1,
                 }
+
+            # Mode hierarchy: Depth (3) > Quote (2) > LTP (1)
+            # Higher modes include all data from lower modes, so subscribing
+            # in a lower mode when a higher mode is already active is redundant
+            # and can cause the broker adapter to downgrade the existing subscription.
+            for higher_mode in range(mode + 1, 4):
+                higher_key = (symbol, exchange, higher_mode)
+                if higher_key in self.subscription_map:
+                    self.logger.debug(
+                        f"Skipping {symbol}.{exchange} mode {mode} subscription - "
+                        f"already subscribed in higher mode {higher_mode}"
+                    )
+                    return {
+                        "status": "success",
+                        "message": f"Already subscribed to {symbol}.{exchange} in mode {higher_mode}",
+                        "connection": self.subscription_map[higher_key] + 1,
+                    }
 
             try:
                 # Get adapter with capacity
@@ -538,8 +555,30 @@ class ConnectionPool:
 
             try:
                 adapter_idx = self.subscription_map[sub_key]
-                adapter = self.adapters[adapter_idx]
 
+                # Check if other mode subscriptions still exist for this symbol.
+                # If so, only remove the pool tracking entry without calling
+                # adapter.unsubscribe(), since the broker-level subscription
+                # must stay active for the remaining modes.
+                other_modes_exist = any(
+                    (symbol, exchange, m) in self.subscription_map
+                    for m in (1, 2, 3) if m != mode
+                )
+
+                if other_modes_exist:
+                    del self.subscription_map[sub_key]
+                    self.adapter_symbol_counts[adapter_idx] -= 1
+                    self.logger.debug(
+                        f"Removed mode {mode} tracking for {symbol}.{exchange}, "
+                        f"other mode subscriptions still active"
+                    )
+                    return {
+                        "status": "success",
+                        "message": f"Unsubscribed mode {mode} from {symbol}.{exchange}",
+                    }
+
+                # No other modes — safe to fully unsubscribe from adapter
+                adapter = self.adapters[adapter_idx]
                 result = adapter.unsubscribe(symbol, exchange, mode)
 
                 if result.get("status") == "success":
