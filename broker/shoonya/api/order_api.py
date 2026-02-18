@@ -121,6 +121,7 @@ def place_order_api(data, auth):
     return response, response_data, orderid
 
 
+
 def place_smartorder_api(data, auth):
     AUTH_TOKEN = auth
 
