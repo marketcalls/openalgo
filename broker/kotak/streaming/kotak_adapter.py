@@ -456,7 +456,9 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # (Kotak sends depth and LTP as separate streams;
                 # "dps" only sends bid/ask, "mws" sends LTP)
                 success = self.subscribe_depth(exchange, symbol, mode)
-                self.subscribe_quote(exchange, symbol, mode)
+                quote_success = self.subscribe_quote(exchange, symbol, mode)
+                if not quote_success:
+                    logger.warning(f"Depth subscribed but quote (LTP) subscription failed for {exchange}:{symbol}")
             else:
                 logger.error(f"Unknown subscribe mode: {mode}")
                 return self._create_error_response(
@@ -500,6 +502,7 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.unsubscribe_quote(exchange, symbol, mode)
             elif mode == 3:
                 self.unsubscribe_depth(exchange, symbol, mode)
+                self.unsubscribe_quote(exchange, symbol, mode)
 
             # Clean up tracking and cache - following AliceBlue pattern
             sub_key = f"{exchange}|{symbol}|{mode}"
