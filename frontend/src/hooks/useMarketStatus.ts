@@ -1,4 +1,7 @@
+import { useQuery } from '@tanstack/react-query'
 import { useCallback, useEffect, useState } from 'react'
+import { dashboardApi } from '@/api/strategy-dashboard'
+import type { MarketStatus as DashboardMarketStatus } from '@/types/strategy-dashboard'
 
 interface MarketTiming {
   exchange: string
@@ -173,4 +176,17 @@ export function useMarketStatus() {
     isLoading: state.isLoading,
     error: state.error,
   }
+}
+
+/**
+ * Lightweight TanStack Query hook for dashboard market phase indicator.
+ * Polls every 60s via the strategy dashboard API.
+ */
+export function useDashboardMarketStatus() {
+  return useQuery<DashboardMarketStatus>({
+    queryKey: ['dashboard-market-status'],
+    queryFn: () => dashboardApi.getMarketStatus(),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  })
 }

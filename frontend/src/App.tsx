@@ -67,6 +67,9 @@ const StrategyIndex = lazy(() => import('@/pages/strategy/StrategyIndex'))
 const NewStrategy = lazy(() => import('@/pages/strategy/NewStrategy'))
 const ViewStrategy = lazy(() => import('@/pages/strategy/ViewStrategy'))
 const ConfigureSymbols = lazy(() => import('@/pages/strategy/ConfigureSymbols'))
+const StrategyHub = lazy(() => import('@/pages/strategy/StrategyHub'))
+const StrategyBuilder = lazy(() => import('@/pages/strategy/StrategyBuilder'))
+const StrategyTemplates = lazy(() => import('@/pages/strategy/StrategyTemplates'))
 
 // Python Strategy pages
 const PythonStrategyIndex = lazy(() => import('@/pages/python-strategy/PythonStrategyIndex'))
@@ -170,6 +173,9 @@ function App() {
                 <Route path="/strategy/new" element={<NewStrategy />} />
                 <Route path="/strategy/:strategyId" element={<ViewStrategy />} />
                 <Route path="/strategy/:strategyId/configure" element={<ConfigureSymbols />} />
+                <Route path="/strategy/hub" element={<StrategyHub />} />
+                <Route path="/strategy/builder" element={<StrategyBuilder />} />
+                <Route path="/strategy/templates" element={<StrategyTemplates />} />
                 {/* Phase 6: Python Strategies */}
                 <Route path="/python" element={<PythonStrategyIndex />} />
                 <Route path="/python/new" element={<NewPythonStrategy />} />

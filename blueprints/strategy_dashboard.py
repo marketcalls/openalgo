@@ -5,12 +5,24 @@ order history, trade history, P&L, and risk configuration.
 All endpoints require session authentication and enforce ownership checks.
 """
 
+import json
+import uuid
+
 from flask import Blueprint, jsonify, request, session
 
-from database.strategy_db import get_strategy
+from database.strategy_db import (
+    Strategy,
+    StrategySymbolMapping,
+    bulk_add_symbol_mappings,
+    create_strategy,
+    get_strategy,
+    get_symbol_mappings,
+    db_session as strategy_db_session,
+)
 from database.chartink_db import get_strategy as get_chartink_strategy
 from database.strategy_position_db import (
     delete_closed_position,
+    get_active_groups,
     get_active_positions,
     get_alert_logs,
     get_all_positions,
@@ -669,3 +681,363 @@ def risk_events(strategy_id):
             for a in alerts
         ],
     })
+
+
+# ─── Clone Strategy ─────────────────────────────────────────────────────
+
+
+@strategy_dashboard_bp.route("/strategy/<int:strategy_id>/clone", methods=["POST"])
+@check_session_validity
+def clone_strategy(strategy_id):
+    """Deep-copy a strategy and its symbol mappings."""
+    user_id = _get_user_id()
+    if not user_id:
+        return jsonify({"status": "error", "message": "Session expired"}), 401
+
+    strategy_type = request.json.get("type", "webhook") if request.json else "webhook"
+
+    if strategy_type == "chartink":
+        return jsonify({"status": "error", "message": "Chartink strategy cloning not supported"}), 400
+
+    strategy, error, status = _get_strategy_with_auth(strategy_id, strategy_type, user_id)
+    if error:
+        return jsonify(error), status
+
+    try:
+        new_webhook_id = str(uuid.uuid4())
+        new_strategy = create_strategy(
+            name=f"{strategy.name} (Copy)",
+            webhook_id=new_webhook_id,
+            user_id=user_id,
+            is_intraday=strategy.is_intraday,
+            trading_mode=strategy.trading_mode,
+            start_time=strategy.start_time,
+            end_time=strategy.end_time,
+            squareoff_time=strategy.squareoff_time,
+            platform=strategy.platform,
+        )
+
+        if not new_strategy:
+            return jsonify({"status": "error", "message": "Failed to clone strategy"}), 500
+
+        # Copy risk defaults
+        for field in [
+            "default_stoploss_type", "default_stoploss_value",
+            "default_target_type", "default_target_value",
+            "default_trailstop_type", "default_trailstop_value",
+            "default_breakeven_type", "default_breakeven_threshold",
+            "risk_monitoring", "auto_squareoff_time", "daily_cb_behavior",
+            "schedule_enabled", "schedule_start_time", "schedule_stop_time",
+            "schedule_days", "schedule_auto_entry", "schedule_auto_exit",
+        ]:
+            setattr(new_strategy, field, getattr(strategy, field, None))
+        strategy_db_session.commit()
+
+        # Copy symbol mappings
+        mappings = get_symbol_mappings(strategy_id)
+        if mappings:
+            mapping_dicts = []
+            for m in mappings:
+                d = {
+                    "symbol": m.symbol,
+                    "exchange": m.exchange,
+                    "quantity": m.quantity,
+                    "product_type": m.product_type,
+                    "order_mode": m.order_mode,
+                    "underlying": m.underlying,
+                    "underlying_exchange": m.underlying_exchange,
+                    "expiry_type": m.expiry_type,
+                    "offset": m.offset,
+                    "option_type": m.option_type,
+                    "risk_mode": m.risk_mode,
+                    "preset": m.preset,
+                    "legs_config": m.legs_config,
+                    "stoploss_type": m.stoploss_type,
+                    "stoploss_value": m.stoploss_value,
+                    "target_type": m.target_type,
+                    "target_value": m.target_value,
+                    "trailstop_type": m.trailstop_type,
+                    "trailstop_value": m.trailstop_value,
+                    "breakeven_type": m.breakeven_type,
+                    "breakeven_threshold": m.breakeven_threshold,
+                    "combined_stoploss_type": m.combined_stoploss_type,
+                    "combined_stoploss_value": m.combined_stoploss_value,
+                    "combined_target_type": m.combined_target_type,
+                    "combined_target_value": m.combined_target_value,
+                    "combined_trailstop_type": m.combined_trailstop_type,
+                    "combined_trailstop_value": m.combined_trailstop_value,
+                }
+                mapping_dicts.append(d)
+            bulk_add_symbol_mappings(new_strategy.id, mapping_dicts)
+
+        return jsonify({
+            "status": "success",
+            "message": "Strategy cloned",
+            "data": {"strategy_id": new_strategy.id, "webhook_id": new_webhook_id},
+        })
+    except Exception as e:
+        logger.exception(f"Error cloning strategy: {e}")
+        return jsonify({"status": "error", "message": "Failed to clone strategy"}), 500
+
+
+# ─── Market Status ──────────────────────────────────────────────────────
+
+
+@strategy_dashboard_bp.route("/market-status")
+@check_session_validity
+def market_status():
+    """Return current market phase for the dashboard header."""
+    try:
+        from database.market_calendar_db import (
+            get_market_hours_status,
+            is_market_holiday,
+        )
+        from datetime import datetime
+        import pytz
+
+        IST = pytz.timezone("Asia/Kolkata")
+        now = datetime.now(IST)
+        today = now.date()
+        current_ms = (now.hour * 3600 + now.minute * 60 + now.second) * 1000
+
+        status = get_market_hours_status()
+
+        # Determine phase
+        if is_market_holiday(today):
+            if today.weekday() >= 5:
+                phase = "weekend"
+            else:
+                phase = "holiday"
+        elif status["any_market_open"]:
+            phase = "market_open"
+        elif current_ms < (status.get("earliest_open_ms") or 33300000):
+            phase = "pre_market"
+        else:
+            phase = "market_closed"
+
+        return jsonify({
+            "status": "success",
+            "data": {
+                "phase": phase,
+                "current_time": now.strftime("%H:%M:%S IST"),
+                "is_trading_day": status.get("is_trading_day", False),
+                "exchanges": status.get("exchanges", {}),
+            },
+        })
+    except Exception as e:
+        logger.exception(f"Error getting market status: {e}")
+        return jsonify({"status": "error", "message": "Failed to get market status"}), 500
+
+
+# ─── Close Position Group ───────────────────────────────────────────────
+
+
+@strategy_dashboard_bp.route("/strategy/<int:strategy_id>/group/<group_id>/close", methods=["POST"])
+@check_session_validity
+def close_position_group(strategy_id, group_id):
+    """Close all active positions in a position group."""
+    user_id = _get_user_id()
+    if not user_id:
+        return jsonify({"status": "error", "message": "Session expired"}), 401
+
+    strategy_type = request.json.get("type", "webhook") if request.json else "webhook"
+
+    strategy, error, status = _get_strategy_with_auth(strategy_id, strategy_type, user_id)
+    if error:
+        return jsonify(error), status
+
+    # Get active positions belonging to this group
+    all_positions = get_active_positions(strategy_id, strategy_type)
+    group_positions = [p for p in all_positions if p.position_group_id == group_id]
+
+    if not group_positions:
+        return jsonify({"status": "success", "message": "No active positions in group", "closed": 0})
+
+    closed = 0
+    errors = []
+    for pos in group_positions:
+        try:
+            from services.websocket_service import get_user_api_key
+
+            api_key = get_user_api_key(user_id)
+            if not api_key:
+                errors.append(f"No API key for position {pos.id}")
+                continue
+
+            exit_action = "SELL" if pos.action == "BUY" else "BUY"
+
+            import requests as http_requests
+
+            base_url = f"http://127.0.0.1:{request.environ.get('SERVER_PORT', 5000)}"
+            order_payload = {
+                "apikey": api_key,
+                "strategy": f"strategy_{strategy_id}",
+                "symbol": pos.symbol,
+                "exchange": pos.exchange,
+                "action": exit_action,
+                "quantity": str(pos.quantity),
+                "product": pos.product_type,
+                "pricetype": "MARKET",
+                "price": "0",
+            }
+
+            response = http_requests.post(f"{base_url}/api/v1/placeorder", json=order_payload)
+            if response.ok:
+                result = response.json()
+                orderid = result.get("orderid", "")
+                if orderid:
+                    from services.strategy_position_service import record_exit_order
+                    from services.order_status_poller import enqueue_order
+
+                    record_exit_order(pos.id, orderid, "group_close")
+                    enqueue_order(orderid, strategy_id, strategy_type, user_id, is_entry=False)
+
+                closed += 1
+            else:
+                errors.append(f"Failed to close position {pos.id}")
+        except Exception as e:
+            errors.append(f"Error closing position {pos.id}: {str(e)}")
+
+    result = {"status": "success", "closed": closed, "total": len(group_positions)}
+    if errors:
+        result["errors"] = errors
+
+    return jsonify(result)
+
+
+# ─── Circuit Breaker ────────────────────────────────────────────────────
+
+
+@strategy_dashboard_bp.route("/strategy/<int:strategy_id>/circuit-breaker", methods=["PUT"])
+@check_session_validity
+def update_circuit_breaker(strategy_id):
+    """Update circuit breaker behavior for a strategy."""
+    user_id = _get_user_id()
+    if not user_id:
+        return jsonify({"status": "error", "message": "Session expired"}), 401
+
+    strategy_type = request.json.get("type", "webhook") if request.json else "webhook"
+
+    strategy, error, status = _get_strategy_with_auth(strategy_id, strategy_type, user_id)
+    if error:
+        return jsonify(error), status
+
+    data = request.json or {}
+    behavior = data.get("daily_cb_behavior")
+
+    valid_behaviors = ["alert_only", "stop_entries", "close_all_positions"]
+    if behavior not in valid_behaviors:
+        return jsonify({
+            "status": "error",
+            "message": f"Invalid behavior. Must be one of: {', '.join(valid_behaviors)}",
+        }), 400
+
+    try:
+        strategy.daily_cb_behavior = behavior
+
+        if strategy_type == "chartink":
+            from database.chartink_db import db_session as chartink_db_session
+            chartink_db_session.commit()
+        else:
+            strategy_db_session.commit()
+
+        return jsonify({
+            "status": "success",
+            "message": f"Circuit breaker set to {behavior}",
+            "data": {"daily_cb_behavior": behavior},
+        })
+    except Exception as e:
+        logger.exception(f"Error updating circuit breaker: {e}")
+        return jsonify({"status": "error", "message": "Failed to update"}), 500
+
+
+# ─── Builder Save ──────────────────────────────────────────────────────
+
+
+@strategy_dashboard_bp.route("/builder/save", methods=["POST"])
+@check_session_validity
+def builder_save():
+    """Create a strategy from the F&O builder wizard."""
+    user_id = _get_user_id()
+    if not user_id:
+        return jsonify({"status": "error", "message": "Session expired"}), 401
+
+    data = request.json or {}
+    basics = data.get("basics", {})
+    legs = data.get("legs", [])
+    risk_config = data.get("riskConfig", {})
+    preset = data.get("preset")
+
+    name = basics.get("name", "").strip()
+    if not name:
+        return jsonify({"status": "error", "message": "Strategy name is required"}), 400
+    if not legs:
+        return jsonify({"status": "error", "message": "At least one leg is required"}), 400
+
+    try:
+        new_webhook_id = str(uuid.uuid4())
+        strategy = create_strategy(
+            name=name,
+            webhook_id=new_webhook_id,
+            user_id=user_id,
+            is_intraday=basics.get("is_intraday", True),
+            trading_mode=basics.get("trading_mode", "BOTH"),
+            platform="builder",
+        )
+
+        if not strategy:
+            return jsonify({"status": "error", "message": "Failed to create strategy"}), 500
+
+        # Apply risk defaults from builder config
+        for field in [
+            "default_stoploss_type", "default_stoploss_value",
+            "default_target_type", "default_target_value",
+            "default_trailstop_type", "default_trailstop_value",
+            "default_breakeven_type", "default_breakeven_threshold",
+        ]:
+            val = risk_config.get(field)
+            if val is not None:
+                setattr(strategy, field, val)
+        strategy_db_session.commit()
+
+        # Create a single symbol mapping with multi-leg configuration
+        exchange = basics.get("exchange", "NFO")
+        underlying = basics.get("underlying", "NIFTY")
+        product_type = basics.get("product_type", "MIS")
+        risk_mode = risk_config.get("risk_mode", "combined")
+
+        mapping_data = {
+            "symbol": underlying,
+            "exchange": exchange,
+            "quantity": legs[0].get("quantity_lots", 1) if legs else 1,
+            "product_type": product_type,
+            "order_mode": "multi_leg",
+            "underlying": underlying,
+            "underlying_exchange": exchange,
+            "expiry_type": basics.get("expiry_type", "current_week"),
+            "risk_mode": risk_mode,
+            "preset": preset,
+            "legs_config": json.dumps(legs),
+        }
+
+        # Add combined risk fields if combined mode
+        if risk_mode == "combined":
+            for field in [
+                "combined_stoploss_type", "combined_stoploss_value",
+                "combined_target_type", "combined_target_value",
+                "combined_trailstop_type", "combined_trailstop_value",
+            ]:
+                val = risk_config.get(field)
+                if val is not None:
+                    mapping_data[field] = val
+
+        bulk_add_symbol_mappings(strategy.id, [mapping_data])
+
+        return jsonify({
+            "status": "success",
+            "message": "Strategy created",
+            "data": {"strategy_id": strategy.id, "webhook_id": new_webhook_id},
+        })
+    except Exception as e:
+        logger.exception(f"Error saving builder strategy: {e}")
+        return jsonify({"status": "error", "message": "Failed to save strategy"}), 500
