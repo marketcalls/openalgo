@@ -103,7 +103,6 @@ export default function Analyzer() {
         }
       }
     } catch (error) {
-      console.error('Error fetching analyzer data:', error)
     } finally {
       setIsLoading(false)
     }

@@ -90,7 +90,6 @@ export default function Dashboard() {
         setError(data.message || 'Failed to fetch margin data')
       }
     } catch (err) {
-      console.error('Error fetching funds:', err)
       setError('Failed to fetch margin data')
     } finally {
       setIsLoading(false)

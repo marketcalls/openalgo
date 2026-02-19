@@ -91,7 +91,6 @@ export default function HolidaysPage() {
       setYears(response.years)
       setExchanges(response.exchanges)
     } catch (error) {
-      console.error('Error fetching holidays:', error)
       showToast.error('Failed to load holidays', 'admin')
     } finally {
       setIsLoading(false)

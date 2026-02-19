@@ -59,7 +59,6 @@ export default function EditPythonStrategy() {
       setCode(contentData.content || '')
       setOriginalCode(contentData.content || '')
     } catch (error) {
-      console.error('Failed to fetch strategy:', error)
       showToast.error('Failed to load strategy', 'pythonStrategy')
       navigate('/python')
     } finally {
@@ -90,7 +89,6 @@ export default function EditPythonStrategy() {
         showToast.error(response.message || 'Failed to save strategy', 'pythonStrategy')
       }
     } catch (error) {
-      console.error('Failed to save strategy:', error)
       showToast.error('Failed to save strategy', 'pythonStrategy')
     } finally {
       setSaving(false)
@@ -138,7 +136,6 @@ export default function EditPythonStrategy() {
       URL.revokeObjectURL(url)
       showToast.success('Strategy exported', 'pythonStrategy')
     } catch (error) {
-      console.error('Failed to export strategy:', error)
       showToast.error('Failed to export strategy', 'pythonStrategy')
     }
   }

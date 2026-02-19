@@ -212,10 +212,8 @@ class BrokerData:
                 ws_exchange = exchange
 
             # Subscribe to index channel (or OHLVC if Index)
-            # Broaden check: Use OHLVC if exchange says INDEX OR if symbol is a known Index
-            known_indices = {"NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX", "SENSEX50"}
-            is_index_symbol = br_symbol.upper() in known_indices
-            is_index_request = exchange in ("NSE_INDEX", "BSE_INDEX") or is_index_symbol
+            # Use exchange suffix to determine if this is an index request
+            is_index_request = exchange.endswith("_INDEX")
 
             if is_index_request:
                  logger.info(f"Subscribing to WS OHLVC (1m) for {br_symbol} on {ws_exchange}")
@@ -250,10 +248,33 @@ class BrokerData:
                     "ltp": float(quote.get("ltp", 0)),
                     "prev_close": float(quote.get("prev_close", 0)),
                     "volume": int(quote.get("volume", 0)),
-                    "oi": int(quote.get("volume_oi", 0)),  # Index channel provides volume_oi
+                    "oi": int(quote.get("volume_oi", 0)),
                 }
 
-            logger.debug(f"No WS quote data for {symbol}")
+            logger.info(f"No WS index data for {symbol}, trying orderbook channel...")
+            
+            # --- Fallback: Try Orderbook Channel (for derivatives like BFO) ---
+            # Reuse the existing _get_depth_via_websocket logic but extracting quote fields
+            depth_data = self._get_depth_via_websocket(symbol, exchange)
+            if depth_data:
+                logger.info(f"WS quote (via depth) for {symbol}: LTP={depth_data['ltp']}")
+                # Map depth data to quote format
+                best_bid = depth_data["bids"][0]["price"] if depth_data["bids"] else 0
+                best_ask = depth_data["asks"][0]["price"] if depth_data["asks"] else 0
+                
+                return {
+                    "bid": best_bid,
+                    "ask": best_ask,
+                    "open": depth_data.get("open", 0),
+                    "high": depth_data.get("high", 0),
+                    "low": depth_data.get("low", 0),
+                    "ltp": depth_data.get("ltp", 0),
+                    "prev_close": depth_data.get("prev_close", 0),
+                    "volume": depth_data.get("volume", 0),
+                    "oi": depth_data.get("oi", 0),
+                }
+
+            logger.debug(f"No WS quote data for {symbol} (checked index and orderbook)")
             return None
 
         except Exception as e:
@@ -318,13 +339,13 @@ class BrokerData:
             return {
                 "bid": bid_price,
                 "ask": ask_price,
-                "open": 0,  # Not available in Nubra orderbook REST API
-                "high": 0,
-                "low": 0,
+                "open": float(orderbook.get("open", 0)) / 100,
+                "high": float(orderbook.get("high", 0)) / 100,
+                "low": float(orderbook.get("low", 0)) / 100,
                 "ltp": ltp,
-                "prev_close": 0,
+                "prev_close": float(orderbook.get("prev_close", 0)) / 100,
                 "volume": int(orderbook.get("volume", 0)),
-                "oi": 0,
+                "oi": int(orderbook.get("oi", 0)),
             }
 
         except Exception as e:
@@ -738,28 +759,42 @@ class BrokerData:
             if not success:
                 return None
 
-            # Wait for data
-            time.sleep(2.0)
+            # Set orderbook depth (required to activate data flow, per SDK pattern)
+            websocket.change_orderbook_depth(5)
 
-            # Retrieve cached depth (expects int ref_id)
-            depth = websocket.get_market_depth(token_int)
+            # Poll for data (check every 0.5s, up to 5s)
+            depth = None
+            for _ in range(10):
+                time.sleep(0.5)
+                depth = websocket.get_market_depth(token_int)
+                if depth and depth.get("ltp", 0) > 0:
+                    break
 
             # Unsubscribe after retrieval
             websocket.unsubscribe_orderbook([token_int])
 
             if depth and depth.get("ltp", 0) > 0:
                 logger.info(f"WS depth for {symbol}: LTP={depth['ltp']}")
+
+                # Bids and asks already padded to 5 levels in cache
+                bids = depth.get("bids", [{"price": 0, "quantity": 0}] * 5)
+                asks = depth.get("asks", [{"price": 0, "quantity": 0}] * 5)
+
+                # Strip 'orders' key to match Angel format (price + quantity only)
+                formatted_bids = [{"price": float(b.get("price", 0)), "quantity": int(b.get("quantity", 0))} for b in bids[:5]]
+                formatted_asks = [{"price": float(a.get("price", 0)), "quantity": int(a.get("quantity", 0))} for a in asks[:5]]
+
                 return {
-                    "bids": depth.get("bids", [{"price": 0, "quantity": 0}] * 5),
-                    "asks": depth.get("asks", [{"price": 0, "quantity": 0}] * 5),
-                    "high": 0,
-                    "low": 0,
+                    "bids": formatted_bids,
+                    "asks": formatted_asks,
+                    "high": float(depth.get("high", 0)),
+                    "low": float(depth.get("low", 0)),
                     "ltp": float(depth.get("ltp", 0)),
                     "ltq": int(depth.get("ltq", 0)),
-                    "open": 0,
-                    "prev_close": 0,
+                    "open": float(depth.get("open", 0)),
+                    "prev_close": float(depth.get("prev_close", 0)),
                     "volume": int(depth.get("volume", 0)),
-                    "oi": 0,
+                    "oi": int(depth.get("oi", 0)),
                     "totalbuyqty": int(depth.get("totalbuyqty", 0)),
                     "totalsellqty": int(depth.get("totalsellqty", 0)),
                 }
@@ -801,9 +836,11 @@ class BrokerData:
                 f"/orderbooks/{token}?levels=5", self.auth_token, "GET"
             )
 
+            logger.debug(f"REST depth raw response keys for {symbol}: {list(response.keys()) if isinstance(response, dict) else type(response)}")
+
             orderbook = response.get("orderBook", {})
             if not orderbook:
-                logger.warning(f"Empty orderbook response for {symbol}")
+                logger.warning(f"Empty orderbook response for {symbol}. Raw: {str(response)[:200]}")
                 return None
 
             # Parse bid/ask from arrays
@@ -844,14 +881,14 @@ class BrokerData:
             return {
                 "bids": bids,
                 "asks": asks,
-                "high": 0,
-                "low": 0,
+                "high": float(orderbook.get("high", 0)) / 100,
+                "low": float(orderbook.get("low", 0)) / 100,
                 "ltp": ltp,
                 "ltq": ltq,
-                "open": 0,
-                "prev_close": 0,
+                "open": float(orderbook.get("open", 0)) / 100,
+                "prev_close": float(orderbook.get("prev_close", 0)) / 100,
                 "volume": volume,
-                "oi": 0,
+                "oi": int(orderbook.get("oi", 0)),
                 "totalbuyqty": totalbuyqty,
                 "totalsellqty": totalsellqty,
             }

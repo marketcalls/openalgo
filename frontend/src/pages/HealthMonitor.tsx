@@ -187,7 +187,6 @@ export default function HealthMonitor() {
         showToast.success('Metrics refreshed', 'monitoring')
       }
     } catch (error) {
-      console.error('Error fetching health metrics:', error)
       showToast.error('Failed to fetch health metrics', 'monitoring')
     } finally {
       setLoading(false)
@@ -395,7 +394,6 @@ export default function HealthMonitor() {
       showToast.success('Alert acknowledged', 'monitoring')
       fetchData()
     } catch (error) {
-      console.error('Error acknowledging alert:', error)
       showToast.error('Failed to acknowledge alert', 'monitoring')
     }
   }

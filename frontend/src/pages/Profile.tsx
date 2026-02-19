@@ -354,7 +354,6 @@ export default function ProfilePage() {
         }
       }
     } catch (error) {
-      console.error('Error fetching profile data:', error)
       showToast.error('Failed to load profile data', 'admin')
     } finally {
       setIsLoading(false)
@@ -374,7 +373,6 @@ export default function ProfilePage() {
         setWebsocketUrl(response.data.data.websocket_url || '')
       }
     } catch (error) {
-      console.error('Error fetching broker credentials:', error)
     }
   }
 
@@ -388,7 +386,6 @@ export default function ProfilePage() {
         setPermissionsData(response.data.data)
       }
     } catch (error) {
-      console.error('Error fetching permissions:', error)
       showToast.error('Failed to load permission status', 'admin')
     } finally {
       setIsLoadingPermissions(false)
@@ -420,7 +417,6 @@ export default function ProfilePage() {
         showToast.error('Failed to fix permissions', 'admin')
       }
     } catch (error) {
-      console.error('Error fixing permissions:', error)
       showToast.error('Failed to fix permissions', 'admin')
     } finally {
       setIsFixingPermissions(false)

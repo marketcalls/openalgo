@@ -58,7 +58,6 @@ export default function ViewChartinkStrategy() {
       setStrategy(data.strategy)
       setMappings(data.mappings || [])
     } catch (error) {
-      console.error('Failed to fetch strategy:', error)
       showToast.error('Failed to load strategy', 'chartink')
       navigate('/chartink')
     } finally {
@@ -74,7 +73,6 @@ export default function ViewChartinkStrategy() {
         const data = await response.json()
         setHostConfig(data)
       } catch (error) {
-        console.error('Failed to fetch host config:', error)
         // Fallback to window.location.origin if config fetch fails
         setHostConfig({
           host_server: window.location.origin,
@@ -113,7 +111,6 @@ export default function ViewChartinkStrategy() {
         showToast.error(response.message || 'Failed to toggle strategy', 'chartink')
       }
     } catch (error) {
-      console.error('Failed to toggle strategy:', error)
       showToast.error('Failed to toggle strategy', 'chartink')
     } finally {
       setToggling(false)
@@ -132,7 +129,6 @@ export default function ViewChartinkStrategy() {
         showToast.error(response.message || 'Failed to delete strategy', 'chartink')
       }
     } catch (error) {
-      console.error('Failed to delete strategy:', error)
       showToast.error('Failed to delete strategy', 'chartink')
     } finally {
       setDeleting(false)
@@ -151,7 +147,6 @@ export default function ViewChartinkStrategy() {
         showToast.error(response.message || 'Failed to delete mapping', 'chartink')
       }
     } catch (error) {
-      console.error('Failed to delete mapping:', error)
       showToast.error('Failed to delete mapping', 'chartink')
     }
   }

@@ -67,7 +67,6 @@ export default function GoCharting() {
         const data = await response.json()
         setHostConfig(data)
       } catch (error) {
-        console.error('Failed to fetch host config:', error)
         // Fallback to window.location.origin if config fetch fails
         setHostConfig({
           host_server: window.location.origin,
@@ -102,7 +101,6 @@ export default function GoCharting() {
         setSearchResults((data.results || []).slice(0, 10))
         setShowResults(true)
       } catch (error) {
-        console.error('Search error:', error)
         setSearchResults([])
       } finally {
         setIsLoading(false)

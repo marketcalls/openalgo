@@ -58,7 +58,6 @@ export default function Login() {
         }
         // If session check fails (401, etc.), just stay on login page
       } catch (err) {
-        console.error('Failed to check setup status:', err)
       } finally {
         setIsCheckingSetup(false)
       }
@@ -78,7 +77,6 @@ export default function Login() {
       })
 
       if (!csrfResponse.ok) {
-        console.error('CSRF fetch failed:', csrfResponse.status, csrfResponse.statusText)
         setError('Failed to initialize login. Please refresh the page.')
         setIsLoading(false)
         return
@@ -102,7 +100,6 @@ export default function Login() {
       // Check content type before parsing
       const contentType = response.headers.get('content-type')
       if (!contentType || !contentType.includes('application/json')) {
-        console.error('Login response is not JSON:', contentType)
         // If redirected to setup page, inform user
         if (response.url.includes('/setup')) {
           setError('Please complete initial setup first.')
@@ -130,7 +127,6 @@ export default function Login() {
         navigate(data.redirect || '/broker')
       }
     } catch (err) {
-      console.error('Login error:', err)
       setError('Login failed. Please try again.')
     } finally {
       setIsLoading(false)

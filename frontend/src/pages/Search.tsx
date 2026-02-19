@@ -101,7 +101,6 @@ export default function Search() {
         setResults([])
       }
     } catch (err) {
-      console.error('Search error:', err)
       setError('Failed to search symbols. Please check your connection.')
       showToast.error('Failed to search symbols', 'system')
       setResults([])

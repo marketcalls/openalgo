@@ -94,7 +94,6 @@ export default function FreezeQtyPage() {
       setFreezeData(data)
       setFilteredData(data)
     } catch (error) {
-      console.error('Error fetching freeze data:', error)
       showToast.error('Failed to load freeze quantities', 'admin')
     } finally {
       setIsLoading(false)

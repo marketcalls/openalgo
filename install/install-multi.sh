@@ -294,10 +294,12 @@ for ((i=1; i<=INSTANCES; i++)); do
     APP_KEY=$(generate_hex)
     API_KEY_PEPPER=$(generate_hex)
 
-    # Database paths
+    # Database paths (unique per instance for complete isolation)
     DB_PATH="sqlite:///db/openalgo${i}.db"
     LATENCY_DB="sqlite:///db/latency${i}.db"
     LOGS_DB="sqlite:///db/logs${i}.db"
+    SANDBOX_DB="sqlite:///db/sandbox${i}.db"
+    HISTORIFY_DB="db/historify${i}.duckdb"
 
     # Session/CSRF cookie names
     SESSION_COOKIE="session${i}"
@@ -333,10 +335,12 @@ for ((i=1; i<=INSTANCES; i++)); do
     sudo sed -i "s|3daa0403ce2501ee7432b75bf100048e3cf510d63d2754f952e93d88bf07ea84|$APP_KEY|g" "$ENV_FILE"
     sudo sed -i "s|a25d94718479b170c16278e321ea6c989358bf499a658fd20c90033cef8ce772|$API_KEY_PEPPER|g" "$ENV_FILE"
 
-    # 8. Update database paths (unique per instance)
+    # 8. Update database paths (unique per instance - ALL 5 databases)
     sudo sed -i "s|DATABASE_URL = '.*'|DATABASE_URL = '$DB_PATH'|g" "$ENV_FILE"
     sudo sed -i "s|LATENCY_DATABASE_URL = '.*'|LATENCY_DATABASE_URL = '$LATENCY_DB'|g" "$ENV_FILE"
     sudo sed -i "s|LOGS_DATABASE_URL = '.*'|LOGS_DATABASE_URL = '$LOGS_DB'|g" "$ENV_FILE"
+    sudo sed -i "s|SANDBOX_DATABASE_URL = '.*'|SANDBOX_DATABASE_URL = '$SANDBOX_DB'|g" "$ENV_FILE"
+    sudo sed -i "s|HISTORIFY_DATABASE_URL = '.*'|HISTORIFY_DATABASE_URL = '$HISTORIFY_DB'|g" "$ENV_FILE"
 
     # 9. Update session/CSRF cookies (CRITICAL for instance isolation)
     sudo sed -i "s|SESSION_COOKIE_NAME = '.*'|SESSION_COOKIE_NAME = '$SESSION_COOKIE'|g" "$ENV_FILE"
