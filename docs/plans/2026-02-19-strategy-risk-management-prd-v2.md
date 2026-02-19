@@ -138,10 +138,8 @@ The `legs_config` JSON field in SymbolMapping must follow this schema for F&O st
     "stoploss_value": 50,
     "target_type": "points",
     "target_value": 100,
-    "trailstop_type": "points",
-    "trailstop_value": 20,
-    "breakeven_type": "points",
-    "breakeven_value": 30
+    "trailstop_type": "percentage",
+    "trailstop_value": 20
   },
   "per_leg_risk": null
 }
@@ -1555,6 +1553,329 @@ Per-leg P&L shown as:
 - Each bar labeled with symbol + action + P&L amount
 - Combined total shown below the chart
 - Sortable by P&L (ascending/descending)
+
+---
+
+## 31. Risk Evaluation Logic (AlgoMirror-Matching)
+
+This section specifies the exact risk evaluation formulas and algorithms, matching AlgoMirror's implementation. The risk engine in OpenAlgo's V1 PRD (§10.2) provides the architectural framework; this section fills in the precise math.
+
+### 31.1 Combined Premium (Net Premium) Calculation
+
+For multi-leg strategies in combined P&L mode, the **net premium** is the capital-at-risk base for all percentage-based risk calculations.
+
+```python
+def calculate_combined_premium(positions):
+    """
+    Calculate net premium for a position group.
+
+    BUY legs = debit (money paid)
+    SELL legs = credit (money received)
+    entry_value = abs(net_premium) = capital at risk
+    """
+    net_premium = 0.0
+
+    for position in positions:
+        premium = position.average_entry_price * position.quantity
+
+        if position.action == 'BUY':
+            net_premium += premium    # Debit (cost paid)
+        else:  # SELL
+            net_premium -= premium    # Credit (money received)
+
+    entry_value = abs(net_premium)    # Always positive
+    return net_premium, entry_value
+```
+
+**Examples:**
+
+| Strategy | Legs | Net Premium | Entry Value |
+|----------|------|-------------|-------------|
+| Short Straddle | SELL CE @150×75 + SELL PE @120×75 | -11,250 + -9,000 = -20,250 | 20,250 |
+| Bull Call Spread | BUY CE @200×75 + SELL CE @150×75 | +15,000 + -11,250 = +3,750 | 3,750 |
+| Iron Condor | SELL OTM CE/PE + BUY OTM CE/PE | Depends on premiums | abs(net) |
+
+**Semantics:**
+- `net_premium > 0` → Net Debit strategy (trader paid money)
+- `net_premium < 0` → Net Credit strategy (trader received money)
+- `entry_value` is ALWAYS positive and used as the base for percentage calculations
+
+### 31.2 Leg-Level Stoploss (Price-Based)
+
+Leg-level stoploss is evaluated against the **option/futures LTP** (price-based), NOT against P&L.
+
+**Value types:**
+
+| Type | `stoploss_type` | SL Price Calculation (BUY leg) | SL Price Calculation (SELL leg) |
+|------|-----------------|-------------------------------|--------------------------------|
+| Percentage | `percentage` | `entry_price × (1 - sl_value/100)` | `entry_price × (1 + sl_value/100)` |
+| Points | `points` | `entry_price - sl_value` | `entry_price + sl_value` |
+| Premium (absolute) | `premium` | `sl_value` (direct price) | `sl_value` (direct price) |
+
+**Trigger logic:**
+```python
+if action == 'BUY':
+    sl_hit = ltp <= sl_price      # Price drops to/below SL
+elif action == 'SELL':
+    sl_hit = ltp >= sl_price      # Price rises to/above SL
+```
+
+**Example (SELL CE leg):**
+- Entry: ₹150, SL type: percentage, SL value: 30
+- SL price = 150 × (1 + 30/100) = ₹195
+- Triggered when LTP ≥ ₹195
+
+### 31.3 Leg-Level Target (Price-Based)
+
+Same structure as stoploss but in the favorable direction.
+
+| Type | `target_type` | Target Price (BUY leg) | Target Price (SELL leg) |
+|------|--------------|----------------------|------------------------|
+| Percentage | `percentage` | `entry_price × (1 + tgt_value/100)` | `entry_price × (1 - tgt_value/100)` |
+| Points | `points` | `entry_price + tgt_value` | `entry_price - tgt_value` |
+| Premium (absolute) | `premium` | `tgt_value` (direct price) | `tgt_value` (direct price) |
+
+**Trigger logic:**
+```python
+if action == 'BUY':
+    tgt_hit = ltp >= target_price   # Price rises to/above target
+elif action == 'SELL':
+    tgt_hit = ltp <= target_price   # Price drops to/below target
+```
+
+### 31.4 Leg-Level Trailing Stop (Price-Based)
+
+Trails the LTP when the position is profitable. The trailing stop only moves in the favorable direction (ratchets).
+
+**Value types:** `percentage`, `points`
+
+```python
+def update_leg_trailing_stop(position, ltp):
+    """
+    Price-based trailing stop per leg.
+    Only activates when position is profitable.
+    Ratchets: stop only moves in favorable direction.
+    """
+    current_pnl = calculate_leg_pnl(position, ltp)
+
+    # Only trail when profitable
+    if current_pnl <= 0:
+        return
+
+    leg = position.leg_config
+
+    if leg['trailing_type'] == 'percentage':
+        if position.action == 'BUY':
+            new_stop = ltp * (1 - leg['trailing_value'] / 100)
+        else:  # SELL
+            new_stop = ltp * (1 + leg['trailing_value'] / 100)
+    elif leg['trailing_type'] == 'points':
+        if position.action == 'BUY':
+            new_stop = ltp - leg['trailing_value']
+        else:  # SELL
+            new_stop = ltp + leg['trailing_value']
+
+    # Ratchet: only move stop in favorable direction
+    if position.action == 'BUY':
+        # BUY: stop ratchets UP (higher = more favorable)
+        if position.trailstop_price is None or new_stop > position.trailstop_price:
+            position.trailstop_price = round_to_tick(new_stop, position.tick_size)
+    else:  # SELL
+        # SELL: stop ratchets DOWN (lower = more favorable)
+        if position.trailstop_price is None or new_stop < position.trailstop_price:
+            position.trailstop_price = round_to_tick(new_stop, position.tick_size)
+```
+
+**Trigger:** Same as SL trigger — `ltp <= trailstop_price` (BUY) or `ltp >= trailstop_price` (SELL).
+
+### 31.5 Combined / Strategy-Level Max Loss (P&L-Based)
+
+For combined-mode multi-leg strategies, max loss is evaluated against **combined P&L** across all legs (not individual prices).
+
+**Value types:** `percentage`, `points`, `amount`
+
+```python
+def check_combined_max_loss(group, positions, config):
+    """
+    Combined max loss check.
+    Percentage is relative to entry_value (combined premium).
+    """
+    combined_pnl = sum(p.unrealized_pnl for p in positions)
+    _, entry_value = calculate_combined_premium(positions)
+
+    if config['stoploss_type'] == 'percentage':
+        sl_threshold = entry_value * (config['stoploss_value'] / 100)
+    elif config['stoploss_type'] == 'points':
+        sl_threshold = config['stoploss_value']
+    elif config['stoploss_type'] == 'amount':
+        sl_threshold = config['stoploss_value']
+
+    # Loss threshold is negative
+    if combined_pnl <= -abs(sl_threshold):
+        return True, 'combined_sl'
+    return False, None
+```
+
+### 31.6 Combined / Strategy-Level Max Profit (P&L-Based)
+
+```python
+def check_combined_max_profit(group, positions, config):
+    combined_pnl = sum(p.unrealized_pnl for p in positions)
+    _, entry_value = calculate_combined_premium(positions)
+
+    if config['target_type'] == 'percentage':
+        tgt_threshold = entry_value * (config['target_value'] / 100)
+    elif config['target_type'] == 'points':
+        tgt_threshold = config['target_value']
+    elif config['target_type'] == 'amount':
+        tgt_threshold = config['target_value']
+
+    if combined_pnl >= abs(tgt_threshold):
+        return True, 'combined_target'
+    return False, None
+```
+
+### 31.7 Combined Trailing Stop (AFL-Style Ratcheting, P&L-Based)
+
+The most critical risk mechanism for multi-leg strategies. This is a **P&L-based** trailing stop (not price-based), evaluated against the combined P&L of all legs.
+
+**Value types:** `percentage`, `points`, `amount`
+
+**Database fields on position group:**
+- `entry_value`: abs(net premium) — base for percentage
+- `initial_stop`: first stop level (negative number)
+- `combined_peak_pnl`: highest combined P&L achieved (starts at 0)
+- `current_stop`: current trailing stop level (ratchets up only)
+
+```python
+def check_combined_trailing_stop(group, positions, config):
+    """
+    AFL-style trailing stop for combined P&L.
+
+    Algorithm:
+    1. Calculate initial_stop from entry_value (always negative)
+    2. Track peak_pnl (highest combined P&L ever)
+    3. current_stop = initial_stop + peak_pnl (shifts up as peak rises)
+    4. Ratchet: current_stop can only increase, never decrease
+    5. Trigger: combined_pnl <= current_stop
+
+    The stop is ALWAYS ACTIVE from entry (no waiting state).
+    """
+    combined_pnl = sum(p.unrealized_pnl for p in positions)
+    _, entry_value = calculate_combined_premium(positions)
+
+    # Near-zero safety guard (likely stale data)
+    if abs(combined_pnl) < 1.0 and len(positions) > 0:
+        return False, None
+
+    # Step 1: Calculate initial stop
+    trailing_type = config['trailstop_type']
+    trailing_value = config['trailstop_value']
+
+    if trailing_type == 'percentage':
+        initial_stop = -(entry_value * (trailing_value / 100))
+    elif trailing_type == 'points':
+        initial_stop = -trailing_value
+    elif trailing_type == 'amount':
+        initial_stop = -trailing_value
+
+    # Step 2: Initialize or recalculate if legs changed
+    if group.initial_stop is None or abs(group.initial_stop - initial_stop) > 0.01:
+        group.initial_stop = initial_stop
+        group.entry_value = entry_value
+
+    # Step 3: Track peak P&L
+    current_peak = group.combined_peak_pnl or 0.0
+    if combined_pnl > current_peak:
+        group.combined_peak_pnl = combined_pnl
+        current_peak = combined_pnl
+
+    # Step 4: Calculate and ratchet stop
+    new_stop = group.initial_stop + current_peak
+    previous_stop = group.current_stop or group.initial_stop
+    current_stop = max(new_stop, previous_stop)  # Ratchet up only
+    group.current_stop = current_stop
+
+    # Step 5: Check trigger
+    if combined_pnl <= current_stop:
+        return True, 'combined_tsl'
+    return False, None
+```
+
+**Worked example (Short Straddle):**
+
+```
+Entry: SELL CE @150×75 + SELL PE @120×75
+net_premium = -20,250 (credit)
+entry_value = 20,250
+
+Config: trailing_type='percentage', trailing_value=25%
+initial_stop = -(20,250 × 0.25) = -5,062.50
+
+Timeline:
+  t1: combined_pnl = +2,000  → peak=2,000  → stop = -5,062 + 2,000 = -3,062
+  t2: combined_pnl = +4,500  → peak=4,500  → stop = -5,062 + 4,500 = -562
+  t3: combined_pnl = +3,000  → peak=4,500  → stop = max(-562, -562) = -562 (ratcheted)
+  t4: combined_pnl = -600    → -600 <= -562 → TRIGGERED! Exit all legs.
+```
+
+### 31.8 Risk Stats Display
+
+The Strategy Builder and Dashboard show real-time risk management stats per strategy:
+
+**Per-Leg Stats (in PositionRow and LegCard):**
+
+| Stat | Display | Source |
+|------|---------|--------|
+| Entry Price | `₹150.00` | `position.average_entry_price` |
+| LTP | `₹142.50` | Live (WebSocket/Zustand) |
+| Leg P&L | `+₹562` (green) / `-₹375` (red) | `(entry - ltp) × qty` for SELL, `(ltp - entry) × qty` for BUY |
+| SL Price | `₹195.00` | Computed from entry + config |
+| SL Distance | `52.5 pts (36.8%)` | `abs(ltp - sl_price)` |
+| Target Price | `₹105.00` | Computed from entry + config |
+| TGT Distance | `37.5 pts (26.3%)` | `abs(ltp - target_price)` |
+| TSL Price | `₹148.20` | Ratcheted trailing stop |
+| TSL Distance | `5.7 pts (4.0%)` | `abs(ltp - tsl_price)` |
+| SL Hit | Red "SL" badge | `position.exit_detail == 'leg_sl'` |
+| TGT Hit | Green "TGT" badge | `position.exit_detail == 'leg_target'` |
+| TSL Hit | Amber "TSL" badge | `position.exit_detail == 'leg_tsl'` |
+
+**Combined Group Stats (in PositionGroupHeader):**
+
+| Stat | Display | Source |
+|------|---------|--------|
+| Net Premium | `₹20,250 CR` / `₹3,750 DR` | Combined premium formula |
+| Combined P&L | `+₹2,450` / `-₹1,200` | Sum of all leg P&Ls |
+| Max Loss Threshold | `-₹5,062 (25%)` | From config |
+| Max Profit Target | `+₹10,125 (50%)` | From config |
+| TSL Current Stop | `-₹562` | Ratcheted value |
+| TSL Peak P&L | `₹4,500` | Highest combined P&L |
+| SL Progress | `[████████░░] 80%` | `abs(combined_pnl) / abs(sl_threshold) × 100` |
+| TGT Progress | `[███░░░░░░░] 30%` | `combined_pnl / tgt_threshold × 100` |
+| Exit Reason | "C-SL" / "C-TGT" / "C-TSL" badge | `group.exit_reason` |
+
+**Strategy-Level Summary (in StrategyCard header):**
+
+| Stat | Display |
+|------|---------|
+| Active Positions | `4 legs active` |
+| Total Strategy P&L | `+₹2,450` (color-coded) |
+| Risk Status | "Monitoring" (blue) / "SL Hit" (red) / "TGT Hit" (green) |
+| Daily P&L | `+₹8,200 / ₹10,000 target` |
+
+### 31.9 Value Types Summary
+
+| Context | Available Types | Notes |
+|---------|----------------|-------|
+| Leg-Level SL | `percentage`, `points`, `premium` | `premium` = absolute price level |
+| Leg-Level Target | `percentage`, `points`, `premium` | `premium` = absolute price level |
+| Leg-Level Trailing | `percentage`, `points` | Price-based ratcheting |
+| Combined SL | `percentage`, `points`, `amount` | `percentage` relative to `entry_value` |
+| Combined Target | `percentage`, `points`, `amount` | `percentage` relative to `entry_value` |
+| Combined TSL | `percentage`, `points`, `amount` | P&L-based AFL ratcheting |
+| Daily SL | `percentage`, `points` | Based on daily cumulative P&L |
+| Daily Target | `percentage`, `points` | Based on daily cumulative P&L |
+| Daily TSL | `percentage`, `points` | Based on daily cumulative P&L |
 
 ---
 
