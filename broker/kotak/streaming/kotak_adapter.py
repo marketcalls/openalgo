@@ -292,13 +292,17 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                         self._ltp_cache[cache_key] = float(ltp)
 
                     # For depth data, update depth cache
+                    # Use cached LTP as fallback when current packet has no LTP
+                    # (Kotak sends depth and LTP as separate packets)
+                    cached_ltp = self._ltp_cache.get(cache_key, 0.0)
+
                     if has_depth_data:
                         depth_data = {
                             "buy": parsed_data.get("bids", []),
                             "sell": parsed_data.get("asks", []),
                             "totalbuyqty": parsed_data.get("totalbuyqty", 0),
                             "totalsellqty": parsed_data.get("totalsellqty", 0),
-                            "ltp": float(ltp) if has_ltp_data else 0.0,
+                            "ltp": float(ltp) if has_ltp_data else cached_ltp,
                         }
                         self._depth_cache[cache_key] = depth_data
 
@@ -308,18 +312,22 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                     # **CRITICAL FIX**: Publish data for ALL active modes for this symbol
                     active_modes = self._symbol_modes.get(mapping_key, set())
 
+                    # Effective LTP: use current packet's LTP or cached value
+                    effective_ltp = float(ltp) if has_ltp_data else cached_ltp
+
                     for mode in active_modes:
                         mode_map = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}
                         mode_str = mode_map.get(mode, "LTP")
                         topic = f"{exchange}_{symbol}_{mode_str}"
+
                         if mode == 1 and has_ltp_data:
                             publish_data = {
                                 "ltp": float(ltp),
                                 "ltt": parsed_data.get("timestamp", int(time.time() * 1000)),
                             }
-                        elif mode == 2:
+                        elif mode == 2 and effective_ltp > 0:
                             publish_data = {
-                                "ltp": float(ltp) if has_ltp_data else 0.0,
+                                "ltp": effective_ltp,
                                 "ltt": parsed_data.get("timestamp", int(time.time() * 1000)),
                                 "volume": parsed_data.get("volume", 0),
                                 "open": parsed_data.get("open", 0.0),
@@ -327,17 +335,36 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                                 "low": parsed_data.get("low", 0.0),
                                 "close": parsed_data.get("prev_close", 0.0),
                             }
-                        elif mode == 3 and has_depth_data:
+                        elif mode == 3:
+                            # Use current depth data or fall back to cached depth
+                            # (Kotak sends depth and LTP as separate packets)
+                            if has_depth_data:
+                                depth_buy = parsed_data.get("bids", [])
+                                depth_sell = parsed_data.get("asks", [])
+                                depth_total_buy = parsed_data.get("totalbuyqty", 0)
+                                depth_total_sell = parsed_data.get("totalsellqty", 0)
+                            elif cache_key in self._depth_cache:
+                                cached_depth = self._depth_cache[cache_key]
+                                depth_buy = cached_depth.get("buy", [])
+                                depth_sell = cached_depth.get("sell", [])
+                                depth_total_buy = cached_depth.get("totalbuyqty", 0)
+                                depth_total_sell = cached_depth.get("totalsellqty", 0)
+                            else:
+                                continue  # No depth data available at all
+
                             publish_data = {
-                                "ltp": float(ltp) if has_ltp_data else 0.0,
                                 "timestamp": int(time.time() * 1000),
                                 "depth": {
-                                    "buy": parsed_data.get("bids", []),
-                                    "sell": parsed_data.get("asks", []),
+                                    "buy": depth_buy,
+                                    "sell": depth_sell,
                                 },
-                                "totalbuyqty": parsed_data.get("totalbuyqty", 0),
-                                "totalsellqty": parsed_data.get("totalsellqty", 0),
+                                "totalbuyqty": depth_total_buy,
+                                "totalsellqty": depth_total_sell,
                             }
+                            # Only include LTP if valid; omitting it lets
+                            # the frontend fall back to polled REST data
+                            if effective_ltp > 0:
+                                publish_data["ltp"] = effective_ltp
                         else:
                             continue
                         publish_data.update(
@@ -425,8 +452,13 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 # Quote/LTP subscription
                 success = self.subscribe_quote(exchange, symbol, mode)
             elif mode == 3:
-                # Depth subscription
+                # Depth subscription + quote subscription for LTP updates
+                # (Kotak sends depth and LTP as separate streams;
+                # "dps" only sends bid/ask, "mws" sends LTP)
                 success = self.subscribe_depth(exchange, symbol, mode)
+                quote_success = self.subscribe_quote(exchange, symbol, mode)
+                if not quote_success:
+                    logger.warning(f"Depth subscribed but quote (LTP) subscription failed for {exchange}:{symbol}")
             else:
                 logger.error(f"Unknown subscribe mode: {mode}")
                 return self._create_error_response(
@@ -470,6 +502,7 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.unsubscribe_quote(exchange, symbol, mode)
             elif mode == 3:
                 self.unsubscribe_depth(exchange, symbol, mode)
+                self.unsubscribe_quote(exchange, symbol, mode)
 
             # Clean up tracking and cache - following AliceBlue pattern
             sub_key = f"{exchange}|{symbol}|{mode}"
