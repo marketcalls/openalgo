@@ -249,6 +249,7 @@ export default function Search() {
                             className="h-6 w-6 opacity-60 hover:opacity-100"
                             onClick={() => copyToClipboard(row.symbol)}
                             title="Copy symbol"
+                            aria-label="Copy symbol"
                           >
                             <Copy className="h-3 w-3" />
                           </Button>

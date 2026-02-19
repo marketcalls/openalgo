@@ -186,6 +186,8 @@ export default function LogsPage() {
           size="icon"
           onClick={() => fetchLogs(currentPage - 1)}
           disabled={currentPage <= 1}
+          title="Previous page"
+          aria-label="Go to previous page"
         >
           <ChevronLeft className="h-4 w-4" />
         </Button>
@@ -205,6 +207,8 @@ export default function LogsPage() {
           size="icon"
           onClick={() => fetchLogs(currentPage + 1)}
           disabled={currentPage >= totalPages}
+          title="Next page"
+          aria-label="Go to next page"
         >
           <ChevronRight className="h-4 w-4" />
         </Button>
@@ -319,11 +323,10 @@ export default function LogsPage() {
                     {requestData.action ? (
                       <Badge
                         variant={String(requestData.action) === 'BUY' ? 'default' : 'destructive'}
-                        className={`gap-1 ${
-                          String(requestData.action) === 'BUY'
-                            ? 'bg-green-500 hover:bg-green-600'
-                            : 'bg-red-500 hover:bg-red-600'
-                        }`}
+                        className={`gap-1 ${String(requestData.action) === 'BUY'
+                          ? 'bg-green-500 hover:bg-green-600'
+                          : 'bg-red-500 hover:bg-red-600'
+                          }`}
                       >
                         {String(requestData.action) === 'BUY' ? (
                           <ArrowUp className="h-3 w-3" />
@@ -343,9 +346,9 @@ export default function LogsPage() {
 
                   {/* Order Details */}
                   {requestData.symbol ||
-                  requestData.quantity ||
-                  requestData.price ||
-                  requestData.product ? (
+                    requestData.quantity ||
+                    requestData.price ||
+                    requestData.product ? (
                     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-4">
                       {requestData.symbol ? (
                         <div className="bg-muted rounded-lg p-3">

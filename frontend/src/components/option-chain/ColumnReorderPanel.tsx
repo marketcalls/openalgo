@@ -155,7 +155,7 @@ export function ColumnReorderPanel({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
-        <Button variant="outline" size="icon" className="h-9 w-9">
+        <Button variant="outline" size="icon" className="h-9 w-9" title="Reorder columns">
           <Columns3 className="h-4 w-4" />
           <span className="sr-only">Reorder columns</span>
         </Button>

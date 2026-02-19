@@ -222,6 +222,7 @@ export function MessageLog({ messages, onClear, onExport }: MessageLogProps) {
             onClick={onClear}
             disabled={messages.length === 0}
             title="Clear messages"
+            aria-label="Clear messages"
           >
             <Trash2 className="h-3 w-3" />
           </Button>
@@ -232,6 +233,7 @@ export function MessageLog({ messages, onClear, onExport }: MessageLogProps) {
             onClick={onExport}
             disabled={messages.length === 0}
             title="Export messages"
+            aria-label="Export messages"
           >
             <Download className="h-3 w-3" />
           </Button>

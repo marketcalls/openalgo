@@ -288,6 +288,8 @@ export default function ViewChartinkStrategy() {
                   variant="outline"
                   size="icon"
                   onClick={() => copyToClipboard(webhookUrl, 'url')}
+                  title="Copy webhook URL"
+                  aria-label="Copy webhook URL to clipboard"
                 >
                   {copiedField === 'url' ? (
                     <Check className="h-4 w-4 text-green-500" />
@@ -387,6 +389,8 @@ export default function ViewChartinkStrategy() {
                         size="icon"
                         className="text-red-500 hover:text-red-600 hover:bg-red-50"
                         onClick={() => handleDeleteMapping(mapping.id)}
+                        title="Delete mapping"
+                        aria-label="Delete mapping"
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
