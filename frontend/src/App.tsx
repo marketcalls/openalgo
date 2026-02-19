@@ -175,6 +175,7 @@ function App() {
                 <Route path="/strategy/:strategyId/configure" element={<ConfigureSymbols />} />
                 <Route path="/strategy/hub" element={<StrategyHub />} />
                 <Route path="/strategy/builder" element={<StrategyBuilder />} />
+                <Route path="/strategy/builder/:id" element={<StrategyBuilder />} />
                 <Route path="/strategy/templates" element={<StrategyTemplates />} />
                 {/* Phase 6: Python Strategies */}
                 <Route path="/python" element={<PythonStrategyIndex />} />

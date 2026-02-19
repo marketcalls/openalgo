@@ -8,8 +8,8 @@ const PRESETS: PresetDefinition[] = [
     description: 'Sell ATM CE + ATM PE',
     category: 'neutral',
     legs: [
-      { leg_type: 'option', action: 'SELL', option_type: 'CE', offset: 'ATM', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
-      { leg_type: 'option', action: 'SELL', option_type: 'PE', offset: 'ATM', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
+      { leg_type: 'option', action: 'SELL', option_type: 'CE', strike_type: 'ATM', offset: 'ATM', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
+      { leg_type: 'option', action: 'SELL', option_type: 'PE', strike_type: 'ATM', offset: 'ATM', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
     ],
   },
   {
@@ -18,8 +18,8 @@ const PRESETS: PresetDefinition[] = [
     description: 'Sell OTM3 CE + OTM3 PE',
     category: 'neutral',
     legs: [
-      { leg_type: 'option', action: 'SELL', option_type: 'CE', offset: 'OTM3', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
-      { leg_type: 'option', action: 'SELL', option_type: 'PE', offset: 'OTM3', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
+      { leg_type: 'option', action: 'SELL', option_type: 'CE', strike_type: 'OTM', offset: 'OTM3', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
+      { leg_type: 'option', action: 'SELL', option_type: 'PE', strike_type: 'OTM', offset: 'OTM3', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
     ],
   },
   {
@@ -28,10 +28,10 @@ const PRESETS: PresetDefinition[] = [
     description: 'Short strangle with protective wings',
     category: 'neutral',
     legs: [
-      { leg_type: 'option', action: 'SELL', option_type: 'CE', offset: 'OTM3', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
-      { leg_type: 'option', action: 'BUY', option_type: 'CE', offset: 'OTM6', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
-      { leg_type: 'option', action: 'SELL', option_type: 'PE', offset: 'OTM3', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
-      { leg_type: 'option', action: 'BUY', option_type: 'PE', offset: 'OTM6', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
+      { leg_type: 'option', action: 'SELL', option_type: 'CE', strike_type: 'OTM', offset: 'OTM3', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
+      { leg_type: 'option', action: 'BUY', option_type: 'CE', strike_type: 'OTM', offset: 'OTM6', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
+      { leg_type: 'option', action: 'SELL', option_type: 'PE', strike_type: 'OTM', offset: 'OTM3', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
+      { leg_type: 'option', action: 'BUY', option_type: 'PE', strike_type: 'OTM', offset: 'OTM6', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
     ],
   },
   {
@@ -40,8 +40,8 @@ const PRESETS: PresetDefinition[] = [
     description: 'Buy ATM CE + Sell OTM3 CE',
     category: 'bullish',
     legs: [
-      { leg_type: 'option', action: 'BUY', option_type: 'CE', offset: 'ATM', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
-      { leg_type: 'option', action: 'SELL', option_type: 'CE', offset: 'OTM3', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
+      { leg_type: 'option', action: 'BUY', option_type: 'CE', strike_type: 'ATM', offset: 'ATM', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
+      { leg_type: 'option', action: 'SELL', option_type: 'CE', strike_type: 'OTM', offset: 'OTM3', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
     ],
   },
   {
@@ -50,8 +50,8 @@ const PRESETS: PresetDefinition[] = [
     description: 'Buy ATM PE + Sell OTM3 PE',
     category: 'bearish',
     legs: [
-      { leg_type: 'option', action: 'BUY', option_type: 'PE', offset: 'ATM', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
-      { leg_type: 'option', action: 'SELL', option_type: 'PE', offset: 'OTM3', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
+      { leg_type: 'option', action: 'BUY', option_type: 'PE', strike_type: 'ATM', offset: 'ATM', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
+      { leg_type: 'option', action: 'SELL', option_type: 'PE', strike_type: 'OTM', offset: 'OTM3', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
     ],
   },
   {
@@ -60,8 +60,8 @@ const PRESETS: PresetDefinition[] = [
     description: 'Buy ATM CE + ATM PE',
     category: 'neutral',
     legs: [
-      { leg_type: 'option', action: 'BUY', option_type: 'CE', offset: 'ATM', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
-      { leg_type: 'option', action: 'BUY', option_type: 'PE', offset: 'ATM', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
+      { leg_type: 'option', action: 'BUY', option_type: 'CE', strike_type: 'ATM', offset: 'ATM', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
+      { leg_type: 'option', action: 'BUY', option_type: 'PE', strike_type: 'ATM', offset: 'ATM', expiry_type: 'current_week', product_type: 'MIS', quantity_lots: 1, order_type: 'MARKET' },
     ],
   },
 ]

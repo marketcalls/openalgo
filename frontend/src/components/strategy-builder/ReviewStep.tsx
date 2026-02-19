@@ -1,6 +1,9 @@
+import { useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
 import type { BuilderBasics, BuilderLeg, BuilderRiskConfig } from '@/types/strategy-builder'
 
 interface ReviewStepProps {
@@ -10,7 +13,7 @@ interface ReviewStepProps {
   preset: string | null
   saving: boolean
   onBack: () => void
-  onSave: () => void
+  onSave: (opts?: { saveAsTemplate?: boolean }) => void
 }
 
 export function ReviewStep({
@@ -22,6 +25,8 @@ export function ReviewStep({
   onBack,
   onSave,
 }: ReviewStepProps) {
+  const [saveAsTemplate, setSaveAsTemplate] = useState(false)
+
   return (
     <div className="max-w-lg mx-auto space-y-4">
       {/* Basics Summary */}
@@ -151,11 +156,23 @@ export function ReviewStep({
         </CardContent>
       </Card>
 
+      {/* Save as Template Option */}
+      <div className="flex items-center gap-2 px-1">
+        <Checkbox
+          id="save-as-template"
+          checked={saveAsTemplate}
+          onCheckedChange={(v) => setSaveAsTemplate(v === true)}
+        />
+        <Label htmlFor="save-as-template" className="text-xs cursor-pointer">
+          Also save as reusable template
+        </Label>
+      </div>
+
       <div className="flex justify-between pt-4">
         <Button variant="outline" onClick={onBack}>
           Back
         </Button>
-        <Button onClick={onSave} disabled={saving}>
+        <Button onClick={() => onSave({ saveAsTemplate })} disabled={saving}>
           {saving ? 'Saving...' : 'Save Strategy'}
         </Button>
       </div>

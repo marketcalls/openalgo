@@ -536,6 +536,7 @@ def close_position_route(strategy_id, position_id):
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+@strategy_dashboard_bp.route("/strategy/<int:strategy_id>/positions/close-all", methods=["POST"])
 @strategy_dashboard_bp.route("/strategy/<int:strategy_id>/close-all", methods=["POST"])
 @check_session_validity
 def close_all_positions(strategy_id):
@@ -787,6 +788,10 @@ def clone_strategy(strategy_id):
 @check_session_validity
 def market_status():
     """Return current market phase for the dashboard header."""
+    user_id = _get_user_id()
+    if not user_id:
+        return jsonify({"status": "error", "message": "Session expired"}), 401
+
     try:
         from database.market_calendar_db import (
             get_market_hours_status,
@@ -803,15 +808,19 @@ def market_status():
         status = get_market_hours_status()
 
         # Determine phase
-        if is_market_holiday(today):
-            if today.weekday() >= 5:
-                phase = "weekend"
-            else:
-                phase = "holiday"
+        # 33300000ms = 09:15 IST, 55800000ms = 15:30 IST
+        earliest_open_ms = status.get("earliest_open_ms") or 33300000
+        latest_close_ms = status.get("latest_close_ms") or 55800000
+        if today.weekday() >= 5:
+            phase = "weekend"
+        elif is_market_holiday(today):
+            phase = "holiday"
         elif status["any_market_open"]:
             phase = "market_open"
-        elif current_ms < (status.get("earliest_open_ms") or 33300000):
+        elif current_ms < earliest_open_ms:
             phase = "pre_market"
+        elif current_ms > latest_close_ms:
+            phase = "post_market"
         else:
             phase = "market_closed"
 
@@ -1006,6 +1015,21 @@ def builder_save():
         product_type = basics.get("product_type", "MIS")
         risk_mode = risk_config.get("risk_mode", "combined")
 
+        # Resolve the correct quote exchange for underlying
+        # Index symbols use NSE_INDEX/BSE_INDEX; stock symbols use NSE/BSE
+        NSE_INDEX_SYMBOLS = {
+            "NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50",
+        }
+        BSE_INDEX_SYMBOLS = {"SENSEX", "BANKEX", "SENSEX50"}
+        if underlying.upper() in NSE_INDEX_SYMBOLS:
+            underlying_exchange = "NSE_INDEX"
+        elif underlying.upper() in BSE_INDEX_SYMBOLS:
+            underlying_exchange = "BSE_INDEX"
+        elif exchange in ("BFO", "BSE"):
+            underlying_exchange = "BSE"
+        else:
+            underlying_exchange = "NSE"
+
         mapping_data = {
             "symbol": underlying,
             "exchange": exchange,
@@ -1013,7 +1037,7 @@ def builder_save():
             "product_type": product_type,
             "order_mode": "multi_leg",
             "underlying": underlying,
-            "underlying_exchange": exchange,
+            "underlying_exchange": underlying_exchange,
             "expiry_type": basics.get("expiry_type", "current_week"),
             "risk_mode": risk_mode,
             "preset": preset,

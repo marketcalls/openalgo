@@ -1,19 +1,22 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { dashboardApi } from '@/api/strategy-dashboard'
 import { strategyApi } from '@/api/strategy'
 import { useStrategySocket } from '@/hooks/useStrategySocket'
+import { useStrategyDashboardStore } from '@/stores/strategyDashboardStore'
 import type { Strategy } from '@/types/strategy'
 import type { OverviewData } from '@/types/strategy-dashboard'
 import { DashboardHeader } from '@/components/strategy-dashboard/DashboardHeader'
 import { StrategyCard } from '@/components/strategy-dashboard/StrategyCard'
 import { EmptyState } from '@/components/strategy-dashboard/EmptyState'
+import { CreateStrategyDialog } from '@/components/strategy-dashboard/CreateStrategyDialog'
 
 export default function StrategyHub() {
-  const navigate = useNavigate()
   const [overview, setOverview] = useState<OverviewData | null>(null)
   const [strategies, setStrategies] = useState<Strategy[]>([])
   const [loading, setLoading] = useState(true)
+  const [createOpen, setCreateOpen] = useState(false)
+
+  const setDashboardData = useStrategyDashboardStore((s) => s.setDashboardData)
 
   // Initialize socket for real-time updates
   useStrategySocket()
@@ -30,6 +33,7 @@ export default function StrategyHub() {
 
         if (!cancelled) {
           setOverview(overviewData)
+          if (overviewData) setDashboardData(overviewData)
           setStrategies(strategyList)
         }
       } finally {
@@ -42,7 +46,7 @@ export default function StrategyHub() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [setDashboardData])
 
   // Build a lookup of dashboard data per strategy
   const dashboardLookup = new Map<number, { active_positions: number; total_unrealized_pnl: number }>()
@@ -79,7 +83,7 @@ export default function StrategyHub() {
     <div className="p-6 space-y-4">
       <DashboardHeader
         overview={overview}
-        onCreateStrategy={() => navigate('/strategy')}
+        onCreateStrategy={() => setCreateOpen(true)}
       />
 
       {strategies.length === 0 ? (
@@ -99,6 +103,8 @@ export default function StrategyHub() {
           ))}
         </div>
       )}
+
+      <CreateStrategyDialog open={createOpen} onClose={() => setCreateOpen(false)} />
     </div>
   )
 }

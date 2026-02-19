@@ -177,7 +177,7 @@ export interface PositionGroupData {
   combined_pnl: number | null
 }
 
-export type MarketPhase = 'market_open' | 'pre_market' | 'market_closed' | 'weekend' | 'holiday'
+export type MarketPhase = 'market_open' | 'pre_market' | 'post_market' | 'market_closed' | 'weekend' | 'holiday'
 
 export interface MarketStatus {
   phase: MarketPhase

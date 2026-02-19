@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type { PresetDefinition } from '@/types/strategy-builder'
-import { PRESETS } from '@/components/strategy-builder/PresetSelector'
-import { TemplateCard } from '@/components/strategy-templates/TemplateCard'
+import { STRATEGY_TEMPLATES } from '@/api/strategy-templates'
+import { TemplateGrid } from '@/components/strategy-templates/TemplateGrid'
 import { DeployDialog } from '@/components/strategy-templates/DeployDialog'
 
 type FilterTab = 'all' | 'neutral' | 'bullish' | 'bearish'
@@ -14,7 +14,9 @@ export default function StrategyTemplates() {
   const [deployTemplate, setDeployTemplate] = useState<PresetDefinition | null>(null)
 
   const filtered =
-    filter === 'all' ? PRESETS : PRESETS.filter((p) => p.category === filter)
+    filter === 'all'
+      ? STRATEGY_TEMPLATES
+      : STRATEGY_TEMPLATES.filter((p) => p.category === filter)
 
   return (
     <div className="p-6 space-y-6">
@@ -34,15 +36,7 @@ export default function StrategyTemplates() {
         </TabsList>
 
         <TabsContent value={filter} className="mt-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filtered.map((template) => (
-              <TemplateCard
-                key={template.id}
-                template={template}
-                onDeploy={setDeployTemplate}
-              />
-            ))}
-          </div>
+          <TemplateGrid templates={filtered} onDeploy={setDeployTemplate} />
         </TabsContent>
       </Tabs>
 

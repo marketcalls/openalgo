@@ -16,6 +16,7 @@ import { strategyApi } from '@/api/strategy'
 import { showToast } from '@/utils/toast'
 import type { Strategy, StrategySymbolMapping } from '@/types/strategy'
 import type { DashboardPosition, RiskConfig } from '@/types/strategy-dashboard'
+import { useStrategyDashboardStore } from '@/stores/strategyDashboardStore'
 import { OverviewTab } from './OverviewTab'
 import { PositionTable } from './PositionTable'
 import { OrdersPanel } from './OrdersPanel'
@@ -23,6 +24,7 @@ import { TradesPanel } from './TradesPanel'
 import { PnlPanel } from './PnlPanel'
 import { RiskMonitorTab } from './RiskMonitorTab'
 import { RiskConfigDrawer } from './RiskConfigDrawer'
+import { CircuitBreakerBanner } from './CircuitBreakerBanner'
 
 interface StrategyCardProps {
   strategy: Strategy
@@ -106,11 +108,19 @@ export function StrategyCard({ strategy, strategyType, dashboardData }: Strategy
     }
   }
 
+  const cbStatus = useStrategyDashboardStore(
+    (s) => s.circuitBreakerStatus.get(strategy.id)
+  )
+
   const activeCount = dashboardData?.active_positions || positions.filter((p) => p.position_state === 'active').length
   const unrealizedPnl = dashboardData?.total_unrealized_pnl || 0
 
   return (
     <Card>
+      {/* Circuit Breaker Banner */}
+      {cbStatus?.status === 'tripped' && (
+        <CircuitBreakerBanner reason={cbStatus.reason} />
+      )}
       {/* Card Header */}
       <CardHeader
         className="cursor-pointer py-3 px-4"

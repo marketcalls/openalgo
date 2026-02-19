@@ -1,44 +1,41 @@
 import { useState } from 'react'
-import { XCircleIcon } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { dashboardApi } from '@/api/strategy-dashboard'
 import { showToast } from '@/utils/toast'
-import type { DashboardPosition } from '@/types/strategy-dashboard'
-import { StatusBadge } from './StatusBadge'
-import { RiskBadges } from './RiskBadges'
+import type { DashboardPosition, PositionGroupData } from '@/types/strategy-dashboard'
+import { PositionRow } from './PositionRow'
+import { PositionGroup } from './PositionGroup'
 import { EmptyState } from './EmptyState'
 
 interface PositionTableProps {
   strategyId: number
   strategyType: string
   positions: DashboardPosition[]
+  groups?: PositionGroupData[]
   onRefresh: () => void
 }
 
-function pnlColor(v: number | null | undefined) {
-  if (!v) return ''
-  return v > 0 ? 'text-green-600' : v < 0 ? 'text-red-600' : ''
-}
-
-function distanceText(entry: number, target: number | null | undefined, action: string) {
-  if (!target || !entry) return null
-  const diff = action === 'BUY' ? target - entry : entry - target
-  const pct = (diff / entry) * 100
-  return `${diff > 0 ? '+' : ''}${diff.toFixed(2)} (${pct.toFixed(1)}%)`
-}
+const HEADERS = [
+  'Symbol',
+  'Qty',
+  'Entry',
+  'LTP',
+  'P&L',
+  'SL',
+  'SL Dist',
+  'TGT',
+  'TGT Dist',
+  'TSL',
+  'TSL Dist',
+  'BE',
+  'Status',
+  '',
+]
 
 export function PositionTable({
   strategyId,
   strategyType,
   positions,
+  groups,
   onRefresh,
 }: PositionTableProps) {
   const [closing, setClosing] = useState<number | null>(null)
@@ -60,79 +57,79 @@ export function PositionTable({
     }
   }
 
+  const handleCloseGroup = async (groupId: string) => {
+    try {
+      await dashboardApi.closePositionGroup(strategyId, groupId, strategyType)
+      showToast.success('Group close orders placed')
+      onRefresh()
+    } catch {
+      showToast.error('Failed to close group')
+    }
+  }
+
+  // Separate grouped vs ungrouped positions
+  const groupedIds = new Set<string>()
+  const groupMap = new Map<string, DashboardPosition[]>()
+  if (groups && groups.length > 0) {
+    for (const g of groups) {
+      groupedIds.add(g.id)
+      groupMap.set(g.id, [])
+    }
+    for (const pos of positions) {
+      if (pos.position_group_id && groupMap.has(pos.position_group_id)) {
+        groupMap.get(pos.position_group_id)!.push(pos)
+      }
+    }
+  }
+
+  const ungrouped = positions.filter(
+    (p) => !p.position_group_id || !groupedIds.has(p.position_group_id)
+  )
+
   return (
-    <div className="overflow-x-auto">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="w-[120px]">Symbol</TableHead>
-            <TableHead>Action</TableHead>
-            <TableHead className="text-right">Qty</TableHead>
-            <TableHead className="text-right">Entry</TableHead>
-            <TableHead className="text-right">LTP</TableHead>
-            <TableHead className="text-right">P&L</TableHead>
-            <TableHead className="text-right">P&L %</TableHead>
-            <TableHead>Risk</TableHead>
-            <TableHead>State</TableHead>
-            <TableHead className="w-[60px]" />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {positions.map((pos) => (
-            <TableRow key={pos.id}>
-              <TableCell className="font-medium text-xs">
-                <div>{pos.symbol}</div>
-                <div className="text-muted-foreground text-[10px]">{pos.exchange}</div>
-              </TableCell>
-              <TableCell>
-                <span
-                  className={`text-xs font-medium ${pos.action === 'BUY' ? 'text-green-600' : 'text-red-600'}`}
-                >
-                  {pos.action}
-                </span>
-              </TableCell>
-              <TableCell className="text-right text-xs">{pos.quantity}</TableCell>
-              <TableCell className="text-right text-xs">
-                {pos.average_entry_price ? pos.average_entry_price.toFixed(2) : '-'}
-              </TableCell>
-              <TableCell className="text-right text-xs">
-                {pos.ltp ? pos.ltp.toFixed(2) : '-'}
-              </TableCell>
-              <TableCell className={`text-right text-xs font-medium ${pnlColor(pos.unrealized_pnl)}`}>
-                {pos.unrealized_pnl != null ? pos.unrealized_pnl.toFixed(2) : '-'}
-              </TableCell>
-              <TableCell className={`text-right text-xs ${pnlColor(pos.unrealized_pnl_pct)}`}>
-                {pos.unrealized_pnl_pct != null ? `${pos.unrealized_pnl_pct.toFixed(2)}%` : '-'}
-              </TableCell>
-              <TableCell>
-                <RiskBadges position={pos} />
-                {pos.stoploss_price && pos.ltp && (
-                  <div className="text-[10px] text-muted-foreground mt-0.5">
-                    SL dist: {distanceText(pos.ltp, pos.stoploss_price, pos.action)}
-                  </div>
-                )}
-              </TableCell>
-              <TableCell>
-                <StatusBadge value={pos.position_state} />
-              </TableCell>
-              <TableCell>
-                {pos.position_state === 'active' && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
-                    disabled={closing === pos.id}
-                    onClick={() => handleClose(pos.id)}
-                    title="Close position"
-                  >
-                    <XCircleIcon className="h-4 w-4 text-red-500" />
-                  </Button>
-                )}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+    <div className="space-y-3">
+      {/* Grouped positions first */}
+      {groups &&
+        groups.map((group) => {
+          const groupPositions = groupMap.get(group.id) || []
+          if (groupPositions.length === 0) return null
+          return (
+            <PositionGroup
+              key={group.id}
+              group={group}
+              positions={groupPositions}
+              onCloseGroup={handleCloseGroup}
+              onClosePosition={handleClose}
+            />
+          )
+        })}
+
+      {/* Ungrouped positions */}
+      {ungrouped.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b">
+                {HEADERS.map((h, i) => (
+                  <th key={i} className="py-2 px-2 text-left font-medium text-muted-foreground">
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {ungrouped.map((pos) => (
+                <PositionRow
+                  key={pos.id}
+                  position={pos}
+                  onClose={handleClose}
+                  closing={closing === pos.id}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

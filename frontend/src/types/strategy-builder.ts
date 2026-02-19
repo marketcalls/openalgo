@@ -1,11 +1,16 @@
 // Strategy Builder Types — F&O multi-leg strategy construction
 
+export type BuilderExchange = 'NFO' | 'BFO' | 'CDS' | 'BCD' | 'MCX'
+
+export type StrikeType = 'ATM' | 'ITM' | 'OTM' | 'specific' | 'premium_near'
+
 export interface BuilderLeg {
   id: string // client-side UUID
   leg_type: 'option' | 'future'
   action: 'BUY' | 'SELL'
   option_type: 'CE' | 'PE' | null // null for futures
-  offset: string // ATM, ITM1-ITM40, OTM1-OTM40
+  strike_type: StrikeType
+  offset: string // ATM, ITM1-ITM20, OTM1-OTM20
   expiry_type: 'current_week' | 'next_week' | 'current_month' | 'next_month'
   product_type: 'MIS' | 'NRML'
   quantity_lots: number
@@ -29,7 +34,7 @@ export type BuilderStep = 'basics' | 'legs' | 'risk' | 'review'
 
 export interface BuilderBasics {
   name: string
-  exchange: 'NFO' | 'BFO'
+  exchange: BuilderExchange
   underlying: string
   expiry_type: 'current_week' | 'next_week' | 'current_month' | 'next_month'
   product_type: 'MIS' | 'NRML'
@@ -62,6 +67,7 @@ export interface BuilderState {
   basics: BuilderBasics
   legs: BuilderLeg[]
   riskConfig: BuilderRiskConfig
+  riskMode: 'per_leg' | 'combined'
   preset: string | null
 }
 

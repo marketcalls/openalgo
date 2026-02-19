@@ -1,7 +1,9 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
 import { Card, CardContent } from '@/components/ui/card'
 import { builderApi } from '@/api/strategy-builder'
+import { strategyApi } from '@/api/strategy'
+import { dashboardApi } from '@/api/strategy-dashboard'
 import { showToast } from '@/utils/toast'
 import type {
   BuilderBasics,
@@ -18,14 +20,68 @@ import { ReviewStep } from '@/components/strategy-builder/ReviewStep'
 
 export default function StrategyBuilder() {
   const navigate = useNavigate()
+  const { id } = useParams<{ id: string }>()
+  const isEditMode = !!id
+
   const [step, setStep] = useState<BuilderStep>('basics')
   const [basics, setBasics] = useState<BuilderBasics>({ ...DEFAULT_BUILDER_BASICS })
   const [legs, setLegs] = useState<BuilderLeg[]>([])
   const [riskConfig, setRiskConfig] = useState<BuilderRiskConfig>({ ...DEFAULT_RISK_CONFIG })
   const [preset, setPreset] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [loading, setLoading] = useState(false)
 
-  const handleSave = async () => {
+  // Load existing strategy for edit mode
+  useEffect(() => {
+    if (!id) return
+    let cancelled = false
+    const loadStrategy = async () => {
+      setLoading(true)
+      try {
+        const strategyId = Number(id)
+        const [stratData, riskData] = await Promise.all([
+          strategyApi.getStrategy(strategyId),
+          dashboardApi.getRiskConfig(strategyId, 'builder').catch(() => null),
+        ])
+
+        if (cancelled) return
+
+        const s = stratData.strategy
+        const mapping = stratData.mappings[0]
+        setBasics({
+          name: s.name || '',
+          exchange: (mapping?.exchange as BuilderBasics['exchange']) || 'NFO',
+          underlying: mapping?.symbol || 'NIFTY',
+          expiry_type: 'current_week',
+          product_type: (mapping?.product_type as 'MIS' | 'NRML') || 'MIS',
+          is_intraday: s.is_intraday ?? true,
+          trading_mode: s.trading_mode || 'BOTH',
+        })
+
+        if (riskData) {
+          setRiskConfig({
+            ...DEFAULT_RISK_CONFIG,
+            default_stoploss_type: riskData.default_stoploss_type,
+            default_stoploss_value: riskData.default_stoploss_value,
+            default_target_type: riskData.default_target_type,
+            default_target_value: riskData.default_target_value,
+            default_trailstop_type: riskData.default_trailstop_type,
+            default_trailstop_value: riskData.default_trailstop_value,
+            default_breakeven_type: riskData.default_breakeven_type,
+            default_breakeven_threshold: riskData.default_breakeven_threshold,
+          })
+        }
+      } catch {
+        showToast.error('Failed to load strategy')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    loadStrategy()
+    return () => { cancelled = true }
+  }, [id])
+
+  const handleSave = async (opts?: { saveAsTemplate?: boolean }) => {
     setSaving(true)
     try {
       const payload = {
@@ -33,10 +89,12 @@ export default function StrategyBuilder() {
         legs: legs.map(({ id: _id, ...rest }) => rest),
         riskConfig,
         preset,
+        saveAsTemplate: opts?.saveAsTemplate,
+        ...(isEditMode ? { strategy_id: Number(id) } : {}),
       }
       const result = await builderApi.saveStrategy(payload)
       if (result.status === 'success') {
-        showToast.success('Strategy saved successfully')
+        showToast.success(isEditMode ? 'Strategy updated' : 'Strategy saved successfully')
         navigate('/strategy/hub')
       } else {
         showToast.error(result.message || 'Failed to save strategy')
@@ -48,11 +106,25 @@ export default function StrategyBuilder() {
     }
   }
 
+  if (loading) {
+    return (
+      <div className="p-6 flex items-center justify-center">
+        <p className="text-sm text-muted-foreground">Loading strategy...</p>
+      </div>
+    )
+  }
+
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1 className="text-xl font-bold mb-1">Strategy Builder</h1>
-        <p className="text-sm text-muted-foreground">Build F&O multi-leg strategies with a visual wizard</p>
+        <h1 className="text-xl font-bold mb-1">
+          {isEditMode ? 'Edit Strategy' : 'Strategy Builder'}
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          {isEditMode
+            ? 'Modify your F&O multi-leg strategy'
+            : 'Build F&O multi-leg strategies with a visual wizard'}
+        </p>
       </div>
 
       <BuilderStepper currentStep={step} onStepClick={setStep} />

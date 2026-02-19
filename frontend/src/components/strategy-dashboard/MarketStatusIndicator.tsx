@@ -13,6 +13,11 @@ const PHASE_CONFIG: Record<MarketPhase, { label: string; dot: string; bg: string
     dot: 'bg-yellow-500',
     bg: 'bg-yellow-50 text-yellow-700 border-yellow-200 dark:bg-yellow-950 dark:text-yellow-300 dark:border-yellow-800',
   },
+  post_market: {
+    label: 'Post-Market',
+    dot: 'bg-amber-500',
+    bg: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800',
+  },
   market_closed: {
     label: 'Market Closed',
     dot: 'bg-gray-400',

@@ -20,6 +20,7 @@ const DEFAULT_LEG: Omit<BuilderLeg, 'id'> = {
   leg_type: 'option',
   action: 'SELL',
   option_type: 'CE',
+  strike_type: 'ATM',
   offset: 'ATM',
   expiry_type: 'current_week',
   product_type: 'MIS',
