@@ -1,9 +1,9 @@
-import type { PresetDefinition } from '@/types/strategy-builder'
+import type { StrategyTemplate } from '@/api/strategy-templates'
 import { TemplateCard } from './TemplateCard'
 
 interface TemplateGridProps {
-  templates: PresetDefinition[]
-  onDeploy: (template: PresetDefinition) => void
+  templates: StrategyTemplate[]
+  onDeploy: (template: StrategyTemplate) => void
 }
 
 export function TemplateGrid({ templates, onDeploy }: TemplateGridProps) {

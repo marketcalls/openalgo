@@ -1,11 +1,11 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
-import type { PresetDefinition } from '@/types/strategy-builder'
+import type { StrategyTemplate } from '@/api/strategy-templates'
 
 interface TemplateCardProps {
-  template: PresetDefinition
-  onDeploy: (template: PresetDefinition) => void
+  template: StrategyTemplate
+  onDeploy: (template: StrategyTemplate) => void
 }
 
 const CATEGORY_STYLES: Record<string, string> = {
@@ -15,6 +15,8 @@ const CATEGORY_STYLES: Record<string, string> = {
 }
 
 export function TemplateCard({ template, onDeploy }: TemplateCardProps) {
+  const legs = template.legs_config || []
+
   return (
     <Card className="flex flex-col">
       <CardHeader className="pb-2">
@@ -28,13 +30,13 @@ export function TemplateCard({ template, onDeploy }: TemplateCardProps) {
       <CardContent className="flex-1 pb-2">
         <p className="text-xs text-muted-foreground mb-3">{template.description}</p>
         <div className="space-y-1">
-          {template.legs.map((leg, idx) => (
+          {legs.map((leg: Record<string, unknown>, idx: number) => (
             <div key={idx} className="flex items-center gap-1.5 text-xs">
-              <span className={leg.action === 'BUY' ? 'text-green-600' : 'text-red-600'}>
-                {leg.action}
+              <span className={String(leg.action) === 'BUY' ? 'text-green-600' : 'text-red-600'}>
+                {String(leg.action)}
               </span>
-              <span>{leg.option_type || 'FUT'}</span>
-              <span className="text-muted-foreground">{leg.offset}</span>
+              <span>{String(leg.option_type || 'FUT')}</span>
+              <span className="text-muted-foreground">{String(leg.offset || '')}</span>
             </div>
           ))}
         </div>

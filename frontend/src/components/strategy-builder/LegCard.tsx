@@ -41,6 +41,8 @@ export function LegCard({ leg, index, onChange, onRemove, frozen }: LegCardProps
 
   const offsets = getOffsets(leg.strike_type)
   const showOffset = leg.strike_type === 'ITM' || leg.strike_type === 'OTM'
+  const showStrikePrice = leg.strike_type === 'specific'
+  const showPremiumNear = leg.strike_type === 'premium_near'
 
   const handleStrikeTypeChange = (v: string) => {
     const st = v as StrikeType
@@ -130,6 +132,34 @@ export function LegCard({ leg, index, onChange, onRemove, frozen }: LegCardProps
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+          )}
+
+          {showStrikePrice && (
+            <div className="space-y-1">
+              <Label className="text-[10px]">Strike Price</Label>
+              <Input
+                type="number"
+                step="0.05"
+                className="h-8 text-xs"
+                value={leg.offset === 'ATM' ? '' : leg.offset}
+                placeholder="e.g., 24000"
+                onChange={(e) => update('offset', e.target.value || 'ATM')}
+              />
+            </div>
+          )}
+
+          {showPremiumNear && (
+            <div className="space-y-1">
+              <Label className="text-[10px]">Premium Near</Label>
+              <Input
+                type="number"
+                step="0.05"
+                className="h-8 text-xs"
+                value={leg.offset === 'ATM' ? '' : leg.offset}
+                placeholder="e.g., 100"
+                onChange={(e) => update('offset', e.target.value ? `P${e.target.value}` : 'ATM')}
+              />
             </div>
           )}
 

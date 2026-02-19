@@ -1,8 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import type { PresetDefinition } from '@/types/strategy-builder'
-import { STRATEGY_TEMPLATES } from '@/api/strategy-templates'
+import { templatesApi, type StrategyTemplate } from '@/api/strategy-templates'
 import { TemplateGrid } from '@/components/strategy-templates/TemplateGrid'
 import { DeployDialog } from '@/components/strategy-templates/DeployDialog'
 
@@ -11,12 +10,30 @@ type FilterTab = 'all' | 'neutral' | 'bullish' | 'bearish'
 export default function StrategyTemplates() {
   const navigate = useNavigate()
   const [filter, setFilter] = useState<FilterTab>('all')
-  const [deployTemplate, setDeployTemplate] = useState<PresetDefinition | null>(null)
+  const [templates, setTemplates] = useState<StrategyTemplate[]>([])
+  const [loading, setLoading] = useState(true)
+  const [deployTemplate, setDeployTemplate] = useState<StrategyTemplate | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const data = await templatesApi.getTemplates()
+        if (!cancelled) setTemplates(data)
+      } catch {
+        // fallback: empty
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [])
 
   const filtered =
     filter === 'all'
-      ? STRATEGY_TEMPLATES
-      : STRATEGY_TEMPLATES.filter((p) => p.category === filter)
+      ? templates
+      : templates.filter((t) => t.category === filter)
 
   return (
     <div className="p-6 space-y-6">
@@ -36,7 +53,13 @@ export default function StrategyTemplates() {
         </TabsList>
 
         <TabsContent value={filter} className="mt-4">
-          <TemplateGrid templates={filtered} onDeploy={setDeployTemplate} />
+          {loading ? (
+            <div className="flex items-center justify-center h-40 text-sm text-muted-foreground">
+              Loading templates...
+            </div>
+          ) : (
+            <TemplateGrid templates={filtered} onDeploy={setDeployTemplate} />
+          )}
         </TabsContent>
       </Tabs>
 

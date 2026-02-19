@@ -19,6 +19,13 @@ from database.strategy_db import (
     get_symbol_mappings,
     db_session as strategy_db_session,
 )
+from database.strategy_template_db import (
+    create_template,
+    delete_template,
+    get_all_templates,
+    get_template,
+    serialize_template,
+)
 from database.chartink_db import get_strategy as get_chartink_strategy
 from database.strategy_position_db import (
     delete_closed_position,
@@ -1065,3 +1072,286 @@ def builder_save():
     except Exception as e:
         logger.exception(f"Error saving builder strategy: {e}")
         return jsonify({"status": "error", "message": "Failed to save strategy"}), 500
+
+
+# ─── Strategy Templates CRUD ─────────────────────────────────────────────
+
+
+@strategy_dashboard_bp.route("/templates")
+@check_session_validity
+def list_templates():
+    """Get all strategy templates (system + user)."""
+    user_id = _get_user_id()
+    if not user_id:
+        return jsonify({"status": "error", "message": "Session expired"}), 401
+
+    category = request.args.get("category")
+    templates = get_all_templates(category=category, user_id=user_id)
+
+    return jsonify({
+        "status": "success",
+        "data": [serialize_template(t) for t in templates],
+    })
+
+
+@strategy_dashboard_bp.route("/templates/<int:template_id>")
+@check_session_validity
+def get_template_route(template_id):
+    """Get a single template by ID."""
+    user_id = _get_user_id()
+    if not user_id:
+        return jsonify({"status": "error", "message": "Session expired"}), 401
+
+    template = get_template(template_id)
+    if not template:
+        return jsonify({"status": "error", "message": "Template not found"}), 404
+
+    # Only system templates or user's own templates are visible
+    if not template.is_system and template.created_by != user_id:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 403
+
+    return jsonify({"status": "success", "data": serialize_template(template)})
+
+
+@strategy_dashboard_bp.route("/templates", methods=["POST"])
+@check_session_validity
+def create_template_route():
+    """Create a user strategy template."""
+    user_id = _get_user_id()
+    if not user_id:
+        return jsonify({"status": "error", "message": "Session expired"}), 401
+
+    data = request.json or {}
+    name = data.get("name", "").strip()
+    if not name:
+        return jsonify({"status": "error", "message": "Template name is required"}), 400
+
+    legs_config = data.get("legs_config", [])
+    if not legs_config:
+        return jsonify({"status": "error", "message": "At least one leg is required"}), 400
+
+    template = create_template(
+        name=name,
+        description=data.get("description"),
+        category=data.get("category", "neutral"),
+        preset=data.get("preset"),
+        legs_config=legs_config,
+        risk_config=data.get("risk_config"),
+        is_system=False,
+        created_by=user_id,
+    )
+
+    if not template:
+        return jsonify({"status": "error", "message": "Failed to create template"}), 500
+
+    return jsonify({
+        "status": "success",
+        "message": "Template created",
+        "data": serialize_template(template),
+    })
+
+
+@strategy_dashboard_bp.route("/templates/<int:template_id>", methods=["DELETE"])
+@check_session_validity
+def delete_template_route(template_id):
+    """Delete a user-created template (system templates cannot be deleted)."""
+    user_id = _get_user_id()
+    if not user_id:
+        return jsonify({"status": "error", "message": "Session expired"}), 401
+
+    if delete_template(template_id, user_id):
+        return jsonify({"status": "success", "message": "Template deleted"})
+    else:
+        return jsonify({"status": "error", "message": "Cannot delete template"}), 400
+
+
+@strategy_dashboard_bp.route("/templates/<int:template_id>/deploy", methods=["POST"])
+@check_session_validity
+def deploy_template(template_id):
+    """Deploy a template as a new strategy."""
+    user_id = _get_user_id()
+    if not user_id:
+        return jsonify({"status": "error", "message": "Session expired"}), 401
+
+    template = get_template(template_id)
+    if not template:
+        return jsonify({"status": "error", "message": "Template not found"}), 404
+
+    data = request.json or {}
+    name = data.get("name", template.name).strip()
+    exchange = data.get("exchange", "NFO")
+    underlying = data.get("underlying", "NIFTY")
+    expiry_type = data.get("expiry_type", "current_week")
+    product_type = data.get("product_type", "MIS")
+    lots = data.get("lots", 1)
+
+    try:
+        legs = json.loads(template.legs_config) if isinstance(template.legs_config, str) else template.legs_config
+        # Override lots in each leg
+        for leg in legs:
+            leg["quantity_lots"] = lots
+
+        risk_config = {}
+        if template.risk_config:
+            risk_config = json.loads(template.risk_config) if isinstance(template.risk_config, str) else template.risk_config
+
+        # Merge user-provided risk config
+        for field in ["default_stoploss_type", "default_stoploss_value",
+                      "default_target_type", "default_target_value"]:
+            if field in data:
+                risk_config[field] = data[field]
+
+        new_webhook_id = str(uuid.uuid4())
+        strategy = create_strategy(
+            name=name,
+            webhook_id=new_webhook_id,
+            user_id=user_id,
+            is_intraday=product_type == "MIS",
+            trading_mode="BOTH",
+            platform="builder",
+        )
+
+        if not strategy:
+            return jsonify({"status": "error", "message": "Failed to create strategy"}), 500
+
+        # Apply risk defaults
+        for field in ["default_stoploss_type", "default_stoploss_value",
+                      "default_target_type", "default_target_value",
+                      "default_trailstop_type", "default_trailstop_value",
+                      "default_breakeven_type", "default_breakeven_threshold"]:
+            val = risk_config.get(field)
+            if val is not None:
+                setattr(strategy, field, val)
+        strategy_db_session.commit()
+
+        # Resolve quote exchange
+        NSE_INDEX_SYMBOLS = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"}
+        BSE_INDEX_SYMBOLS = {"SENSEX", "BANKEX", "SENSEX50"}
+        if underlying.upper() in NSE_INDEX_SYMBOLS:
+            underlying_exchange = "NSE_INDEX"
+        elif underlying.upper() in BSE_INDEX_SYMBOLS:
+            underlying_exchange = "BSE_INDEX"
+        elif exchange in ("BFO", "BSE"):
+            underlying_exchange = "BSE"
+        else:
+            underlying_exchange = "NSE"
+
+        mapping_data = {
+            "symbol": underlying,
+            "exchange": exchange,
+            "quantity": lots,
+            "product_type": product_type,
+            "order_mode": "multi_leg",
+            "underlying": underlying,
+            "underlying_exchange": underlying_exchange,
+            "expiry_type": expiry_type,
+            "risk_mode": risk_config.get("risk_mode", "combined"),
+            "preset": template.preset,
+            "legs_config": json.dumps(legs),
+        }
+
+        bulk_add_symbol_mappings(strategy.id, [mapping_data])
+
+        return jsonify({
+            "status": "success",
+            "message": "Template deployed",
+            "data": {"strategy_id": strategy.id, "webhook_id": new_webhook_id},
+        })
+    except Exception as e:
+        logger.exception(f"Error deploying template: {e}")
+        return jsonify({"status": "error", "message": "Failed to deploy template"}), 500
+
+
+# ─── Builder Execute ──────────────────────────────────────────────────────
+
+
+@strategy_dashboard_bp.route("/builder/<int:strategy_id>/execute", methods=["POST"])
+@check_session_validity
+def builder_execute(strategy_id):
+    """Execute a builder strategy — place orders for all legs."""
+    user_id = _get_user_id()
+    if not user_id:
+        return jsonify({"status": "error", "message": "Session expired"}), 401
+
+    strategy, error, status = _get_strategy_with_auth(strategy_id, "webhook", user_id)
+    if error:
+        return jsonify(error), status
+
+    try:
+        from services.websocket_service import get_user_api_key
+
+        api_key = get_user_api_key(user_id)
+        if not api_key:
+            return jsonify({"status": "error", "message": "No API key found"}), 400
+
+        # Get symbol mapping with legs config
+        mappings = get_symbol_mappings(strategy_id)
+        if not mappings:
+            return jsonify({"status": "error", "message": "No symbol mappings found"}), 400
+
+        mapping = mappings[0]
+        if not mapping.legs_config:
+            return jsonify({"status": "error", "message": "No legs configuration found"}), 400
+
+        legs = json.loads(mapping.legs_config)
+        underlying = mapping.underlying or "NIFTY"
+        exchange = mapping.exchange or "NFO"
+
+        import requests as http_requests
+
+        base_url = f"http://127.0.0.1:{request.environ.get('SERVER_PORT', 5000)}"
+
+        results = []
+        for i, leg in enumerate(legs):
+            action = leg.get("action", "BUY")
+            quantity = leg.get("quantity_lots", 1)
+            product = leg.get("product_type", mapping.product_type or "MIS")
+            order_type = leg.get("order_type", "MARKET")
+
+            # Build symbol from leg parameters
+            symbol = underlying  # For webhook-based strategies, actual symbol resolution happens at broker level
+
+            order_payload = {
+                "apikey": api_key,
+                "strategy": f"strategy_{strategy_id}",
+                "symbol": symbol,
+                "exchange": exchange,
+                "action": action,
+                "quantity": str(quantity),
+                "product": product,
+                "pricetype": order_type,
+                "price": "0",
+            }
+
+            try:
+                response = http_requests.post(f"{base_url}/api/v1/placeorder", json=order_payload)
+                if response.ok:
+                    result = response.json()
+                    results.append({
+                        "leg": i + 1,
+                        "status": "success",
+                        "orderid": result.get("orderid", ""),
+                    })
+                else:
+                    results.append({
+                        "leg": i + 1,
+                        "status": "error",
+                        "message": "Order placement failed",
+                    })
+            except Exception as leg_error:
+                results.append({
+                    "leg": i + 1,
+                    "status": "error",
+                    "message": str(leg_error),
+                })
+
+        success_count = sum(1 for r in results if r["status"] == "success")
+
+        return jsonify({
+            "status": "success",
+            "message": f"Executed {success_count}/{len(legs)} legs",
+            "data": {"results": results},
+        })
+    except Exception as e:
+        logger.exception(f"Error executing builder strategy: {e}")
+        return jsonify({"status": "error", "message": "Failed to execute strategy"}), 500

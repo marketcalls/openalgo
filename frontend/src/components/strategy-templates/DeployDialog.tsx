@@ -10,16 +10,15 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { builderApi } from '@/api/strategy-builder'
+import { templatesApi, type StrategyTemplate } from '@/api/strategy-templates'
 import { webClient } from '@/api/client'
 import { showToast } from '@/utils/toast'
-import type { PresetDefinition, BuilderExchange } from '@/types/strategy-builder'
-import { DEFAULT_RISK_CONFIG } from '@/types/strategy-builder'
+import type { BuilderExchange } from '@/types/strategy-builder'
 
 interface DeployDialogProps {
   open: boolean
   onClose: () => void
-  template: PresetDefinition | null
+  template: StrategyTemplate | null
   onDeployed: () => void
 }
 
@@ -93,43 +92,21 @@ export function DeployDialog({ open, onClose, template, onDeployed }: DeployDial
     if (!template || !name.trim()) return
     setSaving(true)
     try {
-      const legs = template.legs.map((leg) => ({
-        ...leg,
-        quantity_lots: lots,
-      }))
-
-      const riskConfig = { ...DEFAULT_RISK_CONFIG }
-      if (slType) {
-        riskConfig.combined_stoploss_type = slType
-        riskConfig.combined_stoploss_value = slValue
-      }
-      if (tgtType) {
-        riskConfig.combined_target_type = tgtType
-        riskConfig.combined_target_value = tgtValue
-      }
-
-      const result = await builderApi.saveStrategy({
-        basics: {
-          name,
-          exchange,
-          underlying,
-          expiry_type: expiryType as 'current_week' | 'next_week' | 'current_month' | 'next_month',
-          product_type: 'MIS',
-          is_intraday: true,
-          trading_mode: 'BOTH',
-        },
-        legs,
-        riskConfig,
-        preset: template.id,
+      await templatesApi.deployTemplate(template.id, {
+        name,
+        exchange,
+        underlying,
+        expiry_type: expiryType,
+        product_type: 'MIS',
+        lots,
+        default_stoploss_type: slType || null,
+        default_stoploss_value: slValue,
+        default_target_type: tgtType || null,
+        default_target_value: tgtValue,
       })
-
-      if (result.status === 'success') {
-        showToast.success('Strategy deployed')
-        onDeployed()
-        onClose()
-      } else {
-        showToast.error(result.message || 'Failed to deploy')
-      }
+      showToast.success('Strategy deployed')
+      onDeployed()
+      onClose()
     } catch {
       showToast.error('Failed to deploy template')
     } finally {
