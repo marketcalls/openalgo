@@ -2,63 +2,24 @@ import json
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 import pandas as pd
-from requests.exceptions import HTTPError, Timeout
 
-from utils.logging import get_logger
-
-logger = get_logger(__name__)
-
-
-# Mock token map for testing
-ALICEBLUE_TOKEN_MAP = {
-    ("NSE", "YESBANK"): "5998089",
-    ("NSE", "RELIANCE"): "2885634",
-    ("NSE", "INFY"): "1594561",
-    ("BSE", "RELIANCE"): "500325",
-    ("NSE", "NIFTY50"): "26000",
-    ("NSE", "BANKNIFTY"): "26009",
-}
-
-
-# Token retrieval function
-def get_token(symbol, exchange):
-    """Get token for a symbol and exchange"""
-    try:
-        # First try the local token map
-        key = (exchange, symbol)
-        if key in ALICEBLUE_TOKEN_MAP:
-            return ALICEBLUE_TOKEN_MAP[key]
-
-        # Could also try to import the database function
-        # but we'll just return None for now if not in our map
-        return None
-    except Exception as e:
-        logger.error(f"Error getting token: {str(e)}")
-        return None
-
-
-from datetime import timedelta
-
-from database.auth_db import db_session
-from database.symbol import SymToken
+from database.auth_db import Auth
 from database.token_db import get_br_symbol, get_brexchange, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
+from utils.logging import get_logger
 
 from .alicebluewebsocket import AliceBlueWebSocket
 
-# AliceBlue API URLs
-BASE_URL = "https://ant.aliceblueonline.com/rest/AliceBlueAPIService/api/"
-SCRIP_DETAILS_URL = BASE_URL + "ScripDetails/getScripQuoteDetails"
-HISTORICAL_API_URL = BASE_URL + "chart/history"
+logger = get_logger(__name__)
 
-# Global websocket instance for reuse
-_web_socket = None
-_web_socket_lock = threading.Lock()
+# AliceBlue V2 API URLs
+BASE_URL = "https://a3.aliceblueonline.com/"
+HISTORICAL_API_URL = BASE_URL + "open-api/od/ChartAPIService/api/chart/history"
 
 
 class BrokerData:
@@ -66,47 +27,6 @@ class BrokerData:
     BrokerData class for AliceBlue broker.
     Handles market data operations including quotes, market depth, and historical data.
     """
-
-    def _auto_detect_exchange(self, symbol: str) -> str:
-        """
-        Auto-detect exchange for a symbol by looking up its instrumenttype in database
-        Returns the appropriate exchange based on instrumenttype
-        """
-        try:
-            # Query database for the symbol
-            with db_session() as session:
-                # First try to find any matching symbol
-                results = session.query(SymToken).filter(SymToken.symbol == symbol).all()
-
-                if results:
-                    for result in results:
-                        # Check instrumenttype to determine exchange
-                        if result.instrumenttype:
-                            instrument_type = result.instrumenttype.upper()
-                            # If instrumenttype contains INDEX, use it as exchange
-                            if "INDEX" in instrument_type:
-                                # instrumenttype like NSE_INDEX, BSE_INDEX, MCX_INDEX
-                                return result.instrumenttype
-                            else:
-                                # For other types, use the exchange field
-                                return result.exchange
-
-                    # If no instrumenttype, return the exchange of first match
-                    return results[0].exchange
-
-                # If not found, make educated guess based on symbol pattern
-                if symbol.endswith("FUT"):
-                    return "NFO"
-                elif symbol.endswith("CE") or symbol.endswith("PE"):
-                    return "NFO"
-                elif "USDINR" in symbol.upper() or "EURINR" in symbol.upper():
-                    return "CDS"
-                else:
-                    return "NSE"  # Default to NSE
-
-        except Exception as e:
-            logger.error(f"Error in auto-detecting exchange: {str(e)}")
-            return "NSE"  # Default fallback
 
     def __init__(self, auth_token=None):
         self.token_mapping = {}
@@ -140,14 +60,17 @@ class BrokerData:
             # Clean up any existing connection
             if hasattr(self, "_websocket") and self._websocket:
                 try:
-                    self._websocket.close()
+                    self._websocket.disconnect()
                 except Exception as e:
                     logger.warning(f"Error closing existing WebSocket: {str(e)}")
 
-            # Get user ID from environment variable or fallback
-            user_id = os.environ.get("BROKER_API_KEY", "")
+            # Get user ID (clientId) from the auth database
+            # This is the numeric clientId (e.g., '1614986') stored during login,
+            # NOT the appCode from BROKER_API_KEY
+            auth_obj = Auth.query.filter_by(broker='aliceblue', is_revoked=False).first()
+            user_id = auth_obj.user_id if auth_obj else None
             if not user_id:
-                logger.error("Missing API secret (user ID) for AliceBlue WebSocket")
+                logger.error("Missing user_id (clientId) for AliceBlue WebSocket. Please re-login.")
                 return None
 
             # Create new websocket connection
@@ -173,233 +96,102 @@ class BrokerData:
             logger.error(f"Error creating WebSocket: {str(e)}")
             return None
 
-    def get_quotes(self, symbol_list, timeout: int = 5) -> list[dict[str, Any]]:
+    @staticmethod
+    def _normalize_token(token) -> str:
+        """Normalize token to integer string (e.g. 3045.0 -> '3045')."""
+        try:
+            return str(int(float(token)))
+        except (ValueError, TypeError):
+            return str(token)
+
+    def _map_exchange(self, exchange: str) -> str:
+        """Map OpenAlgo exchange codes to AliceBlue API exchange codes."""
+        exchange_map = {
+            "NSE_INDEX": "NSE",
+            "BSE_INDEX": "BSE",
+            "MCX_INDEX": "MCX",
+        }
+        return exchange_map.get(exchange, exchange)
+
+    def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
-        Get real-time quotes for a list of symbols using the WebSocket connection.
-        Falls back to REST API if WebSocket is not available.
+        Get real-time quotes for given symbol.
 
         Args:
-            symbol_list: List of symbols or a single symbol dictionary with exchange and symbol
-            timeout (int): Timeout in seconds
+            symbol: Trading symbol (e.g., 'RELIANCE', 'NIFTY')
+            exchange: Exchange (e.g., NSE, BSE, NFO, NSE_INDEX, BSE_INDEX)
 
         Returns:
-            List[Dict[str, Any]]: List of quote data for each symbol
+            dict: Quote data in OpenAlgo standard format
         """
-        logger.info(f"Original symbol_list: {symbol_list}")
+        try:
+            # Convert symbol to broker format and get token
+            br_symbol = get_br_symbol(symbol, exchange) or symbol
+            token = self._normalize_token(get_token(symbol, exchange))
 
-        # Special case for Bruno API format with single symbol
-        # Special case for OpenAlgo standard format: direct quote request via Bruno
-        if isinstance(symbol_list, dict):
-            try:
-                # Extract symbol and exchange
-                symbol = symbol_list.get("symbol") or symbol_list.get("SYMBOL")
-                exchange = symbol_list.get("exchange") or symbol_list.get("EXCHANGE")
+            if not token:
+                raise Exception(f"Token not found for {symbol} on {exchange}")
 
-                if symbol and exchange:
-                    logger.info(f"Processing single symbol request: {symbol} on {exchange}")
-                    # Convert to a list with a single item to use the standard flow
-                    symbol_list = [{"symbol": symbol, "exchange": exchange}]
-                else:
-                    logger.error("Missing symbol or exchange in request")
-                    return {
-                        "status": "error",
-                        "data": [],
-                        "message": "Missing symbol or exchange in request",
-                    }
-            except Exception as e:
-                logger.error(f"Error processing single symbol request: {str(e)}")
-                return {
-                    "status": "error",
-                    "data": [],
-                    "message": f"Error processing request: {str(e)}",
-                }
+            # Map exchange for AliceBlue WebSocket API
+            api_exchange = self._map_exchange(exchange)
 
-        # Handle plain string (like just "YESBANK" or "NIFTY")
-        elif isinstance(symbol_list, str):
-            symbol = symbol_list.strip()
+            # Get WebSocket connection
+            websocket = self.get_websocket()
+            if not websocket or not websocket.is_connected:
+                logger.warning("WebSocket not connected, reconnecting...")
+                websocket = self.get_websocket(force_new=True)
 
-            # Use the helper function to auto-detect exchange based on database lookup
-            exchange = self._auto_detect_exchange(symbol)
+            if not websocket or not websocket.is_connected:
+                raise Exception("WebSocket connection unavailable")
 
-            logger.info(
-                f"Processing string symbol: {symbol} on {exchange} (auto-detected from database)"
-            )
-            symbol_list = [{"symbol": symbol, "exchange": exchange}]
+            # Create instrument for subscription
+            class Instrument:
+                def __init__(self, exchange, token, symbol=None):
+                    self.exchange = exchange
+                    self.token = token
+                    self.symbol = symbol
 
-        # For simple case, let's create mock data for testing
-        # In a production system, you'd get this from the broker API
-        quote_data = []
+            instrument = Instrument(exchange=api_exchange, token=token, symbol=br_symbol)
+            instruments = [instrument]
 
-        for sym in symbol_list:
-            # If it's a simple dict with symbol and exchange
-            if isinstance(sym, dict) and "symbol" in sym and "exchange" in sym:
-                symbol = sym["symbol"]
-                exchange = sym["exchange"]
+            # Subscribe to tick data
+            logger.info(f"Subscribing to {api_exchange}:{symbol} with token {token}")
+            success = websocket.subscribe(instruments, is_depth=False)
 
-                # Get token for this symbol
-                token = get_token(symbol, exchange)
+            if not success:
+                raise Exception(f"Failed to subscribe to {symbol} on {exchange}")
 
-                if token:
-                    # Get WebSocket connection or create a new one
-                    websocket = self.get_websocket()
+            # Wait for data to arrive
+            time.sleep(2.0)
 
-                    if not websocket or not websocket.is_connected:
-                        logger.warning("WebSocket not connected, reconnecting...")
-                        websocket = self.get_websocket(force_new=True)
+            # Retrieve quote from WebSocket
+            quote = websocket.get_quote(api_exchange, token)
 
-                    if websocket and websocket.is_connected:
-                        # Get broker symbol if different
-                        br_symbol = get_br_symbol(symbol, exchange) or symbol
+            # Unsubscribe after getting the data
+            websocket.unsubscribe(instruments, is_depth=False)
 
-                        # Convert exchange for AliceBlue API (same as Angel)
-                        if exchange == "NSE_INDEX":
-                            exchange = "NSE"
-                        elif exchange == "BSE_INDEX":
-                            exchange = "BSE"
-                        elif exchange == "MCX_INDEX":
-                            exchange = "MCX"
+            if not quote:
+                raise Exception(f"No quote data received for {symbol} on {exchange}")
 
-                        # Create instrument for subscription
-                        class Instrument:
-                            def __init__(self, exchange, token, symbol=None):
-                                self.exchange = exchange
-                                self.token = token
-                                self.symbol = symbol
-
-                        # Use converted exchange for websocket subscription
-                        instrument = Instrument(exchange=exchange, token=token, symbol=br_symbol)
-                        instruments = [instrument]
-
-                        # Subscribe to this instrument
-                        logger.info(f"Subscribing to {exchange}:{symbol} with token {token}")
-                        success = websocket.subscribe(instruments)
-
-                        if success:
-                            # Wait longer for data to arrive, especially for first subscription
-                            logger.info(f"Waiting for WebSocket data for {exchange}:{symbol}")
-                            time.sleep(2.0)  # Increased wait time
-
-                            # Retrieve quote from WebSocket using converted exchange
-                            logger.debug(f"Attempting to retrieve quote for {exchange}:{token}")
-                            quote = websocket.get_quote(exchange, token)
-                            logger.debug(f"Quote retrieval result: {quote is not None}")
-
-                            if quote:
-                                # Format the response according to OpenAlgo standard format
-                                quote_item = {
-                                    "symbol": symbol,
-                                    "exchange": exchange,
-                                    "token": token,
-                                    "ltp": float(quote.get("ltp", 0)),
-                                    "open": float(quote.get("open", 0)),
-                                    "high": float(quote.get("high", 0)),
-                                    "low": float(quote.get("low", 0)),
-                                    "close": float(quote.get("close", 0)),
-                                    "prev_close": float(
-                                        quote.get("close", 0)
-                                    ),  # Using close as prev_close
-                                    "change": float(quote.get("change", 0)),
-                                    "change_percent": float(quote.get("change_percent", 0)),
-                                    "volume": int(quote.get("volume", 0)),
-                                    "oi": int(quote.get("open_interest", 0)),
-                                    "bid": float(quote.get("bid", 0)),
-                                    "ask": float(quote.get("ask", 0)),
-                                    "timestamp": datetime.now().isoformat(),
-                                }
-
-                                # Add market depth if available
-                                if "depth" in quote:
-                                    quote_item["depth"] = quote["depth"]
-
-                                quote_data.append(quote_item)
-                                logger.debug(
-                                    f"Retrieved real-time quote for {symbol} on {exchange}"
-                                )
-
-                                # Unsubscribe after getting the data to stop continuous streaming
-                                logger.info(
-                                    f"Unsubscribing from {exchange}:{symbol} after retrieving quote"
-                                )
-                                websocket.unsubscribe(instruments, is_depth=False)
-                            else:
-                                logger.warning(f"No quote data received for {symbol} on {exchange}")
-                                # Unsubscribe even if no data received to clean up subscription
-                                logger.info(
-                                    f"Unsubscribing from {exchange}:{symbol} due to no quote data"
-                                )
-                                websocket.unsubscribe(instruments, is_depth=False)
-                                # Create fallback data with zeros
-                                quote_item = {
-                                    "symbol": symbol,
-                                    "exchange": exchange,
-                                    "token": token,
-                                    "ltp": 0.0,
-                                    "open": 0.0,
-                                    "high": 0.0,
-                                    "low": 0.0,
-                                    "close": 0.0,
-                                    "change": 0.0,
-                                    "change_percent": 0.0,
-                                    "volume": 0,
-                                    "oi": 0,
-                                    "timestamp": datetime.now().isoformat(),
-                                }
-                                quote_data.append(quote_item)
-                        else:
-                            logger.error(f"Failed to subscribe to {symbol} on {exchange}")
-                            # No need to unsubscribe if subscription failed
-                            # Create error data
-                            quote_item = {
-                                "symbol": symbol,
-                                "exchange": exchange,
-                                "token": token,
-                                "error": "Failed to subscribe to the instrument",
-                                "timestamp": datetime.now().isoformat(),
-                            }
-                            quote_data.append(quote_item)
-                    else:
-                        logger.error("WebSocket connection unavailable")
-                        quote_item = {
-                            "symbol": symbol,
-                            "exchange": exchange,
-                            "token": token,
-                            "error": "WebSocket connection unavailable",
-                            "timestamp": datetime.now().isoformat(),
-                        }
-                        quote_data.append(quote_item)
-                else:
-                    logger.error(f"Could not find token for {symbol} on {exchange}")
-
-        # Return data directly (service layer will wrap it)
-        # If there's no data, return empty response
-        if not quote_data:
-            return {}
-
-        # For single symbol request (most common case), return in simplified format
-        if len(quote_data) == 1:
-            # Extract the first and only quote
-            quote = quote_data[0]
-
-            # Return the data directly without wrapping
+            # Return in OpenAlgo standard format (matching Angel broker)
             return {
-                "ltp": quote.get("ltp", 0),
-                "oi": quote.get("oi", 0),
-                "open": quote.get("open", 0),
-                "high": quote.get("high", 0),
-                "low": quote.get("low", 0),
-                "prev_close": quote.get("prev_close", 0) or quote.get("close", 0),
-                "volume": quote.get("volume", 0),
-                "bid": quote.get("bid", 0),
-                "ask": quote.get("ask", 0),
+                "bid": float(quote.get("bid", 0)),
+                "ask": float(quote.get("ask", 0)),
+                "open": float(quote.get("open", 0)),
+                "high": float(quote.get("high", 0)),
+                "low": float(quote.get("low", 0)),
+                "ltp": float(quote.get("ltp", 0)),
+                "prev_close": float(quote.get("close", 0)),
+                "volume": int(quote.get("volume", 0)),
+                "oi": int(quote.get("open_interest", 0)),
             }
 
-        # For multiple symbols, return the full list
-        return quote_data
+        except Exception as e:
+            raise Exception(f"Error fetching quotes: {str(e)}")
 
     def get_multiquotes(self, symbols: list) -> list:
         """
-        Get real-time quotes for multiple symbols using WebSocket
-        AliceBlue WebSocket supports subscribing to multiple instruments
+        Get real-time quotes for multiple symbols using WebSocket.
 
         Args:
             symbols: List of dicts with 'symbol' and 'exchange' keys
@@ -409,12 +201,10 @@ class BrokerData:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
         try:
-            # AliceBlue WebSocket can handle multiple instruments
-            # Using batch size of 100 for practical response times
             BATCH_SIZE = 100
 
             if len(symbols) > BATCH_SIZE:
-                logger.debug(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
+                logger.info(f"Processing {len(symbols)} symbols in batches of {BATCH_SIZE}")
                 all_results = []
 
                 for i in range(0, len(symbols), BATCH_SIZE):
@@ -422,11 +212,10 @@ class BrokerData:
                     logger.info(
                         f"Processing batch {i // BATCH_SIZE + 1}: symbols {i + 1} to {min(i + BATCH_SIZE, len(symbols))}"
                     )
-
                     batch_results = self._process_multiquotes_batch(batch)
                     all_results.extend(batch_results)
 
-                logger.debug(f"Successfully processed {len(all_results)} quotes")
+                logger.info(f"Successfully processed {len(all_results)} quotes")
                 return all_results
             else:
                 return self._process_multiquotes_batch(symbols)
@@ -437,7 +226,8 @@ class BrokerData:
 
     def _process_multiquotes_batch(self, symbols: list) -> list:
         """
-        Process a batch of symbols using WebSocket subscription
+        Process a batch of symbols using WebSocket subscription.
+
         Args:
             symbols: List of dicts with 'symbol' and 'exchange' keys
         Returns:
@@ -446,11 +236,10 @@ class BrokerData:
         results = []
         skipped_symbols = []
         instruments = []
-        symbol_map = {}  # Map token to original symbol/exchange
+        symbol_map = {}  # Map api_exchange:token -> original info
 
         # Get WebSocket connection
         websocket = self.get_websocket()
-
         if not websocket or not websocket.is_connected:
             logger.warning("WebSocket not connected, reconnecting...")
             websocket = self.get_websocket(force_new=True)
@@ -459,42 +248,32 @@ class BrokerData:
             logger.error("Could not establish WebSocket connection")
             raise ConnectionError("WebSocket connection unavailable")
 
-        # Create Instrument class for subscription
         class Instrument:
             def __init__(self, exchange, token, symbol=None):
                 self.exchange = exchange
                 self.token = token
                 self.symbol = symbol
 
-        # Step 1: Prepare all instruments
+        # Prepare all instruments
         for item in symbols:
             symbol = item["symbol"]
             exchange = item["exchange"]
 
-            token = get_token(symbol, exchange)
-            if not token:
+            raw_token = get_token(symbol, exchange)
+            if not raw_token:
                 logger.warning(f"Skipping symbol {symbol} on {exchange}: could not resolve token")
                 skipped_symbols.append(
                     {"symbol": symbol, "exchange": exchange, "error": "Could not resolve token"}
                 )
                 continue
 
-            # Get broker symbol
+            token = self._normalize_token(raw_token)
             br_symbol = get_br_symbol(symbol, exchange) or symbol
-
-            # Map exchange for AliceBlue API
-            api_exchange = exchange
-            if exchange == "NSE_INDEX":
-                api_exchange = "NSE"
-            elif exchange == "BSE_INDEX":
-                api_exchange = "BSE"
-            elif exchange == "MCX_INDEX":
-                api_exchange = "MCX"
+            api_exchange = self._map_exchange(exchange)
 
             instrument = Instrument(exchange=api_exchange, token=token, symbol=br_symbol)
             instruments.append(instrument)
 
-            # Store mapping for response processing
             symbol_map[f"{api_exchange}:{token}"] = {
                 "symbol": symbol,
                 "exchange": exchange,
@@ -505,31 +284,26 @@ class BrokerData:
             logger.warning("No valid symbols to fetch quotes for")
             return skipped_symbols
 
-        # Step 2: Subscribe to all instruments at once
+        # Subscribe to all instruments at once
         logger.info(f"Subscribing to {len(instruments)} symbols via WebSocket")
-        success = websocket.subscribe(instruments)
+        success = websocket.subscribe(instruments, is_depth=False)
 
         if not success:
             logger.error("Failed to send subscription request")
             for key, info in symbol_map.items():
                 results.append(
-                    {
-                        "symbol": info["symbol"],
-                        "exchange": info["exchange"],
-                        "error": "Subscription failed",
-                    }
+                    {"symbol": info["symbol"], "exchange": info["exchange"], "error": "Subscription failed"}
                 )
             return skipped_symbols + results
 
-        # Step 3: Wait for data to arrive
-        wait_time = min(max(len(instruments) * 0.05, 2), 10)  # Between 2-10 seconds
+        # Wait for data to arrive
+        wait_time = min(max(len(instruments) * 0.05, 2), 10)
         logger.debug(f"Waiting {wait_time:.1f}s for quote data...")
         time.sleep(wait_time)
 
-        # Step 4: Collect results from WebSocket
+        # Collect results from WebSocket
         for key, info in symbol_map.items():
             api_exchange, token = key.split(":")
-
             quote = websocket.get_quote(api_exchange, token)
 
             if quote:
@@ -552,14 +326,10 @@ class BrokerData:
                 )
             else:
                 results.append(
-                    {
-                        "symbol": info["symbol"],
-                        "exchange": info["exchange"],
-                        "error": "No data received",
-                    }
+                    {"symbol": info["symbol"], "exchange": info["exchange"], "error": "No data received"}
                 )
 
-        # Step 5: Unsubscribe after getting data
+        # Unsubscribe after getting data
         logger.info(f"Unsubscribing from {len(instruments)} symbols")
         websocket.unsubscribe(instruments, is_depth=False)
 
@@ -568,555 +338,107 @@ class BrokerData:
         )
         return skipped_symbols + results
 
-        # Support various input formats
-        if not hasattr(symbol_list, "__iter__"):
-            logger.error(f"symbol_list must be iterable, got {type(symbol_list)}")
-            return []
+    def get_depth(self, symbol: str, exchange: str) -> dict:
+        """
+        Get market depth for given symbol.
 
-        for sym in symbol_list:
-            try:
-                # Case 1: Dictionary with exchange and token
-                if isinstance(sym, dict) and "exchange" in sym and "token" in sym:
-                    normalized_symbols.append(
-                        {
-                            "exchange": sym["exchange"],
-                            "token": sym["token"],
-                            "symbol": sym.get("symbol", ""),
-                        }
-                    )
+        Args:
+            symbol: Trading symbol (e.g., 'RELIANCE', 'SBIN')
+            exchange: Exchange (e.g., NSE, BSE, NFO, NSE_INDEX, BSE_INDEX)
 
-                # Case 2: Dictionary with exchange and symbol but no token (like from Bruno API request)
-                elif (
-                    isinstance(sym, dict)
-                    and "exchange" in sym
-                    and "symbol" in sym
-                    and "token" not in sym
-                ):
-                    try:
-                        exchange = sym["exchange"]
-                        symbol_str = sym["symbol"]
-                        # Get token from database
-                        token = get_token(symbol_str, exchange)
-                        normalized_symbols.append(
-                            {"exchange": exchange, "token": token, "symbol": symbol_str}
-                        )
-                        logger.info(f"Retrieved token {token} for {exchange}:{symbol_str}")
-                    except Exception as e:
-                        logger.error(f"Could not get token for {exchange}:{symbol_str}: {str(e)}")
-
-                # Case 3: Object with expected attributes
-                elif hasattr(sym, "exchange") and hasattr(sym, "token"):
-                    normalized_symbols.append(
-                        {
-                            "exchange": sym.exchange,
-                            "token": sym.token,
-                            "symbol": getattr(sym, "symbol", ""),
-                        }
-                    )
-
-                # Case 4: Single string with format "exchange:symbol"
-                elif isinstance(sym, str) and ":" in sym:
-                    parts = sym.split(":", 1)
-                    if len(parts) == 2:
-                        exchange = parts[0]
-                        symbol_str = parts[1]
-                        try:
-                            # Try to get token from database
-                            token = get_token(symbol_str, exchange)
-                            normalized_symbols.append(
-                                {"exchange": exchange, "token": token, "symbol": symbol_str}
-                            )
-                        except Exception as e:
-                            logger.error(f"Could not get token for {sym}: {str(e)}")
-
-                # Case 5: Simple string symbol (like 'YESBANK')
-                elif isinstance(sym, str) and ":" not in sym:
-                    symbol_str = sym.strip()
-
-                    # Handle different formats
-                    if len(symbol_str.split()) > 1:
-                        # It might be "NSE YESBANK" format
-                        parts = symbol_str.split()
-                        exchange, symbol_str = parts[0], parts[1]
-                    else:
-                        # Default to NSE for Indian symbols if no exchange specified
-                        exchange = "NSE"
-
-                    logger.info(f"Processing symbol: {symbol_str} on {exchange}")
-
-                    try:
-                        # Try to get token from database
-                        token = get_token(symbol_str, exchange)
-                        if token:
-                            normalized_symbols.append(
-                                {"exchange": exchange, "token": token, "symbol": symbol_str}
-                            )
-                            logger.info(
-                                f"Successfully normalized {symbol_str} on {exchange} with token {token}"
-                            )
-                        else:
-                            logger.error(f"Could not get token for {symbol_str} on {exchange}")
-                    except Exception as e:
-                        logger.error(
-                            f"Could not get token for {symbol_str} on {exchange}: {str(e)}"
-                        )
-
-                # Case 6: Could not parse
-                else:
-                    logger.warning(f"Could not parse symbol format: {type(sym)} - {sym}")
-            except Exception as e:
-                logger.error(f"Error processing symbol {sym}: {str(e)}")
-
-        logger.info(f"Normalized {len(normalized_symbols)} symbols")
-
-        results = []
-
-        # First, try using WebSocket for faster data retrieval
-        websocket = self.get_websocket()
-
-        # Check if the websocket is connected
-        if websocket and hasattr(websocket, "is_connected") and websocket.is_connected:
-            try:
-                # Prepare instruments for subscription
-                instruments = []
-                for symbol in normalized_symbols:
-                    # Create a simple object with exchange and token attributes
-                    class Instrument:
-                        def __init__(self, exchange, token, symbol=None):
-                            self.exchange = exchange
-                            self.token = token
-                            self.symbol = symbol
-
-                    # Always get token from database to ensure we have correct token format
-                    try:
-                        # Get the token from database
-                        token = get_token(symbol["symbol"], symbol["exchange"])
-                        if token:
-                            logger.info(
-                                f"Retrieved token {token} for {symbol['exchange']}:{symbol['symbol']}"
-                            )
-                            instruments.append(
-                                Instrument(
-                                    exchange=symbol["exchange"],
-                                    token=token,
-                                    symbol=symbol["symbol"],
-                                )
-                            )
-                        else:
-                            # Fall back to token in symbol dict if present
-                            if "token" in symbol and symbol["token"]:
-                                logger.info(
-                                    f"Using provided token {symbol['token']} for {symbol['exchange']}:{symbol['symbol']}"
-                                )
-                                instruments.append(
-                                    Instrument(
-                                        exchange=symbol["exchange"],
-                                        token=symbol["token"],
-                                        symbol=symbol["symbol"],
-                                    )
-                                )
-                            else:
-                                logger.error(
-                                    f"Could not find token for {symbol['symbol']} on {symbol['exchange']}"
-                                )
-                    except Exception as e:
-                        logger.error(
-                            f"Error getting token for {symbol['symbol']} on {symbol['exchange']}: {str(e)}"
-                        )
-                        continue
-
-                # Skip if no valid instruments
-                if not instruments:
-                    logger.warning("No valid instruments to subscribe")
-                    return []
-
-                # Subscribe to the instruments
-                websocket.subscribe(instruments)
-
-                # Wait for data to arrive
-                time.sleep(1)  # Wait a bit for data to arrive
-
-                # Collect quote data from WebSocket
-                for i, instrument in enumerate(instruments):
-                    if i >= len(symbol_list):
-                        break
-
-                    exchange = instrument.exchange
-                    token = instrument.token
-                    symbol_name = getattr(instrument, "symbol", "")
-
-                    quote = websocket.get_quote(exchange, token)
-
-                    if quote:
-                        # Format the quote to match the expected structure
-                        formatted_quote = {
-                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "exchange": exchange,
-                            "symbol": symbol_name,
-                            "ltp": quote.get("ltp", 0),
-                            "close": quote.get("close", 0),
-                            "open": quote.get("open", 0),
-                            "high": quote.get("high", 0),
-                            "low": quote.get("low", 0),
-                            "volume": quote.get("volume", 0),
-                            "bid": quote.get("bid", 0),  # Best bid may not be available
-                            "ask": quote.get("ask", 0),  # Best ask may not be available
-                            "total_buy_qty": quote.get("total_buy_quantity", 0),
-                            "total_sell_qty": quote.get("total_sell_quantity", 0),
-                            "open_interest": quote.get("open_interest", 0),
-                            "average_price": quote.get("average_trade_price", 0),
-                            "token": token,
-                        }
-                        results.append(formatted_quote)
-                    else:
-                        logger.warning(f"No WebSocket quote data for {exchange}:{token}")
-                        # Add to results with empty/default values
-                        results.append(
-                            {
-                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                "exchange": exchange,
-                                "symbol": symbol_name,
-                                "ltp": 0,
-                                "close": 0,
-                                "open": 0,
-                                "high": 0,
-                                "low": 0,
-                                "volume": 0,
-                                "bid": 0,
-                                "ask": 0,
-                                "total_buy_qty": 0,
-                                "total_sell_qty": 0,
-                                "open_interest": 0,
-                                "average_price": 0,
-                                "token": token,
-                            }
-                        )
-
-                # If we got at least some data, return it
-                if any(r.get("ltp", 0) > 0 for r in results):
-                    return results
-
-                # Otherwise, fall back to REST API
-                logger.warning("No valid quote data from WebSocket, falling back to REST API")
-
-            except Exception as e:
-                logger.error(f"Error getting quotes via WebSocket: {str(e)}")
-                # Continue to fallback REST API method
-
-        # Fallback: Use REST API for quotes
+        Returns:
+            dict: Market depth data in OpenAlgo standard format
+        """
         try:
-            logger.info("Using REST API for quotes as WebSocket fallback")
-            client = get_httpx_client()
+            # Convert symbol to broker format and get token
+            br_symbol = get_br_symbol(symbol, exchange) or symbol
+            token = self._normalize_token(get_token(symbol, exchange))
 
-            # Get user_id from environment variables and session_id from class instance
-            user_id = os.environ.get("BROKER_API_SECRET")
-            session_id = self.session_id
+            if not token:
+                raise Exception(f"Token not found for {symbol} on {exchange}")
 
-            if not user_id or not session_id:
-                logger.error(
-                    f"Missing credentials for REST API - user_id: {'Yes' if user_id else 'No'}, session_id: {'Yes' if session_id else 'No'}"
-                )
-                return results  # Return whatever we have so far
+            # Map exchange for AliceBlue WebSocket API
+            api_exchange = self._map_exchange(exchange)
 
-            # Make REST API calls for each symbol
-            results = []
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {user_id} {session_id}",
-            }
+            # Get WebSocket connection
+            websocket = self.get_websocket()
+            if not websocket or not websocket.is_connected:
+                logger.warning("WebSocket not connected, reconnecting...")
+                websocket = self.get_websocket(force_new=True)
 
-            for symbol in normalized_symbols:
-                # Handle different possible formats of the symbol
-                if isinstance(symbol, dict):
-                    exchange = symbol.get("exchange")
-                    token = symbol.get("token")
-                    symbol_name = symbol.get("symbol", "")
-                elif hasattr(symbol, "exchange") and hasattr(symbol, "token"):
-                    exchange = symbol.exchange
-                    token = symbol.token
-                    symbol_name = getattr(symbol, "symbol", "")
+            if not websocket or not websocket.is_connected:
+                raise Exception("WebSocket connection unavailable")
+
+            # Create instrument for subscription
+            class Instrument:
+                def __init__(self, exchange, token, symbol=None):
+                    self.exchange = exchange
+                    self.token = token
+                    self.symbol = symbol
+
+            instrument = Instrument(exchange=api_exchange, token=token, symbol=br_symbol)
+
+            # Subscribe to depth data (is_depth=True sends t='d')
+            logger.info(f"Subscribing to depth for {api_exchange}:{symbol} with token {token}")
+            success = websocket.subscribe([instrument], is_depth=True)
+
+            if not success:
+                raise Exception(f"Failed to subscribe to depth for {symbol} on {exchange}")
+
+            # Wait for depth data to arrive
+            time.sleep(2.0)
+
+            # Retrieve depth from WebSocket
+            depth = websocket.get_market_depth(api_exchange, token)
+
+            # Unsubscribe after getting the data
+            websocket.unsubscribe([instrument], is_depth=True)
+
+            if not depth:
+                raise Exception(f"No market depth received for {symbol} on {exchange}")
+
+            # Format bids and asks with exactly 5 entries each (matching Angel format)
+            bids = []
+            asks = []
+
+            raw_bids = depth.get("bids", [])
+            for i in range(5):
+                if i < len(raw_bids):
+                    bids.append({
+                        "price": raw_bids[i].get("price", 0),
+                        "quantity": raw_bids[i].get("quantity", 0),
+                    })
                 else:
-                    logger.error(f"Unsupported symbol format in REST fallback: {symbol}")
-                    continue
+                    bids.append({"price": 0, "quantity": 0})
 
-                # Skip if we don't have both exchange and token
-                if not exchange or not token:
-                    logger.warning(
-                        f"Missing exchange or token in symbol for REST fallback: {symbol}"
-                    )
-                    continue
+            raw_asks = depth.get("asks", [])
+            for i in range(5):
+                if i < len(raw_asks):
+                    asks.append({
+                        "price": raw_asks[i].get("price", 0),
+                        "quantity": raw_asks[i].get("quantity", 0),
+                    })
+                else:
+                    asks.append({"price": 0, "quantity": 0})
 
-                payload = {"exch": exchange, "symbol": token}
-
-                try:
-                    response = client.post(
-                        SCRIP_DETAILS_URL, headers=headers, json=payload, timeout=timeout
-                    )
-                    response.raise_for_status()
-                    data = response.json()
-
-                    # Format the response to match our expected structure
-                    quote = {
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "exchange": exchange,
-                        "symbol": symbol_name,
-                        "ltp": float(data.get("ltp", 0)),
-                        "close": float(data.get("close", 0)),
-                        "open": float(data.get("open", 0)),
-                        "high": float(data.get("high", 0)),
-                        "low": float(data.get("low", 0)),
-                        "volume": int(data.get("volume", 0)),
-                        "bid": float(data.get("bp", 0)),  # Best bid price
-                        "ask": float(data.get("sp", 0)),  # Best ask price
-                        "total_buy_qty": int(data.get("tbq", 0)),
-                        "total_sell_qty": int(data.get("tsq", 0)),
-                        "open_interest": int(data.get("oi", 0)),
-                        "average_price": float(data.get("ap", 0)),
-                        "token": token,
-                    }
-                    results.append(quote)
-
-                except (HTTPError, Timeout) as e:
-                    logger.error(f"Error fetching quote for {exchange}:{token}: {str(e)}")
-                    # Add empty quote to maintain order
-                    results.append(
-                        {
-                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            "exchange": exchange,
-                            "symbol": symbol_name,
-                            "ltp": 0,
-                            "close": 0,
-                            "open": 0,
-                            "high": 0,
-                            "low": 0,
-                            "volume": 0,
-                            "bid": 0,
-                            "ask": 0,
-                            "total_buy_qty": 0,
-                            "total_sell_qty": 0,
-                            "open_interest": 0,
-                            "average_price": 0,
-                            "token": token,
-                        }
-                    )
-                    continue
+            # Return in OpenAlgo standard format (matching Angel broker)
+            return {
+                "bids": bids,
+                "asks": asks,
+                "high": depth.get("high", 0) if "high" in depth else 0,
+                "low": depth.get("low", 0) if "low" in depth else 0,
+                "ltp": depth.get("ltp", 0),
+                "ltq": depth.get("last_trade_quantity", 0),
+                "open": depth.get("open", 0) if "open" in depth else 0,
+                "prev_close": depth.get("close", 0) if "close" in depth else 0,
+                "volume": depth.get("volume", 0) if "volume" in depth else 0,
+                "oi": depth.get("open_interest", 0),
+                "totalbuyqty": depth.get("total_buy_quantity", 0),
+                "totalsellqty": depth.get("total_sell_quantity", 0),
+            }
 
         except Exception as e:
-            logger.error(f"Error in REST API fallback for quotes: {str(e)}")
-
-        return results
-
-    def get_depth(self, symbol_list, timeout: int = 5):
-        """
-        Get market depth data for a list of symbols using the WebSocket connection.
-        This is a wrapper for get_market_depth to maintain API compatibility.
-
-        Args:
-            symbol_list: List of symbols, single symbol dict with exchange and symbol, or a single symbol string
-            timeout (int): Timeout in seconds
-
-        Returns:
-            Dict with market depth data in the OpenAlgo standard format
-        """
-        return self.get_market_depth(symbol_list, timeout)
-
-    def get_market_depth(self, symbol_list, timeout: int = 5):
-        """
-        Get market depth data for a list of symbols using the WebSocket connection.
-
-        Args:
-            symbol_list: List of symbols, single symbol dict with exchange and symbol, or a single symbol string
-            timeout (int): Timeout in seconds
-
-        Returns:
-            Dict with market depth data in the OpenAlgo standard format
-        """
-        logger.info(f"Getting market depth for: {symbol_list}")
-
-        # Standardize input format
-        # Handle dictionary input (single symbol case)
-        if isinstance(symbol_list, dict):
-            try:
-                # Extract symbol and exchange
-                symbol = symbol_list.get("symbol") or symbol_list.get("SYMBOL")
-                exchange = symbol_list.get("exchange") or symbol_list.get("EXCHANGE")
-
-                if symbol and exchange:
-                    logger.info(f"Processing single symbol depth request: {symbol} on {exchange}")
-                    # Convert to a list with a single item to use the standard flow
-                    symbol_list = [{"symbol": symbol, "exchange": exchange}]
-                else:
-                    logger.error("Missing symbol or exchange in request")
-                    return {
-                        "status": "error",
-                        "data": {},
-                        "message": "Missing symbol or exchange in request",
-                    }
-            except Exception as e:
-                logger.error(f"Error processing single symbol depth request: {str(e)}")
-                return {
-                    "status": "error",
-                    "data": {},
-                    "message": f"Error processing depth request: {str(e)}",
-                }
-
-        # Handle plain string (like just "YESBANK" or "NIFTY")
-        elif isinstance(symbol_list, str):
-            symbol = symbol_list.strip()
-
-            # Use the helper function to auto-detect exchange based on database lookup
-            exchange = self._auto_detect_exchange(symbol)
-
-            logger.info(
-                f"Processing string symbol depth: {symbol} on {exchange} (auto-detected from database)"
-            )
-            symbol_list = [{"symbol": symbol, "exchange": exchange}]
-
-        # For simple case, prepare the instruments for WebSocket subscription
-        depth_data = []
-
-        # Get WebSocket connection
-        websocket = self.get_websocket()
-
-        if not websocket or not websocket.is_connected:
-            logger.warning("WebSocket not connected, reconnecting...")
-            websocket = self.get_websocket(force_new=True)
-
-        if not websocket or not websocket.is_connected:
-            logger.error("Could not establish WebSocket connection for market depth")
-            return {"status": "error", "data": {}, "message": "WebSocket connection unavailable"}
-
-        # Process each symbol
-        for sym in symbol_list:
-            # If it's a simple dict with symbol and exchange
-            if isinstance(sym, dict) and "symbol" in sym and "exchange" in sym:
-                symbol = sym["symbol"]
-                exchange = sym["exchange"]
-
-                # Get token for this symbol
-                token = get_token(symbol, exchange)
-
-                if token:
-                    # Get broker symbol if different
-                    br_symbol = get_br_symbol(symbol, exchange) or symbol
-
-                    # Convert exchange for AliceBlue API (same as Angel)
-                    if exchange == "NSE_INDEX":
-                        exchange = "NSE"
-                    elif exchange == "BSE_INDEX":
-                        exchange = "BSE"
-                    elif exchange == "MCX_INDEX":
-                        exchange = "MCX"
-
-                    # Create instrument for subscription
-                    class Instrument:
-                        def __init__(self, exchange, token, symbol=None):
-                            self.exchange = exchange
-                            self.token = token
-                            self.symbol = symbol
-
-                    # Use converted exchange for websocket subscription
-                    instrument = Instrument(exchange=exchange, token=token, symbol=br_symbol)
-
-                    # Subscribe to market depth
-                    logger.info(
-                        f"Subscribing to market depth for {exchange}:{symbol} with token {token}"
-                    )
-
-                    # Use the depth subscription (t='d')
-                    success = websocket.subscribe([instrument], is_depth=True)
-
-                    if success:
-                        # Wait longer for depth data to arrive
-                        logger.info(f"Waiting for WebSocket depth data for {exchange}:{symbol}")
-                        time.sleep(2.0)  # Increased wait time for depth data
-
-                        # Retrieve depth from WebSocket using converted exchange
-                        depth = websocket.get_market_depth(exchange, token)
-
-                        if depth:
-                            # Create a normalized depth structure in the OpenAlgo format
-                            item = {
-                                "symbol": symbol,
-                                "exchange": exchange,
-                                "token": token,
-                                "timestamp": datetime.now().isoformat(),
-                                "total_buy_qty": depth.get("total_buy_quantity", 0),
-                                "total_sell_qty": depth.get("total_sell_quantity", 0),
-                                "ltp": depth.get("ltp", 0),
-                                "oi": depth.get("open_interest", 0),
-                                "depth": {"buy": [], "sell": []},
-                            }
-
-                            # Format the buy orders
-                            bids = depth.get("bids", [])
-                            for bid in bids:
-                                item["depth"]["buy"].append(
-                                    {
-                                        "price": bid.get("price", 0),
-                                        "quantity": bid.get("quantity", 0),
-                                        "orders": bid.get("orders", 0),
-                                    }
-                                )
-
-                            # Format the sell orders
-                            asks = depth.get("asks", [])
-                            for ask in asks:
-                                item["depth"]["sell"].append(
-                                    {
-                                        "price": ask.get("price", 0),
-                                        "quantity": ask.get("quantity", 0),
-                                        "orders": ask.get("orders", 0),
-                                    }
-                                )
-
-                            depth_data.append(item)
-                            logger.debug(f"Retrieved market depth for {symbol} on {exchange}")
-
-                            # Unsubscribe after getting the data to stop continuous streaming
-                            logger.info(
-                                f"Unsubscribing from depth for {exchange}:{symbol} after retrieving data"
-                            )
-                            websocket.unsubscribe([instrument], is_depth=True)
-                        else:
-                            logger.warning(f"No market depth received for {symbol} on {exchange}")
-                            # Also unsubscribe even if no data received to clean up subscription
-                            logger.info(
-                                f"Unsubscribing from depth for {exchange}:{symbol} due to no data"
-                            )
-                            websocket.unsubscribe([instrument], is_depth=True)
-                    else:
-                        logger.error(
-                            f"Failed to subscribe to market depth for {symbol} on {exchange}"
-                        )
-                else:
-                    logger.error(f"Could not find token for {symbol} on {exchange}")
-            else:
-                logger.warning(f"Unsupported symbol format for market depth: {sym}")
-
-        # Return data directly (service layer will wrap it)
-        # If there's no data, return empty response
-        if not depth_data:
-            return {}
-
-        # For single symbol request (most common case), return in simplified format
-        if len(depth_data) == 1:
-            # Extract the first and only depth item
-            depth_item = depth_data[0]
-
-            # Return the data directly without wrapping
-            return {
-                "symbol": depth_item.get("symbol", ""),
-                "exchange": depth_item.get("exchange", ""),
-                "ltp": depth_item.get("ltp", 0),
-                "oi": depth_item.get("oi", 0),
-                "total_buy_qty": depth_item.get("total_buy_qty", 0),
-                "total_sell_qty": depth_item.get("total_sell_qty", 0),
-                "depth": depth_item.get("depth", {"buy": [], "sell": []}),
-            }
-
-        # For multiple symbols, return the full list
-        return depth_data
+            raise Exception(f"Error fetching market depth: {str(e)}")
 
     def get_history(
         self, symbol: str, exchange: str, timeframe: str, start_date: str, end_date: str
@@ -1177,23 +499,16 @@ class BrokerData:
             # Get the AliceBlue resolution format
             aliceblue_timeframe = self.timeframe_map[timeframe]
 
-            # Get credentials - AliceBlue historical API uses user_id in Bearer token
-            from utils.config import get_broker_api_key, get_broker_api_secret
+            # V2 API uses just the session token in Bearer header
+            # Same format as all other V2 API calls
+            auth_token = self.session_id
 
-            # IMPORTANT: AliceBlue historical API uses user_id (BROKER_API_KEY), not client_id!
-            # This is different from other APIs which use BROKER_API_SECRET
-            user_id = get_broker_api_key()  # This should be '1412368' in your case
-            auth_token = self.session_id  # This is the session token from login
-
-            if not user_id or not auth_token:
-                logger.error(
-                    f"Missing credentials for historical data - user_id: {'Yes' if user_id else 'No'}, auth_token: {'Yes' if auth_token else 'No'}"
-                )
+            if not auth_token:
+                logger.error("Missing session token for historical data")
                 return pd.DataFrame()
 
-            # Historical API uses different auth format: Bearer {user_id} {session_token}
             headers = {
-                "Authorization": f"Bearer {user_id} {auth_token}",
+                "Authorization": f"Bearer {auth_token}",
                 "Content-Type": "application/json",
             }
 
