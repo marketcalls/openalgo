@@ -1,7 +1,7 @@
 import logging
 import os
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Time, create_engine
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, Time, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
@@ -42,6 +42,17 @@ class ChartinkStrategy(Base):
     squareoff_time = Column(String(5))  # HH:MM format
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    # Risk management defaults (PRD §5.1)
+    default_stoploss_type = Column(String(10))
+    default_stoploss_value = Column(Float)
+    default_target_type = Column(String(10))
+    default_target_value = Column(Float)
+    default_trailstop_type = Column(String(10))
+    default_trailstop_value = Column(Float)
+    default_breakeven_type = Column(String(10))
+    default_breakeven_threshold = Column(Float)
+    risk_monitoring = Column(String(10), default="active")
+    auto_squareoff_time = Column(String(5), default="15:15")
 
     # Relationships
     symbol_mappings = relationship(
@@ -59,9 +70,33 @@ class ChartinkSymbolMapping(Base):
     chartink_symbol = Column(String(50), nullable=False)
     exchange = Column(String(10), nullable=False)
     quantity = Column(Integer, nullable=False)
-    product_type = Column(String(10), nullable=False)  # MIS/CNC
+    product_type = Column(String(10), nullable=False)  # MIS/CNC/NRML
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    # Order mode (PRD §5.2)
+    order_mode = Column(String(15), default="equity")
+    underlying = Column(String(50))
+    underlying_exchange = Column(String(15))
+    expiry_type = Column(String(15))
+    offset = Column(String(10))
+    option_type = Column(String(2))
+    risk_mode = Column(String(10))
+    preset = Column(String(20))
+    legs_config = Column(Text)  # JSON
+    combined_stoploss_type = Column(String(10))
+    combined_stoploss_value = Column(Float)
+    combined_target_type = Column(String(10))
+    combined_target_value = Column(Float)
+    combined_trailstop_type = Column(String(10))
+    combined_trailstop_value = Column(Float)
+    stoploss_type = Column(String(10))
+    stoploss_value = Column(Float)
+    target_type = Column(String(10))
+    target_value = Column(Float)
+    trailstop_type = Column(String(10))
+    trailstop_value = Column(Float)
+    breakeven_type = Column(String(10))
+    breakeven_threshold = Column(Float)
 
     # Relationships
     strategy = relationship("ChartinkStrategy", back_populates="symbol_mappings")

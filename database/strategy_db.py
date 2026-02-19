@@ -2,7 +2,7 @@ import logging
 import os
 
 from cachetools import TTLCache
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Time, create_engine
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, Time, create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 from sqlalchemy.pool import NullPool
@@ -52,6 +52,17 @@ class Strategy(Base):
     squareoff_time = Column(String(5))  # HH:MM format
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    # Risk management defaults (PRD §5.1)
+    default_stoploss_type = Column(String(10))  # 'percentage', 'points', or NULL (disabled)
+    default_stoploss_value = Column(Float)
+    default_target_type = Column(String(10))
+    default_target_value = Column(Float)
+    default_trailstop_type = Column(String(10))
+    default_trailstop_value = Column(Float)
+    default_breakeven_type = Column(String(10))  # 'percentage', 'points', or NULL
+    default_breakeven_threshold = Column(Float)
+    risk_monitoring = Column(String(10), default="active")  # 'active' or 'paused'
+    auto_squareoff_time = Column(String(5), default="15:15")  # IST, for MIS positions
 
     # Relationships
     symbol_mappings = relationship(
@@ -69,9 +80,36 @@ class StrategySymbolMapping(Base):
     symbol = Column(String(50), nullable=False)
     exchange = Column(String(10), nullable=False)
     quantity = Column(Integer, nullable=False)
-    product_type = Column(String(10), nullable=False)  # MIS/CNC
+    product_type = Column(String(10), nullable=False)  # MIS/CNC/NRML
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    # Order mode (PRD §5.2)
+    order_mode = Column(String(15), default="equity")  # equity, futures, single_option, multi_leg
+    # Options configuration
+    underlying = Column(String(50))  # e.g., 'NIFTY', 'BANKNIFTY'
+    underlying_exchange = Column(String(15))  # e.g., 'NSE_INDEX', 'BSE_INDEX'
+    expiry_type = Column(String(15))  # current_week, next_week, current_month, next_month
+    offset = Column(String(10))  # ATM, ITM1-ITM40, OTM1-OTM40
+    option_type = Column(String(2))  # CE or PE
+    # Multi-leg configuration
+    risk_mode = Column(String(10))  # 'per_leg' or 'combined'
+    preset = Column(String(20))  # straddle, strangle, iron_condor, etc.
+    legs_config = Column(Text)  # JSON array of leg objects
+    combined_stoploss_type = Column(String(10))
+    combined_stoploss_value = Column(Float)
+    combined_target_type = Column(String(10))
+    combined_target_value = Column(Float)
+    combined_trailstop_type = Column(String(10))
+    combined_trailstop_value = Column(Float)
+    # Per-symbol risk overrides (nullable = use strategy default)
+    stoploss_type = Column(String(10))
+    stoploss_value = Column(Float)
+    target_type = Column(String(10))
+    target_value = Column(Float)
+    trailstop_type = Column(String(10))
+    trailstop_value = Column(Float)
+    breakeven_type = Column(String(10))
+    breakeven_threshold = Column(Float)
 
     # Relationships
     strategy = relationship("Strategy", back_populates="symbol_mappings")

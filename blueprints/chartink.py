@@ -96,6 +96,7 @@ def process_orders():
                         logger.info(
                             f"Smart order placed for {smart_order['payload']['symbol']} in strategy {smart_order['payload']['strategy']}"
                         )
+                        _track_order_if_strategy(response, smart_order)
                     else:
                         logger.error(
                             f"Error placing smart order for {smart_order['payload']['symbol']}: {response.text}"
@@ -133,6 +134,7 @@ def process_orders():
                                 f"Regular order placed for {regular_order['payload']['symbol']} in strategy {regular_order['payload']['strategy']}"
                             )
                             last_regular_orders.append(now)
+                            _track_order_if_strategy(response, regular_order)
                         else:
                             logger.error(
                                 f"Error placing regular order for {regular_order['payload']['symbol']}: {response.text}"
@@ -165,14 +167,74 @@ def ensure_order_processor():
             thread.start()
 
 
-def queue_order(endpoint, payload):
-    """Add order to appropriate processing queue"""
+def queue_order(endpoint, payload, strategy_meta=None):
+    """Add order to appropriate processing queue.
+
+    Args:
+        endpoint: 'placeorder' or 'placesmartorder'
+        payload: Order payload dict
+        strategy_meta: Optional dict with strategy_id, strategy_type, user_id for position tracking
+    """
     ensure_order_processor()
 
+    item = {"endpoint": endpoint, "payload": payload, "strategy_meta": strategy_meta}
     if endpoint == "placesmartorder":
-        smart_order_queue.put({"endpoint": endpoint, "payload": payload})
+        smart_order_queue.put(item)
     else:  # placeorder
-        regular_order_queue.put({"endpoint": endpoint, "payload": payload})
+        regular_order_queue.put(item)
+
+
+def _track_order_if_strategy(response, queue_item):
+    """After successful order placement, record in strategy position tracker if strategy_meta present."""
+    meta = queue_item.get("strategy_meta")
+    if not meta:
+        return
+
+    try:
+        result = response.json()
+        orderid = result.get("orderid") or result.get("data", {}).get("orderid")
+        if not orderid:
+            return
+
+        payload = queue_item["payload"]
+        is_entry = meta.get("is_entry", True)
+
+        from services.strategy_position_service import record_entry_order, record_exit_order
+
+        if is_entry:
+            record_entry_order(
+                strategy_id=meta["strategy_id"],
+                strategy_type=meta["strategy_type"],
+                user_id=meta["user_id"],
+                orderid=str(orderid),
+                symbol=payload.get("symbol", ""),
+                exchange=payload.get("exchange", ""),
+                action=payload.get("action", ""),
+                quantity=int(payload.get("quantity", 0)),
+                product_type=payload.get("product", ""),
+                price_type=payload.get("pricetype", "MARKET"),
+            )
+        else:
+            position_id = meta.get("position_id")
+            if position_id:
+                record_exit_order(
+                    position_id=position_id,
+                    orderid=str(orderid),
+                    exit_reason=meta.get("exit_reason", "manual"),
+                )
+
+        from services.order_status_poller import enqueue_order
+
+        enqueue_order(
+            orderid=str(orderid),
+            strategy_id=meta["strategy_id"],
+            strategy_type=meta["strategy_type"],
+            user_id=meta["user_id"],
+            is_entry=is_entry,
+        )
+
+    except Exception as e:
+        logger.exception(f"Error tracking chartink strategy order: {e}")
 
 
 def validate_strategy_times(start_time, end_time, squareoff_time):
@@ -925,8 +987,16 @@ def webhook(webhook_id):
 
             logger.info(f"Queueing {endpoint} with payload: {payload}")
 
+            # Build strategy metadata for position tracking
+            strategy_meta = {
+                "strategy_id": strategy.id,
+                "strategy_type": "chartink",
+                "user_id": strategy.user_id,
+                "is_entry": is_entry_order,
+            }
+
             # Queue the order instead of executing directly
-            queue_order(endpoint, payload)
+            queue_order(endpoint, payload, strategy_meta=strategy_meta)
             processed_symbols.append(symbol)
 
         if processed_symbols:

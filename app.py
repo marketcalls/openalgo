@@ -62,6 +62,7 @@ from blueprints.search import search_bp
 from blueprints.security import security_bp  # Import the security blueprint
 from blueprints.settings import settings_bp  # Import the settings blueprint
 from blueprints.strategy import strategy_bp  # Import the strategy blueprint
+from blueprints.strategy_dashboard import strategy_dashboard_bp  # Import the strategy dashboard blueprint
 from blueprints.system_permissions import (
     system_permissions_bp,  # Import the system permissions blueprint
 )
@@ -82,6 +83,7 @@ from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
 from database.strategy_db import init_db as ensure_strategy_tables_exists
+from database.strategy_position_db import init_db as ensure_strategy_position_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.telegram_db import get_bot_config
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
@@ -232,6 +234,7 @@ def create_app():
     app.register_blueprint(latency_bp)
     app.register_blueprint(health_bp)  # Register Health monitoring blueprint
     app.register_blueprint(strategy_bp)
+    app.register_blueprint(strategy_dashboard_bp)  # Register Strategy Dashboard blueprint
     app.register_blueprint(master_contract_status_bp)
     app.register_blueprint(websocket_bp)  # Register WebSocket example blueprint
     app.register_blueprint(pnltracker_bp)  # Register PnL tracker blueprint
@@ -500,6 +503,7 @@ def setup_environment(app):
             ("Traffic Logs DB", ensure_traffic_logs_exists),
             ("Latency DB", ensure_latency_tables_exists),
             ("Strategy DB", ensure_strategy_tables_exists),
+            ("Strategy Position DB", ensure_strategy_position_tables_exists),
             ("Sandbox DB", ensure_sandbox_tables_exists),
             ("Action Center DB", ensure_action_center_tables_exists),
             ("Chart Prefs DB", ensure_chart_prefs_tables_exists),
