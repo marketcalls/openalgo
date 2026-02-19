@@ -466,10 +466,12 @@ function useMarketStatus(): MarketStatus | null {
 
 Fields:
 - Strategy name (text input, required)
-- Exchange (NFO/BFO toggle)
-- Underlying (typeahead search via `/search/api/underlyings?exchange=NFO`)
-- Expiry type (select: current_week, next_week, current_month, next_month)
+- Exchange (select: NFO, BFO, CDS, BCD, MCX — all F&O exchanges)
+- Underlying (typeahead search via `/search/api/underlyings?exchange=<selected>`)
+- Expiry type (select: current_week, next_week, current_month, next_month — weekly only for NFO/BFO index options)
 - Product type (NRML/MIS toggle)
+
+When exchange changes: reset underlying, refetch underlyings list, update available expiry types.
 
 ### LegCard (NEW)
 
@@ -487,6 +489,16 @@ Fields:
 | Order: MARKET                                                   |
 +---------------------------------------------------------------+
 ```
+
+**Strike selection dropdown options (5 types):**
+- ATM — strike value auto-resolved (read-only)
+- ITM 1 through ITM 20 — offset dropdown, value auto-resolved (read-only)
+- OTM 1 through OTM 20 — offset dropdown, value auto-resolved (read-only)
+- Specific Strike — value input field enabled (user enters exact strike)
+- Premium Near — premium input field enabled (user enters target premium ₹)
+
+Strike value field dynamically changes behavior based on selection type.
+See PRD §23.7 for resolution logic.
 
 **Frozen state (after execution):**
 - Diagonal stripes overlay (CSS `repeating-linear-gradient`)

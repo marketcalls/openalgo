@@ -124,8 +124,10 @@ The `legs_config` JSON field in SymbolMapping must follow this schema for F&O st
       "expiry_type": "current_week",
       "action": "SELL",
       "option_type": "CE",
-      "strike_selection": "OTM4",
-      "strike_value": null,
+      "strike_selection": "OTM",
+      "strike_offset": 4,
+      "strike_price": null,
+      "premium_value": null,
       "lots": 1,
       "order_type": "MARKET"
     }
@@ -148,7 +150,11 @@ The `legs_config` JSON field in SymbolMapping must follow this schema for F&O st
 **Validation rules:**
 - `legs`: array of 1-6 leg objects
 - Each leg: `leg_type` required (`option` | `futures`)
-- If `leg_type=option`: `option_type` (CE|PE) and `strike_selection` (ATM|ITMn|OTMn) required
+- If `leg_type=option`: `option_type` (CE|PE) and `strike_selection` required
+- `strike_selection` values: `ATM`, `ITM`, `OTM`, `strike_price`, `premium_near`
+- If `strike_selection=ITM` or `OTM`: `strike_offset` required (1-20)
+- If `strike_selection=strike_price`: `strike_price` required (positive float)
+- If `strike_selection=premium_near`: `premium_value` required (positive float)
 - `action`: BUY | SELL
 - `lots`: positive integer
 - `risk_mode`: `per_leg` | `combined`
@@ -703,8 +709,8 @@ A dedicated page (`/strategy/builder`) for creating and configuring F&O (Futures
 | 3 | Expiry type | select | `current_week`, `next_week`, `current_month`, `next_month` |
 | 4 | Action | toggle | `BUY`, `SELL` |
 | 5 | Option type | toggle | `CE`, `PE` (options only) |
-| 6 | Strike selection | select | `ATM`, `ITM1`-`ITM10`, `OTM1`-`OTM10` (options only) |
-| 7 | Strike value | read-only | Auto-resolved from ATM + offset (display only) |
+| 6 | Strike selection | select | See §23.7 Strike Selection Types (options only) |
+| 7 | Strike value | dynamic | Auto-resolved or user-entered depending on selection type |
 | 8 | Lots | number input | Positive integer, validated against lot size |
 | 9 | Order type | read-only | `MARKET` (V1 only) |
 
@@ -796,7 +802,10 @@ Body: {
             "expiry_type": "current_week",
             "action": "SELL",
             "option_type": "CE",
-            "strike_selection": "OTM4",
+            "strike_selection": "OTM",
+            "strike_offset": 4,
+            "strike_price": null,
+            "premium_value": null,
             "lots": 1,
             "order_type": "MARKET"
         },
@@ -807,7 +816,10 @@ Body: {
             "expiry_type": "current_week",
             "action": "SELL",
             "option_type": "PE",
-            "strike_selection": "OTM4",
+            "strike_selection": "OTM",
+            "strike_offset": 4,
+            "strike_price": null,
+            "premium_value": null,
             "lots": 1,
             "order_type": "MARKET"
         },
@@ -818,7 +830,10 @@ Body: {
             "expiry_type": "current_week",
             "action": "BUY",
             "option_type": "CE",
-            "strike_selection": "OTM6",
+            "strike_selection": "OTM",
+            "strike_offset": 6,
+            "strike_price": null,
+            "premium_value": null,
             "lots": 1,
             "order_type": "MARKET"
         },
@@ -829,7 +844,10 @@ Body: {
             "expiry_type": "current_week",
             "action": "BUY",
             "option_type": "PE",
-            "strike_selection": "OTM6",
+            "strike_selection": "OTM",
+            "strike_offset": 6,
+            "strike_price": null,
+            "premium_value": null,
             "lots": 1,
             "order_type": "MARKET"
         }
@@ -862,13 +880,22 @@ Response: { "status": "success", "order_ids": ["ord_1", "ord_2", "ord_3", "ord_4
 1. Load strategy + symbol mapping with `legs_config`
 2. For each leg, resolve the concrete option symbol:
    - Get ATM strike from underlying LTP via `get_quotes(underlying, quote_exchange)`
-   - Apply offset (OTM4 = ATM + 4 * tick_size for CE, ATM - 4 * tick_size for PE)
+   - Resolve strike based on `strike_selection` type (see §23.7):
+     - ATM: `round(spot / strike_step) * strike_step`
+     - ITM/OTM: `ATM ± (offset × strike_step)` (direction depends on CE/PE)
+     - Specific: use `strike_price` directly
+     - Premium Near: scan ±20 strikes, match closest premium to `premium_value`
    - Get expiry date via `get_expiry_dates(symbol, exchange, instrumenttype)`
    - Resolve full symbol via `get_option_symbol(underlying, exchange, expiry_date, strike, offset, option_type)`
-3. Place all legs via `place_options_multiorder(...)` or sequentially
-4. Create `strategy_order` records for each leg
-5. If combined risk mode: create `strategy_position_group` record
-6. Emit `builder_leg_update` SocketIO events as each leg fills
+3. Get `freeze_qty` via `get_symbol_info(underlying, exchange)` → `data.freeze_qty`
+4. Place all legs via `place_options_multiorder(...)` with `splitsize = freeze_qty` per leg (see §23.6):
+   - Service resolves option symbols internally from offset
+   - Service handles freeze_qty splitting per leg automatically
+   - BUY legs execute first, then SELL legs (margin efficiency)
+   - Underlying LTP fetched once and reused across all legs
+5. Create `strategy_order` records for each leg (and each split sub-order)
+6. If combined risk mode: create `strategy_position_group` record
+7. Emit `builder_leg_update` SocketIO events as each leg fills
 
 ### 23.5 Internal Service Usage
 
@@ -878,10 +905,251 @@ Response: { "status": "success", "order_ids": ["ord_1", "ord_2", "ord_3", "ord_4
 | Resolve option symbol | `option_symbol_service` | `get_option_symbol(underlying, exchange, expiry_date, strike_int, offset, option_type)` |
 | Get underlying LTP | `quotes_service` | `get_quotes(symbol, exchange)` |
 | Get multiple LTPs | `multiquotes_service` | `get_multiquotes(symbols_dict)` |
-| Place multi-leg order | `options_multiorder_service` | `place_options_multiorder(...)` |
-| Place single leg | `options_order_service` | `place_options_order(...)` |
-| Auto-split large orders | `split_order_service` | `split_order(...)` |
-| Get symbol info | `symbol_service` | `get_symbol(symbol, exchange)` → returns tick_size, lotsize |
+| Place multi-leg options | `options_multiorder_service` | `place_options_multiorder(...)` — resolves symbols, handles splitsize per leg, BUY-first execution |
+| Place single-leg option | `options_order_service` | `place_options_order(...)` — resolves symbol, handles splitsize |
+| Place equity/futures order | `place_order_service` | `place_order(...)` — when qty ≤ freeze_qty |
+| Split equity/futures order | `split_order_service` | `split_order(...)` — when qty > freeze_qty |
+| Get symbol info + freeze_qty | `symbol_service` | `get_symbol_info(symbol, exchange)` → returns lotsize, tick_size, freeze_qty |
+
+### 23.6 Freeze Quantity & Order Routing
+
+All strategy order placement (entries AND exits) must respect the exchange freeze quantity limit. OpenAlgo is a single-user application — freeze quantity comes from the `qty_freeze` database via `symbol_service.get_symbol_info()`.
+
+**Rule:** If the total order quantity exceeds the freeze limit, pass `splitsize = freeze_qty` so the order is automatically split into sub-orders each ≤ `freeze_qty`.
+
+#### Order Routing by Instrument Type
+
+| Instrument | Service | Freeze Handling |
+|-----------|---------|-----------------|
+| **Multi-leg options** (Strategy Builder, presets) | `place_options_multiorder(...)` | Pass `splitsize = freeze_qty` per leg — service handles splitting internally |
+| **Single-leg option** (single option webhook) | `place_options_order(...)` | Pass `splitsize = freeze_qty` — service handles splitting internally |
+| **Equity / Futures** | `place_order(...)` if qty ≤ freeze_qty, else `split_order(...)` with `splitsize = freeze_qty` | Manual routing needed |
+
+#### Multi-Leg Options (via `place_options_multiorder`)
+
+For F&O strategies built via the Strategy Builder, use `place_options_multiorder` which:
+- Resolves option symbols from offset (ATM/ITM/OTM) for each leg
+- Fetches underlying LTP **once** and reuses across all legs
+- Executes **BUY legs first, then SELL legs** (margin efficiency)
+- Handles `splitsize` per leg internally (max 100 splits per leg)
+- Rate-limits between orders (default 100ms, configurable via `ORDER_RATE_LIMIT`)
+- Emits a single summary SocketIO event (per-leg events suppressed)
+
+```python
+from services.place_options_multiorder_service import place_options_multiorder
+from services.symbol_service import get_symbol_info
+
+def execute_strategy_legs(strategy, legs_config, auth_token, broker):
+    """
+    Execute all legs of a multi-leg F&O strategy.
+    Uses place_options_multiorder which handles freeze qty splitting internally.
+    """
+    # Get freeze_qty for the underlying
+    success, symbol_data, _ = get_symbol_info(strategy.underlying, strategy.exchange)
+    freeze_qty = symbol_data['data'].get('freeze_qty', 0) if success else 0
+
+    # Build multiorder request — pass splitsize per leg
+    multiorder_data = {
+        'underlying': strategy.underlying,
+        'exchange': strategy.exchange,
+        'strategy': strategy.name,
+        'legs': []
+    }
+
+    for leg in legs_config['legs']:
+        leg_data = {
+            'offset': f"{leg['strike_selection']}{leg.get('strike_offset', '')}",  # e.g. "OTM4"
+            'option_type': leg['option_type'],
+            'action': leg['action'],
+            'quantity': leg['lots'] * lot_size,
+            'product': leg.get('product_type', 'NRML'),
+            'pricetype': 'MARKET',
+            'splitsize': freeze_qty if freeze_qty > 0 else 0,  # Auto-split per leg
+        }
+        multiorder_data['legs'].append(leg_data)
+
+    return place_options_multiorder(
+        multiorder_data, auth_token=auth_token, broker=broker
+    )
+```
+
+#### Single-Leg Option (via `place_options_order`)
+
+For single-leg option strategies (webhook-triggered), use `place_options_order`:
+
+```python
+from services.place_options_order_service import place_options_order
+
+options_data = {
+    'underlying': underlying,
+    'exchange': exchange,
+    'offset': 'ATM',
+    'option_type': 'CE',
+    'action': 'BUY',
+    'quantity': total_qty,
+    'product': 'NRML',
+    'pricetype': 'MARKET',
+    'splitsize': freeze_qty,  # Auto-split if qty > freeze_qty
+}
+place_options_order(options_data, auth_token=auth_token, broker=broker)
+```
+
+#### Equity / Futures (via `place_order` or `split_order`)
+
+For non-options instruments, route manually:
+
+```python
+from services.place_order_service import place_order
+from services.split_order_service import split_order
+from services.symbol_service import get_symbol_info
+
+def place_strategy_equity_order(symbol, exchange, action, quantity, product,
+                                strategy_name, pricetype='MARKET',
+                                auth_token=None, broker=None):
+    """
+    Order placement for equity/futures.
+    Routes to place_order or split_order based on freeze_qty.
+    """
+    success, symbol_data, _ = get_symbol_info(symbol, exchange)
+    freeze_qty = symbol_data['data'].get('freeze_qty', 0) if success else 0
+
+    if freeze_qty > 0 and quantity > freeze_qty:
+        split_data = {
+            'strategy': strategy_name,
+            'exchange': exchange,
+            'symbol': symbol,
+            'action': action,
+            'quantity': quantity,
+            'splitsize': freeze_qty,
+            'pricetype': pricetype,
+            'product': product,
+        }
+        return split_order(split_data, auth_token=auth_token, broker=broker)
+    else:
+        order_data = {
+            'strategy': strategy_name,
+            'exchange': exchange,
+            'symbol': symbol,
+            'action': action,
+            'quantity': quantity,
+            'pricetype': pricetype,
+            'product': product,
+        }
+        return place_order(order_data, auth_token=auth_token, broker=broker)
+```
+
+#### Exit Orders (Risk Engine)
+
+When the risk engine triggers exits (SL/TGT/TSL/CB), the same routing applies:
+- **Options positions**: Use `place_options_order` with `splitsize = freeze_qty` for single exits, or `place_options_multiorder` for group exits
+- **Equity/Futures positions**: Use `place_order` / `split_order` routing
+
+**This routing applies to ALL strategy order placements:**
+- Strategy Builder leg execution (§23.4) → `place_options_multiorder`
+- Webhook-triggered option entries (§16) → `place_options_order` or `place_options_multiorder`
+- Webhook-triggered equity/futures entries (§16) → `place_order` / `split_order`
+- Risk engine exit orders — SL/TGT/TSL triggers (§8) → `place_options_order` (options) or `place_order`/`split_order` (equity/futures)
+- Manual position close → same routing by instrument type
+- Circuit breaker `close_all_positions` mode (§20.4.1) → same routing
+- Position group close (§27.4) → `place_options_multiorder` for options groups
+
+### 23.7 Strike Selection Types
+
+The Strategy Builder supports 5 strike selection methods (matching AlgoMirror's capabilities):
+
+| Type | `strike_selection` value | Additional fields | Resolution |
+|------|-------------------------|-------------------|------------|
+| **ATM** | `ATM` | — | `round(spot_price / strike_step) * strike_step` |
+| **ITM** (1-20) | `ITM` | `strike_offset`: 1-20 | CE: `ATM - (offset × strike_step)` / PE: `ATM + (offset × strike_step)` |
+| **OTM** (1-20) | `OTM` | `strike_offset`: 1-20 | CE: `ATM + (offset × strike_step)` / PE: `ATM - (offset × strike_step)` |
+| **Specific Strike** | `strike_price` | `strike_price`: float | User-entered strike used directly |
+| **Premium Near** | `premium_near` | `premium_value`: float | Search ±20 strikes for closest premium match to target |
+
+**ITM/OTM direction logic:**
+- **Call (CE)**: ITM = below spot (lower strikes), OTM = above spot (higher strikes)
+- **Put (PE)**: ITM = above spot (higher strikes), OTM = below spot (lower strikes)
+
+**Strike step sizes** (derived from the symbol database, not hardcoded):
+
+| Underlying | Strike Step | Exchange |
+|-----------|------------|---------|
+| NIFTY | 50 | NFO |
+| BANKNIFTY | 100 | NFO |
+| FINNIFTY | 50 | NFO |
+| MIDCPNIFTY | 25 | NFO |
+| SENSEX | 100 | BFO |
+| BANKEX | 100 | BFO |
+| Stock options | Varies per stock | NFO/BFO |
+| USDINR | 0.25 | CDS/BCD |
+| CRUDEOIL | 50 | MCX |
+| GOLD | 100 | MCX |
+| SILVER | 500 | MCX |
+| NATURALGAS | 5 | MCX |
+
+> **Note:** Strike steps should be derived dynamically from the `SymToken` database (consecutive strikes for the same underlying), not hardcoded, to handle future changes and all underlyings automatically.
+
+**Premium Near resolution algorithm:**
+1. Get spot price → compute ATM strike
+2. Scan strikes in range ATM ± (20 × strike_step)
+3. For each strike, fetch LTP via `get_quotes(option_symbol, exchange)`
+4. Find strike whose premium is closest to user's `premium_value`
+5. Prefer strikes with premium ≤ target (avoid overpaying)
+6. Return the matched strike
+
+**`legs_config` storage for each strike type:**
+
+```json
+// ATM
+{ "strike_selection": "ATM", "strike_offset": 0, "strike_price": null, "premium_value": null }
+
+// OTM 5
+{ "strike_selection": "OTM", "strike_offset": 5, "strike_price": null, "premium_value": null }
+
+// ITM 3
+{ "strike_selection": "ITM", "strike_offset": 3, "strike_price": null, "premium_value": null }
+
+// Specific strike
+{ "strike_selection": "strike_price", "strike_offset": 0, "strike_price": 25000.0, "premium_value": null }
+
+// Premium near ₹150
+{ "strike_selection": "premium_near", "strike_offset": 0, "strike_price": null, "premium_value": 150.0 }
+```
+
+**UI behavior per selection type:**
+- **ATM**: Strike value field shows auto-resolved value (read-only)
+- **ITM/OTM**: Offset dropdown (1-20), strike value auto-resolved (read-only)
+- **Specific Strike**: Strike value input field (enabled, user types exact strike)
+- **Premium Near**: Premium value input field (enabled, user types target premium in ₹)
+
+### 23.8 Supported Exchanges
+
+The Strategy Builder works across ALL futures and options exchanges supported by OpenAlgo:
+
+| Exchange | Code | Instrument Types | Underlyings |
+|----------|------|-----------------|-------------|
+| NSE F&O | `NFO` | Index options, stock options, index futures, stock futures | NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, stock underlyings |
+| BSE F&O | `BFO` | Index options, stock options, index futures, stock futures | SENSEX, BANKEX, SENSEX50, stock underlyings |
+| NSE Currency | `CDS` | Currency futures, currency options | USDINR, EURINR, GBPINR, JPYINR |
+| BSE Currency | `BCD` | Currency futures, currency options | USDINR, EURINR, GBPINR, JPYINR |
+| MCX | `MCX` | Commodity futures, commodity options | CRUDEOIL, GOLD, SILVER, NATURALGAS, COPPER, etc. |
+
+**Exchange-specific handling:**
+- **Quote exchange resolution**: Index underlyings (NIFTY, BANKNIFTY, SENSEX, etc.) use `NSE_INDEX`/`BSE_INDEX` for quotes; stock/commodity underlyings use `NSE`/`BSE`/`MCX` — resolved via `_get_quote_exchange()` pattern
+- **Expiry types**: Weekly expiry available for index options (NFO/BFO); monthly only for CDS/BCD/MCX
+- **Lot sizes**: Vary by exchange and underlying — fetched from `symbol_service.get_symbol_info()`
+- **Freeze quantities**: Exchange-specific — fetched from `qty_freeze` DB
+- **Product types**: `NRML` (carry forward) and `MIS` (intraday) for all exchanges
+
+**Builder exchange selector:**
+```
+Exchange: [NFO ▼]  ← dropdown with all 5 exchanges
+```
+
+When exchange changes:
+1. Reset underlying to first available for that exchange
+2. Fetch underlyings via `/search/api/underlyings?exchange=<selected>`
+3. Update expiry type options (weekly available only for NFO/BFO index options)
+4. Re-fetch lot size and strike step for new underlying
 
 ---
 
