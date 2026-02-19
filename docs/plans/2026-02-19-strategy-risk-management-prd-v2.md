@@ -25,6 +25,16 @@
 | NEW §28 | Market Hours Intelligence | GAP 7 |
 | NEW §29 | Strategy Cloning | GAP 14 |
 | NEW §30 | Per-Leg P&L Breakdown | GAP 12 |
+| NEW §31 | Risk Evaluation Logic — exact formulas matching AlgoMirror (combined premium, leg SL/TGT/TSL, combined max loss/profit/TSL, breakeven) | — |
+| NEW §32 | Strategy Scheduling — configurable start/stop times, trading days, APScheduler pattern matching `/python` | — |
+| 3 (Scope) | Added strategy scheduling, risk evaluation logic, breakeven stoploss to V2 scope | — |
+| 5 (Schema) | Added schedule columns reference | — |
+| 13 (Notifications) | Added schedule-related events | — |
+| 14 (Services) | Added StrategySchedulerService | — |
+| 15 (API) | Added schedule endpoints | — |
+| 16 (Webhook) | Added schedule-aware webhook gating | — |
+| 18 (Configuration) | Added schedule-related env vars | — |
+| 22 (Files) | Added scheduling and risk evaluation files | — |
 | OUT OF SCOPE (V2) | Technical Indicator Exit Mode (Supertrend), Multi-Account Support | GAP 9, 10 |
 
 ---
@@ -83,6 +93,8 @@ Currently, OpenAlgo strategies (Webhook and Chartink) have no local order/positi
 - **Distance metrics columns** — SL Dist, TGT Dist, TSL Dist in position table (color-coded by zone)
 - **Daily circuit breaker behavior modes** — 3 modes: `alert_only`, `stop_entries`, `close_all_positions`
 - **Per-leg P&L breakdown** — trades and P&L panels show per-leg profitability
+- **Risk evaluation logic** — exact formulas for combined premium, leg-level SL/TGT/TSL (price-based), combined max loss/profit/TSL (P&L-based AFL ratcheting), breakeven stoploss
+- **Strategy scheduling** — configurable start/stop times and trading days (default Mon-Fri 09:15-15:30 IST), APScheduler-based, exchange-specific defaults, holiday enforcement, auto square-off at stop time
 
 ### Out of Scope (Future)
 
@@ -108,6 +120,10 @@ Key decisions: Local DB tracking (not broker-dependent), WebSocket-first market 
 *(Sections 5.1-5.8 unchanged from V1 — see original PRD Section 5)*
 
 Tables: `strategy_order`, `strategy_position`, `strategy_trade`, `strategy_daily_pnl`, `strategy_position_group`, `alert_log`
+
+**V2 additions to existing Strategy/ChartinkStrategy tables:**
+- Schedule columns: `schedule_enabled`, `schedule_start_time`, `schedule_stop_time`, `schedule_days`, `schedule_auto_entry`, `schedule_auto_exit` — see §32.2
+- Risk columns from V1: `default_breakeven_type`, `default_breakeven_threshold` — see §31.10
 
 ### 5.2 Addition: `legs_config` Structured Validation (V2)
 
@@ -316,7 +332,18 @@ Strategy type selector at top:
 
 *(Unchanged from V1 — see original PRD Section 13)*
 
-Toast notifications via SocketIO for: position opened, exit triggered, position closed, order rejected, risk paused/resumed, partial fill warning, breakeven activated.
+Toast notifications via SocketIO for: position opened, exit triggered, position closed, order rejected, risk paused/resumed, partial fill warning, breakeven activated, schedule started/stopped/blocked.
+
+### V2 Addition: Schedule Events
+
+| Event | When | Toast Style |
+|-------|------|-------------|
+| `strategy_schedule_started` | Scheduled start fires | info |
+| `strategy_schedule_stopped` | Scheduled stop fires (with auto square-off count) | info |
+| `strategy_schedule_blocked` | Webhook entry rejected outside schedule | warning |
+| `strategy_schedule_holiday` | Strategy paused for market holiday | warning |
+
+See §32.14 for full event payloads.
 
 ---
 
@@ -353,6 +380,23 @@ V1 Services:
 - Determine current market phase: `pre_market`, `market_open`, `post_market`, `market_closed`, `holiday`
 - Check holiday calendar and return holiday name
 - Used by Risk Engine to auto-pause/resume monitoring
+
+### 14.9 StrategySchedulerService (V2 — New)
+
+**File:** `services/strategy_scheduler_service.py`
+
+**Responsibilities:**
+- Initialize APScheduler with IST timezone (matching `/python` pattern)
+- Create/remove CronTrigger jobs per strategy (start + stop)
+- Scheduled start: check `manually_stopped`, `schedule_days`, market holidays before activating
+- Scheduled stop: auto square-off MIS positions, pause risk engine, reject webhook entries
+- Daily trading day check (00:01 IST): stop scheduled strategies on non-trading days
+- Market hours enforcer (every minute): resume paused strategies when trading day starts
+- Restore schedules on application restart
+- Integrate with StrategyRiskEngine for activate/pause on schedule events
+- Webhook gating: entry signals blocked outside schedule, exit signals always accepted
+
+See §32 for full specification.
 
 ---
 
@@ -495,11 +539,64 @@ Body: {
 Response: { "status": "success" }
 ```
 
+### 15.17 Strategy Schedule (V2 — New)
+
+```
+GET /api/v1/strategy/{id}/schedule
+Response: {
+    "status": "success",
+    "data": {
+        "start_time": "09:15",
+        "stop_time": "15:30",
+        "days": ["mon", "tue", "wed", "thu", "fri"],
+        "auto_entry": true,
+        "auto_exit": true,
+        "current_state": "running",
+        "next_start": null,
+        "next_stop": "15:30 IST today"
+    }
+}
+```
+
+```
+PUT /api/v1/strategy/{id}/schedule
+Body: {
+    "start_time": "09:15",
+    "stop_time": "15:30",
+    "days": ["mon", "tue", "wed", "thu", "fri"],
+    "auto_entry": true,
+    "auto_exit": true
+}
+Response: { "status": "success" }
+```
+
+See §32.13 for full specification.
+
 ---
 
 ## 16. Webhook Handler Changes
 
-*(Unchanged from V1 — see original PRD Section 16)*
+*(Sections 16.1-16.4 unchanged from V1 — see original PRD Section 16)*
+
+### V2 Addition: Schedule-Aware Webhook Gating
+
+Webhook entry signals are blocked when the strategy is outside its schedule window, manually stopped, or paused for a holiday. Exit/squareoff signals are always accepted.
+
+```python
+# In webhook handler (strategy.py / chartink.py):
+def handle_webhook_signal(strategy, signal):
+    if signal.action in ('SELL', 'squareoff', 'close'):
+        # Exit signals always accepted regardless of schedule
+        pass
+    else:
+        # Entry signals gated by schedule
+        if not strategy_scheduler.is_within_schedule(strategy):
+            return {"status": "error", "message": "Strategy outside schedule window"}, 403
+        if strategy.manually_stopped:
+            return {"status": "error", "message": "Strategy manually stopped"}, 403
+```
+
+See §32.10 for full webhook behavior matrix.
 
 ---
 
@@ -511,13 +608,47 @@ Response: { "status": "success" }
 
 ## 18. Configuration
 
-*(Unchanged from V1 — see original PRD Section 18)*
+*(Sections 18.1-18.2 unchanged from V1 — see original PRD Section 18)*
+
+### V2 Addition: Schedule & Risk Evaluation Environment Variables
+
+```bash
+# Strategy Scheduling
+STRATEGY_DEFAULT_SCHEDULE_START=09:15        # Default start time (IST)
+STRATEGY_DEFAULT_SCHEDULE_STOP=15:30         # Default stop time (IST)
+STRATEGY_DEFAULT_SCHEDULE_DAYS=mon,tue,wed,thu,fri  # Default trading days
+STRATEGY_SCHEDULE_ENFORCE_HOLIDAYS=true      # Block on market holidays
+STRATEGY_DAILY_CHECK_TIME=00:01              # Daily trading day check time (IST)
+
+# Exchange-Specific Schedule Defaults (used when creating strategies)
+STRATEGY_SCHEDULE_NFO=09:15-15:30            # NSE F&O
+STRATEGY_SCHEDULE_BFO=09:15-15:30            # BSE F&O
+STRATEGY_SCHEDULE_CDS=09:00-17:00            # Currency
+STRATEGY_SCHEDULE_BCD=09:00-17:00            # BSE Currency
+STRATEGY_SCHEDULE_MCX=09:00-23:30            # Commodity
+```
 
 ---
 
 ## 19. Database Migration
 
-*(Unchanged from V1 — see original PRD Section 19)*
+*(Sections 19.1-19.6 unchanged from V1 — see original PRD Section 19)*
+
+### V2 Addition: Schedule Columns
+
+The migration script must add these columns to both `strategies` and `chartink_strategies` tables (via `PRAGMA table_info` check, idempotent):
+
+```sql
+-- Strategy Scheduling (§32)
+schedule_enabled       BOOLEAN DEFAULT TRUE
+schedule_start_time    VARCHAR(5) DEFAULT '09:15'
+schedule_stop_time     VARCHAR(5) DEFAULT '15:30'
+schedule_days          TEXT DEFAULT '["mon","tue","wed","thu","fri"]'
+schedule_auto_entry    BOOLEAN DEFAULT TRUE
+schedule_auto_exit     BOOLEAN DEFAULT TRUE
+```
+
+These are added alongside the existing risk columns (`default_stoploss_type`, `default_breakeven_type`, etc.) in `migrate_strategy_risk.py`.
 
 ---
 
@@ -611,6 +742,23 @@ def _handle_circuit_breaker_trip(self, strategy, reason):
 | `frontend/src/hooks/useMarketStatus.ts` | Market status polling hook |
 | `frontend/src/types/strategy-builder.ts` | Builder TypeScript interfaces |
 | `frontend/src/types/strategy-templates.ts` | Template TypeScript interfaces |
+| `services/strategy_scheduler_service.py` | APScheduler-based strategy scheduling (start/stop/enforce) |
+| `frontend/src/components/strategy-builder/ScheduleConfig.tsx` | Schedule configuration UI (day toggles, time pickers) |
+| `frontend/src/components/strategy-dashboard/ScheduleBadge.tsx` | Schedule status badge in StrategyCard header |
+| `frontend/src/api/strategy-schedule.ts` | Schedule API client |
+| `frontend/src/types/strategy-schedule.ts` | Schedule TypeScript interfaces |
+
+### V2 — Modified Files (Additional)
+
+| File | Change |
+|------|--------|
+| `database/strategy_db.py` | Add schedule columns to Strategy model |
+| `database/chartink_db.py` | Add schedule columns to ChartinkStrategy model |
+| `upgrade/migrate_strategy_risk.py` | Add schedule column migrations |
+| `blueprints/strategy.py` | Add schedule-aware webhook gating |
+| `blueprints/chartink.py` | Add schedule-aware webhook gating |
+| `app.py` | Initialize StrategySchedulerService on startup, restore schedules |
+| `services/strategy_risk_engine.py` | Integrate with scheduler for activate/pause on schedule events |
 
 ---
 
@@ -628,7 +776,12 @@ def _handle_circuit_breaker_trip(self, strategy, reason):
 ### Phase 2: Risk Engine (V1)
 
 - StrategyRiskEngine (main monitoring loop)
-- SL/TGT/TSL/BE evaluation
+- SL/TGT/TSL/BE evaluation (§31 risk evaluation logic — exact formulas)
+- Leg-level SL/TGT/TSL (price-based, 3 types: percentage/points/premium) — §31.2-31.4
+- Combined premium calculation — §31.1
+- Combined max loss/profit (P&L-based) — §31.5-31.6
+- Combined trailing stop (AFL-style ratcheting) — §31.7
+- Breakeven stoploss (one-time SL move to entry) — §31.10
 - Exit execution with retry logic
 - WebSocket market data integration
 - REST polling fallback
@@ -649,12 +802,15 @@ def _handle_circuit_breaker_trip(self, strategy, reason):
 
 ### Phase 4: F&O Strategy Builder (V2)
 
-- Strategy Builder page with 4-step wizard
+- Strategy Builder page with 4-step wizard (includes schedule config in BasicsStep)
 - 9-parameter leg card component
+- 5 strike selection types: ATM, ITM (1-20), OTM (1-20), strike_price, premium_near — §23.7
 - Preset selector (Straddle, Strangle, Iron Condor, Bull Call, Bear Put, Custom)
 - Leg execution state visualization (frozen legs with diagonal stripes)
 - Builder API endpoints (save, execute)
-- Integration with `place_options_multiorder` service
+- Integration with `place_options_multiorder` / `place_options_order` — §23.6
+- Freeze quantity routing via `symbol_service.get_symbol_info()` — §23.6
+- Support for all 5 F&O exchanges: NFO, BFO, CDS, BCD, MCX — §23.8
 - Symbol resolution via `get_option_symbol` and `get_expiry`
 
 ### Phase 5: Templates & Cloning (V2)
@@ -677,6 +833,23 @@ def _handle_circuit_breaker_trip(self, strategy, reason):
 - **Circuit breaker behavior modes** (alert_only, stop_entries, close_all_positions)
 - Per-leg P&L breakdown in trades/P&L panels
 - Distance metrics computation (client-side)
+
+### Phase 7: Strategy Scheduling (V2)
+
+- StrategySchedulerService (APScheduler with IST timezone) — §32
+- Schedule database columns on Strategy/ChartinkStrategy tables — §32.2
+- CronTrigger jobs per strategy (start + stop) — §32.4
+- Scheduled start with manually_stopped/holiday/day checks — §32.5
+- Scheduled stop with auto square-off for MIS positions — §32.6
+- Daily trading day check job (00:01 IST) — §32.8
+- Market hours enforcer job (every minute) — §32.8
+- Schedule-aware webhook gating (block entries outside window) — §32.10
+- Exchange-specific default schedules (NFO, BFO, CDS, BCD, MCX) — §32.11
+- Schedule config UI (day toggles, time pickers) in Strategy Builder — §32.12
+- Schedule status badge in StrategyCard header — §32.12
+- Schedule API endpoints (GET/PUT) — §32.13
+- Schedule SocketIO events — §32.14
+- Restore schedules on application restart
 
 ---
 
@@ -2284,3 +2457,14 @@ When creating a strategy with a specific exchange, the UI pre-fills the default 
 | GAP 13 | Missing webhook deduplication details | P2 | V1 PRD §16 (adequate) |
 | GAP 14 | No strategy cloning | P2 | §29 |
 | GAP 15 | Position group visualization missing | P0 | §27 |
+
+### Additional V2 Features (Beyond Gap Analysis)
+
+| Feature | Description | Section |
+|---------|-------------|---------|
+| Risk Evaluation Logic | Exact formulas matching AlgoMirror — combined premium, leg SL/TGT/TSL (price-based), combined max loss/profit/TSL (P&L-based), breakeven stoploss | §31 |
+| Strategy Scheduling | Configurable start/stop times and trading days, APScheduler, exchange-specific defaults, holiday enforcement, webhook gating | §32 |
+| Freeze Qty Order Routing | Options use `place_options_multiorder`/`place_options_order` with splitsize; equity/futures use `place_order`/`split_order` | §23.6 |
+| Extended Strike Selection | 5 types: ATM, ITM 1-20, OTM 1-20, specific strike, premium near | §23.7 |
+| Multi-Exchange Support | NFO, BFO, CDS, BCD, MCX with exchange-specific strike steps and expiry types | §23.8 |
+| Breakeven Stoploss | OpenAlgo-only: one-time SL move to entry on profit threshold, with trail interaction | §31.10 |
