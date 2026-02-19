@@ -14,6 +14,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    text,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -29,6 +30,15 @@ if DATABASE_URL and "sqlite" in DATABASE_URL:
     engine = create_engine(
         DATABASE_URL, poolclass=NullPool, connect_args={"check_same_thread": False}
     )
+    # Enable WAL mode for better concurrent access (PRD V1 §17.1)
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("PRAGMA journal_mode=WAL"))
+            conn.execute(text("PRAGMA busy_timeout=5000"))
+            conn.execute(text("PRAGMA synchronous=NORMAL"))
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"Could not set SQLite pragmas for strategy_position_db: {e}")
 else:
     engine = create_engine(DATABASE_URL, pool_size=50, max_overflow=100, pool_timeout=10)
 

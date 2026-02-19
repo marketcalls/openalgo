@@ -491,6 +491,14 @@ def add_strategy_risk_columns(engine):
         ("default_breakeven_threshold", "FLOAT"),
         ("risk_monitoring", "VARCHAR(10) DEFAULT 'active'"),
         ("auto_squareoff_time", "VARCHAR(5) DEFAULT '15:15'"),
+        ("daily_cb_behavior", "VARCHAR(25) DEFAULT 'close_all_positions'"),
+        # Strategy scheduling (PRD V2 §32.2)
+        ("schedule_enabled", "BOOLEAN DEFAULT 1"),
+        ("schedule_start_time", "VARCHAR(5) DEFAULT '09:15'"),
+        ("schedule_stop_time", "VARCHAR(5) DEFAULT '15:30'"),
+        ("schedule_days", "TEXT DEFAULT '[\"mon\",\"tue\",\"wed\",\"thu\",\"fri\"]'"),
+        ("schedule_auto_entry", "BOOLEAN DEFAULT 1"),
+        ("schedule_auto_exit", "BOOLEAN DEFAULT 1"),
     ]
 
     _add_columns_to_table(engine, "strategies", columns)
@@ -540,6 +548,14 @@ def add_chartink_risk_columns(engine):
         ("default_breakeven_threshold", "FLOAT"),
         ("risk_monitoring", "VARCHAR(10) DEFAULT 'active'"),
         ("auto_squareoff_time", "VARCHAR(5) DEFAULT '15:15'"),
+        ("daily_cb_behavior", "VARCHAR(25) DEFAULT 'close_all_positions'"),
+        # Strategy scheduling (PRD V2 §32.2)
+        ("schedule_enabled", "BOOLEAN DEFAULT 1"),
+        ("schedule_start_time", "VARCHAR(5) DEFAULT '09:15'"),
+        ("schedule_stop_time", "VARCHAR(5) DEFAULT '15:30'"),
+        ("schedule_days", "TEXT DEFAULT '[\"mon\",\"tue\",\"wed\",\"thu\",\"fri\"]'"),
+        ("schedule_auto_entry", "BOOLEAN DEFAULT 1"),
+        ("schedule_auto_exit", "BOOLEAN DEFAULT 1"),
     ]
 
     _add_columns_to_table(engine, "chartink_strategies", columns)
@@ -696,6 +712,20 @@ def main():
         print()
         print("Creating indexes...")
         create_indexes(engine)
+
+        # Set SQLite pragmas (PRD V1 §17.1, §19.4)
+        if is_sqlite(engine):
+            print()
+            print("Setting SQLite pragmas...")
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text("PRAGMA journal_mode=WAL"))
+                    conn.execute(text("PRAGMA busy_timeout=5000"))
+                    conn.execute(text("PRAGMA synchronous=NORMAL"))
+                    conn.commit()
+                print("  [OK] WAL mode, busy_timeout=5000, synchronous=NORMAL")
+            except Exception as e:
+                print(f"  [WARN] Could not set pragmas: {e}")
 
         print()
         print("[OK] Strategy Risk Management migration completed successfully!")

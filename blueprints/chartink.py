@@ -75,6 +75,11 @@ order_processor_lock = threading.Lock()
 # Rate limiting state for regular orders
 last_regular_orders = deque(maxlen=10)  # Track last 10 regular order timestamps
 
+# Webhook deduplication — 5-second window per strategy+symbol+action (PRD V1 §17.6)
+_dedup_cache = {}
+_dedup_lock = threading.Lock()
+DEDUP_WINDOW = 5  # seconds
+
 
 def process_orders():
     """Background task to process orders from both queues with rate limiting"""
@@ -237,6 +242,41 @@ def _track_order_if_strategy(response, queue_item):
         logger.exception(f"Error tracking chartink strategy order: {e}")
 
 
+def _is_duplicate_webhook(strategy_id, strategy_type, symbol, action):
+    """Check if this webhook is a duplicate within the dedup window (PRD V1 §17.6)."""
+    key = f"{strategy_id}:{strategy_type}:{symbol}:{action}"
+    now = time()
+    with _dedup_lock:
+        last_time = _dedup_cache.get(key)
+        if last_time and (now - last_time) < DEDUP_WINDOW:
+            return True
+        _dedup_cache[key] = now
+        if len(_dedup_cache) > 10000:
+            _dedup_cache.clear()
+        return False
+
+
+def _check_position_state_guard(strategy_id, strategy_type, symbol, exchange, is_entry):
+    """Check position state guards (PRD V1 §17.5)."""
+    try:
+        from database.strategy_position_db import StrategyPosition
+        existing = StrategyPosition.query.filter_by(
+            strategy_id=strategy_id,
+            strategy_type=strategy_type,
+            symbol=symbol,
+            exchange=exchange,
+        ).filter(StrategyPosition.position_state.in_(["active", "pending_entry", "exiting"])).first()
+
+        if is_entry and existing:
+            return False, f"Active position already exists for {symbol} (state: {existing.position_state})"
+        if not is_entry and not existing:
+            return False, f"No active position found for {symbol} to exit"
+        return True, None
+    except Exception as e:
+        logger.warning(f"Position state guard check failed: {e}")
+        return True, None
+
+
 def validate_strategy_times(start_time, end_time, squareoff_time):
     """Validate strategy time settings"""
     try:
@@ -303,7 +343,11 @@ def schedule_squareoff(strategy_id):
 
 
 def squareoff_positions(strategy_id):
-    """Square off all positions for intraday strategy"""
+    """Square off all positions for intraday strategy.
+
+    Uses strategy position tracking to close tracked positions,
+    falls back to symbol mappings for untracked positions.
+    """
     try:
         strategy = get_strategy(strategy_id)
         if not strategy or not strategy.is_intraday:
@@ -315,27 +359,62 @@ def squareoff_positions(strategy_id):
             logger.error(f"No API key found for strategy {strategy_id}")
             return
 
-        # Get all symbol mappings
-        mappings = get_symbol_mappings(strategy_id)
+        # First: close tracked positions via position tracking system
+        from database.strategy_position_db import get_active_positions
 
-        for mapping in mappings:
-            # Use placesmartorder with quantity=0 and position_size=0 for squareoff
+        active_positions = get_active_positions(strategy_id, "chartink")
+        tracked_symbols = set()
+
+        for pos in active_positions:
+            exit_action = "SELL" if pos.action == "BUY" else "BUY"
             payload = {
                 "apikey": api_key,
                 "strategy": strategy.name,
-                "symbol": mapping.chartink_symbol,
-                "exchange": mapping.exchange,
-                "action": "SELL",  # Direction doesn't matter for closing
-                "product": mapping.product_type,
+                "symbol": pos.symbol,
+                "exchange": pos.exchange,
+                "action": exit_action,
+                "product": pos.product_type,
                 "pricetype": "MARKET",
                 "quantity": "0",
-                "position_size": "0",  # This will close the position
+                "position_size": "0",
                 "price": "0",
                 "trigger_price": "0",
                 "disclosed_quantity": "0",
             }
 
-            # Queue the order instead of executing directly
+            strategy_meta = {
+                "strategy_id": strategy_id,
+                "strategy_type": "chartink",
+                "user_id": strategy.user_id,
+                "is_entry": False,
+                "position_id": pos.id,
+                "exit_reason": "squareoff",
+            }
+
+            queue_order("placesmartorder", payload, strategy_meta=strategy_meta)
+            tracked_symbols.add((pos.symbol, pos.exchange))
+
+        # Fallback: close any untracked positions via symbol mappings
+        mappings = get_symbol_mappings(strategy_id)
+        for mapping in mappings:
+            if (mapping.chartink_symbol, mapping.exchange) in tracked_symbols:
+                continue
+
+            payload = {
+                "apikey": api_key,
+                "strategy": strategy.name,
+                "symbol": mapping.chartink_symbol,
+                "exchange": mapping.exchange,
+                "action": "SELL",
+                "product": mapping.product_type,
+                "pricetype": "MARKET",
+                "quantity": "0",
+                "position_size": "0",
+                "price": "0",
+                "trigger_price": "0",
+                "disclosed_quantity": "0",
+            }
+
             queue_order("placesmartorder", payload)
 
     except Exception as e:
@@ -954,6 +1033,19 @@ def webhook(webhook_id):
             mapping = mapping_dict.get(symbol)
             if not mapping:
                 logger.warning(f"No mapping found for symbol {symbol} in strategy {strategy.id}")
+                continue
+
+            # Webhook deduplication check (PRD V1 §17.6)
+            if _is_duplicate_webhook(strategy.id, "chartink", symbol, action):
+                logger.warning(f"Duplicate webhook rejected for strategy {strategy.id}: {action} {symbol}")
+                continue
+
+            # Position state guard (PRD V1 §17.5)
+            allowed, guard_error = _check_position_state_guard(
+                strategy.id, "chartink", mapping.chartink_symbol, mapping.exchange, is_entry_order
+            )
+            if not allowed:
+                logger.info(f"Position state guard blocked for {symbol}: {guard_error}")
                 continue
 
             # Prepare base payload

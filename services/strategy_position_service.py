@@ -5,8 +5,6 @@ Coordinates between webhook order placement, broker order status polling,
 and local position state management.
 """
 
-import math
-
 from database.strategy_position_db import (
     close_position,
     create_strategy_order,

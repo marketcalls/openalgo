@@ -141,8 +141,32 @@ def snapshot_daily_pnl(strategy_id, strategy_type, user_id, pnl_date=None):
 def get_strategy_summary(strategy_id, strategy_type, user_id=None):
     """Get aggregate PnL summary for a strategy.
 
-    Returns dict with today's P&L, total realized, active position count, etc.
+    Returns dict with today's P&L, total realized, active position count,
+    win_rate, profit_factor, expectancy, exit_breakdown, and streak metrics.
     """
+    empty = {
+        "active_positions": 0,
+        "total_unrealized_pnl": 0,
+        "today_realized_pnl": 0,
+        "today_total_pnl": 0,
+        "today_trades": 0,
+        "cumulative_pnl": 0,
+        "max_drawdown": 0,
+        "max_drawdown_pct": 0,
+        "win_rate": 0,
+        "profit_factor": 0,
+        "risk_reward_ratio": 0,
+        "expectancy": 0,
+        "total_trades": 0,
+        "winning_trades": 0,
+        "losing_trades": 0,
+        "avg_win": 0,
+        "avg_loss": 0,
+        "max_consecutive_wins": 0,
+        "max_consecutive_losses": 0,
+        "exit_breakdown": {},
+    }
+
     try:
         active_positions = get_active_positions(strategy_id, strategy_type)
         total_unrealized = sum(p.unrealized_pnl or 0 for p in active_positions)
@@ -156,6 +180,55 @@ def get_strategy_summary(strategy_id, strategy_type, user_id=None):
         all_records = get_daily_pnl_range(strategy_id, strategy_type)
         last_record = all_records[-1] if all_records else None
 
+        # Get all exit trades for advanced metrics
+        exit_trades = (
+            db_session.query(StrategyTrade)
+            .filter(
+                StrategyTrade.strategy_id == strategy_id,
+                StrategyTrade.strategy_type == strategy_type,
+                StrategyTrade.trade_type == "exit",
+            )
+            .order_by(StrategyTrade.created_at.asc())
+            .all()
+        )
+
+        total_trades = len(exit_trades)
+        winning_trades = sum(1 for t in exit_trades if t.pnl and t.pnl > 0)
+        losing_trades = sum(1 for t in exit_trades if t.pnl and t.pnl < 0)
+        gross_profit = sum(t.pnl for t in exit_trades if t.pnl and t.pnl > 0)
+        gross_loss = abs(sum(t.pnl for t in exit_trades if t.pnl and t.pnl < 0))
+
+        win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+        profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else 0
+        avg_win = (gross_profit / winning_trades) if winning_trades > 0 else 0
+        avg_loss = (gross_loss / losing_trades) if losing_trades > 0 else 0
+        risk_reward_ratio = (avg_win / avg_loss) if avg_loss > 0 else 0
+        expectancy = ((win_rate / 100 * avg_win) - ((1 - win_rate / 100) * avg_loss)) if total_trades > 0 else 0
+
+        # Streak calculation
+        max_consecutive_wins = 0
+        max_consecutive_losses = 0
+        current_wins = 0
+        current_losses = 0
+        for t in exit_trades:
+            if t.pnl and t.pnl > 0:
+                current_wins += 1
+                current_losses = 0
+                max_consecutive_wins = max(max_consecutive_wins, current_wins)
+            elif t.pnl and t.pnl < 0:
+                current_losses += 1
+                current_wins = 0
+                max_consecutive_losses = max(max_consecutive_losses, current_losses)
+            else:
+                current_wins = 0
+                current_losses = 0
+
+        # Exit reason breakdown
+        exit_breakdown = {}
+        for t in exit_trades:
+            reason = t.exit_reason or "unknown"
+            exit_breakdown[reason] = exit_breakdown.get(reason, 0) + 1
+
         return {
             "active_positions": len(active_positions),
             "total_unrealized_pnl": round(total_unrealized, 2),
@@ -165,16 +238,19 @@ def get_strategy_summary(strategy_id, strategy_type, user_id=None):
             "cumulative_pnl": round(last_record.cumulative_pnl, 2) if last_record else 0,
             "max_drawdown": round(last_record.max_drawdown, 2) if last_record else 0,
             "max_drawdown_pct": round(last_record.max_drawdown_pct, 2) if last_record else 0,
+            "win_rate": round(win_rate, 2),
+            "profit_factor": round(profit_factor, 2),
+            "risk_reward_ratio": round(risk_reward_ratio, 2),
+            "expectancy": round(expectancy, 2),
+            "total_trades": total_trades,
+            "winning_trades": winning_trades,
+            "losing_trades": losing_trades,
+            "avg_win": round(avg_win, 2),
+            "avg_loss": round(avg_loss, 2),
+            "max_consecutive_wins": max_consecutive_wins,
+            "max_consecutive_losses": max_consecutive_losses,
+            "exit_breakdown": exit_breakdown,
         }
     except Exception as e:
         logger.exception(f"Error getting strategy summary: {e}")
-        return {
-            "active_positions": 0,
-            "total_unrealized_pnl": 0,
-            "today_realized_pnl": 0,
-            "today_total_pnl": 0,
-            "today_trades": 0,
-            "cumulative_pnl": 0,
-            "max_drawdown": 0,
-            "max_drawdown_pct": 0,
-        }
+        return empty

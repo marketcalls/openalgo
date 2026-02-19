@@ -24,7 +24,7 @@ from utils.session import check_session_validity
 
 logger = get_logger(__name__)
 
-strategy_dashboard_bp = Blueprint("strategy_dashboard", __name__, url_prefix="/strategy/api/dashboard")
+strategy_dashboard_bp = Blueprint("strategy_dashboard", __name__, url_prefix="/strategy/api")
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────

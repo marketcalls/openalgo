@@ -53,6 +53,14 @@ class ChartinkStrategy(Base):
     default_breakeven_threshold = Column(Float)
     risk_monitoring = Column(String(10), default="active")
     auto_squareoff_time = Column(String(5), default="15:15")
+    daily_cb_behavior = Column(String(25), default="close_all_positions")  # alert_only, stop_entries, close_all_positions
+    # Strategy scheduling (PRD V2 §32.2)
+    schedule_enabled = Column(Boolean, default=True)
+    schedule_start_time = Column(String(5), default="09:15")
+    schedule_stop_time = Column(String(5), default="15:30")
+    schedule_days = Column(Text, default='["mon","tue","wed","thu","fri"]')
+    schedule_auto_entry = Column(Boolean, default=True)
+    schedule_auto_exit = Column(Boolean, default=True)
 
     # Relationships
     symbol_mappings = relationship(

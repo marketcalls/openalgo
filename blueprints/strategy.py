@@ -95,6 +95,11 @@ order_processor_lock = threading.Lock()
 # Rate limiting state for regular orders
 last_regular_orders = deque(maxlen=10)  # Track last 10 regular order timestamps
 
+# Webhook deduplication — 5-second window per strategy+symbol+action (PRD V1 §17.6)
+_dedup_cache = {}
+_dedup_lock = threading.Lock()
+DEDUP_WINDOW = 5  # seconds
+
 
 def process_orders():
     """Background task to process orders from both queues with rate limiting"""
@@ -253,6 +258,52 @@ def _track_order_if_strategy(response, queue_item):
         logger.exception(f"Error tracking strategy order: {e}")
 
 
+def _is_duplicate_webhook(strategy_id, strategy_type, symbol, action):
+    """Check if this webhook is a duplicate within the dedup window (PRD V1 §17.6).
+
+    Returns True if a duplicate is detected (should be rejected).
+    """
+    key = f"{strategy_id}:{strategy_type}:{symbol}:{action}"
+    now = time()
+    with _dedup_lock:
+        last_time = _dedup_cache.get(key)
+        if last_time and (now - last_time) < DEDUP_WINDOW:
+            return True
+        _dedup_cache[key] = now
+        # Clean old entries periodically (keep cache from growing unbounded)
+        if len(_dedup_cache) > 10000:
+            cutoff = now - DEDUP_WINDOW
+            _dedup_cache.clear()
+        return False
+
+
+def _check_position_state_guard(strategy_id, strategy_type, symbol, exchange, is_entry):
+    """Check position state guards (PRD V1 §17.5).
+
+    For entries: reject if an active position already exists for this symbol.
+    For exits: reject if no active position exists for this symbol.
+
+    Returns (allowed, error_message).
+    """
+    try:
+        from database.strategy_position_db import StrategyPosition
+        existing = StrategyPosition.query.filter_by(
+            strategy_id=strategy_id,
+            strategy_type=strategy_type,
+            symbol=symbol,
+            exchange=exchange,
+        ).filter(StrategyPosition.position_state.in_(["active", "pending_entry", "exiting"])).first()
+
+        if is_entry and existing:
+            return False, f"Active position already exists for {symbol} (state: {existing.position_state})"
+        if not is_entry and not existing:
+            return False, f"No active position found for {symbol} to exit"
+        return True, None
+    except Exception as e:
+        logger.warning(f"Position state guard check failed: {e}")
+        return True, None  # Allow on error to not block trading
+
+
 def validate_strategy_times(start_time, end_time, squareoff_time):
     """Validate strategy time settings"""
     try:
@@ -336,7 +387,11 @@ def schedule_squareoff(strategy_id):
 
 
 def squareoff_positions(strategy_id):
-    """Square off all positions for intraday strategy"""
+    """Square off all positions for intraday strategy.
+
+    Uses strategy position tracking to close tracked positions,
+    falls back to symbol mappings for untracked positions.
+    """
     try:
         strategy = get_strategy(strategy_id)
         if not strategy or not strategy.is_intraday:
@@ -348,27 +403,62 @@ def squareoff_positions(strategy_id):
             logger.error(f"No API key found for strategy {strategy_id}")
             return
 
-        # Get all symbol mappings
-        mappings = get_symbol_mappings(strategy_id)
+        # First: close tracked positions via position tracking system
+        from database.strategy_position_db import get_active_positions
 
+        active_positions = get_active_positions(strategy_id, "webhook")
+        tracked_symbols = set()
+
+        for pos in active_positions:
+            exit_action = "SELL" if pos.action == "BUY" else "BUY"
+            payload = {
+                "apikey": api_key,
+                "symbol": pos.symbol,
+                "exchange": pos.exchange,
+                "product": pos.product_type,
+                "strategy": strategy.name,
+                "action": exit_action,
+                "pricetype": "MARKET",
+                "quantity": "0",
+                "position_size": "0",
+                "price": "0",
+                "trigger_price": "0",
+                "disclosed_quantity": "0",
+            }
+
+            strategy_meta = {
+                "strategy_id": strategy_id,
+                "strategy_type": "webhook",
+                "user_id": strategy.user_id,
+                "is_entry": False,
+                "position_id": pos.id,
+                "exit_reason": "squareoff",
+            }
+
+            queue_order("placesmartorder", payload, strategy_meta=strategy_meta)
+            tracked_symbols.add((pos.symbol, pos.exchange))
+
+        # Fallback: close any untracked positions via symbol mappings
+        mappings = get_symbol_mappings(strategy_id)
         for mapping in mappings:
-            # Use placesmartorder with quantity=0 and position_size=0 for squareoff
+            if (mapping.symbol, mapping.exchange) in tracked_symbols:
+                continue  # Already handled above
+
             payload = {
                 "apikey": api_key,
                 "symbol": mapping.symbol,
                 "exchange": mapping.exchange,
                 "product": mapping.product_type,
                 "strategy": strategy.name,
-                "action": "SELL",  # Direction doesn't matter for closing
+                "action": "SELL",
                 "pricetype": "MARKET",
                 "quantity": "0",
-                "position_size": "0",  # This will close the position
+                "position_size": "0",
                 "price": "0",
                 "trigger_price": "0",
                 "disclosed_quantity": "0",
             }
 
-            # Queue the order instead of executing directly
             queue_order("placesmartorder", payload)
 
     except Exception as e:
@@ -1015,6 +1105,20 @@ def webhook(webhook_id):
         )
         if not mapping:
             return jsonify({"error": f"No mapping found for symbol {data['symbol']}"}), 400
+
+        # Webhook deduplication check (PRD V1 §17.6)
+        is_exit_order_check = use_smart_order if strategy.trading_mode != "BOTH" else (position_size == 0)
+        if _is_duplicate_webhook(strategy.id, "webhook", data["symbol"], action):
+            logger.warning(f"Duplicate webhook rejected for strategy {strategy.id}: {action} {data['symbol']}")
+            return jsonify({"error": "Duplicate webhook rejected (within 5s window)"}), 429
+
+        # Position state guard (PRD V1 §17.5)
+        allowed, guard_error = _check_position_state_guard(
+            strategy.id, "webhook", mapping.symbol, mapping.exchange, not is_exit_order_check
+        )
+        if not allowed:
+            logger.info(f"Position state guard blocked: {guard_error}")
+            return jsonify({"error": guard_error}), 400
 
         # Get API key from database
         api_key = get_api_key_for_tradingview(strategy.user_id)
