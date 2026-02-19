@@ -23,6 +23,16 @@ export interface StrategySymbolMapping {
   quantity: number
   product_type: 'MIS' | 'CNC' | 'NRML'
   created_at: string
+  // Multi-leg / builder fields
+  order_mode?: string
+  underlying?: string
+  underlying_exchange?: string
+  expiry_type?: string
+  offset?: string
+  option_type?: string
+  risk_mode?: string
+  preset?: string
+  legs_config?: string  // JSON string of leg objects
 }
 
 export interface CreateStrategyRequest {

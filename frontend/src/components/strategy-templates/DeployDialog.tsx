@@ -51,16 +51,20 @@ export function DeployDialog({ open, onClose, template, onDeployed }: DeployDial
   const [tgtValue, setTgtValue] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
 
-  // Reset when template changes
+  // Reset name when template or underlying changes
+  useEffect(() => {
+    if (template && open) {
+      setName(`${template.name} - ${underlying}`)
+    }
+  }, [template, underlying, open])
+
   const handleOpen = (isOpen: boolean) => {
     if (!isOpen) {
       onClose()
-    } else if (template) {
-      setName(`${template.name} - ${underlying}`)
     }
   }
 
-  // Fetch underlyings on exchange change
+  // Fetch underlyings on exchange change — always reset underlying to match fetched list
   useEffect(() => {
     let cancelled = false
     const fetchUnderlyings = async () => {
@@ -70,11 +74,18 @@ export function DeployDialog({ open, onClose, template, onDeployed }: DeployDial
         )
         if (!cancelled && res.data.underlyings?.length > 0) {
           setUnderlyings(res.data.underlyings)
+          setUnderlying(res.data.underlyings[0])
         } else if (!cancelled) {
-          setUnderlyings(DEFAULT_UNDERLYINGS[exchange] || [])
+          const defaults = DEFAULT_UNDERLYINGS[exchange] || []
+          setUnderlyings(defaults)
+          setUnderlying(defaults[0] || '')
         }
       } catch {
-        if (!cancelled) setUnderlyings(DEFAULT_UNDERLYINGS[exchange] || [])
+        if (!cancelled) {
+          const defaults = DEFAULT_UNDERLYINGS[exchange] || []
+          setUnderlyings(defaults)
+          setUnderlying(defaults[0] || '')
+        }
       }
     }
     fetchUnderlyings()

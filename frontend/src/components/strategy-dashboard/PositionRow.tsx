@@ -10,21 +10,24 @@ interface PositionRowProps {
   closing?: boolean
 }
 
-/** Compute distance from LTP to SL/TGT/TSL thresholds. */
+/** Compute distance from LTP to SL/TGT/TSL thresholds.
+ *  Positive = still has room; Negative = already breached. */
 export function computeDistanceMetrics(position: DashboardPosition): DistanceMetrics {
   const { ltp, stoploss_price, target_price, trailstop_price, action } = position
   const isLong = action === 'BUY'
 
   const compute = (ref: number | null, favorable: boolean) => {
     if (!ref || ref === 0 || !ltp || ltp === 0) return null
+    // For unfavorable thresholds (SL/TSL): positive = room remaining, negative = breached
+    // For favorable thresholds (TGT): positive = room remaining, negative = already hit
     const dist = favorable
       ? isLong
-        ? ref - ltp
-        : ltp - ref
+        ? ref - ltp   // TGT above LTP for long = positive (good)
+        : ltp - ref   // TGT below LTP for short = positive (good)
       : isLong
-        ? ltp - ref
-        : ref - ltp
-    return { points: Math.abs(dist), pct: (Math.abs(dist) / ltp) * 100 }
+        ? ltp - ref   // SL below LTP for long = positive (room), negative = breached
+        : ref - ltp   // SL above LTP for short = positive (room), negative = breached
+    return { points: dist, pct: (dist / ltp) * 100 }
   }
 
   return {
@@ -34,9 +37,10 @@ export function computeDistanceMetrics(position: DashboardPosition): DistanceMet
   }
 }
 
-/** Get color zone for distance percentage. */
+/** Get color zone for distance percentage. Negative = already breached. */
 export function getDistanceZone(pct: number | null): 'safe' | 'warning' | 'danger' {
   if (pct === null) return 'safe'
+  if (pct <= 0) return 'danger'     // breached or at threshold
   if (pct > 10) return 'safe'
   if (pct >= 5) return 'warning'
   return 'danger'
@@ -50,7 +54,8 @@ const ZONE_CLASSES: Record<string, string> = {
 
 function formatDist(d: { points: number; pct: number } | null) {
   if (!d) return '—'
-  return `${d.points.toFixed(1)} (${d.pct.toFixed(1)}%)`
+  const sign = d.points < 0 ? '-' : ''
+  return `${sign}${Math.abs(d.points).toFixed(1)} (${Math.abs(d.pct).toFixed(1)}%)`
 }
 
 export const PositionRow = React.memo(function PositionRow({

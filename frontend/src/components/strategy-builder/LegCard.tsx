@@ -156,7 +156,7 @@ export function LegCard({ leg, index, onChange, onRemove, frozen }: LegCardProps
                 type="number"
                 step="0.05"
                 className="h-8 text-xs"
-                value={leg.offset === 'ATM' ? '' : leg.offset}
+                value={leg.offset === 'ATM' ? '' : leg.offset.replace(/^P/, '')}
                 placeholder="e.g., 100"
                 onChange={(e) => update('offset', e.target.value ? `P${e.target.value}` : 'ATM')}
               />

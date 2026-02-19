@@ -114,7 +114,7 @@ def get_all_templates(category=None, user_id=None):
         return []
 
 
-def delete_template(template_id, user_id=None):
+def delete_template(template_id, user_id):
     """Delete a template (only non-system, owned by user)"""
     try:
         template = StrategyTemplate.query.get(template_id)
@@ -122,7 +122,7 @@ def delete_template(template_id, user_id=None):
             return False
         if template.is_system:
             return False
-        if user_id and template.created_by != user_id:
+        if not user_id or template.created_by != user_id:
             return False
         db_session.delete(template)
         db_session.commit()

@@ -54,6 +54,17 @@ def _get_user_id():
     return session.get("user")
 
 
+def _safe_int(value, default=0, max_val=None):
+    """Safely parse an integer from request args, with default and optional max."""
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        result = default
+    if max_val is not None:
+        result = min(result, max_val)
+    return result
+
+
 def _get_strategy_with_auth(strategy_id, strategy_type, user_id):
     """Fetch strategy and verify ownership. Returns (strategy, error_response, status_code)."""
     if strategy_type == "chartink":
@@ -226,8 +237,8 @@ def strategy_positions(strategy_id):
 
     strategy_type = request.args.get("type", "webhook")
     include_closed = request.args.get("include_closed", "false").lower() == "true"
-    limit = min(int(request.args.get("limit", 50)), 200)
-    offset = int(request.args.get("offset", 0))
+    limit = _safe_int(request.args.get("limit", 50), default=50, max_val=200)
+    offset = _safe_int(request.args.get("offset", 0), default=0)
 
     strategy, error, status = _get_strategy_with_auth(strategy_id, strategy_type, user_id)
     if error:
@@ -253,8 +264,8 @@ def strategy_orders(strategy_id):
         return jsonify({"status": "error", "message": "Session expired"}), 401
 
     strategy_type = request.args.get("type", "webhook")
-    limit = min(int(request.args.get("limit", 50)), 200)
-    offset = int(request.args.get("offset", 0))
+    limit = _safe_int(request.args.get("limit", 50), default=50, max_val=200)
+    offset = _safe_int(request.args.get("offset", 0), default=0)
 
     strategy, error, status = _get_strategy_with_auth(strategy_id, strategy_type, user_id)
     if error:
@@ -280,8 +291,8 @@ def strategy_trades(strategy_id):
         return jsonify({"status": "error", "message": "Session expired"}), 401
 
     strategy_type = request.args.get("type", "webhook")
-    limit = min(int(request.args.get("limit", 50)), 200)
-    offset = int(request.args.get("offset", 0))
+    limit = _safe_int(request.args.get("limit", 50), default=50, max_val=200)
+    offset = _safe_int(request.args.get("offset", 0), default=0)
 
     strategy, error, status = _get_strategy_with_auth(strategy_id, strategy_type, user_id)
     if error:
@@ -484,7 +495,7 @@ def close_position_route(strategy_id, position_id):
         return jsonify(error), status
 
     position = get_position(position_id)
-    if not position or position.strategy_id != strategy_id:
+    if not position or position.strategy_id != strategy_id or position.strategy_type != strategy_type:
         return jsonify({"status": "error", "message": "Position not found"}), 404
 
     if position.quantity <= 0:
@@ -636,7 +647,7 @@ def delete_position(strategy_id, position_id):
         return jsonify(error), status
 
     position = get_position(position_id)
-    if not position or position.strategy_id != strategy_id:
+    if not position or position.strategy_id != strategy_id or position.strategy_type != strategy_type:
         return jsonify({"status": "error", "message": "Position not found"}), 404
 
     if position.quantity > 0:
@@ -660,8 +671,8 @@ def risk_events(strategy_id):
         return jsonify({"status": "error", "message": "Session expired"}), 401
 
     strategy_type = request.args.get("type", "webhook")
-    limit = min(int(request.args.get("limit", 20)), 100)
-    offset = int(request.args.get("offset", 0))
+    limit = _safe_int(request.args.get("limit", 20), default=20, max_val=100)
+    offset = _safe_int(request.args.get("offset", 0), default=0)
 
     strategy, error, status = _get_strategy_with_auth(strategy_id, strategy_type, user_id)
     if error:

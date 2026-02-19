@@ -52,11 +52,44 @@ export default function StrategyBuilder() {
           name: s.name || '',
           exchange: (mapping?.exchange as BuilderBasics['exchange']) || 'NFO',
           underlying: mapping?.symbol || 'NIFTY',
-          expiry_type: 'current_week',
+          expiry_type: (mapping?.expiry_type as BuilderBasics['expiry_type']) || 'current_week',
           product_type: (mapping?.product_type as 'MIS' | 'NRML') || 'MIS',
           is_intraday: s.is_intraday ?? true,
           trading_mode: s.trading_mode || 'BOTH',
         })
+
+        // Load legs from mapping's legs_config JSON
+        if (mapping?.legs_config) {
+          try {
+            const parsed = typeof mapping.legs_config === 'string'
+              ? JSON.parse(mapping.legs_config)
+              : mapping.legs_config
+            if (Array.isArray(parsed)) {
+              setLegs(parsed.map((leg: Record<string, unknown>, i: number) => ({
+                id: `leg-${i}-${Date.now()}`,
+                leg_type: (leg.leg_type as 'option' | 'future') || 'option',
+                action: (leg.action as 'BUY' | 'SELL') || 'SELL',
+                option_type: (leg.option_type as 'CE' | 'PE' | null) ?? null,
+                strike_type: (leg.strike_type as BuilderLeg['strike_type']) || 'ATM',
+                offset: (leg.offset as string) || 'ATM',
+                expiry_type: (leg.expiry_type as BuilderLeg['expiry_type']) || 'current_week',
+                product_type: (leg.product_type as 'MIS' | 'NRML') || 'MIS',
+                quantity_lots: (leg.quantity_lots as number) || 1,
+                order_type: (leg.order_type as 'MARKET' | 'LIMIT') || 'MARKET',
+                stoploss_type: (leg.stoploss_type as string) || null,
+                stoploss_value: (leg.stoploss_value as number) || null,
+                target_type: (leg.target_type as string) || null,
+                target_value: (leg.target_value as number) || null,
+              })))
+            }
+          } catch {
+            // legs_config not valid JSON — leave legs empty
+          }
+        }
+
+        if (mapping?.preset) {
+          setPreset(mapping.preset)
+        }
 
         if (riskData) {
           setRiskConfig({

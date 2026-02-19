@@ -26,7 +26,14 @@ import type { DashboardPosition, DashboardOrder, PositionGroupData, RiskEvent } 
 export function useStrategySocket() {
   const { isAuthenticated } = useAuthStore()
   const socketRef = useRef<Socket | null>(null)
-  const store = useStrategyDashboardStore()
+  const storeRef = useRef(useStrategyDashboardStore.getState())
+
+  // Keep ref in sync without triggering re-renders
+  useEffect(() => {
+    return useStrategyDashboardStore.subscribe((state) => {
+      storeRef.current = state
+    })
+  }, [])
 
   useEffect(() => {
     if (!isAuthenticated) return
@@ -45,13 +52,14 @@ export function useStrategySocket() {
     })
 
     const socket = socketRef.current
+    const store = () => storeRef.current
 
     // Position opened — new position entry
     socket.on(
       'strategy_position_opened',
       (data: { strategy_id: number; position: DashboardPosition }) => {
         if (data.position) {
-          store.updatePosition(data.strategy_id, data.position)
+          store().updatePosition(data.strategy_id, data.position)
         }
       }
     )
@@ -61,7 +69,7 @@ export function useStrategySocket() {
       'strategy_position_closed',
       (data: { strategy_id: number; position_id: number }) => {
         if (data.strategy_id && data.position_id) {
-          store.removePosition(data.strategy_id, data.position_id)
+          store().removePosition(data.strategy_id, data.position_id)
         }
       }
     )
@@ -71,7 +79,7 @@ export function useStrategySocket() {
       'strategy_order_filled',
       (data: { strategy_id: number; position?: DashboardPosition }) => {
         if (data.position) {
-          store.updatePosition(data.strategy_id, data.position)
+          store().updatePosition(data.strategy_id, data.position)
         }
       }
     )
@@ -81,7 +89,7 @@ export function useStrategySocket() {
       'strategy_order_update',
       (data: { strategy_id: number; order: DashboardOrder }) => {
         if (data.order) {
-          store.updateOrder(data.strategy_id, data.order)
+          store().updateOrder(data.strategy_id, data.order)
         }
       }
     )
@@ -91,7 +99,7 @@ export function useStrategySocket() {
       'strategy_position_update',
       (data: { strategy_id: number; position: DashboardPosition }) => {
         if (data.position) {
-          store.updatePosition(data.strategy_id, data.position)
+          store().updatePosition(data.strategy_id, data.position)
         }
       }
     )
@@ -101,7 +109,7 @@ export function useStrategySocket() {
       'strategy_risk_event',
       (data: { strategy_id: number; event: RiskEvent }) => {
         if (data.event) {
-          store.addRiskEvent(data.strategy_id, data.event)
+          store().addRiskEvent(data.strategy_id, data.event)
         }
       }
     )
@@ -110,7 +118,7 @@ export function useStrategySocket() {
     socket.on(
       'strategy_circuit_breaker',
       (data: { strategy_id: number; status: string; reason?: string }) => {
-        store.updateCircuitBreaker(data.strategy_id, {
+        store().updateCircuitBreaker(data.strategy_id, {
           status: data.status as 'active' | 'tripped' | 'cleared',
           reason: data.reason,
         })
@@ -122,7 +130,7 @@ export function useStrategySocket() {
       'strategy_group_update',
       (data: { strategy_id: number; group: PositionGroupData }) => {
         if (data.group) {
-          store.updateGroup(data.strategy_id, data.group)
+          store().updateGroup(data.strategy_id, data.group)
         }
       }
     )
@@ -131,11 +139,10 @@ export function useStrategySocket() {
     socket.on(
       'strategy_pnl_update',
       (data: { strategy_id: number; summary: { total_unrealized_pnl: number; today_realized_pnl: number } }) => {
-        // Update overview summary if available
         if (data.summary) {
-          const current = store.summary.get(data.strategy_id)
+          const current = store().summary.get(data.strategy_id)
           if (current) {
-            store.setSummary(data.strategy_id, {
+            store().setSummary(data.strategy_id, {
               ...current,
               total_unrealized_pnl: data.summary.total_unrealized_pnl,
               today_realized_pnl: data.summary.today_realized_pnl,
@@ -150,7 +157,7 @@ export function useStrategySocket() {
       'strategy_order_placed',
       (data: { strategy_id: number; order: DashboardOrder }) => {
         if (data.order) {
-          store.updateOrder(data.strategy_id, data.order)
+          store().updateOrder(data.strategy_id, data.order)
         }
       }
     )
@@ -160,7 +167,7 @@ export function useStrategySocket() {
       'strategy_order_cancelled',
       (data: { strategy_id: number; order: DashboardOrder }) => {
         if (data.order) {
-          store.updateOrder(data.strategy_id, data.order)
+          store().updateOrder(data.strategy_id, data.order)
         }
       }
     )
@@ -170,7 +177,7 @@ export function useStrategySocket() {
       'strategy_trailstop_moved',
       (data: { strategy_id: number; position: DashboardPosition }) => {
         if (data.position) {
-          store.updatePosition(data.strategy_id, data.position)
+          store().updatePosition(data.strategy_id, data.position)
         }
       }
     )
@@ -182,9 +189,10 @@ export function useStrategySocket() {
     socket.on('builder_execution_complete', () => {})
 
     return () => {
+      socket.removeAllListeners()
       socket.disconnect()
     }
-  }, [isAuthenticated, store])
+  }, [isAuthenticated])
 
   return socketRef.current
 }

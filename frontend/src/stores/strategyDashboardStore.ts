@@ -163,5 +163,14 @@ export const useStrategyDashboardStore = create<StrategyDashboardStore>()((set) 
       return { orders: next }
     }),
 
-  reset: () => set(initialState),
+  reset: () => set({
+    overview: null,
+    strategies: new Map(),
+    positions: new Map(),
+    summary: new Map(),
+    riskEvents: new Map(),
+    positionGroups: new Map(),
+    circuitBreakerStatus: new Map(),
+    orders: new Map(),
+  }),
 }))
