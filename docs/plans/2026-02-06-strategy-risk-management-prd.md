@@ -191,7 +191,7 @@ breakeven_threshold FLOAT
         "offset": "OTM4",
         "option_type": "CE",
         "action": "SELL",
-        "quantity": 75,
+        "quantity": 65,
         "product_type": "NRML",
         "stoploss_type": "percentage",
         "stoploss_value": 30,
@@ -206,7 +206,7 @@ breakeven_threshold FLOAT
         "leg_type": "futures",
         "expiry_type": "current_month",
         "action": "BUY",
-        "quantity": 75,
+        "quantity": 65,
         "product_type": "NRML",
         "stoploss_type": "percentage",
         "stoploss_value": 2,
@@ -400,8 +400,12 @@ CREATE TABLE strategy_position_group (
     expected_legs         INTEGER NOT NULL,          -- total legs expected (from legs_config)
     filled_legs           INTEGER DEFAULT 0,         -- legs with complete fills
     group_status          VARCHAR(15) DEFAULT 'filling', -- 'filling', 'active', 'exiting', 'closed', 'failed_exit'
-    combined_peak_pnl     FLOAT DEFAULT 0,           -- highest combined PnL reached (for trailing stop)
+    combined_peak_pnl     FLOAT DEFAULT 0,           -- highest combined PnL reached (for trailing stop ratcheting)
     combined_pnl          FLOAT DEFAULT 0,           -- current combined unrealized PnL
+    entry_value           FLOAT DEFAULT 0,           -- abs(Σ signed_entry_price × qty) — capital at risk for risk calculations
+    initial_stop          FLOAT,                      -- TSL initial level: -entry_value × trail%/100 (never changes after init)
+    current_stop          FLOAT,                      -- ratcheting stop: moves up with peak_pnl, never down
+    exit_triggered        BOOLEAN DEFAULT FALSE,      -- prevents duplicate exit attempts on same group
     created_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at            DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -419,6 +423,36 @@ filling → active → exiting → closed
 - `exiting`: Combined trigger fired, exit orders placed for all legs.
 - `closed`: All legs exited successfully.
 - `failed_exit`: One or more leg exit orders were rejected. CRITICAL alert to user. "Retry Exit" button shown in UI.
+
+### 5.8 AlertLog (New)
+
+Centralized log for all alert deliveries (strategy risk, chart alerts, indicator alerts).
+
+```sql
+CREATE TABLE alert_log (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id          VARCHAR(50) NOT NULL,               -- unique alert instance ID
+    alert_type        VARCHAR(20) NOT NULL,               -- 'price', 'indicator', 'strategy_risk', 'circuit_breaker', 'order_status', 'custom'
+    symbol            VARCHAR(50),
+    exchange          VARCHAR(10),
+    strategy_id       INTEGER,
+    strategy_type     VARCHAR(10),                        -- 'webhook' or 'chartink'
+    trigger_reason    VARCHAR(30),                        -- 'stoploss', 'target', 'trailstop', 'price_crossed', etc.
+    trigger_price     FLOAT,
+    ltp_at_trigger    FLOAT,
+    pnl               FLOAT,
+    message           TEXT,
+    channels_attempted JSON,                              -- {"toast": true, "telegram": true, "webhook": true}
+    channels_delivered JSON,                              -- {"toast": true, "telegram": false, "webhook": true}
+    errors            JSON,                               -- [{"channel": "telegram", "message": "Rate limited"}]
+    priority          VARCHAR(10) DEFAULT 'normal',       -- 'low', 'normal', 'high', 'critical'
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_alert_log_symbol ON alert_log(symbol, exchange);
+CREATE INDEX idx_alert_log_strategy ON alert_log(strategy_id, strategy_type);
+CREATE INDEX idx_alert_log_type ON alert_log(alert_type, created_at);
+```
 
 ---
 
@@ -495,7 +529,7 @@ order_mode:         'futures'
 underlying:         'NIFTY'                    -- underlying symbol
 underlying_exchange:'NSE_INDEX'                -- underlying exchange (for LTP)
 expiry_type:        'current_month'            -- 'current_month' or 'next_month'
-quantity:           75                         -- total quantity (will auto-split if > freeze_qty)
+quantity:           65                         -- total quantity (will auto-split if > freeze_qty)
 product_type:       'NRML'                     -- NRML or MIS only
 ```
 
@@ -519,7 +553,7 @@ underlying_exchange:'NSE_INDEX'                -- underlying exchange
 expiry_type:        'current_week'             -- relative: current_week/next_week/current_month/next_month
 offset:             'ATM'                      -- ATM, ITM1-ITM40, OTM1-OTM40
 option_type:        'CE'                       -- CE or PE
-quantity:           75                         -- total quantity (will auto-split if > freeze_qty)
+quantity:           65                         -- total quantity (will auto-split if > freeze_qty)
 product_type:       'NRML'                     -- MIS or NRML
 ```
 
@@ -541,7 +575,7 @@ legs: [
         offset:       'OTM4',
         option_type:  'CE',
         action:       'SELL',
-        quantity:     75,
+        quantity:     65,
         product_type: 'NRML',
         -- Per-leg risk (used in per_leg mode, or always for breakeven):
         stoploss_type:     'percentage',
@@ -557,21 +591,21 @@ legs: [
         offset:       'OTM4',
         option_type:  'PE',
         action:       'SELL',
-        quantity:     75,
+        quantity:     65,
         ...per-leg risk params...
     },
     {
         offset:       'OTM6',
         option_type:  'CE',
         action:       'BUY',
-        quantity:     75,
+        quantity:     65,
         ...per-leg risk params...
     },
     {
         offset:       'OTM6',
         option_type:  'PE',
         action:       'BUY',
-        quantity:     75,
+        quantity:     65,
         ...per-leg risk params...
     }
 ]
@@ -603,8 +637,8 @@ Preset selection pre-fills the leg form. User can modify any field after selecti
 ```
 Preset: custom
 Legs:
-  Leg 1: { leg_type: "futures", expiry_type: "current_month", action: "BUY", quantity: 75, product_type: "NRML" }
-  Leg 2: { leg_type: "option", offset: "OTM2", option_type: "CE", action: "SELL", quantity: 75, product_type: "NRML" }
+  Leg 1: { leg_type: "futures", expiry_type: "current_month", action: "BUY", quantity: 65, product_type: "NRML" }
+  Leg 2: { leg_type: "option", offset: "OTM2", option_type: "CE", action: "SELL", quantity: 65, product_type: "NRML" }
 ```
 
 This enables strategies that combine futures hedging with options premium collection (covered calls, protective puts, synthetic positions).
@@ -621,9 +655,56 @@ This enables strategies that combine futures hedging with options premium collec
 - All legs linked via `position_group_id` in `StrategyPosition`
 - Combined SL/target defined on aggregate unrealized P&L across all legs
 - When combined SL or target triggers → ALL legs in the group exit together via `placeorder` per leg
-- Combined trailing stop trails from peak combined profit
+- Combined trailing stop uses AFL-style ratcheting (see below)
 - Individual leg breakeven NOT available in combined mode
 - Individual leg SL/target/trail NOT active in combined mode (only combined triggers)
+- `exit_triggered` flag prevents duplicate exits on the same group
+
+#### Combined Premium Calculation
+
+For options spread strategies, entry_value is computed from signed leg premiums at entry:
+
+```
+SELL legs = +price (credit received)
+BUY legs  = -price (debit paid)
+net_premium = Σ (signed_entry_price × quantity) for all legs
+entry_value = abs(net_premium)
+```
+
+This `entry_value` is the capital at risk and serves as the base for percentage-based risk calculations (Max Loss, Max Profit, TSL).
+
+#### AFL-Style Trailing Stop Loss (Combined P&L)
+
+**Phase 1 — Initialization** (runs in `StrategyPositionTracker._initialize_group_risk()` when all legs fill):
+```
+entry_value  = abs(Σ signed_entry_price × quantity)
+initial_stop = -entry_value × (trail% / 100)     [percentage]
+             = -trail_value                        [points/amount]
+current_stop = initial_stop
+peak_pnl     = 0
+```
+
+**Phase 2 — Ratcheting** (runs in `StrategyRiskEngine._check_combined_groups()` on every tick):
+```
+peak_pnl     = max(peak_pnl, current_combined_pnl)
+new_stop     = initial_stop + peak_pnl
+current_stop = max(new_stop, current_stop)     -- ratchet: only moves UP, never down
+EXIT if:       combined_pnl <= current_stop
+```
+
+**Worked Example** (credit spread, entry_value=100, TSL=20%):
+```
+initial_stop = -100 × 0.20 = -20
+At entry (pnl=0):     new_stop = -20 + 0  = -20,  current_stop = -20   → no exit
+P&L rises to +50:     new_stop = -20 + 50 = +30,  current_stop = +30   → locks ₹30 profit
+P&L rises to +80:     new_stop = -20 + 80 = +60,  current_stop = +60   → locks ₹60 profit
+P&L drops to +55:     new_stop = -20 + 80 = +60,  current_stop = +60   → peak_pnl stays 80
+P&L drops to +60:     combined_pnl(60) <= current_stop(60) → EXIT ALL LEGS
+```
+
+**Safety Guards**:
+- Near-zero P&L guard: skip TSL check when `abs(combined_pnl) < 1.0` and legs are open (prices may be unreliable right after entry)
+- Duplicate exit prevention: `exit_triggered` flag set to TRUE on first trigger, subsequent ticks skip the group
 
 ### 7.7 Breakeven — Move SL to Entry
 
@@ -1029,35 +1110,43 @@ def on_ltp_update(symbol, exchange, ltp):
 
     # 10. Check combined P&L triggers (after all legs updated)
     for group in get_active_position_groups():
-        # Skip groups that are still filling (not all legs have filled yet)
         if group.group_status != 'active':
+            continue
+        if group.exit_triggered:              # duplicate prevention
             continue
 
         legs = get_positions_by_group(group.id)
         combined_pnl = sum(leg.unrealized_pnl for leg in legs)
-
-        # Update combined peak PnL on the group record
-        if combined_pnl > group.combined_peak_pnl:
-            group.combined_peak_pnl = combined_pnl
         group.combined_pnl = combined_pnl
-
         mapping = get_mapping_for_group(group.id)
 
-        # Combined SL check
-        if mapping.combined_stoploss_type and combined_pnl <= -abs(compute_combined_threshold(mapping, 'sl')):
-            group.group_status = 'exiting'
-            close_all_legs(group, legs, exit_reason='stoploss')
+        # Max Loss check (uses entry_value for percentage base)
+        if mapping.combined_stoploss_type:
+            sl_threshold = compute_combined_threshold(mapping, 'sl', group)
+            if combined_pnl <= -abs(sl_threshold):
+                group.exit_triggered = True
+                close_all_legs(group, legs, exit_reason='stoploss')
+                continue
 
-        # Combined target check
-        elif mapping.combined_target_type and combined_pnl >= compute_combined_threshold(mapping, 'target'):
-            group.group_status = 'exiting'
-            close_all_legs(group, legs, exit_reason='target')
+        # Max Profit check
+        if mapping.combined_target_type:
+            tgt_threshold = compute_combined_threshold(mapping, 'target', group)
+            if combined_pnl >= tgt_threshold:
+                group.exit_triggered = True
+                close_all_legs(group, legs, exit_reason='target')
+                continue
 
-        # Combined trailing stop check
-        elif mapping.combined_trailstop_type:
-            trail_threshold = compute_combined_trail(mapping, group.combined_peak_pnl)
-            if combined_pnl <= trail_threshold:
-                group.group_status = 'exiting'
+        # AFL-Style Trailing Stop (Phase 2 Ratcheting)
+        if group.initial_stop is not None and group.entry_value > 0:
+            if abs(combined_pnl) < 1.0:      # near-zero safety guard
+                continue
+            peak_pnl     = max(group.combined_peak_pnl, combined_pnl)
+            new_stop     = group.initial_stop + peak_pnl
+            current_stop = max(new_stop, group.current_stop)   # ratchet up only
+            group.combined_peak_pnl = peak_pnl
+            group.current_stop      = current_stop
+            if combined_pnl <= current_stop:
+                group.exit_triggered = True
                 close_all_legs(group, legs, exit_reason='trailstop')
 ```
 
@@ -1202,9 +1291,12 @@ Payload: {
     "position_group_id": "uuid-xxx",
     "combined_pnl": -2500.00,
     "combined_peak_pnl": 1200.00,
-    "combined_sl_price": -5000.00,    -- threshold value
-    "combined_target_price": 8000.00,
-    "combined_tsl_price": -3200.00,   -- trailing from peak
+    "entry_value": 6500.00,           -- abs(net premium at entry)
+    "initial_stop": -1300.00,         -- fixed at initialization
+    "current_stop": -100.00,          -- ratcheted stop (only moves up)
+    "combined_sl_price": -5000.00,    -- max loss threshold
+    "combined_target_price": 8000.00, -- max profit threshold
+    "exit_triggered": false,
     "legs": [
         {"position_id": 42, "symbol": "NIFTY..CE", "pnl": -1500},
         {"position_id": 43, "symbol": "NIFTY..PE", "pnl": -1000}
@@ -1391,7 +1483,7 @@ When configuring a symbol mapping, the UI adapts based on the selected `order_mo
 │  Exchange:    [NFO ▼]    -- auto-set from underlying│
 │  Expiry:      [Current Month ▼]                     │
 │  Product:     [NRML ▼]  [MIS]                       │
-│  Quantity:    [75]       -- validated against lot size│
+│  Quantity:    [65]       -- validated against lot size│
 │                                                     │
 │  Auto Square-Off: [15:15] IST  -- MIS only          │
 └────────────────────────────────────────────────────┘
@@ -1626,6 +1718,107 @@ Strategy risk events map to existing Telegram notification preferences:
 | `pnl_notifications` | Position closed with P&L |
 
 No new Telegram toggles required.
+
+### 13.4 Unified Alert Service
+
+All alert delivery (toast, Telegram, webhook) is routed through a centralized `UnifiedAlertService`. This enables consistent alert handling across strategy risk events, chart price alerts, and indicator alerts.
+
+**Alert Payload Structure:**
+
+```python
+@dataclass
+class UnifiedAlertPayload:
+    # Alert Identity
+    alert_type: str              # 'price' | 'indicator' | 'strategy_risk' | 'circuit_breaker' | 'order_status' | 'custom'
+    alert_id: str = None         # Optional reference to source alert
+    
+    # Context
+    symbol: str = None
+    exchange: str = None
+    strategy_id: int = None
+    strategy_type: str = None    # 'webhook' | 'chartink'
+    
+    # Trigger Details
+    trigger_reason: str = None   # 'stoploss' | 'target' | 'trailstop' | 'breakeven_sl' | 'daily_stoploss' | 'price_crossed' | 'indicator_condition'
+    trigger_price: float = None
+    ltp_at_trigger: float = None
+    pnl: float = None
+    
+    # Message
+    message: str = ''            # Pre-formatted or with {{placeholders}}
+    
+    # Delivery Channels (override user defaults if provided)
+    channels: AlertChannels = None
+    
+    # Metadata
+    timestamp: str = None        # ISO 8601, defaults to now
+    priority: str = 'normal'     # 'low' | 'normal' | 'high' | 'critical'
+
+@dataclass
+class AlertChannels:
+    toast: bool = True
+    sound: bool = True
+    telegram: bool = False
+    webhook: WebhookConfig = None
+
+@dataclass
+class WebhookConfig:
+    enabled: bool = False
+    mode: str = 'openalgo'       # 'openalgo' | 'custom'
+    url: str = None              # For custom mode
+    # OpenAlgo trading params (for mode='openalgo')
+    action: str = None           # 'BUY' | 'SELL'
+    product: str = None          # 'MIS' | 'CNC' | 'NRML'
+    quantity: int = None
+    pricetype: str = 'MARKET'    # 'MARKET' | 'LIMIT'
+```
+
+**Responsibilities:**
+- Accept alerts from any source (strategy risk engine, chart alerts, indicator alerts, external platforms)
+- Apply user's notification preferences from profile settings
+- Execute multi-channel delivery in parallel (toast + Telegram + webhook)
+- Support message template placeholders: `{{symbol}}`, `{{exchange}}`, `{{price}}`, `{{condition}}`, `{{time}}`, `{{pnl}}`, `{{direction}}`
+- Log all alerts to `alert_log` table for history and debugging
+- Handle delivery failures gracefully with retry logic for webhooks
+- Rate limit protection for Telegram (respects bot limits)
+
+**Channel Delivery:**
+
+| Channel | Mechanism | Notes |
+|---------|-----------|-------|
+| Toast | SocketIO `global_alert_notification` event | Immediate push to connected clients |
+| Sound | Bundled with toast event payload | Client plays audio if enabled |
+| Telegram | OpenAlgo Telegram bot API | Respects user's Telegram config |
+| Webhook (custom) | HTTP POST to user-specified URL | JSON payload with full alert data |
+| Webhook (OpenAlgo) | Internal trading API call | Executes trade via placeorder |
+
+**Message Template Processing:**
+
+```python
+def render_message(template: str, context: dict) -> str:
+    """Replace {{placeholders}} with actual values."""
+    result = template
+    for key, value in context.items():
+        result = result.replace(f"{{{{{key}}}}}", str(value))
+    return result
+
+# Example:
+# template = "{{symbol}} {{condition}} ₹{{price}} at {{time}}"
+# context = {"symbol": "SBIN", "condition": "crossed above", "price": 800.50, "time": "14:35"}
+# result = "SBIN crossed above ₹800.50 at 14:35"
+```
+
+**Integration Points:**
+
+| Source | When Called |
+|--------|-------------|
+| StrategyRiskEngine | SL/target/trail/breakeven trigger fires |
+| DailyCircuitBreaker | Daily limit hit |
+| OrderStatusPoller | Order fill/rejection |
+| MISAutoSquareOff | Auto square-off triggered |
+| Chart Price Alerts | Price level crossed |
+| Indicator Alerts | Indicator condition met |
+| External Platforms | Via REST API `/api/v1/alerts/send` |
 
 ---
 
@@ -1870,6 +2063,204 @@ Response: {
 DELETE /strategy/api/strategy/<id>/position/<position_id>
 Response (if quantity > 0): { "status": "error", "message": "Close position before deleting" }
 Response (if quantity == 0): { "status": "success", "message": "Position record deleted" }
+```
+
+### 15.9 Unified Alert API
+
+Centralized alert endpoints for use by charts, strategies, and external platforms.
+
+#### Send Alert
+
+```
+POST /api/v1/alerts/send
+Body: {
+    "alert_type": "price",                          // required: 'price' | 'indicator' | 'strategy_risk' | 'circuit_breaker' | 'order_status' | 'custom'
+    "symbol": "SBIN",                               // required
+    "exchange": "NSE",                              // optional, default: NSE
+    "strategy_id": null,                            // optional: link to strategy
+    "strategy_type": null,                          // optional: 'webhook' | 'chartink'
+    "trigger_reason": "price_crossed",              // required
+    "trigger_price": 800.00,                        // optional
+    "ltp_at_trigger": 800.25,                       // optional
+    "pnl": null,                                    // optional
+    "message": "SBIN crossed ₹800",                 // required
+    "priority": "normal",                           // optional: 'low' | 'normal' | 'high' | 'critical'
+    "channels": {                                   // optional: override user defaults
+        "toast": true,
+        "sound": true,
+        "telegram": true,
+        "webhook": {
+            "enabled": true,
+            "mode": "openalgo",                     // 'openalgo' | 'custom'
+            "url": null,                            // for custom mode
+            "action": "BUY",                        // for openalgo mode
+            "product": "MIS",
+            "quantity": 100,
+            "pricetype": "MARKET"
+        }
+    }
+}
+
+Response: {
+    "status": "success",                            // 'success' | 'partial' | 'error'
+    "alert_id": "alert_1707234567890_abc123",
+    "delivered": {
+        "toast": true,
+        "telegram": true,
+        "webhook": true
+    },
+    "errors": []                                    // [{"channel": "telegram", "message": "Rate limited"}]
+}
+```
+
+#### Alert History
+
+```
+GET /api/v1/alerts/history
+Query: ?limit=50&strategy_id=1&alert_type=strategy_risk&since=2026-02-06T00:00:00Z&symbol=SBIN
+
+Response: {
+    "alerts": [
+        {
+            "alert_id": "alert_1707234567890_abc123",
+            "alert_type": "strategy_risk",
+            "symbol": "SBIN",
+            "exchange": "NSE",
+            "strategy_id": 1,
+            "trigger_reason": "stoploss",
+            "trigger_price": 784.00,
+            "ltp_at_trigger": 783.50,
+            "pnl": -1600.00,
+            "message": "SBIN SL hit at ₹783.50. P&L: -₹1,600",
+            "channels_delivered": {"toast": true, "telegram": true, "webhook": false},
+            "priority": "high",
+            "created_at": "2026-02-06T14:35:22+05:30"
+        }
+    ],
+    "total_count": 1,
+    "has_more": false
+}
+```
+
+#### Alert Configuration
+
+```
+GET /api/v1/alerts/config
+Response: {
+    "default_channels": {
+        "toast": true,
+        "sound": true,
+        "telegram": false,
+        "webhook": {
+            "enabled": false,
+            "mode": "openalgo",
+            "url": null
+        }
+    },
+    "telegram_configured": true,
+    "openalgo_configured": true
+}
+```
+
+```
+PUT /api/v1/alerts/config
+Body: {
+    "default_channels": {
+        "toast": true,
+        "sound": true,
+        "telegram": true,
+        "webhook": {
+            "enabled": true,
+            "mode": "custom",
+            "url": "https://my-server.com/webhook"
+        }
+    }
+}
+
+Response: { "status": "success", "message": "Alert configuration updated" }
+```
+
+#### Usage Examples
+
+**From Chart Price Alerts (Frontend):**
+```typescript
+// When chart price alert triggers in fi/
+async function onChartAlertTriggered(alert: PriceAlert, ltp: number) {
+  await fetch('/api/v1/alerts/send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      alert_type: 'price',
+      symbol: alert.symbol,
+      exchange: alert.exchange,
+      trigger_reason: alert.condition,  // 'crossing_up', 'crossing_down', etc.
+      trigger_price: alert.targetPrice,
+      ltp_at_trigger: ltp,
+      message: alert.notifications?.message || `${alert.symbol} ${alert.condition} ₹${alert.targetPrice}`,
+      channels: alert.notifications ? {
+        toast: alert.notifications.showToast,
+        sound: alert.notifications.playSound,
+        telegram: alert.notifications.telegramEnabled,
+        webhook: alert.notifications.webhookEnabled ? {
+          enabled: true,
+          mode: alert.notifications.webhookMode,
+          url: alert.notifications.webhookUrl,
+          action: alert.notifications.openalgoAction,
+          product: alert.notifications.openalgoProduct,
+          quantity: alert.notifications.openalgoQuantity,
+          pricetype: alert.notifications.openalgoPricetype
+        } : undefined
+      } : undefined
+    })
+  });
+}
+```
+
+**From Strategy Risk Engine (Backend):**
+```python
+# In strategy_risk_engine.py when SL triggers
+from services.unified_alert_service import UnifiedAlertService
+
+def on_stoploss_triggered(position, ltp):
+    UnifiedAlertService.send(
+        alert_type='strategy_risk',
+        strategy_id=position.strategy_id,
+        strategy_type=position.strategy_type,
+        symbol=position.symbol,
+        exchange=position.exchange,
+        trigger_reason='stoploss',
+        trigger_price=position.stoploss_price,
+        ltp_at_trigger=ltp,
+        pnl=position.unrealized_pnl,
+        message=f'{position.symbol} SL hit at ₹{ltp:.2f}. P&L: ₹{position.unrealized_pnl:,.2f}',
+        priority='high'
+    )
+```
+
+**From External Platform (Webhook):**
+```bash
+curl -X POST http://localhost:5000/api/v1/alerts/send \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-api-key" \
+  -d '{
+    "alert_type": "custom",
+    "symbol": "NIFTY",
+    "exchange": "NSE_INDEX",
+    "trigger_reason": "external_signal",
+    "message": "NIFTY buy signal from external scanner",
+    "channels": {
+      "toast": true,
+      "telegram": true,
+      "webhook": {
+        "enabled": true,
+        "mode": "openalgo",
+        "action": "BUY",
+        "product": "MIS",
+        "quantity": 50,
+        "pricetype": "MARKET"
+      }
+    }
+  }'
 ```
 
 ---
@@ -2405,10 +2796,14 @@ MIGRATIONS = [
 | `services/strategy_pnl_service.py` | PnL calculation and daily snapshots |
 | `services/strategy_options_resolver.py` | Resolve relative expiry, strike offset, fetch tick_size/lot_size/freeze_qty |
 | `services/strategy_exit_executor.py` | Pluggable exit execution strategies (MarketExecution in V1; future: mid, chase, TWAP) |
-| `database/strategy_position_db.py` | New table models (StrategyOrder, StrategyPosition, StrategyTrade, StrategyDailyPnL, StrategyPositionGroup) |
+| `services/unified_alert_service.py` | Centralized alert delivery (toast, Telegram, webhook) for all alert sources |
+| `database/strategy_position_db.py` | New table models (StrategyOrder, StrategyPosition, StrategyTrade, StrategyDailyPnL, StrategyPositionGroup, AlertLog) |
+| `blueprints/alerts.py` | REST API endpoints for unified alert system (`/api/v1/alerts/*`) |
 | `frontend/src/pages/StrategyDashboard.tsx` | Dashboard page |
 | `frontend/src/api/strategy-dashboard.ts` | API layer |
+| `frontend/src/api/alerts.ts` | Alert API layer for unified alert endpoints |
 | `frontend/src/types/strategy-dashboard.ts` | TypeScript types |
+| `frontend/src/types/alerts.ts` | TypeScript types for alert payloads and responses |
 | `frontend/src/components/strategy-dashboard/` | Dashboard components (StrategyCard, PositionTable, PositionGroupTable, OrdersDrawer, TradesDrawer, PnLDrawer) |
 | `frontend/src/components/strategy/FuturesOptionsLegEditor.tsx` | UI for configuring futures / single option / multi-leg with preset templates |
 | `frontend/src/components/strategy/UnderlyingSearch.tsx` | Typeahead search for underlying symbol selection |
@@ -2420,11 +2815,101 @@ MIGRATIONS = [
 | `upgrade/migrate_all.py` | Register `migrate_strategy_risk.py` in MIGRATIONS list |
 | `database/strategy_db.py` | Add risk + breakeven + options columns to Strategy + StrategySymbolMapping models |
 | `database/chartink_db.py` | Add risk + breakeven + options columns to ChartinkStrategy + ChartinkSymbolMapping models + add `trading_mode` |
-| `blueprints/strategy.py` | Integrate order tracking, options/futures routing, squareoff change, auto-split, dedup, position state checks |
+| `blueprints/strategy.py` | Integrate order tracking, options/futures routing, squareoff change, auto-split, dedup, position state checks; call UnifiedAlertService on triggers |
 | `blueprints/chartink.py` | Same as strategy.py |
-| `app.py` | Initialize StrategyRiskEngine on startup + restart recovery + broker reconciliation |
-| `frontend/src/stores/alertStore.ts` | Add `strategyRisk` category |
-| `frontend/src/pages/Profile.tsx` | Add strategyRisk to alert categories config |
-| `frontend/src/hooks/useSocket.ts` | Handle new strategy risk SocketIO events |
+| `app.py` | Initialize StrategyRiskEngine + UnifiedAlertService on startup + restart recovery + broker reconciliation |
+| `frontend/src/stores/alertStore.ts` | Add `strategyRisk` category; handle `global_alert_notification` SocketIO event |
+| `frontend/src/pages/Profile.tsx` | Add strategyRisk to alert categories config; add default alert channel settings |
+| `frontend/src/hooks/useSocket.ts` | Handle new strategy risk SocketIO events + `global_alert_notification` |
 | `frontend/src/router.tsx` | Add `/strategy/dashboard` route |
 | `frontend/src/pages/strategy/` | Add options mapping UI to symbol configuration pages |
+| `fi/src/plugins/line-tools/tools/user-price-alerts/` | Integrate with unified alert API on alert trigger |
+| `fi/src/services/globalAlertMonitor.ts` | Call unified alert API when indicator/price alerts trigger |
+
+---
+
+## 20. Strategy-Level Daily Circuit Breaker
+
+### 20.1 Overview
+
+When a strategy's aggregate daily P&L (realized + unrealized) hits a configured stoploss, target, or trailing stop — the system rejects all new entry signals for the rest of the day and closes all open positions. Exit signals remain allowed.
+
+### 20.2 Database Columns
+
+Six new columns on both `strategies` and `chartink_strategies` tables:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `daily_stoploss_type` | VARCHAR(10) | "points" only in V1 |
+| `daily_stoploss_value` | FLOAT | Max daily loss (positive number, e.g. 5000) |
+| `daily_target_type` | VARCHAR(10) | "points" only in V1 |
+| `daily_target_value` | FLOAT | Daily profit target |
+| `daily_trailstop_type` | VARCHAR(10) | "points" only in V1 |
+| `daily_trailstop_value` | FLOAT | Trail from peak daily P&L |
+
+### 20.3 In-Memory State
+
+`DailyCircuitBreakerState` dataclass per strategy in `StrategyRiskEngine`:
+- `is_tripped` — blocks new entries when True
+- `trip_reason` — "daily_stoploss", "daily_target", "daily_trailstop"
+- `daily_realized_pnl` — sum of today's exit trade PnLs (updated incrementally)
+- `daily_peak_pnl` — highest daily P&L seen (for TSL ratcheting)
+- `daily_current_stop` — current TSL stop level (ratchets up only)
+- `trading_date` — used for daily reset detection
+
+### 20.4 Behavior
+
+1. **On every LTP tick**: After per-leg and combined group checks, the risk engine checks affected strategies' daily circuit breakers
+2. **Daily SL**: Trips if `daily_pnl <= -abs(daily_stoploss_value)`
+3. **Daily Target**: Trips if `daily_pnl >= daily_target_value`
+4. **Daily TSL (AFL-style ratcheting)**:
+   - `peak_pnl = max(peak_pnl, daily_pnl)`
+   - `new_stop = -trail_value + peak_pnl`
+   - `current_stop = max(current_stop, new_stop)` (ratchet up)
+   - Trips if `daily_pnl <= current_stop`
+   - Near-zero guard: skip if `abs(daily_pnl) < 1.0`
+5. **On trip**: Set `is_tripped = True` immediately (blocks entries), emit SocketIO event, spawn daemon thread to close all open positions
+6. **Webhook blocking**: Entry signals return HTTP 403 when circuit breaker is active
+7. **Daily reset**: APScheduler at 09:00 IST reloads configs and resets all states
+
+### 20.5 SocketIO Events
+
+**`strategy_circuit_breaker`** — emitted on trip and daily reset:
+```json
+{
+  "strategy_id": 1,
+  "strategy_type": "webhook",
+  "action": "tripped",
+  "reason": "daily_stoploss",
+  "daily_pnl": -5200.50
+}
+```
+
+**`strategy_pnl_update`** — enhanced with circuit breaker fields:
+```json
+{
+  "strategy_id": 1,
+  "strategy_type": "webhook",
+  "total_unrealized_pnl": -1200.50,
+  "position_count": 3,
+  "daily_realized_pnl": -3000.00,
+  "daily_total_pnl": -4200.50,
+  "circuit_breaker_active": false,
+  "circuit_breaker_reason": ""
+}
+```
+
+### 20.6 Lock Ordering
+
+Critical for deadlock prevention:
+- Phase 1: `_positions_lock` → compute unrealized P&L per strategy
+- Phase 2: `_circuit_breaker_lock` → check thresholds
+- Never hold both simultaneously
+- Position closing on trip runs in a separate daemon thread (outside all locks)
+
+### 20.7 Startup Recovery
+
+On restart, the risk engine:
+1. Queries `strategy_trade` for today's exit PnLs → initializes `daily_realized_pnl`
+2. Loads daily risk configs from Strategy/ChartinkStrategy models
+3. Runs an immediate check in case limits were already exceeded before restart
