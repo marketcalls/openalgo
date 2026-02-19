@@ -255,16 +255,28 @@ def process_flattrade_nse_data(output_path):
             & (df_filtered["token"] != "")
         ]
 
-        df_filtered["symbol"] = df_filtered["symbol"].replace(
-            {
-                "Nifty 50": "NIFTY",
-                "Nifty Bank": "BANKNIFTY",
-                "Nifty Fin": "FINNIFTY",
-                "Nifty Next 50": "NIFTYNXT50",
-                "NIFTY MID SELECT": "MIDCPNIFTY",
-                "INDIAVIX": "INDIAVIX",
-            }
+        # Normalize NSE_INDEX symbols: uppercase + remove spaces
+        # This handles most index symbols (e.g. "Nifty Auto" → "NIFTYAUTO")
+        nse_idx_mask = df_filtered["exchange"] == "NSE_INDEX"
+        df_filtered.loc[nse_idx_mask, "symbol"] = (
+            df_filtered.loc[nse_idx_mask, "symbol"]
+            .str.upper()
+            .str.replace(" ", "", regex=False)
+            .str.replace("-", "", regex=False)
         )
+
+        # Explicit overrides for NSE_INDEX symbols that don't follow simple concatenation
+        df_filtered.loc[nse_idx_mask, "symbol"] = df_filtered.loc[nse_idx_mask, "symbol"].replace({
+            # Major Indices
+            "NIFTY50": "NIFTY",
+            "NIFTYBANK": "BANKNIFTY",
+            "NIFTYFIN": "FINNIFTY",
+            "NIFTYFINSERVICE": "FINNIFTY",
+            "NIFTYFINANCIALSERVICES": "FINNIFTY",
+            "NIFTYNEXT50": "NIFTYNXT50",
+            "NIFTYMIDSELECT": "MIDCPNIFTY",
+            "NIFTYMIDCAPSELECT": "MIDCPNIFTY",
+        })
 
         logger.info(f"Successfully processed {len(df_filtered)} NSE records")
         return df_filtered
@@ -696,6 +708,26 @@ def process_flattrade_bse_data(output_path):
         & (df_filtered["brsymbol"] != "")
         & (df_filtered["token"] != "")
     ]
+
+    # Normalize BSE_INDEX symbols: uppercase + remove spaces
+    # This handles most index symbols (e.g. "BSE Auto" → "BSEAUTO")
+    bse_idx_mask = df_filtered["exchange"] == "BSE_INDEX"
+    df_filtered.loc[bse_idx_mask, "symbol"] = (
+        df_filtered.loc[bse_idx_mask, "symbol"]
+        .str.upper()
+        .str.replace(" ", "", regex=False)
+        .str.replace("-", "", regex=False)
+    )
+
+    # Explicit overrides for BSE_INDEX symbols that don't follow simple concatenation
+    df_filtered.loc[bse_idx_mask, "symbol"] = df_filtered.loc[bse_idx_mask, "symbol"].replace({
+        "BSESENSEX": "SENSEX",
+        "S&PBSESENSEX": "SENSEX",
+        "BSESENSEX50": "SENSEX50",
+        "S&PBSESENSEX50": "SENSEX50",
+        "BSESENSEXNEXT50": "BSESENSEXNEXT50",
+        "S&PBSESENSEXNEXT50": "BSESENSEXNEXT50",
+    })
 
     logger.info(f"Successfully processed {len(df_filtered)} BSE records")
     # Return the processed DataFrame

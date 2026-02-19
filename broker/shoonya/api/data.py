@@ -13,8 +13,16 @@ from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
-# Toggle between async and threaded approach
-USE_ASYNC = True  # Set to True to use asyncio, False for ThreadPoolExecutor
+# Auto-detect eventlet environment (Docker/standalone uses gunicorn+eventlet)
+# asyncio.run() cannot be called under eventlet's monkey-patched event loop
+def _is_eventlet_patched():
+    try:
+        import eventlet.patcher
+        return eventlet.patcher.is_monkey_patched("socket")
+    except (ImportError, AttributeError):
+        return False
+
+USE_ASYNC = not _is_eventlet_patched()
 
 logger = get_logger(__name__)
 
@@ -133,8 +141,8 @@ class BrokerData:
         """
         try:
             # Shoonya API uses NorenAPI (similar to Flattrade)
-            # Rate limits: ~40 requests/second (conservative estimate)
-            BATCH_SIZE = 40  # Process 40 symbols per batch
+            # Rate limits: ~20 requests/second (conservative estimate)
+            BATCH_SIZE = 20  # Process 40 symbols per batch
             RATE_LIMIT_DELAY = 1.0  # 1 second delay between batches
 
             if len(symbols) > BATCH_SIZE:
@@ -358,7 +366,7 @@ class BrokerData:
         else:
             # ThreadPoolExecutor approach
             results = []
-            with ThreadPoolExecutor(max_workers=40) as executor:
+            with ThreadPoolExecutor(max_workers=20) as executor:
                 future_to_symbol = {
                     executor.submit(
                         self._fetch_single_quote_sync,

@@ -83,7 +83,10 @@ class NubraWebSocket:
 
     @property
     def is_connected(self) -> bool:
-        return self._connected_event.is_set() and self.ws and self.ws.sock and self.ws.sock.connected
+        try:
+            return self._connected_event.is_set() and self.ws and self.ws.sock and self.ws.sock.connected
+        except (AttributeError, OSError):
+            return False
 
     def connect(self):
         """Start the WebSocket connection in a background thread."""
@@ -91,21 +94,36 @@ class NubraWebSocket:
             return
 
         self._stop_event.clear()
-        self.wst = threading.Thread(target=self._run_forever, daemon=True)
+        self.wst = threading.Thread(
+            target=self._run_forever, daemon=True, name="NubraWS"
+        )
         self.wst.start()
 
     def _run_forever(self):
-        """Main WebSocket loop with auto-reconnect."""
+        """Main WebSocket loop with auto-reconnect and exponential backoff."""
+        reconnect_attempts = 0
+        max_reconnect_attempts = 50
+        base_delay = 2.0
+        max_delay = 60.0
+
         while not self._stop_event.is_set():
             try:
-                logger.info("Connecting to Nubra WebSocket...")
-                
+                logger.info(f"Connecting to Nubra WebSocket (attempt {reconnect_attempts + 1})...")
+
+                # Close old socket before creating new one (prevent FD leak)
+                if self.ws:
+                    try:
+                        self.ws.close()
+                    except Exception:
+                        pass
+                    self.ws = None
+
                 # Headers are required for strict auth channels (like Orderbook)
                 headers = {
                     "Authorization": f"Bearer {self.bt}",
                     "x-device-id": self.device_id
                 }
-                
+
                 self.ws = websocket.WebSocketApp(
                     self.url,
                     header=headers,
@@ -114,28 +132,37 @@ class NubraWebSocket:
                     on_error=self._on_error,
                     on_close=self._on_close,
                 )
-                
+
                 # Run blocking call (blocking until close)
                 # SDK uses 20s ping interval
                 self.ws.run_forever(ping_interval=20, ping_timeout=10)
-                
+
             except Exception as e:
                 logger.error(f"WebSocket run error: {e}")
-            
+
             if self._stop_event.is_set():
                 break
-                
-            logger.info("WebSocket disconnected. Reconnecting in 2s...")
+
+            reconnect_attempts += 1
+            if reconnect_attempts >= max_reconnect_attempts:
+                logger.error(f"Max reconnect attempts ({max_reconnect_attempts}) reached. Giving up.")
+                break
+
+            # Exponential backoff: 2s, 4s, 8s, ... capped at 60s
+            delay = min(base_delay * (2 ** min(reconnect_attempts - 1, 5)), max_delay)
+            logger.info(f"WebSocket disconnected. Reconnecting in {delay:.0f}s (attempt {reconnect_attempts}/{max_reconnect_attempts})...")
             self._connected_event.clear()
-            time.sleep(2)
+            # Clear stale cached data on disconnect
+            self.last_quotes.clear()
+            self.last_depth.clear()
+            self._stop_event.wait(timeout=delay)  # Interruptible sleep
 
     def _on_open(self, ws):
         """Called when connection is established."""
-        logger.info("✅ Connected to Nubra WebSocket")
+        logger.info("Connected to Nubra WebSocket")
         self._connected_event.set()
-        
-        # Re-subscribe
-        # Re-subscribe
+
+        # Re-subscribe on reconnect
         if self.subscriptions_batch:
             logger.info(f"Resubscribing to {len(self.subscriptions_batch)} items")
             for item in self.subscriptions_batch.copy():
@@ -156,6 +183,12 @@ class NubraWebSocket:
                     ref_ids = [int(s) for s in symbols_list if str(s).isdigit()]
                     self._send_subscribe_batch(
                         data_type="orderbook",
+                        ref_ids=ref_ids
+                    )
+                elif data_type == "greeks":
+                    ref_ids = [int(s) for s in symbols_list if str(s).isdigit()]
+                    self._send_subscribe_batch(
+                        data_type="greeks",
                         ref_ids=ref_ids
                     )
                 elif data_type == "ohlcv":
@@ -218,7 +251,12 @@ class NubraWebSocket:
                 msg = nubrafrontend_pb2.BatchWebSocketIndexBucketMessage()
                 inner.Unpack(msg)
                 self._process_index_bucket_batch(msg)
-                
+
+            elif inner.type_url.endswith("BatchWebSocketGreeksMessage"):
+                msg = nubrafrontend_pb2.BatchWebSocketGreeksMessage()
+                inner.Unpack(msg)
+                self._process_greeks_batch(msg)
+
         except Exception as e:
             logger.error(f"Protobuf decode error: {e}")
 
@@ -248,7 +286,11 @@ class NubraWebSocket:
         if "NIFTY" in name:
              logger.info(f"Caching index: name={name}, exch={exchange}, val={obj.index_value}")
 
-        self.last_quotes[(exchange, name)] = {
+        # Preserve open/close from OHLCV cache (OHLCV may arrive before index data)
+        key = (exchange, name)
+        existing = self.last_quotes.get(key, {})
+
+        self.last_quotes[key] = {
             "ltp": obj.index_value / 100.0 if obj.index_value else 0,
             "high": obj.high_index_value / 100.0 if obj.high_index_value else 0,
             "low": obj.low_index_value / 100.0 if obj.low_index_value else 0,
@@ -259,7 +301,9 @@ class NubraWebSocket:
             "timestamp": obj.timestamp if obj.timestamp else 0,
             "bid": 0,
             "ask": 0,
-            "open": 0,
+            "open": existing.get("open", 0),
+            "close": existing.get("close", 0),
+            "_has_index": True,
         }
 
     def _process_orderbook_batch(self, msg):
@@ -293,7 +337,10 @@ class NubraWebSocket:
         totalbuyqty = sum(b["quantity"] for b in bids)
         totalsellqty = sum(a["quantity"] for a in asks)
 
-        self.last_depth[ref_id] = {
+        # Preserve OI fields from greeks channel (orderbook doesn't carry OI)
+        existing = self.last_depth.get(ref_id, {})
+
+        existing.update({
             "ltp": obj.ltp / 100.0 if obj.ltp else 0,
             "ltq": obj.ltq if obj.ltq else 0,
             "volume": obj.volume if obj.volume else 0,
@@ -303,7 +350,34 @@ class NubraWebSocket:
             "totalsellqty": totalsellqty,
             "timestamp": obj.timestamp if obj.timestamp else 0,
             "ref_id": ref_id,
-        }
+        })
+        self.last_depth[ref_id] = existing
+
+    def _process_greeks_batch(self, msg):
+        """Process greeks data (WebSocketMsgOptionChainItem) and merge OI into orderbook cache."""
+        logger.info(f"Received greeks batch with {len(msg.instruments)} instruments")
+        for obj in msg.instruments:
+            ref_id = obj.ref_id if obj.ref_id else 0
+            if not ref_id:
+                continue
+
+            oi_val = obj.oi if obj.oi else 0
+            prev_oi = obj.prev_oi if obj.prev_oi else 0
+            ltp = obj.ltp / 100.0 if obj.ltp else 0
+            volume = obj.volume if obj.volume else 0
+
+            logger.info(f"Greeks data: ref_id={ref_id}, oi={oi_val}, prev_oi={prev_oi}, ltp={ltp}")
+
+            # Merge into existing orderbook cache if present, otherwise create entry
+            existing = self.last_depth.get(ref_id, {})
+            existing["oi"] = oi_val
+            existing["prev_oi"] = prev_oi
+            # Fill ltp/volume from greeks if orderbook hasn't arrived yet
+            if not existing.get("ltp"):
+                existing["ltp"] = ltp
+            if not existing.get("volume"):
+                existing["volume"] = volume
+            self.last_depth[ref_id] = existing
 
     def _process_index_bucket_batch(self, msg):
         """Process OHLVC candles (IndexBucket) and update quotes."""
@@ -320,29 +394,39 @@ class NubraWebSocket:
         name = obj.indexname if obj.indexname else ""
         if not name:
             return
-        
+
         name = name.upper()
         if name in INDEX_NAME_MAP:
             name = INDEX_NAME_MAP[name]
-        
-        if "NIFTY" in name:
-             logger.info(f"Caching OHLVC: name={name}, close={obj.close}")
 
-        # Map Candle Close -> Quote LTP
-        # This allows get_quote() to work even if we are using OHLVC feed
-        self.last_quotes[(exchange, name)] = {
-            "ltp": obj.close if obj.close else 0,
-            "open": obj.open if obj.open else 0,
-            "high": obj.high if obj.high else 0,
-            "low": obj.low if obj.low else 0,
-            "close": obj.close if obj.close else 0, # Current close is LTP
-            "volume": obj.cumulative_volume if obj.cumulative_volume else (obj.bucket_volume or 0),
-            "timestamp": obj.timestamp if obj.timestamp else 0,
-            "bid": 0,
-            "ask": 0,
-            "prev_close": 0, # Not provided in OHLVC usually
-            "changepercent": 0 # Not calculated here
-        }
+        if "NIFTY" in name:
+             logger.info(f"Caching OHLVC: name={name}, open={obj.open}, close={obj.close}")
+
+        # Merge OHLCV into existing quote.
+        # Index channel provides: ltp, high, low, prev_close, changepercent
+        # OHLCV channel provides: open, high, low, close, volume
+        # When only OHLCV is subscribed (e.g., index requests), close serves as LTP.
+        # If index channel is active (_has_index flag), it is authoritative for
+        # ltp/high/low/volume/timestamp — OHLCV only contributes open/close.
+        # If OHLCV is the sole source, refresh all fields on every message.
+        key = (exchange, name)
+        existing = self.last_quotes.get(key, {})
+        has_index = existing.get("_has_index", False)
+        close_val = obj.close / 100.0 if obj.close else 0
+        existing["open"] = obj.open / 100.0 if obj.open else existing.get("open", 0)
+        existing["close"] = close_val or existing.get("close", 0)
+        if not has_index:
+            # OHLCV is the only data source — always refresh
+            if close_val:
+                existing["ltp"] = close_val
+            if obj.high:
+                existing["high"] = obj.high / 100.0
+            if obj.low:
+                existing["low"] = obj.low / 100.0
+            existing["volume"] = obj.cumulative_volume if obj.cumulative_volume else (obj.bucket_volume or 0)
+            if obj.timestamp:
+                existing["timestamp"] = obj.timestamp
+        self.last_quotes[key] = existing
 
     # ─── Public Methods ──────────────────────────────────────────────────
 
@@ -380,10 +464,17 @@ class NubraWebSocket:
         """Unsubscribe from index channel."""
         if not self.is_connected:
             return False
-            
+
         key = (tuple(symbols), "index", exchange)
         self.subscriptions_batch.discard(key)
-        
+
+        # Clear _has_index flag so OHLCV channel resumes full updates
+        for sym in symbols:
+            cache_key = (exchange, sym.upper())
+            cached = self.last_quotes.get(cache_key)
+            if cached:
+                cached.pop("_has_index", None)
+
         return self._send_unsubscribe_batch("index", index_symbol=symbols, exchange=exchange)
 
     def subscribe_orderbook(self, ref_ids: List[int]) -> bool:
@@ -400,11 +491,31 @@ class NubraWebSocket:
         """Unsubscribe from orderbook channel."""
         if not self.is_connected:
             return False
-            
+
         key = (tuple(str(r) for r in ref_ids), "orderbook", None)
         self.subscriptions_batch.discard(key)
-        
+
         return self._send_unsubscribe_batch("orderbook", ref_ids=ref_ids)
+
+    def subscribe_greeks(self, ref_ids: List[int]) -> bool:
+        """Subscribe to greeks channel (provides OI, IV, Greeks for options)."""
+        if not self.is_connected:
+            return False
+
+        key = (tuple(str(r) for r in ref_ids), "greeks", None)
+        self.subscriptions_batch.add(key)
+
+        return self._send_subscribe_batch("greeks", ref_ids=ref_ids)
+
+    def unsubscribe_greeks(self, ref_ids: List[int]) -> bool:
+        """Unsubscribe from greeks channel."""
+        if not self.is_connected:
+            return False
+
+        key = (tuple(str(r) for r in ref_ids), "greeks", None)
+        self.subscriptions_batch.discard(key)
+
+        return self._send_unsubscribe_batch("greeks", ref_ids=ref_ids)
 
     def get_quote(self, exchange: str, symbol: str) -> Optional[dict]:
         # Normalize symbol to upper
@@ -420,16 +531,34 @@ class NubraWebSocket:
     def close(self):
         """Close connection and stop thread."""
         self._stop_event.set()
+        self._connected_event.clear()
         if self.ws:
-            self.ws.close()
+            try:
+                self.ws.close()
+            except Exception:
+                pass
+            self.ws = None
         if self.wst and self.wst.is_alive():
-            self.wst.join(timeout=2)
+            self.wst.join(timeout=5)
+            if self.wst.is_alive():
+                logger.warning("NubraWS thread did not terminate within 5s timeout")
+        self.wst = None
+        self.last_quotes.clear()
+        self.last_depth.clear()
+
+    def __del__(self):
+        """Safety net destructor to ensure resources are cleaned up."""
+        try:
+            self.close()
+        except Exception:
+            pass
 
     # ─── Internal Send Methods ───────────────────────────────────────────
 
     def _send_subscribe_batch(self, data_type: str, ref_ids=None, index_symbol=None, exchange=None, interval=None) -> bool:
         try:
-            if not self.ws or not self.ws.sock:
+            ws = self.ws  # Capture local ref to avoid TOCTOU race
+            if not ws or not ws.sock:
                 return False
 
             payload = {
@@ -447,7 +576,7 @@ class NubraWebSocket:
                 msg = f"batch_subscribe {self.bt} {data_type} {json.dumps(payload, separators=(',', ':'))}"
                 logger.info(f"Subscribing to {data_type}: {msg}")
 
-            self.ws.send(msg)
+            ws.send(msg)
             return True
         except Exception as e:
             logger.error(f"Send subscribe failed: {e}")
@@ -456,11 +585,12 @@ class NubraWebSocket:
     def change_orderbook_depth(self, depth: int = 5) -> bool:
         """Set the orderbook depth level (default 5, max 20)."""
         try:
-            if not self.ws or not self.ws.sock:
+            ws = self.ws  # Capture local ref to avoid TOCTOU race
+            if not ws or not ws.sock:
                 return False
             msg = f"batch_subscribe {self.bt} orderbook_depth {depth}"
             logger.info(f"Setting orderbook depth: {msg}")
-            self.ws.send(msg)
+            ws.send(msg)
             return True
         except Exception as e:
             logger.error(f"Failed to set orderbook depth: {e}")
@@ -468,7 +598,8 @@ class NubraWebSocket:
 
     def _send_unsubscribe_batch(self, data_type: str, ref_ids=None, index_symbol=None, exchange=None, interval=None) -> bool:
         try:
-            if not self.ws or not self.ws.sock:
+            ws = self.ws  # Capture local ref to avoid TOCTOU race
+            if not ws or not ws.sock:
                 return False
 
             payload = {
@@ -483,7 +614,7 @@ class NubraWebSocket:
             else:
                 msg = f"batch_unsubscribe {self.bt} {data_type} {json.dumps(payload, separators=(',', ':'))}"
 
-            self.ws.send(msg)
+            ws.send(msg)
             return True
         except Exception as e:
             logger.error(f"Send unsubscribe failed: {e}")

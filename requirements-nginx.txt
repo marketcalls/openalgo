@@ -85,7 +85,7 @@ pyarrow==22.0.0
 fastparquet==2025.12.0
 parso==0.8.5
 pexpect==4.9.0
-pillow==12.1.0
+pillow==12.1.1
 platformdirs==4.5.1
 plotly==6.5.2
 pluggy==1.6.0

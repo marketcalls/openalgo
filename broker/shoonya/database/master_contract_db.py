@@ -213,14 +213,29 @@ def process_shoonya_nse_data(output_path):
     ]
     df_filtered = df[columns_to_keep]
 
-    df_filtered["symbol"] = df_filtered["symbol"].replace(
-        {
-            "NIFTY INDEX": "NIFTY",
-            "NIFTY BANK": "BANKNIFTY",
-            "MIDCPNIFTY": "MIDCPNIFTY",
-            "INDIA VIX": "INDIAVIX",
-        }
+    # Normalize NSE_INDEX symbols: uppercase + remove spaces/hyphens
+    # This handles most index symbols (e.g. "NIFTY AUTO" → "NIFTYAUTO")
+    nse_idx_mask = df_filtered["exchange"] == "NSE_INDEX"
+    df_filtered.loc[nse_idx_mask, "symbol"] = (
+        df_filtered.loc[nse_idx_mask, "symbol"]
+        .str.upper()
+        .str.replace(" ", "", regex=False)
+        .str.replace("-", "", regex=False)
     )
+
+    # Explicit overrides for NSE_INDEX symbols that don't follow simple concatenation
+    df_filtered.loc[nse_idx_mask, "symbol"] = df_filtered.loc[nse_idx_mask, "symbol"].replace({
+        # Major Indices
+        "NIFTY50": "NIFTY",
+        "NIFTYINDEX": "NIFTY",
+        "NIFTYBANK": "BANKNIFTY",
+        "NIFTYFIN": "FINNIFTY",
+        "NIFTYFINSERVICE": "FINNIFTY",
+        "NIFTYFINANCIALSERVICES": "FINNIFTY",
+        "NIFTYNEXT50": "NIFTYNXT50",
+        "NIFTYMIDSELECT": "MIDCPNIFTY",
+        "NIFTYMIDCAPSELECT": "MIDCPNIFTY",
+    })
 
     # Return the processed DataFrame
     return df_filtered

@@ -511,6 +511,7 @@ sudo rm -rf /var/lib/docker
 | Kotak | `kotak` | No |
 | Motilal Oswal | `motilal` | No |
 | MStock | `mstock` | No |
+| Nubra | `nubra` | No |
 | Paytm Money | `paytm` | No |
 | Pocketful | `pocketful` | No |
 | Samco | `samco` | No |

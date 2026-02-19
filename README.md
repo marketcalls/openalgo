@@ -48,6 +48,7 @@
 - Kotak Neo
 - Motilal Oswal
 - Mstock
+- Nubra
 - Paytm Money
 - Pocketful
 - Samco

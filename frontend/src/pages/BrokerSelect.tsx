@@ -1,4 +1,4 @@
-import { BookOpen, ExternalLink, Loader2 } from 'lucide-react'
+import { BookOpen, ExternalLink, Info, Loader2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -253,6 +253,17 @@ export default function BrokerSelect() {
                     </SelectContent>
                   </Select>
                 </div>
+
+                {(selectedBroker === 'zerodha' || selectedBroker === 'dhan') && (
+                  <Alert className="border-amber-500/50 bg-amber-500/10">
+                    <Info className="h-4 w-4 text-amber-500" />
+                    <AlertDescription className="text-amber-200">
+                      {selectedBroker === 'zerodha'
+                        ? 'Zerodha requires an active Kite Connect data subscription for market data access.'
+                        : 'Dhan requires an active Data API subscription for market data access.'}
+                    </AlertDescription>
+                  </Alert>
+                )}
 
                 <Button type="submit" className="w-full" disabled={!selectedBroker || isSubmitting}>
                   {isSubmitting ? (
