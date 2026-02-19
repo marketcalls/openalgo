@@ -1876,6 +1876,392 @@ The Strategy Builder and Dashboard show real-time risk management stats per stra
 | Daily SL | `percentage`, `points` | Based on daily cumulative P&L |
 | Daily Target | `percentage`, `points` | Based on daily cumulative P&L |
 | Daily TSL | `percentage`, `points` | Based on daily cumulative P&L |
+| Leg Breakeven | `percentage`, `points` | One-time SL move to entry |
+
+### 31.10 Breakeven Stoploss (OpenAlgo-Only Feature)
+
+AlgoMirror does NOT implement breakeven stops. This is an OpenAlgo addition.
+
+**Concept:** When a position reaches a configured profit threshold, the stoploss is automatically moved to the entry price — locking in a "no-loss" floor. This is a **one-time, irreversible** action per position.
+
+**Availability:**
+- Equity positions
+- Single option positions
+- Individual legs in `per_leg` risk mode
+- **NOT** available in combined P&L mode (combined stops handle group-level risk)
+
+**Value types:** `percentage`, `points`
+
+**Database fields:**
+```
+breakeven_type        VARCHAR(10)    -- 'percentage' or 'points', NULL = disabled
+breakeven_threshold   FLOAT          -- profit threshold to trigger BE move
+breakeven_activated   BOOLEAN DEFAULT FALSE  -- one-time flag
+```
+
+**Threshold calculation:**
+
+```python
+def breakeven_threshold_hit(position, ltp):
+    """
+    Check if LTP has moved favorably enough to activate breakeven.
+    Threshold is measured from entry price.
+    """
+    entry = position.average_entry_price
+
+    if position.breakeven_type == 'percentage':
+        threshold_distance = entry * (position.breakeven_threshold / 100)
+    elif position.breakeven_type == 'points':
+        threshold_distance = position.breakeven_threshold
+
+    if position.action == 'BUY':
+        # Long: price must rise above entry + threshold
+        return ltp >= entry + threshold_distance
+    else:  # SELL
+        # Short: price must fall below entry - threshold
+        return ltp <= entry - threshold_distance
+```
+
+**Activation logic:**
+
+```python
+# In the risk engine tick loop (after peak_price update, before trail recalc):
+
+if position.breakeven_type and not position.breakeven_activated:
+    if breakeven_threshold_hit(position, ltp):
+        position.stoploss_price = round_to_tick(
+            position.average_entry_price, position.tick_size
+        )
+        position.breakeven_activated = True
+        # Emit SocketIO: strategy_breakeven_activated
+```
+
+**Breakeven + Trailing Stop Interaction:**
+
+After breakeven activates, the trailing stop continues independently. The **effective stop** is always the most protective (closest to LTP):
+
+```python
+def compute_effective_stop(position):
+    """
+    When both breakeven SL and trailing stop are active,
+    the tighter (more protective) stop wins.
+    """
+    stops = []
+
+    if position.stoploss_price is not None:
+        stops.append(position.stoploss_price)
+    if position.trailstop_price is not None:
+        stops.append(position.trailstop_price)
+
+    if not stops:
+        return None
+
+    if position.action == 'BUY':
+        return max(stops)    # Higher stop = more protective for longs
+    else:  # SELL
+        return min(stops)    # Lower stop = more protective for shorts
+```
+
+**Worked examples:**
+
+```
+Example 1: Long equity — entry ₹800, SL ₹784, breakeven_type='percentage', threshold=1.5
+
+  Initial state: SL = ₹784
+  BE triggers when: LTP >= 800 × (1 + 1.5/100) = ₹812
+
+  t1: LTP = ₹805 → No breakeven (805 < 812), SL stays at ₹784
+  t2: LTP = ₹813 → Breakeven triggered! SL moved to ₹800 (entry price)
+  t3: LTP = ₹790 → LTP <= ₹800 → SL hit → exit at ₹790
+      exit_reason = 'stoploss', exit_detail = 'breakeven_sl'
+      Outcome: ₹790 - ₹800 = -₹10 loss (instead of -₹16 without BE)
+
+Example 2: Short option — entry ₹150, SL ₹195, breakeven_type='points', threshold=20
+
+  Initial state: SL = ₹195
+  BE triggers when: LTP <= 150 - 20 = ₹130
+
+  t1: LTP = ₹140 → No breakeven (140 > 130), SL stays at ₹195
+  t2: LTP = ₹128 → Breakeven triggered! SL moved to ₹150 (entry price)
+  t3: LTP = ₹135 → Trailing stop at ₹133 (if configured)
+      Effective SL = min(₹150, ₹133) = ₹133 (trail is tighter for SELL)
+  t4: LTP = ₹134 → LTP >= ₹133? No (134 >= 133 → YES) → TSL hit
+      exit_reason = 'trailstop', exit_detail = 'leg_tsl'
+      Outcome: ₹150 - ₹134 = +₹16/unit profit
+```
+
+**Key semantics:**
+- Breakeven is a **one-time** SL move — once activated, it doesn't revert
+- `breakeven_activated = True` is persisted and never set back to False
+- The SL price after breakeven = entry price (not entry ± some offset)
+- If trailing stop eventually moves past entry (more protective), the trail takes over via `compute_effective_stop()`
+- `exit_detail = 'breakeven_sl'` when the SL that was moved to entry triggers (distinguishes from regular `leg_sl`)
+
+**UI elements:**
+
+| Context | Display |
+|---------|---------|
+| LegCard config | Breakeven toggle + type selector (percentage/points) + threshold input |
+| PositionRow | Blue "BE" badge when `breakeven_activated = True`; `—` if not configured |
+| Risk Events log | `[i] Breakeven activated for NIFTY..PE` |
+| Exit badge | "BE-SL" (blue) when `exit_detail == 'breakeven_sl'` |
+| Toast notification | `strategy_breakeven_activated` event |
+| P&L breakdown | Separate "Breakeven SL" row in exit breakdown table |
+
+---
+
+## 32. Strategy Scheduling
+
+### 32.1 Overview
+
+Strategy scheduling enables automatic start/stop of risk monitoring and webhook acceptance based on configurable time windows and trading days. This matches the pattern used in OpenAlgo's `/python` strategy hosting system (see `blueprints/python_strategy.py`).
+
+**Default schedule:** Monday–Friday, 09:15–15:30 IST (NSE regular session).
+
+Scheduling is **mandatory** — every strategy has an active schedule. Users can modify times and days but cannot fully disable scheduling.
+
+### 32.2 Database Fields
+
+Added to `Strategy` and `ChartinkStrategy` tables:
+
+```sql
+schedule_enabled       BOOLEAN DEFAULT TRUE     -- always TRUE (mandatory)
+schedule_start_time    VARCHAR(5) DEFAULT '09:15'  -- HH:MM IST
+schedule_stop_time     VARCHAR(5) DEFAULT '15:30'  -- HH:MM IST
+schedule_days          TEXT DEFAULT '["mon","tue","wed","thu","fri"]'  -- JSON array
+schedule_auto_entry    BOOLEAN DEFAULT TRUE     -- accept webhooks during schedule
+schedule_auto_exit     BOOLEAN DEFAULT TRUE     -- auto square-off at stop_time
+```
+
+### 32.3 Schedule Configuration
+
+```python
+# Config stored per strategy
+{
+    "schedule_start_time": "09:15",     # HH:MM IST
+    "schedule_stop_time":  "15:30",     # HH:MM IST
+    "schedule_days": ["mon", "tue", "wed", "thu", "fri"],  # Any combination
+    "schedule_auto_entry": True,        # Accept webhook entries during window
+    "schedule_auto_exit":  True         # Auto square-off at stop_time
+}
+```
+
+**Valid days:** `mon`, `tue`, `wed`, `thu`, `fri`, `sat`, `sun`
+
+Allowing `sat` and `sun` supports special exchange sessions (e.g., Muhurat trading, special Saturday sessions for MCX).
+
+### 32.4 Schedule Lifecycle
+
+```
+Strategy Created
+  │
+  ├─ Default schedule: Mon-Fri, 09:15-15:30 IST
+  │
+  ▼
+APScheduler CronTrigger Jobs (2 per strategy):
+  │
+  ├─ START job: CronTrigger(hour=9, minute=15, day_of_week='mon,tue,wed,thu,fri')
+  │   └─ scheduled_start_strategy(strategy_id)
+  │       ├─ Check: manually_stopped? → skip
+  │       ├─ Check: today in schedule_days? → skip if not
+  │       ├─ Check: market holiday (weekday only)? → skip, store paused_reason
+  │       └─ All checks passed → activate risk engine + accept webhooks
+  │
+  └─ STOP job: CronTrigger(hour=15, minute=30, day_of_week='mon,tue,wed,thu,fri')
+      └─ scheduled_stop_strategy(strategy_id)
+          ├─ If schedule_auto_exit: square off all open positions (MIS)
+          ├─ Pause risk engine monitoring
+          └─ Reject new webhook entries
+```
+
+### 32.5 Scheduled Start Behavior
+
+When the start job fires:
+
+1. **Check manually_stopped flag** — if user manually stopped the strategy, skip auto-start. User must manually start to resume.
+2. **Check schedule_days** — verify today is in the schedule. If not, skip.
+3. **Check market holidays** — on weekdays, check holiday calendar. On weekends, trust the user's explicit day selection.
+4. **Activate:**
+   - Set `risk_monitoring = 'active'`
+   - Risk engine subscribes to market data for all strategy positions
+   - Webhooks for this strategy are accepted
+   - Emit SocketIO: `strategy_schedule_started`
+
+### 32.6 Scheduled Stop Behavior
+
+When the stop job fires:
+
+1. **Always fires** — safety measure to prevent strategies from running after hours
+2. **Auto square-off** (if `schedule_auto_exit = True`):
+   - Exit all open MIS positions via `placeorder` (MARKET)
+   - `exit_reason = 'squareoff'`, `exit_detail = 'auto_squareoff_schedule'`
+   - CNC and NRML positions are NOT auto-squared-off
+3. **Pause risk engine** — unsubscribe from market data, stop monitoring
+4. **Reject webhooks** — new entry signals return HTTP 403 with schedule info
+5. Emit SocketIO: `strategy_schedule_stopped`
+
+### 32.7 Manual Start/Stop Interaction
+
+| Action | During Schedule | Outside Schedule |
+|--------|----------------|------------------|
+| Manual Start | Starts immediately | Arms for next scheduled window; returns "armed" status with next start time |
+| Manual Stop | Stops immediately + sets `manually_stopped` flag | Sets `manually_stopped` flag |
+| Manual Start after Manual Stop | Clears `manually_stopped`, starts if within window | Clears flag, arms for next window |
+
+**Key rule:** Manual stop is permanent until manual start. The scheduler will NOT auto-start a manually stopped strategy. This matches `/python` behavior exactly.
+
+### 32.8 Background Enforcement Jobs
+
+Two global APScheduler jobs (matching `/python` pattern):
+
+**1. Daily Trading Day Check** — runs at 00:01 IST:
+```python
+# Stops all scheduled strategies on non-trading days
+# Prevents Friday strategies from running through the weekend
+def daily_trading_day_check():
+    for strategy in active_strategies:
+        if not strategy.is_scheduled:
+            continue
+        if today not in strategy.schedule_days:
+            continue
+        if is_market_holiday() and today.weekday() < 5:
+            stop_strategy_monitoring(strategy)
+            strategy.paused_reason = 'holiday'
+```
+
+**2. Market Hours Enforcer** — runs every minute:
+```python
+# Resumes paused strategies when trading day starts
+# Only enforces trading days (weekends/holidays), NOT specific hours
+# The per-strategy CronTrigger handles hour-based start/stop
+def market_hours_enforcer():
+    if is_trading_day():
+        for strategy in paused_strategies:
+            if strategy.paused_reason in ('weekend', 'holiday'):
+                if is_within_schedule_time(strategy):
+                    resume_strategy_monitoring(strategy)
+```
+
+### 32.9 Strategy Status States
+
+| Status | Meaning | Badge Color | Auto-Start? |
+|--------|---------|-------------|-------------|
+| `running` | Risk engine active, webhooks accepted | Green | N/A |
+| `scheduled` | Armed, will auto-start at scheduled time | Blue | Yes |
+| `manually_stopped` | User stopped, won't auto-start | Gray | No |
+| `paused` | Market holiday or weekend | Amber | Yes (next trading day) |
+| `error` | Strategy error (e.g., order rejected) | Red | Depends |
+
+### 32.10 Webhook Behavior by Schedule State
+
+| Strategy State | Webhook Entry Signal | Webhook Exit Signal |
+|----------------|---------------------|---------------------|
+| Within schedule window | Accepted, processed normally | Accepted |
+| Outside schedule window | Rejected (HTTP 403) | Accepted (always allow exits) |
+| Manually stopped | Rejected (HTTP 403) | Accepted |
+| Paused (holiday) | Rejected (HTTP 403) | Accepted |
+
+**Important:** Exit/squareoff signals are ALWAYS accepted regardless of schedule state. Only entry signals are blocked.
+
+### 32.11 Exchange-Specific Default Schedules
+
+Different exchanges have different trading hours. The default schedule adapts to the primary exchange:
+
+| Exchange | Default Start | Default Stop | Default Days |
+|----------|--------------|-------------|--------------|
+| NFO (NSE F&O) | 09:15 | 15:30 | Mon–Fri |
+| BFO (BSE F&O) | 09:15 | 15:30 | Mon–Fri |
+| CDS (Currency) | 09:00 | 17:00 | Mon–Fri |
+| BCD (BSE Currency) | 09:00 | 17:00 | Mon–Fri |
+| MCX (Commodity) | 09:00 | 23:30 | Mon–Fri |
+| NSE (Equity) | 09:15 | 15:30 | Mon–Fri |
+| BSE (Equity) | 09:15 | 15:30 | Mon–Fri |
+
+When creating a strategy with a specific exchange, the UI pre-fills the default schedule for that exchange. Users can always override.
+
+### 32.12 UI Components
+
+**Schedule Configuration (in Strategy Builder — BasicsStep):**
+
+```
+┌─────────────────────────────────────────────────┐
+│ Schedule                                        │
+│                                                 │
+│ Trading Days                                    │
+│ [Mon✓] [Tue✓] [Wed✓] [Thu✓] [Fri✓] [Sat] [Sun] │
+│                                                 │
+│ Start Time          Stop Time                   │
+│ ┌──────────┐       ┌──────────┐                 │
+│ │ 09:15    │       │ 15:30    │                 │
+│ └──────────┘       └──────────┘                 │
+│                                                 │
+│ ☑ Auto square-off MIS at stop time              │
+│ ☑ Block webhook entries outside schedule         │
+└─────────────────────────────────────────────────┘
+```
+
+**Schedule Status (in StrategyCard header):**
+
+```
+┌───────────────────────────────────────────────────┐
+│ Iron Condor NIFTY    [Running ●]   09:15-15:30    │
+│                      Mon-Fri       Next: Today    │
+└───────────────────────────────────────────────────┘
+```
+
+**Schedule Badge States:**
+
+| State | Display | Color |
+|-------|---------|-------|
+| Running within schedule | `Running ●` + schedule times | Green |
+| Armed, waiting for start | `Scheduled` + next start time | Blue |
+| Manually stopped | `Stopped` + "Click Start to resume" | Gray |
+| Paused (holiday) | `Holiday` + holiday name | Amber |
+| Outside schedule hours | `Off hours` + next start time | Gray |
+
+### 32.13 API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `PUT` | `/api/v1/strategy/{id}/schedule` | Update schedule config |
+| `GET` | `/api/v1/strategy/{id}/schedule` | Get current schedule + status |
+
+**PUT request body:**
+```json
+{
+    "start_time": "09:15",
+    "stop_time": "15:30",
+    "days": ["mon", "tue", "wed", "thu", "fri"],
+    "auto_entry": true,
+    "auto_exit": true
+}
+```
+
+**GET response:**
+```json
+{
+    "status": "success",
+    "data": {
+        "start_time": "09:15",
+        "stop_time": "15:30",
+        "days": ["mon", "tue", "wed", "thu", "fri"],
+        "auto_entry": true,
+        "auto_exit": true,
+        "current_state": "running",
+        "next_start": null,
+        "next_stop": "15:30 IST today"
+    }
+}
+```
+
+### 32.14 SocketIO Events
+
+| Event | When | Payload |
+|-------|------|---------|
+| `strategy_schedule_started` | Scheduled start fires | `{strategy_id, start_time}` |
+| `strategy_schedule_stopped` | Scheduled stop fires | `{strategy_id, stop_time, positions_closed: N}` |
+| `strategy_schedule_blocked` | Entry blocked outside schedule | `{strategy_id, reason, next_start}` |
+| `strategy_schedule_holiday` | Strategy paused for holiday | `{strategy_id, holiday_name}` |
 
 ---
 
