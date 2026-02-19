@@ -161,6 +161,39 @@ The `legs_config` JSON field in SymbolMapping must follow this schema for F&O st
 }
 ```
 
+**Per-leg risk example** (when `risk_mode=per_leg`):
+
+```json
+{
+  "preset": "custom",
+  "legs": [
+    {
+      "leg_id": 1,
+      "leg_type": "option",
+      "action": "SELL",
+      "option_type": "CE",
+      "strike_selection": "OTM",
+      "strike_offset": 4,
+      "lots": 1,
+      "order_type": "MARKET",
+      "risk": {
+        "stoploss_type": "percentage",
+        "stoploss_value": 30,
+        "target_type": "percentage",
+        "target_value": 50,
+        "trailstop_type": "points",
+        "trailstop_value": 10,
+        "breakeven_type": "percentage",
+        "breakeven_threshold": 20
+      }
+    }
+  ],
+  "risk_mode": "per_leg",
+  "combined_risk": null,
+  "per_leg_risk": true
+}
+```
+
 **Validation rules:**
 - `legs`: array of 1-6 leg objects
 - Each leg: `leg_type` required (`option` | `futures`)
@@ -172,8 +205,8 @@ The `legs_config` JSON field in SymbolMapping must follow this schema for F&O st
 - `action`: BUY | SELL
 - `lots`: positive integer
 - `risk_mode`: `per_leg` | `combined`
-- If `risk_mode=combined`: `combined_risk` object required
-- If `risk_mode=per_leg`: each leg must have its own risk params
+- If `risk_mode=combined`: `combined_risk` object required, `per_leg_risk` is null
+- If `risk_mode=per_leg`: each leg must include a `risk` object with SL/TGT/TSL/BE params (all optional but at least one required); `combined_risk` is null
 
 ### 5.9 Strategy Template Schema (V2 — New)
 
@@ -259,7 +292,7 @@ OrderStatusPoller: polls broker for fill confirmations. Position state machine: 
 #### 12.10 Strategy Builder Page (NEW)
 
 Full page at `/strategy/builder` with 4-step wizard flow:
-1. **Basics** — name, underlying, exchange, expiry type, product type
+1. **Basics** — name, underlying, exchange, expiry type, product type, schedule config (§32.12)
 2. **Legs** — preset selector + 9-parameter leg cards (max 6 legs)
 3. **Risk** — per-leg or combined risk config + circuit breaker
 4. **Review & Save** — summary, save as strategy or template
@@ -542,7 +575,7 @@ Response: { "status": "success" }
 ### 15.17 Strategy Schedule (V2 — New)
 
 ```
-GET /api/v1/strategy/{id}/schedule
+GET /strategy/api/strategy/{id}/schedule
 Response: {
     "status": "success",
     "data": {
@@ -703,7 +736,18 @@ def _handle_circuit_breaker_trip(self, strategy, reason):
 
 ## 21. Key Constraints & Safety
 
-*(Unchanged from V1 — see original PRD Section 21)*
+*(V1 constraints unchanged — see original PRD Section 21)*
+
+### V2 Additions to Key Constraints
+
+| # | Constraint | Rationale |
+|---|-----------|-----------|
+| C-10 | Exit/squareoff signals bypass schedule gating | Prevents trapped positions when schedule window closes |
+| C-11 | `manually_stopped` flag persists until explicit user start | Prevents auto-start overriding intentional user stop |
+| C-12 | Schedule stop triggers `schedule_auto_exit` behavior before pausing | Ensures no orphaned positions at end of trading window |
+| C-13 | Holiday calendar checked daily at 00:01 IST — all strategy jobs skipped on holidays | Prevents spurious start/stop on exchange holidays |
+| C-14 | Per-leg risk field names standardized: `stoploss_type`/`stoploss_value`, `target_type`/`target_value`, `trailstop_type`/`trailstop_value`, `breakeven_type`/`breakeven_threshold` | Consistency between leg-level and combined-level config |
+| C-15 | Cloned strategies copy schedule config but NOT `manually_stopped` flag | Clone starts fresh; original's manual stop state is not inherited |
 
 ---
 
@@ -1607,6 +1651,8 @@ class MarketStatusService:
 | `market_closed` | Paused | Disconnected | Rejected |
 | `holiday` | Paused | Disconnected | Rejected |
 
+> **Note:** This table describes market-status-level behavior. Per-strategy scheduling (§32) provides finer-grained control. When both apply, the stricter constraint wins — except that **exit/squareoff signals are always accepted** regardless of market status or schedule state (see §32.6).
+
 ### 28.5 API Endpoint
 
 See Section 15.13 for market status endpoint.
@@ -1628,10 +1674,11 @@ See Section 15.12 for clone endpoint.
 1. Copies strategy record with name appended " (Copy)"
 2. Copies all symbol mappings (including `legs_config`, risk params)
 3. Copies daily circuit breaker config
-4. Does **NOT** copy: positions, orders, trades, P&L history
-5. New strategy starts in 'paused' risk monitoring state
-6. Generates new webhook URL (unique webhook_id)
-7. `is_active` set to True, but risk monitoring starts paused
+4. Copies schedule config (`schedule_enabled`, `schedule_start_time`, `schedule_stop_time`, `schedule_days`, `schedule_auto_entry`, `schedule_auto_exit`) — see §32.2
+5. Does **NOT** copy: positions, orders, trades, P&L history, `manually_stopped` flag
+6. New strategy starts in 'paused' risk monitoring state
+7. Generates new webhook URL (unique webhook_id)
+8. `is_active` set to True, but risk monitoring starts paused
 
 ### 29.4 Backend Implementation
 
@@ -1837,16 +1884,16 @@ def update_leg_trailing_stop(position, ltp):
 
     leg = position.leg_config
 
-    if leg['trailing_type'] == 'percentage':
+    if leg['trailstop_type'] == 'percentage':
         if position.action == 'BUY':
-            new_stop = ltp * (1 - leg['trailing_value'] / 100)
+            new_stop = ltp * (1 - leg['trailstop_value'] / 100)
         else:  # SELL
-            new_stop = ltp * (1 + leg['trailing_value'] / 100)
-    elif leg['trailing_type'] == 'points':
+            new_stop = ltp * (1 + leg['trailstop_value'] / 100)
+    elif leg['trailstop_type'] == 'points':
         if position.action == 'BUY':
-            new_stop = ltp - leg['trailing_value']
+            new_stop = ltp - leg['trailstop_value']
         else:  # SELL
-            new_stop = ltp + leg['trailing_value']
+            new_stop = ltp + leg['trailstop_value']
 
     # Ratchet: only move stop in favorable direction
     if position.action == 'BUY':
@@ -1982,7 +2029,7 @@ Entry: SELL CE @150×75 + SELL PE @120×75
 net_premium = -20,250 (credit)
 entry_value = 20,250
 
-Config: trailing_type='percentage', trailing_value=25%
+Config: trailstop_type='percentage', trailstop_value=25%
 initial_stop = -(20,250 × 0.25) = -5,062.50
 
 Timeline:
