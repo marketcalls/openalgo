@@ -56,7 +56,7 @@ from services.option_symbol_service import (
     get_option_exchange,
     parse_underlying_symbol,
 )
-from services.quotes_service import get_multiquotes, get_quotes
+from services.quotes_service import get_multiquotes, get_quotes, import_broker_module
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -136,29 +136,59 @@ def get_option_symbols_for_chain(
     chain_symbols = []
 
     # Convert expiry format for database lookup (DDMMMYY -> DD-MMM-YY)
-    expiry_formatted = f"{expiry_date[:2]}-{expiry_date[2:5]}-{expiry_date[5:]}".upper()
+    # e.g., "28FEB25" -> "28-FEB-25"
+    expiry_db_fmt = f"{expiry_date[:2]}-{expiry_date[2:5]}-{expiry_date[5:]}".upper()
 
     for strike_info in strikes_with_labels:
         strike = strike_info["strike"]
         ce_label = strike_info["ce_label"]
         pe_label = strike_info["pe_label"]
 
-        # Construct symbol names
-        ce_symbol = construct_option_symbol(base_symbol, expiry_date, strike, "CE")
-        pe_symbol = construct_option_symbol(base_symbol, expiry_date, strike, "PE")
+        if exchange.upper() == "DELTAIN":
+            # Delta symbols: C-BTC-80000-280225 — look up by strike + expiry in DB
+            underlying_pattern = f"_-{base_symbol.upper()}-%"
+            ce_record = (
+                db_session.query(SymToken)
+                .filter(
+                    SymToken.symbol.like(underlying_pattern),
+                    SymToken.expiry == expiry_db_fmt,
+                    SymToken.strike == strike,
+                    SymToken.instrumenttype == "CE",
+                    SymToken.exchange == "DELTAIN",
+                )
+                .first()
+            )
+            pe_record = (
+                db_session.query(SymToken)
+                .filter(
+                    SymToken.symbol.like(underlying_pattern),
+                    SymToken.expiry == expiry_db_fmt,
+                    SymToken.strike == strike,
+                    SymToken.instrumenttype == "PE",
+                    SymToken.exchange == "DELTAIN",
+                )
+                .first()
+            )
+            strike_int = int(strike) if strike == int(strike) else strike
+            ce_symbol = ce_record.symbol if ce_record else f"C-{base_symbol}-{strike_int}-UNKNOWN"
+            pe_symbol = pe_record.symbol if pe_record else f"P-{base_symbol}-{strike_int}-UNKNOWN"
+        else:
+            # Construct symbol names (Indian FNO format)
+            ce_symbol = construct_option_symbol(base_symbol, expiry_date, strike, "CE")
+            pe_symbol = construct_option_symbol(base_symbol, expiry_date, strike, "PE")
 
-        # Query database for both CE and PE
-        ce_record = (
-            db_session.query(SymToken)
-            .filter(SymToken.symbol == ce_symbol, SymToken.exchange == exchange)
-            .first()
-        )
+            # Query database for both CE and PE
+            ce_record = (
+                db_session.query(SymToken)
+                .filter(SymToken.symbol == ce_symbol, SymToken.exchange == exchange)
+                .first()
+            )
 
-        pe_record = (
-            db_session.query(SymToken)
-            .filter(SymToken.symbol == pe_symbol, SymToken.exchange == exchange)
-            .first()
-        )
+            pe_record = (
+                db_session.query(SymToken)
+                .filter(SymToken.symbol == pe_symbol, SymToken.exchange == exchange)
+                .first()
+            )
 
         chain_symbols.append(
             {
@@ -223,15 +253,43 @@ def get_option_chain(
                 quote_exchange = "BSE_INDEX"
             else:
                 quote_exchange = "NSE" if exchange.upper() == "NFO" else "BSE"
+        elif exchange.upper() == "DELTAIN":
+            # Delta Exchange: underlying perpetual trades on DELTAIN (e.g. BTC -> BTCUSD)
+            quote_exchange = "DELTAIN"
+            quote_symbol = f"{base_symbol}USD"
 
-        # Use base symbol for index quotes
-        quote_symbol = base_symbol if embedded_expiry else underlying
+        if exchange.upper() != "DELTAIN":
+            # Use base symbol for index quotes (non-Delta)
+            quote_symbol = base_symbol if embedded_expiry else underlying
 
         # Step 3: Fetch underlying LTP
         logger.info(f"Fetching LTP for {quote_symbol} on {quote_exchange}")
-        success, quote_response, status_code = get_quotes(
-            symbol=quote_symbol, exchange=quote_exchange, api_key=api_key
-        )
+        if exchange.upper() == "DELTAIN":
+            # Bypass validate_symbol_exchange — the perpetual symbol (e.g. BTCUSD) is
+            # constructed programmatically and the in-memory token cache is loaded for
+            # the active broker session, not for DELTAIN specifically.
+            _auth, _feed, _broker = get_auth_token_broker(api_key, include_feed_token=True)
+            if _auth is None:
+                return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+            _bmod = import_broker_module(_broker)
+            if _bmod is None:
+                return False, {"status": "error", "message": "Broker module not found"}, 404
+            try:
+                _dh = _bmod.BrokerData(_auth)
+                _q = _dh.get_quotes(quote_symbol, quote_exchange)
+                quote_response = {"data": _q}
+                success = True
+                status_code = 200
+            except Exception as _e:
+                return (
+                    False,
+                    {"status": "error", "message": f"Failed to fetch LTP for {quote_symbol}: {_e}"},
+                    500,
+                )
+        else:
+            success, quote_response, status_code = get_quotes(
+                symbol=quote_symbol, exchange=quote_exchange, api_key=api_key
+            )
 
         if not success:
             return (
@@ -310,9 +368,42 @@ def get_option_chain(
 
         # Step 8: Fetch quotes for all options using multiquotes
         logger.info(f"Fetching quotes for {len(symbols_to_fetch)} option symbols")
-        success, quotes_response, status_code = get_multiquotes(
-            symbols=symbols_to_fetch, api_key=api_key
-        )
+        if exchange.upper() == "DELTAIN":
+            # Bypass validate_symbols_bulk — option symbols (e.g. C-BTC-80000-280225) are
+            # resolved from master contract DB and would fail the token-cache validation.
+            _auth, _feed, _broker = get_auth_token_broker(api_key, include_feed_token=True)
+            if _auth is None:
+                return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
+            _bmod = import_broker_module(_broker)
+            if _bmod is None:
+                return False, {"status": "error", "message": "Broker module not found"}, 404
+            try:
+                _dh = _bmod.BrokerData(_auth)
+                _results = []
+                for _item in symbols_to_fetch:
+                    try:
+                        _oq = _dh.get_quotes(_item["symbol"], _item["exchange"])
+                        _results.append(
+                            {"symbol": _item["symbol"], "exchange": _item["exchange"], "data": _oq}
+                        )
+                    except Exception as _qe:
+                        logger.warning(f"[DELTAIN] Quote error for {_item['symbol']}: {_qe}")
+                        _results.append(
+                            {"symbol": _item["symbol"], "exchange": _item["exchange"], "error": str(_qe)}
+                        )
+                quotes_response = {"status": "success", "results": _results}
+                success = True
+                status_code = 200
+            except Exception as _e:
+                return (
+                    False,
+                    {"status": "error", "message": f"Failed to fetch option quotes: {_e}"},
+                    500,
+                )
+        else:
+            success, quotes_response, status_code = get_multiquotes(
+                symbols=symbols_to_fetch, api_key=api_key
+            )
 
         # Build quote lookup map
         quotes_map = {}

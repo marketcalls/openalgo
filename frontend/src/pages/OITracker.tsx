@@ -28,11 +28,13 @@ import Plot from 'react-plotly.js'
 const FNO_EXCHANGES = [
   { value: 'NFO', label: 'NFO' },
   { value: 'BFO', label: 'BFO' },
+  { value: 'DELTAIN', label: 'DELTAIN' },
 ]
 
 const DEFAULT_UNDERLYINGS: Record<string, string[]> = {
   NFO: ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'],
   BFO: ['SENSEX', 'BANKEX'],
+  DELTAIN: ['BTC', 'ETH', 'SOL', 'BNB', 'XRP'],
 }
 
 function convertExpiryForAPI(expiry: string): string {

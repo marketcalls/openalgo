@@ -14,6 +14,7 @@ EXCHANGE_MCX = "MCX"  # MCX Commodity
 EXCHANGE_NCDEX = "NCDEX"  # NCDEX Commodity
 EXCHANGE_NSE_INDEX = "NSE_INDEX"  # NSE Index
 EXCHANGE_BSE_INDEX = "BSE_INDEX"  # BSE Index
+EXCHANGE_DELTAIN = "DELTAIN"  # Delta Exchange India
 
 VALID_EXCHANGES = [
     EXCHANGE_NSE,
@@ -26,6 +27,7 @@ VALID_EXCHANGES = [
     EXCHANGE_NCDEX,
     EXCHANGE_NSE_INDEX,
     EXCHANGE_BSE_INDEX,
+    EXCHANGE_DELTAIN,
 ]
 
 # Product Types
@@ -61,6 +63,7 @@ EXCHANGE_BADGE_COLORS = {
     EXCHANGE_NCDEX: "badge-success",
     EXCHANGE_NSE_INDEX: "badge-accent",
     EXCHANGE_BSE_INDEX: "badge-neutral",
+    EXCHANGE_DELTAIN: "badge-primary",
 }
 
 # Required Fields for Order Placement

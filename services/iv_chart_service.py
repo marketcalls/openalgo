@@ -17,6 +17,7 @@ from services.option_greeks_service import (
     parse_option_symbol,
 )
 from services.option_symbol_service import (
+    construct_delta_option_symbol,
     construct_option_symbol,
     find_atm_strike_from_actual,
     get_available_strikes,
@@ -34,8 +35,76 @@ try:
     from py_vollib.black.implied_volatility import implied_volatility as black_iv
 
     PYVOLLIB_AVAILABLE = True
-except ImportError:
-    PYVOLLIB_AVAILABLE = False
+except Exception:
+    # py_vollib fails on Python 3.13+ due to _testcapi removal.
+    # Fall back to a pure scipy Black-76 implementation with identical signatures.
+    try:
+        import math as _math
+        from scipy.optimize import brentq as _brentq
+        from scipy.stats import norm as _norm
+
+        def _b76(flag, F, K, t, r, sigma):
+            if t <= 0 or sigma <= 0 or F <= 0 or K <= 0:
+                return 0.0
+            sq = _math.sqrt(t)
+            d1 = (_math.log(F / K) + 0.5 * sigma * sigma * t) / (sigma * sq)
+            d2 = d1 - sigma * sq
+            df = _math.exp(-r * t)
+            if flag.lower() == "c":
+                return df * (F * _norm.cdf(d1) - K * _norm.cdf(d2))
+            return df * (K * _norm.cdf(-d2) - F * _norm.cdf(-d1))
+
+        def black_iv(price, F, K, r, t, flag):  # NOTE: r before t (py_vollib convention)
+            if price <= 0 or t <= 0 or F <= 0 or K <= 0:
+                raise ValueError("Invalid inputs")
+            df = _math.exp(-r * t)
+            intr = max(df * (F - K), 0.0) if flag.lower() == "c" else max(df * (K - F), 0.0)
+            if price < intr - 1e-8:
+                raise ValueError("Price below intrinsic value")
+            try:
+                return _brentq(lambda s: _b76(flag, F, K, t, r, s) - price, 1e-7, 20.0, xtol=1e-7, maxiter=200)
+            except ValueError:
+                raise ValueError("IV convergence failure")
+
+        def black_delta(flag, F, K, t, r, sigma):
+            if t <= 0 or sigma <= 0:
+                return 1.0 if flag.lower() == "c" else -1.0
+            sq = _math.sqrt(t)
+            d1 = (_math.log(F / K) + 0.5 * sigma * sigma * t) / (sigma * sq)
+            df = _math.exp(-r * t)
+            return df * _norm.cdf(d1) if flag.lower() == "c" else -df * _norm.cdf(-d1)
+
+        def black_gamma(flag, F, K, t, r, sigma):
+            if t <= 0 or sigma <= 0 or F <= 0:
+                return 0.0
+            sq = _math.sqrt(t)
+            d1 = (_math.log(F / K) + 0.5 * sigma * sigma * t) / (sigma * sq)
+            df = _math.exp(-r * t)
+            return df * _norm.pdf(d1) / (F * sigma * sq)
+
+        def black_theta(flag, F, K, t, r, sigma):
+            """Per calendar day — negative means time decay."""
+            if t <= 0 or sigma <= 0:
+                return 0.0
+            sq = _math.sqrt(t)
+            d1 = (_math.log(F / K) + 0.5 * sigma * sigma * t) / (sigma * sq)
+            df = _math.exp(-r * t)
+            W = df * F * _norm.pdf(d1)
+            price = _b76(flag, F, K, t, r, sigma)
+            return (r * price - W * sigma / (2 * sq)) / 365.0
+
+        def black_vega(flag, F, K, t, r, sigma):
+            """Per 1 % change in volatility."""
+            if t <= 0 or sigma <= 0 or F <= 0:
+                return 0.0
+            sq = _math.sqrt(t)
+            d1 = (_math.log(F / K) + 0.5 * sigma * sigma * t) / (sigma * sq)
+            df = _math.exp(-r * t)
+            return df * F * _norm.pdf(d1) * sq / 100.0
+
+        PYVOLLIB_AVAILABLE = True
+    except ImportError:
+        PYVOLLIB_AVAILABLE = False
 
 logger = get_logger(__name__)
 
@@ -180,10 +249,12 @@ def get_iv_chart_data(
         base_symbol = underlying.upper()
         quote_exchange = _get_quote_exchange(base_symbol, exchange)
         options_exchange = get_option_exchange(quote_exchange)
+        # DELTAIN: the tradable underlying is the perpetual (e.g. BTCUSD), not the base asset name (BTC)
+        underlying_quote_symbol = (base_symbol + "USD") if exchange.upper() == "DELTAIN" else base_symbol
 
         # Step 2: Get underlying LTP to resolve ATM strike
         success, quote_response, status_code = get_quotes(
-            symbol=base_symbol,
+            symbol=underlying_quote_symbol,
             exchange=quote_exchange,
             api_key=api_key,
         )
@@ -213,8 +284,9 @@ def get_iv_chart_data(
         if atm_strike is None:
             return False, {"status": "error", "message": "Could not determine ATM strike"}, 400
 
-        ce_symbol = construct_option_symbol(base_symbol, expiry_date.upper(), atm_strike, "CE")
-        pe_symbol = construct_option_symbol(base_symbol, expiry_date.upper(), atm_strike, "PE")
+        _build_sym = construct_delta_option_symbol if exchange.upper() == "DELTAIN" else construct_option_symbol
+        ce_symbol = _build_sym(base_symbol, expiry_date.upper(), atm_strike, "CE")
+        pe_symbol = _build_sym(base_symbol, expiry_date.upper(), atm_strike, "PE")
 
         # Step 4: Parse option symbols to get expiry datetime
         _, expiry_dt, strike, _ = parse_option_symbol(ce_symbol, options_exchange)
@@ -228,7 +300,7 @@ def get_iv_chart_data(
         underlying_history_exchange = quote_exchange
         # For index symbols like NIFTY on NSE_INDEX, the history service needs the right exchange
         success_u, resp_u, _ = get_history(
-            symbol=base_symbol,
+            symbol=underlying_quote_symbol,
             exchange=underlying_history_exchange,
             interval=interval,
             start_date=start_date_str,
@@ -437,10 +509,12 @@ def get_default_symbols(underlying, exchange, expiry_date, api_key):
         base_symbol = underlying.upper()
         quote_exchange = _get_quote_exchange(base_symbol, exchange)
         options_exchange = get_option_exchange(quote_exchange)
+        underlying_quote_symbol = (base_symbol + "USD") if exchange.upper() == "DELTAIN" else base_symbol
+        _build_sym = construct_delta_option_symbol if exchange.upper() == "DELTAIN" else construct_option_symbol
 
         # Get underlying LTP
         success, quote_response, status_code = get_quotes(
-            symbol=base_symbol,
+            symbol=underlying_quote_symbol,
             exchange=quote_exchange,
             api_key=api_key,
         )
@@ -462,8 +536,8 @@ def get_default_symbols(underlying, exchange, expiry_date, api_key):
         if atm_strike is None:
             return False, {"status": "error", "message": "Could not determine ATM strike"}, 400
 
-        ce_symbol = construct_option_symbol(base_symbol, expiry_date.upper(), atm_strike, "CE")
-        pe_symbol = construct_option_symbol(base_symbol, expiry_date.upper(), atm_strike, "PE")
+        ce_symbol = _build_sym(base_symbol, expiry_date.upper(), atm_strike, "CE")
+        pe_symbol = _build_sym(base_symbol, expiry_date.upper(), atm_strike, "PE")
 
         return (
             True,

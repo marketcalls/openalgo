@@ -17,7 +17,7 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 # FNO exchanges that have derivatives
-FNO_EXCHANGES = {"NFO", "BFO", "MCX", "CDS"}
+FNO_EXCHANGES = {"NFO", "BFO", "MCX", "CDS", "DELTAIN"}
 
 # Regex pattern to extract underlying from OpenAlgo symbol format
 # Format: [BaseSymbol][DDMMMYY][StrikePrice][CE/PE] or [BaseSymbol][DDMMMYY]FUT
@@ -29,6 +29,11 @@ _UNDERLYING_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Regex pattern to extract underlying from Delta Exchange symbol format
+# Format: [C/P]-[Underlying]-[Strike]-[DDMMYY]
+# Example: C-BTC-80000-280225 -> BTC
+_DELTAIN_UNDERLYING_PATTERN = re.compile(r"^[CP]-([A-Z]+)-", re.IGNORECASE)
+
 
 def extract_underlying_from_symbol(symbol: str, exchange: str) -> str | None:
     """
@@ -37,16 +42,21 @@ def extract_underlying_from_symbol(symbol: str, exchange: str) -> str | None:
     OpenAlgo symbol formats:
     - Futures: [BaseSymbol][DDMMMYY]FUT (e.g., BANKNIFTY24APR24FUT -> BANKNIFTY)
     - Options: [BaseSymbol][DDMMMYY][Strike][CE/PE] (e.g., NIFTY28MAR2420800CE -> NIFTY)
+    - Delta Exchange Options: [C/P]-[Underlying]-[Strike]-[DDMMYY] (e.g., C-BTC-80000-280225 -> BTC)
 
     Args:
         symbol: OpenAlgo formatted symbol
-        exchange: Exchange code (NFO, BFO, MCX, CDS, etc.)
+        exchange: Exchange code (NFO, BFO, MCX, CDS, DELTAIN, etc.)
 
     Returns:
         Underlying name or None if not extractable
     """
     if not symbol or exchange not in FNO_EXCHANGES:
         return None
+
+    if exchange == "DELTAIN":
+        match = _DELTAIN_UNDERLYING_PATTERN.match(symbol.upper())
+        return match.group(1) if match else None
 
     match = _UNDERLYING_PATTERN.match(symbol.upper())
     if match:

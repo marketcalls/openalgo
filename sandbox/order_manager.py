@@ -33,6 +33,8 @@ logger = get_logger(__name__)
 
 def is_option(symbol, exchange):
     """Check if symbol is an option based on exchange and symbol suffix"""
+    if exchange.upper() == "DELTAIN":
+        return symbol.startswith("C-") or symbol.startswith("P-")
     if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"]:
         return symbol.endswith("CE") or symbol.endswith("PE")
     return False
@@ -40,6 +42,9 @@ def is_option(symbol, exchange):
 
 def is_future(symbol, exchange):
     """Check if symbol is a future based on exchange and symbol suffix"""
+    if exchange.upper() == "DELTAIN":
+        # Perpetuals and dated futures: anything that is not an option
+        return not (symbol.startswith("C-") or symbol.startswith("P-"))
     if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"]:
         return symbol.endswith("FUT")
     return False
@@ -106,7 +111,7 @@ class OrderManager:
                 )
 
             # Validate lot size for F&O
-            if exchange in ["NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX"]:
+            if exchange in ["NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "DELTAIN"]:
                 lot_size = symbol_obj.lotsize or 1
                 if quantity % lot_size != 0:
                     return (
@@ -684,7 +689,7 @@ class OrderManager:
                 new_quantity = int(new_data["quantity"])
                 # Validate lot size (from cache)
                 symbol_obj = get_symbol_info(order.symbol, order.exchange)
-                if symbol_obj and order.exchange in ["NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX"]:
+                if symbol_obj and order.exchange in ["NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "DELTAIN"]:
                     lot_size = symbol_obj.lotsize or 1
                     if new_quantity % lot_size != 0:
                         return (
@@ -1045,7 +1050,7 @@ class OrderManager:
                 )
 
         # Derivatives exchanges (F&O, Commodity, Currency): Only NRML and MIS allowed
-        if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"]:
+        if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX", "DELTAIN"]:
             if product == "CNC":
                 return (
                     False,
@@ -1083,7 +1088,7 @@ class OrderManager:
                 return False, "Invalid trigger_price"
 
         # Validate exchange
-        valid_exchanges = ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX"]
+        valid_exchanges = ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "DELTAIN"]
         if order_data["exchange"].upper() not in valid_exchanges:
             return False, f"Invalid exchange. Must be one of {', '.join(valid_exchanges)}"
 

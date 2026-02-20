@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 search_bp = Blueprint("search_bp", __name__, url_prefix="/search")
 
 # FNO exchanges that support advanced filters
-FNO_EXCHANGES = ["NFO", "BFO", "MCX", "CDS"]
+FNO_EXCHANGES = ["NFO", "BFO", "MCX", "CDS", "DELTAIN"]
 
 
 @search_bp.route("/token")

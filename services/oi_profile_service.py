@@ -47,16 +47,28 @@ def _find_futures_symbol(
         expiry_formatted = f"{expiry_date[:2]}-{expiry_date[2:5]}-{expiry_date[5:]}".upper()
 
         # Search for futures contract matching this expiry
-        futures = fno_search_symbols(
-            underlying=underlying,
-            exchange=exchange,
-            instrumenttype="FUT",
-            expiry=expiry_formatted,
-            limit=1,
-        )
+        # For Delta Exchange, perpetuals (PERPFUT) serve as the underlying
+        if exchange.upper() == "DELTAIN":
+            futures = fno_search_symbols(
+                underlying=underlying,
+                exchange=exchange,
+                instrumenttype="PERPFUT",
+                limit=1,
+            )
+        else:
+            futures = fno_search_symbols(
+                underlying=underlying,
+                exchange=exchange,
+                instrumenttype="FUT",
+                expiry=expiry_formatted,
+                limit=1,
+            )
 
         if not futures:
             # Try without expiry filter to get nearest futures
+            if exchange.upper() == "DELTAIN":
+                logger.warning(f"No perpetual contracts found for {underlying} on {exchange}")
+                return None
             futures = fno_search_symbols(
                 underlying=underlying,
                 exchange=exchange,

@@ -11,9 +11,10 @@ Functions:
 
 from typing import Any
 
+from database.auth_db import get_auth_token_broker
 from database.token_db_enhanced import fno_search_symbols
 from services.option_chain_service import get_option_chain
-from services.quotes_service import get_quotes
+from services.quotes_service import get_quotes, import_broker_module
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -38,7 +39,32 @@ def _get_nearest_futures_price(
         Futures LTP or None if not found
     """
     try:
-        # Convert DDMMMYY to DD-MMM-YY for database lookup
+        if exchange.upper() == "DELTAIN":
+            # Delta perpetuals are stored as PERPFUT — no expiry filter
+            futures = fno_search_symbols(
+                underlying=underlying,
+                exchange=exchange,
+                instrumenttype="PERPFUT",
+                limit=1,
+            )
+            if not futures:
+                logger.warning(f"No perpetual futures contracts found for {underlying} on {exchange}")
+                return None
+
+            fut_symbol = futures[0]["symbol"]
+            fut_exchange = futures[0]["exchange"]
+
+            # DELTAIN: bypass validate_symbol_exchange (in-memory cache miss → 400)
+            logger.info(f"Fetching perpetual futures price for {fut_symbol} on {fut_exchange} (DELTAIN bypass)")
+            broker_module = import_broker_module("deltaexchange")
+            BrokerData = broker_module.BrokerData
+            auth_token = get_auth_token_broker(api_key)
+            quote_response = BrokerData(auth_token).get_quotes(fut_symbol, fut_exchange)
+            if isinstance(quote_response, dict) and "data" in quote_response:
+                return quote_response["data"].get("ltp")
+            return None
+
+        # Indian exchanges: convert DDMMMYY to DD-MMM-YY for database lookup
         expiry_formatted = f"{expiry_date[:2]}-{expiry_date[2:5]}-{expiry_date[5:]}".upper()
 
         # Search for futures contract matching this expiry

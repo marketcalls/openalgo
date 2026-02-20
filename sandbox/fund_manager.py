@@ -41,6 +41,8 @@ logger = get_logger(__name__)
 
 def is_option(symbol, exchange):
     """Check if symbol is an option based on exchange and symbol suffix"""
+    if exchange.upper() == "DELTAIN":
+        return symbol.startswith("C-") or symbol.startswith("P-")
     if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"]:
         return symbol.endswith("CE") or symbol.endswith("PE")
     return False
@@ -48,6 +50,9 @@ def is_option(symbol, exchange):
 
 def is_future(symbol, exchange):
     """Check if symbol is a future based on exchange and symbol suffix"""
+    if exchange.upper() == "DELTAIN":
+        # Perpetuals and dated futures: anything that is not an option
+        return not (symbol.startswith("C-") or symbol.startswith("P-"))
     if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"]:
         return symbol.endswith("FUT")
     return False

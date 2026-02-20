@@ -23,8 +23,81 @@ try:
     from py_vollib.black.implied_volatility import implied_volatility as black_iv
 
     PYVOLLIB_AVAILABLE = True
-except ImportError:
-    PYVOLLIB_AVAILABLE = False
+except Exception:
+    # py_vollib fails on Python 3.13+ due to _testcapi removal.
+    # Fall back to a pure scipy Black-76 implementation with identical signatures.
+    try:
+        import math as _math
+        from scipy.optimize import brentq as _brentq
+        from scipy.stats import norm as _norm
+
+        def _b76(flag, F, K, t, r, sigma):
+            if t <= 0 or sigma <= 0 or F <= 0 or K <= 0:
+                return 0.0
+            sq = _math.sqrt(t)
+            d1 = (_math.log(F / K) + 0.5 * sigma * sigma * t) / (sigma * sq)
+            d2 = d1 - sigma * sq
+            df = _math.exp(-r * t)
+            if flag.lower() == "c":
+                return df * (F * _norm.cdf(d1) - K * _norm.cdf(d2))
+            return df * (K * _norm.cdf(-d2) - F * _norm.cdf(-d1))
+
+        def black_iv(price, F, K, r, t, flag):  # NOTE: r before t (py_vollib convention)
+            if price <= 0 or t <= 0 or F <= 0 or K <= 0:
+                raise ValueError("Invalid inputs")
+            df = _math.exp(-r * t)
+            intr = max(df * (F - K), 0.0) if flag.lower() == "c" else max(df * (K - F), 0.0)
+            if price < intr - 1e-8:
+                raise ValueError("Price below intrinsic value")
+            try:
+                return _brentq(lambda s: _b76(flag, F, K, t, r, s) - price, 1e-7, 20.0, xtol=1e-7, maxiter=200)
+            except ValueError:
+                raise ValueError("IV convergence failure")
+
+        def black_delta(flag, F, K, t, r, sigma):
+            if t <= 0 or sigma <= 0:
+                return 1.0 if flag.lower() == "c" else -1.0
+            sq = _math.sqrt(t)
+            d1 = (_math.log(F / K) + 0.5 * sigma * sigma * t) / (sigma * sq)
+            df = _math.exp(-r * t)
+            return df * _norm.cdf(d1) if flag.lower() == "c" else -df * _norm.cdf(-d1)
+
+        def black_gamma(flag, F, K, t, r, sigma):
+            if t <= 0 or sigma <= 0 or F <= 0:
+                return 0.0
+            sq = _math.sqrt(t)
+            d1 = (_math.log(F / K) + 0.5 * sigma * sigma * t) / (sigma * sq)
+            df = _math.exp(-r * t)
+            return df * _norm.pdf(d1) / (F * sigma * sq)
+
+        def black_theta(flag, F, K, t, r, sigma):
+            """Per calendar day — negative means time decay."""
+            if t <= 0 or sigma <= 0:
+                return 0.0
+            sq = _math.sqrt(t)
+            d1 = (_math.log(F / K) + 0.5 * sigma * sigma * t) / (sigma * sq)
+            df = _math.exp(-r * t)
+            W = df * F * _norm.pdf(d1)  # = df * K * N'(d2)
+            price = _b76(flag, F, K, t, r, sigma)
+            return (r * price - W * sigma / (2 * sq)) / 365.0
+
+        def black_vega(flag, F, K, t, r, sigma):
+            """Per 1 % change in volatility."""
+            if t <= 0 or sigma <= 0 or F <= 0:
+                return 0.0
+            sq = _math.sqrt(t)
+            d1 = (_math.log(F / K) + 0.5 * sigma * sigma * t) / (sigma * sq)
+            df = _math.exp(-r * t)
+            return df * F * _norm.pdf(d1) * sq / 100.0
+
+        def black_rho(flag, F, K, t, r, sigma):
+            """Per 1 % change in interest rate."""
+            price = _b76(flag, F, K, t, r, sigma)
+            return -t * price / 100.0
+
+        PYVOLLIB_AVAILABLE = True
+    except ImportError:
+        PYVOLLIB_AVAILABLE = False
 
 logger = get_logger(__name__)
 
@@ -113,6 +186,28 @@ def parse_option_symbol(
         opt_type: CE or PE
     """
     try:
+        # Handle DELTAIN format: {C/P}-{UNDERLYING}-{STRIKE}-{DDMMYY}
+        # e.g. C-BTC-62800-210226, P-ETH-3000-210226
+        parts = symbol.split('-')
+        if len(parts) == 4 and parts[0].upper() in ('C', 'P'):
+            opt_flag, base_symbol, strike_str, date_str = parts
+            opt_type = 'CE' if opt_flag.upper() == 'C' else 'PE'
+            strike = float(strike_str)
+            # date_str is DDMMYY: 210226 → day=21, month=02, year=2026
+            day = int(date_str[:2])
+            month = int(date_str[2:4])
+            year = 2000 + int(date_str[4:])
+            # DELTAIN options expire at 12:00 UTC = 17:30 IST
+            expiry_hour, expiry_minute = 17, 30
+            if custom_expiry_time:
+                try:
+                    tp = custom_expiry_time.split(":")
+                    expiry_hour, expiry_minute = int(tp[0]), int(tp[1])
+                except Exception:
+                    pass
+            expiry = datetime(year, month, day, expiry_hour, expiry_minute)
+            return base_symbol, expiry, strike, opt_type
+
         # Pattern: SYMBOL + DD + MMM + YY + STRIKE + CE/PE
         # Strike can have decimal point for currencies
         match = re.match(r"([A-Z]+)(\d{2})([A-Z]{3})(\d{2})([\d.]+)(CE|PE)", symbol.upper())
