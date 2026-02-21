@@ -100,7 +100,15 @@ class DeltaWebSocket:
         self._lock   = threading.Lock()
         self._connected = False
         self._stop_flag = False
-        self._pending_subscriptions: list[dict] = []   # buffered before connect
+        # Persistent subscription registry: deterministic_key → raw JSON message.
+        # Serves two purposes:
+        #   1. Pre-connect buffer: messages accumulate here and are sent in
+        #      _ws_on_open when the socket first connects.
+        #   2. Reconnect replay: the dict is NEVER cleared, so every reconnect
+        #      (after a disconnect) re-sends all active subscriptions, restoring
+        #      all streams automatically without the caller needing to re-subscribe.
+        # Unsubscribe removes the entry so the channel is not replayed.
+        self._active_sub_msgs: dict[str, str] = {}
 
     # ── auth helper ───────────────────────────────────────────────────────────
 
@@ -141,32 +149,66 @@ class DeltaWebSocket:
             except Exception as exc:
                 logger.error("DeltaWS _send error: %s", exc)
 
+    def _queue_or_send(self, key: str, msg: str) -> None:
+        """
+        Register and immediately send (or buffer) a subscription message.
+
+        The key is a deterministic string identifying the subscription
+        (e.g. "ticker:BTCUSD,ETHUSD") so duplicates overwrite rather than
+        stack, and unsubscribes can remove the exact entry.
+
+        Why the lock spans both the registry write AND the send:
+          Holding the lock across the send prevents the TOCTOU race where
+          _ws_on_close flips _connected=False between our check and the send,
+          causing the message to be dropped from both the wire and the registry.
+
+        On reconnect, _ws_on_open replays the entire _active_sub_msgs dict,
+        so no explicit re-subscribe call from the caller is ever needed.
+        """
+        with self._lock:
+            self._active_sub_msgs[key] = msg   # persist for reconnect replay
+            if self._connected:
+                try:
+                    if self.wsapp:
+                        self.wsapp.send(msg)
+                except Exception as exc:
+                    logger.error("DeltaWS _send error: %s", exc)
+                    # Send failed mid-flight; message already stored in
+                    # _active_sub_msgs and will be replayed on reconnect.
+            else:
+                logger.debug("DeltaWS buffered subscription (not connected): %s", key)
+
     # ── public API ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _sub_key(channel: str, symbols: list[str]) -> str:
+        """Deterministic registry key for a public channel subscription."""
+        return f"{channel}:{','.join(sorted(symbols))}"
 
     def subscribe_ticker(self, symbols: list[str]) -> None:
         """Subscribe to v2/ticker channel for the given symbols."""
-        msg = self._build_sub_msg(self.CHANNEL_TICKER, symbols)
-        with self._lock:
-            send_now = self._connected
-            if not send_now:
-                self._pending_subscriptions.append(msg)
-        if send_now:
-            self._send(msg)
+        self._queue_or_send(
+            self._sub_key(self.CHANNEL_TICKER, symbols),
+            self._build_sub_msg(self.CHANNEL_TICKER, symbols),
+        )
 
     def subscribe_l2_orderbook(self, symbols: list[str]) -> None:
         """Subscribe to l2_orderbook channel for the given symbols."""
-        msg = self._build_sub_msg(self.CHANNEL_L2_BOOK, symbols)
-        with self._lock:
-            send_now = self._connected
-            if not send_now:
-                self._pending_subscriptions.append(msg)
-        if send_now:
-            self._send(msg)
+        self._queue_or_send(
+            self._sub_key(self.CHANNEL_L2_BOOK, symbols),
+            self._build_sub_msg(self.CHANNEL_L2_BOOK, symbols),
+        )
 
     def unsubscribe_ticker(self, symbols: list[str]) -> None:
+        key = self._sub_key(self.CHANNEL_TICKER, symbols)
+        with self._lock:
+            self._active_sub_msgs.pop(key, None)
         self._send(self._build_sub_msg(self.CHANNEL_TICKER, symbols, unsub=True))
 
     def unsubscribe_l2_orderbook(self, symbols: list[str]) -> None:
+        key = self._sub_key(self.CHANNEL_L2_BOOK, symbols)
+        with self._lock:
+            self._active_sub_msgs.pop(key, None)
         self._send(self._build_sub_msg(self.CHANNEL_L2_BOOK, symbols, unsub=True))
 
     # ── private (authenticated) channel subscriptions ─────────────────────────
@@ -190,13 +232,7 @@ class DeltaWebSocket:
         authenticated user.  The WebSocket session must be authenticated first
         (the auth message is sent automatically in _ws_on_open).
         """
-        msg = self._build_private_sub_msg(self.CHANNEL_ORDERS)
-        with self._lock:
-            send_now = self._connected
-            if not send_now:
-                self._pending_subscriptions.append(msg)
-        if send_now:
-            self._send(msg)
+        self._queue_or_send(self.CHANNEL_ORDERS, self._build_private_sub_msg(self.CHANNEL_ORDERS))
 
     def subscribe_positions_channel(self) -> None:
         """Subscribe to the authenticated 'positions' channel.
@@ -204,13 +240,7 @@ class DeltaWebSocket:
         Delivers real-time position updates (size, entry price, PnL) whenever
         a position changes for the authenticated user.
         """
-        msg = self._build_private_sub_msg(self.CHANNEL_POSITIONS)
-        with self._lock:
-            send_now = self._connected
-            if not send_now:
-                self._pending_subscriptions.append(msg)
-        if send_now:
-            self._send(msg)
+        self._queue_or_send(self.CHANNEL_POSITIONS, self._build_private_sub_msg(self.CHANNEL_POSITIONS))
 
     def subscribe_margins_channel(self) -> None:
         """Subscribe to the authenticated 'margins' channel.
@@ -218,13 +248,7 @@ class DeltaWebSocket:
         Delivers real-time wallet and margin balance updates whenever a fill,
         funding payment, or realised-PnL event changes the account balance.
         """
-        msg = self._build_private_sub_msg(self.CHANNEL_MARGINS)
-        with self._lock:
-            send_now = self._connected
-            if not send_now:
-                self._pending_subscriptions.append(msg)
-        if send_now:
-            self._send(msg)
+        self._queue_or_send(self.CHANNEL_MARGINS, self._build_private_sub_msg(self.CHANNEL_MARGINS))
 
     def connect(self) -> None:
         """Start the WebSocket connection (blocking — run in a thread)."""
@@ -284,19 +308,21 @@ class DeltaWebSocket:
         except Exception as exc:
             logger.error("DeltaWS auth send error: %s", exc)
 
-        # Set _connected and flush pending subscriptions atomically so that any
-        # subscription arriving concurrently either finds _connected=True and
-        # sends directly, or appends to the list before we drain it — never lost.
+        # Set _connected and replay all active subscriptions atomically.
+        # _active_sub_msgs serves as both the pre-connect buffer (messages
+        # registered before the socket was up) AND the reconnect replay list
+        # (messages registered during a previous session that must be
+        # resubscribed after a disconnect/reconnect).  The dict is never
+        # cleared, so every reconnect restores all streams automatically.
         with self._lock:
             self._connected = True
-            pending = list(self._pending_subscriptions)
-            self._pending_subscriptions.clear()
+            to_replay = list(self._active_sub_msgs.values())
 
-        for msg in pending:
+        for msg in to_replay:
             try:
                 wsapp.send(msg)
             except Exception as exc:
-                logger.error("DeltaWS pending sub send error: %s", exc)
+                logger.error("DeltaWS subscription replay send error: %s", exc)
 
         self.on_open(wsapp)
 
@@ -325,5 +351,12 @@ class DeltaWebSocket:
 
     def _ws_on_close(self, wsapp, *args) -> None:
         logger.info("DeltaWS closed")
-        self._connected = False
+        # Acquire the lock before clearing _connected so that any subscribe
+        # call currently deciding whether to send vs. queue (also under the
+        # same lock via _queue_or_send) completes atomically before we flip
+        # the flag.  Without this, _ws_on_close could clear _connected between
+        # the lock release in the old send_now pattern and the actual send,
+        # silently dropping the message from both the wire and the queue.
+        with self._lock:
+            self._connected = False
         self.on_close(wsapp)

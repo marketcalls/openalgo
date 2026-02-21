@@ -267,16 +267,17 @@ def get_option_chain(
         # Step 3: Fetch underlying LTP
         logger.info(f"Fetching LTP for {quote_symbol} on {quote_exchange}")
         if exchange.upper() in CRYPTO_EXCHANGES:
-            # Bypass validate_symbol_exchange — canonical CRYPTO symbols are resolved from
-            # the master contract DB and use CRYPTO as exchange abstraction layer.
+            # Initialise broker auth/module once here and reuse in Step 8 for the
+            # option multiquote fetch.  Doing it once avoids a duplicate DB query
+            # and module import inside the same request.
             _auth, _feed, _broker = get_auth_token_broker(api_key, include_feed_token=True)
             if _auth is None:
                 return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
             _bmod = import_broker_module(_broker)
             if _bmod is None:
                 return False, {"status": "error", "message": "Broker module not found"}, 404
+            _dh = _bmod.BrokerData(_auth)
             try:
-                _dh = _bmod.BrokerData(_auth)
                 _q = _dh.get_quotes(quote_symbol, quote_exchange)
                 quote_response = {"data": _q}
                 success = True
@@ -370,16 +371,9 @@ def get_option_chain(
         # Step 8: Fetch quotes for all options using multiquotes
         logger.info(f"Fetching quotes for {len(symbols_to_fetch)} option symbols")
         if exchange.upper() in CRYPTO_EXCHANGES:
-            # Bypass validate_symbols_bulk — canonical CRYPTO option symbols are resolved
-            # from the master contract DB and use CRYPTO as exchange abstraction layer.
-            _auth, _feed, _broker = get_auth_token_broker(api_key, include_feed_token=True)
-            if _auth is None:
-                return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
-            _bmod = import_broker_module(_broker)
-            if _bmod is None:
-                return False, {"status": "error", "message": "Broker module not found"}, 404
+            # Reuse _auth, _bmod, _dh already initialised in Step 3 — no second
+            # DB query or module import needed.
             try:
-                _dh = _bmod.BrokerData(_auth)
                 _results = []
                 for _item in symbols_to_fetch:
                     try:

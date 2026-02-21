@@ -166,15 +166,20 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> dict[str, Any]:
         """Unsubscribe from market data for a symbol."""
-        token_info = SymbolMapper.get_token_from_symbol(symbol, exchange)
-        br_symbol  = (token_info or {}).get("brexchange_symbol") or symbol
-        channel    = DeltaModeMapper.get_channel(mode)
-        corr_id    = f"{symbol}_{exchange}_{mode}"
+        channel = DeltaModeMapper.get_channel(mode)
+        corr_id = f"{symbol}_{exchange}_{mode}"
 
         should_disconnect      = False
         should_upstream_unsub  = False
         with self._lock:
-            self.subscriptions.pop(corr_id, None)
+            # Read the stored br_symbol that was resolved at subscribe() time
+            # before removing the entry.  This guarantees the upstream unsubscribe
+            # uses exactly the same symbol string that was passed to the WebSocket
+            # at subscription time (brexchange_symbol → token → symbol fallback
+            # chain), avoiding a mismatch when brexchange_symbol is absent and
+            # the token was used instead.
+            stored = self.subscriptions.pop(corr_id, None)
+            br_symbol = (stored or {}).get("br_symbol") or symbol
 
             remaining = list(self.subscriptions.values())
 

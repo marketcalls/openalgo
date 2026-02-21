@@ -176,13 +176,31 @@ def _to_canonical_symbol(delta_symbol: str, instrument_type: str, expiry: str) -
     if instrument_type == "FUT" and expiry:
         # expiry is "DD-MON-YY" (e.g. "28-FEB-25") — strip dashes → "28FEB25"
         expiry_alpha = expiry.replace("-", "")
-        # Strip common quote-currency suffixes to get the base asset (e.g. BTCUSD → BTC)
         upper = delta_symbol.upper()
+
+        # Delta dated futures embed the settlement date in the symbol:
+        #   BTCUSD28Feb2025 → upper = BTCUSD28FEB2025
+        # The suffix-stripping loop below would never match ("USD", "USDT" etc.)
+        # because the symbol ends with the year digits, not the currency code.
+        # Fix: reconstruct the date suffix from the already-parsed expiry and strip
+        # it first, leaving only the underlying+quote base (e.g. "BTCUSD").
+        day, mon, yr2 = expiry.split("-")        # ["28", "FEB", "25"]
+        yr4 = "20" + yr2                          # "2025" (Delta API uses 4-digit year)
+        date_suffix_in_symbol = day + mon + yr4   # "28FEB2025"
+
+        if upper.endswith(date_suffix_in_symbol):
+            base = upper[: -len(date_suffix_in_symbol)]   # "BTCUSD"
+        else:
+            base = upper   # unexpected format — use full symbol as base
+
+        # Strip common quote-currency suffixes to get the underlying (e.g. BTCUSD → BTC)
         for suffix in ("USDT", "USD", "BTC", "ETH"):
-            if upper.endswith(suffix) and len(upper) > len(suffix):
-                return f"{upper[:-len(suffix)]}{expiry_alpha}FUT"
-        # Cannot reliably extract underlying — keep Delta symbol + canonical FUT suffix
-        return f"{delta_symbol}{expiry_alpha}FUT"
+            if base.endswith(suffix) and len(base) > len(suffix):
+                return f"{base[:-len(suffix)]}{expiry_alpha}FUT"
+
+        # Cannot reliably extract underlying — use the de-dated base to avoid
+        # duplicating the expiry date in the canonical symbol.
+        return f"{base}{expiry_alpha}FUT"
 
     # ── Perpetual futures: BTCUSD → BTCUSDT ────────────────────────────────
     if instrument_type == "PERPFUT":
@@ -253,12 +271,16 @@ def fetch_delta_products():
     page_num = 0          # only used for logging / safety guard
     MAX_PAGES = 100       # 100 × 500 = 50,000 products — a very safe ceiling
 
+    fetch_success = False  # Only set True when pagination completes without error
+
     while True:
         page_num += 1
         if page_num > MAX_PAGES:
             logger.warning(
                 f"Reached max_pages limit ({MAX_PAGES}) fetching Delta products, stopping."
             )
+            # Treat hitting the safety ceiling as an incomplete fetch — do not
+            # overwrite the DB with potentially truncated data.
             break
 
         params = {
@@ -293,7 +315,8 @@ def fetch_delta_products():
                 )
                 break
             if not batch:
-                break  # Empty page → done
+                fetch_success = True  # Empty page = natural end of pagination
+                break
 
             all_products.extend(batch)
             logger.debug(
@@ -305,14 +328,22 @@ def fetch_delta_products():
             meta = data.get("meta") or {}
             after_cursor = meta.get("after")
             if not after_cursor:
-                break  # No more pages
+                fetch_success = True  # Explicit last-page signal from the API
+                break
 
         except Exception as e:
             logger.error(f"Exception fetching Delta products (page {page_num}): {e}")
             break
 
+    if not fetch_success:
+        logger.warning(
+            f"fetch_delta_products completed with errors after page {page_num}. "
+            f"Returning partial data ({len(all_products)} products) but marking as failed "
+            f"to prevent overwriting the existing master contract DB."
+        )
+
     logger.info(f"Fetched {len(all_products)} products from Delta Exchange in {page_num} page(s)")
-    return all_products
+    return all_products, fetch_success
 
 
 def process_delta_products(products):
@@ -429,12 +460,27 @@ def master_contract_download():
     logger.info("Downloading Master Contract from Delta Exchange")
 
     try:
-        products = fetch_delta_products()
+        products, fetch_success = fetch_delta_products()
 
         if not products:
             return socketio.emit(
                 "master_contract_download",
                 {"status": "error", "message": "No products returned from Delta Exchange"},
+            )
+
+        if not fetch_success:
+            # Pagination was interrupted mid-way (HTTP error, API error, exception,
+            # or MAX_PAGES hit).  Returning partial data as success would silently
+            # truncate the master contract DB — keep the existing table intact.
+            return socketio.emit(
+                "master_contract_download",
+                {
+                    "status": "error",
+                    "message": (
+                        f"Master contract download incomplete — only {len(products)} products "
+                        f"fetched before an error occurred. Existing master contract preserved."
+                    ),
+                },
             )
 
         delete_symtoken_table()

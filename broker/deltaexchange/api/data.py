@@ -226,8 +226,12 @@ class BrokerData:
             volume     = _i(ticker.get("volume", 0))
             oi         = _f(ticker.get("oi", 0))
 
-            # Empty depth template (used as fallback if l2 call fails)
-            empty_side = [{"price": 0.0, "quantity": 0} for _ in range(5)]
+            # Factory that always returns a *new* list of empty level dicts.
+            # Never reuse a single empty_side object for both bids and asks —
+            # they would be the same list reference, so mutating one side
+            # (e.g. bids[0]["price"] = x) would silently corrupt the other.
+            def _empty_side() -> list:
+                return [{"price": 0.0, "quantity": 0} for _ in range(5)]
 
             if not product_id:
                 logger.warning(
@@ -235,8 +239,8 @@ class BrokerData:
                     f"returning empty depth"
                 )
                 return {
-                    "bids": empty_side,
-                    "asks": empty_side,
+                    "bids": _empty_side(),
+                    "asks": _empty_side(),
                     "ltp": ltp, "ltq": 0,
                     "volume": volume, "open": open_p, "high": high_p,
                     "low": low_p, "prev_close": prev_close, "oi": oi,
@@ -272,7 +276,8 @@ class BrokerData:
                     f"[DeltaExchange] L2 orderbook failed for product_id={product_id}: "
                     f"{book_err} — returning empty depth"
                 )
-                bids = asks = empty_side
+                bids = _empty_side()
+                asks = _empty_side()
                 totalbuyqty = totalsellqty = 0
 
             result = {
