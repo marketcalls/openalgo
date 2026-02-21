@@ -408,7 +408,7 @@ export default function MasterContract() {
               <p className="text-sm text-muted-foreground">
                 Downloads after{' '}
                 <span className="font-medium">
-                  {status?.smart_download?.cutoff_time || '08:00'} IST
+                  {status?.smart_download?.cutoff_time || '08:00'} {status?.smart_download?.cutoff_timezone || 'IST'}
                 </span>{' '}
                 are cached for the day. Login after cutoff reuses cached data.
               </p>
