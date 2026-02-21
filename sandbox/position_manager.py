@@ -261,11 +261,9 @@ class PositionManager:
         avg_price = Decimal(str(position.average_price))
         margin_blocked = Decimal(str(position.margin_blocked or 0))
 
-        # Determine settlement price based on instrument type
-        if position.exchange.upper() == "DELTAIN":
-            is_option = symbol.startswith("C-") or symbol.startswith("P-")
-        else:
-            is_option = symbol.endswith("CE") or symbol.endswith("PE")
+        # Determine settlement price based on instrument type.
+        # CRYPTO canonical suffixes: CE/PE = option, FUT = dated future, no suffix = perpetual.
+        is_option = symbol.endswith("CE") or symbol.endswith("PE")
 
         if is_option:
             # Options expire worthless (at 0)
@@ -1197,7 +1195,7 @@ def cleanup_expired_contracts():
         today = date.today()
 
         # Find all open positions in F&O exchanges
-        fo_exchanges = ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX", "DELTAIN"]
+        fo_exchanges = ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX", "CRYPTO"]
 
         expired_positions = []
 
@@ -1248,13 +1246,9 @@ def cleanup_expired_contracts():
                         avg_price = Decimal(str(position.average_price))
                         margin_blocked = Decimal(str(position.margin_blocked or 0))
 
-                        # Determine settlement price based on instrument type
-                        # Options: Expire at 0 (most expire worthless - conservative approach)
-                        # Futures: Use last stored LTP, or average price as fallback
-                        if position.exchange.upper() == "DELTAIN":
-                            is_option = symbol.startswith("C-") or symbol.startswith("P-")
-                        else:
-                            is_option = symbol.endswith("CE") or symbol.endswith("PE")
+                        # Determine settlement price based on instrument type.
+                        # CRYPTO canonical suffixes: CE/PE = option, FUT/other = future/perpetual.
+                        is_option = symbol.endswith("CE") or symbol.endswith("PE")
 
                         if is_option:
                             # Options expire worthless (at 0)

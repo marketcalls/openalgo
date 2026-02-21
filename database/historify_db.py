@@ -1515,7 +1515,7 @@ def vacuum_database():
 
 
 # Supported exchanges (these are static across brokers)
-SUPPORTED_EXCHANGES = ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "BCD", "NSE_INDEX", "BSE_INDEX", "DELTAIN"]
+SUPPORTED_EXCHANGES = ["NSE", "BSE", "NFO", "BFO", "MCX", "CDS", "BCD", "NSE_INDEX", "BSE_INDEX", "CRYPTO"]
 
 
 def get_supported_intervals(api_key: str) -> list[str]:

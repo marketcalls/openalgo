@@ -29,13 +29,13 @@ import { showToast } from '@/utils/toast'
 const FNO_EXCHANGES = [
   { value: 'NFO', label: 'NFO' },
   { value: 'BFO', label: 'BFO' },
-  { value: 'DELTAIN', label: 'DELTAIN' },
+  { value: 'CRYPTO', label: 'CRYPTO' },
 ]
 
 const DEFAULT_UNDERLYINGS: Record<string, string[]> = {
   NFO: ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'],
   BFO: ['SENSEX', 'BANKEX'],
-  DELTAIN: ['BTC', 'ETH', 'SOL', 'BNB', 'XRP'],
+  CRYPTO: ['BTC', 'ETH', 'SOL', 'BNB', 'XRP'],
 }
 
 const STRIKE_COUNTS = [

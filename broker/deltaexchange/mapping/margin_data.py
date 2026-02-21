@@ -60,8 +60,22 @@ def transform_margin_positions(positions):
             }
 
             price = pos.get("price", 0)
-            if order_type == "limit_order" and price:
-                entry["limit_price"] = str(price)
+            if order_type == "limit_order":
+                try:
+                    price_f = float(price) if price is not None else 0.0
+                except (ValueError, TypeError):
+                    price_f = 0.0
+
+                if price_f > 0:
+                    entry["limit_price"] = str(price_f)
+                else:
+                    # limit_price is required for limit_order but none was provided —
+                    # fall back to market_order so the margin call still succeeds
+                    logger.warning(
+                        f"limit_order for {symbol} has no valid price "
+                        f"(got {price!r}); falling back to market_order for margin calculation"
+                    )
+                    entry["order_type"] = "market_order"
 
             transformed.append(entry)
             logger.debug(

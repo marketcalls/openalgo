@@ -197,7 +197,7 @@ export default function PnLTracker() {
     return () => {
       window.removeEventListener('resize', handleResize)
     }
-  }, [isDarkMode])
+  }, [isDarkMode, formatCurrency])
 
   // Load PnL data
   const loadPnLData = useCallback(async () => {

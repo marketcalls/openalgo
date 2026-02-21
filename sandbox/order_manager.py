@@ -26,26 +26,28 @@ from database.sandbox_db import SandboxOrders, SandboxPositions, SandboxTrades, 
 from database.symbol import SymToken
 from database.token_db import get_symbol_info
 from sandbox.fund_manager import FundManager
+from utils.constants import CRYPTO_EXCHANGES, FNO_EXCHANGES
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
 def is_option(symbol, exchange):
-    """Check if symbol is an option based on exchange and symbol suffix"""
-    if exchange.upper() == "DELTAIN":
-        return symbol.startswith("C-") or symbol.startswith("P-")
-    if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"]:
+    """Check if symbol is an option based on exchange and canonical symbol suffix"""
+    # All exchanges (including CRYPTO) now use canonical CE/PE suffix convention.
+    # CRYPTO canonical format: BTC28FEB2580000CE / BTC28FEB2580000PE (no dashes)
+    if exchange in FNO_EXCHANGES:
         return symbol.endswith("CE") or symbol.endswith("PE")
     return False
 
 
 def is_future(symbol, exchange):
-    """Check if symbol is a future based on exchange and symbol suffix"""
-    if exchange.upper() == "DELTAIN":
-        # Perpetuals and dated futures: anything that is not an option
-        return not (symbol.startswith("C-") or symbol.startswith("P-"))
-    if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"]:
+    """Check if symbol is a future (or perpetual) based on exchange and canonical symbol suffix"""
+    # For CRYPTO: dated futures end with FUT; perpetuals (e.g. BTCUSDT) are also futures.
+    # Both are non-options so: is_future ≡ not is_option for the CRYPTO exchange.
+    if exchange in CRYPTO_EXCHANGES:
+        return not (symbol.endswith("CE") or symbol.endswith("PE"))
+    if exchange in FNO_EXCHANGES - CRYPTO_EXCHANGES:
         return symbol.endswith("FUT")
     return False
 
@@ -84,7 +86,7 @@ class OrderManager:
 
             # Extract order parameters
             symbol = order_data["symbol"]
-            exchange = order_data["exchange"]
+            exchange = order_data["exchange"].upper()
             action = order_data["action"].upper()
             quantity = int(order_data["quantity"])
             price = Decimal(str(order_data.get("price", 0))) if order_data.get("price") else None
@@ -111,7 +113,7 @@ class OrderManager:
                 )
 
             # Validate lot size for F&O
-            if exchange in ["NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "DELTAIN"]:
+            if exchange in ["NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "CRYPTO"]:
                 lot_size = symbol_obj.lotsize or 1
                 if quantity % lot_size != 0:
                     return (
@@ -689,7 +691,7 @@ class OrderManager:
                 new_quantity = int(new_data["quantity"])
                 # Validate lot size (from cache)
                 symbol_obj = get_symbol_info(order.symbol, order.exchange)
-                if symbol_obj and order.exchange in ["NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "DELTAIN"]:
+                if symbol_obj and order.exchange in ["NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "CRYPTO"]:
                     lot_size = symbol_obj.lotsize or 1
                     if new_quantity % lot_size != 0:
                         return (
@@ -1050,7 +1052,7 @@ class OrderManager:
                 )
 
         # Derivatives exchanges (F&O, Commodity, Currency): Only NRML and MIS allowed
-        if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX", "DELTAIN"]:
+        if exchange in ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX", "CRYPTO"]:
             if product == "CNC":
                 return (
                     False,
@@ -1088,7 +1090,7 @@ class OrderManager:
                 return False, "Invalid trigger_price"
 
         # Validate exchange
-        valid_exchanges = ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "DELTAIN"]
+        valid_exchanges = ["NSE", "BSE", "NFO", "BFO", "CDS", "BCD", "MCX", "NCDEX", "CRYPTO"]
         if order_data["exchange"].upper() not in valid_exchanges:
             return False, f"Invalid exchange. Must be one of {', '.join(valid_exchanges)}"
 

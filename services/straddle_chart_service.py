@@ -16,13 +16,14 @@ import pytz
 from services.history_service import get_history
 from services.option_greeks_service import parse_option_symbol
 from services.option_symbol_service import (
-    construct_delta_option_symbol,
+    construct_crypto_option_symbol,
     construct_option_symbol,
     find_atm_strike_from_actual,
     get_available_strikes,
     get_option_exchange,
 )
 from services.quotes_service import get_quotes
+from utils.constants import CRYPTO_EXCHANGES, CRYPTO_QUOTE_CURRENCY
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -132,8 +133,8 @@ def get_straddle_chart_data(
         base_symbol = underlying.upper()
         quote_exchange = _get_quote_exchange(base_symbol, exchange)
         options_exchange = get_option_exchange(quote_exchange)
-        # DELTAIN: the underlying perpetual uses a different symbol (e.g. BTCUSD for BTC options)
-        underlying_quote_symbol = (base_symbol + "USD") if exchange.upper() == "DELTAIN" else base_symbol
+        # CRYPTO: the underlying perpetual uses the canonical symbol (e.g. BTCUSDT for BTC options)
+        underlying_quote_symbol = (base_symbol + CRYPTO_QUOTE_CURRENCY) if exchange.upper() in CRYPTO_EXCHANGES else base_symbol
 
         # Step 2: Get available strikes for the expiry
         available_strikes = get_available_strikes(
@@ -196,7 +197,7 @@ def get_straddle_chart_data(
         # Build lookup: {strike: {timestamp: {ce_close, pe_close}}}
         strike_data = {}
 
-        _build_sym = construct_delta_option_symbol if exchange.upper() == "DELTAIN" else construct_option_symbol
+        _build_sym = construct_crypto_option_symbol if exchange.upper() in CRYPTO_EXCHANGES else construct_option_symbol
         for strike in sorted(unique_strikes):
             ce_symbol = _build_sym(base_symbol, expiry_date.upper(), strike, "CE")
             pe_symbol = _build_sym(base_symbol, expiry_date.upper(), strike, "PE")

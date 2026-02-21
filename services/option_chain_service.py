@@ -57,6 +57,7 @@ from services.option_symbol_service import (
     parse_underlying_symbol,
 )
 from services.quotes_service import get_multiquotes, get_quotes, import_broker_module
+from utils.constants import CRYPTO_EXCHANGES, CRYPTO_QUOTE_CURRENCY
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -144,9 +145,10 @@ def get_option_symbols_for_chain(
         ce_label = strike_info["ce_label"]
         pe_label = strike_info["pe_label"]
 
-        if exchange.upper() == "DELTAIN":
-            # Delta symbols: C-BTC-80000-280225 — look up by strike + expiry in DB
-            underlying_pattern = f"_-{base_symbol.upper()}-%"
+        if exchange.upper() in CRYPTO_EXCHANGES:
+            # CRYPTO canonical format: BTC28FEB2580000CE / BTC28FEB2580000PE
+            # (Indian F&O-style, no dashes — prefix-match on base symbol)
+            underlying_pattern = f"{base_symbol.upper()}%"
             ce_record = (
                 db_session.query(SymToken)
                 .filter(
@@ -154,7 +156,7 @@ def get_option_symbols_for_chain(
                     SymToken.expiry == expiry_db_fmt,
                     SymToken.strike == strike,
                     SymToken.instrumenttype == "CE",
-                    SymToken.exchange == "DELTAIN",
+                    SymToken.exchange.in_(CRYPTO_EXCHANGES),
                 )
                 .first()
             )
@@ -165,13 +167,13 @@ def get_option_symbols_for_chain(
                     SymToken.expiry == expiry_db_fmt,
                     SymToken.strike == strike,
                     SymToken.instrumenttype == "PE",
-                    SymToken.exchange == "DELTAIN",
+                    SymToken.exchange.in_(CRYPTO_EXCHANGES),
                 )
                 .first()
             )
             strike_int = int(strike) if strike == int(strike) else strike
-            ce_symbol = ce_record.symbol if ce_record else f"C-{base_symbol}-{strike_int}-UNKNOWN"
-            pe_symbol = pe_record.symbol if pe_record else f"P-{base_symbol}-{strike_int}-UNKNOWN"
+            ce_symbol = ce_record.symbol if ce_record else f"{base_symbol}-UNKNOWN-{strike_int}-CE"
+            pe_symbol = pe_record.symbol if pe_record else f"{base_symbol}-UNKNOWN-{strike_int}-PE"
         else:
             # Construct symbol names (Indian FNO format)
             ce_symbol = construct_option_symbol(base_symbol, expiry_date, strike, "CE")
@@ -253,21 +255,20 @@ def get_option_chain(
                 quote_exchange = "BSE_INDEX"
             else:
                 quote_exchange = "NSE" if exchange.upper() == "NFO" else "BSE"
-        elif exchange.upper() == "DELTAIN":
-            # Delta Exchange: underlying perpetual trades on DELTAIN (e.g. BTC -> BTCUSD)
-            quote_exchange = "DELTAIN"
-            quote_symbol = f"{base_symbol}USD"
+        elif exchange.upper() in CRYPTO_EXCHANGES:
+            # CRYPTO: underlying perpetual canonical symbol (e.g. BTC -> BTCUSDT)
+            quote_exchange = exchange.upper()
+            quote_symbol = f"{base_symbol}{CRYPTO_QUOTE_CURRENCY}"
 
-        if exchange.upper() != "DELTAIN":
+        if exchange.upper() not in CRYPTO_EXCHANGES:
             # Use base symbol for index quotes (non-Delta)
             quote_symbol = base_symbol if embedded_expiry else underlying
 
         # Step 3: Fetch underlying LTP
         logger.info(f"Fetching LTP for {quote_symbol} on {quote_exchange}")
-        if exchange.upper() == "DELTAIN":
-            # Bypass validate_symbol_exchange — the perpetual symbol (e.g. BTCUSD) is
-            # constructed programmatically and the in-memory token cache is loaded for
-            # the active broker session, not for DELTAIN specifically.
+        if exchange.upper() in CRYPTO_EXCHANGES:
+            # Bypass validate_symbol_exchange — canonical CRYPTO symbols are resolved from
+            # the master contract DB and use CRYPTO as exchange abstraction layer.
             _auth, _feed, _broker = get_auth_token_broker(api_key, include_feed_token=True)
             if _auth is None:
                 return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
@@ -368,9 +369,9 @@ def get_option_chain(
 
         # Step 8: Fetch quotes for all options using multiquotes
         logger.info(f"Fetching quotes for {len(symbols_to_fetch)} option symbols")
-        if exchange.upper() == "DELTAIN":
-            # Bypass validate_symbols_bulk — option symbols (e.g. C-BTC-80000-280225) are
-            # resolved from master contract DB and would fail the token-cache validation.
+        if exchange.upper() in CRYPTO_EXCHANGES:
+            # Bypass validate_symbols_bulk — canonical CRYPTO option symbols are resolved
+            # from the master contract DB and use CRYPTO as exchange abstraction layer.
             _auth, _feed, _broker = get_auth_token_broker(api_key, include_feed_token=True)
             if _auth is None:
                 return False, {"status": "error", "message": "Invalid openalgo apikey"}, 403
@@ -387,7 +388,7 @@ def get_option_chain(
                             {"symbol": _item["symbol"], "exchange": _item["exchange"], "data": _oq}
                         )
                     except Exception as _qe:
-                        logger.warning(f"[DELTAIN] Quote error for {_item['symbol']}: {_qe}")
+                        logger.warning(f"[CRYPTO] Quote error for {_item['symbol']}: {_qe}")
                         _results.append(
                             {"symbol": _item["symbol"], "exchange": _item["exchange"], "error": str(_qe)}
                         )

@@ -254,6 +254,14 @@ def place_order_api(data, auth):
     token = get_token(data["symbol"], data["exchange"])
     logger.info(f"[DeltaExchange] place_order: symbol={data['symbol']} token={token}")
 
+    if not token:
+        msg = f"[DeltaExchange] Symbol '{data['symbol']}' not found in master contract DB for exchange '{data['exchange']}'. Run master contract sync first."
+        logger.error(msg)
+        class _ErrResp:
+            status_code = 400
+            status = 400
+        return _ErrResp(), {"status": "error", "message": msg}, None
+
     # Set leverage if requested (Delta Exchange requires a separate pre-order call)
     leverage = str(data.get("leverage", "")).strip() or os.getenv("DELTA_DEFAULT_LEVERAGE", "")
     if leverage and leverage != "0":

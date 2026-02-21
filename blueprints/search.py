@@ -6,15 +6,13 @@ from database.symbol import enhanced_search_symbols
 from database.token_db_enhanced import fno_search_symbols
 from database.token_db_enhanced import get_distinct_expiries_cached as get_distinct_expiries
 from database.token_db_enhanced import get_distinct_underlyings_cached as get_distinct_underlyings
+from utils.constants import FNO_EXCHANGES
 from utils.logging import get_logger
 from utils.session import check_session_validity
 
 logger = get_logger(__name__)
 
 search_bp = Blueprint("search_bp", __name__, url_prefix="/search")
-
-# FNO exchanges that support advanced filters
-FNO_EXCHANGES = ["NFO", "BFO", "MCX", "CDS", "DELTAIN"]
 
 
 @search_bp.route("/token")

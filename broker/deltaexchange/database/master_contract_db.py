@@ -140,6 +140,61 @@ def copy_from_dataframe(df):
         db_session.rollback()
 
 
+def _to_canonical_symbol(delta_symbol: str, instrument_type: str, expiry: str) -> str:
+    """
+    Convert a Delta Exchange native symbol to the OpenAlgo canonical CRYPTO format.
+
+    Canonical formats (standard Indian F&O-style symbology — no dashes):
+        Perpetual future : BTCUSDT              (delta: BTCUSD  — append T)
+        Dated future     : BTC28FEB25FUT        (delta: BTCUSD28Feb2025 — extract underlying + expiry)
+        Call option      : BTC28FEB2580000CE    (delta: C-BTC-80000-280225)
+        Put option       : BTC28FEB2580000PE    (delta: P-BTC-80000-280225)
+
+    Args:
+        delta_symbol:    Raw symbol string from the Delta Exchange API.
+        instrument_type: Mapped type code (CE, PE, FUT, PERPFUT, TCE, TPE, SYNCE, SYNPE, ...).
+        expiry:          Already-parsed expiry string in "DD-MON-YY" format (e.g. "28-FEB-25"),
+                         or "" for perpetuals.
+
+    Returns:
+        OpenAlgo canonical symbol string.
+    """
+    # ── Options: C-BTC-80000-280225 + expiry "28-FEB-25" → BTC28FEB2580000CE ─
+    if instrument_type in ("CE", "TCE", "SYNCE", "PE", "TPE", "SYNPE"):
+        parts = delta_symbol.split("-")
+        if len(parts) == 4 and expiry:
+            # parts: [C/P, underlying, strike, DDMMYY_from_delta]
+            underlying  = parts[1].upper()
+            strike_part = parts[2]
+            suffix = "CE" if instrument_type in ("CE", "TCE", "SYNCE") else "PE"
+            # expiry is "DD-MON-YY" (e.g. "28-FEB-25") — strip dashes → "28FEB25"
+            expiry_alpha = expiry.replace("-", "")
+            return f"{underlying}{expiry_alpha}{strike_part}{suffix}"
+        return delta_symbol  # unexpected format — fall back
+
+    # ── Dated futures: extract underlying + alpha expiry ───────────────────
+    if instrument_type == "FUT" and expiry:
+        # expiry is "DD-MON-YY" (e.g. "28-FEB-25") — strip dashes → "28FEB25"
+        expiry_alpha = expiry.replace("-", "")
+        # Strip common quote-currency suffixes to get the base asset (e.g. BTCUSD → BTC)
+        upper = delta_symbol.upper()
+        for suffix in ("USDT", "USD", "BTC", "ETH"):
+            if upper.endswith(suffix) and len(upper) > len(suffix):
+                return f"{upper[:-len(suffix)]}{expiry_alpha}FUT"
+        # Cannot reliably extract underlying — keep Delta symbol + canonical FUT suffix
+        return f"{delta_symbol}{expiry_alpha}FUT"
+
+    # ── Perpetual futures: BTCUSD → BTCUSDT ────────────────────────────────
+    if instrument_type == "PERPFUT":
+        upper = delta_symbol.upper()
+        if upper.endswith("USD") and not upper.endswith("USDT"):
+            return delta_symbol + "T"
+        return delta_symbol
+
+    # ── All other types (SPREAD, COMBO, IRS, …): keep as-is ────────────────
+    return delta_symbol
+
+
 # Maps Delta Exchange contract_type values to OpenAlgo instrument type codes
 CONTRACT_TYPE_MAP = {
     "perpetual_futures": "PERPFUT",
@@ -267,11 +322,11 @@ def process_delta_products(products):
 
     Field mapping (from GET /v2/products response):
         token          ← id                    (int → str)
-        brsymbol       ← symbol                (e.g. "BTCUSD")
-        symbol         ← symbol                (same symbology on Delta)
+        brsymbol       ← symbol                (Delta-native, e.g. "C-BTC-80000-280225")
+        symbol         ← canonical             (OpenAlgo format, e.g. "BTC28FEB2580000CE")
         name           ← description
-        exchange       ← "CRYPTO"              (constant)
-        brexchange     ← "CRYPTO"              (constant)
+        exchange       ← "CRYPTO"              (OpenAlgo exchange abstraction)
+        brexchange     ← "DELTAIN"             (broker identifier — Delta Exchange India)
         expiry         ← settlement_time       (None → "" for perpetuals;
                                                 ISO string → "DD-MON-YY" for futures/options)
         strike         ← 0.0                   (strike is encoded in the symbol for options)
@@ -337,14 +392,17 @@ def process_delta_products(products):
                 except (ValueError, TypeError):
                     strike_val = 0.0
 
+        # Build OpenAlgo canonical symbol (exchange = CRYPTO, broker-agnostic format)
+        canonical_symbol = _to_canonical_symbol(symbol_str, instrument_type, expiry)
+
         rows.append(
             {
                 "token": str(p["id"]),
-                "symbol": symbol_str,
-                "brsymbol": symbol_str,
+                "symbol": canonical_symbol,   # OpenAlgo canonical (e.g. BTC28FEB2580000CE)
+                "brsymbol": symbol_str,        # Delta-native (e.g. C-BTC-80000-280225)
                 "name": p.get("description", symbol_str),
-                "exchange": "DELTAIN",
-                "brexchange": "DELTAIN",
+                "exchange": "CRYPTO",          # OpenAlgo exchange abstraction
+                "brexchange": "DELTAIN",       # Broker identifier (Delta Exchange India)
                 "expiry": expiry,
                 "strike": strike_val,
                 "lotsize": 1,

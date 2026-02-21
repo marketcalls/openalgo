@@ -171,15 +171,34 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         channel    = DeltaModeMapper.get_channel(mode)
         corr_id    = f"{symbol}_{exchange}_{mode}"
 
-        should_disconnect = False
+        should_disconnect      = False
+        should_upstream_unsub  = False
         with self._lock:
             self.subscriptions.pop(corr_id, None)
+
+            remaining = list(self.subscriptions.values())
+
+            # Only send the upstream unsubscribe when no remaining subscription
+            # still needs this br_symbol + channel (e.g. mode 1 and mode 2 both
+            # map to v2/ticker — removing one must not kill the shared stream).
+            should_upstream_unsub = not any(
+                s.get("br_symbol") == br_symbol and s.get("channel") == channel
+                for s in remaining
+            )
+
+            # Only drop the LTP cache when no other mode for this symbol/exchange
+            # remains (the cache is keyed on symbol_exchange, shared across modes).
             cache_key = f"{symbol}_{exchange}"
-            self.last_values.pop(cache_key, None)
-            if not self.subscriptions:
+            if not any(
+                s.get("symbol") == symbol and s.get("exchange") == exchange
+                for s in remaining
+            ):
+                self.last_values.pop(cache_key, None)
+
+            if not remaining:
                 should_disconnect = True
 
-        if self.connected and self.ws_client:
+        if self.connected and self.ws_client and should_upstream_unsub:
             try:
                 if channel == DeltaWebSocket.CHANNEL_TICKER:
                     self.ws_client.unsubscribe_ticker([br_symbol])
@@ -229,8 +248,12 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_close(self, wsapp) -> None:
         self.logger.info("DeltaWS closed")
         self.connected = False
-        if self.running:
-            threading.Thread(target=self.ws_client.connect, daemon=True).start()
+        # No manual reconnect here — DeltaWebSocket.connect() runs a blocking
+        # retry loop that handles all reconnection with proper backoff and the
+        # configured max_retry_attempt limit.  Spawning another connect() thread
+        # from this callback (which is invoked mid-loop, before run_forever
+        # returns) would create a second competing retry loop with a reset
+        # counter, bypassing max_retry_attempt and risking duplicate connections.
 
     def _on_data(self, wsapp, msg: dict) -> None:
         """
@@ -270,35 +293,41 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if not br_symbol:
                 return
 
-            # Find the OpenAlgo subscription matching this broker symbol
-            subscription = self._find_subscription_by_br_symbol(br_symbol, msg_type)
-            if not subscription:
+            # Find ALL OpenAlgo subscriptions matching this broker symbol + channel.
+            # Multiple modes (e.g. 1=LTP and 2=Quote) can share the same v2/ticker
+            # channel, so we must fan out to every subscriber.
+            subscriptions = self._find_subscriptions_by_br_symbol(br_symbol, msg_type)
+            if not subscriptions:
                 self.logger.debug("No subscription for br_symbol=%s type=%s", br_symbol, msg_type)
                 return
 
-            oa_symbol  = subscription["symbol"]
-            oa_exchange = subscription["exchange"]
-            oa_mode     = subscription["mode"]
-            cache_key   = f"{oa_symbol}_{oa_exchange}"
-            mode_str    = DeltaModeMapper.get_mode_str(oa_mode)
-            topic       = f"{oa_exchange}_{oa_symbol}_{mode_str}"
-
+            # Normalise once — all subscriptions share the same br_symbol/exchange
+            cache_key = f"{subscriptions[0]['symbol']}_{subscriptions[0]['exchange']}"
             if msg_type == "v2/ticker":
-                market_data = self._normalise_ticker(msg, cache_key)
+                base_data = self._normalise_ticker(msg, cache_key)
             elif msg_type == "l2_orderbook":
-                market_data = self._normalise_l2_orderbook(msg, cache_key)
+                base_data = self._normalise_l2_orderbook(msg, cache_key)
             else:
                 self.logger.debug("Unhandled message type: %s", msg_type)
                 return
 
-            market_data.update({
-                "symbol":    oa_symbol,
-                "exchange":  oa_exchange,
-                "mode":      oa_mode,
-                "timestamp": int(time.time() * 1000),
-            })
+            ts = int(time.time() * 1000)
+            for subscription in subscriptions:
+                oa_symbol   = subscription["symbol"]
+                oa_exchange = subscription["exchange"]
+                oa_mode     = subscription["mode"]
+                mode_str    = DeltaModeMapper.get_mode_str(oa_mode)
+                topic       = f"{oa_exchange}_{oa_symbol}_{mode_str}"
 
-            self.publish_market_data(topic, market_data)
+                market_data = dict(base_data)  # shallow copy per subscriber
+                market_data.update({
+                    "symbol":    oa_symbol,
+                    "exchange":  oa_exchange,
+                    "mode":      oa_mode,
+                    "timestamp": ts,
+                })
+
+                self.publish_market_data(topic, market_data)
 
         except Exception as exc:
             self.logger.error("_on_data error: %s", exc, exc_info=True)
@@ -442,18 +471,26 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     # ── helpers ───────────────────────────────────────────────────────────────
 
-    def _find_subscription_by_br_symbol(self, br_symbol: str, msg_type: str) -> dict | None:
-        """Find the first stored subscription whose br_symbol matches."""
+    def _find_subscriptions_by_br_symbol(self, br_symbol: str, msg_type: str) -> list[dict]:
+        """Return ALL subscriptions whose br_symbol and channel match the incoming message.
+
+        Multiple subscription modes (e.g. mode 1=LTP and mode 2=Quote) can map
+        to the same underlying WebSocket channel (v2/ticker).  Returning every
+        match ensures each subscriber receives its own publish call.
+        """
+        expected_channel = (
+            DeltaWebSocket.CHANNEL_TICKER if msg_type == "v2/ticker"
+            else DeltaWebSocket.CHANNEL_L2_BOOK
+        )
         with self._lock:
-            for sub in self.subscriptions.values():
-                if sub.get("br_symbol") == br_symbol:
-                    # Confirm channel match too
-                    expected_channel = DeltaWebSocket.CHANNEL_TICKER if msg_type == "v2/ticker" \
-                        else DeltaWebSocket.CHANNEL_L2_BOOK
-                    if sub.get("channel") == expected_channel:
-                        return sub
-            # Fallback: return any sub with matching br_symbol
-            for sub in self.subscriptions.values():
-                if sub.get("br_symbol") == br_symbol:
-                    return sub
-        return None
+            matched = [
+                sub for sub in self.subscriptions.values()
+                if sub.get("br_symbol") == br_symbol and sub.get("channel") == expected_channel
+            ]
+            if not matched:
+                # Fallback: any sub with matching br_symbol regardless of channel
+                matched = [
+                    sub for sub in self.subscriptions.values()
+                    if sub.get("br_symbol") == br_symbol
+                ]
+        return matched

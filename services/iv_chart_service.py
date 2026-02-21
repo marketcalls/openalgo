@@ -17,13 +17,14 @@ from services.option_greeks_service import (
     parse_option_symbol,
 )
 from services.option_symbol_service import (
-    construct_delta_option_symbol,
+    construct_crypto_option_symbol,
     construct_option_symbol,
     find_atm_strike_from_actual,
     get_available_strikes,
     get_option_exchange,
 )
 from services.quotes_service import get_quotes
+from utils.constants import CRYPTO_EXCHANGES, CRYPTO_QUOTE_CURRENCY
 from utils.logging import get_logger
 
 # Import py_vollib for Black-76 IV and Greeks calculation
@@ -249,8 +250,8 @@ def get_iv_chart_data(
         base_symbol = underlying.upper()
         quote_exchange = _get_quote_exchange(base_symbol, exchange)
         options_exchange = get_option_exchange(quote_exchange)
-        # DELTAIN: the tradable underlying is the perpetual (e.g. BTCUSD), not the base asset name (BTC)
-        underlying_quote_symbol = (base_symbol + "USD") if exchange.upper() == "DELTAIN" else base_symbol
+        # CRYPTO: the tradable underlying is the canonical perpetual (e.g. BTCUSDT for BTC options)
+        underlying_quote_symbol = (base_symbol + CRYPTO_QUOTE_CURRENCY) if exchange.upper() in CRYPTO_EXCHANGES else base_symbol
 
         # Step 2: Get underlying LTP to resolve ATM strike
         success, quote_response, status_code = get_quotes(
@@ -284,7 +285,7 @@ def get_iv_chart_data(
         if atm_strike is None:
             return False, {"status": "error", "message": "Could not determine ATM strike"}, 400
 
-        _build_sym = construct_delta_option_symbol if exchange.upper() == "DELTAIN" else construct_option_symbol
+        _build_sym = construct_crypto_option_symbol if exchange.upper() in CRYPTO_EXCHANGES else construct_option_symbol
         ce_symbol = _build_sym(base_symbol, expiry_date.upper(), atm_strike, "CE")
         pe_symbol = _build_sym(base_symbol, expiry_date.upper(), atm_strike, "PE")
 
@@ -509,8 +510,8 @@ def get_default_symbols(underlying, exchange, expiry_date, api_key):
         base_symbol = underlying.upper()
         quote_exchange = _get_quote_exchange(base_symbol, exchange)
         options_exchange = get_option_exchange(quote_exchange)
-        underlying_quote_symbol = (base_symbol + "USD") if exchange.upper() == "DELTAIN" else base_symbol
-        _build_sym = construct_delta_option_symbol if exchange.upper() == "DELTAIN" else construct_option_symbol
+        underlying_quote_symbol = (base_symbol + CRYPTO_QUOTE_CURRENCY) if exchange.upper() in CRYPTO_EXCHANGES else base_symbol
+        _build_sym = construct_crypto_option_symbol if exchange.upper() in CRYPTO_EXCHANGES else construct_option_symbol
 
         # Get underlying LTP
         success, quote_response, status_code = get_quotes(

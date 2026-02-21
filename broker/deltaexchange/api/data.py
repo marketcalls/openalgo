@@ -507,7 +507,7 @@ class BrokerData:
     def get_option_chain(
         self,
         underlying: str,
-        exchange: str = "DELTAIN",
+        exchange: str = "CRYPTO",
         expiry: str | None = None,
     ) -> list[dict]:
         """
@@ -520,8 +520,8 @@ class BrokerData:
 
         Args:
             underlying: The underlying symbol prefix, e.g. ``"BTC"``, ``"ETH"``.
-                        Matched as a case-insensitive prefix of the option symbol.
-            exchange:   OpenAlgo exchange code.  ``"DELTAIN"`` for all Delta
+                        Matched as a case-insensitive prefix of the canonical symbol.
+            exchange:   OpenAlgo exchange code.  ``"CRYPTO"`` for all Delta
                         Exchange India listed options.
             expiry:     Optional expiry filter in ``"DD-MON-YY"`` format as
                         stored by the master DB, e.g. ``"28-FEB-25"``.
@@ -560,9 +560,16 @@ class BrokerData:
                 for r in rows
             ]
 
-            # Sort: CE before PE, then by expiry (alpha on DD-MON-YY sorts correctly
-            # for same-year chains), then by strike price
-            result.sort(key=lambda x: (x["instrumenttype"], x["expiry"], x["strike"]))
+            # Sort: CE before PE, then chronologically by expiry, then by strike price.
+            # Raw DD-MON-YY strings cannot be sorted alphabetically (month abbreviations
+            # are not in calendar order: APR < AUG < ... < SEP); parse to date instead.
+            def _expiry_sort_key(expiry_str):
+                try:
+                    return datetime.strptime(expiry_str, "%d-%b-%y").date()
+                except (ValueError, TypeError):
+                    return datetime.max.date()
+
+            result.sort(key=lambda x: (x["instrumenttype"], _expiry_sort_key(x["expiry"]), x["strike"]))
 
             logger.info(
                 f"[DeltaExchange] get_option_chain: {len(result)} strikes for "
@@ -608,12 +615,14 @@ class BrokerData:
     @staticmethod
     def _to_epoch(date_str: str, end_of_day: bool = False) -> int:
         """
-        Convert a YYYY-MM-DD date string to a Unix epoch (seconds).
+        Convert a YYYY-MM-DD date string to a Unix epoch (seconds, UTC).
         Uses UTC midnight for start, UTC 23:59:59 for end.
         """
+        import calendar
         fmt = "%Y-%m-%d %H:%M:%S"
         if end_of_day:
             dt = datetime.strptime(f"{date_str} 23:59:59", fmt)
         else:
             dt = datetime.strptime(f"{date_str} 00:00:00", fmt)
-        return int(dt.timestamp())
+        # calendar.timegm interprets the struct_time as UTC regardless of local timezone
+        return calendar.timegm(dt.timetuple())

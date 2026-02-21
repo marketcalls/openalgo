@@ -186,27 +186,8 @@ def parse_option_symbol(
         opt_type: CE or PE
     """
     try:
-        # Handle DELTAIN format: {C/P}-{UNDERLYING}-{STRIKE}-{DDMMYY}
-        # e.g. C-BTC-62800-210226, P-ETH-3000-210226
-        parts = symbol.split('-')
-        if len(parts) == 4 and parts[0].upper() in ('C', 'P'):
-            opt_flag, base_symbol, strike_str, date_str = parts
-            opt_type = 'CE' if opt_flag.upper() == 'C' else 'PE'
-            strike = float(strike_str)
-            # date_str is DDMMYY: 210226 → day=21, month=02, year=2026
-            day = int(date_str[:2])
-            month = int(date_str[2:4])
-            year = 2000 + int(date_str[4:])
-            # DELTAIN options expire at 12:00 UTC = 17:30 IST
-            expiry_hour, expiry_minute = 17, 30
-            if custom_expiry_time:
-                try:
-                    tp = custom_expiry_time.split(":")
-                    expiry_hour, expiry_minute = int(tp[0]), int(tp[1])
-                except Exception:
-                    pass
-            expiry = datetime(year, month, day, expiry_hour, expiry_minute)
-            return base_symbol, expiry, strike, opt_type
+        # CRYPTO canonical format (BTC28FEB2580000CE) uses the same
+        # Indian F&O-style symbology as NFO/MCX — the regex below handles both.
 
         # Pattern: SYMBOL + DD + MMM + YY + STRIKE + CE/PE
         # Strike can have decimal point for currencies

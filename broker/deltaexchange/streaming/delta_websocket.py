@@ -146,20 +146,22 @@ class DeltaWebSocket:
     def subscribe_ticker(self, symbols: list[str]) -> None:
         """Subscribe to v2/ticker channel for the given symbols."""
         msg = self._build_sub_msg(self.CHANNEL_TICKER, symbols)
-        if self._connected:
-            self._send(msg)
-        else:
-            with self._lock:
+        with self._lock:
+            send_now = self._connected
+            if not send_now:
                 self._pending_subscriptions.append(msg)
+        if send_now:
+            self._send(msg)
 
     def subscribe_l2_orderbook(self, symbols: list[str]) -> None:
         """Subscribe to l2_orderbook channel for the given symbols."""
         msg = self._build_sub_msg(self.CHANNEL_L2_BOOK, symbols)
-        if self._connected:
-            self._send(msg)
-        else:
-            with self._lock:
+        with self._lock:
+            send_now = self._connected
+            if not send_now:
                 self._pending_subscriptions.append(msg)
+        if send_now:
+            self._send(msg)
 
     def unsubscribe_ticker(self, symbols: list[str]) -> None:
         self._send(self._build_sub_msg(self.CHANNEL_TICKER, symbols, unsub=True))
@@ -189,11 +191,12 @@ class DeltaWebSocket:
         (the auth message is sent automatically in _ws_on_open).
         """
         msg = self._build_private_sub_msg(self.CHANNEL_ORDERS)
-        if self._connected:
-            self._send(msg)
-        else:
-            with self._lock:
+        with self._lock:
+            send_now = self._connected
+            if not send_now:
                 self._pending_subscriptions.append(msg)
+        if send_now:
+            self._send(msg)
 
     def subscribe_positions_channel(self) -> None:
         """Subscribe to the authenticated 'positions' channel.
@@ -202,11 +205,12 @@ class DeltaWebSocket:
         a position changes for the authenticated user.
         """
         msg = self._build_private_sub_msg(self.CHANNEL_POSITIONS)
-        if self._connected:
-            self._send(msg)
-        else:
-            with self._lock:
+        with self._lock:
+            send_now = self._connected
+            if not send_now:
                 self._pending_subscriptions.append(msg)
+        if send_now:
+            self._send(msg)
 
     def subscribe_margins_channel(self) -> None:
         """Subscribe to the authenticated 'margins' channel.
@@ -215,11 +219,12 @@ class DeltaWebSocket:
         funding payment, or realised-PnL event changes the account balance.
         """
         msg = self._build_private_sub_msg(self.CHANNEL_MARGINS)
-        if self._connected:
-            self._send(msg)
-        else:
-            with self._lock:
+        with self._lock:
+            send_now = self._connected
+            if not send_now:
                 self._pending_subscriptions.append(msg)
+        if send_now:
+            self._send(msg)
 
     def connect(self) -> None:
         """Start the WebSocket connection (blocking — run in a thread)."""
@@ -238,7 +243,7 @@ class DeltaWebSocket:
                     on_close   = self._ws_on_close,
                 )
                 self.wsapp.run_forever(
-                    sslopt={"cert_reqs": ssl.CERT_NONE},
+                    sslopt={"cert_reqs": ssl.CERT_REQUIRED},
                     ping_interval=self.HEARTBEAT_INTERVAL,
                     ping_timeout=10,
                 )
@@ -272,7 +277,6 @@ class DeltaWebSocket:
 
     def _ws_on_open(self, wsapp) -> None:
         logger.info("DeltaWS connected")
-        self._connected = True
 
         # Authenticate (required for order/position channels)
         try:
@@ -280,8 +284,11 @@ class DeltaWebSocket:
         except Exception as exc:
             logger.error("DeltaWS auth send error: %s", exc)
 
-        # Flush buffered subscriptions
+        # Set _connected and flush pending subscriptions atomically so that any
+        # subscription arriving concurrently either finds _connected=True and
+        # sends directly, or appends to the list before we drain it — never lost.
         with self._lock:
+            self._connected = True
             pending = list(self._pending_subscriptions)
             self._pending_subscriptions.clear()
 

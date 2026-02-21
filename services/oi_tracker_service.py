@@ -15,6 +15,7 @@ from database.auth_db import get_auth_token_broker
 from database.token_db_enhanced import fno_search_symbols
 from services.option_chain_service import get_option_chain
 from services.quotes_service import get_quotes, import_broker_module
+from utils.constants import CRYPTO_EXCHANGES
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -39,8 +40,8 @@ def _get_nearest_futures_price(
         Futures LTP or None if not found
     """
     try:
-        if exchange.upper() == "DELTAIN":
-            # Delta perpetuals are stored as PERPFUT — no expiry filter
+        if exchange.upper() in CRYPTO_EXCHANGES:
+            # CRYPTO perpetuals are stored as PERPFUT — no expiry filter
             futures = fno_search_symbols(
                 underlying=underlying,
                 exchange=exchange,
@@ -54,11 +55,14 @@ def _get_nearest_futures_price(
             fut_symbol = futures[0]["symbol"]
             fut_exchange = futures[0]["exchange"]
 
-            # DELTAIN: bypass validate_symbol_exchange (in-memory cache miss → 400)
-            logger.info(f"Fetching perpetual futures price for {fut_symbol} on {fut_exchange} (DELTAIN bypass)")
+            # CRYPTO: bypass validate_symbol_exchange (in-memory cache miss → 400)
+            logger.info(f"Fetching perpetual futures price for {fut_symbol} on {fut_exchange} (CRYPTO bypass)")
             broker_module = import_broker_module("deltaexchange")
             BrokerData = broker_module.BrokerData
-            auth_token = get_auth_token_broker(api_key)
+            auth_token, _ = get_auth_token_broker(api_key)
+            if auth_token is None:
+                logger.warning(f"Could not retrieve auth token for CRYPTO futures quote")
+                return None
             quote_response = BrokerData(auth_token).get_quotes(fut_symbol, fut_exchange)
             if isinstance(quote_response, dict) and "data" in quote_response:
                 return quote_response["data"].get("ltp")

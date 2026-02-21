@@ -14,7 +14,33 @@ EXCHANGE_MCX = "MCX"  # MCX Commodity
 EXCHANGE_NCDEX = "NCDEX"  # NCDEX Commodity
 EXCHANGE_NSE_INDEX = "NSE_INDEX"  # NSE Index
 EXCHANGE_BSE_INDEX = "BSE_INDEX"  # BSE Index
-EXCHANGE_DELTAIN = "DELTAIN"  # Delta Exchange India
+EXCHANGE_CRYPTO = "CRYPTO"  # Crypto Exchanges (broker-agnostic; brexchange carries broker name)
+
+# Set of all crypto-family exchanges.
+# Use `exchange in CRYPTO_EXCHANGES` instead of `exchange == "CRYPTO"` so that
+# onboarding a second crypto exchange (e.g. BINANCE, BYBIT) is a one-line change here.
+CRYPTO_EXCHANGES: set[str] = {EXCHANGE_CRYPTO}
+
+# Set of broker names that map to crypto exchanges.
+# Used to select the correct download cutoff timezone (UTC vs IST).
+# Add new crypto brokers here — the smart download logic picks this up automatically.
+CRYPTO_BROKERS: set[str] = {"deltaexchange"}
+
+# Default quote-currency suffix for crypto perpetual instruments.
+# e.g. BTCUSDT = BTC + CRYPTO_QUOTE_CURRENCY — update here if/when USDC or INR is added.
+CRYPTO_QUOTE_CURRENCY: str = "USDT"
+
+# Set of all derivative-capable exchanges (FNO + Crypto).
+# Use `exchange in FNO_EXCHANGES` instead of maintaining local sets in each service.
+# Adding a new exchange family is a one-line change here.
+FNO_EXCHANGES: set[str] = {
+    EXCHANGE_NFO,
+    EXCHANGE_BFO,
+    EXCHANGE_MCX,
+    EXCHANGE_CDS,
+    EXCHANGE_BCD,
+    EXCHANGE_NCDEX,
+} | CRYPTO_EXCHANGES
 
 VALID_EXCHANGES = [
     EXCHANGE_NSE,
@@ -27,7 +53,7 @@ VALID_EXCHANGES = [
     EXCHANGE_NCDEX,
     EXCHANGE_NSE_INDEX,
     EXCHANGE_BSE_INDEX,
-    EXCHANGE_DELTAIN,
+    EXCHANGE_CRYPTO,
 ]
 
 # Product Types
@@ -63,7 +89,7 @@ EXCHANGE_BADGE_COLORS = {
     EXCHANGE_NCDEX: "badge-success",
     EXCHANGE_NSE_INDEX: "badge-accent",
     EXCHANGE_BSE_INDEX: "badge-neutral",
-    EXCHANGE_DELTAIN: "badge-primary",
+    EXCHANGE_CRYPTO: "badge-primary",
 }
 
 # Required Fields for Order Placement
