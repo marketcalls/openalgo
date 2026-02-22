@@ -283,14 +283,10 @@ if ! grep "CORS_ALLOWED_ORIGINS" .env | grep -q "https://$DOMAIN"; then
     fi
 fi
 
-# CSP: Add domain if not already present (preserves custom domains)
-if ! grep "CSP_CONNECT_SRC" .env | grep -q "https://$DOMAIN"; then
-    CURRENT_CSP=$(grep "CSP_CONNECT_SRC" .env | sed 's/.*= "\\(.*\\)"/\\1/')
-    if [ -n "$CURRENT_CSP" ] && ! echo "$CURRENT_CSP" | grep -q "https://$DOMAIN"; then
-        NEW_CSP="$CURRENT_CSP https://$DOMAIN wss://$DOMAIN"
-        $SUDO sed -i "s|CSP_CONNECT_SRC = \".*\"|CSP_CONNECT_SRC = \"$NEW_CSP\"|g" .env
-    fi
-fi
+# CSP: Set connect sources with domain (delete-and-append avoids sed regex issues with nested quotes)
+# See: https://github.com/marketcalls/openalgo/issues/938
+$SUDO sed -i '/^CSP_CONNECT_SRC/d' .env
+echo "CSP_CONNECT_SRC = \"'self' wss: ws: https://cdn.socket.io https://$DOMAIN wss://$DOMAIN\"" | $SUDO tee -a .env > /dev/null
 
 check_status "Environment configuration failed"
 
