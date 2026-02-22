@@ -4,30 +4,30 @@ from marshmallow import Schema, ValidationError, fields, validate
 
 
 # Custom validator for date or timestamp string
-def validate_date_or_timestamp(data):
+def validate_date_or_timestamp(data: str) -> None:
     """
     Validates that the input string is either in 'YYYY-MM-DD' format or a numeric timestamp.
     """
-    date_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-    timestamp_pattern = re.compile(r"^\d{10,13}$")  # Allows for seconds or milliseconds
-    if not (isinstance(data, str) and (date_pattern.match(data) or timestamp_pattern.match(data))):
+    date_pattern: re.Pattern[str] = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+    timestamp_pattern: re.Pattern[str] = re.compile(r"^\d{10,13}$")  # Allows for seconds or milliseconds
+    if not (isinstance(data, str) and (date_pattern.match(data) or timestamp_pattern.match(data))): # note on [isinstance(data, str)] : Unnecessary isinstance call; "str" is always an instance of "str" (works perfectly as safety net)
         raise ValidationError(
             "Field must be a string in 'YYYY-MM-DD' format or a numeric timestamp."
         )
 
 
 # Custom validator for option offset
-def validate_option_offset(data):
+def validate_option_offset(data:str) -> bool:
     """
     Validates option offset: ATM, ITM1-ITM50, OTM1-OTM50
     """
-    data_upper = data.upper()
+    data_upper: str = data.upper()
     if data_upper == "ATM":
         return True
 
     # Check for ITM pattern: ITM followed by 1-50
-    itm_pattern = re.compile(r"^ITM([1-9]|[1-4][0-9]|50)$")
-    otm_pattern = re.compile(r"^OTM([1-9]|[1-4][0-9]|50)$")
+    itm_pattern: re.Pattern[str] = re.compile(r"^ITM([1-9]|[1-4][0-9]|50)$")
+    otm_pattern: re.Pattern[str] = re.compile(r"^OTM([1-9]|[1-4][0-9]|50)$")
 
     if not (itm_pattern.match(data_upper) or otm_pattern.match(data_upper)):
         raise ValidationError("Offset must be ATM, ITM1-ITM50, or OTM1-OTM50")
