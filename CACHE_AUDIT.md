@@ -27,7 +27,7 @@
 
 ## 1. Executive Summary
 
-OpenAlgo uses a **multi-layer, all-in-memory caching architecture** built primarily on `cachetools.TTLCache` with one custom singleton cache (`BrokerSymbolCache`). There are **20+ distinct cache instances** spread across 10 database modules. No external cache service (Redis, Memcached) is used.
+OpenAlgo uses a **multi-layer, all-in-memory caching architecture** built primarily on `cachetools.TTLCache` with one custom singleton cache (`BrokerSymbolCache`) and several broker-specific streaming caches. There are **28+ distinct cache instances** spread across database modules, broker adapters, and utility services. No external cache service (Redis, Memcached) is used.
 
 ### Strengths
 - Well-structured TTL-based caching with appropriate expiry times
@@ -80,11 +80,26 @@ OpenAlgo uses a **multi-layer, all-in-memory caching architecture** built primar
 | 21 | `last_message_time` | `websocket_proxy/server.py:76` | Plain dict | Periodic cleanup (5 min) | WebSocket message throttling (50ms) |
 | 22 | Rate limiter store | `limiter.py:7` | `memory://` (flask-limiter) | Moving window | Request rate limiting |
 
-### 2.3 Flask Session Cache
+### 2.3 Broker Streaming Adapter Caches
+
+| # | Cache | File | Type | Thread-Safe | Purpose |
+|---|-------|------|------|-------------|---------|
+| 23 | `MarketDataCache._cache` | `broker/definedge/streaming/definedge_adapter.py` | Dict with `threading.Lock` | **Yes** | Smart-merge OHLC data per token |
+| 24 | `_ltp_cache`, `_quote_cache`, `_depth_cache` | `broker/kotak/streaming/kotak_adapter.py` | Dicts with `threading.RLock` | **Yes** | Separate LTP/quote/depth caches |
+| 25 | `ohlcv_cache` | `broker/nubra/streaming/nubra_adapter.py` | Dict | No | OHLC candle data |
+| 26 | `MarketDataCache` variants | `broker/shoonya/`, `broker/flattrade/`, `broker/zebu/` | Dict with Lock | **Yes** | Smart-merge market data |
+
+### 2.4 Health Monitor Cache
+
+| # | Cache | File | Type | Thread-Safe | Purpose |
+|---|-------|------|------|-------------|---------|
+| 27 | `_cached_metrics` | `utils/health_monitor.py` | Dict with `threading.Lock` | **Yes** | Sampled every 10s by background thread; instant access for `/health/status` |
+
+### 2.5 Flask Session Cache
 
 | # | Cache | Mechanism | TTL |
 |---|-------|-----------|-----|
-| 23 | Flask sessions | Server-side signed cookies | SESSION_EXPIRY_TIME (default 03:00 IST) |
+| 28 | Flask sessions | Server-side signed cookies | SESSION_EXPIRY_TIME (default 03:00 IST) |
 
 ---
 
@@ -324,6 +339,18 @@ The `BrokerSymbolCache` (`token_db_enhanced.py`) has **no locking mechanism**. T
 However, the design mitigates this:
 - `load_all_symbols()` is called only during master contract download (user-initiated, infrequent)
 - The singleton pattern ensures only one instance exists
+
+### Broker Streaming Adapter Thread Safety
+
+Several broker adapters implement **proper thread-safe caching** — these are good reference patterns:
+
+- **DefinEdge `MarketDataCache`** (`broker/definedge/streaming/definedge_adapter.py`): Uses `threading.Lock`, returns copies from `get()`, smart-merge on `update()`
+- **Kotak adapter** (`broker/kotak/streaming/kotak_adapter.py`): Uses `threading.RLock` protecting `_ltp_cache`, `_quote_cache`, `_depth_cache`
+- **Shoonya, Flattrade, Zebu**: Follow same `MarketDataCache` pattern with Lock
+
+### Health Monitor Cache Thread Safety
+
+The health monitor (`utils/health_monitor.py`) correctly uses `threading.Lock` (`_cache_lock`) to protect `_cached_metrics`. Updated every 10 seconds by a background daemon thread.
 
 ### WebSocket Proxy Thread Safety
 
