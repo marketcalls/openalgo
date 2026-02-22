@@ -211,6 +211,8 @@ export default function MarketTimingsPage() {
                               className="h-8 w-8"
                               onClick={() => handleSaveEdit(timing.exchange)}
                               disabled={isSaving}
+                              title="Save changes"
+                              aria-label={`Save timing changes for ${timing.exchange}`}
                             >
                               <Save className="h-4 w-4" />
                             </Button>
@@ -219,6 +221,8 @@ export default function MarketTimingsPage() {
                               variant="ghost"
                               className="h-8 w-8"
                               onClick={() => setEditingExchange(null)}
+                              title="Cancel editing"
+                              aria-label={`Cancel editing ${timing.exchange}`}
                             >
                               <X className="h-4 w-4" />
                             </Button>
@@ -229,6 +233,8 @@ export default function MarketTimingsPage() {
                             variant="ghost"
                             className="h-8 w-8"
                             onClick={() => handleEdit(timing)}
+                            title="Edit timing"
+                            aria-label={`Edit timing for ${timing.exchange}`}
                           >
                             <Pencil className="h-4 w-4" />
                           </Button>

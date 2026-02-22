@@ -206,6 +206,8 @@ export default function ApiKey() {
                 className="h-8 w-8 shrink-0"
                 onClick={() => setShowApiKey(!showApiKey)}
                 disabled={!hasApiKey}
+                title={showApiKey ? 'Hide API key' : 'Show API key'}
+                aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
               >
                 {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </Button>
