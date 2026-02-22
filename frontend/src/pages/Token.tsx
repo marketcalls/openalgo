@@ -35,7 +35,7 @@ const EXCHANGES = [
   { value: 'CRYPTO', label: 'CRYPTO - Delta Exchange India' },
 ]
 
-const FNO_EXCHANGES = ['NFO', 'BFO', 'MCX', 'CDS']
+const FNO_EXCHANGES = ['NFO', 'BFO', 'MCX', 'CDS', 'CRYPTO']
 
 export default function Token() {
   const navigate = useNavigate()

@@ -224,25 +224,19 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
     # ── internal callbacks ────────────────────────────────────────────────────
 
     def _on_open(self, wsapp) -> None:
-        """Re-subscribe after (re)connection."""
+        """Called after (re)connection.
+
+        Public channel replay is handled automatically by DeltaWebSocket._ws_on_open,
+        which replays every entry in _active_sub_msgs before invoking this callback.
+        Manually re-subscribing here would create duplicate subscribe messages and
+        accumulate extra aggregated keys in _active_sub_msgs on each reconnect.
+
+        Private feeds are bootstrapped here on first connect via _queue_or_send,
+        which registers them in _active_sub_msgs so subsequent reconnects replay
+        them automatically without needing another explicit call.
+        """
         self.logger.info("DeltaWS connection opened")
         self.connected = True
-
-        with self._lock:
-            subs = list(self.subscriptions.values())
-
-        ticker_syms  = [s["br_symbol"] for s in subs if s["channel"] == DeltaWebSocket.CHANNEL_TICKER]
-        l2_syms      = [s["br_symbol"] for s in subs if s["channel"] == DeltaWebSocket.CHANNEL_L2_BOOK]
-
-        try:
-            if ticker_syms:
-                self.ws_client.subscribe_ticker(ticker_syms)
-                self.logger.info("Re-subscribed ticker: %s", ticker_syms)
-            if l2_syms:
-                self.ws_client.subscribe_l2_orderbook(l2_syms)
-                self.logger.info("Re-subscribed l2_orderbook: %s", l2_syms)
-        except Exception as exc:
-            self.logger.error("Re-subscribe error: %s", exc)
 
         # Subscribe to authenticated private feeds on every (re)connect
         self._subscribe_private_feeds()

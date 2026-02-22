@@ -483,23 +483,23 @@ def master_contract_download():
                 },
             )
 
-        delete_symtoken_table()
         token_df = process_delta_products(products)
 
-        if not token_df.empty:
-            copy_from_dataframe(token_df)
-            return socketio.emit(
-                "master_contract_download",
-                {
-                    "status": "success",
-                    "message": f"Successfully Downloaded {len(token_df)} Delta Exchange Instruments",
-                },
-            )
-        else:
+        if token_df.empty:
             return socketio.emit(
                 "master_contract_download",
                 {"status": "error", "message": "No live instruments found on Delta Exchange"},
             )
+
+        delete_symtoken_table()
+        copy_from_dataframe(token_df)
+        return socketio.emit(
+            "master_contract_download",
+            {
+                "status": "success",
+                "message": f"Successfully Downloaded {len(token_df)} Delta Exchange Instruments",
+            },
+        )
 
     except Exception as e:
         logger.exception(f"Error during Delta Exchange master contract download: {e}")
