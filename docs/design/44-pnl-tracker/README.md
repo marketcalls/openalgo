@@ -143,6 +143,30 @@ class RateLimiter:
 history_rate_limiter = RateLimiter(calls_per_second=2)
 ```
 
+### Carry-Forward Position PnL Tracking
+
+The PnL tracker handles carry-forward positions — positions opened on previous days that are still open today. This is critical for NRML/CNC positions that span multiple trading sessions.
+
+```python
+# Carry-forward position handling:
+# 1. Detect open positions not in today's tradebook (no entry trade today)
+# 2. Fetch historical data from market open to track MTM
+# 3. Calculate P&L relative to previous close price
+# 4. Two cases handled:
+#    Case 1: Open carry-forward position (still held, no today trades)
+#    Case 2: Closed carry-forward position (exit-only trades today)
+```
+
+**Position Detection:**
+- Compares current positions (from positionbook) against today's trades
+- Positions with quantities but no matching entry trades are carry-forward
+- Historical data fetched from 9:15 AM to calculate intraday P&L movement
+
+**P&L Calculation for Carry-Forward:**
+- Uses previous day's close price as the reference
+- Tracks MTM from market open using 1-minute historical bars
+- Merges carry-forward PnL series with regular trade PnL series
+
 ## API Endpoint
 
 ### Get P&L Data
