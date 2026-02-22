@@ -1,5 +1,4 @@
 import copy
-import traceback
 from typing import Any, Dict, Optional, Tuple
 
 import requests
@@ -175,8 +174,7 @@ def get_open_position_with_auth(
         return True, response_data, 200
 
     except Exception as e:
-        logger.error(f"Error processing open position: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error processing open position: {e}")
         error_response = {"status": "error", "message": str(e)}
         log_executor.submit(async_log_order, "openposition", original_data, error_response)
         return False, error_response, 500

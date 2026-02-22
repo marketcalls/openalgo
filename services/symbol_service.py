@@ -1,4 +1,3 @@
-import traceback
 from typing import Any, Dict, Optional, Tuple
 
 from sqlalchemy.orm.exc import NoResultFound
@@ -78,8 +77,7 @@ def get_symbol_info_with_auth(
         return False, error_response, 404
 
     except Exception as e:
-        logger.error(f"Error retrieving symbol information: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error retrieving symbol information: {e}")
         error_response = {"status": "error", "message": str(e)}
         return False, error_response, 500
 

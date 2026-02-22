@@ -1,6 +1,5 @@
 import threading
 import time as time_module
-import traceback
 from datetime import datetime, timedelta
 from datetime import time as dt_time
 from importlib import import_module
@@ -1102,6 +1101,5 @@ def get_pnl_data():
         ), 200
 
     except Exception as e:
-        logger.error(f"Error calculating intraday PnL: {e}")
-        traceback.print_exc()
+        logger.exception(f"Error calculating intraday PnL: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500

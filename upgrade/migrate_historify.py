@@ -237,10 +237,7 @@ def upgrade():
         return True
 
     except Exception as e:
-        logger.error(f"Migration failed: {e}")
-        import traceback
-
-        traceback.print_exc()
+        logger.exception(f"Migration failed: {e}")
         return False
 
 
