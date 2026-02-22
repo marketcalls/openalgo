@@ -619,12 +619,14 @@ def _process_order(self, order, quote):
 
     elif order.price_type == 'LIMIT':
         limit_price = Decimal(str(order.price))
+        # Limit orders fill at the limit price (realistic exchange behavior)
+        # Orders sit on the book at the limit price and fill when market crosses
         if order.action == 'BUY' and ltp <= limit_price:
             should_execute = True
-            execution_price = ltp  # Better than limit
+            execution_price = limit_price  # Fill at limit price
         elif order.action == 'SELL' and ltp >= limit_price:
             should_execute = True
-            execution_price = ltp
+            execution_price = limit_price  # Fill at limit price
 
     elif order.price_type == 'SL':
         trigger = Decimal(str(order.trigger_price))
@@ -1864,6 +1866,7 @@ Service       API
 | `sandbox/order_manager.py` | Order CRUD operations |
 | `sandbox/catch_up_processor.py` | Startup catch-up for missed events |
 | `sandbox/execution_thread.py` | Execution engine thread management |
+| `sandbox/websocket_execution_engine.py` | WebSocket-based order execution |
 | `sandbox/squareoff_thread.py` | APScheduler management |
 | `services/sandbox_service.py` | API integration layer |
 | `services/analyzer_service.py` | Analyzer mode toggle |

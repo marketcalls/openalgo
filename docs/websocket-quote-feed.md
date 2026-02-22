@@ -4,7 +4,7 @@ This guide demonstrates how to integrate with OpenAlgo's WebSocket quote feed fo
 
 ## Overview
 
-OpenAlgo provides a unified WebSocket server (port 8765) that streams market data from 24+ brokers in a normalized format. Clients can subscribe to LTP, Quote, or Depth modes.
+OpenAlgo provides a unified WebSocket server (port 8765) that streams market data from 29 brokers in a normalized format. Clients can subscribe to LTP, Quote, or Depth modes.
 
 ## Connection Details
 

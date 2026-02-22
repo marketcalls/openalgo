@@ -21,10 +21,6 @@ openalgo/
 ├── requirements.txt          # Pip fallback dependencies
 ├── uv.lock                   # Locked dependency versions
 │
-├── package.json              # Node.js for Tailwind CSS (Jinja2 templates)
-├── tailwind.config.mjs       # Tailwind configuration
-├── postcss.config.mjs        # PostCSS configuration
-│
 ├── CLAUDE.md                 # AI assistant instructions
 ├── README.md                 # Project overview
 ├── CONTRIBUTING.md           # Contribution guidelines
@@ -44,8 +40,6 @@ openalgo/
 ├── websocket_proxy/          # Real-time data server
 ├── sandbox/                  # Sandbox trading engine
 ├── frontend/                 # React 19 SPA
-├── templates/                # Jinja2 HTML templates
-├── static/                   # Static assets (CSS, JS, images)
 ├── docs/                     # Documentation
 ├── test/                     # Test suites
 └── db/                       # SQLite database files
@@ -81,6 +75,14 @@ blueprints/
 ├── search.py                 # Symbol search UI
 ├── strategy.py               # Strategy management
 ├── python_strategy.py        # Python strategy execution
+├── gex.py                    # GEX Dashboard analytics
+├── ivchart.py                # IV Chart analytics
+├── ivsmile.py                # IV Smile analytics
+├── oiprofile.py              # OI Profile analytics
+├── oitracker.py              # OI Tracker analytics
+├── straddle_chart.py         # Straddle Chart analytics
+├── vol_surface.py            # Volatility Surface analytics
+├── health.py                 # Health monitoring
 ├── log.py                    # Log viewer
 ├── traffic.py                # Traffic logs
 ├── latency.py                # Latency monitor
@@ -198,9 +200,19 @@ services/
 ├── option_greeks_service.py      # Greeks calculation
 ├── option_symbol_service.py      # Option symbol builder
 ├── synthetic_future_service.py   # Synthetic futures
+├── options_multiorder_service.py # Multi-leg options
+│
+├── gex_service.py                # Gamma Exposure (GEX) analytics
+├── iv_chart_service.py           # IV Chart analytics
+├── iv_smile_service.py           # IV Smile analytics
+├── oi_profile_service.py         # OI Profile analytics
+├── oi_tracker_service.py         # OI Tracker analytics
+├── straddle_chart_service.py     # ATM Straddle Chart analytics
+├── vol_surface_service.py        # 3D Volatility Surface analytics
 │
 ├── market_calendar_service.py    # Trading calendar
 ├── historify_service.py          # Historical data storage
+├── historify_scheduler_service.py # Historify background jobs
 ├── analyzer_service.py           # Sandbox mode
 ├── sandbox_service.py            # Sandbox operations
 │
@@ -212,6 +224,7 @@ services/
 ├── flow_price_monitor_service.py # Price-triggered flows
 ├── flow_openalgo_client.py       # Flow API client
 │
+├── ping_service.py               # Health check
 ├── websocket_service.py          # WebSocket management
 └── websocket_client.py           # WebSocket client
 ```
@@ -247,12 +260,15 @@ database/
 ├── master_contract_cache_hook.py # Contract caching
 ├── chart_prefs_db.py             # Chart preferences
 │
+├── health_db.py                  # Health monitoring data
 ├── historify_db.py               # Historical data (DuckDB)
 ├── apilog_db.py                  # API logs
 ├── latency_db.py                 # Latency metrics
 ├── traffic_db.py                 # Traffic logs
 ├── cache_restoration.py          # Cache recovery
-└── token_db_enhanced.py          # Enhanced token features
+├── cache_invalidation.py         # Cache invalidation
+├── token_db_enhanced.py          # Enhanced token features
+└── token_db_backup.py            # Token backup utilities
 ```
 
 ### `/utils/` - Shared Utilities
@@ -283,6 +299,7 @@ utils/
 ├── number_formatter.py       # Number formatting
 ├── mpp_slab.py               # Margin slab calculations
 │
+├── health_monitor.py         # System health monitoring
 ├── ngrok_manager.py          # Ngrok tunnel management
 ├── env_check.py              # Environment validation
 ├── version.py                # Version information
@@ -378,15 +395,15 @@ Virtual trading environment for testing.
 sandbox/
 ├── __init__.py
 ├── execution_engine.py       # Order execution simulator
+├── websocket_execution_engine.py # WebSocket-based execution
+├── execution_thread.py       # Background execution thread
+├── catch_up_processor.py     # Catch-up order processing
+├── order_manager.py          # Order management
 ├── position_manager.py       # Position tracking
 ├── fund_manager.py           # Virtual fund management
-├── margin_calculator.py      # Margin calculations
-├── mtm_engine.py             # Mark-to-market updates
-├── auto_squareoff.py         # Auto square-off logic
-├── session_manager.py        # Session boundary handling
-├── order_validator.py        # Order validation
-├── price_feed.py             # Price feed integration
-└── *.py                      # Additional modules
+├── holdings_manager.py       # Holdings tracking
+├── squareoff_manager.py      # Square-off logic
+└── squareoff_thread.py       # Background square-off thread
 ```
 
 ## Frontend
@@ -410,78 +427,93 @@ frontend/
 │   │
 │   ├── api/                  # API client modules
 │   │   ├── client.ts         # Axios instance
-│   │   ├── orders.ts         # Order API
-│   │   ├── positions.ts      # Position API
-│   │   └── *.ts              # Other API modules
+│   │   ├── auth.ts           # Authentication API
+│   │   ├── admin.ts          # Admin API
+│   │   ├── trading.ts        # Trading API (orders, positions)
+│   │   ├── option-chain.ts   # Option chain API
+│   │   ├── gex.ts            # GEX analytics API
+│   │   ├── iv-chart.ts       # IV Chart API
+│   │   ├── iv-smile.ts       # IV Smile API
+│   │   ├── oi-profile.ts     # OI Profile API
+│   │   ├── oi-tracker.ts     # OI Tracker API
+│   │   ├── straddle-chart.ts # Straddle Chart API
+│   │   ├── vol-surface.ts    # Volatility Surface API
+│   │   ├── health.ts         # Health monitoring API
+│   │   ├── flow.ts           # Flow editor API
+│   │   ├── strategy.ts       # Strategy API
+│   │   ├── chartink.ts       # Chartink API
+│   │   ├── python-strategy.ts # Python strategy API
+│   │   └── telegram.ts       # Telegram API
 │   │
 │   ├── components/           # Reusable components
 │   │   ├── ui/               # shadcn/ui components
 │   │   ├── layout/           # Layout components
+│   │   ├── auth/             # Auth components (AuthSync)
 │   │   ├── flow/             # Flow editor components
-│   │   └── *.tsx             # Feature components
+│   │   ├── socket/           # Socket.IO components
+│   │   ├── trading/          # Trading components
+│   │   ├── option-chain/     # Option chain components
+│   │   └── playground/       # Playground components
 │   │
-│   ├── pages/                # Route pages
-│   │   ├── Dashboard.tsx
-│   │   ├── OrderBook.tsx
-│   │   ├── Positions.tsx
-│   │   └── *.tsx
-│   │
-│   ├── features/             # Feature modules
-│   │   ├── auth/
-│   │   ├── trading/
-│   │   └── *.ts
+│   ├── pages/                # Route pages (60+)
+│   │   ├── Dashboard.tsx     # Main dashboard
+│   │   ├── OrderBook.tsx     # Order book
+│   │   ├── Positions.tsx     # Positions
+│   │   ├── Tools.tsx         # Analytics tools hub
+│   │   ├── GEXDashboard.tsx  # Gamma Exposure dashboard
+│   │   ├── IVSmile.tsx       # IV Smile chart
+│   │   ├── IVChart.tsx       # IV Chart
+│   │   ├── OIProfile.tsx     # OI Profile
+│   │   ├── OITracker.tsx     # OI Tracker
+│   │   ├── MaxPain.tsx       # Max Pain analysis
+│   │   ├── StraddleChart.tsx # ATM Straddle chart
+│   │   ├── VolSurface.tsx    # 3D Volatility Surface
+│   │   ├── admin/            # Admin pages
+│   │   ├── chartink/         # Chartink pages
+│   │   ├── flow/             # Flow editor pages
+│   │   ├── monitoring/       # Monitoring dashboards
+│   │   ├── python-strategy/  # Python strategy pages
+│   │   ├── strategy/         # Strategy pages
+│   │   └── telegram/         # Telegram pages
 │   │
 │   ├── hooks/                # Custom React hooks
-│   │   ├── useSocket.ts
-│   │   ├── useApi.ts
-│   │   └── *.ts
+│   │   ├── useSocket.ts      # Socket.IO hook
+│   │   ├── useLivePrice.ts   # Live price feed
+│   │   ├── useLiveQuote.ts   # Live quote feed
+│   │   ├── useMarketData.ts  # Market data hook
+│   │   ├── useMarketStatus.ts # Market status
+│   │   ├── useOptionChainLive.ts # Live option chain
+│   │   └── useOrderEventRefresh.ts # Order event refresh
 │   │
 │   ├── stores/               # Zustand stores
-│   │   ├── authStore.ts
-│   │   └── *.ts
+│   │   ├── authStore.ts      # Auth state
+│   │   ├── themeStore.ts     # Theme state
+│   │   ├── alertStore.ts     # Alert/toast state
+│   │   └── flowWorkflowStore.ts # Flow editor state
 │   │
 │   ├── lib/                  # Utility libraries
 │   │   ├── utils.ts
-│   │   └── flow/
+│   │   ├── rateLimiter.ts    # Client-side rate limiter
+│   │   ├── MarketDataManager.ts # Market data management
+│   │   └── flow/             # Flow editor utilities
 │   │
 │   ├── types/                # TypeScript types
-│   │   ├── api.ts
-│   │   ├── order.ts
-│   │   └── *.ts
+│   │   ├── trading.ts        # Trading types
+│   │   ├── option-chain.ts   # Option chain types
+│   │   ├── plotly.d.ts       # Plotly type declarations
+│   │   └── *.ts              # Other type definitions
 │   │
 │   ├── config/               # Configuration
-│   │   └── routes.ts
+│   │   └── navigation.ts     # Navigation config
+│   │
+│   ├── app/                  # App-level providers
+│   │   └── providers.tsx     # React context providers
 │   │
 │   └── test/                 # Test utilities
 │
 ├── dist/                     # Production build output
 ├── e2e/                      # Playwright E2E tests
 └── node_modules/             # Dependencies
-```
-
-### `/templates/` - Jinja2 Templates
-
-Server-rendered HTML templates (legacy/admin).
-
-```
-templates/
-├── base.html                 # Base template
-├── login.html                # Login page
-├── dashboard.html            # Dashboard
-├── admin/                    # Admin templates
-└── *.html                    # Other pages
-```
-
-### `/static/` - Static Assets
-
-```
-static/
-├── css/
-│   └── main.css              # Compiled Tailwind CSS
-├── js/
-│   └── *.js                  # JavaScript files
-└── icons/
-    └── *.png                 # Favicons and icons
 ```
 
 ## Data & Storage
@@ -507,10 +539,15 @@ docs/
 │   ├── 00-directory-structure/
 │   ├── 01-frontend/
 │   ├── 02-backend/
-│   └── ...
+│   └── ... (52 modules)
 │
 ├── api/                      # API documentation
+├── audit/                    # Broker API audit reports
+├── prd/                      # Product requirements docs
+├── plans/                    # Implementation plans
+├── docker/                   # Docker documentation
 ├── userguide/                # User guide
+├── test/                     # Test documentation
 ├── CHANGELOG.md              # Version history
 └── *.md                      # Other docs
 ```

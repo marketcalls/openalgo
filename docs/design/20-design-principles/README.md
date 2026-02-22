@@ -18,7 +18,7 @@ OpenAlgo follows specific design patterns and architectural principles to mainta
 │  │  Agnostic       │  │  of Concerns    │  │  Operations     │             │
 │  │                 │  │                 │  │                 │             │
 │  │  Single API for │  │  API → Service  │  │  Non-blocking   │             │
-│  │  24+ brokers    │  │  → Broker       │  │  logging/alerts │             │
+│  │  29 brokers    │  │  → Broker       │  │  logging/alerts │             │
 │  └─────────────────┘  └─────────────────┘  └─────────────────┘             │
 │                                                                              │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐             │
@@ -35,7 +35,7 @@ OpenAlgo follows specific design patterns and architectural principles to mainta
 ## 1. Broker-Agnostic API
 
 ### Principle
-One unified API that works with all 24+ supported brokers.
+One unified API that works with all 29 supported brokers.
 
 ### Implementation
 

@@ -2,7 +2,7 @@
 
 ## Introduction
 
-**OpenAlgo** is a free, open-source algorithmic trading platform that bridges your trading ideas with execution. Built with Python Flask and a modern React frontend, it provides a unified API layer across 24+ Indian brokers, enabling seamless automation from TradingView, Amibroker, Python scripts, Excel, and AI agents.
+**OpenAlgo** is a free, open-source algorithmic trading platform that bridges your trading ideas with execution. Built with Python Flask and a modern React frontend, it provides a unified API layer across 29 Indian brokers, enabling seamless automation from TradingView, Amibroker, Python scripts, Excel, and AI agents.
 
 **Website**: [https://openalgo.in](https://openalgo.in)
 **GitHub**: [https://github.com/marketcalls/openalgo](https://github.com/marketcalls/openalgo)
@@ -72,7 +72,7 @@ All in under 1 second!
 | Feature | Description |
 |---------|-------------|
 | **Smart Order Placement** | Execute trades with position sizing, split orders, and bracket orders |
-| **Multi-Broker Support** | Connect to 24+ Indian brokers through a unified API |
+| **Multi-Broker Support** | Connect to 29 Indian brokers through a unified API |
 | **Multi-Exchange Trading** | NSE, NFO, BSE, BFO, MCX, CDS, BCD, NCDEX |
 | **Real-Time Streaming** | WebSocket-based live quotes, depth, and order updates |
 | **Auto Square-Off** | Time-based and one-click position square-off |
@@ -156,13 +156,13 @@ All in under 1 second!
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Supported Brokers (24+)
+## Supported Brokers (29)
 
 | Category | Brokers |
 |----------|---------|
 | **Tier 1** | Zerodha, Angel One, Dhan, Fyers, Upstox |
 | **Banks** | ICICI Direct, HDFC Securities, Kotak Neo |
-| **Others** | 5paisa, Finvasia, Flattrade, Firstock, and more |
+| **Others** | 5paisa, Finvasia, Flattrade, Firstock, Nubra, and more |
 
 **Benefit**: Switch brokers without changing your strategy code - OpenAlgo's unified API handles the translation.
 
@@ -298,7 +298,7 @@ Ready to begin? Here's your path:
 | Aspect | OpenAlgo |
 |--------|----------|
 | **Cost** | Free (Open Source, MIT License) |
-| **Brokers** | 24+ Indian brokers |
+| **Brokers** | 29 Indian brokers |
 | **Exchanges** | NSE, NFO, BSE, BFO, MCX, CDS, BCD, NCDEX |
 | **Signal Sources** | TradingView, Amibroker, ChartInk, Python, AI |
 | **Strategy Building** | Flow (Visual), Python Hosting, External Webhooks |
