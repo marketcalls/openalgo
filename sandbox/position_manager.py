@@ -53,7 +53,7 @@ def parse_expiry_from_symbol(symbol, exchange):
     import re
 
     # Only process F&O exchanges
-    fo_exchanges = ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX"]
+    fo_exchanges = ["NFO", "BFO", "MCX", "CDS", "BCD", "NCDEX", "CRYPTO"]
     if exchange not in fo_exchanges:
         return None
 
