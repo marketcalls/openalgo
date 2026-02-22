@@ -64,7 +64,7 @@ OpenAlgo uses three distinct hooks for real-time communication:
 ### 1.2 Backend Architecture
 
 The backend WebSocket proxy (`websocket_proxy/server.py`) provides:
-- Multi-broker support (24+ brokers)
+- Multi-broker support (29 brokers)
 - Connection pooling (3,000 symbols capacity)
 - ZeroMQ message bus for high-performance distribution
 - Message throttling (50ms for LTP mode)

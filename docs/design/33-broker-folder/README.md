@@ -286,6 +286,7 @@ VALID_BROKERS=zerodha,dhan,angel,newbroker
 | zerodha | Complete OAuth2 implementation |
 | dhan | Simple API key auth |
 | angel | Full feature set |
+| nubra | gRPC-based streaming, protos directory |
 
 ### Code Reference
 

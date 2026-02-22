@@ -28,7 +28,7 @@ OpenAlgo uses `httpx` with a shared singleton pattern for broker API calls:
 └─────────────────────────────────────────────────────────────┘
                             │
                             ▼
-                    Broker APIs (24+)
+                    Broker APIs (29)
 ```
 
 ### Key Files
