@@ -92,7 +92,7 @@ source .venv/bin/activate
 uv sync
 
 # Install production dependencies
-uv pip install gunicorn eventlet==0.35.2
+uv pip install gunicorn eventlet
 ```
 
 ### 3. Configure Environment
@@ -141,7 +141,7 @@ ExecStart=/opt/openalgo/.venv/bin/gunicorn \
     --worker-class eventlet \
     -w 1 \
     --bind 127.0.0.1:5000 \
-    --timeout 120 \
+    --timeout 300 \
     app:app
 Restart=always
 RestartSec=10
