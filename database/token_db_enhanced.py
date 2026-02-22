@@ -12,12 +12,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pytz
 
+from utils.constants import CRYPTO_EXCHANGES, FNO_EXCHANGES
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
-
-# FNO exchanges that have derivatives
-FNO_EXCHANGES = {"NFO", "BFO", "MCX", "CDS"}
 
 # Regex pattern to extract underlying from OpenAlgo symbol format
 # Format: [BaseSymbol][DDMMMYY][StrikePrice][CE/PE] or [BaseSymbol][DDMMMYY]FUT
@@ -29,24 +27,52 @@ _UNDERLYING_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Regex to extract underlying from canonical CRYPTO symbols that follow the
+# Indian F&O-style format (no dashes): BTC28FEB2580000CE / BTC28FEB25FUT
+# The underlying is the run of leading alpha characters before the first digit.
+# Perpetuals (BTCUSDT) have no embedded digit — handled separately via suffix stripping.
+# Anchored to expiry date pattern (DDMMMYY) so numeric-prefix underlyings like
+# 1INCH28FEB25FUT are handled correctly. Non-greedy capture stops at first DDMMMYY match.
+_CRYPTO_UNDERLYING_PATTERN = re.compile(
+    r"^([A-Z0-9]+?)(?=\d{2}[A-Z]{3}\d{2})",
+    re.IGNORECASE,
+)
+
 
 def extract_underlying_from_symbol(symbol: str, exchange: str) -> str | None:
     """
     Extract underlying name from OpenAlgo symbol format.
 
     OpenAlgo symbol formats:
-    - Futures: [BaseSymbol][DDMMMYY]FUT (e.g., BANKNIFTY24APR24FUT -> BANKNIFTY)
-    - Options: [BaseSymbol][DDMMMYY][Strike][CE/PE] (e.g., NIFTY28MAR2420800CE -> NIFTY)
+    - Indian FNO / CRYPTO options+futures:
+        [BaseSymbol][DDMMMYY][Strike][CE/PE]  e.g. NIFTY28MAR2420800CE  → NIFTY
+        [BaseSymbol][DDMMMYY]FUT              e.g. BTC28FEB25FUT         → BTC
+      Underlying = leading alpha characters before the first digit.
+    - CRYPTO perpetuals: BTCUSDT / ETHUSDT
+      Underlying = strip trailing USDT or USD quote-currency suffix.
 
     Args:
         symbol: OpenAlgo formatted symbol
-        exchange: Exchange code (NFO, BFO, MCX, CDS, etc.)
+        exchange: Exchange code (NFO, BFO, MCX, CDS, CRYPTO, etc.)
 
     Returns:
         Underlying name or None if not extractable
     """
     if not symbol or exchange not in FNO_EXCHANGES:
         return None
+
+    if exchange in CRYPTO_EXCHANGES:
+        upper = symbol.upper()
+        # FUT / CE / PE canonical: underlying is leading alpha-nums before DDMMMYY expiry
+        # e.g. BTC28FEB2580000CE → BTC,  1INCH28FEB25FUT → 1INCH
+        m = _CRYPTO_UNDERLYING_PATTERN.match(upper)
+        if m:
+            return m.group(1)
+        # Perpetual canonical: BTCUSDT / BTCUSD — strip quote-currency suffix
+        for suffix in ("USDT", "USD"):
+            if upper.endswith(suffix) and len(upper) > len(suffix):
+                return upper[: -len(suffix)]
+        return upper  # fallback — return whole symbol
 
     match = _UNDERLYING_PATTERN.match(symbol.upper())
     if match:
@@ -504,7 +530,13 @@ class BrokerSymbolCache:
             if expiry_stripped and symbol_data.expiry != expiry_stripped:
                 continue
 
-            # Instrument type filter (based on symbol suffix)
+            # Instrument type filter.
+            # All exchanges (including CRYPTO) use canonical suffix conventions:
+            #   CE  → symbol ends with "CE"  (e.g. BTC28FEB2580000CE)
+            #   PE  → symbol ends with "PE"  (e.g. BTC28FEB2580000PE)
+            #   FUT → symbol ends with "FUT" (e.g. BTC28FEB25FUT)
+            # Perpetuals (BTCUSDT) carry instrumenttype="PERPFUT" and do not end with
+            # FUT/CE/PE, so they are correctly excluded when a specific filter is applied.
             if inst_type:
                 symbol_upper = symbol_data.symbol.upper()
                 if inst_type == "FUT" and not symbol_upper.endswith("FUT"):

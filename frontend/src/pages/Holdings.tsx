@@ -25,25 +25,18 @@ import {
 } from '@/components/ui/table'
 import { useLivePrice, calculateLiveStats } from '@/hooks/useLivePrice'
 import { usePageVisibility } from '@/hooks/usePageVisibility'
-import { cn, sanitizeCSV } from '@/lib/utils'
+import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Holding, HoldingsStats } from '@/types/trading'
-
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    minimumFractionDigits: 2,
-  }).format(value)
-}
 
 function formatPercent(value: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
 }
 
 export default function Holdings() {
-  const { apiKey } = useAuthStore()
+  const { apiKey, user } = useAuthStore()
+  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [holdings, setHoldings] = useState<Holding[]>([])
   const [stats, setStats] = useState<HoldingsStats | null>(null)
   const [isLoading, setIsLoading] = useState(true)
