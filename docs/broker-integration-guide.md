@@ -170,10 +170,48 @@ def authenticate_broker(request_token):
         return None, f"An exception occurred: {str(e)}"
 ```
 
-### Example: TOTP/Credential Pattern
+### Example: TOTP/Credential Pattern (No Feed Token)
+
+For brokers that authenticate with userid + password + TOTP but do **not** return a separate feed token (e.g., AliceBlue, Firstock, Shoonya, Zebu, Samco):
 
 ```python
-# For brokers that require userid + password + TOTP instead of OAuth
+# Returns: (auth_token, error_message)
+
+def authenticate_broker(userid, password, totp_code):
+    """
+    Authenticate using client credentials and TOTP.
+
+    Returns:
+        tuple: (auth_token, error_message)
+    """
+    api_key = os.getenv("BROKER_API_KEY")
+    client = get_httpx_client()
+
+    payload = {
+        "userId": userid,
+        "password": password,
+        "totp": totp_code,
+    }
+
+    response = client.post(
+        "https://api.yourbroker.com/auth/login",
+        json=payload,
+        headers={"X-PrivateKey": api_key},
+    )
+
+    data = response.json()
+    if data.get("sessionID"):
+        return data["sessionID"], None
+    else:
+        return None, data.get("message", "Authentication failed")
+```
+
+### Example: TOTP + Feed Token Pattern
+
+For brokers that return both an auth token and a separate feed/streaming token (e.g., Angel, MStock, Nubra, Paytm, Motilal):
+
+```python
+# Returns: (auth_token, feed_token, error_message)
 
 def authenticate_broker(clientcode, broker_pin, totp_code):
     """
@@ -910,10 +948,10 @@ class YourBrokerWebSocket:
             on_open=self._on_open,
             header={"Authorization": f"Bearer {self.auth_token}"},
         )
-        thread = threading.Thread(
-            target=self.ws.run_forever,
-            kwargs={"sslopt": {"cert_reqs": ssl.CERT_NONE}},
-        )
+        # Use default TLS verification (recommended).
+        # Only set sslopt={"cert_reqs": ssl.CERT_NONE} if the broker's
+        # WebSocket server has certificate issues that prevent connection.
+        thread = threading.Thread(target=self.ws.run_forever)
         thread.daemon = True
         thread.start()
 
