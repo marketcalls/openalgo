@@ -808,12 +808,14 @@ for i in "${!CONF_DOMAINS[@]}"; do
             fi
         fi
         
-        # CSP: Add domain if not already present (preserves custom domains)
+        # CSP: Add domain if not already present (delete-and-append avoids sed regex issues with nested quotes)
+        # See: https://github.com/marketcalls/openalgo/issues/938
         if ! grep "CSP_CONNECT_SRC" "$ENV_FILE" | grep -q "https://$DOMAIN"; then
-            CURRENT_CSP=$(grep "CSP_CONNECT_SRC" "$ENV_FILE" | sed 's/.*= "\\(.*\\)"/\\1/')
+            CURRENT_CSP=$(grep "^CSP_CONNECT_SRC" "$ENV_FILE" | sed 's/^CSP_CONNECT_SRC *= *//; s/^"//; s/"$//')
             if [ -n "$CURRENT_CSP" ] && ! echo "$CURRENT_CSP" | grep -q "https://$DOMAIN"; then
                 NEW_CSP="$CURRENT_CSP https://$DOMAIN wss://$DOMAIN"
-                sed -i "s|CSP_CONNECT_SRC = \".*\"|CSP_CONNECT_SRC = \"$NEW_CSP\"|g" "$ENV_FILE"
+                sed -i '/^CSP_CONNECT_SRC/d' "$ENV_FILE"
+                echo "CSP_CONNECT_SRC = \"$NEW_CSP\"" >> "$ENV_FILE"
             fi
         fi
         
@@ -844,7 +846,10 @@ for i in "${!CONF_DOMAINS[@]}"; do
         sed -i "s|ZMQ_HOST='127.0.0.1'|ZMQ_HOST='0.0.0.0'|g" "$ENV_FILE"
         sed -i "s|FLASK_HOST_IP='127.0.0.1'|FLASK_HOST_IP='0.0.0.0'|g" "$ENV_FILE"
         sed -i "s|CORS_ALLOWED_ORIGINS = '.*'|CORS_ALLOWED_ORIGINS = 'https://$DOMAIN'|g" "$ENV_FILE"
-        sed -i "s|CSP_CONNECT_SRC = \"'self'.*\"|CSP_CONNECT_SRC = \"'self' wss://$DOMAIN https://$DOMAIN wss: ws: https://cdn.socket.io\"|g" "$ENV_FILE"
+        # CSP: Set connect sources with domain (delete-and-append avoids sed regex issues with nested quotes)
+        # See: https://github.com/marketcalls/openalgo/issues/938
+        sed -i '/^CSP_CONNECT_SRC/d' "$ENV_FILE"
+        echo "CSP_CONNECT_SRC = \"'self' wss://$DOMAIN https://$DOMAIN wss: ws: https://cdn.socket.io\"" >> "$ENV_FILE"
         
         log "New .env created with fresh security keys" "$GREEN"
     fi
