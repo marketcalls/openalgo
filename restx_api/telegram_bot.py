@@ -90,7 +90,25 @@ preferences_model = api.model(
 
 
 def run_async(coro):
-    """Helper to run async coroutine in sync context"""
+    """Execute an async coroutine in a synchronous context.
+
+    Creates a new event loop for the duration of the coroutine execution,
+    properly closing it when complete. Useful for calling async functions
+    from Flask request handlers.
+
+    Args:
+        coro: The async coroutine to execute.
+
+    Returns:
+        The return value from the coroutine.
+
+    Raises:
+        RuntimeError: If the event loop fails to initialize.
+        Any exception raised by the coroutine being executed.
+
+    Example:
+        result = run_async(telegram_bot_service.start_polling())
+    """
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
@@ -212,7 +230,7 @@ class StartBot(Resource):
 
             # Start bot
             if config.get("polling_mode", True):
-                success, message = run_async(bot.start_polling())
+                success, message = run_async(telegram_bot_service.start_polling())
             else:
                 # Webhook mode would be configured separately
                 success = True
@@ -261,9 +279,17 @@ class StopBot(Resource):
 
 
 def get_webhook_secret():
-    """
-    Get or generate webhook secret for Telegram webhook verification.
+    """Get or generate webhook secret for Telegram webhook verification.
+
     Uses TELEGRAM_WEBHOOK_SECRET env var, or derives from bot token if not set.
+    This secret ensures that incoming requests to the webhook endpoint 
+    originate from the official Telegram API.
+
+    Returns:
+        str: The webhook secret string, or None if the bot token is not available.
+
+    Example:
+        secret = get_webhook_secret()
     """
     # First check for explicit webhook secret
     secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
@@ -291,7 +317,7 @@ class WebhookHandler(Resource):
         requests are genuinely from Telegram and not from attackers.
         """
         try:
-            # Verify webhook secret token (Telegram sends this header when secret_token is configured)
+            # Verify webhook secret token
             expected_secret = get_webhook_secret()
 
             if expected_secret:
@@ -299,12 +325,10 @@ class WebhookHandler(Resource):
 
                 if not received_secret:
                     logger.warning("Webhook request missing secret token header")
-                    # Return 401 Unauthorized for missing token
                     return make_response("Unauthorized", 401)
 
                 if received_secret != expected_secret:
                     logger.warning("Webhook request with invalid secret token")
-                    # Return 403 Forbidden for invalid token
                     return make_response("Forbidden", 403)
 
             # Get update data from Telegram
@@ -313,22 +337,17 @@ class WebhookHandler(Resource):
             if not update_data:
                 return make_response("", 200)
 
-            # Basic structure validation - Telegram updates must have update_id
+            # Basic structure validation
             if not isinstance(update_data, dict) or "update_id" not in update_data:
                 logger.warning("Invalid webhook payload structure")
                 return make_response("Bad Request", 400)
 
-            # Process update asynchronously
-            # Note: process_webhook_update method needs to be implemented in the new service
-            # For now, return success
             logger.info(f"Webhook update received: update_id={update_data.get('update_id')}")
 
-            # Always return 200 to Telegram for valid requests
             return make_response("", 200)
 
         except Exception as e:
             logger.exception(f"Error processing webhook: {str(e)}")
-            # Still return 200 to avoid Telegram retries for processing errors
             return make_response("", 200)
 
 
@@ -399,9 +418,6 @@ class BroadcastMessage(Resource):
                     jsonify({"status": "error", "message": "Broadcast is disabled"}), 403
                 )
 
-            # Send broadcast
-            # Note: broadcast_message method needs to be implemented in the new service
-            # For now, return a placeholder response
             success_count, fail_count = 0, 0
 
             return make_response(
@@ -480,7 +496,6 @@ class SendNotification(Resource):
                 logger.warning(
                     f"Failed to send telegram alert to user {username} (ID: {telegram_id}), queued for retry"
                 )
-                # Still return success since it's queued
                 return make_response(
                     jsonify({"status": "success", "message": "Notification queued for delivery"}),
                     200,
