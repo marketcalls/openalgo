@@ -675,11 +675,221 @@ def master_contract_download():
 
 ## 11. Step 9: Implement WebSocket Streaming
 
-Three files are needed for real-time market data streaming.
+Three files are needed in `broker/your_broker/streaming/`, plus the adapter must follow specific naming conventions for automatic discovery by the WebSocket proxy system.
+
+### How the WebSocket Proxy Discovers Broker Adapters
+
+The WebSocket proxy uses a **factory pattern** in `websocket_proxy/broker_factory.py`. When a user authenticates, the proxy calls `create_broker_adapter(broker_name)`, which:
+
+1. Checks the `BROKER_ADAPTERS` registry (populated by `register_adapter()`)
+2. If not found, attempts **dynamic import** using this naming convention:
+
+```python
+# websocket_proxy/broker_factory.py — _get_adapter_class()
+
+# Primary path: broker-specific directory
+module_name = f"broker.{broker_name}.streaming.{broker_name}_adapter"
+class_name = f"{broker_name.capitalize()}WebSocketAdapter"
+
+# Fallback path: websocket_proxy directory
+module_name = f"websocket_proxy.{broker_name}_adapter"
+```
+
+**Critical naming requirements:**
+- **Module file:** `broker/your_broker/streaming/your_broker_adapter.py`
+- **Class name:** `Your_brokerWebSocketAdapter` (broker name with first letter capitalized + `WebSocketAdapter`)
+- **Examples:**
+  - `broker/angel/streaming/angel_adapter.py` → class `AngelWebSocketAdapter`
+  - `broker/zerodha/streaming/zerodha_adapter.py` → class `ZerodhaWebSocketAdapter`
+  - `broker/dhan/streaming/dhan_adapter.py` → class `DhanWebSocketAdapter`
+
+### Architecture: Data Flow
+
+```
+Broker WebSocket API
+  → your_broker_websocket.py (low-level client, receives raw ticks)
+  → your_broker_mapping.py (normalizes data format)
+  → your_broker_adapter.py (publishes to ZeroMQ via BaseBrokerWebSocketAdapter)
+  → ZeroMQ PUB socket (port 5555)
+  → websocket_proxy/server.py SUB socket (reads from ZeroMQ)
+  → WebSocket clients (port 8765, broadcasts to React frontend / SDK)
+```
+
+### The Base Adapter Class (`websocket_proxy/base_adapter.py`)
+
+Your adapter **must** extend `BaseBrokerWebSocketAdapter`, which provides:
+
+- **ZeroMQ PUB socket** — automatically created and bound to a port
+- **Connection pooling** — managed via `websocket_proxy/connection_manager.py`
+- **Auth token helpers** — `get_auth_token_for_user()`, `get_fresh_auth_token()`, `clear_auth_cache_for_user()`
+- **Stale token retry** — `handle_auth_error_and_retry()`, `is_auth_error()`
+- **publish_market_data()** — publishes normalized tick data to ZeroMQ
+
+**Abstract methods you must implement:**
+
+```python
+from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
+
+class Your_brokerWebSocketAdapter(BaseBrokerWebSocketAdapter):
+
+    def initialize(self, broker_name, user_id, auth_data=None):
+        """
+        Initialize connection with broker WebSocket API.
+        Fetch auth token from DB, set up broker-specific client.
+
+        Args:
+            broker_name: The broker name (e.g., 'your_broker')
+            user_id: The user's ID
+            auth_data: Optional pre-fetched auth data
+
+        Returns:
+            dict: {"status": "success"} or {"status": "error", "message": "..."}
+        """
+
+    def connect(self):
+        """
+        Establish WebSocket connection to the broker.
+
+        Returns:
+            dict: {"status": "success"} or {"status": "error", "code": "...", "message": "..."}
+        """
+
+    def disconnect(self):
+        """
+        Disconnect from the broker's WebSocket.
+        Must call self.cleanup_zmq() to release ZeroMQ resources.
+        """
+
+    def subscribe(self, symbol, exchange, mode=2, depth_level=5):
+        """
+        Subscribe to market data.
+
+        Args:
+            symbol: Trading symbol (e.g., 'RELIANCE')
+            exchange: Exchange code (e.g., 'NSE')
+            mode: 1=LTP, 2=Quote, 3=Depth
+            depth_level: Market depth levels (5, 20, or 30)
+
+        Returns:
+            dict: {"status": "success", "actual_depth": 5} or {"status": "error", "message": "..."}
+        """
+
+    def unsubscribe(self, symbol, exchange, mode=2):
+        """
+        Unsubscribe from market data.
+
+        Returns:
+            dict: {"status": "success"} or {"status": "error", "message": "..."}
+        """
+```
+
+### Publishing Market Data (ZeroMQ Topic Format)
+
+The adapter must publish data using `self.publish_market_data(topic, data)`. The topic format is:
+
+```
+{BROKER_NAME}_{EXCHANGE}_{SYMBOL}_{MODE}
+```
+
+Where MODE is `LTP`, `QUOTE`, or `DEPTH`. Examples:
+- `angel_NSE_RELIANCE_LTP`
+- `zerodha_NFO_NIFTY24JAN24000CE_QUOTE`
+
+The proxy server (`websocket_proxy/server.py`) parses these topics in its `zmq_listener()` method and routes data to subscribed WebSocket clients.
+
+### Full Adapter Example
+
+```python
+# broker/your_broker/streaming/your_broker_adapter.py
+
+from database.auth_db import get_auth_token_broker
+from database.token_db import get_token, get_brexchange
+from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
+from broker.your_broker.streaming.your_broker_websocket import YourBrokerWebSocket
+from broker.your_broker.streaming.your_broker_mapping import map_feed_data
+from utils.logging import get_logger
+
+logger = get_logger(__name__)
+
+class Your_brokerWebSocketAdapter(BaseBrokerWebSocketAdapter):
+
+    def __init__(self):
+        super().__init__()
+        self.broker_ws = None
+        self.broker_name = "your_broker"
+
+    def initialize(self, broker_name, user_id, auth_data=None):
+        try:
+            # Fetch auth credentials from database
+            auth_token = self.get_auth_token_for_user(user_id)
+            if not auth_token:
+                return {"status": "error", "message": "No auth token found"}
+
+            self.auth_token = auth_token
+            self.user_id = user_id
+            return {"status": "success"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def connect(self):
+        try:
+            self.broker_ws = YourBrokerWebSocket(
+                auth_token=self.auth_token,
+                on_message_callback=self._on_tick_data,
+            )
+            self.broker_ws.connect()
+            self.connected = True
+            return {"status": "success"}
+        except Exception as e:
+            return {"status": "error", "code": "CONNECTION_FAILED", "message": str(e)}
+
+    def disconnect(self):
+        if self.broker_ws:
+            self.broker_ws.disconnect()
+        self.connected = False
+        self.cleanup_zmq()  # IMPORTANT: release ZeroMQ resources
+
+    def subscribe(self, symbol, exchange, mode=2, depth_level=5):
+        try:
+            token = get_token(symbol, exchange)
+            if not token:
+                return {"status": "error", "message": f"Token not found for {symbol}:{exchange}"}
+
+            self.broker_ws.subscribe([token])
+            self.subscriptions[f"{symbol}:{exchange}:{mode}"] = {
+                "symbol": symbol, "exchange": exchange, "token": token, "mode": mode,
+            }
+            return {"status": "success", "actual_depth": depth_level}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def unsubscribe(self, symbol, exchange, mode=2):
+        key = f"{symbol}:{exchange}:{mode}"
+        sub = self.subscriptions.pop(key, None)
+        if sub:
+            self.broker_ws.unsubscribe([sub["token"]])
+        return {"status": "success"}
+
+    def _on_tick_data(self, raw_data):
+        """Callback from broker WebSocket — normalize and publish."""
+        try:
+            normalized = map_feed_data(raw_data)
+            if normalized:
+                symbol = normalized.get("symbol")
+                exchange = normalized.get("exchange")
+                mode_str = {1: "LTP", 2: "QUOTE", 3: "DEPTH"}.get(normalized.get("mode", 2), "QUOTE")
+
+                topic = f"{self.broker_name}_{exchange}_{symbol}_{mode_str}"
+                self.publish_market_data(topic, normalized)
+        except Exception as e:
+            logger.error(f"Error processing tick: {e}")
+```
 
 ### your_broker_websocket.py — Low-Level WebSocket Client
 
 ```python
+# broker/your_broker/streaming/your_broker_websocket.py
+
 import ssl
 import json
 import threading
@@ -716,18 +926,26 @@ class YourBrokerWebSocket:
         """Unsubscribe from market data."""
         if self.ws:
             self.ws.send(json.dumps({"action": "unsubscribe", "tokens": tokens}))
+
+    def disconnect(self):
+        if self.ws:
+            self.ws.close()
 ```
 
 ### your_broker_mapping.py — Data Normalization
 
 ```python
+# broker/your_broker/streaming/your_broker_mapping.py
+
 def map_feed_data(raw_data):
     """
     Normalize broker-specific tick data to OpenAlgo's unified format.
 
     Returns:
         dict: {
-            "token": "instrument_token",
+            "symbol": "RELIANCE",
+            "exchange": "NSE",
+            "mode": 2,
             "ltp": 100.50,
             "open": 99.00,
             "high": 101.00,
@@ -740,34 +958,44 @@ def map_feed_data(raw_data):
     """
 ```
 
-### your_broker_adapter.py — Unified WebSocket Adapter
+### Connection Pooling Support
 
-This adapter integrates with the unified WebSocket proxy server (`websocket_proxy/server.py`). It must implement the `BrokerWebSocketAdapter` interface:
+The WebSocket proxy supports **connection pooling** via `websocket_proxy/connection_manager.py`. This handles broker symbol limits (e.g., Angel: 1000 symbols/connection) by automatically creating multiple WebSocket connections.
 
-```python
-import zmq
-
-class YourBrokerAdapter:
-    def __init__(self, auth_token, feed_token=None, user_id=None, api_key_market=None):
-        self.auth_token = auth_token
-        self.feed_token = feed_token
-        self.zmq_context = zmq.Context()
-        self.zmq_socket = self.zmq_context.socket(zmq.PUB)
-
-    def connect(self):
-        """Establish WebSocket connection to the broker."""
-
-    def subscribe(self, tokens):
-        """Subscribe to market data for instrument tokens."""
-
-    def unsubscribe(self, tokens):
-        """Unsubscribe from market data."""
-
-    def disconnect(self):
-        """Close the WebSocket connection."""
+Configuration (from `.env`):
+```env
+MAX_SYMBOLS_PER_WEBSOCKET = '1000'    # Symbols per connection
+MAX_WEBSOCKET_CONNECTIONS = '3'        # Max connections per broker
+ENABLE_CONNECTION_POOLING = 'true'     # Enable/disable pooling
 ```
 
-The adapter publishes normalized tick data to ZeroMQ (port 5555), which the unified proxy server (`websocket_proxy/server.py`, port 8765) then broadcasts to all connected frontend clients.
+Your adapter doesn't need special code for pooling — the `_PooledAdapterWrapper` in `broker_factory.py` handles it automatically by wrapping your adapter class.
+
+### Special Broker Behaviors in WebSocket Proxy
+
+Some brokers have special handling in `websocket_proxy/server.py` (in `cleanup_client()`):
+
+```python
+# Flattrade and Shoonya keep connections alive when last client disconnects
+if broker_name in ["flattrade", "shoonya"] and hasattr(adapter, "unsubscribe_all"):
+    adapter.unsubscribe_all()  # Just unsubscribe, don't disconnect
+else:
+    adapter.disconnect()       # Full disconnect for all other brokers
+```
+
+If your broker has expensive reconnection overhead, consider implementing `unsubscribe_all()` and adding your broker to this list.
+
+### WebSocket Proxy File Reference
+
+| File | Purpose |
+|------|---------|
+| `websocket_proxy/server.py` | Main WebSocket proxy server (port 8765), ZeroMQ listener, client management |
+| `websocket_proxy/broker_factory.py` | `BROKER_ADAPTERS` registry, `create_broker_adapter()` factory, dynamic import |
+| `websocket_proxy/base_adapter.py` | `BaseBrokerWebSocketAdapter` ABC, ZeroMQ PUB socket, auth helpers |
+| `websocket_proxy/connection_manager.py` | `ConnectionPool` for multi-connection symbol limit handling |
+| `websocket_proxy/mapping.py` | `SymbolMapper`, `ExchangeMapper`, `BrokerCapabilityRegistry` base classes |
+| `websocket_proxy/port_check.py` | Port availability checking utilities |
+| `websocket_proxy/app_integration.py` | Flask app integration for starting WebSocket server |
 
 ---
 
@@ -775,7 +1003,26 @@ The adapter publishes normalized tick data to ZeroMQ (port 5555), which the unif
 
 A new broker must be registered in **all** of the following locations:
 
-### 12.1. `.sample.env` — VALID_BROKERS List
+### 12.1. `README.md` — Supported Brokers List
+
+Add your broker to the "Supported Brokers" section (alphabetical order):
+
+```markdown
+## Supported Brokers (24+)
+
+<details>
+<summary>View All Supported Brokers</summary>
+
+- ...
+- YourBroker
+- ...
+
+</details>
+```
+
+**File:** `README.md` (lines 29-62)
+
+### 12.2. `.sample.env` — VALID_BROKERS List
 
 Add your broker name to the comma-separated `VALID_BROKERS` string:
 
@@ -785,7 +1032,7 @@ VALID_BROKERS = '...,your_broker,...'
 
 **File:** `.sample.env` (line 22)
 
-### 12.2. `start.sh` — Cloud/Docker VALID_BROKERS Default
+### 12.3. `start.sh` — Cloud/Docker VALID_BROKERS Default
 
 The startup script has a default VALID_BROKERS list for cloud deployments:
 
@@ -795,7 +1042,7 @@ VALID_BROKERS = '${VALID_BROKERS:-fivepaisa,...,your_broker,...,zerodha}'
 
 **File:** `start.sh` (line 51)
 
-### 12.3. `install/install.sh` — Installation Script
+### 12.4. `install/install.sh` — Installation Script
 
 Two functions need updating:
 
@@ -831,36 +1078,50 @@ log_message "\nValid brokers: fivepaisa,...,your_broker,...,zerodha" "$BLUE"
 
 **File:** `install/install.sh` (line 358)
 
-### 12.4. `install/install-multi.sh`
+### 12.5. `install/install-multi.sh`
 
 Same changes as `install.sh` — update `validate_broker()`, `is_xts_broker()`, and the broker selection prompt.
 
-### 12.5. `install/install-docker.sh`
+### 12.6. `install/install-docker.sh`
 
 Same changes as above for Docker-based installation.
 
-### 12.6. `install/install-docker-multi-custom-ssl.sh`
+### 12.7. `install/install-docker-multi-custom-ssl.sh`
 
 Same changes as above for multi-instance Docker with custom SSL.
 
-### 12.7. `install/docker-run.sh` and `install/docker-run.bat`
+### 12.8. `install/docker-run.sh` and `install/docker-run.bat`
 
 These scripts have a default `VALID_BROKERS` list in their generated `.env` file. Add your broker there.
 
-### 12.8. `websocket_proxy/server.py`
+### 12.9. `websocket_proxy/broker_factory.py` — Adapter Registration
 
-The WebSocket proxy server dynamically imports broker streaming adapters. If your broker follows the standard naming convention (`broker/{name}/streaming/{name}_adapter.py`), it should be auto-discovered. Verify the import pattern matches:
+The broker factory dynamically imports and registers your streaming adapter. If you follow the naming convention, **no code changes needed** — it auto-discovers:
 
 ```python
-# websocket_proxy/server.py dynamically imports:
-module = importlib.import_module(f"broker.{broker_name}.streaming.{broker_name}_adapter")
+# Auto-discovery uses these conventions:
+# Module: broker.{broker_name}.streaming.{broker_name}_adapter
+# Class:  {Broker_name}WebSocketAdapter  (first letter capitalized)
+
+# Example for "your_broker":
+#   Module: broker.your_broker.streaming.your_broker_adapter
+#   Class:  Your_brokerWebSocketAdapter
 ```
 
-### 12.9. `blueprints/brlogin.py` — Callback Handler
+If your class name doesn't follow this convention, you can **manually register** it in `broker_factory.py`:
+
+```python
+from broker.your_broker.streaming.your_broker_adapter import YourBrokerAdapter
+register_adapter("your_broker", YourBrokerAdapter)
+```
+
+The factory also handles connection pooling automatically via `_PooledAdapterWrapper`. See [Step 9](#11-step-9-implement-websocket-streaming) for full details.
+
+### 12.10. `blueprints/brlogin.py` — Callback Handler
 
 As detailed in [Step 3](#5-step-3-register-the-broker-callback-in-brloginpy), add your broker's callback handling logic.
 
-### 12.10. Frontend — React Broker Components (If TOTP Required)
+### 12.11. Frontend — React Broker Components (If TOTP Required)
 
 If your broker requires TOTP/credential input (not OAuth redirect), you need a React component:
 
@@ -881,6 +1142,7 @@ The route `/broker/your_broker/totp` must be handled by the React router.
 | `broker/your_broker/mapping/order_data.py` | Create new |
 | `broker/your_broker/database/master_contract_db.py` | Create new |
 | `broker/your_broker/streaming/*` | Create 3 files |
+| `README.md` → Supported Brokers | Append broker name (alphabetical) |
 | `.sample.env` → VALID_BROKERS | Append broker name |
 | `start.sh` → VALID_BROKERS default | Append broker name |
 | `install/install.sh` → `validate_broker()` | Append broker name |
@@ -890,6 +1152,7 @@ The route `/broker/your_broker/totp` must be handled by the React router.
 | `install/install-docker-multi-custom-ssl.sh` | Same as install.sh |
 | `install/docker-run.sh` | Append broker name |
 | `install/docker-run.bat` | Append broker name |
+| `websocket_proxy/broker_factory.py` | Auto-discovered if naming convention followed |
 | `blueprints/brlogin.py` | Add callback handler |
 | `frontend/` (if TOTP broker) | Add React TOTP page |
 
