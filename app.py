@@ -82,6 +82,7 @@ from database.latency_db import init_latency_db as ensure_latency_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
 from database.strategy_db import init_db as ensure_strategy_tables_exists
+from database.order_queue_db import init_db as ensure_order_queue_tables_exists
 from database.symbol import init_db as ensure_master_contract_tables_exists
 from database.telegram_db import get_bot_config
 from database.traffic_db import init_logs_db as ensure_traffic_logs_exists
@@ -507,6 +508,7 @@ def setup_environment(app):
             ("Qty Freeze DB", ensure_qty_freeze_tables_exists),
             ("Historify DB", ensure_historify_tables_exists),
             ("Flow DB", ensure_flow_tables_exists),
+            ("Order Queue DB", ensure_order_queue_tables_exists),
         ]
 
         db_init_start = time.time()

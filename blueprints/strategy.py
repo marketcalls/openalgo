@@ -1,13 +1,25 @@
 import json
 import os
-import queue
 import re
+import signal
 import threading
 import time as time_module
 import uuid
 from collections import deque
 from datetime import datetime, time
 from time import time
+
+from database.order_queue_db import (
+    enqueue_order,
+    fetch_next_pending,
+    get_failed_orders,
+    mark_failed,
+    mark_processing,
+    mark_sent,
+    queue_depth,
+    recover_stale_processing_orders,
+    init_db as init_order_queue_db,
+)
 
 import pytz
 import requests
@@ -84,109 +96,151 @@ EXCHANGE_PRODUCTS = {
 DEFAULT_EXCHANGE = "NSE"
 DEFAULT_PRODUCT = "MIS"
 
-# Separate queues for different order types
-regular_order_queue = queue.Queue()  # For placeorder (up to 10/sec)
-smart_order_queue = queue.Queue()  # For placesmartorder (1/sec)
-
 # Order processor state
-order_processor_running = False
-order_processor_lock = threading.Lock()
+_order_processor_running = False
+_order_processor_lock = threading.Lock()
+_shutdown_event = threading.Event()  # signals clean shutdown to the worker thread
 
-# Rate limiting state for regular orders
-last_regular_orders = deque(maxlen=10)  # Track last 10 regular order timestamps
+# Rate limiting state for regular orders (unchanged: ≤10/sec)
+_last_regular_orders = deque(maxlen=10)  # Track last 10 regular order timestamps
 
 
 def process_orders():
-    """Background task to process orders from both queues with rate limiting"""
-    global order_processor_running
+    """Background task to drain the persistent order queue with rate limiting.
 
-    while True:
+    Differences from the original in-memory implementation:
+    - Orders are read from SQLite, so they survive app restarts and OOM kills.
+    - Each order is marked 'processing' before the API call, so a crash
+      mid-flight is detected and recovered automatically on next startup.
+    - Failed orders are retried up to ORDER_QUEUE_MAX_RETRIES times, then
+      moved to the dead-letter 'failed' state with a recorded error message.
+    - Rate-limiting behaviour is identical to the original:
+        smart orders: 1 per second
+        regular orders: up to 10 per second
+    """
+    logger.info("Persistent order processor started.")
+
+    while not _shutdown_event.is_set():
         try:
-            # Process smart orders first (1 per second)
-            try:
-                smart_order = smart_order_queue.get_nowait()
-                if smart_order is None:  # Poison pill
-                    break
-
+            # ── Smart orders first: 1 per second ─────────────────────────
+            smart_entry = fetch_next_pending("placesmartorder")
+            if smart_entry:
+                mark_processing(smart_entry.id)
+                payload = smart_entry.get_payload()
                 try:
                     response = requests.post(
-                        f"{BASE_URL}/api/v1/placesmartorder", json=smart_order["payload"]
+                        f"{BASE_URL}/api/v1/placesmartorder", json=payload
                     )
                     if response.ok:
+                        mark_sent(smart_entry.id)
                         logger.info(
-                            f"Smart order placed for {smart_order['payload']['symbol']} in strategy {smart_order['payload']['strategy']}"
+                            f"Smart order sent: id={smart_entry.id} "
+                            f"symbol={payload.get('symbol')} "
+                            f"strategy={payload.get('strategy')}"
                         )
                     else:
+                        mark_failed(smart_entry.id, response.text[:500])
                         logger.error(
-                            f"Error placing smart order for {smart_order['payload']['symbol']}: {response.text}"
+                            f"Smart order failed: id={smart_entry.id} "
+                            f"symbol={payload.get('symbol')} — {response.text[:200]}"
                         )
                 except Exception as e:
-                    logger.exception(f"Error placing smart order: {str(e)}")
+                    mark_failed(smart_entry.id, str(e))
+                    logger.exception(f"Exception placing smart order id={smart_entry.id}: {e}")
 
-                # Always wait 1 second after smart order
-                time_module.sleep(1)
-                continue  # Start next iteration
+                # Always wait 1 second after a smart order attempt
+                _shutdown_event.wait(timeout=1)
+                continue
 
-            except queue.Empty:
-                pass  # No smart orders, continue to regular orders
-
-            # Process regular orders (up to 10 per second)
+            # ── Regular orders: up to 10 per second ──────────────────────
             now = time()
+            while _last_regular_orders and now - _last_regular_orders[0] > 1:
+                _last_regular_orders.popleft()
 
-            # Clean up old timestamps
-            while last_regular_orders and now - last_regular_orders[0] > 1:
-                last_regular_orders.popleft()
-
-            # Process regular orders if under rate limit
-            if len(last_regular_orders) < 10:
-                try:
-                    regular_order = regular_order_queue.get_nowait()
-                    if regular_order is None:  # Poison pill
-                        break
-
+            if len(_last_regular_orders) < 10:
+                regular_entry = fetch_next_pending("placeorder")
+                if regular_entry:
+                    mark_processing(regular_entry.id)
+                    payload = regular_entry.get_payload()
                     try:
                         response = requests.post(
-                            f"{BASE_URL}/api/v1/placeorder", json=regular_order["payload"]
+                            f"{BASE_URL}/api/v1/placeorder", json=payload
                         )
                         if response.ok:
+                            mark_sent(regular_entry.id)
+                            _last_regular_orders.append(time())
                             logger.info(
-                                f"Regular order placed for {regular_order['payload']['symbol']} in strategy {regular_order['payload']['strategy']}"
+                                f"Regular order sent: id={regular_entry.id} "
+                                f"symbol={payload.get('symbol')} "
+                                f"strategy={payload.get('strategy')}"
                             )
-                            last_regular_orders.append(now)
                         else:
+                            mark_failed(regular_entry.id, response.text[:500])
                             logger.error(
-                                f"Error placing regular order for {regular_order['payload']['symbol']}: {response.text}"
+                                f"Regular order failed: id={regular_entry.id} "
+                                f"symbol={payload.get('symbol')} — {response.text[:200]}"
                             )
                     except Exception as e:
-                        logger.exception(f"Error placing regular order: {str(e)}")
+                        mark_failed(regular_entry.id, str(e))
+                        logger.exception(
+                            f"Exception placing regular order id={regular_entry.id}: {e}"
+                        )
 
-                except queue.Empty:
-                    pass  # No regular orders
-
-            # Small sleep to prevent CPU spinning
-            time_module.sleep(0.1)
+            # Small sleep to prevent CPU spinning (identical to original)
+            _shutdown_event.wait(timeout=0.1)
 
         except Exception as e:
-            logger.exception(f"Error in order processor: {str(e)}")
-            time_module.sleep(1)  # Sleep on error to prevent rapid retries
+            logger.exception(f"Error in order processor loop: {e}")
+            _shutdown_event.wait(timeout=1)
+
+    logger.info("Persistent order processor shut down cleanly.")
+
+
+def _handle_shutdown(signum, frame):
+    """SIGTERM / SIGINT handler: signal the worker thread to stop cleanly."""
+    logger.info(
+        f"Signal {signum} received — stopping order processor. "
+        f"Queue depth at shutdown: {queue_depth()}"
+    )
+    _shutdown_event.set()
+
+
+# Register shutdown handlers so the worker thread exits gracefully
+signal.signal(signal.SIGTERM, _handle_shutdown)
+signal.signal(signal.SIGINT, _handle_shutdown)
 
 
 def ensure_order_processor():
-    """Ensure the order processor is running"""
-    global order_processor_running
-    with order_processor_lock:
-        if not order_processor_running:
-            threading.Thread(target=process_orders, daemon=True).start()
-            order_processor_running = True
+    """Start the persistent order processor thread if not already running."""
+    global _order_processor_running
+    with _order_processor_lock:
+        if not _order_processor_running:
+            # On first start, recover orders that were in-flight during the last crash
+            recovered = recover_stale_processing_orders()
+            if recovered:
+                logger.warning(
+                    f"Re-queued {recovered} order(s) that were in-flight during last shutdown."
+                )
+            # daemon=False so the thread is allowed to finish processing on exit
+            t = threading.Thread(target=process_orders, daemon=False)
+            t.start()
+            _order_processor_running = True
+            logger.info("Persistent order processor thread started.")
 
 
 def queue_order(endpoint, payload):
-    """Add order to appropriate queue"""
+    """Persist an order and ensure the processor is running.
+
+    Drop-in replacement for the previous queue_order(): callers are unchanged.
+    """
     ensure_order_processor()
-    if endpoint == "placesmartorder":
-        smart_order_queue.put({"payload": payload})
-    else:
-        regular_order_queue.put({"payload": payload})
+    order_id = enqueue_order(endpoint, payload)
+    if not order_id:
+        logger.error(
+            f"CRITICAL: Failed to persist order for "
+            f"symbol={payload.get('symbol', '?')} endpoint={endpoint}. "
+            f"Check database connectivity — order may be lost."
+        )
 
 
 def validate_strategy_times(start_time, end_time, squareoff_time):
