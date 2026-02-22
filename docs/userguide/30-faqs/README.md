@@ -12,7 +12,7 @@ Yes, OpenAlgo is completely free and open-source. You can download, use, and mod
 
 ### Which brokers are supported?
 
-OpenAlgo supports 24+ Indian brokers including:
+OpenAlgo supports 29 Indian brokers including:
 - Zerodha
 - Angel One
 - Dhan

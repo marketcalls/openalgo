@@ -2,7 +2,7 @@
 
 ## Overview
 
-OpenAlgo implements a unified WebSocket proxy server that handles real-time market data streaming from 24+ brokers. The architecture uses ZeroMQ for high-performance internal messaging and supports connection pooling for handling thousands of symbol subscriptions.
+OpenAlgo implements a unified WebSocket proxy server that handles real-time market data streaming from 29 brokers. The architecture uses ZeroMQ for high-performance internal messaging and supports connection pooling for handling thousands of symbol subscriptions.
 
 ## Architecture Diagram
 
@@ -44,12 +44,12 @@ OpenAlgo implements a unified WebSocket proxy server that handles real-time mark
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                    Broker Adapters (Connection Pool)                          │
 │                                                                               │
-│  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐             │
-│  │  Zerodha   │  │   Angel    │  │    Dhan    │  │   Fyers    │  ...        │
-│  │  Adapter   │  │  Adapter   │  │  Adapter   │  │  Adapter   │             │
-│  │            │  │            │  │            │  │            │             │
-│  │ 3000 sym   │  │ 1000 sym   │  │ 1000 sym   │  │ 2000 sym   │             │
-│  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘             │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌──────┐  │
+│  │  Zerodha   │  │   Angel    │  │    Dhan    │  │   Fyers    │  │Nubra │  │
+│  │  Adapter   │  │  Adapter   │  │  Adapter   │  │  Adapter   │  │Adapt.│  │
+│  │            │  │            │  │            │  │            │  │      │  │
+│  │ 3000 sym   │  │ 1000 sym   │  │ 1000 sym   │  │ 2000 sym   │  │ ...  │  │
+│  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘  └──┬───┘  │
 │        │               │               │               │                     │
 │        └───────────────┴───────────────┴───────────────┘                     │
 │                               │                                              │
@@ -408,6 +408,10 @@ broker/angel/streaming/
 ├── angel_adapter.py
 ├── angel_websocket.py
 └── angel_mapping.py
+
+broker/nubra/streaming/
+├── nubra_adapter.py          # Nubra WebSocket adapter (gRPC-based)
+└── nubra_mapping.py          # Data normalization
 ```
 
 **Adapter Implementation Example:**
@@ -452,13 +456,16 @@ ENABLE_CONNECTION_POOLING=true
 
 ### Symbol Limits by Broker
 
-| Broker | Max Symbols/Connection | Default Pool Size |
-|--------|------------------------|-------------------|
-| Zerodha | 3000 | 1 |
-| Angel | 1000 | 3 |
-| Dhan | 1000 | 3 |
-| Fyers | 2000 | 2 |
-| Others | 1000 | 3 |
+| Broker | Max Symbols/Connection | Default Pool Size | Depth Levels |
+|--------|------------------------|-------------------|--------------|
+| Zerodha | 3000 | 1 | 5 |
+| Angel | 1000 | 3 | 5 |
+| Dhan | 1000 | 3 | 20 |
+| Fyers | 2000 | 2 | 5 |
+| Nubra | 1000 | 3 | 5 |
+| Others | 1000 | 3 | 5 |
+
+**Note:** Only Dhan supports 20-level market depth. All other brokers provide 5-level depth. The frontend provides depth level routes at `/websocket/test/20`, `/websocket/test/30`, and `/websocket/test/50` for testing different depth configurations.
 
 ## Frontend Integration
 
@@ -515,6 +522,8 @@ websocket_proxy/
 ├── base_adapter.py        # BaseBrokerWebSocketAdapter ABC
 ├── broker_factory.py      # Creates broker-specific adapters
 ├── connection_manager.py  # Connection pool management
+├── mapping.py             # Symbol mapping utilities
+├── port_check.py          # Port availability checking
 └── app_integration.py     # Flask app integration
 ```
 

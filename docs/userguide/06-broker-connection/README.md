@@ -2,7 +2,7 @@
 
 ## Introduction
 
-OpenAlgo supports 24+ Indian brokers through a unified interface. This guide covers connecting your broker account and understanding the authentication process.
+OpenAlgo supports 29 Indian brokers through a unified interface. This guide covers connecting your broker account and understanding the authentication process.
 
 ## Supported Brokers
 

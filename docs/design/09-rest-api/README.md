@@ -2,7 +2,7 @@
 
 ## Overview
 
-OpenAlgo provides a comprehensive REST API built with Flask-RESTX at `/api/v1/`. The API enables trading operations, market data retrieval, and account management across 24+ Indian brokers through a unified interface.
+OpenAlgo provides a comprehensive REST API built with Flask-RESTX at `/api/v1/`. The API enables trading operations, market data retrieval, and account management across 29 Indian brokers through a unified interface.
 
 ## Architecture Diagram
 
@@ -53,9 +53,11 @@ OpenAlgo provides a comprehensive REST API built with Flask-RESTX at `/api/v1/`.
 | `/api/v1/modifyorder` | POST | ORDER_RATE | Modify pending order |
 | `/api/v1/cancelorder` | POST | ORDER_RATE | Cancel single order |
 | `/api/v1/cancelallorder` | POST | API_RATE | Cancel all orders |
-| `/api/v1/basketorder` | POST | ORDER_RATE | Place multiple orders |
+| `/api/v1/basketorder` | POST | ORDER_RATE | Place multiple orders (batched concurrent) |
 | `/api/v1/splitorder` | POST | API_RATE | Split large order |
 | `/api/v1/closeposition` | POST | ORDER_RATE | Close specific position |
+| `/api/v1/optionsorder` | POST | ORDER_RATE | Place options order |
+| `/api/v1/optionsmultiorder` | POST | ORDER_RATE | Place multi-leg options order |
 | `/api/v1/orderstatus` | POST | API_RATE | Get order status |
 | `/api/v1/openposition` | POST | API_RATE | Get open positions |
 
@@ -101,6 +103,11 @@ OpenAlgo provides a comprehensive REST API built with Flask-RESTX at `/api/v1/`.
 | `/api/v1/ping` | POST | API_RATE | Connection test |
 | `/api/v1/markettimings` | POST | API_RATE | Market hours |
 | `/api/v1/marketholidays` | POST | API_RATE | Holiday calendar |
+| `/api/v1/pnlsymbols` | POST | API_RATE | P&L breakdown by symbol |
+| `/api/v1/chart` | POST | API_RATE | Chart data |
+| `/api/v1/ticker` | GET | API_RATE | WebSocket ticker info |
+| `/api/v1/telegram` | POST | API_RATE | Telegram bot integration |
+| `/api/v1/analyzer` | POST | API_RATE | Sandbox/analyzer mode toggle |
 
 ## Authentication
 

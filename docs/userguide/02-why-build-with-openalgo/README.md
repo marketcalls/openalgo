@@ -56,7 +56,7 @@ The **Analyzer Mode** works like a local sandbox—test your signals, APIs, and 
 
 ### Multi-Broker, Multi-Platform
 
-OpenAlgo supports **24+ Indian brokers** via a **unified API and WebSocket layer**. Write your strategy once, and run it across Zerodha, Angel One, Dhan, Upstox, Fyers, Flattrade, Firstock, and more—without rewriting code.
+OpenAlgo supports **29 Indian brokers** via a **unified API and WebSocket layer**. Write your strategy once, and run it across Zerodha, Angel One, Dhan, Upstox, Fyers, Flattrade, Firstock, and more—without rewriting code.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -184,7 +184,7 @@ With direct broker APIs, you'd have to build:
 | **Trade Dashboard** | React UI, real-time updates | Full React frontend included |
 | **Log Storage** | Database, query interface | SQLite with traffic logs |
 | **Latency Tracking** | Timing, metrics, alerts | Latency monitor built-in |
-| **Multi-Broker Support** | N broker integrations | 24+ brokers pre-integrated |
+| **Multi-Broker Support** | N broker integrations | 29 brokers pre-integrated |
 | **Security Layer** | Auth, rate limiting, CSRF | Enterprise security included |
 | **Notifications** | Telegram, alerts | Telegram bot integrated |
 

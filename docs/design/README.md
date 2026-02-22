@@ -4,7 +4,7 @@ Welcome to the OpenAlgo Developer Bible - a comprehensive guide for understandin
 
 ## What is OpenAlgo?
 
-OpenAlgo is a production-ready algorithmic trading platform built with Flask (backend) and React 19 (frontend). It provides a unified API layer across 24+ Indian brokers, enabling seamless integration with TradingView, Amibroker, Excel, Python, and AI agents.
+OpenAlgo is a production-ready algorithmic trading platform built with Flask (backend) and React 19 (frontend). It provides a unified API layer across 29 Indian brokers, enabling seamless integration with TradingView, Amibroker, Excel, Python, and AI agents.
 
 ## Documentation Index
 
@@ -46,6 +46,11 @@ OpenAlgo is a production-ready algorithmic trading platform built with Flask (ba
 | [10-Flow Architecture](./10-flow/) | Visual workflow builder |
 | [13-Chartink](./13-chartink/) | Chartink scanner integration |
 | [14-TradingView & GoCharting](./14-tradingview-gocharting/) | Alert webhook setup |
+
+### Analytics Tools
+| Module | Description |
+|--------|-------------|
+| [15-UI Elements](./15-basic-ui/) | Trading UI and analytics tools (GEX, IV Smile, OI Profile, etc.) |
 
 ### Paper Trading
 | Module | Description |

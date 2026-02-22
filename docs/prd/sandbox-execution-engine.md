@@ -152,12 +152,12 @@ def _poll_loop(self):
 
 ### Price Type Matching
 
-| Price Type | BUY Condition | SELL Condition |
-|------------|---------------|----------------|
-| MARKET | Execute at LTP | Execute at LTP |
-| LIMIT | LTP <= limit_price | LTP >= limit_price |
-| SL | LTP >= trigger_price → MARKET | LTP <= trigger_price → MARKET |
-| SL-M | LTP >= trigger_price → MARKET | LTP <= trigger_price → MARKET |
+| Price Type | BUY Condition | SELL Condition | Fill Price |
+|------------|---------------|----------------|------------|
+| MARKET | Execute immediately | Execute immediately | Ask (BUY) / Bid (SELL) |
+| LIMIT | LTP <= limit_price | LTP >= limit_price | Limit price |
+| SL | LTP >= trigger, LTP <= limit | LTP <= trigger, LTP >= limit | LTP |
+| SL-M | LTP >= trigger_price | LTP <= trigger_price | LTP |
 
 ### Execution Function
 
