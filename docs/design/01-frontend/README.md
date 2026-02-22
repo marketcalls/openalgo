@@ -12,13 +12,18 @@ OpenAlgo features a modern React 19 Single Page Application (SPA) built with Typ
 | TypeScript | 5.9.3 | Type safety |
 | Vite | 7.2.4 | Build tool & dev server |
 | Tailwind CSS | 4.1.18 | Utility-first styling |
-| React Router | 7.12.0 | Client-side routing |
-| Zustand | 5.0.9 | Client state management |
-| TanStack Query | 5.90.16 | Server state & caching |
+| React Router DOM | 7.13.0 | Client-side routing |
+| Zustand | 5.0.10 | Client state management |
+| TanStack Query | 5.90.20 | Server state & caching |
 | Axios | 1.13.5 | HTTP client |
 | Socket.IO Client | 4.8.3 | Real-time events |
 | @xyflow/react | 12.3.6 | Flow editor canvas |
 | Plotly.js | react-plotly.js | Interactive analytics charts |
+| Lightweight Charts | 5.1.0 | TradingView-style price charts |
+| Sonner | 2.0.7 | Toast notification system |
+| next-themes | 0.4.6 | Theme persistence |
+| CodeMirror | @uiw/react-codemirror | JSON/Python code editors |
+| cmdk | 1.1.1 | Command palette |
 | Radix UI | Latest | Accessible UI primitives |
 
 ## Architecture Diagram
@@ -28,7 +33,7 @@ OpenAlgo features a modern React 19 Single Page Application (SPA) built with Typ
 │                           React Application                                   │
 │                                                                               │
 │  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │                      React Router v7.12                                 │  │
+│  │                      React Router v7.13                                 │  │
 │  │                                                                         │  │
 │  │   Public Routes          Protected Routes         Full-Width Routes     │  │
 │  │   /, /login, /setup      /dashboard, /positions   /flow/editor/:id      │  │
@@ -57,7 +62,8 @@ OpenAlgo features a modern React 19 Single Page Application (SPA) built with Typ
 │  │  │                 │  │                  │  │                        │ │  │
 │  │  │  - authStore    │  │  - positions     │  │  - SocketProvider      │ │  │
 │  │  │  - themeStore   │  │  - orders        │  │  - ThemeProvider       │ │  │
-│  │  │  - flowStore    │  │  - strategies    │  │                        │ │  │
+│  │  │  - alertStore   │  │  - strategies    │  │  - MarketDataProvider  │ │  │
+│  │  │  - flowStore    │  │                  │  │                        │ │  │
 │  │  └─────────────────┘  └──────────────────┘  └────────────────────────┘ │  │
 │  └────────────────────────────────────────────────────────────────────────┘  │
 │                                   │                                           │
@@ -108,7 +114,16 @@ frontend/
 │   │   └── admin.ts            # Admin API
 │   │
 │   ├── app/
-│   │   └── providers.tsx       # TanStack Query & theme providers
+│   │   └── providers.tsx       # TanStack Query, theme & market data providers
+│   │
+│   ├── contexts/
+│   │   └── MarketDataContext.tsx # WebSocket market data singleton provider
+│   │
+│   ├── lib/                      # Shared libraries
+│   │   ├── MarketDataManager.ts  # WebSocket data management singleton
+│   │   ├── rateLimiter.ts        # Client-side rate limiting
+│   │   ├── utils.ts              # General utilities
+│   │   └── flow/                 # Flow editor utilities
 │   │
 │   ├── components/
 │   │   ├── auth/
@@ -127,7 +142,7 @@ frontend/
 │   │   │   └── SocketProvider.tsx
 │   │   └── ui/                 # 30+ shadcn/ui components
 │   │
-│   ├── hooks/                  # Custom React hooks
+│   ├── hooks/                  # Custom React hooks (12)
 │   │   ├── useSocket.ts        # Socket.IO connection
 │   │   ├── useLivePrice.ts     # Live price feed
 │   │   ├── useLiveQuote.ts     # Live quote feed
@@ -135,8 +150,14 @@ frontend/
 │   │   ├── useMarketStatus.ts  # Market status tracking
 │   │   ├── useOptionChainLive.ts    # Live option chain data
 │   │   ├── useOptionChainPolling.ts # Option chain polling
+│   │   ├── useOptionChainPreferences.ts # Option chain user prefs
 │   │   ├── useOrderEventRefresh.ts  # Order event refresh
-│   │   └── usePageVisibility.ts     # Page visibility tracking
+│   │   ├── usePageVisibility.ts     # Page visibility tracking
+│   │   ├── useWebSocketTester.ts    # WebSocket testing
+│   │   └── use-mobile.ts       # Mobile responsive detection
+│   │
+│   ├── utils/                    # Utility modules
+│   │   └── toast.ts              # Smart toast wrapper with category filtering
 │   │
 │   ├── pages/                  # Page components (60+ all lazy-loaded)
 │   │   ├── Dashboard.tsx       # Main dashboard
@@ -161,7 +182,8 @@ frontend/
 │   │
 │   ├── stores/                 # Zustand state stores
 │   │   ├── authStore.ts        # Authentication state
-│   │   ├── themeStore.ts       # Theme preferences
+│   │   ├── themeStore.ts       # Theme preferences + 12 color themes
+│   │   ├── alertStore.ts       # Toast notification state & categories
 │   │   └── flowWorkflowStore.ts
 │   │
 │   ├── types/                  # TypeScript type definitions
@@ -200,7 +222,7 @@ const { user, isAuthenticated } = useAuthStore()
 
 **Stores:**
 - `authStore` - User session, API key, authentication state
-- `themeStore` - Dark/light mode, analyzer mode toggle
+- `themeStore` - Dark/light mode, 12 color themes, analyzer/live app mode toggle
 - `alertStore` - Toast notification state and management
 - `flowWorkflowStore` - Flow editor nodes, edges, selection state
 
@@ -333,9 +355,12 @@ Built on Radix UI primitives with Tailwind styling:
 | Form | Button, Input, Select, Checkbox, Switch, Label |
 | Display | Card, Table, Badge, Avatar, Skeleton |
 | Overlay | Dialog, Sheet, Popover, Tooltip, DropdownMenu |
+| Feedback | Sonner Toaster (category-filtered), CommandPalette (cmdk) |
 | Custom | JsonEditor, PythonEditor, LogViewer, PageLoader |
 
 ## Build & Development
+
+**Node.js Requirement:** `>=20.20.0 || >=22.22.0 || >=24.13.0`
 
 ```bash
 # Development
@@ -346,7 +371,10 @@ npm run build        # Output to /frontend/dist/
 
 # Testing
 npm test             # Vitest watch mode
+npm run test:ui      # Vitest UI mode
+npm run test:coverage # Coverage reports
 npm run e2e          # Playwright E2E tests
+npm run e2e:ui       # Playwright UI mode
 
 # Code quality
 npm run lint         # Biome linting
