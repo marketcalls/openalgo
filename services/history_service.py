@@ -10,6 +10,7 @@ from database.token_db import get_token
 from utils.constants import VALID_EXCHANGES
 from utils.logging import get_logger
 
+
 # Initialize logger
 logger = get_logger(__name__)
 
@@ -180,7 +181,7 @@ def get_history_from_db(
 
         # Set end_date to end of day
         end_dt = end_dt.replace(hour=23, minute=59, second=59)
-
+        
         start_timestamp = int(start_dt.timestamp())
         end_timestamp = int(end_dt.timestamp())
 

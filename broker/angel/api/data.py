@@ -10,6 +10,7 @@ import pandas as pd
 from database.token_db import get_br_symbol, get_oa_symbol, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
+from utils.datetime_utils import get_ist_now, to_ist_epoch, to_ist_epoch_series
 
 logger = get_logger(__name__)
 
@@ -366,11 +367,11 @@ class BrokerData:
             from_date = from_date.replace(hour=0, minute=0)
 
             # If end_date is today, set the end time to current time
-            current_time = pd.Timestamp.now()
+            current_time = get_ist_now()
             if to_date.date() == current_time.date():
                 to_date = current_time.replace(
-                    second=0, microsecond=0
-                )  # Remove seconds and microseconds
+                    second=0, microsecond=0, tzinfo=None
+                )  # Remove seconds and microseconds and make naive for payload
             else:
                 # For past dates, set end time to 23:59
                 to_date = to_date.replace(hour=23, minute=59)
@@ -483,8 +484,8 @@ class BrokerData:
             if interval == "D":
                 df["timestamp"] = df["timestamp"] + pd.Timedelta(hours=5, minutes=30)
 
-            # Convert timestamp to Unix epoch
-            df["timestamp"] = df["timestamp"].astype("int64") // 10**9  # Convert to Unix epoch
+            # Convert timestamp to Unix epoch using IST-aware logic (Vectorized)
+            df["timestamp"] = to_ist_epoch_series(df["timestamp"])
 
             # Ensure numeric columns and proper order
             numeric_columns = ["open", "high", "low", "close", "volume"]
@@ -554,9 +555,9 @@ class BrokerData:
             from_date = from_date.replace(hour=0, minute=0)
 
             # If end_date is today, set the end time to current time
-            current_time = pd.Timestamp.now()
+            current_time = get_ist_now()
             if to_date.date() == current_time.date():
-                to_date = current_time.replace(second=0, microsecond=0)
+                to_date = current_time.replace(second=0, microsecond=0, tzinfo=None)
             else:
                 # For past dates, set end time to 23:59
                 to_date = to_date.replace(hour=23, minute=59)
@@ -644,8 +645,8 @@ class BrokerData:
             if interval == "D":
                 df["timestamp"] = df["timestamp"] + pd.Timedelta(hours=5, minutes=30)
 
-            # Convert timestamp to Unix epoch
-            df["timestamp"] = df["timestamp"].astype("int64") // 10**9
+            # Convert timestamp to Unix epoch using vectorized IST-aware logic
+            df["timestamp"] = to_ist_epoch_series(df["timestamp"])
 
             # Ensure oi column is numeric
             df["oi"] = pd.to_numeric(df["oi"])
