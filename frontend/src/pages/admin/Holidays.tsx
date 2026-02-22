@@ -333,6 +333,8 @@ export default function HolidaysPage() {
                 size="icon"
                 onClick={() => setCurrentYear((y) => y - 1)}
                 disabled={!years.includes(currentYear - 1)}
+                title="Previous year"
+                aria-label="Previous year"
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
@@ -356,6 +358,8 @@ export default function HolidaysPage() {
                 size="icon"
                 onClick={() => setCurrentYear((y) => y + 1)}
                 disabled={!years.includes(currentYear + 1)}
+                title="Next year"
+                aria-label="Next year"
               >
                 <ChevronRight className="h-4 w-4" />
               </Button>
@@ -412,6 +416,8 @@ export default function HolidaysPage() {
                           variant="ghost"
                           className="h-8 w-8 text-destructive hover:text-destructive"
                           onClick={() => setDeleteHoliday(holiday)}
+                          title="Delete holiday"
+                          aria-label={`Delete holiday ${holiday.description}`}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -569,6 +575,8 @@ export default function HolidaysPage() {
                           size="icon"
                           className="h-8 w-8 text-destructive hover:text-destructive"
                           onClick={() => removeSpecialSessionExchange(ex.exchange)}
+                          title="Remove exchange"
+                          aria-label={`Remove ${ex.exchange} from special session`}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
