@@ -410,8 +410,14 @@ broker/angel/streaming/
 └── angel_mapping.py
 
 broker/nubra/streaming/
-├── nubra_adapter.py          # Nubra WebSocket adapter (gRPC-based)
+├── nubra_adapter.py          # Nubra WebSocket adapter (gRPC + protobuf)
 └── nubra_mapping.py          # Data normalization
+
+# Nubra also has protobuf message definitions:
+broker/nubra/protos/
+├── market_pb2.py             # Market data protobuf
+├── nubrafrontend_pb2.py      # Frontend protobuf
+└── orders_pb2.py             # Orders protobuf
 ```
 
 **Adapter Implementation Example:**
@@ -465,7 +471,9 @@ ENABLE_CONNECTION_POOLING=true
 | Nubra | 1000 | 3 | 5 |
 | Others | 1000 | 3 | 5 |
 
-**Note:** Only Dhan supports 20-level market depth. All other brokers provide 5-level depth. The frontend provides depth level routes at `/websocket/test/20`, `/websocket/test/30`, and `/websocket/test/50` for testing different depth configurations.
+**Notes:**
+- Only Dhan supports 20-level market depth. All other brokers provide 5-level depth. The frontend provides depth level routes at `/websocket/test/20`, `/websocket/test/30`, and `/websocket/test/50` for testing different depth configurations.
+- Nubra uniquely supports a **Greeks/OI data channel** via `BatchWebSocketGreeksMessage` protobuf messages. This provides real-time Open Interest data for the OI Tracker and Max Pain analytics tools. Other brokers do not have this channel.
 
 ## Frontend Integration
 
