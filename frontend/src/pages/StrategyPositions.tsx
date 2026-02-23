@@ -89,6 +89,9 @@ const exitTypeColors: Record<ExitType, string> = {
   HEDGE_SL_EXIT: 'bg-red-400',
   HEDGE_TARGET_EXIT: 'bg-green-400',
   STRATEGY_DONE: 'bg-gray-500',
+  AUTO_BUYBACK: 'bg-blue-500',
+  MANUAL_EXIT: 'bg-purple-500',
+  EXIT: 'bg-gray-400',
 }
 
 // Format currency in Indian format

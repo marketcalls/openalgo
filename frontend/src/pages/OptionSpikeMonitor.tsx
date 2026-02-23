@@ -9,6 +9,7 @@ import {
     RefreshCw,
     Settings2,
     Square,
+    Star,
     TrendingUp,
     X,
 } from 'lucide-react'
@@ -122,6 +123,75 @@ interface IvSummary {
     failed: number
 }
 
+interface GreeksData {
+    iv: number
+    delta: number
+    gamma: number
+    theta: number
+    vega: number
+    daysToExpiry: number
+}
+
+interface BestStrikeConfig {
+    romWeight: number      // 0-100
+    thetaWeight: number    // 0-100
+    safetyWeight: number   // 0-100
+    lotSize: number
+    applyDistanceFilter: boolean  // restrict best strike to strikes beyond config distance threshold
+    applyPremiumFilter: boolean   // restrict best strike to strikes within config premium threshold
+}
+
+interface ScoredRow {
+    symbol: string
+    type: 'CE' | 'PE'
+    strike: number
+    currentPremium: number
+    theta: number
+    thetaIncome: number   // |theta| * lotSize per day (theoretical)
+    maxCollectible: number // premium * lotSize (actual max income if expires worthless)
+    daysToExpiry: number
+    rom: number | null    // null if margin unavailable
+    distancePct: number   // % OTM
+    score: number         // 0-100 composite
+}
+
+const LS_KEY = 'openalgo_strike_monitor_session'
+
+interface PersistedSession {
+    expiresOn: string   // YYYY-MM-DD
+    config: MonitorConfig
+    filtersLinked: boolean
+    monitoredStrikes: MonitoredStrike[]
+    greeksData: Record<string, GreeksData>
+    marginData: Record<string, number>
+    marginFetchedAt: number | null  // epoch ms
+    bestStrikeConfig: BestStrikeConfig
+    isMonitoring: boolean
+}
+
+function getTodayDateStr(): string {
+    return new Date().toISOString().slice(0, 10)
+}
+
+function loadSession(): PersistedSession | null {
+    try {
+        const raw = localStorage.getItem(LS_KEY)
+        if (!raw) return null
+        const parsed: PersistedSession = JSON.parse(raw)
+        if (parsed.expiresOn !== getTodayDateStr()) {
+            localStorage.removeItem(LS_KEY)
+            return null
+        }
+        return parsed
+    } catch {
+        return null
+    }
+}
+
+function clearSession() {
+    localStorage.removeItem(LS_KEY)
+}
+
 const DEFAULT_CONFIG: MonitorConfig = {
     exchange: 'NFO',
     underlying: 'NIFTY',
@@ -150,14 +220,48 @@ const FNO_EXCHANGES = [
     { value: 'BFO', label: 'BFO' },
 ]
 
+const DEFAULT_BEST_STRIKE_CONFIG: BestStrikeConfig = {
+    romWeight: 40,
+    thetaWeight: 40,
+    safetyWeight: 20,
+    lotSize: 50,
+    applyDistanceFilter: false,
+    applyPremiumFilter: false,
+}
+
 export default function OptionSpikeMonitor() {
     const { apiKey } = useAuthStore()
 
-    // Configuration State
-    const [config, setConfig] = useState<MonitorConfig>(DEFAULT_CONFIG)
-    const [filtersLinked, setFiltersLinked] = useState(true)
+    // Load persisted session once on mount
+    const persistedSession = useMemo(() => loadSession(), [])
+
+    // Configuration State — rehydrate from localStorage if available
+    const [config, setConfig] = useState<MonitorConfig>(persistedSession?.config ?? DEFAULT_CONFIG)
+    const [filtersLinked, setFiltersLinked] = useState(persistedSession?.filtersLinked ?? true)
+    // Always start as not-monitoring on mount — restoring active monitoring state
+    // would require restarting WebSocket, timers, etc. which is error-prone.
+    // Config, greeksData and marginData are restored so user just clicks Start.
     const [isMonitoring, setIsMonitoring] = useState(false)
     const [isConfigOpen, setIsConfigOpen] = useState(true)
+
+    // Best Strike Config
+    const [bestStrikeConfig, setBestStrikeConfig] = useState<BestStrikeConfig>(
+        persistedSession?.bestStrikeConfig ?? DEFAULT_BEST_STRIKE_CONFIG
+    )
+
+    // Greeks data (full — IV + Delta + Theta + Gamma + Vega)
+    const [greeksData, setGreeksData] = useState<Record<string, GreeksData>>(
+        persistedSession?.greeksData ?? {}
+    )
+
+    // Margin data
+    const [marginData, setMarginData] = useState<Record<string, number>>(
+        persistedSession?.marginData ?? {}
+    )
+    const [marginFetchedAt, setMarginFetchedAt] = useState<number | null>(
+        persistedSession?.marginFetchedAt ?? null
+    )
+    const [isFetchingMargin, setIsFetchingMargin] = useState(false)
 
     // Helper: get the effective threshold for a given type and field
     const getThreshold = useCallback((type: 'CE' | 'PE', field: 'distance' | 'premium' | 'iv' | 'spike') => {
@@ -193,10 +297,17 @@ export default function OptionSpikeMonitor() {
     // Data State
     const [underlyings, setUnderlyings] = useState<string[]>([])
     const [expiries, setExpiries] = useState<string[]>([])
-    const [selectedUnderlying, setSelectedUnderlying] = useState('')
-    const [selectedExpiry, setSelectedExpiry] = useState('')
+    const [selectedUnderlying, setSelectedUnderlying] = useState(persistedSession?.config?.underlying ?? '')
+    const [selectedExpiry, setSelectedExpiry] = useState(persistedSession?.config?.expiry ?? '')
     const [optionChain, setOptionChain] = useState<OptionChainResponse | null>(null)
-    const [ivData, setIvData] = useState<Record<string, number>>({})
+    // ivData is derived from greeksData for backward compat
+    const ivData = useMemo(() => {
+        const result: Record<string, number> = {}
+        for (const [sym, g] of Object.entries(greeksData)) {
+            result[sym] = g.iv
+        }
+        return result
+    }, [greeksData])
     const [ivSummary, setIvSummary] = useState<IvSummary | null>(null)
     const [tickTimes, setTickTimes] = useState<Record<string, number>>({})
     const [referenceSnapshots, setReferenceSnapshots] = useState<Record<string, ReferenceSnapshot>>({})
@@ -217,7 +328,9 @@ export default function OptionSpikeMonitor() {
     const [isLoadingChain, setIsLoadingChain] = useState(false)
 
     // Derived list of symbols to monitor (for WS subscription)
-    const [monitoredStrikes, setMonitoredStrikes] = useState<MonitoredStrike[]>([])
+    const [monitoredStrikes, setMonitoredStrikes] = useState<MonitoredStrike[]>(
+        persistedSession?.monitoredStrikes ?? []
+    )
     const wsSymbols = useMemo(() => {
         const symbols: Array<{ symbol: string; exchange: string }> = monitoredStrikes.map(s => ({
             symbol: s.symbol,
@@ -344,7 +457,7 @@ export default function OptionSpikeMonitor() {
         }
     }, [apiKey, config.lastXMinutes])
 
-    // Fetch IV Data (Multi-Option Greeks)
+    // Fetch Greeks Data (Multi-Option Greeks) — stores full Greeks not just IV
     const fetchIvData = useCallback(async (overrideSymbols?: { symbol: string; exchange: string }[], strikesList?: MonitoredStrike[]) => {
         const activeStrikes = strikesList ?? monitoredStrikes
         console.log('[OptionSpikeMonitor][fetchIvData] ENTRY - apiKey:', !!apiKey, 'activeStrikes:', activeStrikes.length, 'override:', overrideSymbols?.length)
@@ -367,7 +480,12 @@ export default function OptionSpikeMonitor() {
             console.log('[OptionSpikeMonitor][fetchIvData] spotPrice:', spotPrice, 'wsData size:', wsData.size, 'optionChain?.underlying_ltp:', optionChain?.underlying_ltp)
 
             const symbols = overrideSymbols && overrideSymbols.length > 0
+                // When called with explicit pre-mapped symbols, use directly
                 ? overrideSymbols
+                // When called with strikesList (initial fetch from handleStart),
+                // skip distance/premium filtering — no WS prices yet
+                : strikesList && strikesList.length > 0
+                ? strikesList.map(s => ({ symbol: s.symbol, exchange: config.exchange }))
                 : activeStrikes
                     .filter(s => {
                         if (spotPrice === undefined) {
@@ -409,8 +527,6 @@ export default function OptionSpikeMonitor() {
                 return
             }
 
-            // Batch in chunks of 20 to avoid payload limits if any
-            // But typically 10-20 strikes is fine in one go
             const response = await apiClient.post('/multioptiongreeks', {
                 apikey: apiKey,
                 symbols: symbols
@@ -420,22 +536,30 @@ export default function OptionSpikeMonitor() {
             console.log('[OptionSpikeMonitor] fetchIvData response:', response.data)
 
             if ((response.data.status === 'success' || response.data.status === 'partial') && response.data.data) {
-                const newIvData: Record<string, number> = {}
+                const newGreeksData: Record<string, GreeksData> = {}
                 const successSymbols = new Set<string>()
                 response.data.data.forEach((item: any) => {
                     if (item.status === 'success' && item.implied_volatility !== undefined && item.symbol) {
-                        newIvData[item.symbol] = item.implied_volatility
+                        const g = item.greeks ?? {}
+                        newGreeksData[item.symbol] = {
+                            iv: item.implied_volatility ?? 0,
+                            delta: g.delta ?? 0,
+                            gamma: g.gamma ?? 0,
+                            theta: g.theta ?? 0,
+                            vega: g.vega ?? 0,
+                            daysToExpiry: item.days_to_expiry ?? 0,
+                        }
                         successSymbols.add(item.symbol)
                     }
                 })
-                if (Object.keys(newIvData).length > 0) {
-                    setIvData(prev => ({ ...prev, ...newIvData }))
+                if (Object.keys(newGreeksData).length > 0) {
+                    setGreeksData(prev => ({ ...prev, ...newGreeksData }))
                 }
                 setIvSummary({
                     status: response.data.status,
                     total: response.data.summary?.total ?? response.data.data.length,
-                    success: response.data.summary?.success ?? Object.keys(newIvData).length,
-                    failed: response.data.summary?.failed ?? response.data.data.length - Object.keys(newIvData).length
+                    success: response.data.summary?.success ?? Object.keys(newGreeksData).length,
+                    failed: response.data.summary?.failed ?? response.data.data.length - Object.keys(newGreeksData).length
                 })
 
                 if (response.data.status === 'partial') {
@@ -468,6 +592,83 @@ export default function OptionSpikeMonitor() {
         }
     }, [apiKey, monitoredStrikes, config.exchange, config.underlying, config.skipIvWhenDistanceFail, config.skipIvWhenPremiumFail, wsData, optionChain, getUnderlyingExchange, getThreshold])
 
+    // Fetch Margin Data for all monitored strikes (once on start, or manual refresh)
+    const fetchMarginData = useCallback(async (strikes: MonitoredStrike[]) => {
+        if (!apiKey || strikes.length === 0) return
+        setIsFetchingMargin(true)
+        try {
+            const newMargin: Record<string, number> = {}
+            // Fetch margin per-strike individually so we get accurate per-symbol margin
+            // The /margin API returns basket margin (total for all positions combined),
+            // so we call it once per strike to get individual margin requirements
+            await Promise.all(strikes.map(async (s) => {
+                try {
+                    const response = await apiClient.post('/margin', {
+                        apikey: apiKey,
+                        positions: [
+                            {
+                                symbol: s.symbol,
+                                exchange: config.exchange,
+                                action: 'SELL',
+                                product: 'NRML',
+                                pricetype: 'MARKET',
+                                quantity: String(bestStrikeConfig.lotSize),
+                                price: '1',
+                            }
+                        ],
+                    })
+                    if (response.data.status === 'success' && response.data.data) {
+                        const data = response.data.data
+                        // Response: { total_margin_required, span_margin, exposure_margin }
+                        const margin = Number(
+                            data.total_margin_required ?? data.total_margin ?? data.margin ?? 0
+                        )
+                        if (margin > 0) newMargin[s.symbol] = margin
+                    }
+                } catch {
+                    // individual strike margin fetch failed — skip silently
+                }
+            }))
+
+            if (Object.keys(newMargin).length > 0) {
+                setMarginData(prev => ({ ...prev, ...newMargin }))
+                setMarginFetchedAt(Date.now())
+            }
+        } catch (err) {
+            console.error('[OptionSpikeMonitor] Error fetching margin data', err)
+        } finally {
+            setIsFetchingMargin(false)
+        }
+    }, [apiKey, config.exchange, bestStrikeConfig.lotSize])
+
+    // Persist session to localStorage whenever key state changes
+    const saveSession = useCallback((overrides: Partial<PersistedSession> = {}) => {
+        try {
+            const session: PersistedSession = {
+                expiresOn: getTodayDateStr(),
+                config,
+                filtersLinked,
+                monitoredStrikes,
+                greeksData,
+                marginData,
+                marginFetchedAt,
+                bestStrikeConfig,
+                isMonitoring: false, // never restore as true — user must click Start again
+                ...overrides,
+            }
+            localStorage.setItem(LS_KEY, JSON.stringify(session))
+        } catch {
+            // localStorage may be full or unavailable — silently ignore
+        }
+    }, [config, filtersLinked, monitoredStrikes, greeksData, marginData, marginFetchedAt, bestStrikeConfig, isMonitoring])
+
+    // Auto-save session whenever key state changes (while monitoring)
+    useEffect(() => {
+        if (isMonitoring) {
+            saveSession()
+        }
+    }, [isMonitoring, config, monitoredStrikes, greeksData, marginData, marginFetchedAt, bestStrikeConfig, saveSession])
+
     // Start Monitoring Logic
     const handleStart = async () => {
         if (!apiKey || !config.expiry) {
@@ -494,6 +695,13 @@ export default function OptionSpikeMonitor() {
 
             if (chainResponse && chainResponse.chain) {
                 setOptionChain(chainResponse)
+
+                // Auto-populate lot size from chain data (use first available CE or PE lotsize)
+                const firstLotSize = chainResponse.chain.find(s => s.ce?.lotsize || s.pe?.lotsize)
+                const detectedLotSize = firstLotSize?.ce?.lotsize ?? firstLotSize?.pe?.lotsize ?? null
+                if (detectedLotSize && detectedLotSize > 0) {
+                    setBestStrikeConfig(prev => ({ ...prev, lotSize: detectedLotSize }))
+                }
 
                 // Filter strikes (OTM Only) based on ATM
                 const atm = chainResponse.atm_strike
@@ -522,12 +730,15 @@ export default function OptionSpikeMonitor() {
 
                 setMonitoredStrikes(strikes)
 
-                // Start Monitoring
-                setIsMonitoring(true)
-
-                // Reset tick times
+                // Reset data on new start
+                setGreeksData({})
+                setMarginData({})
+                setMarginFetchedAt(null)
                 setTickTimes({})
                 setReferenceSnapshots({})
+
+                // Start Monitoring
+                setIsMonitoring(true)
 
                 if (config.spikeReference === 'LAST_X_MIN') {
                     const historySymbols = strikes.map(strike => ({
@@ -537,12 +748,18 @@ export default function OptionSpikeMonitor() {
                     fetchReferenceSnapshot(historySymbols)
                 }
 
-                // Initial IV Fetch
-                console.log('[OptionSpikeMonitor][handleStart] Scheduling initial IV fetch in 1s, apiKey available:', !!apiKey, 'strikes count:', strikes.length)
+                // Initial Greeks Fetch (delayed to allow WS to connect)
+                console.log('[OptionSpikeMonitor][handleStart] Scheduling initial Greeks fetch in 1s, strikes count:', strikes.length)
                 setTimeout(() => {
-                    console.log('[OptionSpikeMonitor][handleStart] FIRING initial IV fetch now with', strikes.length, 'strikes')
+                    console.log('[OptionSpikeMonitor][handleStart] FIRING initial Greeks fetch now with', strikes.length, 'strikes')
                     fetchIvData(undefined, strikes)
                 }, 1000)
+
+                // Fetch margin once (delayed to not overload on start)
+                setTimeout(() => {
+                    fetchMarginData(strikes)
+                }, 2000)
+
             } else {
                 showToast.error('No option chain data found')
             }
@@ -559,6 +776,7 @@ export default function OptionSpikeMonitor() {
         setIsMonitoring(false)
         setIsConfigOpen(true)
         setReferenceSnapshots({})
+        clearSession()
     }
 
     // Cleanup on stop
@@ -719,6 +937,147 @@ export default function OptionSpikeMonitor() {
 
         return { distance: distanceCount, premium: premiumCount }
     }, [monitoredStrikes, wsData, optionChain, getThreshold, getUnderlyingExchange, config.exchange, config.underlying, config.skipIvWhenDistanceFail, config.skipIvWhenPremiumFail])
+
+    // ─── Best Strike Scoring ───────────────────────────────────────────────────
+    const scoredRows = useMemo((): ScoredRow[] => {
+        if (!optionChain || !monitoredStrikes.length) return []
+
+        const spotPrice = wsData.get(
+            `${getUnderlyingExchange(config.exchange)}:${config.underlying}`
+        )?.data?.ltp ?? optionChain.underlying_ltp
+
+        if (!spotPrice) return []
+
+        const { lotSize, romWeight, thetaWeight, safetyWeight } = bestStrikeConfig
+
+        // Compute raw values for each strike
+        const rawRows = monitoredStrikes.map(s => {
+            const wsKey = `${config.exchange}:${s.symbol}`
+            const ltp = wsData.get(wsKey)?.data?.ltp ?? 0
+            const greeks = greeksData[s.symbol]
+            // py_vollib black_theta() returns annualized theta (per year).
+            // Divide by 365 to get daily theta per unit, then multiply by lot size.
+            const theta = greeks?.theta ?? 0
+            const daysToExpiry = greeks?.daysToExpiry ?? 0
+            const thetaDaily = Math.abs(theta) / 365        // daily decay per unit
+            const thetaIncome = thetaDaily * lotSize        // ₹ per day seller earns
+            const maxCollectible = ltp * lotSize             // actual max if expires worthless
+            const margin = marginData[s.symbol] ?? null
+            const rom = margin && margin > 0 ? (ltp * lotSize / margin) * 100 : null
+            const distancePct = spotPrice > 0 ? (Math.abs(spotPrice - s.strike) / spotPrice) * 100 : 0
+
+            return {
+                symbol: s.symbol,
+                type: s.type,
+                strike: s.strike,
+                currentPremium: ltp,
+                theta,
+                thetaIncome,
+                maxCollectible,
+                daysToExpiry,
+                rom,
+                distancePct,
+                score: 0,  // placeholder
+            } as ScoredRow
+        })
+
+        if (rawRows.length === 0) return []
+
+        // Apply optional filters (controlled by toggles inside Best Strike card)
+        const filteredRows = rawRows.filter(r => {
+            const isCE = r.type === 'CE'
+
+            // Distance filter: CE strike must be >= spot + distance, PE strike <= spot - distance
+            if (bestStrikeConfig.applyDistanceFilter && spotPrice > 0) {
+                const distancePoints = filtersLinked
+                    ? config.distanceThreshold
+                    : isCE ? config.distanceThresholdCE : config.distanceThresholdPE
+                if (isCE && r.strike < spotPrice + distancePoints) return false
+                if (!isCE && r.strike > spotPrice - distancePoints) return false
+            }
+
+            // Premium filter: strike premium must be within configured premium threshold
+            if (bestStrikeConfig.applyPremiumFilter) {
+                const maxPremium = filtersLinked
+                    ? config.premiumThreshold
+                    : isCE ? config.premiumThresholdCE : config.premiumThresholdPE
+                if (r.currentPremium > maxPremium) return false
+            }
+
+            return true
+        })
+
+        // If all strikes are filtered out, fall back to full rawRows so we always show something
+        const rowsToScore = filteredRows.length > 0 ? filteredRows : rawRows
+
+        // Min-max normalize a set of values → 0..100
+        const normalize = (values: number[]): number[] => {
+            const min = Math.min(...values)
+            const max = Math.max(...values)
+            if (max === min) return values.map(() => 50)
+            return values.map(v => ((v - min) / (max - min)) * 100)
+        }
+
+        // Determine effective weights (ROM disabled if no margin data available)
+        const hasMargin = rawRows.some(r => r.rom !== null)
+        let effectiveRom = hasMargin ? romWeight : 0
+        const effectiveTheta = thetaWeight
+        const effectiveSafety = safetyWeight
+        const totalWeight = effectiveRom + effectiveTheta + effectiveSafety
+        // Normalize weights to sum to 1
+        const wRom = totalWeight > 0 ? effectiveRom / totalWeight : 0
+        const wTheta = totalWeight > 0 ? effectiveTheta / totalWeight : 0
+        const wSafety = totalWeight > 0 ? effectiveSafety / totalWeight : 0
+
+        // Normalize within filtered set (scoring is relative to eligible strikes only)
+        const thetaValues = normalize(rowsToScore.map(r => r.thetaIncome))
+        const safetyValues = normalize(rowsToScore.map(r => r.distancePct))
+        const romValues = hasMargin
+            ? normalize(rowsToScore.map(r => r.rom ?? 0))
+            : rowsToScore.map(() => 0)
+
+        // Score the filtered rows
+        const filteredScored = rowsToScore.map((r, i) => ({
+            ...r,
+            score: Math.round(
+                wRom * romValues[i] +
+                wTheta * thetaValues[i] +
+                wSafety * safetyValues[i]
+            ),
+        }))
+
+        // Rows outside the filter get score 0 (still shown in table, not eligible for best strike)
+        const filteredSymbols = new Set(rowsToScore.map(r => r.symbol))
+        const allScored = rawRows.map(r =>
+            filteredSymbols.has(r.symbol)
+                ? filteredScored.find(s => s.symbol === r.symbol)!
+                : { ...r, score: 0 }
+        )
+
+        return allScored.sort((a, b) => b.score - a.score)
+    }, [monitoredStrikes, wsData, optionChain, greeksData, marginData, bestStrikeConfig, config, filtersLinked, getUnderlyingExchange])
+
+    // Best CE and PE by score
+    const bestCE = useMemo(() => scoredRows.find(r => r.type === 'CE') ?? null, [scoredRows])
+    const bestPE = useMemo(() => scoredRows.find(r => r.type === 'PE') ?? null, [scoredRows])
+
+    // Map symbol → score for quick table lookup
+    const scoreBySymbol = useMemo(() => {
+        const map: Record<string, number> = {}
+        scoredRows.forEach(r => { map[r.symbol] = r.score })
+        return map
+    }, [scoredRows])
+
+    // Margin age label
+    const marginAgeLabel = useMemo(() => {
+        if (!marginFetchedAt) return null
+        const mins = Math.round((Date.now() - marginFetchedAt) / 60000)
+        if (mins < 1) return 'just now'
+        if (mins === 1) return '1 min ago'
+        return `${mins} mins ago`
+    }, [marginFetchedAt])
+
+    const hasMarginData = Object.keys(marginData).length > 0
 
     return (
         <div className="py-6 space-y-6">
@@ -1091,13 +1450,273 @@ export default function OptionSpikeMonitor() {
                         </Card>
                     </div>
 
+                    {/* Best Strike Recommendation Card */}
+                    {scoredRows.length > 0 && (
+                        <Card className="border-primary/20 bg-primary/5">
+                            <CardHeader className="pb-3">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                    <CardTitle className="flex items-center gap-2 text-base">
+                                        <Star className="h-4 w-4 text-yellow-500 fill-yellow-500" />
+                                        Best Strike Recommendation
+                                        {!hasMarginData && (
+                                            <span className="text-xs font-normal text-muted-foreground ml-1">(ROM disabled — margin not available)</span>
+                                        )}
+                                    </CardTitle>
+                                    <div className="flex items-center gap-2">
+                                        {marginAgeLabel && (
+                                            <span className="text-xs text-muted-foreground">Margin: {marginAgeLabel}</span>
+                                        )}
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-7 text-xs"
+                                            disabled={isFetchingMargin || monitoredStrikes.length === 0}
+                                            onClick={() => fetchMarginData(monitoredStrikes)}
+                                        >
+                                            <RefreshCw className={cn("mr-1 h-3 w-3", isFetchingMargin && "animate-spin")} />
+                                            {isFetchingMargin ? 'Fetching...' : 'Refresh Margin'}
+                                        </Button>
+                                    </div>
+                                </div>
+
+                                {/* Scoring Weight Controls */}
+                                <div className="mt-3">
+                                    <div className="flex items-center gap-1.5 mb-2">
+                                        <span className="text-xs font-medium text-muted-foreground">Scoring Weights</span>
+                                        <TooltipProvider>
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <span className="cursor-help text-muted-foreground hover:text-foreground transition-colors">
+                                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                            <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>
+                                                        </svg>
+                                                    </span>
+                                                </TooltipTrigger>
+                                                <TooltipContent side="top" className="max-w-[300px] p-3 space-y-2">
+                                                    <div className="font-bold">How Scoring Works</div>
+                                                    <div className="space-y-1.5 text-[11px]">
+                                                        <div>
+                                                            <span className="font-semibold">ROM (Return on Margin)</span>
+                                                            <div className="opacity-80">Higher weight = prefer strikes that generate more premium relative to the margin blocked. Best for capital-efficient selling. Requires margin data.</div>
+                                                        </div>
+                                                        <div>
+                                                            <span className="font-semibold">Theta</span>
+                                                            <div className="opacity-80">Higher weight = prefer strikes with higher daily time decay (₹/day). Best for maximising daily income from options selling.</div>
+                                                        </div>
+                                                        <div>
+                                                            <span className="font-semibold">Safety</span>
+                                                            <div className="opacity-80">Higher weight = prefer strikes farther OTM (% distance from spot). Best for conservative sellers who want more buffer before the strike is tested.</div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="opacity-60 text-[10px] border-t border-current/20 pt-1.5">
+                                                        Weights are auto-normalised — they don't need to add up to 100. Each strike is ranked 0–100 on each axis and the weighted average becomes its final score.
+                                                    </div>
+                                                </TooltipContent>
+                                            </Tooltip>
+                                        </TooltipProvider>
+                                    </div>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 items-end">
+                                    <div className="space-y-1">
+                                        <div className="flex justify-between text-xs text-muted-foreground">
+                                            <span>ROM Weight</span>
+                                            <span className={cn("font-medium", !hasMarginData && "line-through opacity-40")}>{bestStrikeConfig.romWeight}%</span>
+                                        </div>
+                                        <input
+                                            type="range" min={0} max={100} step={5}
+                                            value={bestStrikeConfig.romWeight}
+                                            disabled={!hasMarginData}
+                                            onChange={e => setBestStrikeConfig(p => ({ ...p, romWeight: Number(e.target.value) }))}
+                                            className="w-full accent-primary h-1.5 disabled:opacity-30"
+                                        />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <div className="flex justify-between text-xs text-muted-foreground">
+                                            <span>Theta Weight</span>
+                                            <span className="font-medium">{bestStrikeConfig.thetaWeight}%</span>
+                                        </div>
+                                        <input
+                                            type="range" min={0} max={100} step={5}
+                                            value={bestStrikeConfig.thetaWeight}
+                                            onChange={e => setBestStrikeConfig(p => ({ ...p, thetaWeight: Number(e.target.value) }))}
+                                            className="w-full accent-primary h-1.5"
+                                        />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <div className="flex justify-between text-xs text-muted-foreground">
+                                            <span>Safety Weight</span>
+                                            <span className="font-medium">{bestStrikeConfig.safetyWeight}%</span>
+                                        </div>
+                                        <input
+                                            type="range" min={0} max={100} step={5}
+                                            value={bestStrikeConfig.safetyWeight}
+                                            onChange={e => setBestStrikeConfig(p => ({ ...p, safetyWeight: Number(e.target.value) }))}
+                                            className="w-full accent-primary h-1.5"
+                                        />
+                                    </div>
+                                    <div className="space-y-1">
+                                        <label className="text-xs text-muted-foreground">Lot Size</label>
+                                        <Input
+                                            type="number" min={1}
+                                            value={bestStrikeConfig.lotSize}
+                                            onChange={e => setBestStrikeConfig(p => ({ ...p, lotSize: Math.max(1, Number(e.target.value)) }))}
+                                            className="h-7 text-xs"
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Filter Toggles */}
+                                <div className="flex flex-wrap gap-4 mt-3 pt-3 border-t border-border">
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            type="button"
+                                            role="switch"
+                                            aria-checked={bestStrikeConfig.applyDistanceFilter}
+                                            onClick={() => setBestStrikeConfig(p => ({ ...p, applyDistanceFilter: !p.applyDistanceFilter }))}
+                                            className={cn(
+                                                "relative inline-flex h-4 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
+                                                bestStrikeConfig.applyDistanceFilter ? "bg-primary" : "bg-muted"
+                                            )}
+                                        >
+                                            <span className={cn(
+                                                "pointer-events-none inline-block h-3 w-3 rounded-full bg-white shadow-lg transition-transform",
+                                                bestStrikeConfig.applyDistanceFilter ? "translate-x-4" : "translate-x-0"
+                                            )} />
+                                        </button>
+                                        <span className="text-xs text-muted-foreground">Distance Filter</span>
+                                        <TooltipProvider>
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <span className="cursor-help text-muted-foreground/60 hover:text-muted-foreground">
+                                                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                                                    </span>
+                                                </TooltipTrigger>
+                                                <TooltipContent side="top" className="max-w-[220px] text-xs p-2">
+                                                    <p className="font-medium mb-1">Distance Filter</p>
+                                                    <p className="opacity-80">When ON, only considers strikes that are safely beyond the configured distance threshold:</p>
+                                                    <p className="mt-1 opacity-80">• CE: strike ≥ spot + distance</p>
+                                                    <p className="opacity-80">• PE: strike ≤ spot - distance</p>
+                                                    <p className="mt-1 opacity-60 text-[10px]">Uses the distance threshold from Configuration section.</p>
+                                                </TooltipContent>
+                                            </Tooltip>
+                                        </TooltipProvider>
+                                    </div>
+
+                                    <div className="flex items-center gap-2">
+                                        <button
+                                            type="button"
+                                            role="switch"
+                                            aria-checked={bestStrikeConfig.applyPremiumFilter}
+                                            onClick={() => setBestStrikeConfig(p => ({ ...p, applyPremiumFilter: !p.applyPremiumFilter }))}
+                                            className={cn(
+                                                "relative inline-flex h-4 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
+                                                bestStrikeConfig.applyPremiumFilter ? "bg-primary" : "bg-muted"
+                                            )}
+                                        >
+                                            <span className={cn(
+                                                "pointer-events-none inline-block h-3 w-3 rounded-full bg-white shadow-lg transition-transform",
+                                                bestStrikeConfig.applyPremiumFilter ? "translate-x-4" : "translate-x-0"
+                                            )} />
+                                        </button>
+                                        <span className="text-xs text-muted-foreground">Premium Filter</span>
+                                        <TooltipProvider>
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <span className="cursor-help text-muted-foreground/60 hover:text-muted-foreground">
+                                                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                                                    </span>
+                                                </TooltipTrigger>
+                                                <TooltipContent side="top" className="max-w-[220px] text-xs p-2">
+                                                    <p className="font-medium mb-1">Premium Filter</p>
+                                                    <p className="opacity-80">When ON, only considers strikes whose current premium is within the configured premium threshold.</p>
+                                                    <p className="mt-1 opacity-60 text-[10px]">Uses the premium threshold from Configuration section.</p>
+                                                </TooltipContent>
+                                            </Tooltip>
+                                        </TooltipProvider>
+                                    </div>
+                                </div>
+                                </div>
+                            </CardHeader>
+                            <CardContent className="pt-0">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    {/* Best CE */}
+                                    {bestCE && (
+                                        <div className="rounded-lg border border-green-500/30 bg-green-500/5 p-3 space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <div className="flex items-center gap-2">
+                                                    <Badge variant="outline" className="bg-green-500/10 text-green-500 border-green-500/20 text-xs">CE</Badge>
+                                                    <span className="font-bold text-sm">{bestCE.strike}</span>
+                                                    <span className="text-xs text-muted-foreground font-mono">{bestCE.symbol}</span>
+                                                </div>
+                                                <div className={cn(
+                                                    "text-lg font-black tabular-nums",
+                                                    bestCE.score >= 70 ? "text-green-500" : bestCE.score >= 40 ? "text-yellow-500" : "text-red-500"
+                                                )}>
+                                                    {bestCE.score}<span className="text-xs font-normal text-muted-foreground">/100</span>
+                                                </div>
+                                            </div>
+                                            <div className="grid grid-cols-3 gap-2 text-xs">
+                                                <div className="text-center">
+                                                    <div className="text-muted-foreground">Premium</div>
+                                                    <div className="font-semibold">₹{bestCE.currentPremium.toFixed(2)}</div>
+                                                </div>
+                                                <div className="text-center">
+                                                    <div className="text-muted-foreground">θ/day</div>
+                                                    <div className="font-semibold text-blue-500">₹{bestCE.thetaIncome.toFixed(2)}</div>
+                                                </div>
+                                                <div className="text-center">
+                                                    <div className="text-muted-foreground">{bestCE.rom !== null ? 'ROM' : '% OTM'}</div>
+                                                    <div className="font-semibold text-purple-500">
+                                                        {bestCE.rom !== null ? `${bestCE.rom.toFixed(1)}%` : `${bestCE.distancePct.toFixed(1)}%`}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                    {/* Best PE */}
+                                    {bestPE && (
+                                        <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-3 space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <div className="flex items-center gap-2">
+                                                    <Badge variant="outline" className="bg-red-500/10 text-red-500 border-red-500/20 text-xs">PE</Badge>
+                                                    <span className="font-bold text-sm">{bestPE.strike}</span>
+                                                    <span className="text-xs text-muted-foreground font-mono">{bestPE.symbol}</span>
+                                                </div>
+                                                <div className={cn(
+                                                    "text-lg font-black tabular-nums",
+                                                    bestPE.score >= 70 ? "text-green-500" : bestPE.score >= 40 ? "text-yellow-500" : "text-red-500"
+                                                )}>
+                                                    {bestPE.score}<span className="text-xs font-normal text-muted-foreground">/100</span>
+                                                </div>
+                                            </div>
+                                            <div className="grid grid-cols-3 gap-2 text-xs">
+                                                <div className="text-center">
+                                                    <div className="text-muted-foreground">Premium</div>
+                                                    <div className="font-semibold">₹{bestPE.currentPremium.toFixed(2)}</div>
+                                                </div>
+                                                <div className="text-center">
+                                                    <div className="text-muted-foreground">θ/day</div>
+                                                    <div className="font-semibold text-blue-500">₹{bestPE.thetaIncome.toFixed(2)}</div>
+                                                </div>
+                                                <div className="text-center">
+                                                    <div className="text-muted-foreground">{bestPE.rom !== null ? 'ROM' : '% OTM'}</div>
+                                                    <div className="font-semibold text-purple-500">
+                                                        {bestPE.rom !== null ? `${bestPE.rom.toFixed(1)}%` : `${bestPE.distancePct.toFixed(1)}%`}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </CardContent>
+                        </Card>
+                    )}
+
                     {/* Monitor Table */}
                     <Card>
                         <Table>
                             <TableHeader>
                                 <TableRow>
                                     <TableHead>SYMBOL</TableHead>
-                                    <TableHead className="text-center">TYPE</TableHead>
                                     <TableHead className="text-center">STRIKE</TableHead>
                                     <TableHead className="text-right">PREMIUM</TableHead>
                                     <TableHead className="text-center">DISTANCE</TableHead>
@@ -1130,17 +1749,30 @@ export default function OptionSpikeMonitor() {
                                             : <><span className="text-green-500">CE:{config.spikeThresholdPercentCE}%</span> / <span className="text-red-500">PE:{config.spikeThresholdPercentPE}%</span></>
                                         }
                                     </TableHead>
+                                    <TableHead className="text-center">θ/DAY</TableHead>
+                                    {hasMarginData && <TableHead className="text-center">ROM%</TableHead>}
+                                    <TableHead className="text-center">SCORE</TableHead>
                                     <TableHead className="text-center">ALL PASS</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {tableRows.map((row) => (
-                                    <TableRow key={row.symbol} className={row.isAllPass ? 'bg-green-500/10' : ''}>
-                                        <TableCell className="font-medium text-xs">{row.symbol}</TableCell>
-                                        <TableCell className="text-center">
-                                            <Badge variant="outline" className={row.type === 'CE' ? 'bg-green-500/10 text-green-500 border-green-500/20' : 'bg-red-500/10 text-red-500 border-red-500/20'}>
-                                                {row.type}
-                                            </Badge>
+                                {tableRows.map((row) => {
+                                    const scored = scoredRows.find(r => r.symbol === row.symbol)
+                                    const score = scoreBySymbol[row.symbol] ?? null
+                                    return (
+                                    <TableRow key={row.symbol} className={cn(
+                                        row.isAllPass ? 'bg-green-500/10' : '',
+                                        scored?.symbol === bestCE?.symbol || scored?.symbol === bestPE?.symbol ? 'ring-1 ring-inset ring-yellow-500/40' : ''
+                                    )}>
+                                        <TableCell className="font-medium text-xs">
+                                            <div className="flex items-center gap-1">
+                                                {(scored?.symbol === bestCE?.symbol || scored?.symbol === bestPE?.symbol) && (
+                                                    <Star className="h-3 w-3 text-yellow-500 fill-yellow-500 shrink-0" />
+                                                )}
+                                                <span className={row.type === 'CE' ? 'text-green-500' : 'text-red-400'}>
+                                                    {row.symbol}
+                                                </span>
+                                            </div>
                                         </TableCell>
                                         <TableCell className="text-center font-bold">{row.strike}</TableCell>
                                         <TableCell className="text-right font-mono text-base font-semibold">
@@ -1182,6 +1814,105 @@ export default function OptionSpikeMonitor() {
                                                 </TooltipProvider>
                                             </div>
                                         </TableCell>
+                                        {/* θ/day */}
+                                        <TableCell className="text-center">
+                                            {scored ? (
+                                                <TooltipProvider delayDuration={100}>
+                                                    <Tooltip>
+                                                        <TooltipTrigger asChild>
+                                                            <span className="text-xs font-medium text-blue-500 cursor-help underline decoration-dotted">
+                                                                ₹{scored.thetaIncome.toFixed(2)}
+                                                            </span>
+                                                        </TooltipTrigger>
+                                                        <TooltipContent side="top" className="min-w-[240px] p-2">
+                                                            <div className="font-bold mb-2">Daily Theta Decay</div>
+                                                            <div className="flex justify-between gap-4">
+                                                                <span className="opacity-70">Raw θ (annualised)</span>
+                                                                <span>{scored.theta.toFixed(4)}</span>
+                                                            </div>
+                                                            <div className="flex justify-between gap-4">
+                                                                <span className="opacity-70">÷ 365 (daily per unit)</span>
+                                                                <span>{(Math.abs(scored.theta) / 365).toFixed(4)}</span>
+                                                            </div>
+                                                            <div className="flex justify-between gap-4">
+                                                                <span className="opacity-70">× Lot size</span>
+                                                                <span>× {bestStrikeConfig.lotSize}</span>
+                                                            </div>
+                                                            <div className="flex justify-between gap-4">
+                                                                <span className="opacity-70">Days to expiry</span>
+                                                                <span>{scored.daysToExpiry.toFixed(2)} days</span>
+                                                            </div>
+                                                            <div className="border-t border-current/20 pt-1 mt-1 flex justify-between gap-4">
+                                                                <span className="opacity-70">θ/day (theoretical)</span>
+                                                                <span className="font-bold">₹{scored.thetaIncome.toFixed(2)}</span>
+                                                            </div>
+                                                            <div className="flex justify-between gap-4">
+                                                                <span className="opacity-70">Max collectible</span>
+                                                                <span className="font-bold">₹{scored.maxCollectible.toFixed(2)}</span>
+                                                            </div>
+                                                            <div className="opacity-60 text-[10px] pt-1 border-t border-current/20 mt-1">
+                                                                py_vollib returns annualised θ. Divide by 365 for daily decay. Max collectible = premium × lot (actual income if expires worthless).
+                                                            </div>
+                                                        </TooltipContent>
+                                                    </Tooltip>
+                                                </TooltipProvider>
+                                            ) : <span className="text-xs text-muted-foreground">—</span>}
+                                        </TableCell>
+                                        {/* ROM% */}
+                                        {hasMarginData && (
+                                            <TableCell className="text-center">
+                                                {scored ? (
+                                                    <TooltipProvider delayDuration={100}>
+                                                        <Tooltip>
+                                                            <TooltipTrigger asChild>
+                                                                <span className="text-xs font-medium text-purple-500 cursor-help underline decoration-dotted">
+                                                                    {scored.rom != null ? `${scored.rom.toFixed(1)}%` : '—'}
+                                                                </span>
+                                                            </TooltipTrigger>
+                                                            <TooltipContent side="top" className="min-w-[200px] p-2">
+                                                                <div className="font-bold mb-2">Return on Margin</div>
+                                                                <div className="flex justify-between gap-4">
+                                                                    <span className="opacity-70">Premium (LTP)</span>
+                                                                    <span>₹{scored.currentPremium.toFixed(2)}</span>
+                                                                </div>
+                                                                <div className="flex justify-between gap-4">
+                                                                    <span className="opacity-70">Lot size</span>
+                                                                    <span>× {bestStrikeConfig.lotSize}</span>
+                                                                </div>
+                                                                <div className="flex justify-between gap-4">
+                                                                    <span className="opacity-70">Premium collected</span>
+                                                                    <span>₹{(scored.currentPremium * bestStrikeConfig.lotSize).toFixed(2)}</span>
+                                                                </div>
+                                                                <div className="flex justify-between gap-4">
+                                                                    <span className="opacity-70">Margin required</span>
+                                                                    <span>₹{marginData[row.symbol] != null ? marginData[row.symbol]!.toLocaleString('en-IN', { maximumFractionDigits: 0 }) : '—'}</span>
+                                                                </div>
+                                                                <div className="border-t border-border pt-1 flex justify-between gap-4 font-semibold">
+                                                                    <span className="opacity-70">ROM</span>
+                                                                    <span className="font-bold">{scored.rom != null ? `${scored.rom.toFixed(2)}%` : '—'}</span>
+                                                                </div>
+                                                                <div className="opacity-60 text-[10px] pt-1 border-t border-current/20 mt-1">
+                                                                    (Premium × Lot) ÷ Margin × 100
+                                                                </div>
+                                                            </TooltipContent>
+                                                        </Tooltip>
+                                                    </TooltipProvider>
+                                                ) : <span className="text-xs text-muted-foreground">—</span>}
+                                            </TableCell>
+                                        )}
+                                        {/* Score */}
+                                        <TableCell className="text-center">
+                                            {score !== null ? (
+                                                <span className={cn(
+                                                    "inline-flex items-center justify-center rounded-full px-2 py-0.5 text-xs font-bold",
+                                                    score >= 70 ? "bg-green-500/15 text-green-500" :
+                                                    score >= 40 ? "bg-yellow-500/15 text-yellow-500" :
+                                                    "bg-red-500/15 text-red-500"
+                                                )}>
+                                                    {score}
+                                                </span>
+                                            ) : <span className="text-xs text-muted-foreground">—</span>}
+                                        </TableCell>
                                         <TableCell className="text-center">
                                             {row.isAllPass ?
                                                 <div className="flex justify-center"><div className="h-6 w-6 rounded-full bg-green-500 flex items-center justify-center text-white"><Check className="h-4 w-4" /></div></div> :
@@ -1189,10 +1920,11 @@ export default function OptionSpikeMonitor() {
                                             }
                                         </TableCell>
                                     </TableRow>
-                                ))}
+                                    )
+                                })}
                                 {tableRows.length === 0 && (
                                     <TableRow>
-                                        <TableCell colSpan={10} className="h-24 text-center">
+                                        <TableCell colSpan={13} className="h-24 text-center">
                                             No strikes match the criteria or market is closed.
                                         </TableCell>
                                     </TableRow>

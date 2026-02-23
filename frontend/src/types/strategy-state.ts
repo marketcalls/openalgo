@@ -90,6 +90,9 @@ export type ExitType =
   | 'HEDGE_SL_EXIT'
   | 'HEDGE_TARGET_EXIT'
   | 'STRATEGY_DONE'
+  | 'AUTO_BUYBACK'
+  | 'MANUAL_EXIT'
+  | 'EXIT'
 
 export interface TradeHistoryRecord {
   trade_id: number
