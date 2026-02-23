@@ -248,6 +248,28 @@ CREATE INDEX idx_token ON symtoken(token);
 └──────────────────┴──────────────┴──────────────────────────────┘
 ```
 
+## Stuck Download Detection
+
+The system auto-detects stuck master contract downloads. If a download stays in 'downloading' state for more than a configurable timeout (default: 5 minutes), it is automatically marked as an error, and the UI enables the "Force Download" button for manual retry.
+
+```python
+# database/master_contract_status_db.py
+DOWNLOAD_TIMEOUT_MINUTES = 5  # Configurable timeout
+
+def get_download_status(broker):
+    """
+    Check download status with stuck detection.
+    If status='downloading' and last_updated > DOWNLOAD_TIMEOUT_MINUTES ago,
+    auto-mark as error and suggest Force Download.
+    """
+    status = query_status(broker)
+    if status == 'downloading' and is_stuck(status.last_updated):
+        mark_as_error(broker,
+            f"Download timed out (stuck for >{DOWNLOAD_TIMEOUT_MINUTES} minutes). "
+            "Click Force Download to retry."
+        )
+```
+
 ## Error Handling
 
 ### Download Failures

@@ -2,7 +2,7 @@
 
 ## Overview
 
-OpenAlgo backend is a production-ready Flask application providing a unified API layer across **28+ Indian brokers**. It features a plugin-based broker system, multi-database architecture, real-time WebSocket streaming, and comprehensive security layers.
+OpenAlgo backend is a production-ready Flask application providing a unified API layer across **29 Indian brokers**. It features a plugin-based broker system, multi-database architecture, real-time WebSocket streaming, and comprehensive security layers.
 
 ## Technology Stack
 
@@ -33,13 +33,13 @@ OpenAlgo backend is a production-ready Flask application providing a unified API
 │          ▼                           ▼                           ▼           │
 │  ┌───────────────┐         ┌─────────────────┐         ┌───────────────────┐ │
 │  │  Blueprints   │         │   REST API v1   │         │    WebSocket      │ │
-│  │  (34 routes)  │         │   /api/v1/*     │         │    Proxy :8765    │ │
+│  │  (41 routes)  │         │   /api/v1/*     │         │    Proxy :8765    │ │
 │  └───────┬───────┘         └────────┬────────┘         └─────────┬─────────┘ │
 │          │                          │                            │           │
 │          └──────────────────────────┼────────────────────────────┘           │
 │                                     ▼                                         │
 │  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │                         Service Layer (50+)                             │  │
+│  │                         Service Layer (58+)                             │  │
 │  │                                                                         │  │
 │  │   place_order_service   │   quotes_service   │   funds_service         │  │
 │  │   cancel_order_service  │   depth_service    │   holdings_service      │  │
@@ -48,10 +48,13 @@ OpenAlgo backend is a production-ready Flask application providing a unified API
 │                                   │                                           │
 │                                   ▼                                           │
 │  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │                      Broker Plugin System (28+)                         │  │
+│  │                      Broker Plugin System (29)                          │  │
 │  │                                                                         │  │
 │  │   ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐          │  │
-│  │   │ Zerodha │ │  Dhan   │ │  Angel  │ │  Fyers  │ │ Upstox  │  ...     │  │
+│  │   │ Zerodha │ │  Dhan   │ │  Angel  │ │  Fyers  │ │ Upstox  │          │  │
+│  │   └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘          │  │
+│  │   ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐          │  │
+│  │   │  Kotak  │ │  Nubra  │ │  IIFL   │ │ Shoonya │ │ AliceB  │  ...     │  │
 │  │   └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘          │  │
 │  └────────────────────────────────────────────────────────────────────────┘  │
 └──────────────────────────────────────────────────────────────────────────────┘
@@ -77,7 +80,7 @@ openalgo/
 ├── cors.py                     # CORS configuration
 ├── csp.py                      # Content Security Policy
 │
-├── blueprints/                 # Route handlers (33 files)
+├── blueprints/                 # Route handlers (41 files)
 │   ├── auth.py                 # Login, logout, CSRF
 │   ├── core.py                 # Home, setup, download
 │   ├── dashboard.py            # Dashboard UI
@@ -86,6 +89,14 @@ openalgo/
 │   ├── strategy.py             # Strategy webhooks
 │   ├── flow.py                 # Flow workflows
 │   ├── analyzer.py             # Analyzer mode
+│   ├── gex.py                  # GEX Dashboard
+│   ├── ivchart.py              # IV Chart
+│   ├── ivsmile.py              # IV Smile
+│   ├── oiprofile.py            # OI Profile
+│   ├── oitracker.py            # OI Tracker
+│   ├── straddle_chart.py       # ATM Straddle Chart
+│   ├── vol_surface.py          # Volatility Surface
+│   ├── health.py               # Health monitoring
 │   ├── react_app.py            # React SPA serving
 │   └── ...
 │
@@ -95,13 +106,13 @@ openalgo/
 │   ├── quotes.py               # POST /quotes
 │   └── ...
 │
-├── services/                   # Business logic (50+ files)
+├── services/                   # Business logic (58+ files)
 │   ├── place_order_service.py
 │   ├── quotes_service.py
 │   ├── order_router_service.py
 │   └── ...
 │
-├── broker/                     # Broker plugins (24+ brokers)
+├── broker/                     # Broker plugins (29 brokers)
 │   ├── zerodha/
 │   ├── dhan/
 │   ├── angel/
@@ -155,7 +166,7 @@ openalgo/
                               │
                               ▼
 ┌────────────────────────────────────────────────────────────────┐
-│  3. Blueprint Registration (33 blueprints)                      │
+│  3. Blueprint Registration (41 blueprints)                      │
 │     - React frontend (if available)                             │
 │     - REST API v1                                               │
 │     - Auth, Dashboard, Orders, Search...                        │
@@ -284,7 +295,8 @@ def place_order_service(data, auth_token, api_key=None):
 | Trading | orders, search, apikey | Order management, symbol search |
 | Strategies | strategy, chartink, python_strategy, flow | Webhook strategies |
 | Data | tv_json, gc_json, historify | Chart data, historical data |
-| Monitoring | log, traffic, latency, security | Logs and metrics |
+| Analytics | gex, ivchart, ivsmile, oiprofile, oitracker, straddle_chart, vol_surface | Options analytics tools |
+| Monitoring | log, traffic, latency, security, health | Logs, metrics, health |
 | Admin | admin, settings, telegram | Configuration |
 | Sandbox | analyzer, sandbox | Paper trading |
 | Frontend | react_app, platforms | UI serving |
