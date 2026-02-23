@@ -61,7 +61,7 @@ class DeltaWebSocket:
     # ── constants ─────────────────────────────────────────────────────────────
     WS_URL            = "wss://socket.india.delta.exchange"
     HEARTBEAT_INTERVAL = 30      # seconds between pings
-    MSG_TYPE_AUTH      = "auth"
+    MSG_TYPE_AUTH      = "key-auth"
     MSG_TYPE_SUB       = "subscribe"
     MSG_TYPE_UNSUB     = "unsubscribe"
     CHANNEL_TICKER     = "v2/ticker"
@@ -216,13 +216,15 @@ class DeltaWebSocket:
     def _build_private_sub_msg(self, channel: str, unsub: bool = False) -> str:
         """Build a subscribe/unsubscribe message for account-level channels.
 
-        Account channels such as 'orders', 'positions', and 'margins' do not
-        filter by symbol — they deliver all events for the authenticated user.
-        Delta Exchange expects the channels list entry to have no 'symbols' key.
+        'orders' and 'positions' require "symbols": ["all"] or Delta Exchange
+        sends no data (per API docs).  'margins' works without a symbols list.
         """
+        channel_entry: dict = {"name": channel}
+        if channel in (self.CHANNEL_ORDERS, self.CHANNEL_POSITIONS):
+            channel_entry["symbols"] = ["all"]
         return json.dumps({
             "type": self.MSG_TYPE_UNSUB if unsub else self.MSG_TYPE_SUB,
-            "payload": {"channels": [{"name": channel}]},
+            "payload": {"channels": [channel_entry]},
         })
 
     def subscribe_orders_channel(self) -> None:
@@ -335,7 +337,7 @@ class DeltaWebSocket:
 
         msg_type = msg.get("type", "")
 
-        if msg_type in ("auth_ack", "subscribe_ack", "unsubscribe_ack"):
+        if msg_type in ("key-auth", "subscriptions"):
             logger.info("DeltaWS ack: %s", msg_type)
             return
 

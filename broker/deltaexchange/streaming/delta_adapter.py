@@ -71,7 +71,7 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
         else:
             # OpenAlgo stores the api_key as the auth token
             api_key    = get_auth_token(user_id) or ""
-            api_secret = ""   # Will be empty unless the DB is extended to store secret
+            api_secret = os.getenv("BROKER_API_SECRET", "")
 
         if not api_key:
             raise ValueError(f"No API key found for user {user_id}")
@@ -132,7 +132,7 @@ class DeltaWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 "SYMBOL_NOT_FOUND", f"{symbol} not found for exchange {exchange}"
             )
 
-        br_symbol = token_info.get("brexchange_symbol") or token_info.get("token") or symbol
+        br_symbol = get_br_symbol(symbol, exchange) or symbol
         channel   = DeltaModeMapper.get_channel(mode)
         corr_id   = f"{symbol}_{exchange}_{mode}"
 

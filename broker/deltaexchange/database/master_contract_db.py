@@ -4,12 +4,12 @@ import os
 import time
 
 import pandas as pd
-import requests
 from sqlalchemy import Column, Float, Index, Integer, Sequence, String, create_engine, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import scoped_session, sessionmaker
 
 from extensions import socketio  # Import SocketIO
+from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -145,7 +145,7 @@ def _to_canonical_symbol(delta_symbol: str, instrument_type: str, expiry: str) -
     Convert a Delta Exchange native symbol to the OpenAlgo canonical CRYPTO format.
 
     Canonical formats (standard Indian F&O-style symbology — no dashes):
-        Perpetual future : BTCUSDT              (delta: BTCUSD  — append T)
+        Perpetual future : BTCUSD.P             (delta: BTCUSD  — TradingView .P suffix)
         Dated future     : BTC28FEB25FUT        (delta: BTCUSD28Feb2025 — extract underlying + expiry)
         Call option      : BTC28FEB2580000CE    (delta: C-BTC-80000-280225)
         Put option       : BTC28FEB2580000PE    (delta: P-BTC-80000-280225)
@@ -202,12 +202,11 @@ def _to_canonical_symbol(delta_symbol: str, instrument_type: str, expiry: str) -
         # duplicating the expiry date in the canonical symbol.
         return f"{base}{expiry_alpha}FUT"
 
-    # ── Perpetual futures: BTCUSD → BTCUSDT ────────────────────────────────
+    # ── Perpetual futures: BTCUSD → BTCUSD.P (TradingView perpetual notation) ──
+    # .P is the TradingView-standard suffix for perpetuals and avoids colliding
+    # with BTCUSDT (Binance BTC/Tether spot pair — a completely different asset).
     if instrument_type == "PERPFUT":
-        upper = delta_symbol.upper()
-        if upper.endswith("USD") and not upper.endswith("USDT"):
-            return delta_symbol + "T"
-        return delta_symbol
+        return delta_symbol + ".P"
 
     # ── All other types (SPREAD, COMBO, IRS, …): keep as-is ────────────────
     return delta_symbol
@@ -232,20 +231,12 @@ CONTRACT_TYPE_MAP = {
 # Maps user-supplied aliases → canonical Delta Exchange symbol prefix / exact match.
 # Keys are stored upper-case; resolution happens case-insensitively.
 # Add further pairs here as users report lookup failures.
+# Maps user-supplied symbol aliases to the canonical Delta Exchange symbol prefix
+# used in the database.  search_symbols() applies a LIKE query after alias resolution,
+# so partial matches (e.g. "BTCUSD" → finds "BTCUSD.P") work without explicit entries.
+# Only add entries here for genuinely-different ticker names (not convention variants).
 SYMBOL_ALIASES: dict[str, str] = {
-    "BTCUSDT":   "BTCUSD",
-    "ETHUSDT":   "ETHUSD",
-    "SOLUSDT":   "SOLUSD",
-    "BNBUSDT":   "BNBUSD",
-    "XRPUSDT":   "XRPUSD",
-    "DOGEUSDT":  "DOGEUSD",
-    "AVAXUSDT":  "AVAXUSD",
-    "MATICUSDT": "MATICUSD",
-    "LINKUSDT":  "LINKUSD",
-    "LTCUSDT":   "LTCUSD",
-    "ADAUSDT":   "ADAUSD",
-    "DOTUSDT":   "DOTUSD",
-    "NEARBRC":   "NEARUSD",   # alternative ticker heard on TradingView
+    "NEARBRC": "NEARUSD",   # alternative ticker heard on TradingView
 }
 
 
@@ -291,11 +282,10 @@ def fetch_delta_products():
             params["after"] = after_cursor
 
         try:
-            response = requests.get(
+            response = get_httpx_client().get(
                 url,
                 params=params,
                 headers=headers,
-                timeout=30,
             )
             if response.status_code != 200:
                 logger.error(
