@@ -906,7 +906,7 @@ export default function Positions() {
                               )}
                             >
                               {groupStats.totalPnl >= 0 ? '+' : ''}
-                              {groupStats.totalPnl.toFixed(2)}
+                              {formatCurrency(groupStats.totalPnl)}
                             </TableCell>
                             <TableCell
                               className={cn(
