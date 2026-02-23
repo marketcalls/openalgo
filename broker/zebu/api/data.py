@@ -465,6 +465,14 @@ class BrokerData:
 
             # Convert symbol to broker format and get token
             br_symbol = get_br_symbol(symbol, exchange)
+            
+            # Convert OpenAlgo exchange to broker exchange for API calls
+            api_exchange = exchange
+            if exchange == "NSE_INDEX":
+                api_exchange = "NSE"
+            elif exchange == "BSE_INDEX":
+                api_exchange = "BSE"
+            
             token = get_token(symbol, exchange)
 
             # Convert dates to epoch timestamps
@@ -490,7 +498,7 @@ class BrokerData:
             # For daily data, use EODChartData endpoint
             if interval == "D":
                 payload = {
-                    "sym": f"{exchange}:{br_symbol}",
+                    "sym": f"{api_exchange}:{br_symbol}",
                     "from": str(start_ts),
                     "to": str(end_ts),
                 }
@@ -508,7 +516,7 @@ class BrokerData:
                 # For intraday data, use TPSeries endpoint
                 payload = {
                     "uid": os.getenv("BROKER_API_KEY"),
-                    "exch": exchange,
+                    "exch": api_exchange,
                     "token": token,
                     "st": str(start_ts),
                     "et": str(end_ts),
@@ -588,7 +596,7 @@ class BrokerData:
                     if df.empty or df["timestamp"].max() < today_ts:
                         try:
                             # Get today's data from quotes
-                            payload = {"exch": exchange, "token": token}
+                            payload = {"exch": api_exchange, "token": token}
                             quotes_response = get_api_response(
                                 "/NorenWClientTP/GetQuotes", self.auth_token, payload=payload
                             )

@@ -56,7 +56,7 @@ OpenAlgo includes an MCP (Model Context Protocol) server that enables AI assista
                                  ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                      Broker Integration                                      │
-│                      (24+ Brokers)                                          │
+│                      (29 Brokers)                                          │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
