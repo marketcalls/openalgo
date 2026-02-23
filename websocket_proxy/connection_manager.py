@@ -628,16 +628,24 @@ class ConnectionPool:
                                 f"[POOL] Downgraded {symbol}.{exchange} from mode {mode} "
                                 f"to mode {new_highest} on connection {adapter_idx + 1}"
                             )
+                            return {
+                                "status": "success",
+                                "message": f"Unsubscribed mode {mode}, downgraded to mode {new_highest}",
+                            }
                         else:
-                            self.logger.warning(
+                            # Re-subscribe failed — rollback: restore tracking and try to
+                            # re-subscribe at the old mode so the symbol isn't left dangling
+                            self.logger.error(
                                 f"[POOL] Failed to downgrade {symbol}.{exchange} to mode "
-                                f"{new_highest}: {result}"
+                                f"{new_highest}, rolling back: {result}"
                             )
-                        # Don't change adapter_symbol_counts — symbol still active
-                        return {
-                            "status": "success",
-                            "message": f"Unsubscribed mode {mode}, downgraded to mode {new_highest}",
-                        }
+                            self.subscription_map[sub_key] = adapter_idx
+                            adapter.subscribe(symbol, exchange, mode, 5)
+                            return {
+                                "status": "error",
+                                "code": "DOWNGRADE_FAILED",
+                                "message": f"Failed to downgrade {symbol}.{exchange} to mode {new_highest}",
+                            }
                     else:
                         # Removed a lower mode — broker still has the higher mode active
                         # No broker call needed
