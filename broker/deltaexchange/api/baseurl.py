@@ -4,8 +4,9 @@ import hmac
 import os
 import time
 
-# Base URL for Delta Exchange India REST API (Production)
-BASE_URL = "https://api.india.delta.exchange"
+# Base URL for Delta Exchange India REST API (Production).
+# Override via DELTA_BASE_URL env var to point at the testnet.
+BASE_URL = os.getenv("DELTA_BASE_URL", "https://api.india.delta.exchange")
 
 
 def get_url(endpoint):

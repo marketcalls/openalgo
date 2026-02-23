@@ -94,7 +94,7 @@ def transform_data(data, token):
         if data.get(field):
             transformed[field] = str(data[field])
 
-    logger.info(f"[DeltaExchange] Transformed order: {transformed}")
+    logger.debug(f"[DeltaExchange] Transformed order: {transformed}")
     return transformed
 
 
