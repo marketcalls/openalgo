@@ -52,6 +52,12 @@ import {
     TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
+import {
+    Tooltip,
+    TooltipContent,
+    TooltipProvider,
+    TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { showToast } from '@/utils/toast'
 import { cn } from '@/lib/utils'
 
@@ -61,12 +67,23 @@ interface MonitorConfig {
     underlying: string
     expiry: string
     strikeCount: number
+    // Shared thresholds (used when filtersLinked = true)
     distanceThreshold: number
     premiumThreshold: number
     ivThreshold: number
+    spikeThresholdPercent: number
+    // CE-specific thresholds (used when filtersLinked = false)
+    distanceThresholdCE: number
+    premiumThresholdCE: number
+    ivThresholdCE: number
+    spikeThresholdPercentCE: number
+    // PE-specific thresholds (used when filtersLinked = false)
+    distanceThresholdPE: number
+    premiumThresholdPE: number
+    ivThresholdPE: number
+    spikeThresholdPercentPE: number
     spikeReference: 'OPEN' | 'PREV_CLOSE' | 'LAST_X_MIN'
     lastXMinutes: number
-    spikeThresholdPercent: number
     skipIvWhenDistanceFail: boolean
     skipIvWhenPremiumFail: boolean
 }
@@ -83,6 +100,7 @@ interface StrikeStatus {
     currentPremium: number
     currentIv: number
     spikePercent: number
+    optionRefPrice: number
     lastTickTime: number
     isDistancePass: boolean
     isPremiumPass: boolean
@@ -112,9 +130,17 @@ const DEFAULT_CONFIG: MonitorConfig = {
     distanceThreshold: 500,
     premiumThreshold: 5,
     ivThreshold: 30,
+    spikeThresholdPercent: 10,
+    distanceThresholdCE: 500,
+    premiumThresholdCE: 5,
+    ivThresholdCE: 30,
+    spikeThresholdPercentCE: 10,
+    distanceThresholdPE: 500,
+    premiumThresholdPE: 5,
+    ivThresholdPE: 30,
+    spikeThresholdPercentPE: 10,
     spikeReference: 'OPEN',
     lastXMinutes: 5,
-    spikeThresholdPercent: 10,
     skipIvWhenDistanceFail: false,
     skipIvWhenPremiumFail: false,
 }
@@ -129,8 +155,40 @@ export default function OptionSpikeMonitor() {
 
     // Configuration State
     const [config, setConfig] = useState<MonitorConfig>(DEFAULT_CONFIG)
+    const [filtersLinked, setFiltersLinked] = useState(true)
     const [isMonitoring, setIsMonitoring] = useState(false)
     const [isConfigOpen, setIsConfigOpen] = useState(true)
+
+    // Helper: get the effective threshold for a given type and field
+    const getThreshold = useCallback((type: 'CE' | 'PE', field: 'distance' | 'premium' | 'iv' | 'spike') => {
+        if (filtersLinked) {
+            if (field === 'distance') return config.distanceThreshold
+            if (field === 'premium') return config.premiumThreshold
+            if (field === 'iv') return config.ivThreshold
+            return config.spikeThresholdPercent
+        }
+        if (type === 'CE') {
+            if (field === 'distance') return config.distanceThresholdCE
+            if (field === 'premium') return config.premiumThresholdCE
+            if (field === 'iv') return config.ivThresholdCE
+            return config.spikeThresholdPercentCE
+        }
+        if (field === 'distance') return config.distanceThresholdPE
+        if (field === 'premium') return config.premiumThresholdPE
+        if (field === 'iv') return config.ivThresholdPE
+        return config.spikeThresholdPercentPE
+    }, [filtersLinked, config])
+
+    // Helper: update a linked field (syncs both CE and PE when linked)
+    const setLinkedFilter = useCallback((field: 'distanceThreshold' | 'premiumThreshold' | 'ivThreshold' | 'spikeThresholdPercent', value: number) => {
+        if (filtersLinked) {
+            const ceField = `${field}CE` as keyof MonitorConfig
+            const peField = `${field}PE` as keyof MonitorConfig
+            setConfig(p => ({ ...p, [field]: value, [ceField]: value, [peField]: value }))
+        } else {
+            setConfig(p => ({ ...p, [field]: value }))
+        }
+    }, [filtersLinked])
 
     // Data State
     const [underlyings, setUnderlyings] = useState<string[]>([])
@@ -320,8 +378,9 @@ export default function OptionSpikeMonitor() {
 
                         if (config.skipIvWhenDistanceFail) {
                             const distance = Math.abs(spotPrice - s.strike)
-                            if (distance <= config.distanceThreshold) {
-                                console.log('[OptionSpikeMonitor][fetchIvData] FILTERED OUT (distance):', s.symbol, 'distance:', distance, 'threshold:', config.distanceThreshold)
+                            const distThreshold = getThreshold(s.type, 'distance')
+                            if (distance <= distThreshold) {
+                                console.log('[OptionSpikeMonitor][fetchIvData] FILTERED OUT (distance):', s.symbol, 'distance:', distance, 'threshold:', distThreshold)
                                 return false
                             }
                         }
@@ -329,8 +388,9 @@ export default function OptionSpikeMonitor() {
                         if (config.skipIvWhenPremiumFail) {
                             const wsKey = `${config.exchange}:${s.symbol}`
                             const ltp = wsData.get(wsKey)?.data?.ltp ?? 0
-                            if (ltp <= config.premiumThreshold) {
-                                console.log('[OptionSpikeMonitor][fetchIvData] FILTERED OUT (premium):', s.symbol, 'ltp:', ltp, 'threshold:', config.premiumThreshold)
+                            const premThreshold = getThreshold(s.type, 'premium')
+                            if (ltp <= premThreshold) {
+                                console.log('[OptionSpikeMonitor][fetchIvData] FILTERED OUT (premium):', s.symbol, 'ltp:', ltp, 'threshold:', premThreshold)
                                 return false
                             }
                         }
@@ -406,7 +466,7 @@ export default function OptionSpikeMonitor() {
             console.error('[OptionSpikeMonitor] Error fetching IV data', err)
             setIsFetchingIv(false)
         }
-    }, [apiKey, monitoredStrikes, config.exchange, config.underlying, config.skipIvWhenDistanceFail, config.skipIvWhenPremiumFail, config.distanceThreshold, config.premiumThreshold, wsData, optionChain, getUnderlyingExchange])
+    }, [apiKey, monitoredStrikes, config.exchange, config.underlying, config.skipIvWhenDistanceFail, config.skipIvWhenPremiumFail, wsData, optionChain, getUnderlyingExchange, getThreshold])
 
     // Start Monitoring Logic
     const handleStart = async () => {
@@ -546,10 +606,6 @@ export default function OptionSpikeMonitor() {
 
     // Calculate Table Rows
     const {
-        distanceThreshold,
-        premiumThreshold,
-        ivThreshold,
-        spikeThresholdPercent,
         spikeReference,
         exchange,
         underlying,
@@ -587,10 +643,10 @@ export default function OptionSpikeMonitor() {
             const lastTick = tickTimes[s.symbol] ?? 0
             const isLive = Date.now() - lastTick < 30000 // 30s heartbeat
 
-            const isDistancePass = distance > distanceThreshold
-            const isPremiumPass = ltp > premiumThreshold
-            const isIvPass = currentIv !== undefined && currentIv > ivThreshold
-            const isSpikePass = spikePercent > spikeThresholdPercent
+            const isDistancePass = distance > getThreshold(s.type, 'distance')
+            const isPremiumPass = ltp > getThreshold(s.type, 'premium')
+            const isIvPass = currentIv !== undefined && currentIv > getThreshold(s.type, 'iv')
+            const isSpikePass = spikePercent > getThreshold(s.type, 'spike')
             const isHistoryPass = isLive
 
             const isAllPass = isDistancePass && isPremiumPass && isIvPass && isSpikePass && isHistoryPass
@@ -601,6 +657,7 @@ export default function OptionSpikeMonitor() {
                 currentPremium: ltp,
                 currentIv: currentIv ?? 0,
                 spikePercent,
+                optionRefPrice,
                 lastTickTime: lastTick,
                 isDistancePass,
                 isPremiumPass,
@@ -623,7 +680,7 @@ export default function OptionSpikeMonitor() {
                 }
                 return a.strike - b.strike
             })
-    }, [monitoredStrikes, wsData, optionChain, tickTimes, ivData, referenceSnapshots, distanceThreshold, premiumThreshold, ivThreshold, spikeThresholdPercent, spikeReference, exchange, underlying, getUnderlyingExchange, config.skipIvWhenPremiumFail, config.skipIvWhenDistanceFail])
+    }, [monitoredStrikes, wsData, optionChain, tickTimes, ivData, referenceSnapshots, spikeReference, exchange, underlying, getUnderlyingExchange, config.skipIvWhenPremiumFail, config.skipIvWhenDistanceFail, getThreshold])
 
     const hiddenCounts = useMemo(() => {
         if (!optionChain || !monitoredStrikes.length) return { distance: 0, premium: 0 }
@@ -639,17 +696,17 @@ export default function OptionSpikeMonitor() {
         if (config.skipIvWhenDistanceFail || config.skipIvWhenPremiumFail) {
             monitoredStrikes.forEach(s => {
                 const distance = Math.abs(spotPrice - s.strike)
-                const isDistanceFail = distance <= distanceThreshold
-                
+                const isDistanceFail = distance <= getThreshold(s.type, 'distance')
+
                 const wsKey = `${config.exchange}:${s.symbol}`
                 const ltp = wsData.get(wsKey)?.data?.ltp ?? 0
-                const isPremiumFail = ltp <= premiumThreshold
+                const isPremiumFail = ltp <= getThreshold(s.type, 'premium')
 
                 // Count distance failures (when switch is ON)
                 if (config.skipIvWhenDistanceFail && isDistanceFail) {
                     distanceCount++
                 }
-                
+
                 // Count premium failures (when switch is ON and distance passes)
                 // Premium check only matters if distance passed (or distance switch is OFF)
                 if (config.skipIvWhenPremiumFail && isPremiumFail) {
@@ -661,7 +718,7 @@ export default function OptionSpikeMonitor() {
         }
 
         return { distance: distanceCount, premium: premiumCount }
-    }, [monitoredStrikes, wsData, optionChain, distanceThreshold, premiumThreshold, getUnderlyingExchange, config.exchange, config.underlying, config.skipIvWhenDistanceFail, config.skipIvWhenPremiumFail])
+    }, [monitoredStrikes, wsData, optionChain, getThreshold, getUnderlyingExchange, config.exchange, config.underlying, config.skipIvWhenDistanceFail, config.skipIvWhenPremiumFail])
 
     return (
         <div className="py-6 space-y-6">
@@ -682,7 +739,7 @@ export default function OptionSpikeMonitor() {
                 </CardHeader>
                 {isConfigOpen && (
                     <CardContent>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 items-start">
                             <div className="space-y-2">
                                 <Label>Exchange & Underlying</Label>
                                 <div className="flex gap-2">
@@ -753,48 +810,142 @@ export default function OptionSpikeMonitor() {
                                 </div>
                             </div>
 
-                            <div className="space-y-2">
-                                <Label>Filters ( &gt; )</Label>
-                                <div className="grid grid-cols-2 gap-2">
-                                    <div className="space-y-1">
-                                        <span className="text-xs text-muted-foreground">Dist (Pts)</span>
-                                        <Input
-                                            type="number"
-                                            value={config.distanceThreshold}
-                                            onChange={e => setConfig(p => ({ ...p, distanceThreshold: Number(e.target.value) }))}
+                            <div className="space-y-2 lg:col-span-2">
+                                <div className="flex items-center justify-between">
+                                    <Label>Filters ( &gt; )</Label>
+                                    <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                                        <input
+                                            type="checkbox"
+                                            checked={filtersLinked}
+                                            onChange={e => {
+                                                const linked = e.target.checked
+                                                setFiltersLinked(linked)
+                                                // When re-linking, sync CE/PE values to the shared value
+                                                if (linked) {
+                                                    setConfig(p => ({
+                                                        ...p,
+                                                        distanceThresholdCE: p.distanceThreshold,
+                                                        distanceThresholdPE: p.distanceThreshold,
+                                                        premiumThresholdCE: p.premiumThreshold,
+                                                        premiumThresholdPE: p.premiumThreshold,
+                                                        ivThresholdCE: p.ivThreshold,
+                                                        ivThresholdPE: p.ivThreshold,
+                                                        spikeThresholdPercentCE: p.spikeThresholdPercent,
+                                                        spikeThresholdPercentPE: p.spikeThresholdPercent,
+                                                    }))
+                                                }
+                                            }}
+                                            className="accent-primary h-3.5 w-3.5"
                                         />
-                                    </div>
-                                    <div className="space-y-1">
-                                        <span className="text-xs text-muted-foreground">Prem (Min)</span>
-                                        <Input
-                                            type="number"
-                                            value={config.premiumThreshold}
-                                            onChange={e => setConfig(p => ({ ...p, premiumThreshold: Number(e.target.value) }))}
-                                        />
-                                    </div>
+                                        <span className="text-xs text-muted-foreground">Same for CE & PE</span>
+                                    </label>
                                 </div>
-                            </div>
 
-                            <div className="space-y-2">
-                                <Label>Thresh ( &gt; ) & Spike</Label>
-                                <div className="grid grid-cols-2 gap-2">
-                                    <div className="space-y-1">
-                                        <span className="text-xs text-muted-foreground">IV (Max)</span>
-                                        <Input
-                                            type="number"
-                                            value={config.ivThreshold}
-                                            onChange={e => setConfig(p => ({ ...p, ivThreshold: Number(e.target.value) }))}
-                                        />
+                                {filtersLinked ? (
+                                    /* Linked mode — single values for both CE & PE */
+                                    <div className="grid grid-cols-4 gap-2">
+                                        <div className="space-y-1">
+                                            <span className="text-xs text-muted-foreground">Dist (Pts)</span>
+                                            <Input
+                                                type="number"
+                                                value={config.distanceThreshold}
+                                                onChange={e => setLinkedFilter('distanceThreshold', Number(e.target.value))}
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <span className="text-xs text-muted-foreground">Prem (Min)</span>
+                                            <Input
+                                                type="number"
+                                                value={config.premiumThreshold}
+                                                onChange={e => setLinkedFilter('premiumThreshold', Number(e.target.value))}
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <span className="text-xs text-muted-foreground">IV (Max)</span>
+                                            <Input
+                                                type="number"
+                                                value={config.ivThreshold}
+                                                onChange={e => setLinkedFilter('ivThreshold', Number(e.target.value))}
+                                            />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <span className="text-xs text-muted-foreground">Spike %</span>
+                                            <Input
+                                                type="number"
+                                                value={config.spikeThresholdPercent}
+                                                onChange={e => setLinkedFilter('spikeThresholdPercent', Number(e.target.value))}
+                                            />
+                                        </div>
                                     </div>
-                                    <div className="space-y-1">
-                                        <span className="text-xs text-muted-foreground">Spike %</span>
-                                        <Input
-                                            type="number"
-                                            value={config.spikeThresholdPercent}
-                                            onChange={e => setConfig(p => ({ ...p, spikeThresholdPercent: Number(e.target.value) }))}
-                                        />
+                                ) : (
+                                    /* Unlinked mode — separate CE and PE values */
+                                    <div className="space-y-2">
+                                        {/* Column headers */}
+                                        <div className="grid grid-cols-5 gap-2 items-center">
+                                            <div className="text-xs font-medium text-muted-foreground" />
+                                            <div className="text-xs font-medium text-center text-green-500">Dist (Pts)</div>
+                                            <div className="text-xs font-medium text-center text-green-500">Prem (Min)</div>
+                                            <div className="text-xs font-medium text-center text-green-500">IV (Max)</div>
+                                            <div className="text-xs font-medium text-center text-green-500">Spike %</div>
+                                        </div>
+                                        {/* CE row */}
+                                        <div className="grid grid-cols-5 gap-2 items-center">
+                                            <div className="text-xs font-bold text-green-500 bg-green-500/10 rounded px-2 py-1 text-center">CE</div>
+                                            <Input
+                                                type="number"
+                                                className="h-8 text-xs"
+                                                value={config.distanceThresholdCE}
+                                                onChange={e => setConfig(p => ({ ...p, distanceThresholdCE: Number(e.target.value) }))}
+                                            />
+                                            <Input
+                                                type="number"
+                                                className="h-8 text-xs"
+                                                value={config.premiumThresholdCE}
+                                                onChange={e => setConfig(p => ({ ...p, premiumThresholdCE: Number(e.target.value) }))}
+                                            />
+                                            <Input
+                                                type="number"
+                                                className="h-8 text-xs"
+                                                value={config.ivThresholdCE}
+                                                onChange={e => setConfig(p => ({ ...p, ivThresholdCE: Number(e.target.value) }))}
+                                            />
+                                            <Input
+                                                type="number"
+                                                className="h-8 text-xs"
+                                                value={config.spikeThresholdPercentCE}
+                                                onChange={e => setConfig(p => ({ ...p, spikeThresholdPercentCE: Number(e.target.value) }))}
+                                            />
+                                        </div>
+                                        {/* PE row */}
+                                        <div className="grid grid-cols-5 gap-2 items-center">
+                                            <div className="text-xs font-bold text-red-500 bg-red-500/10 rounded px-2 py-1 text-center">PE</div>
+                                            <Input
+                                                type="number"
+                                                className="h-8 text-xs"
+                                                value={config.distanceThresholdPE}
+                                                onChange={e => setConfig(p => ({ ...p, distanceThresholdPE: Number(e.target.value) }))}
+                                            />
+                                            <Input
+                                                type="number"
+                                                className="h-8 text-xs"
+                                                value={config.premiumThresholdPE}
+                                                onChange={e => setConfig(p => ({ ...p, premiumThresholdPE: Number(e.target.value) }))}
+                                            />
+                                            <Input
+                                                type="number"
+                                                className="h-8 text-xs"
+                                                value={config.ivThresholdPE}
+                                                onChange={e => setConfig(p => ({ ...p, ivThresholdPE: Number(e.target.value) }))}
+                                            />
+                                            <Input
+                                                type="number"
+                                                className="h-8 text-xs"
+                                                value={config.spikeThresholdPercentPE}
+                                                onChange={e => setConfig(p => ({ ...p, spikeThresholdPercentPE: Number(e.target.value) }))}
+                                            />
+                                        </div>
                                     </div>
-                                </div>
+                                )}
                             </div>
 
                             <div className="space-y-2 lg:col-span-4">
@@ -950,10 +1101,18 @@ export default function OptionSpikeMonitor() {
                                     <TableHead className="text-center">STRIKE</TableHead>
                                     <TableHead className="text-right">PREMIUM</TableHead>
                                     <TableHead className="text-center">DISTANCE</TableHead>
-                                    <TableHead className="text-center">PREM &gt; {config.premiumThreshold}</TableHead>
+                                    <TableHead className="text-center">
+                                        {filtersLinked
+                                            ? <>PREM &gt; {config.premiumThreshold}</>
+                                            : <><span className="text-green-500">CE:{config.premiumThresholdCE}</span> / <span className="text-red-500">PE:{config.premiumThresholdPE}</span></>
+                                        }
+                                    </TableHead>
                                     <TableHead className="text-center">
                                         <div className="flex items-center justify-center gap-2">
-                                            <span>IV &gt; {config.ivThreshold}</span>
+                                            {filtersLinked
+                                                ? <span>IV &gt; {config.ivThreshold}</span>
+                                                : <span><span className="text-green-500">CE:{config.ivThresholdCE}</span> / <span className="text-red-500">PE:{config.ivThresholdPE}</span></span>
+                                            }
                                             {ivSummary && ivSummary.status === 'partial' && (
                                                 <Badge
                                                     variant="outline"
@@ -965,7 +1124,12 @@ export default function OptionSpikeMonitor() {
                                         </div>
                                     </TableHead>
                                     <TableHead className="text-center">HISTORY</TableHead>
-                                    <TableHead className="text-center">SPIKE &gt; {config.spikeThresholdPercent}%</TableHead>
+                                    <TableHead className="text-center">
+                                        {filtersLinked
+                                            ? <>SPIKE &gt; {config.spikeThresholdPercent}%</>
+                                            : <><span className="text-green-500">CE:{config.spikeThresholdPercentCE}%</span> / <span className="text-red-500">PE:{config.spikeThresholdPercentPE}%</span></>
+                                        }
+                                    </TableHead>
                                     <TableHead className="text-center">ALL PASS</TableHead>
                                 </TableRow>
                             </TableHeader>
@@ -1003,7 +1167,19 @@ export default function OptionSpikeMonitor() {
                                         </TableCell>
                                         <TableCell className="text-center">
                                             <div className={cn("font-bold text-xs", row.isSpikePass ? "text-green-500" : "text-red-500")}>
-                                                {row.spikePercent.toFixed(1)}%
+                                                <TooltipProvider delayDuration={100}>
+                                                    <Tooltip>
+                                                        <TooltipTrigger asChild>
+                                                            <span className="cursor-default">
+                                                                {row.spikePercent.toFixed(1)}%
+                                                            </span>
+                                                        </TooltipTrigger>
+                                                        <TooltipContent side="left" className="text-xs">
+                                                            <p className="font-medium text-muted-foreground mb-0.5">Ref ({resolveReferenceLabel()})</p>
+                                                            <p className="font-semibold">₹{row.optionRefPrice.toFixed(2)}</p>
+                                                        </TooltipContent>
+                                                    </Tooltip>
+                                                </TooltipProvider>
                                             </div>
                                         </TableCell>
                                         <TableCell className="text-center">
