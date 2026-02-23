@@ -84,6 +84,7 @@ def search():
                 "expiry": result.expiry,
                 "strike": result.strike,
                 "lotsize": result.lotsize,
+                "contract_value": result.contract_value,
                 "instrumenttype": result.instrumenttype,
                 "tick_size": result.tick_size,
                 "freeze_qty": get_freeze_qty_for_option(result.symbol, result.exchange),
@@ -153,6 +154,7 @@ def api_search():
                 "expiry": r["expiry"],
                 "strike": r["strike"],
                 "lotsize": r.get("lotsize"),
+                "contract_value": r.get("contract_value"),
                 "instrumenttype": r["instrumenttype"],
                 "freeze_qty": r.get("freeze_qty", 1),
             }
@@ -176,6 +178,7 @@ def api_search():
                 "expiry": result.expiry,
                 "strike": result.strike,
                 "lotsize": result.lotsize,
+                "contract_value": result.contract_value,
                 "instrumenttype": result.instrumenttype,
                 "freeze_qty": get_freeze_qty_for_option(result.symbol, result.exchange),
             }

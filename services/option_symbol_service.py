@@ -217,63 +217,6 @@ def construct_option_symbol(
     return option_symbol
 
 
-def construct_delta_option_symbol(
-    base_symbol: str, expiry_date: str, strike: float, option_type: str
-) -> str:
-    """
-    Construct a Delta Exchange **native** option symbol (kept for backward compatibility
-    with any code that works directly with Delta-native brsymbols).
-
-    Format: {C|P}-{UNDERLYING}-{STRIKE}-{DDMMYY}
-    Examples:
-        construct_delta_option_symbol("BTC", "21FEB26", 62800, "CE") -> "C-BTC-62800-210226"
-        construct_delta_option_symbol("ETH", "28MAR26", 3000, "PE") -> "P-ETH-3000-280326"
-    """
-    _MONTH_MAP = {
-        "JAN": "01", "FEB": "02", "MAR": "03", "APR": "04",
-        "MAY": "05", "JUN": "06", "JUL": "07", "AUG": "08",
-        "SEP": "09", "OCT": "10", "NOV": "11", "DEC": "12",
-    }
-    day = expiry_date[:2]
-    mon = _MONTH_MAP[expiry_date[2:5].upper()]
-    yr = expiry_date[5:7]
-    date_str = f"{day}{mon}{yr}"
-    flag = "C" if option_type.upper() in ("CE", "CALL", "C") else "P"
-    strike_str = str(int(strike)) if strike == int(strike) else str(strike)
-    sym = f"{flag}-{base_symbol.upper()}-{strike_str}-{date_str}"
-    logger.info(f"Constructed Delta native option symbol: {sym}")
-    return sym
-
-
-def construct_crypto_option_symbol(
-    base_symbol: str, expiry_date: str, strike: float, option_type: str
-) -> str:
-    """
-    Construct an OpenAlgo canonical CRYPTO option symbol.
-
-    Uses the same Indian F&O-style format as other exchanges — no dashes:
-        {UNDERLYING}{DDMMMYY}{STRIKE}{CE|PE}
-
-    Examples:
-        construct_crypto_option_symbol("BTC", "21FEB26", 62800, "CE") -> "BTC21FEB2662800CE"
-        construct_crypto_option_symbol("ETH", "28MAR26", 3000,  "PE") -> "ETH28MAR263000PE"
-
-    The canonical symbol is stored in the ``symbol`` column of the master contract DB.
-    ``get_br_symbol(canonical, "CRYPTO")`` returns the Delta-native brsymbol for API calls.
-
-    Args:
-        base_symbol:  Underlying asset, e.g. "BTC", "ETH"
-        expiry_date:  Expiry in DDMMMYY format, e.g. "21FEB26"
-        strike:       Strike price, e.g. 62800
-        option_type:  "CE" or "PE" (also accepts "C" / "P" / "CALL" / "PUT")
-    """
-    suffix = "CE" if option_type.upper() in ("CE", "CALL", "C") else "PE"
-    strike_str = str(int(strike)) if strike == int(strike) else str(strike)
-    sym = f"{base_symbol.upper()}{expiry_date.upper()}{strike_str}{suffix}"
-    logger.info(f"Constructed CRYPTO canonical option symbol: {sym}")
-    return sym
-
-
 def find_option_in_database(option_symbol: str, exchange: str) -> dict[str, Any] | None:
     """
     Find the option symbol in the database and return its details.

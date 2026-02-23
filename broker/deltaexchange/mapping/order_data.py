@@ -1,6 +1,6 @@
 import json
 
-from database.token_db import get_symbol
+from database.token_db import get_symbol, get_symbol_info
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -443,6 +443,18 @@ def map_position_data(position_data):
             realised = float(position.get("realized_pnl") or 0)
             position["pnlAbsolute"] = realised
 
+            # Contract value: look up from master contract cache using the resolved canonical symbol.
+            # Delta Exchange v2 API removed nested product payloads from positions responses,
+            # so we read contract_value (e.g. 0.01 ETH for ETHUSD.P) from the in-memory symbol cache.
+            # This is forwarded to the frontend so the live P&L recalculation in useLivePrice.ts
+            # scales correctly.
+            lot_size = 1.0
+            if symbol_from_db:
+                sym_info = get_symbol_info(symbol_from_db, "CRYPTO")
+                if sym_info and sym_info.contract_value is not None:
+                    lot_size = float(sym_info.contract_value)
+            position["lot_size"] = lot_size
+
             position["multiplier"] = 1
             position["positionType"] = "open" if net_qty != 0 else "closed"
 
@@ -502,6 +514,7 @@ def transform_positions_data(positions_data):
                 ),  # Float as per OpenAlgo standard
                 "ltp": float(position.get("lastTradedPrice", 0.0)),  # Last traded price
                 "pnl": float(position.get("pnlAbsolute", 0.0)),  # Profit and loss
+                "lot_size": float(position.get("lot_size", 1.0)),  # Contract size (e.g. 0.01 ETH for ETHUSD.P)
             }
             transformed_data.append(transformed_position)
         return transformed_data

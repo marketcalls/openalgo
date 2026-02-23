@@ -56,6 +56,7 @@ class SymToken(Base):
     lotsize = Column(Integer)
     instrumenttype = Column(String)
     tick_size = Column(Float)
+    contract_value = Column(Float, default=1.0)  # Underlying units per contract (e.g. 0.01 ETH for ETHUSD.P)
 
     # Define a composite index on symbol and exchange columns
     __table_args__ = (Index("idx_symbol_exchange", "symbol", "exchange"),)
@@ -64,6 +65,24 @@ class SymToken(Base):
 def init_db():
     logger.info("Initializing Master Contract DB")
     Base.metadata.create_all(bind=engine)
+    # Idempotent migration: add contract_value column if not already present.
+    # Using Inspector (check-before-add) is more reliable than catching exceptions
+    # because the error message for "column already exists" varies across SQLite versions.
+    try:
+        from sqlalchemy import inspect as sa_inspect
+        insp = sa_inspect(engine)
+        existing_cols = {c["name"] for c in insp.get_columns("symtoken")}
+        if "contract_value" not in existing_cols:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE symtoken ADD COLUMN contract_value REAL DEFAULT 1.0"))
+                conn.commit()
+                logger.info("Migrated symtoken table: added contract_value column")
+    except Exception as e:
+        logger.error(
+            f"contract_value migration FAILED — master contract insert will fail until "
+            f"the column is added. Run: sqlite3 db/openalgo.db "
+            f"\"ALTER TABLE symtoken ADD COLUMN contract_value REAL DEFAULT 1.0\" | Error: {e}"
+        )
 
 
 def delete_symtoken_table():
@@ -76,6 +95,22 @@ def copy_from_dataframe(df):
     logger.info("Performing Bulk Insert")
     # Convert DataFrame to a list of dictionaries
     data_dict = df.to_dict(orient="records")
+
+    # Determine which columns actually exist in the DB right now.
+    # This guards against a failed/pending migration: if contract_value column
+    # was not added yet, strip it from insert dicts rather than failing every chunk.
+    try:
+        from sqlalchemy import inspect as sa_inspect
+        _db_cols = {c["name"] for c in sa_inspect(engine).get_columns("symtoken")}
+    except Exception:
+        _db_cols = None  # Can't introspect — proceed unfiltered (will fail loudly if needed)
+
+    if _db_cols is not None:
+        # Remove any DataFrame columns that don't have a matching DB column
+        extra_cols = {k for k in (data_dict[0] if data_dict else {}) if k not in _db_cols}
+        if extra_cols:
+            logger.warning(f"Stripping unknown columns from insert (migration pending?): {extra_cols}")
+            data_dict = [{k: v for k, v in row.items() if k not in extra_cols} for row in data_dict]
 
     # Retrieve existing tokens to filter them out from the insert
     existing_tokens = {result.token for result in db_session.query(SymToken.token).all()}
@@ -429,6 +464,7 @@ def process_delta_products(products):
                 "lotsize": 1,
                 "instrumenttype": instrument_type,
                 "tick_size": tick_size,
+                "contract_value": float(p.get("contract_value") or 1.0),
             }
         )
 

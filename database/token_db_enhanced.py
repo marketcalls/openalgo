@@ -130,6 +130,7 @@ class SymbolData:
     instrumenttype: str | None = None
     tick_size: float | None = None
     underlying: str | None = None  # Extracted from OpenAlgo symbol format for F&O
+    contract_value: float | None = None  # Contract multiplier (e.g. 0.001 for BTCUSD.P)
 
 
 class BrokerSymbolCache:
@@ -209,6 +210,7 @@ class BrokerSymbolCache:
                     instrumenttype=sym.instrumenttype,
                     tick_size=sym.tick_size,
                     underlying=underlying,
+                    contract_value=getattr(sym, 'contract_value', None),
                 )
 
                 # Store in primary dict
@@ -1017,6 +1019,7 @@ def fno_search_symbols(
                 "instrumenttype": s.instrumenttype,
                 "tick_size": s.tick_size,
                 "underlying": s.underlying,
+                "contract_value": s.contract_value,
                 "freeze_qty": get_freeze_qty_for_option(s.symbol, s.exchange),
             }
             for s in results
