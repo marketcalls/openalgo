@@ -2,7 +2,7 @@
 
 ## Overview
 
-OpenAlgo provides core trading UI components including Dashboard, OrderBook, TradeBook, Positions, and Holdings. These components display real-time data with auto-refresh and support both React and Jinja2 frontends.
+OpenAlgo provides core trading UI components including Dashboard, OrderBook, TradeBook, Positions, and Holdings, along with advanced analytics tools (GEX Dashboard, IV Smile, OI Profile, Volatility Surface, etc.). These components display real-time data with auto-refresh via the React frontend.
 
 ## Architecture Diagram
 
@@ -232,29 +232,70 @@ export function usePositions() {
 }
 ```
 
-## Jinja2 Templates
+## Analytics Tools
 
-### File Structure
+OpenAlgo includes a suite of options analytics tools accessible from the **Tools** hub page (`/tools`). These tools use Plotly.js for interactive charting and visualization.
 
-```
-templates/
-├── dashboard.html
-├── orderbook.html
-├── tradebook.html
-├── positions.html
-└── holdings.html
-```
+### Tools Hub (`/tools`)
 
-### Auto-Refresh
+Central navigation page listing all available analytical tools with descriptions.
 
-```javascript
-// Auto-refresh every 10 seconds
-setInterval(() => {
-    fetch('/api/positions')
-        .then(response => response.json())
-        .then(data => updateTable(data));
-}, 10000);
-```
+### GEX Dashboard (`/gex`)
+
+Gamma Exposure (GEX) analysis showing the net gamma exposure across strike prices. Helps identify key support/resistance levels driven by options market makers.
+
+- **Blueprint:** `blueprints/gex.py`
+- **Service:** `services/gex_service.py`
+- **API:** `frontend/src/api/gex.ts`
+
+### IV Smile (`/ivsmile`)
+
+Implied Volatility Smile chart showing IV across different strike prices for a given expiry. Visualizes the volatility skew pattern.
+
+- **Blueprint:** `blueprints/ivsmile.py`
+- **Service:** `services/iv_smile_service.py`
+
+### IV Chart (`/ivchart`)
+
+IV time series chart tracking implied volatility changes over time for specific options contracts.
+
+- **Blueprint:** `blueprints/ivchart.py`
+- **Service:** `services/iv_chart_service.py`
+
+### OI Profile (`/oiprofile`)
+
+Open Interest profile analysis showing OI distribution across strike prices. Identifies where maximum OI is concentrated.
+
+- **Blueprint:** `blueprints/oiprofile.py`
+- **Service:** `services/oi_profile_service.py`
+
+### OI Tracker (`/oitracker`)
+
+Real-time OI change tracker monitoring changes in open interest across strikes. Useful for tracking smart money positioning.
+
+- **Blueprint:** `blueprints/oitracker.py`
+- **Service:** `services/oi_tracker_service.py`
+
+### Max Pain (`/maxpain`)
+
+Max Pain analysis calculating the strike price at which the maximum number of options contracts would expire worthless.
+
+- **Blueprint:** (shared with option chain infrastructure)
+- **Service:** Option chain data with max pain calculation
+
+### ATM Straddle Chart (`/straddle`)
+
+Dynamic ATM Straddle chart showing combined premium of at-the-money call and put options over time.
+
+- **Blueprint:** `blueprints/straddle_chart.py`
+- **Service:** `services/straddle_chart_service.py`
+
+### 3D Volatility Surface (`/volsurface`)
+
+Interactive 3D visualization of implied volatility across strike prices and expiry dates, rendered with Plotly.
+
+- **Blueprint:** `blueprints/vol_surface.py`
+- **Service:** `services/vol_surface_service.py`
 
 ## Key Files Reference
 
@@ -264,5 +305,10 @@ setInterval(() => {
 | `blueprints/orders.py` | OrderBook/TradeBook routes |
 | `restx_api/positionbook.py` | Positions API |
 | `restx_api/holdings.py` | Holdings API |
+| `blueprints/gex.py` | GEX Dashboard routes |
+| `blueprints/ivsmile.py` | IV Smile routes |
+| `blueprints/oiprofile.py` | OI Profile routes |
+| `blueprints/oitracker.py` | OI Tracker routes |
+| `blueprints/straddle_chart.py` | Straddle Chart routes |
+| `blueprints/vol_surface.py` | Volatility Surface routes |
 | `frontend/src/pages/` | React UI components |
-| `templates/` | Jinja2 templates |

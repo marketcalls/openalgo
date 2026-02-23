@@ -149,7 +149,7 @@ class User:
 
 ### Broker Types and Auth Methods
 
-OpenAlgo supports 24+ brokers with different authentication methods:
+OpenAlgo supports 29 brokers with different authentication methods:
 
 | Auth Type | Brokers | Flow |
 |-----------|---------|------|
