@@ -3,10 +3,9 @@
 #
 # Bandit 1.9.x has a bug in its SARIF formatter (IndexError in
 # add_region_and_context_region) that can crash mid-write and leave
-# the output file empty.  This wrapper validates the output and
-# substitutes a minimal valid SARIF document when the formatter fails,
-# so that downstream steps (e.g. github/codeql-action/upload-sarif)
-# never receive broken JSON.
+# the output file empty.  This wrapper tries the native SARIF format
+# first, then falls back to running Bandit in JSON mode and converting
+# to SARIF with a bundled converter script.
 #
 # Usage:
 #   scripts/run_bandit_sarif.sh [output-path]
@@ -15,21 +14,39 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUTPUT="${1:-bandit.sarif}"
 
-# Run bandit; exit code is non-zero when findings exist, so don't fail.
-uv run bandit -r . \
-  -x .venv,test,frontend,node_modules \
-  -f sarif \
-  -o "$OUTPUT" || true
+BANDIT_ARGS="-r . -x .venv,test,frontend,node_modules"
+
+# --- Attempt 1: native SARIF formatter ---
+uv run bandit $BANDIT_ARGS -f sarif -o "$OUTPUT" || true
 
 # Validate: file must be non-empty and parseable JSON.
-if [ ! -s "$OUTPUT" ] || \
-   ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$OUTPUT" 2>/dev/null; then
+if [ -s "$OUTPUT" ] && \
+   python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$OUTPUT" 2>/dev/null; then
+  echo "Bandit SARIF report generated successfully"
+  exit 0
+fi
 
-  echo "::warning::Bandit SARIF output was empty or invalid — substituting an empty report"
+# --- Attempt 2: JSON output → SARIF conversion ---
+echo "::warning::Bandit native SARIF formatter failed — falling back to JSON-to-SARIF conversion"
 
-  cat > "$OUTPUT" << 'SARIF'
+JSON_TMP="$(mktemp bandit-XXXXXX.json)"
+trap 'rm -f "$JSON_TMP"' EXIT
+
+uv run bandit $BANDIT_ARGS -f json -o "$JSON_TMP" || true
+
+if [ -s "$JSON_TMP" ] && \
+   python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$JSON_TMP" 2>/dev/null; then
+  python3 "$SCRIPT_DIR/bandit_json_to_sarif.py" "$JSON_TMP" "$OUTPUT"
+  exit 0
+fi
+
+# --- Attempt 3: empty valid SARIF ---
+echo "::warning::Both Bandit formatters failed — substituting an empty SARIF report"
+
+cat > "$OUTPUT" << 'SARIF'
 {
   "version": "2.1.0",
   "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
@@ -60,4 +77,3 @@ if [ ! -s "$OUTPUT" ] || \
   ]
 }
 SARIF
-fi
