@@ -377,8 +377,20 @@ class BrokerData:
             resolution = self.TIMEFRAME_MAP[interval]
             br_symbol  = self._get_br_symbol(symbol, exchange)
 
-            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-            end_dt   = datetime.strptime(end_date,   "%Y-%m-%d")
+            # Normalize: accept datetime.date/datetime or str, avoid string roundtrip
+            from datetime import date as _date, time as _time
+            if isinstance(start_date, str):
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            else:
+                start_dt = datetime.combine(start_date, _time.min)
+
+            if isinstance(end_date, str):
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+            else:
+                end_dt = datetime.combine(end_date, _time.min)
+
+            start_date = start_dt.strftime("%Y-%m-%d")
+            end_date   = end_dt.strftime("%Y-%m-%d")
 
             # Build list of (chunk_start_str, chunk_end_str) date pairs
             chunk_days = self.CHUNK_DAYS.get(resolution, 30)
