@@ -24,7 +24,8 @@ from services.option_symbol_service import (
     get_option_exchange,
 )
 from services.quotes_service import get_quotes
-from utils.constants import CRYPTO_EXCHANGES, CRYPTO_QUOTE_CURRENCY
+from utils.constants import CRYPTO_EXCHANGES
+from utils.symbol_utils import get_underlying_quote_symbol
 from utils.logging import get_logger
 
 # Import py_vollib for Black-76 IV and Greeks calculation
@@ -251,7 +252,7 @@ def get_iv_chart_data(
         quote_exchange = _get_quote_exchange(base_symbol, exchange)
         options_exchange = get_option_exchange(quote_exchange)
         # CRYPTO: the tradable underlying is the canonical perpetual (e.g. BTCUSDT for BTC options)
-        underlying_quote_symbol = (base_symbol + CRYPTO_QUOTE_CURRENCY) if exchange.upper() in CRYPTO_EXCHANGES else base_symbol
+        underlying_quote_symbol = get_underlying_quote_symbol(base_symbol, exchange)
 
         # Step 2: Get underlying LTP to resolve ATM strike
         success, quote_response, status_code = get_quotes(
@@ -510,7 +511,7 @@ def get_default_symbols(underlying, exchange, expiry_date, api_key):
         base_symbol = underlying.upper()
         quote_exchange = _get_quote_exchange(base_symbol, exchange)
         options_exchange = get_option_exchange(quote_exchange)
-        underlying_quote_symbol = (base_symbol + CRYPTO_QUOTE_CURRENCY) if exchange.upper() in CRYPTO_EXCHANGES else base_symbol
+        underlying_quote_symbol = get_underlying_quote_symbol(base_symbol, exchange)
         _build_sym = construct_crypto_option_symbol if exchange.upper() in CRYPTO_EXCHANGES else construct_option_symbol
 
         # Get underlying LTP

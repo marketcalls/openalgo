@@ -57,7 +57,8 @@ from services.option_symbol_service import (
     parse_underlying_symbol,
 )
 from services.quotes_service import get_multiquotes, get_quotes, import_broker_module
-from utils.constants import CRYPTO_EXCHANGES, CRYPTO_QUOTE_CURRENCY
+from utils.constants import CRYPTO_EXCHANGES
+from utils.symbol_utils import get_underlying_quote_symbol
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -258,7 +259,7 @@ def get_option_chain(
         elif exchange.upper() in CRYPTO_EXCHANGES:
             # CRYPTO: underlying perpetual canonical symbol (e.g. BTC -> BTCUSDT)
             quote_exchange = exchange.upper()
-            quote_symbol = f"{base_symbol}{CRYPTO_QUOTE_CURRENCY}"
+            quote_symbol = get_underlying_quote_symbol(base_symbol, exchange)
 
         if exchange.upper() not in CRYPTO_EXCHANGES:
             # Use base symbol for index quotes (non-Delta)
