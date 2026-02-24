@@ -299,11 +299,14 @@ def _write_shared_credentials(auth_token, source_user_id):
     Write broker token to the shared credentials file (writer mode).
     Called after successful Zerodha login on Instance 1.
     The access_token is extracted from the 'api_key:access_token' format.
+
+    Returns:
+        bool: True if written successfully, False otherwise.
     """
     shared_file = os.getenv("SHARED_CREDENTIALS_FILE")
     if not shared_file:
         logger.warning("SHARED_CREDENTIALS_MODE=writer but SHARED_CREDENTIALS_FILE is not set")
-        return
+        return False
 
     try:
         # auth_token format for Zerodha is "api_key:access_token"
@@ -316,8 +319,10 @@ def _write_shared_credentials(auth_token, source_user_id):
         with open(shared_file, "w") as f:
             json.dump(creds, f, indent=2)
         logger.info(f"Shared credentials written to {shared_file} for user {source_user_id}")
+        return True
     except Exception as e:
         logger.exception(f"Failed to write shared credentials file: {e}")
+        return False
 
 
 def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, user_id=None):
@@ -350,8 +355,9 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
     )
 
     # Writer mode: persist broker token to shared credentials file for Instance 2 to consume
+    shared_creds_written = False
     if os.getenv("SHARED_CREDENTIALS_MODE") == "writer" and broker == "zerodha":
-        _write_shared_credentials(auth_token, user_session_key)
+        shared_creds_written = _write_shared_credentials(auth_token, user_session_key)
     if inserted_id:
         logger.info(f"Database record upserted with ID: {inserted_id}")
         # Initialize master contract status for this broker
@@ -378,9 +384,12 @@ def handle_auth_success(auth_token, user_session_key, broker, feed_token=None, u
                     "status": "success",
                     "message": "Authentication successful",
                     "redirect": "/dashboard",
+                    "shared_creds_written": shared_creds_written,
                 }
             ), 200
         else:
+            if shared_creds_written:
+                return redirect(url_for("dashboard_bp.dashboard") + "?shared_creds=written")
             return redirect(url_for("dashboard_bp.dashboard"))
     else:
         logger.error(f"Failed to upsert auth token for user {user_session_key}")

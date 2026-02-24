@@ -1,10 +1,11 @@
 import { BarChart3, BookOpen, FileText, MessageCircle, Search, Zap } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { onModeChange } from '@/stores/themeStore'
+import { showToast } from '@/utils/toast'
 
 interface MarginData {
   availablecash: string
@@ -66,6 +67,17 @@ export default function Dashboard() {
     status: 'pending',
   })
   const [isAuthenticated, setIsAuthenticated] = useState(true) // Assume authenticated initially
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
+
+  // Show toast when shared credentials were successfully written (writer mode / Instance 1)
+  useEffect(() => {
+    if (searchParams.get('shared_creds') === 'written') {
+      showToast.success('Shared credentials saved. Instance 2 can now log in automatically.', 'system')
+      // Clean the query param from the URL without triggering a re-render
+      navigate('/dashboard', { replace: true })
+    }
+  }, [searchParams, navigate])
 
   // Fetch dashboard funds data
   const fetchFundsData = useCallback(async () => {
