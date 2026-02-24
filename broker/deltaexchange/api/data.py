@@ -54,7 +54,10 @@ def _get_ticker(symbol: str) -> dict:
     if not data.get("success", False):
         raise Exception(f"Ticker API error for {symbol}: {data.get('error', data)}")
 
-    result = data.get("result", {})
+    result = data.get("result")
+    if result is None:
+        result = {}
+        
     # Guard: single-symbol endpoint must return a dict
     if not isinstance(result, dict):
         raise Exception(

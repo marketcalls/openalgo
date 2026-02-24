@@ -112,7 +112,21 @@ class MarketDataValidator:
             return ValidationResult(valid=False, error="Missing symbol or exchange")
 
         market_data = data.get("data", {})
+        mode = data.get("mode")
         ltp = market_data.get("ltp")
+
+        # Depth packets (mode=3) can legitimately arrive before ticker cache is warm,
+        # in which case LTP may be 0/None while orderbook levels are still valid.
+        # Accept those packets so depth consumers continue to receive updates.
+        if mode == 3:
+            depth_obj = market_data.get("depth") or {}
+            depth_buy = depth_obj.get("buy", []) if isinstance(depth_obj, dict) else []
+            depth_sell = depth_obj.get("sell", []) if isinstance(depth_obj, dict) else []
+            bids = market_data.get("bids", [])
+            asks = market_data.get("asks", [])
+            has_depth = bool(depth_buy or depth_sell or bids or asks)
+            if has_depth and (ltp is None or (isinstance(ltp, (int, float)) and ltp <= 0)):
+                return ValidationResult(valid=True, warnings=["Depth update without positive LTP"])
 
         # Check LTP is valid
         if ltp is None:
@@ -426,9 +440,21 @@ class MarketDataService:
                         "volume": market_data.get("volume", 0),
                     }
                 elif mode == 3:  # Depth
+                    depth_obj = market_data.get("depth") or {}
+                    depth_buy = depth_obj.get("buy", []) if isinstance(depth_obj, dict) else []
+                    depth_sell = depth_obj.get("sell", []) if isinstance(depth_obj, dict) else []
+                    bids = market_data.get("bids", [])
+                    asks = market_data.get("asks", [])
+
+                    # Normalise broker payloads:
+                    # - Standard format: depth.buy/depth.sell
+                    # - Delta format: bids/asks
+                    buy_levels = depth_buy or bids
+                    sell_levels = depth_sell or asks
+
                     cache_entry["depth"] = {
-                        "buy": market_data.get("depth", {}).get("buy", []),
-                        "sell": market_data.get("depth", {}).get("sell", []),
+                        "buy": buy_levels,
+                        "sell": sell_levels,
                         "ltp": market_data.get("ltp", 0),
                         "timestamp": market_data.get("timestamp", timestamp),
                     }
