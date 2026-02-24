@@ -11,6 +11,7 @@ import re
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
+from utils.constants import CRYPTO_EXCHANGES
 from utils.logging import get_logger
 
 # Import py_vollib for Black-76 calculations
@@ -288,6 +289,10 @@ def get_underlying_exchange(base_symbol: str, options_exchange: str) -> str:
     # Commodity options
     if base_symbol in COMMODITY_SYMBOLS or options_exchange == "MCX":
         return "MCX"
+
+    # Crypto options — underlying is on the same exchange
+    if options_exchange.upper() in CRYPTO_EXCHANGES:
+        return options_exchange.upper()
 
     # Default to NSE for equity options
     return "NSE"

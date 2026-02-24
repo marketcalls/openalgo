@@ -3,17 +3,27 @@
 Shared symbol classification helpers used across the sandbox and other modules.
 """
 
-from utils.constants import CRYPTO_EXCHANGES, CRYPTO_QUOTE_CURRENCY, FNO_EXCHANGES
+from utils.constants import CRYPTO_EXCHANGES, FNO_EXCHANGES
+from database.token_db_enhanced import fno_search_symbols
+from utils.constants import INSTRUMENT_PERPFUT
 
 
 def get_underlying_quote_symbol(base_symbol: str, exchange: str) -> str:
     """Return the quote symbol for an underlying, appending the crypto quote currency if needed.
 
-    For crypto exchanges: BTCUSDT (base_symbol + CRYPTO_QUOTE_CURRENCY)
+    For crypto exchanges: canonical perpetual (e.g. BTCUSD.P)
     For all other exchanges: base_symbol unchanged
     """
     if exchange.upper() in CRYPTO_EXCHANGES:
-        return base_symbol + CRYPTO_QUOTE_CURRENCY
+        _perp = fno_search_symbols(
+            underlying=base_symbol.upper(),
+            exchange=exchange,
+            instrumenttype=INSTRUMENT_PERPFUT,
+            limit=1,
+        )
+        if _perp:
+            return _perp[0]["symbol"]
+        return f"{base_symbol.upper()}USD.P"
     return base_symbol
 
 

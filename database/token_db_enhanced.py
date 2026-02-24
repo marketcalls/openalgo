@@ -68,8 +68,10 @@ def extract_underlying_from_symbol(symbol: str, exchange: str) -> str | None:
         m = _CRYPTO_UNDERLYING_PATTERN.match(upper)
         if m:
             return m.group(1)
-        # Perpetual canonical: BTCUSDT / BTCUSD — strip quote-currency suffix
-        for suffix in ("USDT", "USD"):
+        # Perpetual canonical: BTCUSD.P / BTC_INR.P — strip .P then quote-currency suffix
+        if upper.endswith(".P"):
+            upper = upper[:-2]
+        for suffix in ("USDT", "USD", "_INR", "INR"):
             if upper.endswith(suffix) and len(upper) > len(suffix):
                 return upper[: -len(suffix)]
         return upper  # fallback — return whole symbol
@@ -229,8 +231,11 @@ class BrokerSymbolCache:
                     # Use extracted underlying for index (more reliable than broker's name field)
                     if underlying:
                         self.expiries_by_exchange_underlying[(sym.exchange, underlying)].add(sym.expiry)
-                # Use extracted underlying for underlyings index
-                if underlying:
+                # Use extracted underlying for underlyings index.
+                # Only track underlyings that have options (CE/PE) — perpetuals, futures,
+                # spreads, etc. should not appear in the option-chain/IV-chart dropdown.
+                sym_upper = sym.symbol.upper()
+                if underlying and (sym_upper.endswith("CE") or sym_upper.endswith("PE")):
                     self.underlyings_by_exchange[sym.exchange].add(underlying)
 
             # Update cache metadata
@@ -534,11 +539,10 @@ class BrokerSymbolCache:
 
             # Instrument type filter.
             # All exchanges (including CRYPTO) use canonical suffix conventions:
-            #   CE  → symbol ends with "CE"  (e.g. BTC28FEB2580000CE)
-            #   PE  → symbol ends with "PE"  (e.g. BTC28FEB2580000PE)
-            #   FUT → symbol ends with "FUT" (e.g. BTC28FEB25FUT)
-            # Perpetuals (BTCUSDT) carry instrumenttype="PERPFUT" and do not end with
-            # FUT/CE/PE, so they are correctly excluded when a specific filter is applied.
+            #   CE      → symbol ends with "CE"  (e.g. BTC28FEB2580000CE)
+            #   PE      → symbol ends with "PE"  (e.g. BTC28FEB2580000PE)
+            #   FUT     → symbol ends with "FUT" (e.g. BTC28FEB25FUT)
+            #   PERPFUT → stored instrumenttype field (e.g. BTCUSD.P)
             if inst_type:
                 symbol_upper = symbol_data.symbol.upper()
                 if inst_type == "FUT" and not symbol_upper.endswith("FUT"):
@@ -546,6 +550,11 @@ class BrokerSymbolCache:
                 elif inst_type == "CE" and not symbol_upper.endswith("CE"):
                     continue
                 elif inst_type == "PE" and not symbol_upper.endswith("PE"):
+                    continue
+                elif inst_type == "PERPFUT" and (
+                    not symbol_data.instrumenttype
+                    or symbol_data.instrumenttype.upper() != "PERPFUT"
+                ):
                     continue
 
             # Strike range filter
