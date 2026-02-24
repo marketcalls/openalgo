@@ -84,15 +84,16 @@ def get_margin_data(auth_token):
             ]
         )
 
-        position_book = get_positions(auth_token)
-        position_book = map_order_data(position_book)
-
-        def sum_realised_unrealised(position_book):
-            total_realised = sum(position.get("realised", 0) for position in position_book)
-            total_unrealised = sum(position.get("unrealised", 0) for position in position_book)
-            return total_realised, total_unrealised
-
-        total_realised, total_unrealised = sum_realised_unrealised(position_book)
+        total_realised = 0.0
+        total_unrealised = 0.0
+        try:
+            position_book = get_positions(auth_token)
+            if position_book and position_book.get("status") == "success" and "data" in position_book:
+                position_book = map_order_data(position_book)
+                total_realised = sum(position.get("realised", 0) for position in position_book)
+                total_unrealised = sum(position.get("unrealised", 0) for position in position_book)
+        except Exception as e:
+            logger.warning(f"Failed to fetch positions for margin calc: {e}")
 
         # Get holdings and calculate collateral
         holdings_response = get_holdings(auth_token)
