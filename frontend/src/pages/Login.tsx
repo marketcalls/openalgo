@@ -120,11 +120,39 @@ export default function Login() {
           navigate(data.redirect)
         }
       } else {
-        // Set login state (broker will be set after broker selection)
-        setLogin(username, '')
         showToast.success('Login successful', 'system')
-        // Use redirect from response if provided, otherwise go to broker
-        navigate(data.redirect || '/broker')
+        // Sync full session state (including broker) before navigating.
+        // This handles shared-credentials reader mode where broker auth
+        // completes server-side and the response already has redirect:/dashboard.
+        const target = data.redirect || '/broker'
+        if (target === '/dashboard') {
+          // Re-fetch session status so Zustand has the correct broker set
+          try {
+            const { setUser, setApiKey } = useAuthStore.getState()
+            const sessionResponse = await fetch('/auth/session-status', { credentials: 'include' })
+            if (sessionResponse.ok) {
+              const sessionData = await sessionResponse.json()
+              if (sessionData.status === 'success' && sessionData.logged_in && sessionData.broker) {
+                setUser({
+                  username: sessionData.user,
+                  broker: sessionData.broker,
+                  isLoggedIn: true,
+                  loginTime: new Date().toISOString(),
+                })
+                if (sessionData.api_key) {
+                  setApiKey(sessionData.api_key)
+                }
+              }
+            }
+          } catch (_) {
+            // If session sync fails, fall back to basic login state
+            setLogin(username, '')
+          }
+        } else {
+          // Normal broker selection flow
+          setLogin(username, '')
+        }
+        navigate(target)
       }
     } catch (err) {
       setError('Login failed. Please try again.')
