@@ -1,6 +1,5 @@
 # api/funds.py
 
-import json
 import os
 
 from utils.httpx_client import get_httpx_client
@@ -37,11 +36,8 @@ def get_margin_data(auth_token):
         logger.error(f"Error fetching margin data: {error_message}")
         return {}
 
-    logger.info(f"Funds Details: {margin_data}")
-
     if margin_data.get("status") == "error":
-        # Log the error or return an empty dictionary to indicate failure
-        logger.info(f"Error fetching margin data: {margin_data.get('errors')}")
+        logger.error(f"Error fetching margin data: {margin_data.get('errors')}")
         return {}
 
     try:
@@ -65,21 +61,53 @@ def get_margin_data(auth_token):
             ]
         )
 
-        # Calculate the sum of m2m_unrealised
-        total_unrealised = sum(
-            [
-                margin_data["data"]["commodity"]["utilised"]["m2m_unrealised"],
-                margin_data["data"]["equity"]["utilised"]["m2m_unrealised"],
-            ]
-        )
+        # Fetch PnL from position book
+        total_realised = 0
+        total_unrealised = 0
+        try:
+            pos_response = client.get(
+                "https://api.kite.trade/portfolio/positions", headers=headers
+            )
+            pos_response.raise_for_status()
+            position_book = pos_response.json()
 
-        # Calculate the sum of m2m_realised
-        total_realised = sum(
-            [
-                margin_data["data"]["commodity"]["utilised"]["m2m_realised"],
-                margin_data["data"]["equity"]["utilised"]["m2m_realised"],
-            ]
-        )
+            if position_book.get("status") == "success" and position_book.get("data"):
+                net_positions = position_book["data"].get("net", [])
+
+                # Collect open positions to fetch live LTP
+                open_positions = []
+                for p in net_positions:
+                    qty = p.get("quantity", 0)
+                    if qty == 0:
+                        # Fully closed position - PnL is realized
+                        total_realised += p.get("sell_value", 0) - p.get("buy_value", 0)
+                    else:
+                        open_positions.append(p)
+
+                # Fetch live LTP for open positions via quotes API
+                if open_positions:
+                    instruments = [
+                        f"{p['exchange']}:{p['tradingsymbol']}" for p in open_positions
+                    ]
+                    query = "&".join(f"i={inst}" for inst in instruments)
+                    quote_response = client.get(
+                        f"https://api.kite.trade/quote/ltp?{query}", headers=headers
+                    )
+                    quote_response.raise_for_status()
+                    quote_data = quote_response.json()
+                    ltp_map = {}
+                    if quote_data.get("status") == "success" and quote_data.get("data"):
+                        for key, val in quote_data["data"].items():
+                            ltp_map[key] = val.get("last_price", 0)
+
+                    for p in open_positions:
+                        qty = p.get("quantity", 0)
+                        avg_price = p.get("average_price", 0)
+                        inst_key = f"{p['exchange']}:{p['tradingsymbol']}"
+                        live_ltp = ltp_map.get(inst_key, p.get("last_price", 0))
+                        total_unrealised += (live_ltp - avg_price) * qty
+        except Exception as e:
+            logger.error(f"Error fetching positions for PnL: {e}")
 
         # Construct and return the processed margin data
         processed_margin_data = {
