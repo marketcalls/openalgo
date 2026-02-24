@@ -217,6 +217,22 @@ def construct_option_symbol(
     return option_symbol
 
 
+def construct_crypto_option_symbol(
+    base_symbol: str, expiry_date: str, strike: float, option_type: str
+) -> str:
+    """
+    Construct crypto option symbol in OpenAlgo canonical format.
+
+    Format is aligned with standard option symbols:
+    [Base Symbol][Expiry Date][Strike Price][Option Type]
+
+    Examples:
+        BTC28FEB2580000CE
+        ETH28FEB252500PE
+    """
+    return construct_option_symbol(base_symbol, expiry_date, strike, option_type)
+
+
 def find_option_in_database(option_symbol: str, exchange: str) -> dict[str, Any] | None:
     """
     Find the option symbol in the database and return its details.
