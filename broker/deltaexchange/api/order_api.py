@@ -135,24 +135,74 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
 # ---------------------------------------------------------------------------
 
 def get_order_book(auth):
-    """Fetch all open orders (state=open)."""
+    """Fetch all orders for today (open + history)."""
     try:
-        result = get_api_response("/v2/orders", auth, method="GET", params={"state": "open"})
-        if result.get("success"):
-            return result.get("result", [])
-        logger.warning(f"[DeltaExchange] get_order_book unexpected response: {result}")
-        return []
+        from datetime import datetime
+        import pytz
+        
+        # Get today's date in IST
+        ist = pytz.timezone("Asia/Kolkata")
+        today_date = datetime.now(ist).date()
+        
+        all_orders = []
+        
+        # 1. Fetch open orders
+        open_result = get_api_response("/v2/orders", auth, method="GET", params={"state": "open"})
+        if open_result.get("success"):
+            all_orders.extend(open_result.get("result", []))
+            
+        # 2. Fetch historical orders
+        hist_result = get_api_response("/v2/orders/history", auth, method="GET")
+        if hist_result.get("success"):
+            all_orders.extend(hist_result.get("result", []))
+            
+        # Filter for today's orders only
+        today_orders = []
+        for order in all_orders:
+            created_at = order.get("created_at")
+            if created_at:
+                try:
+                    # Parse UTC timestamp and convert to IST
+                    dt_utc = datetime.strptime(created_at[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=pytz.UTC)
+                    dt_ist = dt_utc.astimezone(ist)
+                    if dt_ist.date() == today_date:
+                        today_orders.append(order)
+                except Exception as e:
+                    logger.warning(f"Error parsing date {created_at}: {e}")
+                    
+        return today_orders
     except Exception as e:
         logger.error(f"[DeltaExchange] Exception in get_order_book: {e}")
         return []
 
 
 def get_trade_book(auth):
-    """Fetch closed / filled orders from order history."""
+    """Fetch closed / filled orders (fills) for today only."""
     try:
-        result = get_api_response("/v2/orders/history", auth, method="GET")
+        from datetime import datetime
+        import pytz
+        
+        # Get today's date in IST
+        ist = pytz.timezone("Asia/Kolkata")
+        today_date = datetime.now(ist).date()
+        
+        result = get_api_response("/v2/fills", auth, method="GET")
         if result.get("success"):
-            return result.get("result", [])
+            all_trades = result.get("result", [])
+            today_trades = []
+            for trade in all_trades:
+                created_at = trade.get("created_at")
+                if created_at:
+                    try:
+                        # Parse UTC timestamp and convert to IST
+                        dt_utc = datetime.strptime(created_at[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=pytz.UTC)
+                        dt_ist = dt_utc.astimezone(ist)
+                        if dt_ist.date() == today_date:
+                            today_trades.append(trade)
+                    except Exception as e:
+                        logger.warning(f"Error parsing date {created_at}: {e}")
+            return today_trades
+            
         logger.warning(f"[DeltaExchange] get_trade_book unexpected response: {result}")
         return []
     except Exception as e:
