@@ -134,8 +134,21 @@ def get_api_response(endpoint, auth, method="GET", payload="", params=None):
 # Order book / trade book
 # ---------------------------------------------------------------------------
 
+def _get_all_open_orders(auth):
+    """Internal: Fetch all open orders regardless of creation date (for cancel all operations)."""
+    try:
+        result = get_api_response("/v2/orders", auth, method="GET", params={"state": "open"})
+        if result.get("success"):
+            return result.get("result", [])
+        logger.warning(f"[DeltaExchange] _get_all_open_orders unexpected response: {result}")
+        return []
+    except Exception as e:
+        logger.error(f"[DeltaExchange] Exception in _get_all_open_orders: {e}")
+        return []
+
+
 def get_order_book(auth):
-    """Fetch all orders for today (open + history)."""
+    """Fetch all orders for today (open + history) for UI display."""
     try:
         from datetime import datetime
         import pytz
@@ -472,8 +485,8 @@ def cancel_order(orderid, auth):
 
 
 def cancel_all_orders_api(data, auth):
-    """Cancel all currently open orders."""
-    order_book = get_order_book(auth)
+    """Cancel all currently open orders (regardless of creation date)."""
+    order_book = _get_all_open_orders(auth)
     if not order_book:
         return [], []
 
