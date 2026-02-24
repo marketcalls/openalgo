@@ -18,7 +18,7 @@ from typing import Any
 from database.token_db_enhanced import fno_search_symbols
 from services.history_service import get_history
 from services.option_chain_service import get_option_chain
-from utils.constants import CRYPTO_EXCHANGES
+from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -48,12 +48,12 @@ def _find_futures_symbol(
         expiry_formatted = f"{expiry_date[:2]}-{expiry_date[2:5]}-{expiry_date[5:]}".upper()
 
         # Search for futures contract matching this expiry
-        # For Delta Exchange, perpetuals (PERPFUT) serve as the underlying
+        # For crypto exchanges, perpetuals (PERPFUT) serve as the underlying
         if exchange.upper() in CRYPTO_EXCHANGES:
             futures = fno_search_symbols(
                 underlying=underlying,
                 exchange=exchange,
-                instrumenttype="PERPFUT",
+                instrumenttype=INSTRUMENT_PERPFUT,
                 limit=1,
             )
         else:

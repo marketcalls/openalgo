@@ -26,6 +26,9 @@ CRYPTO_EXCHANGES: set[str] = {EXCHANGE_CRYPTO}
 # Add new crypto brokers here — the smart download logic picks this up automatically.
 CRYPTO_BROKERS: set[str] = {"deltaexchange"}
 
+# Instrument type for crypto perpetual futures (used in symbol DB queries).
+INSTRUMENT_PERPFUT: str = "PERPFUT"
+
 # Default quote-currency suffix for crypto perpetual instruments.
 # e.g. BTCUSDT = BTC + CRYPTO_QUOTE_CURRENCY — update here if/when USDC or INR is added.
 CRYPTO_QUOTE_CURRENCY: str = "USDT"

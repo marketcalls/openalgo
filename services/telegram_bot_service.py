@@ -50,6 +50,7 @@ from database.telegram_db import (
     log_command,
     update_bot_config,
 )
+from utils.constants import CRYPTO_BROKERS
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -98,8 +99,8 @@ class TelegramBotService:
             return None
 
     def _cs(self, telegram_user: dict) -> str:
-        """Return the currency symbol for the user's broker ($ for deltaexchange, ₹ for others)."""
-        return "$" if telegram_user.get("broker") == "deltaexchange" else "₹"
+        """Return the currency symbol for the user's broker ($ for crypto brokers, ₹ for others)."""
+        return "$" if telegram_user.get("broker") in CRYPTO_BROKERS else "₹"
 
     async def _make_sdk_call(self, telegram_id: int, method: str, **kwargs) -> dict | None:
         """Make an SDK call in async context"""
@@ -1853,7 +1854,7 @@ class TelegramBotService:
             message += f"_... and {len(trades) - 10} more trades_"
         return message
 
-    def _format_positions(self, response: dict) -> str:
+    def _format_positions(self, response: dict, cs: str = '₹') -> str:
         """Format positions response into message"""
         if not response or response.get("status") != "success":
             return "❌ Failed to fetch positions"
@@ -2011,7 +2012,7 @@ class TelegramBotService:
                 message = self._format_tradebook(response, cs=cs)
             elif callback_data == "positions":
                 response = await loop.run_in_executor(None, client.positionbook)
-                message = self._format_positions(response)
+                message = self._format_positions(response, cs=cs)
             elif callback_data == "holdings":
                 response = await loop.run_in_executor(None, client.holdings)
                 message = self._format_holdings(response, cs=cs)

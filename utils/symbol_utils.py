@@ -3,7 +3,18 @@
 Shared symbol classification helpers used across the sandbox and other modules.
 """
 
-from utils.constants import CRYPTO_EXCHANGES, FNO_EXCHANGES
+from utils.constants import CRYPTO_EXCHANGES, CRYPTO_QUOTE_CURRENCY, FNO_EXCHANGES
+
+
+def get_underlying_quote_symbol(base_symbol: str, exchange: str) -> str:
+    """Return the quote symbol for an underlying, appending the crypto quote currency if needed.
+
+    For crypto exchanges: BTCUSDT (base_symbol + CRYPTO_QUOTE_CURRENCY)
+    For all other exchanges: base_symbol unchanged
+    """
+    if exchange.upper() in CRYPTO_EXCHANGES:
+        return base_symbol + CRYPTO_QUOTE_CURRENCY
+    return base_symbol
 
 
 def is_option(symbol: str, exchange: str) -> bool:
