@@ -122,7 +122,22 @@ def _shared_credentials_login(username):
         }), 401
 
     logger.info(f"Shared credentials verified for user {username}, completing login")
-    return handle_auth_success(auth_token, username, "zerodha")
+    response = handle_auth_success(auth_token, username, "zerodha")
+
+    # Inject shared_creds=auto_login flag so Dashboard can show a toast
+    # handle_auth_success returns a JSON response for AJAX (multipart/form-data) requests
+    try:
+        import json as _json
+        resp_data = _json.loads(response[0].get_data(as_text=True))
+        if resp_data.get("status") == "success":
+            resp_data["redirect"] = "/dashboard?shared_creds=auto_login"
+            from flask import make_response as _make_response
+            new_response = _make_response(_json.dumps(resp_data), response[1])
+            new_response.headers["Content-Type"] = "application/json"
+            return new_response
+    except Exception:
+        pass
+    return response
 
 
 @auth_bp.errorhandler(429)

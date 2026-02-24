@@ -70,11 +70,16 @@ export default function Dashboard() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
 
-  // Show toast when shared credentials were successfully written (writer mode / Instance 1)
+  // Show toast for shared credentials events
   useEffect(() => {
-    if (searchParams.get('shared_creds') === 'written') {
+    const sharedCreds = searchParams.get('shared_creds')
+    if (sharedCreds === 'written') {
+      // Instance 1 (writer): credentials saved successfully
       showToast.success('Shared credentials saved. Instance 2 can now log in automatically.', 'system')
-      // Clean the query param from the URL without triggering a re-render
+      navigate('/dashboard', { replace: true })
+    } else if (sharedCreds === 'auto_login') {
+      // Instance 2 (reader): auto-login using Instance 1's token succeeded
+      showToast.success('Auto-login successful using shared broker token.', 'system')
       navigate('/dashboard', { replace: true })
     }
   }, [searchParams, navigate])
