@@ -1,6 +1,5 @@
 # api/funds.py
 
-import json
 import os
 
 from utils.httpx_client import get_httpx_client
@@ -25,7 +24,6 @@ def get_margin_data(auth_token):
 
         # Parse the response
         margin_data = response.json()
-        logger.info(f"Funds Raw Response: {json.dumps(margin_data, indent=2)}")
     except Exception as e:
         error_message = str(e)
         try:
@@ -38,11 +36,8 @@ def get_margin_data(auth_token):
         logger.error(f"Error fetching margin data: {error_message}")
         return {}
 
-    logger.info(f"Funds Details: {margin_data}")
-
     if margin_data.get("status") == "error":
-        # Log the error or return an empty dictionary to indicate failure
-        logger.info(f"Error fetching margin data: {margin_data.get('errors')}")
+        logger.error(f"Error fetching margin data: {margin_data.get('errors')}")
         return {}
 
     try:
