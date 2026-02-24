@@ -56,9 +56,9 @@ from services.option_symbol_service import (
     get_option_exchange,
     parse_underlying_symbol,
 )
+from database.token_db_enhanced import fno_search_symbols
 from services.quotes_service import get_multiquotes, get_quotes, import_broker_module
-from utils.constants import CRYPTO_EXCHANGES
-from utils.symbol_utils import get_underlying_quote_symbol
+from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -257,9 +257,18 @@ def get_option_chain(
             else:
                 quote_exchange = "NSE" if exchange.upper() == "NFO" else "BSE"
         elif exchange.upper() in CRYPTO_EXCHANGES:
-            # CRYPTO: underlying perpetual canonical symbol (e.g. BTC -> BTCUSDT)
+            # CRYPTO: look up the canonical perpetual symbol from DB (e.g. BTC -> BTCUSD.P)
             quote_exchange = exchange.upper()
-            quote_symbol = get_underlying_quote_symbol(base_symbol, exchange)
+            _perp = fno_search_symbols(
+                underlying=base_symbol, exchange=exchange, instrumenttype=INSTRUMENT_PERPFUT, limit=1
+            )
+            if not _perp:
+                return (
+                    False,
+                    {"status": "error", "message": f"No perpetual futures found for {base_symbol} on {exchange}"},
+                    404,
+                )
+            quote_symbol = _perp[0]["symbol"]
 
         if exchange.upper() not in CRYPTO_EXCHANGES:
             # Use base symbol for index quotes (non-Delta)
