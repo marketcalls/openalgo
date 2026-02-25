@@ -233,7 +233,7 @@ def process_dhan_csv(path):
     df["expiry"] = df["SEM_EXPIRY_DATE"].str.upper()
     df["strike"] = df["SEM_STRIKE_PRICE"]
     df["lotsize"] = df["SEM_LOT_UNITS"]
-    df["tick_size"] = df["SEM_TICK_SIZE"]
+    df["tick_size"] = pd.to_numeric(df["SEM_TICK_SIZE"], errors="coerce") / 100
     df["brsymbol"] = df["SEM_TRADING_SYMBOL"]
 
     # Apply the function
