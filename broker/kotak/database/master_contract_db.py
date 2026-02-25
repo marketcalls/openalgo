@@ -150,7 +150,7 @@ def process_kotak_nse_csv(path):
     filtereddataframe["expiry"] = df["pExpiryDate"]
     filtereddataframe["strike"] = df["dStrikePrice;"]
     filtereddataframe["lotsize"] = df["lLotSize"]
-    filtereddataframe["tick_size"] = df["dTickSize "]
+    filtereddataframe["tick_size"] = pd.to_numeric(df["dTickSize "], errors="coerce") / 100
     filtereddataframe["brsymbol"] = df["pTrdSymbol"]
     filtereddataframe["symbol"] = df["pSymbolName"]
 
@@ -199,7 +199,7 @@ def process_kotak_bse_csv(path):
     filtereddataframe["expiry"] = df["pExpiryDate"]
     filtereddataframe["strike"] = df["dStrikePrice"]
     filtereddataframe["lotsize"] = df["lLotSize"]
-    filtereddataframe["tick_size"] = df["dTickSize"]
+    filtereddataframe["tick_size"] = pd.to_numeric(df["dTickSize"], errors="coerce") / 100
     filtereddataframe["brsymbol"] = df["pTrdSymbol"]
     filtereddataframe["symbol"] = df["pSymbolName"]
 
@@ -266,7 +266,7 @@ def process_kotak_nfo_csv(path):
     tokensymbols["strike"] = tokensymbols["strike"].apply(lambda x: int(x) if x.is_integer() else x)
 
     tokensymbols["lotsize"] = df["lLotSize"]
-    tokensymbols["tick_size"] = df["dTickSize"]
+    tokensymbols["tick_size"] = pd.to_numeric(df["dTickSize"], errors="coerce") / 100
     tokensymbols["brsymbol"] = df["pTrdSymbol"]
     tokensymbols["brexchange"] = df["pExchSeg"]
     tokensymbols["exchange"] = "NFO"
@@ -444,7 +444,7 @@ def process_kotak_cds_csv(path):
     tokensymbols["strike"] = tokensymbols["strike"].apply(lambda x: int(x) if x.is_integer() else x)
 
     tokensymbols["lotsize"] = df["lLotSize"]
-    tokensymbols["tick_size"] = df["dTickSize"]
+    tokensymbols["tick_size"] = pd.to_numeric(df["dTickSize"], errors="coerce") / 100
     tokensymbols["brsymbol"] = df["pTrdSymbol"]
     tokensymbols["brexchange"] = df["pExchSeg"]
     tokensymbols["exchange"] = "CDS"
@@ -483,7 +483,7 @@ def process_kotak_mcx_csv(path):
     tokensymbols["strike"] = tokensymbols["strike"].apply(lambda x: int(x) if x.is_integer() else x)
 
     tokensymbols["lotsize"] = df["lLotSize"]
-    tokensymbols["tick_size"] = df["dTickSize"]
+    tokensymbols["tick_size"] = pd.to_numeric(df["dTickSize"], errors="coerce") / 100
     tokensymbols["brsymbol"] = df["pTrdSymbol"]
     tokensymbols["brexchange"] = df["pExchSeg"]
     tokensymbols["exchange"] = "MCX"
@@ -522,7 +522,7 @@ def process_kotak_bfo_csv(path):
     tokensymbols["strike"] = tokensymbols["strike"].apply(lambda x: int(x) if x.is_integer() else x)
 
     tokensymbols["lotsize"] = df["lLotSize"]
-    tokensymbols["tick_size"] = df["dTickSize"]
+    tokensymbols["tick_size"] = pd.to_numeric(df["dTickSize"], errors="coerce") / 100
     tokensymbols["brsymbol"] = df["pTrdSymbol"]
     tokensymbols["brexchange"] = df["pExchSeg"]
     tokensymbols["exchange"] = "BFO"

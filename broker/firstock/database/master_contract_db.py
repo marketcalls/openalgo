@@ -218,7 +218,7 @@ def process_firstock_nse_data(output_path):
 
     # Handle missing or invalid numeric values
     df["lotsize"] = pd.to_numeric(df["lotsize"], errors="coerce").fillna(0).astype(int)
-    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce").fillna(0).astype(float)
+    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce") / 100
 
     # Reorder the columns to match the database structure
     columns_to_keep = [
@@ -319,7 +319,7 @@ def process_firstock_nfo_data(output_path):
 
     # Handle numeric values
     df["lotsize"] = pd.to_numeric(df["lotsize"], errors="coerce").fillna(0).astype(int)
-    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce").fillna(0).astype(float)
+    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce") / 100
 
     # Reorder columns
     columns_to_keep = [
@@ -385,7 +385,7 @@ def process_firstock_bse_data(output_path):
 
     # Handle missing or invalid numeric values
     df["lotsize"] = pd.to_numeric(df["lotsize"], errors="coerce").fillna(0).astype(int)
-    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce").fillna(0).astype(float)
+    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce") / 100
 
     # Reorder the columns to match the database structure
     columns_to_keep = [
@@ -486,7 +486,7 @@ def process_firstock_bfo_data(output_path):
 
     # Handle numeric values
     df["lotsize"] = pd.to_numeric(df["lotsize"], errors="coerce").fillna(0).astype(int)
-    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce").fillna(0).astype(float)
+    df["tick_size"] = pd.to_numeric(df["tick_size"], errors="coerce") / 100
 
     # Reorder columns
     columns_to_keep = [
