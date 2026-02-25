@@ -1,7 +1,7 @@
-# Dhan API Base URL Configuration
+import os
 
-# Base URL for Dhan API endpoints
-BASE_URL = "https://sandbox.dhan.co"
+# Dhan sandbox API base URL (override with env if needed)
+BASE_URL = os.getenv("DHAN_SANDBOX_BASE_URL", "https://sandbox.dhan.co").rstrip("/")
 
 
 # Function to build full URL with endpoint
