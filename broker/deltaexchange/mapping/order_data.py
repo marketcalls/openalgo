@@ -350,8 +350,15 @@ def transform_tradebook_data(tradebook_data):
                 logger.warning(f"Skipping non-dictionary trade: {type(trade)}")
                 continue
 
-            quantity = trade.get("tradedQuantity", 0)
-            price = trade.get("tradedPrice", 0.0)
+            try:
+                quantity = float(trade.get("tradedQuantity", 0) or 0)
+            except (TypeError, ValueError):
+                quantity = 0.0
+
+            try:
+                price = float(trade.get("tradedPrice", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                price = 0.0
 
             transformed_trade = {
                 "symbol": trade.get("tradingSymbol", ""),
@@ -359,8 +366,8 @@ def transform_tradebook_data(tradebook_data):
                 "product": trade.get("productType", ""),
                 "action": trade.get("transactionType", ""),
                 "quantity": quantity,
-                "average_price": float(price) if price else 0.0,
-                "trade_value": quantity * (float(price) if price else 0.0),
+                "average_price": price,
+                "trade_value": quantity * price,
                 "orderid": trade.get("orderId", ""),
                 "timestamp": trade.get("updateTime", ""),
             }
