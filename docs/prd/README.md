@@ -21,7 +21,7 @@ Indian retail traders face:
 ## Solution
 
 A unified API layer that:
-- Connects 24+ Indian brokers through standardized API
+- Connects 29 Indian brokers through standardized API
 - Accepts signals from TradingView, Amibroker, Python, Excel, AI agents
 - Executes orders in under 1 second
 - Runs entirely on user's own infrastructure
@@ -39,7 +39,7 @@ A unified API layer that:
 
 | Feature | Priority | Status |
 |---------|----------|--------|
-| Multi-broker support (24+) | P0 | Complete |
+| Multi-broker support (29) | P0 | Complete |
 | REST API for orders | P0 | Complete |
 | TradingView webhooks | P0 | Complete |
 | Real-time WebSocket streaming | P0 | Complete |
@@ -49,6 +49,11 @@ A unified API layer that:
 | Action Center (order approval) | P1 | Complete |
 | Python strategy execution | P1 | Complete |
 | Telegram notifications | P2 | Complete |
+| Options Analytics Tools (GEX, IV, OI) | P1 | Complete |
+| Batched concurrent basket orders | P1 | Complete |
+| Carry-forward position PnL tracking | P1 | Complete |
+| NSE/BSE index symbol normalization | P1 | Complete |
+| Health monitoring dashboard | P2 | Complete |
 
 ## Non-Functional Requirements
 
@@ -62,7 +67,7 @@ A unified API layer that:
 ## Success Metrics
 
 - Active GitHub stars: 1000+
-- Supported brokers: 24+
+- Supported brokers: 29
 - Daily order volume capability: 10,000+
 
 ## Detailed PRDs

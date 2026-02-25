@@ -172,6 +172,11 @@ class WebSocketProxy:
                 except aio.CancelledError:
                     pass
 
+                # Properly stop the server and release the port.
+                # This calls server.wait_closed() which ensures the socket
+                # is fully released before the event loop shuts down.
+                await self.stop()
+
             except Exception as e:
                 logger.exception(f"Failed to start WebSocket server: {e}")
                 raise
@@ -1539,11 +1544,15 @@ class WebSocketProxy:
                     logger.debug(f"MarketDataService processing error: {mds_error}")
 
                 # OPTIMIZATION 2: O(1) lookup using subscription index
-                # Instead of iterating through ALL clients and ALL subscriptions (O(n²)),
-                # directly lookup clients subscribed to this specific (symbol, exchange, mode)
-                client_ids = self.subscription_index.get(sub_key, set()).copy()
+                # Higher modes include all lower-mode data (Depth > Quote > LTP),
+                # so also deliver to subscribers at lower modes.
+                # Maps client_id -> the mode they subscribed to (for correct message tagging)
+                all_client_modes = {}
+                for m in range(1, mode + 1):
+                    for cid in self.subscription_index.get((symbol, exchange, m), set()):
+                        all_client_modes[cid] = m
 
-                if not client_ids:
+                if not all_client_modes:
                     continue  # No WebSocket clients subscribed, skip delivery
 
                 # OPTIMIZATION 3: Batch message sends for parallel delivery
@@ -1559,11 +1568,7 @@ class WebSocketProxy:
                     "data": market_data,
                 }
 
-                # OPTIMIZATION 5: Pre-serialize JSON once (not per-client)
-                # Most clients get the same message, so serialize once
-                base_message_str = None
-
-                for client_id in client_ids:
+                for client_id, client_mode in all_client_modes.items():
                     # Verify client still exists
                     if client_id not in self.clients:
                         continue
@@ -1578,8 +1583,9 @@ class WebSocketProxy:
                     if broker_name != "unknown" and client_broker and client_broker != broker_name:
                         continue
 
-                    # Add broker to message
+                    # Tag message with client's subscribed mode so frontend renders correctly
                     message = base_message.copy()
+                    message["mode"] = client_mode
                     message["broker"] = broker_name if broker_name != "unknown" else client_broker
 
                     # Add to batch
