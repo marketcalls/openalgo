@@ -9,8 +9,10 @@
 # Reference: https://docs.delta.exchange
 
 import os
+import time
 from datetime import datetime, timedelta
 
+import httpx
 import pandas as pd
 
 from broker.deltaexchange.api.baseurl import BASE_URL
@@ -37,15 +39,41 @@ def _i(value, default=0):
         return default
 
 
+# ---------------------------------------------------------------------------
+# Transient-error retry helpers
+# ---------------------------------------------------------------------------
+_TRANSIENT_ERRORS = (httpx.ReadError, httpx.WriteError, httpx.ConnectError, httpx.PoolTimeout)
+_MAX_RETRIES = 2        # up to 2 retries (3 total attempts)
+_RETRY_DELAY = 0.3      # seconds between retries
+
+
 def _get_ticker(symbol: str) -> dict:
     """
     Fetch ticker for a single symbol via GET /v2/tickers/{symbol}.
     Returns the 'result' dict, or raises on failure.
     The result is a DICT (not a list) for the single-symbol endpoint.
+
+    Retries up to _MAX_RETRIES times on transient HTTP/2 socket errors
+    (e.g. WinError 10035 / WSAEWOULDBLOCK under concurrent load).
     """
     url = f"{BASE_URL}/v2/tickers/{symbol}"
-    client = get_httpx_client()
-    resp = client.get(url, headers={"Accept": "application/json"}, timeout=15.0)
+    last_err: Exception | None = None
+
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            client = get_httpx_client()
+            resp = client.get(url, headers={"Accept": "application/json"}, timeout=15.0)
+            break  # success
+        except _TRANSIENT_ERRORS as exc:
+            last_err = exc
+            if attempt < _MAX_RETRIES:
+                logger.warning(
+                    "Transient error fetching ticker %s (attempt %d/%d): %s – retrying",
+                    symbol, attempt + 1, _MAX_RETRIES + 1, exc,
+                )
+                time.sleep(_RETRY_DELAY)
+            else:
+                raise
 
     if resp.status_code != 200:
         raise Exception(f"Ticker HTTP {resp.status_code} for {symbol}: {resp.text[:200]}")
@@ -81,10 +109,27 @@ def _get_l2orderbook(product_id: int) -> dict:
         }
 
     Returns the 'result' dict (with 'buy'/'sell' lists), or raises on failure.
+
+    Retries up to _MAX_RETRIES times on transient HTTP/2 socket errors.
     """
     url = f"{BASE_URL}/v2/l2orderbook/{product_id}"
-    client = get_httpx_client()
-    resp = client.get(url, headers={"Accept": "application/json"}, timeout=15.0)
+    last_err: Exception | None = None
+
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            client = get_httpx_client()
+            resp = client.get(url, headers={"Accept": "application/json"}, timeout=15.0)
+            break  # success
+        except _TRANSIENT_ERRORS as exc:
+            last_err = exc
+            if attempt < _MAX_RETRIES:
+                logger.warning(
+                    "Transient error fetching l2orderbook %s (attempt %d/%d): %s – retrying",
+                    product_id, attempt + 1, _MAX_RETRIES + 1, exc,
+                )
+                time.sleep(_RETRY_DELAY)
+            else:
+                raise
 
     if resp.status_code != 200:
         raise Exception(
