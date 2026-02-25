@@ -98,13 +98,20 @@ def parse_margin_response(response_data):
             error_message = response_data.get("errorMessage", "Failed to calculate margin")
             return {"status": "error", "message": error_message}
 
-        # Return standardized format with Dhan Sandbox-specific fields
+        total_margin = response_data.get("totalMargin", 0)
+        span_margin = response_data.get("spanMargin", 0)
+        exposure_margin = response_data.get("exposureMargin", 0)
+
+        # Return standardized format with OpenAlgo-compatible aliases.
         return {
             "status": "success",
             "data": {
-                "total_margin_required": response_data.get("totalMargin", 0),
-                "span_margin": response_data.get("spanMargin", 0),
-                "exposure_margin": response_data.get("exposureMargin", 0),
+                "total_margin_required": total_margin,
+                "total_margin": total_margin,
+                "span_margin": span_margin,
+                "exposure_margin": exposure_margin,
+                "margin_benefit": 0,
+                "positions": response_data.get("positions", []),
                 "available_balance": response_data.get("availableBalance", 0),
                 "variable_margin": response_data.get("variableMargin", 0),
                 "insufficient_balance": response_data.get("insufficientBalance", 0),
@@ -117,6 +124,66 @@ def parse_margin_response(response_data):
     except Exception as e:
         logger.error(f"Error parsing margin response: {e}")
         return {"status": "error", "message": f"Failed to parse margin response: {str(e)}"}
+
+
+def parse_multi_margin_response(response_data):
+    """
+    Parse Dhan Sandbox /v2/margincalculator/multi response to OpenAlgo standard format.
+
+    Response structure:
+    {
+        "total_margin": "150000.00",
+        "span_margin": "50000.00",
+        "exposure_margin": "30000.00",
+        "equity_margin": "70000.00",
+        "fo_margin": "0.00",
+        "commodity_margin": "0.00",
+        "currency": "INR",
+        "hedge_benefit": ""
+    }
+
+    Args:
+        response_data: Raw response from Dhan Sandbox multi-margin API
+
+    Returns:
+        Standardized margin response
+    """
+    try:
+        if not response_data or not isinstance(response_data, dict):
+            return {"status": "error", "message": "Invalid response from broker"}
+
+        # Check for error response
+        if response_data.get("errorType") or response_data.get("status") == "failed":
+            error_message = response_data.get("errorMessage", "Failed to calculate margin")
+            return {"status": "error", "message": error_message}
+
+        # Parse multi-margin response fields
+        total_margin = response_data.get("total_margin", "0")
+        span_margin = response_data.get("span_margin", "0")
+        exposure_margin = response_data.get("exposure_margin", "0")
+
+        # Return standardized format with multi-margin specific fields
+        return {
+            "status": "success",
+            "data": {
+                "total_margin_required": float(total_margin) if total_margin else 0,
+                "total_margin": float(total_margin) if total_margin else 0,
+                "span_margin": float(span_margin) if span_margin else 0,
+                "exposure_margin": float(exposure_margin) if exposure_margin else 0,
+                "margin_benefit": float(response_data.get("hedge_benefit", "0") or "0"),
+                "positions": response_data.get("positions", []),
+                "equity_margin": float(response_data.get("equity_margin", "0") or "0"),
+                "fo_margin": float(response_data.get("fo_margin", "0") or "0"),
+                "commodity_margin": float(response_data.get("commodity_margin", "0") or "0"),
+                "currency": response_data.get("currency", "INR"),
+                "hedge_benefit": response_data.get("hedge_benefit", ""),
+                "raw_response": response_data,
+            },
+        }
+
+    except Exception as e:
+        logger.error(f"Error parsing multi-margin response: {e}")
+        return {"status": "error", "message": f"Failed to parse multi-margin response: {str(e)}"}
 
 
 def parse_batch_margin_response(responses):
@@ -156,8 +223,11 @@ def parse_batch_margin_response(responses):
             "status": "success",
             "data": {
                 "total_margin_required": total_margin,
+                "total_margin": total_margin,
                 "span_margin": total_span,
                 "exposure_margin": total_exposure,
+                "margin_benefit": 0,
+                "positions": [],
                 "available_balance": available_balance,
                 "total_brokerage": total_brokerage,
                 "insufficient_balance": insufficient_balance,

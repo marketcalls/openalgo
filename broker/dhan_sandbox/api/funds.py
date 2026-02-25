@@ -1,22 +1,28 @@
-# api/funds.py
-
 import json
 import os
 
-import httpx
-
 from broker.dhan_sandbox.api.baseurl import get_url
 from broker.dhan_sandbox.api.order_api import get_positions
-from broker.dhan_sandbox.mapping.order_data import map_position_data
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
 
 
+def _get_dhan_client_id() -> str | None:
+    """Extract Dhan client-id from BROKER_API_KEY env value."""
+    broker_api_key = os.getenv("BROKER_API_KEY")
+    if not broker_api_key:
+        return None
+    if ":::" in broker_api_key:
+        client_id, _ = broker_api_key.split(":::", 1)
+        return client_id.strip() or None
+    return broker_api_key.strip() or None
+
+
 def test_auth_token(auth_token):
     """Test if the auth token is valid by making a simple API call to funds endpoint."""
-    api_key = os.getenv("BROKER_API_KEY")
+    client_id = _get_dhan_client_id()
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -26,6 +32,9 @@ def test_auth_token(auth_token):
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
+    # Add client-id header if available (required by Dhan sandbox)
+    if client_id:
+        headers["client-id"] = client_id
 
     try:
         url = get_url("/v2/fundlimit")
@@ -52,8 +61,8 @@ def test_auth_token(auth_token):
 
 
 def get_margin_data(auth_token):
-    """Fetch margin data from Dhan API using the provided auth token."""
-    api_key = os.getenv("BROKER_API_KEY")
+    """Fetch margin data from Dhan Sandbox API using the provided auth token."""
+    client_id = _get_dhan_client_id()
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -63,6 +72,9 @@ def get_margin_data(auth_token):
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
+    # Add client-id header if available (required by Dhan sandbox)
+    if client_id:
+        headers["client-id"] = client_id
 
     url = get_url("/v2/fundlimit")
     res = client.get(url, headers=headers)
@@ -70,22 +82,17 @@ def get_margin_data(auth_token):
     res.status = res.status_code
     margin_data = json.loads(res.text)
 
-    logger.info(f"Funds Details: {margin_data}")
+    logger.debug(
+        "Funds response status=%s keys=%s",
+        res.status_code,
+        list(margin_data.keys()) if isinstance(margin_data, dict) else type(margin_data).__name__,
+    )
 
-    # Check for authentication errors first
-    if margin_data.get("errorType") == "Invalid_Authentication":
-        logger.error(f"Authentication error: {margin_data.get('errorMessage')}")
-        return {
-            "availablecash": "0.00",
-            "collateral": "0.00",
-            "m2munrealized": "0.00",
-            "m2mrealized": "0.00",
-            "utiliseddebits": "0.00",
-        }
-
-    if margin_data.get("status") == "error":
-        # Log the error or return an empty dictionary to indicate failure
-        logger.error(f"Error fetching margin data: {margin_data.get('errors')}")
+    # Check for any API errors (auth errors, service errors, after-hours etc.)
+    if margin_data.get("errorType") or margin_data.get("status") in ("error", "failed"):
+        error_type = margin_data.get("errorType", "")
+        error_msg = margin_data.get("errorMessage") or margin_data.get("errors", "Unknown error")
+        logger.error(f"Error fetching margin data: [{error_type}] {error_msg}")
         return {
             "availablecash": "0.00",
             "collateral": "0.00",
@@ -97,7 +104,10 @@ def get_margin_data(auth_token):
     try:
         position_book = get_positions(auth_token)
 
-        logger.info(f"Positionbook: {position_book}")
+        logger.debug(
+            "Positionbook entries=%s",
+            len(position_book) if isinstance(position_book, list) else 0,
+        )
 
         # Check if position_book is an error response
         if isinstance(position_book, dict) and position_book.get("errorType"):
@@ -108,8 +118,6 @@ def get_margin_data(auth_token):
             total_unrealised = 0
         else:
             # If successful, process the positions
-            # position_book = map_position_data(position_book)
-
             def sum_realised_unrealised(position_book):
                 total_realised = 0
                 total_unrealised = 0

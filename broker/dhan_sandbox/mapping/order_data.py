@@ -1,10 +1,34 @@
 import json
+from datetime import datetime, timedelta, timezone
 
-from broker.dhan.mapping.transform_data import map_exchange
+from broker.dhan_sandbox.mapping.transform_data import map_exchange
 from database.token_db import get_symbol
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# IST is UTC+5:30
+_IST = timezone(timedelta(hours=5, minutes=30))
+_UTC = timezone.utc
+
+
+def _utc_to_ist(timestamp_str):
+    """Convert a UTC timestamp string from Dhan sandbox API to IST.
+    Dhan sandbox returns updateTime in UTC without timezone info.
+    """
+    if not timestamp_str:
+        return timestamp_str
+    try:
+        # Parse the timestamp (format: '2026-02-19 03:44:27')
+        dt = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+        # Treat it as UTC, then convert to IST
+        dt_utc = dt.replace(tzinfo=_UTC)
+        dt_ist = dt_utc.astimezone(_IST)
+        # Return in the same format without timezone suffix (frontend handles display)
+        return dt_ist.strftime("%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError) as e:
+        logger.debug(f"Could not convert timestamp '{timestamp_str}': {e}")
+        return timestamp_str
 
 
 def map_order_data(order_data):
@@ -17,6 +41,11 @@ def map_order_data(order_data):
     Returns:
     - The modified order_data with updated 'tradingsymbol' and 'product' fields.
     """
+    # Handle error responses from the API (e.g., after-hours errors, auth errors)
+    if isinstance(order_data, dict) and (order_data.get("errorType") or order_data.get("status") in ("error", "failed")):
+        logger.info(f"API returned error, no order data to map: {order_data.get('errorType', order_data.get('status', 'unknown'))}")
+        return []
+
     # Check if 'data' is None
     if order_data is None:
         # Handle the case where there is no data
@@ -96,6 +125,14 @@ def calculate_order_statistics(order_data):
                 order["orderStatus"] = "rejected"
             elif order["orderStatus"] == "CANCELLED":
                 order["orderStatus"] = "cancelled"
+            elif order["orderStatus"] == "TRANSIT":
+                total_completed_orders += 1
+                order["orderStatus"] = "complete"
+            elif order["orderStatus"] == "PART_TRADED":
+                total_open_orders += 1
+                order["orderStatus"] = "open"
+            elif order["orderStatus"] == "EXPIRED":
+                order["orderStatus"] = "cancelled"
 
     # Compile and return the statistics
     return {
@@ -143,7 +180,7 @@ def transform_order_data(orders):
             "product": order.get("productType", ""),
             "orderid": order.get("orderId", ""),
             "order_status": order.get("orderStatus", ""),
-            "timestamp": order.get("updateTime", ""),
+            "timestamp": _utc_to_ist(order.get("updateTime", "")),
         }
 
         transformed_orders.append(transformed_order)
@@ -167,7 +204,7 @@ def transform_tradebook_data(tradebook_data):
             "average_price": trade.get("tradedPrice", 0.0),
             "trade_value": trade.get("tradedQuantity", 0) * trade.get("tradedPrice", 0.0),
             "orderid": trade.get("orderId", ""),
-            "timestamp": trade.get("updateTime", ""),
+            "timestamp": _utc_to_ist(trade.get("updateTime", "")),
         }
         transformed_data.append(transformed_trade)
     return transformed_data
@@ -178,14 +215,45 @@ def map_position_data(position_data):
 
 
 def transform_positions_data(positions_data):
+    # Avoid fetching LTP using a globally decrypted API key from DB.
+    # That pattern can leak cross-user data in multi-user setups.
     transformed_data = []
     for position in positions_data:
+        realized_pnl = float(position.get("realizedProfit", 0))
+        unrealized_pnl = float(position.get("unrealizedProfit", 0))
+        symbol = position.get("tradingSymbol", "")
+        exchange = position.get("exchangeSegment", "")
+
+        # Use broker-provided LTP fields when available, then safe fallback.
+        ltp = 0.0
+        for candidate in (
+            position.get("ltp"),
+            position.get("lastTradedPrice"),
+            position.get("lastPrice"),
+            position.get("closePrice"),
+        ):
+            try:
+                parsed = float(candidate)
+            except (TypeError, ValueError):
+                continue
+            if parsed > 0:
+                ltp = parsed
+                break
+
+        if ltp <= 0:
+            try:
+                ltp = float(position.get("costPrice", 0) or 0)
+            except (TypeError, ValueError):
+                ltp = 0.0
+
         transformed_position = {
-            "symbol": position.get("tradingSymbol", ""),
-            "exchange": position.get("exchangeSegment", ""),
+            "symbol": symbol,
+            "exchange": exchange,
             "product": position.get("productType", ""),
             "quantity": position.get("netQty", 0),
             "average_price": position.get("costPrice", 0.0),
+            "ltp": round(ltp, 2),
+            "pnl": round(realized_pnl + unrealized_pnl, 2),
         }
         transformed_data.append(transformed_position)
     return transformed_data
