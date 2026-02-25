@@ -660,14 +660,32 @@ class BrokerData:
             df = pd.DataFrame(all_candles)
             if df.empty:
                 logger.info(f"Sandbox returned empty history for {symbol}, generating fake candles.")
-                fake_candles = []
-                base_dt = datetime.now().replace(hour=9, minute=15, second=0, microsecond=0)
+
+                # Calculate interval in seconds based on requested timeframe
+                interval_seconds = self.timeframe_map.get(interval, 300)
+
+                # Determine number of candles to generate based on date range
+                start_dt = datetime.strptime(str(start_date), "%Y-%m-%d")
+                end_dt = datetime.strptime(str(end_date), "%Y-%m-%d")
+                date_range_days = (end_dt - start_dt).days + 1
+
+                # For daily data, generate one candle per day in range
+                if interval == "D":
+                    num_candles = min(date_range_days, 365)  # Cap at 1 year
+                    base_dt = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                else:
+                    # For intraday, generate candles from market open
+                    # Calculate trading hours in seconds (9:15 AM to 3:30 PM = 6h 15m = 22500 seconds)
+                    trading_session_seconds = 6 * 60 + 15  # 375 minutes
+                    num_candles = min(trading_session_seconds // interval_seconds, 75)
+                    base_dt = datetime.now().replace(hour=9, minute=15, second=0, microsecond=0)
+
                 base_ts = int(base_dt.timestamp())
                 quote_tmpl = {"ltp": 0, "open": 0, "high": 0, "low": 0, "volume": 0, "oi": 0}
-                
-                # Generate 75 candles (assuming 5m interval for typical intraday mock)
-                for i in range(75):
-                    candle_ts = base_ts + (i * 300)
+
+                # Generate candles respecting the requested interval
+                for i in range(num_candles):
+                    candle_ts = base_ts + (i * interval_seconds)
                     realistic = self._apply_sandbox_mock_realism(
                         symbol,
                         quote_tmpl.copy(),
@@ -740,9 +758,9 @@ class BrokerData:
         # LTP = close of the last candle
         ltp = float(closes[-1]) if closes[-1] else 0
         # Day open = first candle's open
-        day_open = float(opens[0]) if opens[0] else 0
+        day_open = float(opens[0]) if opens and opens[0] else 0
         # Day high = max of all highs
-        day_high = max(float(h) for h in highs if h) if highs else 0
+        day_high = max((float(h) for h in highs if h), default=0)
         # Day low = min of all lows (exclude zeros)
         valid_lows = [float(l) for l in lows if l and float(l) > 0]
         day_low = min(valid_lows) if valid_lows else 0

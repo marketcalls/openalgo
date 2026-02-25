@@ -126,8 +126,8 @@ def calculate_order_statistics(order_data):
             elif order["orderStatus"] == "CANCELLED":
                 order["orderStatus"] = "cancelled"
             elif order["orderStatus"] == "TRANSIT":
-                total_completed_orders += 1
-                order["orderStatus"] = "complete"
+                total_open_orders += 1
+                order["orderStatus"] = "open"
             elif order["orderStatus"] == "PART_TRADED":
                 total_open_orders += 1
                 order["orderStatus"] = "open"
