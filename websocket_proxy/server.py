@@ -172,6 +172,11 @@ class WebSocketProxy:
                 except aio.CancelledError:
                     pass
 
+                # Properly stop the server and release the port.
+                # This calls server.wait_closed() which ensures the socket
+                # is fully released before the event loop shuts down.
+                await self.stop()
+
             except Exception as e:
                 logger.exception(f"Failed to start WebSocket server: {e}")
                 raise
