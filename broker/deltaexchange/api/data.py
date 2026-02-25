@@ -42,7 +42,14 @@ def _i(value, default=0):
 # ---------------------------------------------------------------------------
 # Transient-error retry helpers
 # ---------------------------------------------------------------------------
-_TRANSIENT_ERRORS = (httpx.ReadError, httpx.WriteError, httpx.ConnectError, httpx.PoolTimeout)
+_TRANSIENT_ERRORS = (
+    httpx.ReadError,
+    httpx.WriteError,
+    httpx.ConnectError,
+    httpx.PoolTimeout,
+    httpx.ReadTimeout,
+    httpx.TimeoutException,
+)
 _MAX_RETRIES = 2        # up to 2 retries (3 total attempts)
 _RETRY_DELAY = 0.3      # seconds between retries
 
