@@ -332,6 +332,17 @@ class ConnectionPool:
 
             return len(self.adapters) - 1, adapter
 
+    def _get_existing_modes(self, symbol: str, exchange: str) -> dict[int, int]:
+        """
+        Return {mode: adapter_idx} for all tracked subscriptions of this symbol/exchange.
+        Must be called while holding self.lock.
+        """
+        return {
+            m: idx
+            for (s, e, m), idx in self.subscription_map.items()
+            if s == symbol and e == exchange
+        }
+
     def initialize(
         self, broker_name: str = None, user_id: str = None, auth_data: dict = None, force: bool = False
     ) -> dict:
@@ -444,6 +455,11 @@ class ConnectionPool:
         """
         Subscribe to market data, automatically using connection with capacity.
 
+        Implements mode hierarchy: Depth (3) > Quote (2) > LTP (1).
+        Higher modes include all data from lower modes, so only the highest
+        requested mode is sent to the broker. All requested modes are tracked
+        in subscription_map so unsubscribe can downgrade correctly.
+
         Args:
             symbol: Trading symbol
             exchange: Exchange code
@@ -456,7 +472,7 @@ class ConnectionPool:
         sub_key = (symbol, exchange, mode)
 
         with self.lock:
-            # Check if already subscribed
+            # Already subscribed in this exact mode
             if sub_key in self.subscription_map:
                 return {
                     "status": "success",
@@ -464,48 +480,83 @@ class ConnectionPool:
                     "connection": self.subscription_map[sub_key] + 1,
                 }
 
+            existing_modes = self._get_existing_modes(symbol, exchange)
+            highest_existing = max(existing_modes.keys()) if existing_modes else 0
+
             try:
-                # Get adapter with capacity
-                adapter_idx, adapter = self._get_adapter_with_capacity()
+                if existing_modes:
+                    # Reuse the same adapter as existing subscriptions
+                    adapter_idx = existing_modes[highest_existing]
+                    adapter = self.adapters[adapter_idx]
 
-                # Subscribe
-                result = adapter.subscribe(symbol, exchange, mode, depth_level)
-
-                if result.get("status") == "success":
-                    self.subscription_map[sub_key] = adapter_idx
-                    self.adapter_symbol_counts[adapter_idx] += 1
-                    symbols_on_conn = self.adapter_symbol_counts[adapter_idx]
-                    total_symbols = sum(self.adapter_symbol_counts)
-
-                    # Update peak usage tracking
-                    if total_symbols > self.peak_total_symbols:
-                        self.peak_total_symbols = total_symbols
-                        self.peak_connections_used = len(self.adapters)
-                        self.peak_symbol_counts = list(self.adapter_symbol_counts)
-
-                    # Add connection info to result
-                    result["connection"] = adapter_idx + 1
-                    result["total_connections"] = len(self.adapters)
-                    result["symbols_on_connection"] = symbols_on_conn
-
-                    # Log at key milestones: every 100 symbols, at 1000, and when new connection starts
-                    if symbols_on_conn == 1:
-                        self.logger.info(
-                            f"[POOL] Connection {adapter_idx + 1} started - first symbol: {symbol}.{exchange}"
+                    if mode > highest_existing:
+                        # UPGRADE: new mode is higher — tell broker to switch up
+                        result = adapter.subscribe(symbol, exchange, mode, depth_level)
+                        if result.get("status") == "success":
+                            self.subscription_map[sub_key] = adapter_idx
+                            # Don't increment adapter_symbol_counts — same symbol, already counted
+                            result["connection"] = adapter_idx + 1
+                            self.logger.info(
+                                f"[POOL] Upgraded {symbol}.{exchange} from mode {highest_existing} "
+                                f"to mode {mode} on connection {adapter_idx + 1}"
+                            )
+                        return result
+                    else:
+                        # COVERED: higher mode already active — just track, skip broker call
+                        self.subscription_map[sub_key] = adapter_idx
+                        # Don't increment adapter_symbol_counts — same symbol, already counted
+                        self.logger.debug(
+                            f"Tracked {symbol}.{exchange} mode {mode} "
+                            f"(covered by active mode {highest_existing})"
                         )
-                    elif symbols_on_conn % 100 == 0 or symbols_on_conn == self.max_symbols:
-                        capacity_pct = (symbols_on_conn / self.max_symbols) * 100
-                        self.logger.info(
-                            f"[POOL] Connection {adapter_idx + 1}: {symbols_on_conn}/{self.max_symbols} symbols "
-                            f"({capacity_pct:.0f}% full) | Total: {total_symbols} symbols across {len(self.adapters)} connection(s)"
+                        return {
+                            "status": "success",
+                            "message": f"Subscribed to {symbol}.{exchange} (covered by mode {highest_existing})",
+                            "connection": adapter_idx + 1,
+                        }
+                else:
+                    # NEW SYMBOL: normal path
+                    adapter_idx, adapter = self._get_adapter_with_capacity()
+                    result = adapter.subscribe(symbol, exchange, mode, depth_level)
+
+                    if result.get("status") == "success":
+                        self.subscription_map[sub_key] = adapter_idx
+                        self.adapter_symbol_counts[adapter_idx] += 1
+                        symbols_on_conn = self.adapter_symbol_counts[adapter_idx]
+                        total_symbols = sum(self.adapter_symbol_counts)
+
+                        # Update peak usage tracking
+                        if total_symbols > self.peak_total_symbols:
+                            self.peak_total_symbols = total_symbols
+                            self.peak_connections_used = len(self.adapters)
+                            self.peak_symbol_counts = list(self.adapter_symbol_counts)
+
+                        # Add connection info to result
+                        result["connection"] = adapter_idx + 1
+                        result["total_connections"] = len(self.adapters)
+                        result["symbols_on_connection"] = symbols_on_conn
+
+                        # Log at key milestones
+                        if symbols_on_conn == 1:
+                            self.logger.info(
+                                f"[POOL] Connection {adapter_idx + 1} started - "
+                                f"first symbol: {symbol}.{exchange}"
+                            )
+                        elif symbols_on_conn % 100 == 0 or symbols_on_conn == self.max_symbols:
+                            capacity_pct = (symbols_on_conn / self.max_symbols) * 100
+                            self.logger.info(
+                                f"[POOL] Connection {adapter_idx + 1}: "
+                                f"{symbols_on_conn}/{self.max_symbols} symbols "
+                                f"({capacity_pct:.0f}% full) | Total: {total_symbols} "
+                                f"symbols across {len(self.adapters)} connection(s)"
+                            )
+
+                        self.logger.debug(
+                            f"Subscribed {symbol}.{exchange} on connection {adapter_idx + 1}, "
+                            f"symbols: {symbols_on_conn}/{self.max_symbols}"
                         )
 
-                    self.logger.debug(
-                        f"Subscribed {symbol}.{exchange} on connection {adapter_idx + 1}, "
-                        f"symbols: {symbols_on_conn}/{self.max_symbols}"
-                    )
-
-                return result
+                    return result
 
             except RuntimeError as e:
                 # Max capacity reached
@@ -517,6 +568,11 @@ class ConnectionPool:
     def unsubscribe(self, symbol: str, exchange: str, mode: int = 2) -> dict:
         """
         Unsubscribe from market data.
+
+        Implements mode hierarchy awareness: when the highest mode is removed but
+        lower modes remain, the broker subscription is downgraded rather than
+        fully removed. When a lower mode is removed while a higher mode is still
+        active, only the tracking entry is removed (no broker call needed).
 
         Args:
             symbol: Trading symbol
@@ -540,20 +596,72 @@ class ConnectionPool:
                 adapter_idx = self.subscription_map[sub_key]
                 adapter = self.adapters[adapter_idx]
 
-                result = adapter.unsubscribe(symbol, exchange, mode)
+                # Remove tracking entry
+                del self.subscription_map[sub_key]
 
-                if result.get("status") == "success":
-                    del self.subscription_map[sub_key]
-                    self.adapter_symbol_counts[adapter_idx] -= 1
+                # Check what modes remain for this symbol
+                remaining_modes = self._get_existing_modes(symbol, exchange)
 
-                    self.logger.debug(
-                        f"Unsubscribed {symbol}.{exchange} from connection {adapter_idx + 1}, "
-                        f"remaining: {self.adapter_symbol_counts[adapter_idx]}"
-                    )
+                if not remaining_modes:
+                    # LAST mode removed — fully unsubscribe from broker
+                    result = adapter.unsubscribe(symbol, exchange, mode)
+                    if result.get("status") == "success":
+                        self.adapter_symbol_counts[adapter_idx] -= 1
+                        self.logger.debug(
+                            f"Fully unsubscribed {symbol}.{exchange} from connection "
+                            f"{adapter_idx + 1}, remaining: {self.adapter_symbol_counts[adapter_idx]}"
+                        )
+                    else:
+                        # Rollback tracking on failure
+                        self.subscription_map[sub_key] = adapter_idx
+                    return result
 
-                return result
+                else:
+                    new_highest = max(remaining_modes.keys())
+
+                    if mode > new_highest:
+                        # DOWNGRADE: removed the highest mode, broker needs to switch down
+                        adapter.unsubscribe(symbol, exchange, mode)
+                        result = adapter.subscribe(symbol, exchange, new_highest, 5)
+                        if result.get("status") == "success":
+                            self.logger.info(
+                                f"[POOL] Downgraded {symbol}.{exchange} from mode {mode} "
+                                f"to mode {new_highest} on connection {adapter_idx + 1}"
+                            )
+                            return {
+                                "status": "success",
+                                "message": f"Unsubscribed mode {mode}, downgraded to mode {new_highest}",
+                            }
+                        else:
+                            # Re-subscribe failed — rollback: restore tracking and try to
+                            # re-subscribe at the old mode so the symbol isn't left dangling
+                            self.logger.error(
+                                f"[POOL] Failed to downgrade {symbol}.{exchange} to mode "
+                                f"{new_highest}, rolling back: {result}"
+                            )
+                            self.subscription_map[sub_key] = adapter_idx
+                            adapter.subscribe(symbol, exchange, mode, 5)
+                            return {
+                                "status": "error",
+                                "code": "DOWNGRADE_FAILED",
+                                "message": f"Failed to downgrade {symbol}.{exchange} to mode {new_highest}",
+                            }
+                    else:
+                        # Removed a lower mode — broker still has the higher mode active
+                        # No broker call needed
+                        self.logger.debug(
+                            f"Removed {symbol}.{exchange} mode {mode} tracking "
+                            f"(broker still at mode {new_highest})"
+                        )
+                        return {
+                            "status": "success",
+                            "message": f"Unsubscribed from {symbol}.{exchange} mode {mode}",
+                        }
 
             except Exception as e:
+                # Rollback tracking on exception
+                if sub_key not in self.subscription_map:
+                    self.subscription_map[sub_key] = adapter_idx
                 self.logger.exception(f"Error unsubscribing from {symbol}.{exchange}: {e}")
                 return {"status": "error", "code": "UNSUBSCRIPTION_ERROR", "message": str(e)}
 

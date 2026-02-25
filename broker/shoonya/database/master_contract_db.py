@@ -194,8 +194,8 @@ def process_shoonya_nse_data(output_path):
         pd.to_numeric(df["lotsize"], errors="coerce").fillna(0).astype(int)
     )  # Convert to int, default to 0
     df["tick_size"] = (
-        pd.to_numeric(df["tick_size"], errors="coerce").fillna(0).astype(float)
-    )  # Convert to float, default to 0.0
+        pd.to_numeric(df["tick_size"], errors="coerce") / 100
+    )  # Convert from paise to rupees
 
     # Reorder the columns to match the database structure
     columns_to_keep = [
@@ -675,8 +675,8 @@ def process_shoonya_bse_data(output_path):
         pd.to_numeric(df["lotsize"], errors="coerce").fillna(0).astype(int)
     )  # Convert to int, default to 0
     df["tick_size"] = (
-        pd.to_numeric(df["tick_size"], errors="coerce").fillna(0).astype(float)
-    )  # Convert to float, default to 0.0
+        pd.to_numeric(df["tick_size"], errors="coerce") / 100
+    )  # Convert from paise to rupees
 
     # Reorder the columns to match the database structure
     columns_to_keep = [

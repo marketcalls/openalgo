@@ -242,7 +242,94 @@ def process_dhan_csv(path):
     )
 
     df["symbol"] = df.apply(reformat_symbol, axis=1)
-    df["symbol"] = df["symbol"].replace("INDIA VIX", "INDIAVIX")
+
+    # Normalize NSE_INDEX symbols: uppercase, remove spaces, only for symbols in OpenAlgo docs
+    nse_idx_mask = df["exchange"] == "NSE_INDEX"
+    valid_nse_symbols = {
+        "NIFTY", "NIFTYNXT50", "FINNIFTY", "BANKNIFTY", "MIDCPNIFTY", "INDIAVIX",
+        "HANGSENGBEESNAV", "NIFTY100", "NIFTY200", "NIFTY500", "NIFTYALPHA50",
+        "NIFTYAUTO", "NIFTYCOMMODITIES", "NIFTYCONSUMPTION", "NIFTYCPSE",
+        "NIFTYDIVOPPS50", "NIFTYENERGY", "NIFTYFMCG", "NIFTYGROWSECT15",
+        "NIFTYGS10YR", "NIFTYGS10YRCLN", "NIFTYGS1115YR", "NIFTYGS15YRPLUS",
+        "NIFTYGS48YR", "NIFTYGS813YR", "NIFTYGSCOMPSITE", "NIFTYINFRA", "NIFTYIT",
+        "NIFTYMEDIA", "NIFTYMETAL", "NIFTYMIDLIQ15", "NIFTYMIDCAP100",
+        "NIFTYMIDCAP150", "NIFTYMIDCAP50", "NIFTYMIDSML400", "NIFTYMNC",
+        "NIFTYPHARMA", "NIFTYPSE", "NIFTYPSUBANK", "NIFTYPVTBANK", "NIFTYREALTY",
+        "NIFTYSERVSECTOR", "NIFTYSMLCAP100", "NIFTYSMLCAP250", "NIFTYSMLCAP50",
+        "NIFTY100EQLWGT", "NIFTY100LIQ15", "NIFTY100LOWVOL30", "NIFTY100QUALTY30",
+        "NIFTY200QUALTY30", "NIFTY50DIVPOINT", "NIFTY50EQLWGT", "NIFTY50PR1XINV",
+        "NIFTY50PR2XLEV", "NIFTY50TR1XINV", "NIFTY50TR2XLEV", "NIFTY50VALUE20",
+    }
+    original_nse = df.loc[nse_idx_mask, "symbol"].copy()
+    df.loc[nse_idx_mask, "symbol"] = (
+        df.loc[nse_idx_mask, "symbol"]
+        .str.upper()
+        .str.replace(" ", "", regex=False)
+        .str.replace("-", "", regex=False)
+    )
+    df.loc[nse_idx_mask, "symbol"] = df.loc[nse_idx_mask, "symbol"].replace(
+        {
+            "NIFTYNEXT50": "NIFTYNXT50",
+            "NIFTYMCAP50": "NIFTYMIDCAP50",
+            "NIFTYMIDSMALLCAP400": "NIFTYMIDSML400",
+            "NIFTYSMALLCAP100": "NIFTYSMLCAP100",
+            "NIFTYSMALLCAP250": "NIFTYSMLCAP250",
+            "NIFTYSMALLCAP50": "NIFTYSMLCAP50",
+            "NIFTY100EQUALWEIGHT": "NIFTY100EQLWGT",
+            "NIFTY100LOWVOLATILITY30": "NIFTY100LOWVOL30",
+            "NIFTYMID100FREE": "NIFTYMIDCAP100",
+        }
+    )
+    # Revert symbols not in the OpenAlgo standard set
+    not_valid = ~df.loc[nse_idx_mask, "symbol"].isin(valid_nse_symbols)
+    revert_idx = not_valid[not_valid].index
+    df.loc[revert_idx, "symbol"] = original_nse.loc[revert_idx]
+
+    # Normalize BSE_INDEX symbols to OpenAlgo standard format
+    bse_idx_mask = df["exchange"] == "BSE_INDEX"
+    bse_index_map = {
+        "SENSEX": "SENSEX",
+        "BANKEX": "BANKEX",
+        "SNSX50": "SENSEX50",
+        "SNXT50": "BSESENSEXNEXT50",
+        "BSE100": "BSE100",
+        "BSE200": "BSE200",
+        "BSE500": "BSE500",
+        "MID150": "BSE150MIDCAPINDEX",
+        "LMI250": "BSE250LARGEMIDCAPINDEX",
+        "MSL400": "BSE400MIDSMALLCAPINDEX",
+        "AUTO": "BSEAUTO",
+        "BSE CG": "BSECAPITALGOODS",
+        "BSE CD": "BSECONSUMERDURABLES",
+        "BSE HC": "BSEHEALTHCARE",
+        "BSE IT": "BSEINFORMATIONTECHNOLOGY",
+        "CARBON": "BSECARBONEX",
+        "CPSE": "BSECPSE",
+        "DOL100": "BSEDOLLEX100",
+        "DOL200": "BSEDOLLEX200",
+        "DOL30": "BSEDOLLEX30",
+        "ENERGY": "BSEENERGY",
+        "BSEFMC": "BSEFASTMOVINGCONSUMERGOODS",
+        "FINSER": "BSEFINANCIALSERVICES",
+        "GREENX": "BSEGREENEX",
+        "INFRA": "BSEINDIAINFRASTRUCTUREINDEX",
+        "INDSTR": "BSEINDUSTRIALS",
+        "BSEIPO": "BSEIPO",
+        "LRGCAP": "BSELARGECAP",
+        "METAL": "BSEMETAL",
+        "MIDCAP": "BSEMIDCAP",
+        "MIDSEL": "BSEMIDCAPSELECTINDEX",
+        "OILGAS": "BSEOIL&GAS",
+        "POWER": "BSEPOWER",
+        "BSEPSU": "BSEPSU",
+        "REALTY": "BSEREALTY",
+        "SMLCAP": "BSESMALLCAP",
+        "SMLSEL": "BSESMALLCAPSELECTINDEX",
+        "SMEIPO": "BSESMEIPO",
+        "TECK": "BSETECK",
+        "TELCOM": "BSETELECOM",
+    }
+    df.loc[bse_idx_mask, "symbol"] = df.loc[bse_idx_mask, "symbol"].replace(bse_index_map)
 
     # List of columns to remove
     columns_to_remove = [

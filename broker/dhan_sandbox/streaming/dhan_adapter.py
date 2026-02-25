@@ -27,6 +27,17 @@ from .dhan_mapping import get_dhan_exchange, get_openalgo_exchange
 from .dhan_websocket import DhanWebSocket
 
 
+def _get_dhan_client_id() -> str | None:
+    """Extract Dhan client-id from BROKER_API_KEY env value."""
+    broker_api_key = os.getenv("BROKER_API_KEY")
+    if not broker_api_key:
+        return None
+    if ":::" in broker_api_key:
+        client_id, _ = broker_api_key.split(":::", 1)
+        return client_id.strip() or None
+    return broker_api_key.strip() or None
+
+
 class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
     """
     Dhan-specific implementation of the WebSocket adapter.
@@ -86,9 +97,11 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
         # Load authentication tokens
         try:
             # Use BROKER_API_KEY as client_id
-            self.client_id = os.getenv("BROKER_API_KEY")
+            self.client_id = _get_dhan_client_id()
             self.logger.info(
-                f"Retrieved API KEY: {self.client_id[:5]}... (length: {len(self.client_id) if self.client_id else 0})"
+                "Client ID loaded: configured=%s length=%s",
+                bool(self.client_id),
+                len(self.client_id) if self.client_id else 0,
             )
             if not self.client_id:
                 error_msg = f"No BROKER_API_KEY available for {self.broker_name} authentication"
@@ -98,7 +111,9 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Use BROKER_API_SECRET as access_token
             self.access_token = os.getenv("BROKER_API_SECRET")
             self.logger.info(
-                f"Retrieved API SECRET: {self.access_token[:5]}... (length: {len(self.access_token) if self.access_token else 0})"
+                "Access token loaded: configured=%s length=%s",
+                bool(self.access_token),
+                len(self.access_token) if self.access_token else 0,
             )
             if not self.access_token:
                 error_msg = f"No BROKER_API_SECRET available for {self.broker_name} authentication"

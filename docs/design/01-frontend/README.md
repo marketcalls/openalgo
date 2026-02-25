@@ -15,9 +15,10 @@ OpenAlgo features a modern React 19 Single Page Application (SPA) built with Typ
 | React Router | 7.12.0 | Client-side routing |
 | Zustand | 5.0.9 | Client state management |
 | TanStack Query | 5.90.16 | Server state & caching |
-| Axios | 1.13.2 | HTTP client |
+| Axios | 1.13.5 | HTTP client |
 | Socket.IO Client | 4.8.3 | Real-time events |
 | @xyflow/react | 12.3.6 | Flow editor canvas |
+| Plotly.js | react-plotly.js | Interactive analytics charts |
 | Radix UI | Latest | Accessible UI primitives |
 
 ## Architecture Diagram
@@ -40,7 +41,7 @@ OpenAlgo features a modern React 19 Single Page Application (SPA) built with Typ
 │  │                                                                         │  │
 │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌────────────┐  │  │
 │  │  │   Layouts    │  │    Pages     │  │     UI       │  │    Flow    │  │  │
-│  │  │  - Standard  │  │  (50+ lazy   │  │  (30+ shadcn │  │  (50+ node │  │  │
+│  │  │  - Standard  │  │  (60+ lazy   │  │  (30+ shadcn │  │  (50+ node │  │  │
 │  │  │  - FullWidth │  │   loaded)    │  │   components)│  │   types)   │  │  │
 │  │  │  - Public    │  │              │  │              │  │            │  │  │
 │  │  └──────────────┘  └──────────────┘  └──────────────┘  └────────────┘  │  │
@@ -92,7 +93,19 @@ frontend/
 │   │   ├── trading.ts          # Trading operations API
 │   │   ├── strategy.ts         # Strategy management API
 │   │   ├── flow.ts             # Flow workflow API
-│   │   └── ...                 # Other API modules
+│   │   ├── gex.ts              # GEX analytics API
+│   │   ├── iv-chart.ts         # IV Chart API
+│   │   ├── iv-smile.ts         # IV Smile API
+│   │   ├── oi-profile.ts       # OI Profile API
+│   │   ├── oi-tracker.ts       # OI Tracker API
+│   │   ├── straddle-chart.ts   # ATM Straddle Chart API
+│   │   ├── vol-surface.ts      # 3D Volatility Surface API
+│   │   ├── option-chain.ts     # Option chain API
+│   │   ├── health.ts           # Health monitoring API
+│   │   ├── chartink.ts         # Chartink API
+│   │   ├── python-strategy.ts  # Python strategy API
+│   │   ├── telegram.ts         # Telegram API
+│   │   └── admin.ts            # Admin API
 │   │
 │   ├── app/
 │   │   └── providers.tsx       # TanStack Query & theme providers
@@ -116,16 +129,35 @@ frontend/
 │   │
 │   ├── hooks/                  # Custom React hooks
 │   │   ├── useSocket.ts        # Socket.IO connection
+│   │   ├── useLivePrice.ts     # Live price feed
+│   │   ├── useLiveQuote.ts     # Live quote feed
 │   │   ├── useMarketData.ts    # WebSocket market data
-│   │   └── ...
+│   │   ├── useMarketStatus.ts  # Market status tracking
+│   │   ├── useOptionChainLive.ts    # Live option chain data
+│   │   ├── useOptionChainPolling.ts # Option chain polling
+│   │   ├── useOrderEventRefresh.ts  # Order event refresh
+│   │   └── usePageVisibility.ts     # Page visibility tracking
 │   │
-│   ├── pages/                  # Page components (all lazy-loaded)
-│   │   ├── Dashboard.tsx
-│   │   ├── Positions.tsx
+│   ├── pages/                  # Page components (60+ all lazy-loaded)
+│   │   ├── Dashboard.tsx       # Main dashboard
+│   │   ├── Positions.tsx       # Position management
+│   │   ├── Tools.tsx           # Analytics tools hub
+│   │   ├── GEXDashboard.tsx    # Gamma Exposure dashboard
+│   │   ├── IVSmile.tsx         # IV Smile analysis
+│   │   ├── IVChart.tsx         # IV Chart
+│   │   ├── OIProfile.tsx       # OI Profile analysis
+│   │   ├── OITracker.tsx       # Open Interest tracker
+│   │   ├── MaxPain.tsx         # Max Pain analysis
+│   │   ├── StraddleChart.tsx   # ATM Straddle chart
+│   │   ├── VolSurface.tsx      # 3D Volatility Surface
+│   │   ├── OptionChain.tsx     # Option chain viewer
 │   │   ├── strategy/           # Strategy pages
 │   │   ├── flow/               # Flow editor pages
 │   │   ├── admin/              # Admin pages
-│   │   └── ...
+│   │   ├── monitoring/         # Monitoring dashboards
+│   │   ├── python-strategy/    # Python strategy pages
+│   │   ├── chartink/           # Chartink pages
+│   │   └── telegram/           # Telegram pages
 │   │
 │   ├── stores/                 # Zustand state stores
 │   │   ├── authStore.ts        # Authentication state
@@ -169,6 +201,7 @@ const { user, isAuthenticated } = useAuthStore()
 **Stores:**
 - `authStore` - User session, API key, authentication state
 - `themeStore` - Dark/light mode, analyzer mode toggle
+- `alertStore` - Toast notification state and management
 - `flowWorkflowStore` - Flow editor nodes, edges, selection state
 
 ### 2. TanStack Query (Server State)
@@ -240,7 +273,8 @@ webClient.interceptors.request.use(async (config) => {
 | Public | `/`, `/login`, `/setup`, `/download` | None |
 | Broker Auth | `/broker`, `/broker/:broker/totp` | None |
 | Protected | `/dashboard`, `/positions`, `/strategy` | Standard Layout |
-| Full-Width | `/flow/editor/:id`, `/playground` | Full-Width Layout |
+| Analytics | `/tools`, `/gex`, `/ivsmile`, `/oitracker`, `/maxpain`, `/volsurface` | Standard Layout |
+| Full-Width | `/flow/editor/:id`, `/playground`, `/historify` | Full-Width Layout |
 
 ### Code Splitting
 
