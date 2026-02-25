@@ -144,17 +144,16 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def connect(self) -> None:
         """Establish connections to Dhan WebSocket endpoints"""
-        if not self.ws_client_5depth or not self.ws_client_20depth:
+        if not self.ws_client_5depth:
             self.logger.error("WebSocket clients not initialized. Call initialize() first.")
             return
 
-        # Connect to 5-depth endpoint
+        # Connect only the 5-depth endpoint (always needed)
         self.logger.debug("Connecting to Dhan 5-depth WebSocket...")
         self.ws_client_5depth.connect()
 
-        # Connect to 20-depth endpoint
-        self.logger.debug("Connecting to Dhan 20-depth WebSocket...")
-        self.ws_client_20depth.connect()
+        # 20-depth WebSocket is connected lazily on first 20-depth subscription
+        # to avoid wasting Dhan's 5-connection-per-user limit
 
     def disconnect(self) -> None:
         """Disconnect from Dhan WebSocket endpoints with proper resource cleanup"""
@@ -337,6 +336,11 @@ class DhanWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 self.depth_20_timeouts[correlation_id] = time.time() + 30
                 # Reset data received timestamp
                 self.depth_20_data_received[correlation_id] = time.time()
+
+            # Lazy-connect the 20-depth WebSocket on first demand
+            if self.ws_client_20depth and not self.ws_client_20depth.connected and not self.ws_client_20depth.running:
+                self.logger.info("Lazy-connecting Dhan 20-depth WebSocket (first 20-depth subscription)")
+                self.ws_client_20depth.connect()
 
             # Subscribe if connected
             if self.ws_client_20depth and self.ws_client_20depth.connected:
