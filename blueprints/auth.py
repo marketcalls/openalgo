@@ -42,6 +42,104 @@ RESET_RATE_LIMIT = os.getenv("RESET_RATE_LIMIT", "15 per hour")  # Password rese
 auth_bp = Blueprint("auth", __name__, url_prefix="/auth")
 
 
+def _shared_credentials_login(username):
+    """
+    Reader mode: automatically authenticate against Zerodha using the shared
+    credentials file written by Instance 1 (writer). Skips broker OAuth entirely.
+
+    Verifies the token is still valid by calling Zerodha's /user/profile endpoint
+    before completing the login.
+    """
+    import json
+
+    from utils.auth_utils import handle_auth_success
+    from utils.httpx_client import get_httpx_client
+
+    shared_file = os.getenv("SHARED_CREDENTIALS_FILE")
+    if not shared_file:
+        session.clear()
+        logger.error("SHARED_CREDENTIALS_MODE=reader but SHARED_CREDENTIALS_FILE is not set")
+        return jsonify({
+            "status": "error",
+            "message": "Shared credentials not available, please log in to Instance 1 first",
+        }), 401
+
+    # Read shared credentials file
+    try:
+        with open(shared_file) as f:
+            creds = json.load(f)
+        access_token = creds["access_token"]
+    except FileNotFoundError:
+        session.clear()
+        logger.warning(f"Shared credentials file not found: {shared_file}")
+        return jsonify({
+            "status": "error",
+            "message": "Shared credentials not available, please log in to Instance 1 first",
+        }), 401
+    except (KeyError, ValueError, Exception) as e:
+        session.clear()
+        logger.exception(f"Shared credentials file is invalid: {e}")
+        return jsonify({
+            "status": "error",
+            "message": "Shared credentials file is invalid or corrupted",
+        }), 401
+
+    # Build the Zerodha auth token: "api_key:access_token"
+    broker_api_key = os.getenv("BROKER_API_KEY", "")
+    auth_token = f"{broker_api_key}:{access_token}"
+
+    # Verify the token is still valid with a lightweight Zerodha API call
+    try:
+        client = get_httpx_client()
+        response = client.get(
+            "https://api.kite.trade/user/profile",
+            headers={
+                "Authorization": f"token {auth_token}",
+                "X-Kite-Version": "3",
+            },
+            timeout=10,
+        )
+        if response.status_code == 403:
+            session.clear()
+            logger.warning("Shared credentials are expired (Zerodha returned 403)")
+            return jsonify({
+                "status": "error",
+                "message": "Shared credentials are expired, please log in to Instance 1 again",
+            }), 401
+        elif response.status_code != 200:
+            session.clear()
+            logger.warning(f"Zerodha token verification returned status {response.status_code}")
+            return jsonify({
+                "status": "error",
+                "message": "Unable to verify shared credentials, please try again",
+            }), 401
+    except Exception as e:
+        session.clear()
+        logger.exception(f"Error verifying shared credentials with Zerodha: {e}")
+        return jsonify({
+            "status": "error",
+            "message": "Unable to verify shared credentials, please try again",
+        }), 401
+
+    logger.info(f"Shared credentials verified for user {username}, completing login")
+    response = handle_auth_success(auth_token, username, "zerodha")
+
+    # Inject shared_creds=auto_login flag so Dashboard can show a toast
+    # handle_auth_success returns a JSON response for AJAX (multipart/form-data) requests
+    try:
+        import json as _json
+        resp_data = _json.loads(response[0].get_data(as_text=True))
+        if resp_data.get("status") == "success":
+            resp_data["redirect"] = "/dashboard?shared_creds=auto_login"
+            from flask import make_response as _make_response
+            new_response = _make_response(_json.dumps(resp_data), response[1])
+            new_response.headers["Content-Type"] = "application/json"
+            return new_response
+    except Exception:
+        pass
+    return response
+
+
 @auth_bp.errorhandler(429)
 def ratelimit_handler(e):
     return jsonify(error="Rate limit exceeded"), 429
@@ -103,12 +201,7 @@ def login():
                 }
             ), 400
 
-        # Check if already logged in
-        if "user" in session:
-            return jsonify(
-                {"status": "success", "message": "Already logged in", "redirect": "/broker"}
-            ), 200
-
+        # Check if already fully logged in (broker connected)
         if session.get("logged_in"):
             return jsonify(
                 {"status": "success", "message": "Already logged in", "redirect": "/dashboard"}
@@ -118,8 +211,15 @@ def login():
         password = request.form["password"]
 
         if authenticate_user(username, password):
+            # Clear any stale partial session before setting new state
+            session.clear()
             session["user"] = username  # Set the username in the session
             logger.info(f"Login success for user: {username}")
+
+            # Shared credentials reader mode: auto-login using Instance 1's broker token
+            if os.getenv("SHARED_CREDENTIALS_MODE") == "reader":
+                return _shared_credentials_login(username)
+
             # Redirect to broker login without marking as fully logged in
             return jsonify({"status": "success"}), 200
         else:
