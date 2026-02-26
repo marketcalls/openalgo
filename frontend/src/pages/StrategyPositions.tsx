@@ -418,7 +418,9 @@ function CurrentPositionsTable({
                   <TableHead className="text-right">SL</TableHead>
                   <TableHead className="text-right">Target</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Unreal P&L</TableHead>
+                  <TableHead className="text-right">Gross P&L</TableHead>
+                  <TableHead className="text-right">Brokerage</TableHead>
+                  <TableHead className="text-right">Net P&L</TableHead>
                   <TableHead className="text-right">Reentry</TableHead>
                   <TableHead className="text-center">Action</TableHead>
                 </TableRow>
@@ -483,6 +485,25 @@ function CurrentPositionsTable({
                     </TableCell>
                     <TableCell className="text-right">
                       <PnLDisplay value={computeUnrealizedPnlForLeg(leg, liveLtpByLegKey?.[legKey])} />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {(leg.total_brokerage ?? 0) > 0 ? (
+                        <div className="flex flex-col items-end">
+                          <span className="text-red-500 text-sm">−{formatCurrency(leg.total_brokerage ?? 0)}</span>
+                          <span className="text-xs text-muted-foreground">
+                            E:{formatCurrency(leg.entry_brokerage ?? 0)}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground text-sm">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {(() => {
+                        const grossPnl = computeUnrealizedPnlForLeg(leg, liveLtpByLegKey?.[legKey])
+                        const brokerage = leg.total_brokerage ?? 0
+                        return <PnLDisplay value={grossPnl !== null ? grossPnl - brokerage : null} />
+                      })()}
                     </TableCell>
                     <TableCell className="text-right">
                       {(leg.reentry_limit === null || leg.reentry_limit === undefined)
@@ -670,11 +691,16 @@ function TradeHistoryTable({ trades }: { trades: TradeHistoryRecord[] | null | u
               <TableHead className="text-right">SL</TableHead>
               <TableHead className="text-right">Target</TableHead>
               <TableHead>Exit Type</TableHead>
-              <TableHead className="text-right">P&L</TableHead>
+              <TableHead className="text-right">Gross P&L</TableHead>
+              <TableHead className="text-right">Brokerage</TableHead>
+              <TableHead className="text-right">Net P&L</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {trades.map((trade) => (
+            {trades.map((trade) => {
+              const tradeBrokerage = trade.total_brokerage ?? 0
+              const tradeNetPnl = trade.pnl - tradeBrokerage
+              return (
               <TableRow key={trade.trade_id}>
                 <TableCell>{trade.trade_id}</TableCell>
                 <TableCell className="font-medium">
@@ -716,8 +742,26 @@ function TradeHistoryTable({ trades }: { trades: TradeHistoryRecord[] | null | u
                 <TableCell className="text-right">
                   <PnLDisplay value={trade.pnl} />
                 </TableCell>
+                <TableCell className="text-right">
+                  {tradeBrokerage > 0 ? (
+                    <div className="flex flex-col items-end">
+                      <span className="text-red-500 text-sm">−{formatCurrency(tradeBrokerage)}</span>
+                      {(trade.entry_brokerage ?? 0) > 0 && (
+                        <span className="text-xs text-muted-foreground">
+                          E:{formatCurrency(trade.entry_brokerage ?? 0)} X:{formatCurrency(trade.exit_brokerage ?? 0)}
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-muted-foreground text-sm">—</span>
+                  )}
+                </TableCell>
+                <TableCell className="text-right">
+                  <PnLDisplay value={tradeBrokerage > 0 ? tradeNetPnl : trade.pnl} />
+                </TableCell>
               </TableRow>
-            ))}
+              )
+            })}
           </TableBody>
         </Table>
       </div>
@@ -772,6 +816,20 @@ function StrategyAccordionItem({
   }, [legs, liveLtpByLegKey])
 
   const totalPnl = realizedPnl + unrealizedPnl
+
+  // Total brokerage: sum from closed trades + entry brokerage from open legs
+  const totalBrokerage = useMemo(() => {
+    const closedBrokerage = (strategy.trade_history ?? []).reduce(
+      (sum, t) => sum + (t.total_brokerage ?? 0),
+      0
+    )
+    const openBrokerage = Object.values(legs)
+      .filter((leg) => ['IN_POSITION', 'PENDING_EXIT'].includes(leg.status))
+      .reduce((sum, leg) => sum + (leg.total_brokerage ?? 0), 0)
+    return closedBrokerage + openBrokerage
+  }, [strategy.trade_history, legs])
+
+  const netPnl = totalPnl - totalBrokerage
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
@@ -836,7 +894,7 @@ function StrategyAccordionItem({
         <CollapsibleContent>
           <CardContent className="pt-0 space-y-6">
             {/* Summary Stats */}
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 p-4 bg-muted/30 rounded-lg">
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 p-4 bg-muted/30 rounded-lg">
               <div>
                 <p className="text-xs text-muted-foreground">Open Positions</p>
                 <p className="text-lg font-semibold">
@@ -864,6 +922,18 @@ function StrategyAccordionItem({
               <div>
                 <p className="text-xs text-muted-foreground">Unrealized P&L</p>
                 <PnLDisplay value={unrealizedPnl} showIcon={false} />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Total Brokerage</p>
+                {totalBrokerage > 0 ? (
+                  <p className="text-lg font-semibold text-red-500">−{formatCurrency(totalBrokerage)}</p>
+                ) : (
+                  <p className="text-lg font-semibold text-muted-foreground">—</p>
+                )}
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Net P&L</p>
+                <PnLDisplay value={totalBrokerage > 0 ? netPnl : totalPnl} showIcon={false} />
               </div>
             </div>
 
@@ -911,26 +981,30 @@ function StrategyAccordionItem({
                       <p className="font-semibold text-xs uppercase text-muted-foreground">Risk Management</p>
                       {config.sl_percent !== undefined && config.sl_percent !== null && <p><span className="text-muted-foreground">SL %:</span> <span className="font-medium">{(config.sl_percent * 100).toFixed(1)}%</span></p>}
                       {config.target_percent !== undefined && config.target_percent !== null && <p><span className="text-muted-foreground">Target %:</span> <span className="font-medium">{(config.target_percent * 100).toFixed(1)}%</span></p>}
-                      {config.reentry_limit !== undefined && <p><span className="text-muted-foreground">Re-entry Limit:</span> <span className="font-medium">{config.reentry_limit}</span></p>}
-                      {config.reexecute_limit !== undefined && <p><span className="text-muted-foreground">Re-execute Limit:</span> <span className="font-medium">{config.reexecute_limit}</span></p>}
+                      {config.reentry_limit !== undefined && config.reentry_limit !== null && <p><span className="text-muted-foreground">Re-entry Limit:</span> <span className="font-medium">{config.reentry_limit}</span></p>}
+                      {config.reexecute_limit !== undefined && config.reexecute_limit !== null && <p><span className="text-muted-foreground">Re-execute Limit:</span> <span className="font-medium">{config.reexecute_limit}</span></p>}
                     </div>
 
                     {/* Leg Pair Configs */}
-                    {config.leg_pair_configs && config.leg_pair_configs.length > 0 && (
+                    {config.leg_pair_configs && Object.keys(config.leg_pair_configs).length > 0 && (
                       <div className="space-y-2 md:col-span-2 lg:col-span-3">
                         <p className="font-semibold text-xs uppercase text-muted-foreground">Leg Configurations</p>
                         <div className="grid gap-3 md:grid-cols-2">
-                          {config.leg_pair_configs.map((legConfig: LegPairConfig, idx: number) => (
-                            <div key={idx} className="border rounded p-3 bg-background/50">
-                              <p className="font-medium mb-2">{legConfig.name || `Leg ${idx + 1}`}</p>
+                          {Object.values(config.leg_pair_configs).map((legConfig: LegPairConfig) => (
+                            <div key={legConfig.name} className="border rounded p-3 bg-background/50">
+                              <p className="font-medium mb-2">{legConfig.name}</p>
                               <div className="space-y-1 text-xs">
                                 {legConfig.main_leg && <p><span className="text-muted-foreground">Main Leg:</span> <span className="font-medium">{legConfig.main_leg}</span></p>}
                                 {legConfig.sl_percent !== undefined && legConfig.sl_percent !== null && <p><span className="text-muted-foreground">SL %:</span> <span className="font-medium">{(legConfig.sl_percent * 100).toFixed(1)}%</span></p>}
                                 {legConfig.target_percent !== undefined && legConfig.target_percent !== null && <p><span className="text-muted-foreground">Target %:</span> <span className="font-medium">{(legConfig.target_percent * 100).toFixed(1)}%</span></p>}
-                                {legConfig.reentry_limit !== undefined && <p><span className="text-muted-foreground">Re-entry:</span> <span className="font-medium">{legConfig.reentry_limit}</span></p>}
-                                {legConfig.reexecute_limit !== undefined && <p><span className="text-muted-foreground">Re-execute:</span> <span className="font-medium">{legConfig.reexecute_limit}</span></p>}
-                                {legConfig.ce_sell_offset && <p><span className="text-muted-foreground">CE Sell:</span> <span className="font-medium">{legConfig.ce_sell_offset}</span></p>}
-                                {legConfig.pe_sell_offset && <p><span className="text-muted-foreground">PE Sell:</span> <span className="font-medium">{legConfig.pe_sell_offset}</span></p>}
+                                {legConfig.trail_activation_percent !== undefined && legConfig.trail_activation_percent !== null && <p><span className="text-muted-foreground">Trail Activation %:</span> <span className="font-medium">{(legConfig.trail_activation_percent * 100).toFixed(1)}%</span></p>}
+                                {legConfig.trail_sl_percent !== undefined && legConfig.trail_sl_percent !== null && <p><span className="text-muted-foreground">Trail SL %:</span> <span className="font-medium">{(legConfig.trail_sl_percent * 100).toFixed(1)}%</span></p>}
+                                {legConfig.reentry_limit !== undefined && legConfig.reentry_limit !== null && <p><span className="text-muted-foreground">Re-entry Limit:</span> <span className="font-medium">{legConfig.reentry_limit}</span></p>}
+                                {legConfig.reexecute_limit !== undefined && legConfig.reexecute_limit !== null && <p><span className="text-muted-foreground">Re-execute Limit:</span> <span className="font-medium">{legConfig.reexecute_limit}</span></p>}
+                                {legConfig.ce_sell_offset && <p><span className="text-muted-foreground">CE Sell Offset:</span> <span className="font-medium">{legConfig.ce_sell_offset}</span></p>}
+                                {legConfig.ce_buy_offset && <p><span className="text-muted-foreground">CE Buy Offset:</span> <span className="font-medium">{legConfig.ce_buy_offset}</span></p>}
+                                {legConfig.pe_sell_offset && <p><span className="text-muted-foreground">PE Sell Offset:</span> <span className="font-medium">{legConfig.pe_sell_offset}</span></p>}
+                                {legConfig.pe_buy_offset && <p><span className="text-muted-foreground">PE Buy Offset:</span> <span className="font-medium">{legConfig.pe_buy_offset}</span></p>}
                               </div>
                             </div>
                           ))}
@@ -967,7 +1041,9 @@ function StrategyAccordionItem({
                         <TableHead>Status</TableHead>
                         <TableHead className="text-right">Realized P&L</TableHead>
                         <TableHead className="text-right">Unrealized P&L</TableHead>
-                        <TableHead className="text-right">Total P&L</TableHead>
+                        <TableHead className="text-right">Gross P&L</TableHead>
+                        <TableHead className="text-right">Brokerage</TableHead>
+                        <TableHead className="text-right">Net P&L</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -976,11 +1052,13 @@ function StrategyAccordionItem({
                           ? computeUnrealizedPnlForLeg(leg, liveLtpByLegKey?.[legKey])
                           : 0
                         const realized = leg.realized_pnl ?? 0
-                        const total = (leg.total_pnl ?? null) !== null && leg.total_pnl !== undefined
+                        const grossTotal = (leg.total_pnl ?? null) !== null && leg.total_pnl !== undefined
                           ? leg.total_pnl
                           : unreal === null
                             ? null
                             : realized + unreal
+                        const legBrokerage = leg.total_brokerage ?? 0
+                        const netTotal = grossTotal !== null ? grossTotal - legBrokerage : null
 
                         return (
                           <TableRow key={legKey}>
@@ -1005,7 +1083,17 @@ function StrategyAccordionItem({
                               <PnLDisplay value={unreal} showIcon={false} />
                             </TableCell>
                             <TableCell className="text-right">
-                              <PnLDisplay value={total} showIcon={false} />
+                              <PnLDisplay value={grossTotal} showIcon={false} />
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {legBrokerage > 0 ? (
+                                <span className="text-red-500 text-sm">−{formatCurrency(legBrokerage)}</span>
+                              ) : (
+                                <span className="text-muted-foreground text-sm">—</span>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <PnLDisplay value={netTotal} showIcon={false} />
                             </TableCell>
                           </TableRow>
                         )

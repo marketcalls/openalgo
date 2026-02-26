@@ -21,21 +21,28 @@ export interface StrategyConfig {
   persist_cycles?: number
   limit_order_retry_wait?: number
   limit_order_retries?: number
-  leg_pair_configs?: LegPairConfig[]
+  leg_pair_configs?: Record<string, LegPairConfig>
 }
 
 export interface LegPairConfig {
   name: string
   main_leg?: string
-  sl_percent?: number
-  reentry_limit?: number
-  target_percent?: number
-  reexecute_limit?: number
+  sl_percent?: number | null
+  reentry_limit?: number | null
+  target_percent?: number | null
+  reexecute_limit?: number | null
+  trail_sl_percent?: number | null
+  trail_activation_percent?: number | null
+  recalculate_delta_on_exit?: boolean | null
   wait_trade_percentage?: number | null
   ce_sell_offset?: string | null
   ce_buy_offset?: string | null
   pe_sell_offset?: string | null
   pe_buy_offset?: string | null
+  ce_sell_delta?: number | null
+  ce_buy_delta?: number | null
+  pe_sell_delta?: number | null
+  pe_buy_delta?: number | null
   ce_sell_premium?: number | null
   ce_buy_premium?: number | null
   pe_sell_premium?: number | null
@@ -82,6 +89,13 @@ export interface LegState {
   /** Percent (e.g., 0.01 for 1%) used to compute planned entry trigger from baseline. */
   wait_trade_percent?: number | null
   wait_trigger_price?: number | null
+
+  /** Brokerage paid at entry (₹). 0 if not yet calculated or pre-brokerage state. */
+  entry_brokerage?: number
+  /** Estimated brokerage for exit (₹). 0 while position is still open. */
+  exit_brokerage?: number
+  /** Total brokerage so far = entry + exit (₹). */
+  total_brokerage?: number
 }
 
 export type ExitType =
@@ -113,6 +127,12 @@ export interface TradeHistoryRecord {
   pnl: number
   reentry_count_at_exit?: number
   reexecute_count_at_exit?: number
+  /** Brokerage paid at entry (₹). */
+  entry_brokerage?: number
+  /** Brokerage paid at exit (₹). */
+  exit_brokerage?: number
+  /** Total brokerage = entry + exit (₹). */
+  total_brokerage?: number
 }
 
 export interface OrchestratorState {
