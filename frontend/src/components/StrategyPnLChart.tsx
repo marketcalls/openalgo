@@ -88,7 +88,7 @@ export default function StrategyPnLChart({ instanceId, strategyName }: StrategyP
     const container = chartContainerRef.current
 
     const chart = createChart(container, {
-      width: container.offsetWidth,
+      autoSize: true,
       height: 400,
       layout: {
         background: { type: ColorType.Solid, color: 'transparent' },
@@ -114,6 +114,8 @@ export default function StrategyPnLChart({ instanceId, strategyName }: StrategyP
         borderColor: isDarkMode ? 'rgba(166, 173, 187, 0.2)' : 'rgba(0, 0, 0, 0.2)',
         timeVisible: true,
         secondsVisible: false,
+        fixLeftEdge: true,
+        fixRightEdge: true,
         tickMarkFormatter: (time: number) => {
           const date = new Date(time * 1000)
           const istOffset = 5.5 * 60 * 60 * 1000
@@ -192,10 +194,7 @@ export default function StrategyPnLChart({ instanceId, strategyName }: StrategyP
     drawdownSeriesRef.current = drawdownSeries
 
     const handleResize = () => {
-      if (chartRef.current && container) {
-        chartRef.current.applyOptions({ width: container.offsetWidth })
-        positionWatermark()
-      }
+      positionWatermark()
     }
     window.addEventListener('resize', handleResize)
 
@@ -279,8 +278,16 @@ export default function StrategyPnLChart({ instanceId, strategyName }: StrategyP
           drawdownSeriesRef.current.setData(ddData)
         }
 
-        if (chartRef.current) {
-          chartRef.current.timeScale().fitContent()
+        if (chartRef.current && data.pnl_series?.length > 0) {
+          const times = data.pnl_series.map((p) => Math.floor(p.time / 1000))
+          const minTime = Math.min(...times) as UTCTimestamp
+          const maxTime = Math.max(...times) as UTCTimestamp
+          // Pad 1 minute on each side so the line isn't flush against the edges
+          const pad = 60
+          chartRef.current.timeScale().setVisibleRange({
+            from: (minTime - pad) as UTCTimestamp,
+            to: (maxTime + pad) as UTCTimestamp,
+          })
         }
       } else {
         showToast.error(result.message || 'Failed to load strategy P&L data', 'positions')
@@ -414,7 +421,7 @@ export default function StrategyPnLChart({ instanceId, strategyName }: StrategyP
           <div
             ref={chartContainerRef}
             className="relative"
-            style={{ height: '400px', display: hasData ? 'block' : 'none' }}
+            style={{ height: hasData ? '400px' : '0px', overflow: 'hidden' }}
           />
         </CardContent>
       </Card>
