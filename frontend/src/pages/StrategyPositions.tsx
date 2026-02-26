@@ -43,6 +43,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import StrategyPnLChart from '@/components/StrategyPnLChart'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
@@ -211,6 +212,52 @@ function sumTradeHistoryPnl(trades: TradeHistoryRecord[] | null | undefined): nu
   return trades.reduce((sum, t) => sum + (t.pnl || 0), 0)
 }
 
+// Compute consolidated stats for a DONE leg from trade history
+function getDoneLegStats(legKey: string, tradeHistory: TradeHistoryRecord[] | null | undefined) {
+  const legTrades = (tradeHistory ?? []).filter((t) => t.leg_key === legKey)
+  if (legTrades.length === 0) {
+    return {
+      avgEntryPrice: null, avgExitPrice: null,
+      firstEntryTime: null, lastExitTime: null,
+      slHits: 0, targetHits: 0, totalBrokerage: 0,
+    }
+  }
+
+  // Qty-weighted average entry price: Σ(entry_price × qty) / Σ(qty)
+  const totalEntryQty = legTrades.reduce((sum, t) => sum + (t.quantity ?? 0), 0)
+  const avgEntryPrice = totalEntryQty > 0
+    ? legTrades.reduce((sum, t) => sum + (t.entry_price ?? 0) * (t.quantity ?? 0), 0) / totalEntryQty
+    : null
+
+  // Qty-weighted average exit price (only trades with a valid exit_price)
+  const exitTrades = legTrades.filter((t) => t.exit_price !== null && t.exit_price !== undefined)
+  const totalExitQty = exitTrades.reduce((sum, t) => sum + (t.quantity ?? 0), 0)
+  const avgExitPrice = totalExitQty > 0
+    ? exitTrades.reduce((sum, t) => sum + (t.exit_price! * (t.quantity ?? 0)), 0) / totalExitQty
+    : null
+
+  // First entry time: min(entry_time)
+  const entryTimes = legTrades.map((t) => t.entry_time).filter(Boolean) as string[]
+  const firstEntryTime = entryTimes.length > 0
+    ? entryTimes.reduce((min, t) => t < min ? t : min)
+    : null
+
+  // Last exit time: max(exit_time)
+  const exitTimes = legTrades.map((t) => t.exit_time).filter(Boolean) as string[]
+  const lastExitTime = exitTimes.length > 0
+    ? exitTimes.reduce((max, t) => t > max ? t : max)
+    : null
+
+  // SL hits and Target hits counts
+  const slHits = legTrades.filter((t) => t.exit_type === 'SL_HIT').length
+  const targetHits = legTrades.filter((t) => t.exit_type === 'TARGET_HIT').length
+
+  // Total brokerage cost
+  const totalBrokerage = legTrades.reduce((sum, t) => sum + (t.total_brokerage ?? 0), 0)
+
+  return { avgEntryPrice, avgExitPrice, firstEntryTime, lastExitTime, slHits, targetHits, totalBrokerage }
+}
+
 // Editable Price Cell for SL/Target inline editing
 function EditablePriceCell({
   value,
@@ -367,12 +414,14 @@ function CurrentPositionsTable({
   onRefresh,
   liveLtpByLegKey,
   onExitLeg,
+  tradeHistory,
 }: {
   legs: Record<string, LegState> | null | undefined
   instanceId: string
   onRefresh: () => void
   liveLtpByLegKey?: Record<string, number | undefined>
   onExitLeg: (legKey: string, leg: LegState) => void
+  tradeHistory?: TradeHistoryRecord[] | null
 }) {
   if (!legs) {
     return <p className="text-muted-foreground text-sm py-4">No positions found</p>
@@ -622,12 +671,20 @@ function CurrentPositionsTable({
                   <TableHead>Symbol</TableHead>
                   <TableHead>Side</TableHead>
                   <TableHead className="text-right">Qty</TableHead>
+                  <TableHead className="text-right">Avg Entry</TableHead>
+                  <TableHead className="text-right">Avg Exit</TableHead>
+                  <TableHead className="text-right">First Entry</TableHead>
+                  <TableHead className="text-right">Last Exit</TableHead>
+                  <TableHead className="text-right">SL Hits</TableHead>
+                  <TableHead className="text-right">Target Hits</TableHead>
+                  <TableHead className="text-right">Brokerage</TableHead>
                   <TableHead className="text-right">Total P&L</TableHead>
-                  <TableHead>Status</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {donePositions.map(([legKey, leg]) => (
+                {donePositions.map(([legKey, leg]) => {
+                  const stats = getDoneLegStats(legKey, tradeHistory)
+                  return (
                   <TableRow key={legKey}>
                     <TableCell className="font-medium">
                       <div className="flex flex-col">
@@ -648,18 +705,33 @@ function CurrentPositionsTable({
                       )}
                     </TableCell>
                     <TableCell className="text-right">{leg.quantity}</TableCell>
+                    <TableCell className="text-right">{formatPrice(stats.avgEntryPrice)}</TableCell>
+                    <TableCell className="text-right">{formatPrice(stats.avgExitPrice)}</TableCell>
+                    <TableCell className="text-right text-xs text-muted-foreground">{formatTime(stats.firstEntryTime)}</TableCell>
+                    <TableCell className="text-right text-xs text-muted-foreground">{formatTime(stats.lastExitTime)}</TableCell>
+                    <TableCell className="text-right">
+                      {stats.slHits > 0
+                        ? <span className="text-red-500 font-medium">{stats.slHits}</span>
+                        : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {stats.targetHits > 0
+                        ? <span className="text-green-500 font-medium">{stats.targetHits}</span>
+                        : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {stats.totalBrokerage > 0
+                        ? <span className="text-red-500 text-sm">−{formatCurrency(stats.totalBrokerage)}</span>
+                        : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end">
                         <PnLDisplay value={leg.total_pnl ?? leg.realized_pnl} />
                       </div>
                     </TableCell>
-                    <TableCell>
-                      <Badge className={legStatusColors[leg.status] || 'bg-gray-400'} variant="secondary">
-                        {leg.status.replace(/_/g, ' ')}
-                      </Badge>
-                    </TableCell>
                   </TableRow>
-                ))}
+                  )
+                })}
               </TableBody>
             </Table>
           </div>
@@ -770,6 +842,60 @@ function TradeHistoryTable({ trades }: { trades: TradeHistoryRecord[] | null | u
 }
 
 // Strategy Accordion Item
+/**
+ * StrategyTabs — renders the Positions / Trade History / P&L Curve tabs for a strategy card.
+ * StrategyPnLChart is only mounted (and therefore only fetches data) when the user
+ * explicitly clicks the "📈 P&L Curve" tab — never on page load.
+ */
+function StrategyTabs({
+  strategy,
+  onRefresh,
+  liveLtpByLegKey,
+  onExitLeg,
+}: {
+  strategy: StrategyState
+  onRefresh: () => void
+  liveLtpByLegKey: Record<string, number | undefined>
+  onExitLeg: (instanceId: string, legKey: string, leg: LegState) => void
+}) {
+  const [activeTab, setActiveTab] = useState('positions')
+
+  return (
+    <Tabs value={activeTab} onValueChange={setActiveTab}>
+      <TabsList className="mb-3">
+        <TabsTrigger value="positions">📊 Positions</TabsTrigger>
+        <TabsTrigger value="trade-history">📜 Trade History</TabsTrigger>
+        <TabsTrigger value="pnl-curve">📈 P&L Curve</TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="positions">
+        <CurrentPositionsTable
+          legs={strategy.legs}
+          instanceId={strategy.instance_id}
+          onRefresh={onRefresh}
+          liveLtpByLegKey={liveLtpByLegKey}
+          onExitLeg={(legKey, leg) => onExitLeg(strategy.instance_id, legKey, leg)}
+          tradeHistory={strategy.trade_history}
+        />
+      </TabsContent>
+
+      <TabsContent value="trade-history">
+        <TradeHistoryTable trades={strategy.trade_history} />
+      </TabsContent>
+
+      <TabsContent value="pnl-curve">
+        {/* Only mount StrategyPnLChart when tab is active — avoids API call on page load */}
+        {activeTab === 'pnl-curve' && (
+          <StrategyPnLChart
+            instanceId={strategy.instance_id}
+            strategyName={strategy.strategy_name}
+          />
+        )}
+      </TabsContent>
+    </Tabs>
+  )
+}
+
 function StrategyAccordionItem({
   strategy,
   onDelete,
@@ -1112,23 +1238,13 @@ function StrategyAccordionItem({
               </p>
             )}
 
-            {/* Current Positions */}
-            <div>
-              <h3 className="text-md font-semibold mb-3">📊 Current Positions</h3>
-              <CurrentPositionsTable
-                legs={strategy.legs}
-                instanceId={strategy.instance_id}
-                onRefresh={onRefresh}
-                liveLtpByLegKey={liveLtpByLegKey}
-                onExitLeg={(legKey, leg) => onExitLeg(strategy.instance_id, legKey, leg)}
-              />
-            </div>
-
-            {/* Trade History */}
-            <div>
-              <h3 className="text-md font-semibold mb-3">📜 Trade History</h3>
-              <TradeHistoryTable trades={strategy.trade_history} />
-            </div>
+            {/* Positions / Trade History / P&L Curve Tabs */}
+            <StrategyTabs
+              strategy={strategy}
+              onRefresh={onRefresh}
+              liveLtpByLegKey={liveLtpByLegKey}
+              onExitLeg={onExitLeg}
+            />
           </CardContent>
         </CollapsibleContent>
       </Card>

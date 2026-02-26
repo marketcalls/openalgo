@@ -14,6 +14,12 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.pool import StaticPool
 from utils.logging import get_logger
 
+try:
+    from strategies.scripts.utils.brokerage import calculate_option_brokerage, get_exchange_for_underlying
+    _brokerage_available = True
+except ImportError:
+    _brokerage_available = False
+
 logger = get_logger(__name__)
 
 
@@ -668,7 +674,39 @@ def manual_exit_strategy_leg(
             pnl = (exit_price - entry_price) * quantity
         else:  # SELL
             pnl = (entry_price - exit_price) * quantity
-        
+
+        # Calculate brokerage for entry and exit
+        entry_brokerage = 0.0
+        exit_brokerage = 0.0
+        total_brokerage = 0.0
+        if _brokerage_available:
+            try:
+                exchange_str = leg.get('exchange', '')
+                symbol_str = leg.get('symbol', '')
+                # BFO exchange means BSE derivatives (e.g. SENSEX options)
+                if exchange_str.upper() in ('BFO',):
+                    brokerage_exchange = 'BSE'
+                else:
+                    brokerage_exchange = get_exchange_for_underlying(symbol_str)
+
+                entry_brokerage = calculate_option_brokerage(
+                    premium=float(entry_price) if entry_price else 0.0,
+                    lot_size=int(quantity),
+                    transaction_type=side,
+                    exchange=brokerage_exchange,
+                )
+                # Exit order is the opposite side of the original position
+                exit_side = 'SELL' if side == 'BUY' else 'BUY'
+                exit_brokerage = calculate_option_brokerage(
+                    premium=float(exit_price),
+                    lot_size=int(quantity),
+                    transaction_type=exit_side,
+                    exchange=brokerage_exchange,
+                )
+                total_brokerage = round(entry_brokerage + exit_brokerage, 2)
+            except Exception as brok_exc:
+                logger.warning(f"Brokerage calculation failed for leg {leg_key}: {brok_exc}")
+
         # Update leg status and exit details
         leg['status'] = 'DONE'  # Mark as DONE so frontend recognizes it as exited
         leg['exit_type'] = exit_status  # Store exit reason (SL_HIT/TARGET_HIT/MANUAL_EXIT)
@@ -705,6 +743,9 @@ def manual_exit_strategy_leg(
             'pnl': pnl,
             'leg_pair_name': leg.get('leg_pair_name'),
             'is_main_leg': leg.get('is_main_leg'),
+            'entry_brokerage': entry_brokerage,
+            'exit_brokerage': exit_brokerage,
+            'total_brokerage': total_brokerage,
         }
         trade_history.append(trade_history_entry)
         parsed_state['trade_history'] = trade_history
