@@ -20,9 +20,29 @@ from utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _get_dhan_client_id() -> str | None:
+    """Extract Dhan client-id from BROKER_API_KEY env value."""
+    broker_api_key = os.getenv("BROKER_API_KEY")
+    if not broker_api_key:
+        return None
+    if ":::" in broker_api_key:
+        client_id, _ = broker_api_key.split(":::", 1)
+        return client_id.strip() or None
+    return broker_api_key.strip() or None
+
+
+class _MockResponse:
+    """Minimal response shim for config validation failures."""
+
+    def __init__(self, status_code: int):
+        self.status_code = status_code
+        self.status = status_code
+        self.text = ""
+
+
 def get_api_response(endpoint, auth, method="GET", payload=""):
     AUTH_TOKEN = auth
-    api_key = os.getenv("BROKER_API_KEY")
+    client_id = _get_dhan_client_id()
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -32,6 +52,9 @@ def get_api_response(endpoint, auth, method="GET", payload=""):
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
+    # Add client-id header if available (required by Dhan sandbox)
+    if client_id:
+        headers["client-id"] = client_id
 
     url = get_url(endpoint)
 
@@ -126,8 +149,20 @@ def get_open_position(tradingsymbol, exchange, product, auth):
 
 def place_order_api(data, auth):
     AUTH_TOKEN = auth
-    BROKER_API_KEY = os.getenv("BROKER_API_KEY")
-    data["apikey"] = BROKER_API_KEY
+    client_id = _get_dhan_client_id()
+    if not client_id:
+        logger.error("Missing Dhan client-id in BROKER_API_KEY; refusing to place order")
+        return (
+            _MockResponse(400),
+            {
+                "status": "error",
+                "errorType": "ConfigurationError",
+                "message": "BROKER_API_KEY must include Dhan client-id for dhan_sandbox",
+            },
+            None,
+        )
+
+    data["apikey"] = client_id
     token = get_token(data["symbol"], data["exchange"])
     newdata = transform_data(data, token)
     headers = {
@@ -135,9 +170,19 @@ def place_order_api(data, auth):
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
+    if client_id:
+        headers["client-id"] = client_id
+        
     payload = json.dumps(newdata)
 
-    logger.debug(f"Placing order with payload: {payload}")
+    logger.info(
+        "Placing order: symbol=%s exchange=%s action=%s qty=%s order_type=%s",
+        data.get("symbol"),
+        data.get("exchange"),
+        data.get("action"),
+        data.get("quantity"),
+        data.get("pricetype"),
+    )
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -153,7 +198,11 @@ def place_order_api(data, auth):
         logger.error(f"Failed to parse JSON response: {e}")
         return res, {"error": "Invalid JSON response"}, None
 
-    logger.debug(f"Place order response: {response_data}")
+    logger.debug(
+        "Place order response status=%s keys=%s",
+        res.status_code,
+        list(response_data.keys()) if isinstance(response_data, dict) else type(response_data).__name__,
+    )
 
     # Check if the API call was successful before accessing orderId
     orderid = None
@@ -170,7 +219,6 @@ def place_order_api(data, auth):
 
 def place_smartorder_api(data, auth):
     AUTH_TOKEN = auth
-    BROKER_API_KEY = os.getenv("BROKER_API_KEY")
     # If no API call is made in this function then res will return None
     res = None
 
@@ -247,7 +295,10 @@ def close_all_positions(current_api_key, auth):
     AUTH_TOKEN = auth
     # Fetch the current open positions
     positions_response = get_positions(AUTH_TOKEN)
-    logger.debug(f"Positions response for closing all: {positions_response}")
+    logger.debug(
+        "Positions fetched for squareoff: count=%s",
+        len(positions_response) if isinstance(positions_response, list) else 0,
+    )
 
     # Check if the positions data is null or empty
     if positions_response is None or not positions_response:
@@ -283,12 +334,21 @@ def close_all_positions(current_api_key, auth):
                 "quantity": str(quantity),
             }
 
-            logger.debug(f"Close position payload: {place_order_payload}")
+            logger.debug(
+                "Squareoff order: symbol=%s exchange=%s action=%s qty=%s",
+                place_order_payload.get("symbol"),
+                place_order_payload.get("exchange"),
+                place_order_payload.get("action"),
+                place_order_payload.get("quantity"),
+            )
 
             # Place the order to close the position
             _, api_response, _ = place_order_api(place_order_payload, AUTH_TOKEN)
 
-            logger.debug(f"Close position response: {api_response}")
+            logger.debug(
+                "Squareoff response keys=%s",
+                list(api_response.keys()) if isinstance(api_response, dict) else type(api_response).__name__,
+            )
 
             # Note: Ensure place_order_api handles any errors and logs accordingly
 
@@ -305,6 +365,10 @@ def cancel_order(orderid, auth):
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
+    
+    client_id = _get_dhan_client_id()
+    if client_id:
+        headers["client-id"] = client_id
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -336,8 +400,15 @@ def cancel_order(orderid, auth):
 def modify_order(data, auth):
     # Assuming you have a function to get the authentication token
     AUTH_TOKEN = auth
-    BROKER_API_KEY = os.getenv("BROKER_API_KEY")
-    data["apikey"] = BROKER_API_KEY
+    client_id = _get_dhan_client_id()
+    if not client_id:
+        logger.error("Missing Dhan client-id in BROKER_API_KEY; refusing to modify order")
+        return {
+            "status": "error",
+            "message": "BROKER_API_KEY must include Dhan client-id for dhan_sandbox",
+        }, 400
+
+    data["apikey"] = client_id
 
     orderid = data["orderid"]
     transformed_order_data = transform_modify_order_data(
@@ -350,9 +421,17 @@ def modify_order(data, auth):
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
+    # Add client-id header if available (required by Dhan sandbox)
+    if client_id:
+        headers["client-id"] = client_id
     payload = json.dumps(transformed_order_data)
 
-    logger.debug(f"Modify order payload: {payload}")
+    logger.debug(
+        "Modify order: orderid=%s qty=%s order_type=%s",
+        orderid,
+        transformed_order_data.get("quantity"),
+        transformed_order_data.get("orderType"),
+    )
 
     # Get the shared httpx client with connection pooling
     client = get_httpx_client()
@@ -368,15 +447,18 @@ def modify_order(data, auth):
 
     # Parse the response
     data = json.loads(res.text)
-    logger.debug(f"Modify order response: {data}")
-    # return {"status": "error", "message": data.get("message", "Failed to modify order")}, res.status
+    logger.debug(
+        "Modify order response status=%s keys=%s",
+        res.status_code,
+        list(data.keys()) if isinstance(data, dict) else type(data).__name__,
+    )
 
-    if data["orderId"]:
+    if data.get("orderId"):
         return {"status": "success", "orderid": data["orderId"]}, 200
     else:
         return {
             "status": "error",
-            "message": data.get("message", "Failed to modify order"),
+            "message": data.get("errorMessage") or data.get("message", "Failed to modify order"),
         }, res.status
 
 
@@ -384,15 +466,23 @@ def cancel_all_orders_api(data, auth):
     # Get the order book
     AUTH_TOKEN = auth
     order_book_response = get_order_book(AUTH_TOKEN)
-    logger.debug(f"Order book for cancel all: {order_book_response}")
+    logger.debug(
+        "Order book fetched for cancel-all: count=%s",
+        len(order_book_response) if isinstance(order_book_response, list) else 0,
+    )
     if order_book_response is None:
         return [], []  # Return empty lists indicating failure to retrieve the order book
 
+    # Handle error dict responses from the API
+    if isinstance(order_book_response, dict) and (order_book_response.get("errorType") or order_book_response.get("status") in ("error", "failed")):
+        logger.info(f"Cannot cancel orders - API error: {order_book_response.get('errorType', 'unknown')}")
+        return [], []
+
     # Filter orders that are in 'open' or 'trigger_pending' state
     orders_to_cancel = [
-        order for order in order_book_response if order["orderStatus"] in ["PENDING"]
+        order for order in order_book_response if isinstance(order, dict) and order.get("orderStatus") in ["PENDING", "TRIGGER_PENDING", "TRANSIT"]
     ]
-    logger.info(f"Orders to cancel: {orders_to_cancel}")
+    logger.info("Orders to cancel: count=%s", len(orders_to_cancel))
     canceled_orders = []
     failed_cancellations = []
 
