@@ -126,6 +126,28 @@ class RateLimiter:
 # Global rate limiter instance - 2 calls per second (conservative limit)
 history_rate_limiter = RateLimiter(calls_per_second=2)
 
+
+def _infer_exchange(symbol: str, exchange: str | None) -> str | None:
+    """
+    Infer the exchange from the symbol name when it is None or empty.
+
+    Strategy legs for options may be stored without an exchange field.
+    Rules:
+      - SENSEX / BANKEX options → BFO  (BSE Futures & Options)
+      - NIFTY / BANKNIFTY / FINNIFTY / MIDCPNIFTY → NFO  (NSE Futures & Options)
+      - Anything else → NFO as a safe default for Indian option symbols
+
+    If exchange is already set, it is returned unchanged.
+    """
+    if exchange:
+        return exchange
+    if not symbol:
+        return None
+    sym_upper = symbol.upper()
+    if sym_upper.startswith("SENSEX") or sym_upper.startswith("BANKEX"):
+        return "BFO"
+    return "NFO"
+
 # Define the blueprint
 pnltracker_bp = Blueprint("pnltracker_bp", __name__, url_prefix="/")
 
@@ -1103,5 +1125,320 @@ def get_pnl_data():
 
     except Exception as e:
         logger.error(f"Error calculating intraday PnL: {e}")
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@pnltracker_bp.route("/pnltracker/api/strategy-pnl", methods=["POST"])
+@cross_origin()
+@check_session_validity
+def get_strategy_pnl_data():
+    """
+    Get minute-level intraday P&L curve for a single strategy instance.
+
+    Uses the same MTM computation as /pnltracker/api/pnl but driven by the
+    strategy's own trade_history (closed legs) and open legs instead of the
+    broker tradebook.  This gives per-strategy, per-minute P&L resolution.
+
+    Request body (JSON):
+        instance_id  (str, required): strategy instance ID
+
+    Response: same shape as /pnltracker/api/pnl
+    """
+    try:
+        from database.strategy_state_db import get_strategy_state_by_instance_id
+
+        data = request.get_json(silent=True) or {}
+        instance_id = data.get("instance_id")
+        if not instance_id:
+            return jsonify({"status": "error", "message": "instance_id is required"}), 400
+
+        login_username = session.get("user")
+        if not login_username:
+            return jsonify({"status": "error", "message": "Not authenticated"}), 401
+
+        api_key = get_api_key_for_tradingview(login_username)
+        if not api_key:
+            return jsonify({"status": "error", "message": "API key not configured"}), 401
+
+        # Load strategy state
+        state = get_strategy_state_by_instance_id(instance_id)
+        if not state:
+            return jsonify({"status": "error", "message": f"Strategy {instance_id} not found"}), 404
+
+        trade_history = state.get("trade_history") or []
+        legs = state.get("legs") or {}
+
+        ist = pytz.timezone("Asia/Kolkata")
+        today_ist = datetime.now(ist).date()
+        today_str = today_ist.strftime("%Y-%m-%d")
+
+        # ------------------------------------------------------------------ #
+        # Build position windows from trade_history (closed legs) +
+        # open legs (IN_POSITION / PENDING_EXIT).
+        #
+        # Each window = {symbol, exchange, action (BUY/SELL), qty, price
+        #                (entry), exit_price, start_time (IST), end_time (IST)}
+        # ------------------------------------------------------------------ #
+        empty_response = {
+            "status": "success",
+            "data": {
+                "current_mtm": 0,
+                "max_mtm": 0,
+                "max_mtm_time": None,
+                "min_mtm": 0,
+                "min_mtm_time": None,
+                "max_drawdown": 0,
+                "pnl_series": [],
+                "drawdown_series": [],
+            },
+        }
+
+        # Group windows by symbol so we can fetch 1-min history once per symbol
+        # symbol_windows: { "SYMBOL_EXCHANGE": [window, ...] }
+        symbol_windows: dict[str, list[dict]] = {}
+
+        # --- closed trades ---
+        for trade in trade_history:
+            symbol = trade.get("symbol")
+            exchange = _infer_exchange(symbol, trade.get("exchange"))
+            if not symbol or not exchange:
+                continue
+
+            entry_time_ist = parse_trade_timestamp(trade.get("entry_time"), fallback_date=today_ist)
+            exit_time_ist = parse_trade_timestamp(trade.get("exit_time"), fallback_date=today_ist)
+
+            if entry_time_ist is None:
+                continue
+
+            # Only include trades from today
+            if entry_time_ist.date() != today_ist:
+                continue
+
+            key = f"{symbol}_{exchange}"
+            symbol_windows.setdefault(key, []).append({
+                "symbol": symbol,
+                "exchange": exchange,
+                "action": trade.get("side", "BUY"),
+                "qty": abs(int(trade.get("quantity") or 0)),
+                "price": float(trade.get("entry_price") or 0),
+                "exit_price": float(trade.get("exit_price") or 0) if trade.get("exit_price") else None,
+                "start_time": entry_time_ist,
+                "end_time": exit_time_ist,
+            })
+
+        # --- open legs ---
+        for leg_key, leg in legs.items():
+            status = leg.get("status", "")
+            if status not in ("IN_POSITION", "PENDING_EXIT"):
+                continue
+
+            symbol = leg.get("symbol")
+            exchange = _infer_exchange(symbol, leg.get("exchange"))
+            if not symbol or not exchange:
+                continue
+
+            entry_time_ist = parse_trade_timestamp(leg.get("entry_time"), fallback_date=today_ist)
+            if entry_time_ist is None:
+                continue
+            if entry_time_ist.date() != today_ist:
+                continue
+
+            key = f"{symbol}_{exchange}"
+            symbol_windows.setdefault(key, []).append({
+                "symbol": symbol,
+                "exchange": exchange,
+                "action": leg.get("side", "BUY"),
+                "qty": abs(int(leg.get("quantity") or 0)),
+                "price": float(leg.get("entry_price") or 0),
+                "exit_price": None,   # still open
+                "start_time": entry_time_ist,
+                "end_time": None,     # still open
+            })
+
+        if not symbol_windows:
+            return jsonify(empty_response), 200
+
+        # ------------------------------------------------------------------ #
+        # For each symbol fetch 1-min candles and compute MTM P&L —
+        # identical logic to get_pnl_data()
+        # ------------------------------------------------------------------ #
+        portfolio_pnl = None
+        first_trade_time = None
+
+        # Determine earliest trade time across all windows
+        for windows in symbol_windows.values():
+            for w in windows:
+                if w["start_time"]:
+                    if first_trade_time is None or w["start_time"] < first_trade_time:
+                        first_trade_time = w["start_time"]
+
+        for sym_key, position_windows in symbol_windows.items():
+            parts = sym_key.rsplit("_", 1)
+            if len(parts) != 2:
+                continue
+            symbol, exchange = parts
+
+            try:
+                history_rate_limiter.wait()
+                success, hist_response, _ = get_history(
+                    symbol=symbol,
+                    exchange=exchange,
+                    interval="1m",
+                    start_date=today_str,
+                    end_date=today_str,
+                    api_key=api_key,
+                )
+
+                if not (success and "data" in hist_response):
+                    logger.warning(f"Could not get historical data for {symbol}")
+                    continue
+
+                df_hist = pd.DataFrame(hist_response["data"])
+                if df_hist.empty:
+                    continue
+
+                df_hist = convert_timestamp_to_ist(df_hist, symbol)
+                if df_hist is None:
+                    continue
+
+                current_time = datetime.now(ist)
+
+                # Filter to the strategy's trading window
+                if first_trade_time:
+                    df_hist = df_hist[df_hist.index >= first_trade_time]
+                df_hist = df_hist[df_hist.index <= current_time]
+
+                df_hist = df_hist[["close"]].copy()
+                df_hist.rename(columns={"close": f"{symbol}_price"}, inplace=True)
+                df_hist[f"{symbol}_pnl"] = 0.0
+
+                cumulative_realized_pnl = 0.0
+
+                position_windows_sorted = sorted(
+                    position_windows,
+                    key=lambda x: x["start_time"] if x["start_time"] else datetime.min.replace(tzinfo=pytz.UTC),
+                )
+
+                for window in position_windows_sorted:
+                    if window["start_time"] is None:
+                        continue
+
+                    start = window["start_time"]
+                    end = window["end_time"] if window["end_time"] else current_time
+
+                    mask = (df_hist.index >= start) & (df_hist.index <= end)
+                    has_data_points = mask.any()
+                    is_closed_position = (
+                        window["end_time"] is not None and window.get("exit_price") is not None
+                    )
+
+                    if not has_data_points and not is_closed_position:
+                        continue
+
+                    if has_data_points:
+                        if window["action"] == "BUY":
+                            position_pnl = (
+                                df_hist.loc[mask, f"{symbol}_price"] - window["price"]
+                            ) * window["qty"]
+                        else:  # SELL
+                            position_pnl = (
+                                window["price"] - df_hist.loc[mask, f"{symbol}_price"]
+                            ) * window["qty"]
+                        df_hist.loc[mask, f"{symbol}_pnl"] += position_pnl
+
+                    if is_closed_position:
+                        if window["action"] == "BUY":
+                            realized = (window["exit_price"] - window["price"]) * window["qty"]
+                        else:
+                            realized = (window["price"] - window["exit_price"]) * window["qty"]
+                        cumulative_realized_pnl += realized
+
+                    if window["end_time"] is not None:
+                        future_mask = df_hist.index > window["end_time"]
+                        if future_mask.any():
+                            df_hist.loc[future_mask, f"{symbol}_pnl"] = cumulative_realized_pnl
+                        elif cumulative_realized_pnl != 0 and len(df_hist) > 0:
+                            last_idx = df_hist.index[-1]
+                            df_hist.loc[last_idx, f"{symbol}_pnl"] = cumulative_realized_pnl
+
+                if portfolio_pnl is None:
+                    portfolio_pnl = df_hist[[f"{symbol}_pnl"]].copy()
+                else:
+                    portfolio_pnl = portfolio_pnl.join(df_hist[[f"{symbol}_pnl"]], how="outer")
+
+                logger.info(f"[strategy-pnl] Added {symbol}: {len(df_hist)} candles")
+
+            except Exception as e:
+                logger.exception(f"[strategy-pnl] Error processing {symbol}: {e}")
+                continue
+
+        if portfolio_pnl is None or portfolio_pnl.empty:
+            return jsonify(empty_response), 200
+
+        # Fill NaN with forward-fill then 0
+        portfolio_pnl = portfolio_pnl.ffill().fillna(0)
+        portfolio_pnl["Total_PnL"] = portfolio_pnl.sum(axis=1)
+
+        # Drawdown
+        portfolio_pnl["Peak"] = portfolio_pnl["Total_PnL"].cummax()
+        portfolio_pnl["Drawdown"] = portfolio_pnl["Total_PnL"] - portfolio_pnl["Peak"]
+
+        latest_mtm = float(portfolio_pnl["Total_PnL"].iloc[-1])
+        max_mtm = float(portfolio_pnl["Total_PnL"].max())
+        min_mtm = float(portfolio_pnl["Total_PnL"].min())
+        max_drawdown = float(portfolio_pnl["Drawdown"].min())
+
+        try:
+            max_mtm_time = portfolio_pnl["Total_PnL"].idxmax().strftime("%H:%M")
+            min_mtm_time = portfolio_pnl["Total_PnL"].idxmin().strftime("%H:%M")
+        except Exception:
+            max_mtm_time = None
+            min_mtm_time = None
+
+        pnl_series = []
+        drawdown_series = []
+
+        for idx, row in portfolio_pnl.iterrows():
+            try:
+                if hasattr(idx, "tz") and idx.tz is not None:
+                    timestamp_ms = int(idx.tz_convert("UTC").timestamp() * 1000)
+                else:
+                    timestamp_ms = int(idx.timestamp() * 1000)
+
+                pnl_val = row.get("Total_PnL", 0)
+                dd_val = row.get("Drawdown", 0)
+                if pd.isna(pnl_val):
+                    pnl_val = 0
+                if pd.isna(dd_val):
+                    dd_val = 0
+
+                pnl_series.append({"time": timestamp_ms, "value": round(float(pnl_val), 2)})
+                drawdown_series.append({"time": timestamp_ms, "value": round(float(dd_val), 2)})
+            except Exception as e:
+                logger.warning(f"[strategy-pnl] Error processing row {idx}: {e}")
+                continue
+
+        logger.info(
+            f"[strategy-pnl] {instance_id}: {len(pnl_series)} points, "
+            f"current={latest_mtm:.2f}, max={max_mtm:.2f}, drawdown={max_drawdown:.2f}"
+        )
+
+        return jsonify({
+            "status": "success",
+            "data": {
+                "current_mtm": round(latest_mtm, 2),
+                "max_mtm": round(max_mtm, 2),
+                "max_mtm_time": max_mtm_time,
+                "min_mtm": round(min_mtm, 2),
+                "min_mtm_time": min_mtm_time,
+                "max_drawdown": round(max_drawdown, 2),
+                "pnl_series": pnl_series,
+                "drawdown_series": drawdown_series,
+            },
+        }), 200
+
+    except Exception as e:
+        logger.error(f"[strategy-pnl] Error: {e}")
         traceback.print_exc()
         return jsonify({"status": "error", "message": str(e)}), 500
