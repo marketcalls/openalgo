@@ -1,3 +1,4 @@
+import atexit
 import json
 import os
 import queue
@@ -91,6 +92,7 @@ smart_order_queue = queue.Queue()  # For placesmartorder (1/sec)
 # Order processor state
 order_processor_running = False
 order_processor_lock = threading.Lock()
+_order_processor_thread = None
 
 # Rate limiting state for regular orders
 last_regular_orders = deque(maxlen=10)  # Track last 10 regular order timestamps
@@ -171,12 +173,28 @@ def process_orders():
             time_module.sleep(1)  # Sleep on error to prevent rapid retries
 
 
+def _shutdown_order_processor():
+    """Drain remaining orders before process exit"""
+    if _order_processor_thread and _order_processor_thread.is_alive():
+        pending = smart_order_queue.qsize() + regular_order_queue.qsize()
+        if pending:
+            logger.info(f"Shutting down order processor, draining {pending} pending orders...")
+        # Only poison the regular queue — smart orders drain first via the loop,
+        # then the regular queue processes all remaining orders before hitting the pill
+        regular_order_queue.put(None)
+        _order_processor_thread.join(timeout=30)
+
+
+atexit.register(_shutdown_order_processor)
+
+
 def ensure_order_processor():
     """Ensure the order processor is running"""
-    global order_processor_running
+    global order_processor_running, _order_processor_thread
     with order_processor_lock:
         if not order_processor_running:
-            threading.Thread(target=process_orders, daemon=True).start()
+            _order_processor_thread = threading.Thread(target=process_orders, daemon=True)
+            _order_processor_thread.start()
             order_processor_running = True
 
 
