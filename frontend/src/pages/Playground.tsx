@@ -220,9 +220,26 @@ export default function Playground() {
   // Mobile sidebar
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
+  // Host server URL for display
+  const [hostServer, setHostServer] = useState(window.location.origin);
+
   // Playground mode - REST API or WebSocket
   const [playgroundMode, setPlaygroundMode] = useState<"rest" | "websocket">("rest");
   const [wsInitialMessage, setWsInitialMessage] = useState<string>("");
+
+  useEffect(() => {
+    // Fetch host server config
+    fetch("/api/config/host", { credentials: "include" })
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.host_server) {
+          setHostServer(data.host_server);
+        }
+      })
+      .catch(() => {
+        // Fallback to window.location.origin (already set as default)
+      });
+  }, []);
 
   useEffect(() => {
     loadApiKey();
@@ -963,7 +980,7 @@ export default function Playground() {
                   ) : (
                     <>
                       <span className="text-muted-foreground">
-                        http://127.0.0.1:5000
+                        {hostServer}
                       </span>
                       <span className="text-foreground">{url}</span>
                     </>
