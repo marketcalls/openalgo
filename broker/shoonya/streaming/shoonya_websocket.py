@@ -284,8 +284,9 @@ class ShoonyaWebSocket:
             self.logger.info("Authentication successful")
             # SW-1 fix: Start heartbeat AFTER connected=True so the worker loop runs
             self._start_heartbeat()
-            # SA-R6-11 fix: Pass actual ws reference instead of None
-            self._call_external_callback(self.on_open, self.ws)
+            # SA-R6-11 fix: Pass actual ws reference via snapshot to avoid race with _close_websocket
+            ws = self.ws
+            self._call_external_callback(self.on_open, ws)
         else:
             self.logger.error(f"Authentication failed: {data}")
             # SW-5 fix: Defensively set connected=False in case future changes
