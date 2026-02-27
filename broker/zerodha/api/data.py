@@ -1,17 +1,50 @@
 import json
 import os
+import threading
 import time
 import urllib.parse
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 
 from broker.zerodha.database.master_contract_db import SymToken, db_session
+from broker.zerodha.utils import validate_enctoken
 from database.token_db import get_br_symbol, get_oa_symbol
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# OMS API rate limiter (enctoken mode)
+# ---------------------------------------------------------------------------
+# Zerodha OMS (kite.zerodha.com) enforces rate limits similar to the official
+# Kite Connect historical data API. We use the same conservative 350ms minimum
+# interval between calls (~3 requests/second, evenly spaced) to avoid hitting
+# rate limits when fetching quotes for multiple symbols via enctoken.
+#
+# This is intentionally duplicated from services/history_service.py to keep
+# broker-level code self-contained and independently maintainable in this fork.
+# ---------------------------------------------------------------------------
+_last_oms_call: float = 0.0
+_MIN_OMS_INTERVAL = 0.35  # 350ms between OMS API calls (~3 req/sec)
+_oms_rate_limit_lock = threading.Lock()
+
+
+def _enforce_oms_rate_limit():
+    """Block until at least 350ms has elapsed since the last OMS API call.
+
+    Thread-safe: uses a lock to prevent concurrent callers from reading the
+    same _last_oms_call timestamp and both deciding no sleep is needed,
+    which would result in back-to-back requests violating the rate limit.
+    """
+    global _last_oms_call
+    with _oms_rate_limit_lock:
+        now = time.monotonic()
+        elapsed = now - _last_oms_call
+        if elapsed < _MIN_OMS_INTERVAL:
+            time.sleep(_MIN_OMS_INTERVAL - elapsed)
+        _last_oms_call = time.monotonic()
 
 
 class ZerodhaPermissionError(Exception):
@@ -121,7 +154,7 @@ class BrokerData:
         """Initialize Zerodha data handler with authentication token"""
         self.auth_token = auth_token
 
-        # Map common timeframe format to Zerodha intervals
+        # Map common timeframe format to Zerodha intervals (official Kite Connect API)
         self.timeframe_map = {
             # Minutes
             "1m": "minute",
@@ -135,6 +168,18 @@ class BrokerData:
             "1h": "60minute",
             # Daily
             "D": "day",
+        }
+
+        # Additional timeframe mappings available only via enctoken (OMS/web API)
+        # Zerodha supports second-level data starting from 5s (not 1s)
+        self.enctoken_timeframe_map = {
+            **self.timeframe_map,
+            # Seconds (only available via enctoken OMS API)
+            "5s": "5second",
+            "10s": "10second",
+            "15s": "15second",
+            "30s": "30second",
+            "45s": "45second",
         }
 
         # Market timing configuration for different exchanges
@@ -154,15 +199,183 @@ class BrokerData:
         """Get market start and end times for given exchange"""
         return self.market_timings.get(exchange, self.default_market_timings)
 
+    def _get_quotes_enctoken(
+        self, symbol: str, exchange: str, enctoken: str, user_id: str
+    ) -> dict:
+        """
+        Fetch real-time quote data using the Zerodha OMS (web/enctoken) API.
+
+        Strategy (Option C — single API call):
+        - Fetches all 5-second candles for today using _get_history_enctoken()
+        - Aggregates in-memory to derive OHLC and LTP
+        - Retries up to 3 total attempts (today + 2 previous non-weekend days)
+          to handle market holidays or pre-market requests gracefully
+
+        Why 5s candles?
+        - LTP is guaranteed to be at most 5 seconds stale (vs daily candle which is EOD)
+        - Single API call avoids rate limit concerns of a dual-call approach
+        - OI is available from the latest candle at no extra cost
+
+        Fields derived from 5s candles:
+          open       = first candle's open  (day open price)
+          high       = max of all highs     (day high)
+          low        = min of all lows      (day low)
+          ltp        = last candle's close  (~5s delayed last traded price)
+          oi         = last candle's oi     (latest open interest)
+
+        Fields NOT available via OMS history (returned as 0):
+          ask        = not available (order book not exposed via OMS history)
+          bid        = not available (order book not exposed via OMS history)
+          prev_close = not available (yesterday's close not in today's 5s data)
+          volume     = not summed intentionally (not needed by consuming side)
+
+        Fallback behaviour:
+          If today has no 5s data (pre-market / holiday), retries up to 2 previous
+          non-weekend trading days. If all 3 attempts fail, raises an exception
+          which triggers automatic fallback to the Kite Connect API in get_quotes().
+
+        Args:
+            symbol: Trading symbol (e.g., SBIN)
+            exchange: Exchange (e.g., NSE, BSE, NFO)
+            enctoken: Valid Zerodha enctoken
+            user_id: Zerodha user ID
+
+        Returns:
+            dict: Quote data compatible with the standard get_quotes() return format
+        """
+        def prev_non_weekend_day(d):
+            """Step back one calendar day, skipping Saturday and Sunday."""
+            d = d - timedelta(days=1)
+            while d.weekday() in (5, 6):  # 5=Saturday, 6=Sunday
+                d = d - timedelta(days=1)
+            return d
+
+        today = date.today()
+        attempt_dates = [today]
+
+        # Build list of up to 3 non-weekend trading days to try (today + 2 previous)
+        d = today
+        for _ in range(2):
+            d = prev_non_weekend_day(d)
+            attempt_dates.append(d)
+
+        last_exception = None
+
+        for attempt_date in attempt_dates:
+            date_str = attempt_date.strftime("%Y-%m-%d")
+            logger.debug(
+                f"[enctoken quotes] Attempting 5s data for {exchange}:{symbol} on {date_str}"
+            )
+
+            try:
+                df = self._get_history_enctoken(
+                    symbol=symbol,
+                    exchange=exchange,
+                    timeframe="5s",
+                    from_date=date_str,
+                    to_date=date_str,
+                    enctoken=enctoken,
+                    user_id=user_id,
+                )
+
+                if df.empty:
+                    logger.debug(
+                        f"[enctoken quotes] No 5s data for {date_str}, trying previous trading day..."
+                    )
+                    continue  # Try the previous non-weekend day
+
+                # --- Aggregate in-memory from all 5s candles ---
+
+                # ltp: last candle's close — at most 5 seconds stale
+                ltp = float(df.iloc[-1]["close"])
+
+                # open: first candle's open — represents the day's opening price
+                open_price = float(df.iloc[0]["open"])
+
+                # high: maximum of all candle highs — day high
+                high = float(df["high"].max())
+
+                # low: minimum of all candle lows — day low
+                low = float(df["low"].min())
+
+                # oi: last candle's open interest — most recent OI snapshot
+                oi = int(df.iloc[-1]["oi"])
+
+                # ask: not available via OMS history endpoint (order book not exposed)
+                ask = 0
+
+                # bid: not available via OMS history endpoint (order book not exposed)
+                bid = 0
+
+                # prev_close: not available — would require a separate daily candle
+                # fetch for yesterday. Returning 0 as it is not used by consuming side.
+                prev_close = 0
+
+                # volume: per-candle volume is available in df["volume"] but not summed
+                # intentionally — the consuming side does not use this field.
+                volume = 0
+
+                logger.info(
+                    f"[enctoken quotes] ✅ {exchange}:{symbol} ltp={ltp} "
+                    f"open={open_price} high={high} low={low} oi={oi} "
+                    f"(from {len(df)} x 5s candles on {date_str})"
+                )
+
+                return {
+                    "ask": ask,
+                    "bid": bid,
+                    "high": high,
+                    "low": low,
+                    "ltp": ltp,
+                    "open": open_price,
+                    "prev_close": prev_close,
+                    "volume": volume,
+                    "oi": oi,
+                }
+
+            except Exception as e:
+                last_exception = e
+                logger.debug(
+                    f"[enctoken quotes] Error fetching 5s data for {date_str}: {e}"
+                )
+                continue
+
+        # All 3 attempts exhausted — raise to trigger Kite Connect fallback
+        raise Exception(
+            f"[enctoken quotes] No 5s data found for {exchange}:{symbol} "
+            f"across {len(attempt_dates)} trading day attempts. "
+            f"Last error: {last_exception}"
+        )
+
     def get_quotes(self, symbol: str, exchange: str) -> dict:
         """
-        Get real-time quotes for given symbol
+        Get real-time quotes for given symbol.
+
+        Routing priority:
+        1. enctoken mode (OMS API): Used when ZERODHA_ENCTOKEN and ZERODHA_USER_ID
+           are set in environment and the enctoken is valid. Derives quote data from
+           today's 5-second candles — LTP is at most 5 seconds stale.
+        2. Kite Connect API (fallback): Used when enctoken is not set, invalid,
+           the enctoken fetch fails, or no 5s data is available (e.g., pre-market).
+
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE)
         Returns:
             dict: Quote data with required fields
         """
+        # --- Try enctoken (OMS) mode first ---
+        enctoken, user_id = self._get_enctoken_mode()
+        if enctoken:
+            try:
+                return self._get_quotes_enctoken(symbol, exchange, enctoken, user_id)
+            except Exception as e:
+                logger.warning(
+                    f"⚠️ enctoken quotes fetch failed: {e}. "
+                    "Falling back to Kite Connect API."
+                )
+
+        # --- Fallback: official Kite Connect API ---
         try:
             # Convert symbol to broker format
             br_symbol = get_br_symbol(symbol, exchange)
@@ -218,9 +431,94 @@ class BrokerData:
             logger.exception(f"Error fetching quotes: {e}")
             raise ZerodhaAPIError(f"Error fetching quotes: {e}")
 
+    def _get_multiquotes_enctoken(
+        self, symbols: list, enctoken: str, user_id: str
+    ) -> list:
+        """
+        Fetch real-time quotes for multiple symbols using the Zerodha OMS (web/enctoken) API.
+
+        Strategy:
+        - Iterates through each symbol sequentially
+        - Enforces a 350ms rate limit between each OMS API call (same conservative
+          spacing as the history service) to avoid hitting Zerodha OMS rate limits
+        - Each symbol fetches today's 5s candles via _get_quotes_enctoken() which
+          internally calls _get_history_enctoken()
+        - On per-symbol failure, records an error entry and continues to next symbol
+          (partial results are better than a full failure)
+
+        Rate limit math:
+          - 350ms per symbol → ~3 symbols/second
+          - 20 symbols → ~7 seconds total response time
+          - This is intentional: slow but safe, never hitting rate limits
+
+        Args:
+            symbols: List of dicts with 'symbol' and 'exchange' keys
+            enctoken: Valid Zerodha enctoken
+            user_id: Zerodha user ID
+
+        Returns:
+            list: List of quote results, each with format:
+                  {'symbol': ..., 'exchange': ..., 'data': {...}}  on success
+                  {'symbol': ..., 'exchange': ..., 'error': '...'}  on failure
+        """
+        results = []
+
+        for item in symbols:
+            symbol = item.get("symbol")
+            exchange = item.get("exchange")
+
+            if not symbol or not exchange:
+                results.append({
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "error": "Missing symbol or exchange",
+                })
+                continue
+
+            # Enforce 350ms rate limit before each OMS API call
+            # This applies across all symbols in the batch to stay within
+            # Zerodha's OMS API rate limits (~3 requests/second)
+            _enforce_oms_rate_limit()
+
+            try:
+                quote = self._get_quotes_enctoken(symbol, exchange, enctoken, user_id)
+                results.append({
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "data": quote,
+                })
+                logger.debug(
+                    f"[enctoken multiquotes] ✅ {exchange}:{symbol} ltp={quote.get('ltp')}"
+                )
+            except Exception as e:
+                # Record error for this symbol and continue — partial results
+                # are better than failing the entire batch
+                logger.warning(
+                    f"[enctoken multiquotes] ⚠️ Failed to fetch {exchange}:{symbol}: {e}"
+                )
+                results.append({
+                    "symbol": symbol,
+                    "exchange": exchange,
+                    "error": str(e),
+                })
+
+        success_count = sum(1 for r in results if "data" in r)
+        logger.info(
+            f"[enctoken multiquotes] Completed {success_count}/{len(symbols)} symbols successfully"
+        )
+        return results
+
     def get_multiquotes(self, symbols: list) -> list:
         """
-        Get real-time quotes for multiple symbols with automatic batching
+        Get real-time quotes for multiple symbols with automatic batching.
+
+        Routing priority:
+        1. enctoken mode (OMS API): Used when ZERODHA_ENCTOKEN and ZERODHA_USER_ID
+           are set in environment and the enctoken is valid. Fetches 5s candles per
+           symbol sequentially with 350ms rate limiting between calls.
+        2. Kite Connect API (fallback): Used when enctoken is not set, invalid,
+           or the enctoken fetch fails. Batches up to 500 symbols per request.
+
         Args:
             symbols: List of dicts with 'symbol' and 'exchange' keys
                      Example: [{'symbol': 'SBIN', 'exchange': 'NSE'}, ...]
@@ -228,6 +526,18 @@ class BrokerData:
             list: List of quote data for each symbol with format:
                   [{'symbol': 'SBIN', 'exchange': 'NSE', 'data': {...}}, ...]
         """
+        # --- Try enctoken (OMS) mode first ---
+        enctoken, user_id = self._get_enctoken_mode()
+        if enctoken:
+            try:
+                return self._get_multiquotes_enctoken(symbols, enctoken, user_id)
+            except Exception as e:
+                logger.warning(
+                    f"⚠️ enctoken multiquotes fetch failed: {e}. "
+                    "Falling back to Kite Connect API."
+                )
+
+        # --- Fallback: official Kite Connect API ---
         try:
             BATCH_SIZE = 500  # Zerodha API limit per request
             RATE_LIMIT_DELAY = 1.0  # 1 request per second = 500 symbols/second
@@ -386,20 +696,221 @@ class BrokerData:
         # Include skipped symbols in results
         return skipped_symbols + results
 
+    def _get_enctoken_mode(self) -> tuple[str | None, str | None]:
+        """
+        Check if enctoken mode is available and valid.
+
+        Reads ZERODHA_ENCTOKEN and ZERODHA_USER_ID from environment variables
+        and validates the enctoken against the Zerodha OMS profile endpoint.
+
+        Returns:
+            Tuple of (enctoken, user_id) if valid, (None, None) otherwise
+        """
+        enctoken = os.getenv("ZERODHA_ENCTOKEN")
+        user_id = os.getenv("ZERODHA_USER_ID")
+
+        if not enctoken or not user_id:
+            return None, None
+
+        logger.info(f"🔑 ZERODHA_ENCTOKEN found, validating for user {user_id}...")
+        if validate_enctoken(enctoken, user_id):
+            return enctoken, user_id
+
+        logger.warning(
+            "⚠️ enctoken invalid or expired. Falling back to Kite Connect API for history fetch."
+        )
+        return None, None
+
+    def _get_history_enctoken(
+        self,
+        symbol: str,
+        exchange: str,
+        timeframe: str,
+        from_date: str,
+        to_date: str,
+        enctoken: str,
+        user_id: str,
+    ) -> pd.DataFrame:
+        """
+        Fetch historical data using the Zerodha OMS (web/enctoken) API.
+
+        This uses the kite.zerodha.com/oms endpoint which supports additional
+        second-level intervals (5s, 10s, 15s, 30s, 45s) not available via the
+        official Kite Connect API.
+
+        Args:
+            symbol: Trading symbol
+            exchange: Exchange (e.g., NSE, BSE)
+            timeframe: Timeframe (e.g., 5s, 1m, 5m, D)
+            from_date: Start date in format YYYY-MM-DD
+            to_date: End date in format YYYY-MM-DD
+            enctoken: Valid Zerodha enctoken
+            user_id: Zerodha user ID (e.g., OVC427)
+
+        Returns:
+            pd.DataFrame: Historical OHLCV data
+        """
+        # Resolve resolution using the extended enctoken timeframe map
+        resolution = self.enctoken_timeframe_map.get(timeframe)
+        if not resolution:
+            raise Exception(f"Unsupported timeframe: {timeframe}")
+
+        # Convert symbol to broker format and look up instrument token
+        br_symbol = get_br_symbol(symbol, exchange)
+
+        with db_session() as session:
+            symbol_info = (
+                session.query(SymToken)
+                .filter(SymToken.exchange == exchange, SymToken.brsymbol == br_symbol)
+                .first()
+            )
+
+            if not symbol_info:
+                raise Exception(f"Could not find instrument token for {exchange}:{symbol}")
+
+            # instrument_token is the first part of the stored token (before "::::")
+            instrument_token = symbol_info.token.split("::::")[0]
+
+        if exchange == "NSE_INDEX":
+            exchange = "NSE"
+        elif exchange == "BSE_INDEX":
+            exchange = "BSE"
+
+        base_url = "https://kite.zerodha.com/oms"
+        headers = {
+            "authorization": f"enctoken {enctoken}",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/142.0.0.0 Safari/537.36"
+            ),
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://kite.zerodha.com/static/chart/tradingview/chart.html?v=3.6.83",
+            "X-Kite-Version": "3",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "same-origin",
+        }
+
+        start_date = pd.to_datetime(from_date)
+        end_date = pd.to_datetime(to_date)
+
+        dfs = []
+        current_start = start_date
+
+        while current_start <= end_date:
+            # Chunk in 60-day windows (same limit applies to OMS API)
+            current_end = min(current_start + timedelta(days=59), end_date)
+
+            from_str = current_start.strftime("%Y-%m-%d")
+            to_str = current_end.strftime("%Y-%m-%d")
+
+            url = (
+                f"{base_url}/instruments/historical/{instrument_token}/{resolution}"
+                f"?user_id={user_id}&oi=1&from={from_str}&to={to_str}"
+            )
+
+            logger.debug(
+                f"[enctoken] Fetching {resolution} data for {exchange}:{symbol} "
+                f"from {from_str} to {to_str}"
+            )
+
+            try:
+                client = get_httpx_client()
+                response = client.get(url, headers=headers)
+
+                response_data = response.json()
+
+                if response_data.get("status") != "success":
+                    raise Exception(
+                        f"Error from Zerodha OMS API: {response_data.get('message', 'Unknown error')}"
+                    )
+
+                candles = response_data.get("data", {}).get("candles", [])
+                if candles:
+                    df = pd.DataFrame(
+                        candles,
+                        columns=["timestamp", "open", "high", "low", "close", "volume", "oi"],
+                    )
+                    dfs.append(df)
+
+            except Exception as e:
+                logger.error(f"[enctoken] Error fetching chunk {from_str} to {to_str}: {e}")
+                raise
+
+            current_start = current_end + timedelta(days=1)
+
+        if not dfs:
+            return pd.DataFrame(
+                columns=["timestamp", "open", "high", "low", "close", "volume", "oi"]
+            )
+
+        final_df = pd.concat(dfs, ignore_index=True)
+
+        # Convert ISO8601 timestamp strings to epoch seconds
+        final_df["timestamp"] = pd.to_datetime(final_df["timestamp"], format="ISO8601")
+
+        # For daily timeframe, add 5h30m to convert UTC → IST before epoching
+        if timeframe == "D":
+            final_df["timestamp"] = final_df["timestamp"] + pd.Timedelta(hours=5, minutes=30)
+
+        final_df["timestamp"] = (
+            final_df["timestamp"].astype("int64") // 10**9
+        )
+
+        # Sort, deduplicate, reset index
+        final_df = (
+            final_df.sort_values("timestamp")
+            .drop_duplicates(subset=["timestamp"])
+            .reset_index(drop=True)
+        )
+
+        final_df["volume"] = final_df["volume"].astype(int)
+        final_df["oi"] = final_df["oi"].astype(int)
+
+        logger.info(
+            f"[enctoken] Successfully fetched {len(final_df)} candles for "
+            f"{exchange}:{symbol} ({timeframe})"
+        )
+        return final_df
+
     def get_history(
         self, symbol: str, exchange: str, timeframe: str, from_date: str, to_date: str
     ) -> pd.DataFrame:
         """
-        Get historical data for given symbol and timeframe
+        Get historical data for given symbol and timeframe.
+
+        Routing priority:
+        1. enctoken mode (OMS API): Used when ZERODHA_ENCTOKEN and ZERODHA_USER_ID
+           are set in environment and the enctoken is valid. Supports additional
+           second-level intervals (5s, 10s, 15s, 30s, 45s).
+        2. Kite Connect API (fallback): Used when enctoken is not set, invalid,
+           or the enctoken fetch fails.
+
         Args:
             symbol: Trading symbol
             exchange: Exchange (e.g., NSE, BSE)
-            timeframe: Timeframe (e.g., 1m, 5m, 15m, 60m, D)
+            timeframe: Timeframe (e.g., 5s, 1m, 5m, 15m, 60m, D)
             from_date: Start date in format YYYY-MM-DD
             to_date: End date in format YYYY-MM-DD
         Returns:
             pd.DataFrame: Historical data with OHLCV
         """
+        # --- Try enctoken (OMS) mode first ---
+        enctoken, user_id = self._get_enctoken_mode()
+        if enctoken:
+            try:
+                return self._get_history_enctoken(
+                    symbol, exchange, timeframe, from_date, to_date, enctoken, user_id
+                )
+            except Exception as e:
+                logger.warning(
+                    f"⚠️ enctoken history fetch failed: {e}. "
+                    "Falling back to Kite Connect API."
+                )
+
+        # --- Fallback: official Kite Connect API ---
         try:
             # Convert timeframe to Zerodha format
             resolution = self.timeframe_map.get(timeframe)

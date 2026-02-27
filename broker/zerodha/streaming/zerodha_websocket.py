@@ -16,6 +16,7 @@ import json
 import struct
 import threading
 import time
+import urllib.parse
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime
@@ -53,11 +54,25 @@ class ZerodhaWebSocket:
     RECONNECT_MAX_TRIES = 50  # Maximum number of reconnection attempts
 
     def __init__(
-        self, api_key: str, access_token: str, on_ticks: Callable[[list[dict]], None] = None
+        self,
+        api_key: str = None,
+        access_token: str = None,
+        on_ticks: Callable[[list[dict]], None] = None,
+        enctoken: str = None,
+        user_id: str = None,
     ):
-        """Initialize the Zerodha WebSocket client"""
+        """Initialize the Zerodha WebSocket client.
+
+        Supports two authentication modes:
+        1. enctoken mode: Uses Zerodha web session token (no developer account needed)
+           Requires: enctoken + user_id
+        2. api_key + access_token mode: Uses official Kite Connect API (default)
+           Requires: api_key + access_token
+        """
         self.api_key = api_key
         self.access_token = access_token
+        self.enctoken = enctoken
+        self.user_id = user_id
         self.on_ticks = on_ticks
         self.websocket = None
         self.connected = False
@@ -96,9 +111,23 @@ class ZerodhaWebSocket:
         self.on_connect = None
         self.on_disconnect = None
         self.on_error = None
+        self.on_auth_failure = None  # Called when enctoken is rejected mid-session (401/403)
 
-        # WebSocket URL
-        self.ws_url = f"wss://ws.kite.trade?api_key={self.api_key}&access_token={self.access_token}"
+        # Build WebSocket URL based on auth mode
+        if enctoken and user_id:
+            # enctoken mode: connect via Zerodha's web WebSocket endpoint
+            encoded_enctoken = urllib.parse.quote(enctoken, safe='')
+            self.ws_url = (
+                f"wss://ws.zerodha.com/?api_key=kitefront"
+                f"&user_id={user_id}"
+                f"&enctoken={encoded_enctoken}"
+                f"&user-agent=kite3-web&version=3.0.0"
+            )
+            self.logger.info(f"🔑 WebSocket URL configured using enctoken mode for user {user_id}")
+        else:
+            # Official Kite Connect API mode (api_key + access_token)
+            self.ws_url = f"wss://ws.kite.trade?api_key={self.api_key}&access_token={self.access_token}"
+            self.logger.info("🔑 WebSocket URL configured using api_key + access_token mode")
 
         # Statistics
         self.message_count = 0
@@ -546,9 +575,32 @@ class ZerodhaWebSocket:
             self.reconnect_delay = min(self.reconnect_delay * 1.5, self.max_reconnect_delay)
 
             error_msg = str(e) if str(e) else "Unknown connection error"
-            self.logger.error(
-                f"❌ Connection failed (attempt {self.reconnect_attempts}): {error_msg}"
-            )
+
+            # Detect auth rejection (enctoken expired/invalid mid-session)
+            # websockets raises InvalidStatus with HTTP 401 or 403 on auth failure
+            is_auth_failure = False
+            if hasattr(e, "response") and hasattr(e.response, "status_code"):
+                is_auth_failure = e.response.status_code in (401, 403)
+            elif "401" in error_msg or "403" in error_msg:
+                is_auth_failure = True
+
+            if is_auth_failure and self.enctoken and self.on_auth_failure:
+                self.logger.warning(
+                    f"🔐 Auth failure detected (HTTP 401/403) during WebSocket connect. "
+                    f"enctoken has likely expired mid-session. "
+                    f"Triggering fallback to api_key + access_token mode..."
+                )
+                try:
+                    self.on_auth_failure()
+                except Exception as cb_err:
+                    self.logger.error(f"❌ Error in on_auth_failure callback: {cb_err}")
+                # Stop reconnect loop — the adapter will rebuild and reconnect
+                self.running = False
+                self._stop_event.set()
+            else:
+                self.logger.error(
+                    f"❌ Connection failed (attempt {self.reconnect_attempts}): {error_msg}"
+                )
 
             if self.on_error:
                 try:
