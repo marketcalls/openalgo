@@ -72,6 +72,71 @@ const statusColors: Record<string, string> = {
   ERROR: 'bg-red-500',
 }
 
+// ---- Strategy health (heartbeat-based) ----
+type StrategyHealth = 'alive' | 'stale' | 'dead' | 'unknown'
+
+const HEALTH_STALE_SECONDS = 30   // heartbeat older than 30s → stale
+const HEALTH_DEAD_SECONDS  = 60   // heartbeat older than 60s → dead/crashed
+
+function getStrategyHealth(strategy: StrategyState): StrategyHealth {
+  // Completed strategies are neither alive nor dead — not applicable
+  if (strategy.status === 'COMPLETED') return 'unknown'
+  if (!strategy.last_heartbeat) return 'unknown'
+
+  const lastBeat = new Date(strategy.last_heartbeat).getTime()
+  const nowMs    = Date.now()
+  const ageSecs  = (nowMs - lastBeat) / 1000
+
+  if (ageSecs < HEALTH_STALE_SECONDS) return 'alive'
+  if (ageSecs < HEALTH_DEAD_SECONDS)  return 'stale'
+  return 'dead'
+}
+
+function formatHeartbeatAge(lastHeartbeat: string | null): string {
+  if (!lastHeartbeat) return 'never'
+  const ageSecs = (Date.now() - new Date(lastHeartbeat).getTime()) / 1000
+  if (ageSecs < 5)   return 'just now'
+  if (ageSecs < 60)  return `${Math.floor(ageSecs)}s ago`
+  if (ageSecs < 3600) return `${Math.floor(ageSecs / 60)}m ago`
+  return `${Math.floor(ageSecs / 3600)}h ago`
+}
+
+const healthConfig: Record<StrategyHealth, { label: string; dot: string; badge: string; title: string }> = {
+  alive:   { label: 'Live',     dot: 'bg-green-400',  badge: 'border-green-500 text-green-600 dark:text-green-400',  title: 'Strategy is running — heartbeat is current' },
+  stale:   { label: 'Stale',    dot: 'bg-yellow-400', badge: 'border-yellow-500 text-yellow-600 dark:text-yellow-400', title: 'No heartbeat for 30–60s — script may be slow or stuck' },
+  dead:    { label: 'No Signal',dot: 'bg-red-500',    badge: 'border-red-500 text-red-600 dark:text-red-400',        title: 'No heartbeat for >60s — script is likely crashed or stopped' },
+  unknown: { label: 'Unknown',  dot: 'bg-gray-400',   badge: 'border-gray-400 text-gray-500',                        title: 'No heartbeat data available' },
+}
+
+function HealthBadge({ strategy }: { strategy: StrategyState }) {
+  const health = getStrategyHealth(strategy)
+  if (health === 'unknown') return null
+
+  const cfg = healthConfig[health]
+  const ageText = formatHeartbeatAge(strategy.last_heartbeat)
+  const isAlive = health === 'alive'
+
+  const pidText = strategy.pid ? `PID: ${strategy.pid}` : 'PID: unknown'
+  const tooltipText = `${cfg.title}\nLast heartbeat: ${ageText}\n${pidText}`
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${cfg.badge}`}
+      title={tooltipText}
+    >
+      {/* Pulsing dot for alive, static for others */}
+      <span className="relative flex h-2 w-2 items-center justify-center">
+        {isAlive && (
+          <span className={`absolute inline-flex h-full w-full animate-ping rounded-full ${cfg.dot} opacity-60`} />
+        )}
+        <span className={`relative inline-flex h-2 w-2 rounded-full ${cfg.dot}`} />
+      </span>
+      {cfg.label}
+      <span className="opacity-60">· {ageText}</span>
+    </span>
+  )
+}
+
 // Leg status colors
 const legStatusColors: Record<LegStatus, string> = {
   IDLE: 'bg-gray-400',
@@ -990,6 +1055,7 @@ function StrategyAccordionItem({
                 <Badge className={statusColors[strategy.status] || 'bg-gray-400'}>
                   {strategy.status}
                 </Badge>
+                <HealthBadge strategy={strategy} />
                 <div className="flex items-center gap-2">
                   <Button
                     variant="outline"
@@ -1290,6 +1356,8 @@ export default function StrategyPositions() {
   const [autoRefreshSeconds, setAutoRefreshSeconds] = useState(10)
   const [expandAll, setExpandAll] = useState(false)
   const isRefreshingRef = useRef(false)
+  // Track previous health per instance_id to detect transitions
+  const prevHealthRef = useRef<Map<string, StrategyHealth>>(new Map())
   const [deleteDialog, setDeleteDialog] = useState<{
     open: boolean
     instanceId: string
@@ -1314,6 +1382,36 @@ export default function StrategyPositions() {
     try {
       const data = await getStrategyStates()
       setStrategies(data)
+
+      // ---- Health transition toasts ----
+      const prevMap = prevHealthRef.current
+      for (const strategy of data) {
+        const newHealth = getStrategyHealth(strategy)
+        const oldHealth = prevMap.get(strategy.instance_id)
+        const name = strategy.strategy_name
+
+        if (oldHealth !== undefined && oldHealth !== newHealth) {
+          if (newHealth === 'dead') {
+            toast.error(`⚠️ ${name} — No heartbeat detected`, {
+              description: `Script may have crashed or stopped. Last seen: ${formatHeartbeatAge(strategy.last_heartbeat)}${strategy.pid ? ` (PID: ${strategy.pid})` : ''}`,
+              duration: 10000,
+            })
+          } else if (newHealth === 'stale' && oldHealth === 'alive') {
+            toast.warning(`🟡 ${name} — Heartbeat is stale`, {
+              description: `No update for ${formatHeartbeatAge(strategy.last_heartbeat)} — script may be slow or stuck`,
+              duration: 6000,
+            })
+          } else if (newHealth === 'alive' && (oldHealth === 'dead' || oldHealth === 'stale')) {
+            toast.success(`✅ ${name} — Script is back online`, {
+              description: `Heartbeat resumed${strategy.pid ? ` (PID: ${strategy.pid})` : ''}`,
+              duration: 5000,
+            })
+          }
+        }
+
+        prevMap.set(strategy.instance_id, newHealth)
+      }
+
       if (showToast) {
         toast.success('Data refreshed')
       }
