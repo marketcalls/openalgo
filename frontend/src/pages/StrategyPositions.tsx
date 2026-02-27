@@ -58,6 +58,7 @@ import {
 } from '@/components/ui/table'
 import { createManualStrategyLeg, createStrategyOverride, deleteStrategyState, getStrategyStates, manualExitLeg } from '@/api/strategy-state'
 import { tradingApi } from '@/api/trading'
+import { useAlertStore } from '@/stores/alertStore'
 import { useAuthStore } from '@/stores/authStore'
 import { useLivePrice } from '@/hooks/useLivePrice'
 import type { LegPairConfig, LegState, LegStatus, StrategyState, TradeHistoryRecord, ExitType, OverrideType } from '@/types/strategy-state'
@@ -84,8 +85,11 @@ function getStrategyHealth(strategy: StrategyState): StrategyHealth {
   if (!strategy.last_heartbeat) return 'unknown'
 
   const lastBeat = new Date(strategy.last_heartbeat).getTime()
-  const nowMs    = Date.now()
-  const ageSecs  = (nowMs - lastBeat) / 1000
+  // Guard against malformed/unparseable timestamp strings
+  if (Number.isNaN(lastBeat)) return 'unknown'
+
+  const nowMs   = Date.now()
+  const ageSecs = (nowMs - lastBeat) / 1000
 
   if (ageSecs < HEALTH_STALE_SECONDS) return 'alive'
   if (ageSecs < HEALTH_DEAD_SECONDS)  return 'stale'
@@ -1383,8 +1387,11 @@ export default function StrategyPositions() {
       const data = await getStrategyStates()
       setStrategies(data)
 
-      // ---- Health transition toasts ----
+      // ---- Health transition toasts + sound ----
       const prevMap = prevHealthRef.current
+      const { shouldPlaySound, shouldShowToast } = useAlertStore.getState()
+      let playSound = false
+
       for (const strategy of data) {
         const newHealth = getStrategyHealth(strategy)
         const oldHealth = prevMap.get(strategy.instance_id)
@@ -1392,24 +1399,44 @@ export default function StrategyPositions() {
 
         if (oldHealth !== undefined && oldHealth !== newHealth) {
           if (newHealth === 'dead') {
-            toast.error(`⚠️ ${name} — No heartbeat detected`, {
-              description: `Script may have crashed or stopped. Last seen: ${formatHeartbeatAge(strategy.last_heartbeat)}${strategy.pid ? ` (PID: ${strategy.pid})` : ''}`,
-              duration: 10000,
-            })
+            if (shouldShowToast('pythonStrategy')) {
+              toast.error(`⚠️ ${name} — No heartbeat detected`, {
+                description: `Script may have crashed or stopped. Last seen: ${formatHeartbeatAge(strategy.last_heartbeat)}${strategy.pid ? ` (PID: ${strategy.pid})` : ''}`,
+                duration: 10000,
+              })
+            }
+            // Flag sound — played once after the loop even if multiple strategies go dead
+            if (shouldPlaySound()) playSound = true
           } else if (newHealth === 'stale' && oldHealth === 'alive') {
-            toast.warning(`🟡 ${name} — Heartbeat is stale`, {
-              description: `No update for ${formatHeartbeatAge(strategy.last_heartbeat)} — script may be slow or stuck`,
-              duration: 6000,
-            })
+            if (shouldShowToast('pythonStrategy')) {
+              toast.warning(`🟡 ${name} — Heartbeat is stale`, {
+                description: `No update for ${formatHeartbeatAge(strategy.last_heartbeat)} — script may be slow or stuck`,
+                duration: 6000,
+              })
+            }
           } else if (newHealth === 'alive' && (oldHealth === 'dead' || oldHealth === 'stale')) {
-            toast.success(`✅ ${name} — Script is back online`, {
-              description: `Heartbeat resumed${strategy.pid ? ` (PID: ${strategy.pid})` : ''}`,
-              duration: 5000,
-            })
+            if (shouldShowToast('pythonStrategy')) {
+              toast.success(`✅ ${name} — Script is back online`, {
+                description: `Heartbeat resumed${strategy.pid ? ` (PID: ${strategy.pid})` : ''}`,
+                duration: 5000,
+              })
+            }
           }
         }
 
         prevMap.set(strategy.instance_id, newHealth)
+      }
+
+      // Play alert sound once for dead transitions (respects global sound toggle)
+      if (playSound) {
+        const audio = new Audio('/sounds/alert.mp3')
+        audio.play().catch(() => {/* autoplay blocked — silently ignore */})
+      }
+
+      // Prune stale instance_ids so the Map doesn't grow unboundedly
+      const activeIds = new Set(data.map((s) => s.instance_id))
+      for (const id of prevMap.keys()) {
+        if (!activeIds.has(id)) prevMap.delete(id)
       }
 
       if (showToast) {
