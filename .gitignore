@@ -83,3 +83,6 @@ yarn-error.log*
 
 # Windows NUL file
 nul
+
+# User strategies — never track/delete via git
+user_strategy/
