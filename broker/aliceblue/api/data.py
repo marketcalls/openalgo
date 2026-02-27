@@ -28,13 +28,30 @@ class BrokerData:
     Handles market data operations including quotes, market depth, and historical data.
     """
 
+    # Timeframes that require resampling from 1-minute data
+    _RESAMPLE_TIMEFRAMES = {
+        "3m": 3,
+        "5m": 5,
+        "10m": 10,
+        "15m": 15,
+        "30m": 30,
+        "1h": 60,
+    }
+
     def __init__(self, auth_token=None):
         self.token_mapping = {}
         self.session_id = auth_token  # Store the session ID from authentication
-        # AliceBlue only supports 1-minute and daily data
+        # AliceBlue natively supports 1-minute and daily data.
+        # Other intraday timeframes are resampled from 1-minute data.
         self.timeframe_map = {
-            "1m": "1",  # 1-minute data
-            "D": "D",  # Daily data
+            "1m": "1",
+            "3m": "1",   # resampled from 1m
+            "5m": "1",   # resampled from 1m
+            "10m": "1",  # resampled from 1m
+            "15m": "1",  # resampled from 1m
+            "30m": "1",  # resampled from 1m
+            "1h": "1",   # resampled from 1m
+            "D": "D",
         }
 
     def get_websocket(self, force_new=False):
@@ -113,38 +130,18 @@ class BrokerData:
         }
         return exchange_map.get(exchange, exchange)
 
-    def get_quotes(self, symbol: str, exchange: str) -> dict:
-        """
-        Get real-time quotes for given symbol.
-
-        Args:
-            symbol: Trading symbol (e.g., 'RELIANCE', 'NIFTY')
-            exchange: Exchange (e.g., NSE, BSE, NFO, NSE_INDEX, BSE_INDEX)
-
-        Returns:
-            dict: Quote data in OpenAlgo standard format
-        """
+    def _try_fetch_quote_via_ws(self, api_exchange: str, token: str, br_symbol: str, symbol: str, exchange: str) -> dict | None:
+        """Attempt a single WebSocket quote fetch. Returns quote dict or None."""
         try:
-            # Convert symbol to broker format and get token
-            br_symbol = get_br_symbol(symbol, exchange) or symbol
-            token = self._normalize_token(get_token(symbol, exchange))
-
-            if not token:
-                raise Exception(f"Token not found for {symbol} on {exchange}")
-
-            # Map exchange for AliceBlue WebSocket API
-            api_exchange = self._map_exchange(exchange)
-
-            # Get WebSocket connection
             websocket = self.get_websocket()
             if not websocket or not websocket.is_connected:
                 logger.warning("WebSocket not connected, reconnecting...")
                 websocket = self.get_websocket(force_new=True)
 
             if not websocket or not websocket.is_connected:
-                raise Exception("WebSocket connection unavailable")
+                logger.error("WebSocket connection unavailable")
+                return None
 
-            # Create instrument for subscription
             class Instrument:
                 def __init__(self, exchange, token, symbol=None):
                     self.exchange = exchange
@@ -154,26 +151,69 @@ class BrokerData:
             instrument = Instrument(exchange=api_exchange, token=token, symbol=br_symbol)
             instruments = [instrument]
 
-            # Subscribe to tick data
             logger.info(f"Subscribing to {api_exchange}:{symbol} with token {token}")
             success = websocket.subscribe(instruments, is_depth=False)
 
             if not success:
-                raise Exception(f"Failed to subscribe to {symbol} on {exchange}")
+                logger.warning(f"Subscribe failed for {symbol} on {exchange}")
+                return None
 
             # Wait for data to arrive
             time.sleep(2.0)
 
-            # Retrieve quote from WebSocket
             quote = websocket.get_quote(api_exchange, token)
 
             # Unsubscribe after getting the data
             websocket.unsubscribe(instruments, is_depth=False)
 
-            if not quote:
-                raise Exception(f"No quote data received for {symbol} on {exchange}")
+            return quote
 
-            # Return in OpenAlgo standard format (matching Angel broker)
+        except Exception as e:
+            logger.warning(f"WebSocket quote attempt failed for {symbol}: {e}")
+            return None
+
+    def get_quotes(self, symbol: str, exchange: str) -> dict:
+        """
+        Get real-time quotes for given symbol with retry logic.
+
+        Args:
+            symbol: Trading symbol (e.g., 'RELIANCE', 'NIFTY')
+            exchange: Exchange (e.g., NSE, BSE, NFO, NSE_INDEX, BSE_INDEX)
+
+        Returns:
+            dict: Quote data in OpenAlgo standard format
+        """
+        MAX_RETRIES = 2  # Total attempts (1 original + 1 retry)
+
+        try:
+            br_symbol = get_br_symbol(symbol, exchange) or symbol
+            token = self._normalize_token(get_token(symbol, exchange))
+
+            if not token:
+                raise Exception(f"Token not found for {symbol} on {exchange}")
+
+            api_exchange = self._map_exchange(exchange)
+
+            # Attempt quote fetch with retry
+            quote = None
+            for attempt in range(1, MAX_RETRIES + 1):
+                quote = self._try_fetch_quote_via_ws(api_exchange, token, br_symbol, symbol, exchange)
+                if quote:
+                    break
+                if attempt < MAX_RETRIES:
+                    logger.info(f"Retrying quote fetch for {symbol} (attempt {attempt + 1}/{MAX_RETRIES})")
+                    # Force a fresh WebSocket connection on retry
+                    try:
+                        if hasattr(self, "_websocket") and self._websocket:
+                            self._websocket.disconnect()
+                    except Exception:
+                        pass
+                    self._websocket = None
+                    time.sleep(1.0)
+
+            if not quote:
+                raise Exception(f"No quote data received for {symbol} on {exchange} after {MAX_RETRIES} attempts")
+
             return {
                 "bid": float(quote.get("bid", 0)),
                 "ask": float(quote.get("ask", 0)),
@@ -284,29 +324,40 @@ class BrokerData:
             logger.warning("No valid symbols to fetch quotes for")
             return skipped_symbols
 
-        # Subscribe to all instruments at once
+        # Subscribe to all instruments at once with retry
         logger.info(f"Subscribing to {len(instruments)} symbols via WebSocket")
         success = websocket.subscribe(instruments, is_depth=False)
 
         if not success:
-            logger.error("Failed to send subscription request")
+            # Retry once with a fresh connection
+            logger.warning("First subscription attempt failed, retrying with fresh connection...")
+            websocket = self.get_websocket(force_new=True)
+            if websocket and websocket.is_connected:
+                success = websocket.subscribe(instruments, is_depth=False)
+
+        if not success:
+            logger.error("Failed to send subscription request after retry")
             for key, info in symbol_map.items():
                 results.append(
                     {"symbol": info["symbol"], "exchange": info["exchange"], "error": "Subscription failed"}
                 )
             return skipped_symbols + results
 
-        # Wait for data to arrive
-        wait_time = min(max(len(instruments) * 0.05, 2), 10)
-        logger.debug(f"Waiting {wait_time:.1f}s for quote data...")
+        # Wait for data to arrive — use higher cap for large batches
+        # (Vol Surface / OI Profile can request 60+ symbols at once)
+        wait_time = min(max(len(instruments) * 0.08, 2), 20)
+        logger.debug(f"Waiting {wait_time:.1f}s for quote data ({len(instruments)} instruments)...")
         time.sleep(wait_time)
 
-        # Collect results from WebSocket
+        # Collect results from WebSocket — first pass
+        received_keys = set()
+        missing_keys = []
         for key, info in symbol_map.items():
             api_exchange, token = key.split(":")
             quote = websocket.get_quote(api_exchange, token)
 
             if quote:
+                received_keys.add(key)
                 results.append(
                     {
                         "symbol": info["symbol"],
@@ -325,16 +376,48 @@ class BrokerData:
                     }
                 )
             else:
-                results.append(
-                    {"symbol": info["symbol"], "exchange": info["exchange"], "error": "No data received"}
-                )
+                missing_keys.append(key)
+
+        # Retry pass for symbols that didn't return data on first attempt
+        if missing_keys:
+            logger.info(f"{len(missing_keys)}/{len(symbol_map)} symbols missing after first pass, retrying...")
+            time.sleep(3.0)  # Extra wait for stragglers
+
+            for key in missing_keys:
+                api_exchange, token = key.split(":")
+                info = symbol_map[key]
+                quote = websocket.get_quote(api_exchange, token)
+
+                if quote:
+                    results.append(
+                        {
+                            "symbol": info["symbol"],
+                            "exchange": info["exchange"],
+                            "data": {
+                                "bid": float(quote.get("bid", 0)),
+                                "ask": float(quote.get("ask", 0)),
+                                "open": float(quote.get("open", 0)),
+                                "high": float(quote.get("high", 0)),
+                                "low": float(quote.get("low", 0)),
+                                "ltp": float(quote.get("ltp", 0)),
+                                "prev_close": float(quote.get("close", 0)),
+                                "volume": int(quote.get("volume", 0)),
+                                "oi": int(quote.get("open_interest", 0)),
+                            },
+                        }
+                    )
+                else:
+                    results.append(
+                        {"symbol": info["symbol"], "exchange": info["exchange"], "error": "No data received"}
+                    )
 
         # Unsubscribe after getting data
         logger.info(f"Unsubscribing from {len(instruments)} symbols")
         websocket.unsubscribe(instruments, is_depth=False)
 
+        received_count = len([r for r in results if 'data' in r])
         logger.info(
-            f"Retrieved quotes for {len([r for r in results if 'data' in r])}/{len(symbol_map)} symbols"
+            f"Retrieved quotes for {received_count}/{len(symbol_map)} symbols"
         )
         return skipped_symbols + results
 
@@ -492,11 +575,14 @@ class BrokerData:
             if timeframe not in self.timeframe_map:
                 supported = list(self.timeframe_map.keys())
                 logger.error(
-                    f"Unsupported timeframe: {timeframe}. AliceBlue only supports: {', '.join(supported)}"
+                    f"Unsupported timeframe: {timeframe}. AliceBlue supports: {', '.join(supported)}"
                 )
                 return pd.DataFrame()
 
-            # Get the AliceBlue resolution format
+            # Determine whether we need to resample from 1-minute data
+            needs_resample = timeframe in self._RESAMPLE_TIMEFRAMES
+
+            # Get the AliceBlue resolution format (always "1" for intraday, "D" for daily)
             aliceblue_timeframe = self.timeframe_map[timeframe]
 
             # V2 API uses just the session token in Bearer header
@@ -515,8 +601,6 @@ class BrokerData:
             # Alternative: Try adding session token to payload as some historical APIs expect it
             # payload['sessionId'] = session_id
 
-            # For indices, append ::index to the exchange
-            exchange_str = f"{exchange}::index" if exchange.endswith("IDX") else exchange
 
             # Convert timestamps to milliseconds as required by AliceBlue API
             # Format: Unix timestamp in milliseconds (like 1660128489000)
@@ -557,9 +641,12 @@ class BrokerData:
                                 # Set to end of day (23:59:59) for end dates
                                 dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
                             else:
-                                # For intraday data, set to market open (09:15:00) for start dates
-                                # This ensures we get full day data from market open
-                                dt = dt.replace(hour=9, minute=15, second=0, microsecond=0)
+                                # For daily data, start at midnight (00:00:00)
+                                # For intraday data, start at market open (09:15:00)
+                                if aliceblue_timeframe == "D":
+                                    dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                                else:
+                                    dt = dt.replace(hour=9, minute=15, second=0, microsecond=0)
 
                         # Localize to IST timezone (AliceBlue expects IST timestamps)
                         dt_ist = ist.localize(dt)
@@ -657,7 +744,7 @@ class BrokerData:
                 logger.error(f"Error in historical data response: {error_msg}")
 
                 # Provide more helpful error messages based on the error
-                if "No data available" in error_msg:
+                if "No data available" in error_msg or "market time" in error_msg.lower() or "Session" in error_msg:
                     if exchange in ["MCX", "NFO", "CDS"]:
                         logger.error(
                             f"No data available. For {exchange}, AliceBlue only provides data for current expiry contracts."
@@ -671,8 +758,18 @@ class BrokerData:
                         )
                     else:
                         logger.error(f"No historical data available for {symbol} on {exchange}.")
+
+                    # Check if we're during market hours (AliceBlue limitation)
+                    from datetime import time as dtime
+                    import pytz as _pytz
+                    _ist = _pytz.timezone("Asia/Kolkata")
+                    _now = datetime.now(_ist)
+                    _market_open = dtime(8, 0)
+                    _market_close = dtime(17, 30)
+                    if _now.weekday() < 5 and _market_open <= _now.time() <= _market_close:
                         logger.error(
-                            "This could be due to: 1) Symbol not traded in the date range, 2) Invalid symbol, or 3) Data not available during market hours (available from 5:30 PM to 8 AM on weekdays)"
+                            "AliceBlue historical data API is only available from 5:30 PM to 8 AM on weekdays "
+                            "and fully on weekends/holidays. This request was made during market hours."
                         )
 
                 return pd.DataFrame()
@@ -710,31 +807,27 @@ class BrokerData:
             # AliceBlue returns time as string in format 'YYYY-MM-DD HH:MM:SS'
             df["timestamp"] = pd.to_datetime(df["timestamp"])
 
-            # Handle different timeframes
+            # Handle different timeframes for timestamp conversion
             if timeframe == "D":
-                # For daily data, normalize to date only (no time component)
-                # Set time to midnight to represent the date
+                # For daily data, normalize to date only then add IST offset
+                # Match Angel's approach: naive datetime + 5:30, no tz_localize
                 df["timestamp"] = df["timestamp"].dt.normalize()
-
-                # Add IST offset (5:30 hours) for proper Unix timestamp conversion
-                # This ensures the date is correctly represented
                 df["timestamp"] = df["timestamp"] + pd.Timedelta(hours=5, minutes=30)
+
+                # Convert directly to Unix epoch (naive → treated as UTC by pandas)
+                df["timestamp"] = df["timestamp"].astype("int64") // 10**9
             else:
                 # For intraday data, adjust timestamps to represent the start of the candle
                 # AliceBlue provides end-of-candle timestamps (XX:XX:59), we need start (XX:XX:00)
                 df["timestamp"] = df["timestamp"].dt.floor("min")
 
-            # AliceBlue timestamps are in IST - need to localize them
-            import pytz
+                # AliceBlue timestamps are in IST - localize them for correct epoch conversion
+                import pytz
+                ist = pytz.timezone("Asia/Kolkata")
+                df["timestamp"] = df["timestamp"].dt.tz_localize(ist)
 
-            ist = pytz.timezone("Asia/Kolkata")
-
-            # Localize to IST (AliceBlue provides IST timestamps without timezone info)
-            df["timestamp"] = df["timestamp"].dt.tz_localize(ist)
-
-            # Convert timestamp to Unix epoch (seconds since 1970)
-            # This will correctly handle the IST timezone
-            df["timestamp"] = df["timestamp"].astype("int64") // 10**9
+                # Convert to Unix epoch (seconds since 1970)
+                df["timestamp"] = df["timestamp"].astype("int64") // 10**9
 
             # Ensure numeric columns are properly typed
             numeric_columns = ["open", "high", "low", "close", "volume"]
@@ -747,7 +840,9 @@ class BrokerData:
                 .reset_index(drop=True)
             )
 
-            # Add OI column with zeros (AliceBlue doesn't provide OI in historical data)
+            # Add OI column with zeros — AliceBlue's historical API does NOT return OI.
+            # This means OI Profile's "Daily OI Change" will show current OI as the
+            # full change amount (since previous day OI always = 0).
             df["oi"] = 0
 
             # For intraday data, ensure we have data from market open (9:15 AM)
@@ -805,6 +900,36 @@ class BrokerData:
 
             # Return columns in the order matching Angel broker format
             df = df[["close", "high", "low", "open", "timestamp", "volume", "oi"]]
+
+            # Resample to requested timeframe if needed
+            if needs_resample:
+                resample_minutes = self._RESAMPLE_TIMEFRAMES[timeframe]
+                logger.info(f"Resampling 1m data to {timeframe} ({resample_minutes}m intervals)")
+                try:
+                    # Convert timestamp back to datetime for resampling
+                    import pytz as _pytz2
+                    _ist2 = _pytz2.timezone("Asia/Kolkata")
+                    df["dt"] = pd.to_datetime(df["timestamp"], unit="s", utc=True).dt.tz_convert(_ist2)
+                    df = df.set_index("dt")
+
+                    resampled = df.resample(f"{resample_minutes}min", label="left", closed="left").agg(
+                        {
+                            "open": "first",
+                            "high": "max",
+                            "low": "min",
+                            "close": "last",
+                            "volume": "sum",
+                            "oi": "last",
+                        }
+                    ).dropna(subset=["open"])
+
+                    # Convert back to unix timestamps
+                    resampled["timestamp"] = resampled.index.astype("int64") // 10**9
+                    resampled = resampled.reset_index(drop=True)
+                    df = resampled[["close", "high", "low", "open", "timestamp", "volume", "oi"]]
+                    logger.info(f"Resampled to {len(df)} candles at {timeframe}")
+                except Exception as resample_err:
+                    logger.error(f"Resampling to {timeframe} failed: {resample_err}. Returning 1m data.")
 
             return df
 
