@@ -1,7 +1,3 @@
-from utils.logging import get_logger
-
-logger = get_logger(__name__)
-
 """
 Fixed Zerodha WebSocket adapter that properly handles NIFTY index data.
 The key fixes are in the _handle_ticks method for proper topic generation.
@@ -14,12 +10,16 @@ import time
 from collections.abc import Callable
 from typing import Any, Dict, List, Optional, Set
 
+from broker.zerodha.utils import validate_enctoken
 from database.auth_db import get_auth_token
 from database.token_db import get_token
+from utils.logging import get_logger
 from websocket_proxy.base_adapter import BaseBrokerWebSocketAdapter
 
 # Import the WebSocket client
 from .zerodha_websocket import ZerodhaWebSocket
+
+logger = get_logger(__name__)
 
 
 class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
@@ -65,14 +65,56 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
     ) -> dict[str, Any]:
-        """Initialize the adapter with broker credentials"""
+        """Initialize the adapter with broker credentials.
+
+        Authentication priority:
+        1. enctoken mode: If ZERODHA_ENCTOKEN and ZERODHA_USER_ID are set in env
+           and the enctoken is valid (verified via profile API call).
+        2. api_key + access_token mode: Fallback using the official Kite Connect API.
+        """
         try:
             if broker_name != self.broker_name:
                 return {"status": "error", "message": f"Invalid broker name: {broker_name}"}
 
             self.user_id = user_id
 
-            # Get API key from environment
+            # --- Try enctoken mode first ---
+            enctoken = os.getenv("ZERODHA_ENCTOKEN")
+            zerodha_user_id = os.getenv("ZERODHA_USER_ID")
+
+            if enctoken and zerodha_user_id:
+                self.logger.info(
+                    f"🔑 ZERODHA_ENCTOKEN found, validating for user {zerodha_user_id}..."
+                )
+                if validate_enctoken(enctoken, zerodha_user_id):
+                    # enctoken is valid — use enctoken WebSocket mode
+                    self.ws_client = ZerodhaWebSocket(
+                        enctoken=enctoken,
+                        user_id=zerodha_user_id,
+                        on_ticks=self._handle_ticks,
+                    )
+                    self.ws_client.on_connect = self._on_connect
+                    self.ws_client.on_disconnect = self._on_disconnect
+                    self.ws_client.on_error = self._on_error
+                    self.ws_client.on_auth_failure = self._on_auth_failure  # mid-session expiry fallback
+
+                    self.logger.info(
+                        f"✅ Zerodha adapter initialized for user {user_id} "
+                        f"using enctoken mode (Zerodha user: {zerodha_user_id})"
+                    )
+                    return {"status": "success", "message": "Adapter initialized successfully (enctoken mode)"}
+                else:
+                    self.logger.warning(
+                        "⚠️ enctoken invalid or expired. "
+                        "Falling back to api_key + access_token mode."
+                    )
+            elif enctoken and not zerodha_user_id:
+                self.logger.warning(
+                    "⚠️ ZERODHA_ENCTOKEN is set but ZERODHA_USER_ID is missing. "
+                    "Falling back to api_key + access_token mode."
+                )
+
+            # --- Fallback: api_key + access_token mode (original behaviour) ---
             self.api_key = os.getenv("BROKER_API_KEY")
             if not self.api_key:
                 return {"status": "error", "message": "API key not found in environment variables"}
@@ -95,7 +137,7 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if not self.access_token:
                 return {"status": "error", "message": "Invalid access token"}
 
-            # Initialize WebSocket client
+            # Initialize WebSocket client using official Kite Connect API
             self.ws_client = ZerodhaWebSocket(
                 api_key=self.api_key, access_token=self.access_token, on_ticks=self._handle_ticks
             )
@@ -105,7 +147,10 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.ws_client.on_disconnect = self._on_disconnect
             self.ws_client.on_error = self._on_error
 
-            self.logger.info(f"✅ Zerodha adapter initialized for user {user_id}")
+            self.logger.info(
+                f"✅ Zerodha adapter initialized for user {user_id} "
+                f"using api_key + access_token mode"
+            )
             return {"status": "success", "message": "Adapter initialized successfully"}
 
         except Exception as e:
@@ -713,6 +758,107 @@ class ZerodhaWebSocketAdapter(BaseBrokerWebSocketAdapter):
     def _on_error(self, error):
         """Handle WebSocket errors"""
         self.logger.error(f"WebSocket error: {error}")
+
+    def _on_auth_failure(self):
+        """
+        Handle mid-session enctoken expiry.
+
+        Called by ZerodhaWebSocket when a 401/403 is received during WebSocket
+        handshake while running in enctoken mode. Seamlessly falls back to the
+        official api_key + access_token mode and reconnects, preserving all
+        existing subscriptions so the calling strategy is not interrupted.
+        """
+        self.logger.warning(
+            "🔐 enctoken expired mid-session. "
+            "Falling back to api_key + access_token mode and reconnecting..."
+        )
+
+        # Snapshot existing subscriptions before tearing down
+        with self.lock:
+            existing_subscriptions = dict(self.subscribed_symbols)
+
+        # Stop the old (enctoken) WebSocket client cleanly
+        if self.ws_client:
+            try:
+                self.ws_client.stop()
+            except Exception as e:
+                self.logger.debug(f"Error stopping old ws_client during fallback: {e}")
+            self.ws_client = None
+
+        self.connected = False
+        self.running = False
+
+        # Build a new client using api_key + access_token (original method)
+        self.api_key = os.getenv("BROKER_API_KEY")
+        if not self.api_key:
+            self.logger.error(
+                "❌ Fallback failed: BROKER_API_KEY not found in environment. "
+                "Cannot reconnect after enctoken expiry."
+            )
+            return
+
+        auth_token = get_auth_token(self.user_id)
+        if not auth_token:
+            self.logger.error(
+                "❌ Fallback failed: Authentication token not found in database. "
+                "Cannot reconnect after enctoken expiry."
+            )
+            return
+
+        if ":" in auth_token:
+            parts = auth_token.split(":")
+            self.access_token = parts[1] if len(parts) >= 2 else auth_token
+        else:
+            self.access_token = auth_token
+
+        if not self.access_token:
+            self.logger.error(
+                "❌ Fallback failed: Invalid access token. "
+                "Cannot reconnect after enctoken expiry."
+            )
+            return
+
+        self.logger.info(
+            "🔄 Rebuilding WebSocket client using api_key + access_token mode..."
+        )
+        self.ws_client = ZerodhaWebSocket(
+            api_key=self.api_key,
+            access_token=self.access_token,
+            on_ticks=self._handle_ticks,
+        )
+        self.ws_client.on_connect = self._on_connect
+        self.ws_client.on_disconnect = self._on_disconnect
+        self.ws_client.on_error = self._on_error
+        # No on_auth_failure in fallback mode — api_key auth failures are
+        # genuine errors, not something to silently retry.
+
+        # Restore subscriptions into the new client's tracking so that
+        # _resubscribe_all() will replay them after reconnection.
+        token_exchange_map = {}
+        with self.lock:
+            for key, sub_info in existing_subscriptions.items():
+                token = sub_info["token"]
+                exchange = sub_info["exchange"]
+                mode_str = self.mode_map.get(sub_info["mode"], ZerodhaWebSocket.MODE_QUOTE)
+                self.ws_client.subscribed_tokens.add(token)
+                self.ws_client.mode_map[token] = mode_str
+                token_exchange_map[token] = exchange
+
+        self.ws_client.set_token_exchange_mapping(token_exchange_map)
+
+        # Reconnect — _resubscribe_all() fires automatically on connect
+        self.logger.info("🔄 Connecting with api_key + access_token mode...")
+        result = self.connect()
+        if result.get("status") == "success":
+            self.logger.info(
+                "✅ Fallback successful: reconnected using api_key + access_token mode. "
+                f"Restoring {len(existing_subscriptions)} subscription(s)."
+            )
+        else:
+            self.logger.error(
+                f"❌ Fallback reconnection failed: {result.get('message')}. "
+                "Market data streaming is interrupted."
+            )
 
     def cleanup(self):
         """Clean up all resources including WebSocket connection and ZMQ resources"""
