@@ -50,6 +50,7 @@ import { profileMenuItems } from '@/config/navigation'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
+import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
 import {
   CandlestickSeries,
   ColorType,
@@ -85,6 +86,7 @@ export default function HistorifyCharts() {
   const { mode, toggleMode, appMode, toggleAppMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
   const isDarkMode = mode === 'dark' || appMode === 'analyzer'
+  const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const { symbol: urlSymbol } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -745,7 +747,7 @@ export default function HistorifyCharts() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                onClick={handleLogout}
+                onClick={() => setShowLogoutDialog(true)}
                 className="text-destructive focus:text-destructive"
               >
                 <LogOut className="h-4 w-4 mr-2" />
@@ -755,6 +757,12 @@ export default function HistorifyCharts() {
           </DropdownMenu>
         </div>
       </div>
+
+      <LogoutConfirmDialog
+        open={showLogoutDialog}
+        onOpenChange={setShowLogoutDialog}
+        onConfirm={handleLogout}
+      />
 
       {/* Chart Area */}
       <div className="flex-1 flex flex-col overflow-hidden p-4">

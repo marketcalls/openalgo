@@ -43,6 +43,7 @@ import { profileMenuItems } from "@/config/navigation";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/authStore";
 import { useThemeStore } from "@/stores/themeStore";
+import { LogoutConfirmDialog } from "@/components/auth/LogoutConfirmDialog";
 import { JsonEditor } from "@/components/ui/json-editor";
 import { WebSocketTesterPanel } from "@/components/playground/WebSocketTesterPanel";
 
@@ -192,6 +193,7 @@ export default function Playground() {
 
   const [apiKey, setApiKey] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
+  const [showLogoutDialog, setShowLogoutDialog] = useState(false);
   const [endpoints, setEndpoints] = useState<EndpointsByCategory>({});
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(
     new Set(['data', 'utilities', 'websocket']),
@@ -823,7 +825,7 @@ export default function Playground() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                onClick={handleLogout}
+                onClick={() => setShowLogoutDialog(true)}
                 className="text-destructive focus:text-destructive"
               >
                 <LogOut className="h-4 w-4 mr-2" />
@@ -833,6 +835,12 @@ export default function Playground() {
           </DropdownMenu>
         </div>
       </div>
+
+      <LogoutConfirmDialog
+        open={showLogoutDialog}
+        onOpenChange={setShowLogoutDialog}
+        onConfirm={handleLogout}
+      />
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
