@@ -10,7 +10,14 @@
 
 </div>
 
-**OpenAlgo** is a production-ready, open-source algorithmic trading platform built with Flask and React. It provides a unified API layer across 24+ Indian brokers, enabling seamless integration with popular platforms like TradingView, Amibroker, Excel, Python, and AI agents. Designed for traders and developers, OpenAlgo makes algo trading accessible, secure, and powerful.
+## What is OpenAlgo?
+OpenAlgo is a free, open source, self hosted algorithmic trading platform that bridges your trading ideas with real execution. Built with Python Flask and a modern React frontend, it provides a unified API layer across 30+ Indian brokers, enabling seamless automation from Amibroker, TradingView, GoCharting, N8N, Python, Java, Go, .NET, Node.js, ChartInk, MetaTrader, Excel, and Google Sheets. Traders can also receive strategy alerts directly on Telegram, ensuring real time visibility and control.
+
+Beyond execution, OpenAlgo empowers traders to completely own their trading infrastructure. Traders can effortlessly build algorithmic strategies, indicators, and custom trading dashboards using AI agentic coding tools, connect with their favorite trading platforms, and deploy strategies without being tied to any single broker or vendor. By standardizing broker APIs into one consistent trading layer, OpenAlgo allows strategies to work the same way across brokers, making automation faster, scalable, and fully under the trader’s control.
+
+## Video Tutorial
+
+[![What is OpenAlgo](https://img.youtube.com/vi/LhbXWlUtCcM/0.jpg)](https://www.youtube.com/watch?v=LhbXWlUtCcM)
 
 ## Quick Links
 
@@ -18,15 +25,13 @@
 - **Installation Guide**: [Getting Started](https://docs.openalgo.in/installation-guidelines/getting-started)
 - **Upgrade Guide**: [Upgrade Instructions](https://docs.openalgo.in/installation-guidelines/getting-started/upgrade)
 - **Why OpenAlgo**: [Why Build with OpenAlgo](https://docs.openalgo.in/why-to-build-with-openalgo)
-- **Video Tutorial**:
 
-[![What is OpenAlgo](https://img.youtube.com/vi/LhbXWlUtCcM/0.jpg)](https://www.youtube.com/watch?v=LhbXWlUtCcM)
 
 ## Python Compatibility
 
 **Supports Python 3.11, 3.12, 3.13, and 3.14**
 
-## Supported Brokers (24+)
+## Supported Brokers (30+)
 
 <details>
 <summary>View All Supported Brokers</summary>
