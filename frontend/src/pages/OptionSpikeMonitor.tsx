@@ -112,11 +112,6 @@ interface StrikeStatus {
     isAllPass: boolean
 }
 
-interface ReferenceSnapshot {
-    price: number
-    timestamp: number
-}
-
 // A single price tick stored in the local ring buffer (for LAST_X_MIN spike mode)
 interface Tick {
     t: number  // epoch ms
@@ -317,7 +312,6 @@ export default function OptionSpikeMonitor() {
     }, [greeksData])
     const [ivSummary, setIvSummary] = useState<IvSummary | null>(null)
     const [tickTimes, setTickTimes] = useState<Record<string, number>>({})
-    const [referenceSnapshots, setReferenceSnapshots] = useState<Record<string, ReferenceSnapshot>>({})
     const [isFetchingIv, setIsFetchingIv] = useState(false)
     // True while seedTickBuffers() is running (only relevant for LAST_X_MIN mode)
     const [isSeeding, setIsSeeding] = useState(false)
@@ -329,6 +323,23 @@ export default function OptionSpikeMonitor() {
     // without any further API calls. Max window = 30 min to keep memory tiny.
     const TICK_BUFFER_MAX_MS = 30 * 60 * 1000  // 30 min
     const tickBuffers = useRef<Map<string, Tick[]>>(new Map())
+
+    // Binary-search helper: find the last tick at or before targetMs.
+    // Returns undefined if the buffer is empty or all ticks are after targetMs.
+    const findTickBefore = useCallback((buffer: Tick[], targetMs: number): Tick | undefined => {
+        if (buffer.length === 0) return undefined
+        let lo = 0, hi = buffer.length - 1, found: Tick | undefined = undefined
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1
+            if (buffer[mid].t <= targetMs) {
+                found = buffer[mid]
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+        return found
+    }, [])
 
     const getUnderlyingExchange = useCallback((exchange: MonitorConfig['exchange']) => {
         if (exchange === 'NFO') return 'NSE_INDEX'
@@ -753,7 +764,6 @@ export default function OptionSpikeMonitor() {
                 setMarginData({})
                 setMarginFetchedAt(null)
                 setTickTimes({})
-                setReferenceSnapshots({})
                 tickBuffers.current.clear()
 
                 // Start Monitoring
@@ -797,7 +807,6 @@ export default function OptionSpikeMonitor() {
     const handleStop = () => {
         setIsMonitoring(false)
         setIsConfigOpen(true)
-        setReferenceSnapshots({})
         setIsSeeding(false)
         tickBuffers.current.clear()
         clearSession()
@@ -876,26 +885,11 @@ export default function OptionSpikeMonitor() {
             else if (spikeReference === 'PREV_CLOSE') optionRefPrice = optionData?.prev_close ?? 0
             else {
                 // LAST_X_MIN: look up price from X minutes ago in the local tick buffer.
-                // Binary-search for the tick closest to (now - lastXMinutes * 60s).
                 const buf = tickBuffers.current.get(s.symbol)
-                if (buf && buf.length > 0) {
+                if (buf) {
                     const targetMs = Date.now() - config.lastXMinutes * 60 * 1000
-                    // Find the last tick at or before targetMs (binary search)
-                    let lo = 0, hi = buf.length - 1, found = buf[0]
-                    while (lo <= hi) {
-                        const mid = (lo + hi) >> 1
-                        if (buf[mid].t <= targetMs) {
-                            found = buf[mid]
-                            lo = mid + 1
-                        } else {
-                            hi = mid - 1
-                        }
-                    }
-                    optionRefPrice = found.p
-                }
-                // Fallback to seeded referenceSnapshot if buffer not yet populated
-                if (optionRefPrice === 0) {
-                    optionRefPrice = referenceSnapshots[s.symbol]?.price ?? 0
+                    const tick = findTickBefore(buf, targetMs)
+                    if (tick) optionRefPrice = tick.p
                 }
             }
 
@@ -944,7 +938,7 @@ export default function OptionSpikeMonitor() {
                 }
                 return a.strike - b.strike
             })
-    }, [monitoredStrikes, wsData, optionChain, tickTimes, ivData, referenceSnapshots, spikeReference, exchange, underlying, getUnderlyingExchange, config.skipIvWhenPremiumFail, config.skipIvWhenDistanceFail, config.lastXMinutes, getThreshold])
+    }, [monitoredStrikes, wsData, optionChain, tickTimes, ivData, spikeReference, exchange, underlying, getUnderlyingExchange, config.skipIvWhenPremiumFail, config.skipIvWhenDistanceFail, config.lastXMinutes, getThreshold, findTickBefore])
 
     // Spot trend: compare current spot LTP vs the price X minutes ago from the tick buffer.
     // Works for any spikeReference mode since we always seed the underlying buffer on start.
@@ -959,14 +953,8 @@ export default function OptionSpikeMonitor() {
         if (!buf || buf.length === 0) return null
 
         const targetMs = Date.now() - config.lastXMinutes * 60 * 1000
-        // Binary search: find last tick at or before targetMs
-        let lo = 0, hi = buf.length - 1, found = buf[0]
-        while (lo <= hi) {
-            const mid = (lo + hi) >> 1
-            if (buf[mid].t <= targetMs) { found = buf[mid]; lo = mid + 1 }
-            else hi = mid - 1
-        }
-        const refPrice = found.p
+        const foundTick = findTickBefore(buf, targetMs)
+        const refPrice = foundTick?.p
         if (!refPrice) return null
 
         const changePercent = ((currentSpot - refPrice) / refPrice) * 100
@@ -975,7 +963,7 @@ export default function OptionSpikeMonitor() {
             changePercent,
             refPrice,
         }
-    }, [isMonitoring, config.underlying, config.lastXMinutes, wsData, optionChain, exchange, underlying, getUnderlyingExchange, tickTimes])
+    }, [isMonitoring, config.underlying, config.lastXMinutes, wsData, optionChain, exchange, underlying, getUnderlyingExchange, tickTimes, findTickBefore])
 
     const hiddenCounts = useMemo(() => {
         if (!optionChain || !monitoredStrikes.length) return { distance: 0, premium: 0 }
