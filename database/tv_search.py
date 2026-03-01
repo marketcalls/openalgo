@@ -4,13 +4,15 @@ from database.symbol import SymToken
 
 
 def search_symbols(symbol, exchange):
-    """Search for symbols matching an exact symbol-exchange pair.
+    """Look up symbols by exact symbol-exchange match.
 
-    Used by TradingView integration to resolve symbol identifiers.
+    Performs an exact-match query against the ``SymToken`` table
+    and returns all rows where both ``symbol`` and ``exchange``
+    match the provided values.
 
     Args:
-        symbol: The OpenAlgo-format symbol string to search for.
-        exchange: The exchange code (e.g. ``'NSE'``, ``'NFO'``).
+        symbol: The symbol string to match exactly.
+        exchange: The exchange code to match exactly (e.g. ``'NSE'``, ``'NFO'``).
 
     Returns:
         A list of ``SymToken`` ORM instances matching the query.
