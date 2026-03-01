@@ -17,7 +17,7 @@ from .alicebluewebsocket import AliceBlueWebSocket
 
 logger = get_logger(__name__)
 
-# AliceBlue V2 API URLs
+# AliceBlue V3 API URLs
 BASE_URL = "https://a3.aliceblueonline.com/"
 HISTORICAL_API_URL = BASE_URL + "open-api/od/ChartAPIService/api/chart/history"
 
@@ -51,7 +51,7 @@ class BrokerData:
             "15m": "1",  # resampled from 1m
             "30m": "1",  # resampled from 1m
             "1h": "1",   # resampled from 1m
-            "D": "D",
+            "D": "D",  # V3 API uses 'D' for daily (docs text says '1D' but API rejects it)
         }
 
     def get_websocket(self, force_new=False):
@@ -550,6 +550,13 @@ class BrokerData:
                 logger.error(f"Token not found for {symbol} on {exchange}")
                 return pd.DataFrame()
 
+            # CRITICAL: get_token() returns float-like values (e.g. '3045.0')
+            # AliceBlue API requires clean integer tokens (e.g. '3045')
+            try:
+                token = str(int(float(token)))
+            except (ValueError, TypeError):
+                token = str(token)  # fallback to string as-is
+
             logger.debug(f"Found token {token} for {symbol}:{exchange}")
 
             # Convert exchange for AliceBlue API (same as Angel)
@@ -585,8 +592,7 @@ class BrokerData:
             # Get the AliceBlue resolution format (always "1" for intraday, "D" for daily)
             aliceblue_timeframe = self.timeframe_map[timeframe]
 
-            # V2 API uses just the session token in Bearer header
-            # Same format as all other V2 API calls
+            # V3 API auth: Bearer {session_token}
             auth_token = self.session_id
 
             if not auth_token:
@@ -602,8 +608,8 @@ class BrokerData:
             # payload['sessionId'] = session_id
 
 
-            # Convert timestamps to milliseconds as required by AliceBlue API
-            # Format: Unix timestamp in milliseconds (like 1660128489000)
+            # Convert timestamps to milliseconds as required by AliceBlue V3 API
+            # V3 docs example: "from": "1660128489000" (13-digit milliseconds)
             import time
             from datetime import datetime
 
@@ -639,26 +645,25 @@ class BrokerData:
                             dt = datetime.strptime(timestamp, "%Y-%m-%d")
                             if is_end_date:
                                 # Set to end of day (23:59:59) for end dates
-                                dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+                                dt = dt.replace(hour=23, minute=59, second=59)
                             else:
                                 # For daily data, start at midnight (00:00:00)
                                 # For intraday data, start at market open (09:15:00)
                                 if aliceblue_timeframe == "D":
-                                    dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                                    dt = dt.replace(hour=0, minute=0, second=0)
                                 else:
-                                    dt = dt.replace(hour=9, minute=15, second=0, microsecond=0)
+                                    dt = dt.replace(hour=9, minute=15, second=0)
 
                         # Localize to IST timezone (AliceBlue expects IST timestamps)
                         dt_ist = ist.localize(dt)
 
-                        # Convert to Unix timestamp in seconds, then to milliseconds
+                        # Convert to Unix timestamp in milliseconds
                         result = str(int(dt_ist.timestamp() * 1000))
                         logger.debug(f"Converted '{timestamp}' to {result} (Date: {dt_ist})")
                         return result
                     except (ValueError, Exception) as e:
                         logger.error(f"Error parsing timestamp string '{timestamp}': {e}")
                         logger.error(f"Timestamp type: {type(timestamp)}, value: {repr(timestamp)}")
-                        # Fallback to current time - THIS SHOULD NOT HAPPEN
                         logger.error(
                             "WARNING: Falling back to current time - this is likely a bug!"
                         )
@@ -677,69 +682,73 @@ class BrokerData:
                     # Fallback to current time
                     return str(int(time.time() * 1000))
 
-            start_ms = convert_to_unix_ms(start_date, is_end_date=False)
-            end_ms = convert_to_unix_ms(end_date, is_end_date=True)
+            start_ts = convert_to_unix_ms(start_date, is_end_date=False)
+            end_ts = convert_to_unix_ms(end_date, is_end_date=True)
 
             # Log the conversion for debugging
-            logger.info(
-                f"Date conversion - Start: {start_date} -> {start_ms}, End: {end_date} -> {end_ms}"
+            logger.debug(
+                f"Date conversion - Start: {start_date} -> {start_ts}, End: {end_date} -> {end_ts}"
             )
 
             # Validate that dates are not in the future
             current_time_ms = int(time.time() * 1000)
-            if int(start_ms) > current_time_ms:
+            if int(start_ts) > current_time_ms:
                 logger.error(
                     f"Start date {start_date} is in the future. Historical data is only available for past dates."
                 )
                 return pd.DataFrame()
 
             # If end date is in future, cap it to current time
-            if int(end_ms) > current_time_ms:
+            if int(end_ts) > current_time_ms:
                 logger.warning(f"End date {end_date} is in the future. Capping to current time.")
-                end_ms = str(current_time_ms)
+                end_ts = str(current_time_ms)
 
             # Ensure start and end times are different and valid
-            if start_ms == end_ms:
+            if start_ts == end_ts:
                 logger.warning(
-                    f"Start and end timestamps are the same: {start_ms}. Adjusting end time."
+                    f"Start and end timestamps are the same: {start_ts}. Adjusting end time."
                 )
                 # If they're the same, add one day to the end time
-                end_ms = str(int(end_ms) + 86400000)  # Add 24 hours in milliseconds
+                end_ts = str(int(end_ts) + 86400000)  # Add 24 hours in milliseconds
 
             # For intraday data, ensure minimum time range
             if timeframe != "D":
-                time_diff_ms = int(end_ms) - int(start_ms)
+                time_diff_ms = int(end_ts) - int(start_ts)
                 min_range_ms = 3600000  # Minimum 1 hour for intraday data
 
                 if time_diff_ms < min_range_ms:
                     logger.warning(
                         f"Time range too small ({time_diff_ms}ms). Extending to minimum 1 hour for intraday data."
                     )
-                    end_ms = str(int(start_ms) + min_range_ms)
+                    end_ts = str(int(start_ts) + min_range_ms)
 
-            # Prepare request payload according to AliceBlue API docs
+            # Prepare request payload according to AliceBlue V3 API docs
             payload = {
                 "token": str(token),  # Token should be the instrument token
                 "exchange": exchange,  # Exchange should be NSE, NFO, etc.
-                "from": start_ms,
-                "to": end_ms,
+                "from": start_ts,
+                "to": end_ts,
                 "resolution": aliceblue_timeframe,
             }
 
-            # Debug logging
-            logger.debug("Making historical data request:")
-            logger.debug(f"URL: {HISTORICAL_API_URL}")
-            logger.debug(f"Headers: {headers}")
-            logger.debug(f"Payload: {payload}")
+            logger.debug(f"Historical API request: {symbol}:{exchange} res={aliceblue_timeframe} token={token}")
 
             # Make request to historical API
             client = get_httpx_client()
-            response = client.post(HISTORICAL_API_URL, headers=headers, json=payload, timeout=10)
-            response.raise_for_status()
-            data = response.json()
+            try:
+                response = client.post(HISTORICAL_API_URL, headers=headers, json=payload, timeout=15)
+                response.raise_for_status()
+                data = response.json()
+            except httpx.HTTPStatusError as http_err:
+                logger.error(f"HTTP Error: {http_err}")
+                logger.error(f"Response body: {http_err.response.text[:500]}")
+                return pd.DataFrame()
+            except Exception as req_err:
+                logger.error(f"Request failed: {type(req_err).__name__}: {req_err}")
+                return pd.DataFrame()
 
             # Check if response contains valid data
-            if data.get("stat") == "Not_Ok" or "result" not in data:
+            if str(data.get("stat", "")).lower() in ["not_ok", "not ok"] or "result" not in data:
                 error_msg = data.get("emsg", "Unknown error")
                 logger.error(f"Error in historical data response: {error_msg}")
 
@@ -797,11 +806,7 @@ class BrokerData:
                 logger.error("Missing required columns in historical data response")
                 return pd.DataFrame()
 
-            # Log the first few rows of raw data to debug
-            logger.info(
-                f"First 3 rows of historical data from AliceBlue: {df.head(3).to_dict('records')}"
-            )
-            logger.info(f"Total rows received: {len(df)}")
+            logger.debug(f"Received {len(df)} rows from AliceBlue for {symbol}:{exchange}")
 
             # Convert time column to datetime
             # AliceBlue returns time as string in format 'YYYY-MM-DD HH:MM:SS'
