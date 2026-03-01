@@ -10,6 +10,7 @@ import {
     Settings2,
     Square,
     Star,
+    TrendingDown,
     TrendingUp,
     X,
 } from 'lucide-react'
@@ -114,6 +115,12 @@ interface StrikeStatus {
 interface ReferenceSnapshot {
     price: number
     timestamp: number
+}
+
+// A single price tick stored in the local ring buffer (for LAST_X_MIN spike mode)
+interface Tick {
+    t: number  // epoch ms
+    p: number  // LTP at that moment
 }
 
 interface IvSummary {
@@ -312,8 +319,16 @@ export default function OptionSpikeMonitor() {
     const [tickTimes, setTickTimes] = useState<Record<string, number>>({})
     const [referenceSnapshots, setReferenceSnapshots] = useState<Record<string, ReferenceSnapshot>>({})
     const [isFetchingIv, setIsFetchingIv] = useState(false)
+    // True while seedTickBuffers() is running (only relevant for LAST_X_MIN mode)
+    const [isSeeding, setIsSeeding] = useState(false)
     const ivRetryTimeoutRef = useRef<number | null>(null)
     const ivRetrySymbolsRef = useRef<Record<string, { symbol: string; exchange: string }>>({})
+
+    // Local tick ring-buffer: symbol → array of { t: epochMs, p: ltp }
+    // Used by LAST_X_MIN spike mode to look up price from exactly X minutes ago
+    // without any further API calls. Max window = 30 min to keep memory tiny.
+    const TICK_BUFFER_MAX_MS = 30 * 60 * 1000  // 30 min
+    const tickBuffers = useRef<Map<string, Tick[]>>(new Map())
 
     const getUnderlyingExchange = useCallback((exchange: MonitorConfig['exchange']) => {
         if (exchange === 'NFO') return 'NSE_INDEX'
@@ -410,17 +425,19 @@ export default function OptionSpikeMonitor() {
         fetchExpiries()
     }, [config.exchange, config.underlying, selectedExpiry])
 
-    const fetchReferenceSnapshot = useCallback(async (symbols: { symbol: string; exchange: string }[]) => {
-        if (!apiKey) {
-            return
-        }
+    // Seed the tick buffer with historical 1-min candles so LAST_X_MIN works immediately
+    // on start (before X minutes of live ticks have accumulated).
+    // All symbols are fetched in parallel (Promise.all) — no serial loop.
+    // After seeding, live WebSocket ticks keep the buffer current automatically.
+    const seedTickBuffers = useCallback(async (symbols: { symbol: string; exchange: string }[]) => {
+        if (!apiKey || symbols.length === 0) return
 
-        const referenceTime = new Date(Date.now() - config.lastXMinutes * 60 * 1000)
-        const startDate = referenceTime.toISOString().slice(0, 10)
-        const endDate = new Date().toISOString().slice(0, 10)
+        setIsSeeding(true)
+        const now = Date.now()
+        const startDate = new Date(now - TICK_BUFFER_MAX_MS).toISOString().slice(0, 10)
+        const endDate = new Date(now).toISOString().slice(0, 10)
 
-        const snapshotUpdates: Record<string, ReferenceSnapshot> = {}
-        for (const item of symbols) {
+        await Promise.all(symbols.map(async (item) => {
             try {
                 const response = await apiClient.post('/history', {
                     apikey: apiKey,
@@ -433,29 +450,30 @@ export default function OptionSpikeMonitor() {
                 })
 
                 if (response.data.status === 'success' && response.data.data?.length) {
-                    const candles = response.data.data
-                    const cutoff = referenceTime.getTime()
-                    let closest = candles[0]
-                    for (const candle of candles) {
-                        const candleTime = new Date(candle.timestamp ?? candle.date ?? candle.time).getTime()
-                        if (candleTime <= cutoff) {
-                            closest = candle
-                        }
-                    }
-                    snapshotUpdates[item.symbol] = {
-                        price: Number(closest.close ?? closest.c ?? closest.last_price ?? 0),
-                        timestamp: cutoff
-                    }
+                    const candles: Tick[] = response.data.data.map((c: any) => ({
+                        t: new Date(c.timestamp ?? c.date ?? c.time).getTime(),
+                        p: Number(c.close ?? c.c ?? c.last_price ?? 0),
+                    })).filter((tick: Tick) => tick.p > 0)
+
+                    // Merge into buffer (seed entries behind live ticks)
+                    const existing = tickBuffers.current.get(item.symbol) ?? []
+                    const existingTimes = new Set(existing.map(e => e.t))
+                    const merged = [
+                        ...candles.filter(c => !existingTimes.has(c.t)),
+                        ...existing,
+                    ].sort((a, b) => a.t - b.t)
+
+                    // Evict entries older than max window
+                    const cutoff = Date.now() - TICK_BUFFER_MAX_MS
+                    tickBuffers.current.set(item.symbol, merged.filter(e => e.t >= cutoff))
                 }
             } catch (error) {
-                console.error('[OptionSpikeMonitor] Failed to fetch reference snapshot', item.symbol, error)
+                console.error('[OptionSpikeMonitor] Failed to seed tick buffer', item.symbol, error)
             }
-        }
+        }))
 
-        if (Object.keys(snapshotUpdates).length > 0) {
-            setReferenceSnapshots(prev => ({ ...prev, ...snapshotUpdates }))
-        }
-    }, [apiKey, config.lastXMinutes])
+        setIsSeeding(false)
+    }, [apiKey, TICK_BUFFER_MAX_MS])
 
     // Fetch Greeks Data (Multi-Option Greeks) — stores full Greeks not just IV
     const fetchIvData = useCallback(async (overrideSymbols?: { symbol: string; exchange: string }[], strikesList?: MonitoredStrike[]) => {
@@ -736,17 +754,21 @@ export default function OptionSpikeMonitor() {
                 setMarginFetchedAt(null)
                 setTickTimes({})
                 setReferenceSnapshots({})
+                tickBuffers.current.clear()
 
                 // Start Monitoring
                 setIsMonitoring(true)
 
-                if (config.spikeReference === 'LAST_X_MIN') {
-                    const historySymbols = strikes.map(strike => ({
-                        symbol: strike.symbol,
-                        exchange: config.exchange
-                    }))
-                    fetchReferenceSnapshot(historySymbols)
-                }
+                // Always seed the underlying spot buffer (for spot trend indicator)
+                // + option strike buffers when in LAST_X_MIN mode
+                const underlyingSymbol = { symbol: config.underlying, exchange: getUnderlyingExchange(config.exchange) }
+                const historySymbols = [
+                    underlyingSymbol,
+                    ...(config.spikeReference === 'LAST_X_MIN'
+                        ? strikes.map(strike => ({ symbol: strike.symbol, exchange: config.exchange }))
+                        : [])
+                ]
+                seedTickBuffers(historySymbols)
 
                 // Initial Greeks Fetch (delayed to allow WS to connect)
                 console.log('[OptionSpikeMonitor][handleStart] Scheduling initial Greeks fetch in 1s, strikes count:', strikes.length)
@@ -776,6 +798,8 @@ export default function OptionSpikeMonitor() {
         setIsMonitoring(false)
         setIsConfigOpen(true)
         setReferenceSnapshots({})
+        setIsSeeding(false)
+        tickBuffers.current.clear()
         clearSession()
     }
 
@@ -788,38 +812,39 @@ export default function OptionSpikeMonitor() {
         }
     }, [isMonitoring])
 
-    useEffect(() => {
-        if (!isMonitoring || config.spikeReference !== 'LAST_X_MIN') {
-            return
-        }
-
-        const historySymbols = monitoredStrikes.map(strike => ({
-            symbol: strike.symbol,
-            exchange: config.exchange
-        }))
-
-        if (historySymbols.length === 0) {
-            return
-        }
-
-        fetchReferenceSnapshot(historySymbols)
-    }, [config.spikeReference, config.lastXMinutes, isMonitoring, monitoredStrikes, config.exchange, fetchReferenceSnapshot])
-
-    // Track WS Ticks
+    // Track WS Ticks — also push every tick into the local ring buffer for LAST_X_MIN spike mode
     useEffect(() => {
         if (!isMonitoring) return
 
-        // Update tick times when WS data updates
+        const now = Date.now()
+        const cutoff = now - TICK_BUFFER_MAX_MS
+
         wsData.forEach((data, key) => {
             const symbol = key.split(':')[1]
+            const ltp = data?.data?.ltp
+
+            // Update tick times
             if (data.lastUpdate) {
                 setTickTimes(prev => ({
                     ...prev,
-                    [symbol]: data.lastUpdate ?? Date.now()
+                    [symbol]: data.lastUpdate ?? now
                 }))
             }
+
+            // Push to ring buffer (only for monitored option strikes, not the underlying index)
+            if (ltp !== undefined && ltp > 0) {
+                const buf = tickBuffers.current.get(symbol) ?? []
+                // Avoid duplicate timestamps (same tick fired twice)
+                const lastTick = buf[buf.length - 1]
+                if (!lastTick || now - lastTick.t >= 500) {
+                    buf.push({ t: now, p: ltp })
+                    // Evict entries older than max window to keep memory bounded
+                    const trimStart = buf.findIndex(e => e.t >= cutoff)
+                    tickBuffers.current.set(symbol, trimStart > 0 ? buf.slice(trimStart) : buf)
+                }
+            }
         })
-    }, [wsData, isMonitoring])
+    }, [wsData, isMonitoring, TICK_BUFFER_MAX_MS])
 
 
     // Calculate Table Rows
@@ -850,10 +875,31 @@ export default function OptionSpikeMonitor() {
             if (spikeReference === 'OPEN') optionRefPrice = optionData?.open ?? 0
             else if (spikeReference === 'PREV_CLOSE') optionRefPrice = optionData?.prev_close ?? 0
             else {
-                optionRefPrice = referenceSnapshots[s.symbol]?.price ?? 0
+                // LAST_X_MIN: look up price from X minutes ago in the local tick buffer.
+                // Binary-search for the tick closest to (now - lastXMinutes * 60s).
+                const buf = tickBuffers.current.get(s.symbol)
+                if (buf && buf.length > 0) {
+                    const targetMs = Date.now() - config.lastXMinutes * 60 * 1000
+                    // Find the last tick at or before targetMs (binary search)
+                    let lo = 0, hi = buf.length - 1, found = buf[0]
+                    while (lo <= hi) {
+                        const mid = (lo + hi) >> 1
+                        if (buf[mid].t <= targetMs) {
+                            found = buf[mid]
+                            lo = mid + 1
+                        } else {
+                            hi = mid - 1
+                        }
+                    }
+                    optionRefPrice = found.p
+                }
+                // Fallback to seeded referenceSnapshot if buffer not yet populated
+                if (optionRefPrice === 0) {
+                    optionRefPrice = referenceSnapshots[s.symbol]?.price ?? 0
+                }
             }
 
-            // If Ref Price is 0 (e.g. no trade today), use Prev Close
+            // If Ref Price is still 0 (e.g. no trade today), use Prev Close
             if (optionRefPrice === 0) optionRefPrice = optionData?.prev_close ?? 0
 
             const spikePercent = optionRefPrice > 0 ? ((ltp - optionRefPrice) / optionRefPrice) * 100 : 0
@@ -898,7 +944,38 @@ export default function OptionSpikeMonitor() {
                 }
                 return a.strike - b.strike
             })
-    }, [monitoredStrikes, wsData, optionChain, tickTimes, ivData, referenceSnapshots, spikeReference, exchange, underlying, getUnderlyingExchange, config.skipIvWhenPremiumFail, config.skipIvWhenDistanceFail, getThreshold])
+    }, [monitoredStrikes, wsData, optionChain, tickTimes, ivData, referenceSnapshots, spikeReference, exchange, underlying, getUnderlyingExchange, config.skipIvWhenPremiumFail, config.skipIvWhenDistanceFail, config.lastXMinutes, getThreshold])
+
+    // Spot trend: compare current spot LTP vs the price X minutes ago from the tick buffer.
+    // Works for any spikeReference mode since we always seed the underlying buffer on start.
+    const spotTrend = useMemo((): { direction: 'up' | 'down' | 'flat'; changePercent: number; refPrice: number } | null => {
+        if (!isMonitoring || !config.underlying) return null
+
+        const spotKey = `${getUnderlyingExchange(exchange)}:${underlying}`
+        const currentSpot = wsData.get(spotKey)?.data?.ltp ?? optionChain?.underlying_ltp ?? 0
+        if (!currentSpot) return null
+
+        const buf = tickBuffers.current.get(config.underlying)
+        if (!buf || buf.length === 0) return null
+
+        const targetMs = Date.now() - config.lastXMinutes * 60 * 1000
+        // Binary search: find last tick at or before targetMs
+        let lo = 0, hi = buf.length - 1, found = buf[0]
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1
+            if (buf[mid].t <= targetMs) { found = buf[mid]; lo = mid + 1 }
+            else hi = mid - 1
+        }
+        const refPrice = found.p
+        if (!refPrice) return null
+
+        const changePercent = ((currentSpot - refPrice) / refPrice) * 100
+        return {
+            direction: changePercent > 0.05 ? 'up' : changePercent < -0.05 ? 'down' : 'flat',
+            changePercent,
+            refPrice,
+        }
+    }, [isMonitoring, config.underlying, config.lastXMinutes, wsData, optionChain, exchange, underlying, getUnderlyingExchange, tickTimes])
 
     const hiddenCounts = useMemo(() => {
         if (!optionChain || !monitoredStrikes.length) return { distance: 0, premium: 0 }
@@ -1399,7 +1476,44 @@ export default function OptionSpikeMonitor() {
                         <Card>
                             <CardContent className="p-4 flex items-center justify-between">
                                 <div>
-                                    <p className="text-sm font-medium text-muted-foreground">Spot Price</p>
+                                    <p className="text-sm font-medium text-muted-foreground">
+                                        {spotTrend ? (
+                                            <TooltipProvider>
+                                                <Tooltip>
+                                                    <TooltipTrigger asChild>
+                                                        <span className="cursor-help inline-flex items-center gap-1">
+                                                            Spot Price
+                                                            <span className={cn(
+                                                                "text-xs font-semibold",
+                                                                spotTrend.direction === 'up' ? 'text-green-500' : spotTrend.direction === 'down' ? 'text-red-500' : 'text-muted-foreground'
+                                                            )}>
+                                                                {spotTrend.direction === 'up' ? '▲' : spotTrend.direction === 'down' ? '▼' : '—'}
+                                                                {' '}{Math.abs(spotTrend.changePercent).toFixed(2)}%
+                                                            </span>
+                                                        </span>
+                                                    </TooltipTrigger>
+                                                    <TooltipContent side="bottom" className="text-xs space-y-1">
+                                                        <p className="font-semibold">{config.underlying} — Last {config.lastXMinutes} min trend</p>
+                                                        <p>
+                                                            <span className="text-muted-foreground">Ref price ({config.lastXMinutes}m ago):</span>{' '}
+                                                            <span className="font-mono font-medium">{spotTrend.refPrice.toFixed(2)}</span>
+                                                        </p>
+                                                        <p>
+                                                            <span className="text-muted-foreground">Change:</span>{' '}
+                                                            <span className={cn(
+                                                                "font-mono font-semibold",
+                                                                spotTrend.direction === 'up' ? 'text-green-500' : spotTrend.direction === 'down' ? 'text-red-500' : ''
+                                                            )}>
+                                                                {spotTrend.changePercent > 0 ? '+' : ''}{spotTrend.changePercent.toFixed(2)}%
+                                                            </span>
+                                                        </p>
+                                                    </TooltipContent>
+                                                </Tooltip>
+                                            </TooltipProvider>
+                                        ) : (
+                                            'Spot Price'
+                                        )}
+                                    </p>
                                     <h2 className="text-2xl font-bold">
                                         {formatPrice(
                                             wsData.get(`${getUnderlyingExchange(config.exchange)}:${config.underlying}`)?.data?.ltp
@@ -1407,13 +1521,26 @@ export default function OptionSpikeMonitor() {
                                         )}
                                     </h2>
                                 </div>
-                                <TrendingUp className="h-8 w-8 text-primary opacity-50" />
+                                {spotTrend?.direction === 'down'
+                                    ? <TrendingDown className="h-8 w-8 text-red-500 opacity-70" />
+                                    : spotTrend?.direction === 'up'
+                                    ? <TrendingUp className="h-8 w-8 text-green-500 opacity-70" />
+                                    : <TrendingUp className="h-8 w-8 text-primary opacity-50" />
+                                }
                             </CardContent>
                         </Card>
                         <Card>
                             <CardContent className="p-4 flex items-center justify-between">
                                 <div>
-                                    <p className="text-sm font-medium text-muted-foreground">Reference Basis</p>
+                                    <p className="text-sm font-medium text-muted-foreground">
+                                        Reference Basis
+                                        {isSeeding && config.spikeReference === 'LAST_X_MIN' && (
+                                            <span className="ml-2 inline-flex items-center gap-1 text-xs text-amber-500 font-medium">
+                                                <span className="inline-block h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+                                                Seeding buffer…
+                                            </span>
+                                        )}
+                                    </p>
                                     <h2 className="text-xl font-bold">
                                         {resolveReferenceLabel()}
                                     </h2>
@@ -1803,7 +1930,10 @@ export default function OptionSpikeMonitor() {
                                                     <Tooltip>
                                                         <TooltipTrigger asChild>
                                                             <span className="cursor-default">
-                                                                {row.spikePercent.toFixed(1)}%
+                                                                {isSeeding && config.spikeReference === 'LAST_X_MIN'
+                                                                    ? <span className="text-muted-foreground animate-pulse">—</span>
+                                                                    : `${row.spikePercent.toFixed(1)}%`
+                                                                }
                                                             </span>
                                                         </TooltipTrigger>
                                                         <TooltipContent side="left" className="text-xs">
