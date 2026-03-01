@@ -20,6 +20,7 @@ from flask import Flask, session
 from flask_wtf.csrf import CSRFProtect  # Import CSRF protection
 
 from blueprints.admin import admin_bp  # Import the admin blueprint
+from blueprints.backtest import backtest_bp  # Import the backtest blueprint
 from blueprints.analyzer import analyzer_bp  # Import the analyzer blueprint
 from blueprints.apikey import api_key_bp
 from blueprints.auth import auth_bp
@@ -79,6 +80,7 @@ from database.chartink_db import init_db as ensure_chartink_tables_exists
 from database.flow_db import init_db as ensure_flow_tables_exists
 from database.historify_db import init_database as ensure_historify_tables_exists
 from database.latency_db import init_latency_db as ensure_latency_tables_exists
+from database.backtest_db import init_db as ensure_backtest_tables_exists
 from database.sandbox_db import init_db as ensure_sandbox_tables_exists
 from database.settings_db import init_db as ensure_settings_tables_exists
 from database.strategy_db import init_db as ensure_strategy_tables_exists
@@ -253,6 +255,7 @@ def create_app():
     app.register_blueprint(flow_bp)  # Register Flow blueprint
     app.register_blueprint(broker_credentials_bp)  # Register Broker credentials blueprint
     app.register_blueprint(system_permissions_bp)  # Register System permissions blueprint
+    app.register_blueprint(backtest_bp)  # Register Backtest blueprint
 
     # Exempt webhook endpoints from CSRF protection after app initialization
     with app.app_context():
@@ -507,6 +510,7 @@ def setup_environment(app):
             ("Qty Freeze DB", ensure_qty_freeze_tables_exists),
             ("Historify DB", ensure_historify_tables_exists),
             ("Flow DB", ensure_flow_tables_exists),
+            ("Backtest DB", ensure_backtest_tables_exists),
         ]
 
         db_init_start = time.time()
@@ -677,6 +681,12 @@ def shutdown_database_sessions(exception=None):
     except Exception as e:
         logger.error(f"Error removing health_session: {e}")
 
+    try:
+        from database.backtest_db import db_session as backtest_session
+        backtest_session.remove()
+    except Exception as e:
+        logger.error(f"Error removing backtest_session: {e}")
+
 
 # Integrate the WebSocket proxy server with the Flask app
 # Check if running in Docker (standalone mode) or local (integrated mode)
@@ -844,4 +854,4 @@ if __name__ == "__main__":
             "*.bak",
         ]
     }
-    socketio.run(app, host=host_ip, port=port, debug=debug, reloader_options=reloader_options)
+    socketio.run(app, host=host_ip, port=port, debug=debug, reloader_options=reloader_options, allow_unsafe_werkzeug=True)
