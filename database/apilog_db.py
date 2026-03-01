@@ -61,8 +61,10 @@ executor = ThreadPoolExecutor(10)  # Increased from 2 to 10 for better concurren
 def async_log_order(api_type, request_data, response_data):
     """Persist an API order log entry to the database.
 
-    Serializes request and response data as JSON and stores them
-    in the ``order_logs`` table with the current IST timestamp.
+    Note: Despite its name, this function executes **synchronously**.
+    It is designed to be submitted to a ``ThreadPoolExecutor`` by
+    callers so that the database write does not block the main
+    request thread.
 
     Args:
         api_type: The type of API call (e.g. ``'placeorder'``, ``'cancelorder'``).

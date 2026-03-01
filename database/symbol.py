@@ -241,20 +241,7 @@ def fno_search_symbols_db(
         if primary_term:
 
             def sort_key(r):
-                """Return a tuple that sorts results by relevance to the primary search term.
-
-                Sorting priority:
-                    1. Exact match on name/underlying.
-                    2. Name starts with search term.
-                    3. Symbol starts with search term.
-                    4. Alphabetical by symbol.
-
-                Args:
-                    r: A symbol result dictionary with ``name`` and ``symbol`` keys.
-
-                Returns:
-                    A comparison tuple used by ``list.sort``.
-                """
+                """Sort results by relevance: exact match, prefix match, then alphabetical."""
                 name = r["name"] or ""
                 symbol = r["symbol"] or ""
                 # Priority 1: Exact match on name/underlying
@@ -308,18 +295,7 @@ def get_distinct_expiries(exchange: str = None, underlying: str = None) -> list[
 
         # Sort expiries chronologically
         def parse_expiry(exp_str):
-            """Parse an expiry date string into a datetime for chronological sorting.
-
-            Tries ``%d-%b-%y`` first (e.g. ``26-DEC-24``), then
-            ``%d-%b-%Y`` (e.g. ``26-DEC-2024``).  Returns
-            ``datetime.max`` for unparseable strings so they sort last.
-
-            Args:
-                exp_str: Expiry date string from the database.
-
-            Returns:
-                A ``datetime`` instance used as a sort key.
-            """
+            """Parse an expiry date string into a datetime for chronological sorting."""
             try:
                 return datetime.strptime(exp_str, "%d-%b-%y")
             except ValueError:

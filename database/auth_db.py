@@ -326,17 +326,13 @@ def get_auth_token_fresh(name):
 
 
 def get_auth_token_dbquery(name):
-    """Query the database directly for an auth token.
-
-    Bypasses the in-memory TTL cache and fetches the ``Auth`` row
-    for the given user name.  Returns the full ``Auth`` ORM object
-    so that callers can decrypt the token or inspect revocation status.
+    """Fetch the auth token record directly from the database.
 
     Args:
         name: The user identifier (username) to look up.
 
     Returns:
-        The ``Auth`` ORM instance if a valid, non-revoked record exists,
+        The ``Auth`` ORM instance if a valid record exists,
         otherwise ``None``.
     """
     try:
@@ -359,18 +355,13 @@ def get_auth_token_dbquery(name):
 
 
 def get_feed_token(name):
-    """Get the decrypted feed token for a user.
-
-    Uses a TTL cache (keyed ``feed-{name}``) to minimise database
-    round-trips.  Falls back to ``get_feed_token_dbquery`` on a
-    cache miss.
+    """Get the feed token for a user.
 
     Args:
         name: The user identifier (username) to look up.
 
     Returns:
-        The decrypted feed token string, or ``None`` if the token is
-        unavailable, revoked, or the name is empty.
+        The feed token string, or ``None`` if unavailable.
     """
     # Handle None or empty name gracefully
     if not name:
@@ -394,17 +385,13 @@ def get_feed_token(name):
 
 
 def get_feed_token_dbquery(name):
-    """Query the database directly for a feed token.
-
-    Bypasses the in-memory TTL cache and fetches the ``Auth`` row
-    for the given user name.  Returns the full ``Auth`` ORM object
-    so that callers can decrypt the feed token.
+    """Fetch the feed token record directly from the database.
 
     Args:
         name: The user identifier (username) to look up.
 
     Returns:
-        The ``Auth`` ORM instance if a valid, non-revoked record exists,
+        The ``Auth`` ORM instance if a valid record exists,
         otherwise ``None``.
     """
     try:

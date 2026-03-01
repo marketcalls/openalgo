@@ -110,10 +110,10 @@ def init_db():
 
 
 def add_user(username, email, password, is_admin=False):
-    """Create a new user with Argon2-hashed password and TOTP secret.
+    """Create a new user with a securely hashed password.
 
-    Generates a random TOTP secret for the user, hashes the
-    password with Argon2 + pepper, and persists the record.
+    Hashes the provided password, generates a two-factor authentication
+    secret, and persists the new user record to the database.
 
     Args:
         username: Unique username for the new account.
