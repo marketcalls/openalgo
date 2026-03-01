@@ -177,6 +177,12 @@ class ApiKeys(Base):
 
 
 def init_db():
+    """Initialize the authentication database tables.
+
+    Creates the ``auth`` and ``api_keys`` tables if they do not
+    already exist, using the shared ``db_init_helper`` for
+    consistent startup logging.
+    """
     from database.db_init_helper import init_db_with_logging
 
     init_db_with_logging(Base, engine, "Auth DB", logger)
@@ -320,6 +326,19 @@ def get_auth_token_fresh(name):
 
 
 def get_auth_token_dbquery(name):
+    """Query the database directly for an auth token.
+
+    Bypasses the in-memory TTL cache and fetches the ``Auth`` row
+    for the given user name.  Returns the full ``Auth`` ORM object
+    so that callers can decrypt the token or inspect revocation status.
+
+    Args:
+        name: The user identifier (username) to look up.
+
+    Returns:
+        The ``Auth`` ORM instance if a valid, non-revoked record exists,
+        otherwise ``None``.
+    """
     try:
         # Handle None or empty name gracefully
         if not name:
@@ -340,7 +359,19 @@ def get_auth_token_dbquery(name):
 
 
 def get_feed_token(name):
-    """Get decrypted feed token"""
+    """Get the decrypted feed token for a user.
+
+    Uses a TTL cache (keyed ``feed-{name}``) to minimise database
+    round-trips.  Falls back to ``get_feed_token_dbquery`` on a
+    cache miss.
+
+    Args:
+        name: The user identifier (username) to look up.
+
+    Returns:
+        The decrypted feed token string, or ``None`` if the token is
+        unavailable, revoked, or the name is empty.
+    """
     # Handle None or empty name gracefully
     if not name:
         logger.debug("get_feed_token called with empty/None name, returning None")
@@ -363,6 +394,19 @@ def get_feed_token(name):
 
 
 def get_feed_token_dbquery(name):
+    """Query the database directly for a feed token.
+
+    Bypasses the in-memory TTL cache and fetches the ``Auth`` row
+    for the given user name.  Returns the full ``Auth`` ORM object
+    so that callers can decrypt the feed token.
+
+    Args:
+        name: The user identifier (username) to look up.
+
+    Returns:
+        The ``Auth`` ORM instance if a valid, non-revoked record exists,
+        otherwise ``None``.
+    """
     try:
         # Handle None or empty name gracefully
         if not name:

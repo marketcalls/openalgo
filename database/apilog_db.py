@@ -44,6 +44,11 @@ class OrderLog(Base):
 
 
 def init_db():
+    """Initialize the API log database tables.
+
+    Creates the ``order_logs`` table if it does not already exist,
+    using the shared ``db_init_helper`` for consistent logging.
+    """
     from database.db_init_helper import init_db_with_logging
 
     init_db_with_logging(Base, engine, "API Log DB", logger)
@@ -54,6 +59,16 @@ executor = ThreadPoolExecutor(10)  # Increased from 2 to 10 for better concurren
 
 
 def async_log_order(api_type, request_data, response_data):
+    """Persist an API order log entry to the database.
+
+    Serializes request and response data as JSON and stores them
+    in the ``order_logs`` table with the current IST timestamp.
+
+    Args:
+        api_type: The type of API call (e.g. ``'placeorder'``, ``'cancelorder'``).
+        request_data: Dictionary of the original request payload.
+        response_data: Dictionary of the broker/service response.
+    """
     try:
         # Serialize JSON data for storage
         request_json = json.dumps(request_data)
