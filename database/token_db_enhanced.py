@@ -556,6 +556,20 @@ class BrokerSymbolCache:
         primary_term = query_terms[0] if query_terms else None
 
         def sort_key(s):
+            """Return a sort-key tuple that ranks FNO results by relevance.
+
+            Sorting priority:
+                1. Exact match on extracted underlying.
+                2. Underlying starts with the primary search term.
+                3. Symbol starts with the primary search term.
+                4. Alphabetical by symbol.
+
+            Args:
+                s: A ``SymbolData`` instance from the cache.
+
+            Returns:
+                A comparison tuple used by ``list.sort``.
+            """
             # Priority 1: Exact match on underlying (e.g., "NIFTY" matches underlying="NIFTY" exactly)
             underlying_exact = (
                 0 if (primary_term and s.underlying and s.underlying == primary_term) else 1
@@ -1041,6 +1055,17 @@ def get_distinct_expiries_cached(
 
         # Sort expiries chronologically
         def parse_expiry(exp_str):
+            """Parse an expiry date string into a datetime for chronological sorting.
+
+            Tries ``%d-%b-%y`` first, then ``%d-%b-%Y``.  Returns
+            ``datetime.max`` for unparseable strings so they sort last.
+
+            Args:
+                exp_str: Expiry date string from the database.
+
+            Returns:
+                A ``datetime`` instance used as a sort key.
+            """
             try:
                 return datetime.strptime(exp_str, "%d-%b-%y")
             except ValueError:
