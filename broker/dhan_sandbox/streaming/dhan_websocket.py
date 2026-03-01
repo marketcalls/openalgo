@@ -37,9 +37,11 @@ class DhanWebSocket:
     TYPE_DEPTH_20_BID = 41  # 20-level depth bid data
     TYPE_DEPTH_20_ASK = 51  # 20-level depth ask data
 
-    # WebSocket URL constants
-    MARKET_FEED_WSS = "wss://api-feed.dhan.co"
-    DEPTH_20_FEED_WSS = "wss://depth-api-feed.dhan.co/twentydepth"
+    # WebSocket URL constants (env-overridable)
+    MARKET_FEED_WSS = os.getenv("DHAN_MARKET_FEED_WSS", "wss://api-feed.dhan.co")
+    DEPTH_20_FEED_WSS = os.getenv(
+        "DHAN_DEPTH20_FEED_WSS", "wss://depth-api-feed.dhan.co/twentydepth"
+    )
 
     # Mode constants for V2 API
     MODE_LTP = "ltp"  # LTP only
@@ -231,7 +233,7 @@ class DhanWebSocket:
 
             # Build connection URL (Dhan V2 format)
             ws_url = f"{self.MARKET_FEED_WSS}?version=2&token={self.access_token}&clientId={self.client_id}&authType=2"
-            logger.info(f"Connecting to WebSocket URL: {ws_url[:50]}...")
+            logger.info("Connecting to WebSocket endpoint: %s", self.MARKET_FEED_WSS)
 
             self.ws = await websockets.connect(
                 ws_url, ping_interval=30, ping_timeout=10, close_timeout=10, max_size=None
@@ -1918,7 +1920,7 @@ class DhanWebSocket:
         try:
             # Build connection URL - try without version parameter like in working example
             ws_url = f"{self.DEPTH_20_FEED_WSS}?token={self.access_token}&clientId={self.client_id}&authType=2"
-            logger.info(f"Connecting to 20-level depth endpoint: {ws_url[:50]}...")
+            logger.info("Connecting to 20-level depth endpoint: %s", self.DEPTH_20_FEED_WSS)
 
             # Connect using the same approach as the main WebSocket
             self.depth_20_ws = await websockets.connect(

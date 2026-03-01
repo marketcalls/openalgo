@@ -140,7 +140,7 @@ def process_nubra_json(path):
     # IMPORTANT: Use ref_id as token because Nubra's order API uses ref_id, not exchange token
     df['token'] = df['ref_id'].astype(str)  # ref_id is what Nubra order API needs
     df['lotsize'] = df['lot_size']
-    df['tick_size'] = df['tick_size'].astype(float)
+    df['tick_size'] = pd.to_numeric(df['tick_size'], errors='coerce') / 100
     df['name'] = df['asset']
     df['brsymbol'] = df['stock_name']
 

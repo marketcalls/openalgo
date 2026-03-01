@@ -87,6 +87,7 @@ import { profileMenuItems } from '@/config/navigation'
 import { authApi } from '@/api/auth'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
+import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
 
 // Types
 interface SearchResult {
@@ -249,6 +250,7 @@ export default function Historify() {
   const { appMode, toggleAppMode, mode, toggleMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
   const navigate = useNavigate()
+  const [showLogoutDialog, setShowLogoutDialog] = useState(false)
 
   // Core state
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([])
@@ -1550,7 +1552,7 @@ export default function Historify() {
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  onClick={handleLogout}
+                  onClick={() => setShowLogoutDialog(true)}
                   className="text-destructive focus:text-destructive"
                 >
                   <LogOut className="h-4 w-4 mr-2" />
@@ -1561,6 +1563,12 @@ export default function Historify() {
           </div>
         </div>
       </div>
+
+      <LogoutConfirmDialog
+        open={showLogoutDialog}
+        onOpenChange={setShowLogoutDialog}
+        onConfirm={handleLogout}
+      />
 
       {/* Main Content */}
       <div className="flex-1 overflow-hidden">

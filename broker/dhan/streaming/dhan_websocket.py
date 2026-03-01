@@ -62,6 +62,7 @@ class DhanWebSocket:
         self.ws_thread = None
         self.running = False
         self.connected = False
+        self._was_connected = False  # tracks if connection was ever established
 
         # Callbacks
         self.on_open = None
@@ -174,6 +175,13 @@ class DhanWebSocket:
                 break
 
             if self.running:
+                # Reset counter if the connection was successfully established
+                # before it dropped. self.connected can't be used here because
+                # _on_close already set it to False before run_forever returned.
+                if self._was_connected:
+                    reconnect_attempt = 0
+                    self._was_connected = False
+
                 reconnect_attempt += 1
                 if reconnect_attempt >= max_reconnect_attempts:
                     self.logger.error(
@@ -188,10 +196,6 @@ class DhanWebSocket:
                     f"Reconnecting in {delay} seconds... (attempt {reconnect_attempt}/{max_reconnect_attempts})"
                 )
                 time.sleep(delay)
-
-                # Reset reconnect attempt counter on successful connection
-                if self.connected:
-                    reconnect_attempt = 0
 
     def disconnect(self):
         """Disconnect from WebSocket with proper resource cleanup"""
@@ -310,6 +314,7 @@ class DhanWebSocket:
     def _on_open(self, ws):
         """Handle WebSocket connection open"""
         self.connected = True
+        self._was_connected = True
         self.logger.debug("WebSocket connection established")
 
         if self.on_open:

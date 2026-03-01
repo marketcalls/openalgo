@@ -1,6 +1,5 @@
 import datetime
 import json
-import ssl
 
 import websocket
 
@@ -15,8 +14,6 @@ isEncyptOut = False
 isEncyptIn = True
 
 MAX_SCRIPS = 100
-topic_list = {}
-counter = 0
 FieldTypes = {"FLOAT32": 1, "LONG": 2, "DATE": 3, "STRING": 4}
 TRASH_VAL = -2147483648
 STRING_INDEX = {"NAME": 51, "SYMBOL": 52, "EXCHG": 53, "TSYMBOL": 54}
@@ -33,7 +30,6 @@ BinRespTypes = {
     "SNAPSHOT": 9,
     "OPC_SUBSCRIBE": 10,
 }
-# ws = None
 BinRespStat = {"OK": "K", "NOT_OK": "N"}
 ResponseTypes = {"SNAP": 83, "UPDATE": 85}
 STAT = {"OK": "Ok", "NOT_OK": "NotOk"}
@@ -60,11 +56,6 @@ RespCodes = {
 
 def DataType(c, d):
     return {"name": c, "type": d}
-
-
-def enable_log(a):
-    global HSD_Flag
-    HSD_Flag = a
 
 
 TopicTypes = {"SCRIP": "sf", "INDEX": "if", "DEPTH": "dp"}
@@ -127,7 +118,7 @@ INDEX_MAPPING[4] = DataType("tvalue", FieldTypes.get("DATE"))
 INDEX_MAPPING[5] = DataType("highPrice", FieldTypes.get("FLOAT32"))
 INDEX_MAPPING[6] = DataType("lowPrice", FieldTypes.get("FLOAT32"))
 INDEX_MAPPING[7] = DataType("openingPrice", FieldTypes.get("FLOAT32"))
-INDEX_MAPPING.append(DataType("mul", FieldTypes.get("LONG")))
+INDEX_MAPPING[INDEX_INDEX["MULTIPLIER"]] = DataType("mul", FieldTypes.get("LONG"))
 INDEX_MAPPING[INDEX_INDEX["PRECISION"]] = DataType("prec", FieldTypes.get("LONG"))
 INDEX_MAPPING[INDEX_INDEX["CHANGE"]] = DataType("cng", FieldTypes.get("FLOAT32"))
 INDEX_MAPPING[INDEX_INDEX["PERCHANGE"]] = DataType("nc", FieldTypes.get("STRING"))
@@ -376,9 +367,8 @@ class DepthTopicData(TopicData):
         # logger.info("INSIDE DepthTopicData")
         super().__init__(TopicTypes["DEPTH"])
         self.updatedFieldsArray = [None] * 100
-        self.multiplier = None
-        self.precision = None
-        self.precisionValue = None
+        # Inherit sensible defaults from TopicData (multiplier=1, precision=2, precisionValue=100)
+        # setMultiplierAndPrec() will override these once the broker sends actual values
 
     def setMultiplierAndPrec(self):
         # logger.info("INTO setMultiplierAndPrec")
@@ -433,7 +423,8 @@ def prepare_connection_request(a):
     buffer[5 + user_id_len] = 2
     buffer[6 + user_id_len : 8 + user_id_len] = int(src_len).to_bytes(2, byteorder="big")
     buffer[8 + user_id_len : 8 + user_id_len + src_len] = src.encode()
-    buffer[8 + user_id_len + src_len] = BinRespTypes.get("END_OF_MSG")
+    # End-of-message marker (0xFF) — not in BinRespTypes since it's a framing byte, not a type
+    buffer[8 + user_id_len + src_len] = 0xFF
     return buffer
 
 
@@ -679,18 +670,14 @@ def buf2long(a):
 
 
 def buf2string(a):
-    import numpy as np
-
-    return "".join(map(chr, np.frombuffer(a, dtype=np.uint8)))
+    return bytes(a).decode("utf-8", errors="replace")
 
 
 class ScripTopicData(TopicData):
     def __init__(self):
         super().__init__(TopicTypes["SCRIP"])
-        # logger.info("After topic")
-        self.precision = None
-        self.precisionValue = None
-        self.multiplier = None
+        # Inherit sensible defaults from TopicData (multiplier=1, precision=2, precisionValue=100)
+        # setMultiplierAndPrec() will override these once the broker sends actual values
 
     def setMultiplierAndPrec(self):
         if self.updatedFieldsArray[SCRIP_INDEX["PRECISION"]]:
@@ -711,7 +698,8 @@ class ScripTopicData(TopicData):
                 change = ltp - close
                 self.fieldDataArray[SCRIP_INDEX["CHANGE"]] = change
                 self.updatedFieldsArray[SCRIP_INDEX["CHANGE"]] = True
-                self.fieldDataArray[SCRIP_INDEX["PERCHANGE"]] = f"{change / close * 100:.2f}"
+                per_change = f"{change / close * 100:.2f}" if close != 0 else "0.00"
+                self.fieldDataArray[SCRIP_INDEX["PERCHANGE"]] = per_change
                 self.updatedFieldsArray[SCRIP_INDEX["PERCHANGE"]] = True
         if (
             self.updatedFieldsArray[SCRIP_INDEX["VOLUME"]]
@@ -743,9 +731,8 @@ class IndexTopicData(TopicData):
         # logger.info("INSIDE IndexTopicData")
         super().__init__(TopicTypes["INDEX"])
         self.updatedFieldsArray = [None] * 100
-        self.multiplier = None
-        self.precision = None
-        self.precisionValue = None
+        # Inherit sensible defaults from TopicData (multiplier=1, precision=2, precisionValue=100)
+        # setMultiplierAndPrec() will override these once the broker sends actual values
 
     def setMultiplierAndPrec(self):
         if self.updatedFieldsArray[INDEX_INDEX["PRECISION"]]:
@@ -766,7 +753,7 @@ class IndexTopicData(TopicData):
                 change = ltp - close
                 self.fieldDataArray[INDEX_INDEX["CHANGE"]] = change
                 self.updatedFieldsArray[INDEX_INDEX["CHANGE"]] = True
-                per_change = round(change / close * 100, self.precision)
+                per_change = round(change / close * 100, self.precision) if close != 0 else 0.0
                 self.fieldDataArray[INDEX_INDEX["PERCHANGE"]] = per_change
                 self.updatedFieldsArray[INDEX_INDEX["PERCHANGE"]] = True
         # logger.info(f"\nIndex::{self.feedType}|{self.exchange}|{self.symbol}")
@@ -786,9 +773,13 @@ class IndexTopicData(TopicData):
 
 
 class HSWrapper:
-    def __init__(self):
+    def __init__(self, ws_app=None, send_lock=None):
         self.counter = 0
         self.ack_num = 0
+        self._ws_app = ws_app  # Reference to WebSocketApp for sending acks
+        self._send_lock = send_lock  # Serialize sends with subscription messages
+        self.topic_list = {}  # Per-instance topic data, not shared globally
+        self._max_topics = 5000  # Cap topic_list to prevent unbounded memory growth
 
     def getNewTopicData(self, c):
         # logger.info(f"INPUT {c}")
@@ -817,8 +808,19 @@ class HSWrapper:
         return status
 
     def parseData(self, e):
+        if len(e) < 3:
+            logger.warning(f"Truncated binary message: {len(e)} bytes, dropping")
+            return None
         pos = 0
         # logger.info(f"INTO Parse Data {e}")
+        try:
+            return self._parseDataInner(e)
+        except (IndexError, ValueError) as exc:
+            logger.error(f"Malformed binary message ({len(e)} bytes): {exc}, dropping")
+            return None
+
+    def _parseDataInner(self, e):
+        pos = 0
         packetsCount = buf2long(e[pos:2])
         pos += 2
         type = int.from_bytes(e[pos : pos + 1], "big")
@@ -889,8 +891,13 @@ class HSWrapper:
                     pos += 4
                     if self.counter == self.ack_num:
                         req = get_acknowledgement_req(msg_num)
+                        ws = self._ws_app
                         if ws:
-                            ws.send(req, 0x2)
+                            if self._send_lock:
+                                with self._send_lock:
+                                    ws.send(req, 0x2)
+                            else:
+                                ws.send(req, 0x2)
                             self.counter = 0
                         # logger.info(f"Acknowledgement sent for message num: {msg_num}")
                 h = []
@@ -898,7 +905,9 @@ class HSWrapper:
                 # logger.info(f"G in {g}")
                 pos += 2
                 for n in range(g):
+                    sub_msg_len = buf2long(e[pos : pos + 2])
                     pos += 2
+                    sub_msg_start = pos
                     c = buf2long(e[pos : pos + 1])
                     # logger.info(f"ResponseType: {c}")
                     pos += 1
@@ -913,13 +922,19 @@ class HSWrapper:
                         pos += name_len
                         d = self.getNewTopicData(topic_name)
                         if d:
-                            topic_list[f] = d
+                            # Evict oldest entries if topic_list exceeds cap
+                            if len(self.topic_list) >= self._max_topics and f not in self.topic_list:
+                                oldest_key = next(iter(self.topic_list))
+                                del self.topic_list[oldest_key]
+                            self.topic_list[f] = d
                             fcount = buf2long(e[pos : pos + 1])
                             pos += 1
+                            max_fields = len(d.fieldDataArray)
                             # logger.info(f"fcount1: {fcount}")
                             for index in range(fcount):
                                 fvalue = buf2long(e[pos : pos + 4])
-                                d.setLongValues(index, fvalue)
+                                if index < max_fields:
+                                    d.setLongValues(index, fvalue)
                                 pos += 4
                             # logger.info("Able to set ")
                             d.setMultiplierAndPrec()
@@ -938,29 +953,50 @@ class HSWrapper:
                             h.append(d.prepareData())
                         else:
                             logger.info("Invalid topic feed type !")
+                            # Skip integer fields to keep pos aligned
+                            fcount_skip = buf2long(e[pos : pos + 1])
+                            pos += 1
+                            pos += fcount_skip * 4
+                            # Skip string fields
+                            fcount2_skip = buf2long(e[pos : pos + 1])
+                            pos += 1
+                            for _ in range(fcount2_skip):
+                                pos += 1  # fid
+                                skip_len = buf2long(e[pos : pos + 1])
+                                pos += 1
+                                pos += skip_len
                     else:
                         if c == ResponseTypes.get("UPDATE"):
                             logger.debug("updates ......")
                             f = buf2long(e[pos : pos + 4])
                             # logger.info(f"topic Id: {f}")
                             pos += 4
-                            d = topic_list[f]
+                            d = self.topic_list.get(f)
                             if not d:
                                 logger.info("Topic Not Available in TopicList!")
-                            else:
-                                # logger.info("INSIDE Else COndition ")
+                                # Skip remaining fields for this update to keep pos correct
                                 fcount = buf2long(e[pos : pos + 1])
                                 pos += 1
-                                # logger.info(f"fcount1: {fcount}")
-                                for index in range(fcount):
-                                    fvalue = buf2long(e[pos : pos + 4])
+                                pos += fcount * 4
+                                continue
+                            # logger.info("INSIDE Else COndition ")
+                            fcount = buf2long(e[pos : pos + 1])
+                            pos += 1
+                            max_fields = len(d.fieldDataArray)
+                            # logger.info(f"fcount1: {fcount}")
+                            for index in range(fcount):
+                                fvalue = buf2long(e[pos : pos + 4])
+                                if index < max_fields:
                                     d.setLongValues(index, fvalue)
-                                    # d[index] = fvalue
-                                    # logger.info(f"index: {index} val: {fvalue}")
-                                    pos += 4
+                                # d[index] = fvalue
+                                # logger.info(f"index: {index} val: {fvalue}")
+                                pos += 4
+                            d.setMultiplierAndPrec()
                             h.append(d.prepareData())
                         else:
                             logger.info(f"Invalid ResponseType: {c}")
+                            # Skip remaining bytes of this sub-message to keep pos aligned
+                            pos = sub_msg_start + sub_msg_len
                 return h
             else:
                 if type == BinRespTypes.get("SUBSCRIBE_TYPE") or type == BinRespTypes.get(
@@ -1065,7 +1101,7 @@ class HSWrapper:
 
 
 class StartServer:
-    def __init__(self, a, token, sid, onopen, onmessage, onerror, onclose):
+    def __init__(self, a, token, sid, onopen, onmessage, onerror, onclose, owner=None, send_lock=None):
         self.userSocket = self
         self.a = a
         self.onopen = onopen
@@ -1073,51 +1109,80 @@ class StartServer:
         self.onerror = onerror
         self.onclose = onclose
         self.token, self.sid = token, sid
-        global ws
+        self._owner = owner  # HSWebSocket instance that owns this connection
+        self._send_lock = send_lock  # Lock for serializing WebSocket sends
+        self._ws_app = None
         try:
             # websocket.enableTrace(True)
-            ws = websocket.WebSocketApp(
+            self._ws_app = websocket.WebSocketApp(
                 a,
                 on_open=self.on_open,
                 on_message=self.on_message,
                 on_error=self.on_error,
                 on_close=self.on_close,
             )
-        except Exception:
-            logger.info("WebSocket not supported!")
+        except Exception as e:
+            logger.error(f"WebSocket not supported: {e}")
+            self.onerror(e)
 
-        if ws:
-            # logger.info("WS is a array buffer ")
-            self.hsWrapper = HSWrapper()
-            # logger.info("HS WRAPPER IS DONE ")
+        if self._ws_app:
+            self.hsWrapper = HSWrapper(ws_app=self._ws_app, send_lock=self._send_lock)
+            # Store references on the owning HSWebSocket instance
+            if self._owner is not None:
+                self._owner._ws_app = self._ws_app
+                self._owner._hs_wrapper = self.hsWrapper
+            self._ws_app.run_forever(
+                ping_interval=30,
+                ping_timeout=10,
+            )
+            # run_forever() has returned — clean up references to break reference cycles
+            # so that StartServer, HSWrapper, and WebSocketApp can be GC'd promptly
+            self._ws_app = None
+            self.hsWrapper = None
+            self.onopen = None
+            self.onmessage = None
+            self.onerror = None
+            self.onclose = None
+            if self._owner is not None:
+                self._owner = None
         else:
             logger.info("WebSocket not initialized!")
 
-        ws.run_forever()
-
     def on_open(self, ws):
         # logger.info("[OnOpen]: Function is running in HSWebscoket")
-        self.onopen()
+        callback = self.onopen
+        if callback:
+            callback()
 
     def on_message(self, ws, inData):
         # logger.info("[OnMessage]: Function is running in HSWebsocket")
+        callback = self.onmessage
+        if not callback:
+            return
         outData = None
         if isinstance(inData, bytes):
-            jsonData = self.hsWrapper.parseData(inData)
+            hsw = self.hsWrapper
+            if not hsw:
+                return
+            jsonData = hsw.parseData(inData)
             # logger.info(f"JSON DATA in HSWEBSOCKE ON MESSAGE {jsonData}")
             if jsonData:
                 outData = json.dumps(jsonData) if isEncyptOut else jsonData
         else:
             outData = inData if not isEncyptIn else json.loads(inData) if isEncyptOut else inData
         if outData:
-            self.onmessage(outData)
+            callback(outData)
 
     def on_close(self, ws, close_status_code, close_msg):
         # logger.info(f"[OnClose]: Function is running HSWebsocket {close_status_code}")
-        self.onclose()
+        callback = self.onclose
+        if callback:
+            callback()
 
     def on_error(self, ws, error):
-        self.onerror(error)
+        callback = self.onerror
+        if callback:
+            callback(error)
         logger.info(f"ERROR in HSWebscoket {error}")
         logger.info("[OnError]: Function is running HSWebsocket")
 
@@ -1138,15 +1203,15 @@ def convert_to_dict(scrips=None, channelnum=None):
 
 
 class HSWebSocket:
-    OPEN = 0
-    readyState = 0
-
     def __init__(self):
         self.onclose = None
         self.url = None
         self.onopen = None
         self.onmessage = None
         self.on_error = None
+        self._ws_app = None  # Per-instance WebSocketApp reference
+        self._hs_wrapper = None  # Per-instance HSWrapper reference
+        self._send_lock = None  # Optional lock for serializing sends
 
     def open_connection(self, url, token, sid, on_open, on_message, on_error, on_close):
         self.url = url
@@ -1154,7 +1219,7 @@ class HSWebSocket:
         self.onmessage = on_message
         self.on_error = on_error
         self.onclose = on_close
-        StartServer(self.url, token, sid, self.onopen, self.onmessage, self.on_error, self.onclose)
+        StartServer(self.url, token, sid, self.onopen, self.onmessage, self.on_error, self.onclose, owner=self, send_lock=self._send_lock)
 
     def hs_send(self, d):
         req_json = json.loads(d)
@@ -1227,16 +1292,15 @@ class HSWebSocket:
             req = prepareSnapshotRequest(scrips, BinRespTypes.get("SNAPSHOT"), INDEX_PREFIX)
         elif req_type == ReqTypeValues.get("OPC_SUBS"):
             req = get_opc_chain_subs_request(
-                req[Keys.get("OPC_KEY")],
-                req[Keys.get("STK_PRC")],
-                req[Keys.get("HIGH_STK")],
-                req[Keys.get("LOW_STK")],
+                req_json[Keys.get("OPC_KEY")],
+                req_json[Keys.get("STK_PRC")],
+                req_json[Keys.get("HIGH_STK")],
+                req_json[Keys.get("LOW_STK")],
                 channelnum,
             )
         elif req_type == ReqTypeValues.get("THROTTLING_INTERVAL"):
             req = prepareThrottlingIntervalRequest(scrips)
-        elif req_type == ReqTypeValues.get("LOG"):
-            enable_log(req.get("enable"))
+        ws = self._ws_app
         if ws and req:
             ws.send(req, 0x2)
         else:
@@ -1245,7 +1309,18 @@ class HSWebSocket:
             )
 
     def close(self):
-        ws.close()
+        if self._ws_app:
+            self._ws_app.close()
+            self._ws_app = None
+        if self._hs_wrapper:
+            self._hs_wrapper.topic_list.clear()
+        self._hs_wrapper = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 #
@@ -1330,7 +1405,7 @@ class HSWebSocket:
 
 
 class StartHSIServer:
-    def __init__(self, url, onopen, onmessage, onerror, onclose):
+    def __init__(self, url, onopen, onmessage, onerror, onclose, owner=None):
         self.OPEN = None
         self.readyState = None
         self.url = url
@@ -1338,11 +1413,11 @@ class StartHSIServer:
         self.onmessage = onmessage
         self.onerror = onerror
         self.onclose = onclose
-        # self.token, self.sid = token, sid
-        global hsiws
+        self._owner = owner  # HSIWebSocket instance that owns this connection
+        self._ws_app = None
         try:
             # websocket.enableTrace(True)
-            hsiws = websocket.WebSocketApp(
+            self._ws_app = websocket.WebSocketApp(
                 self.url,
                 on_open=self.on_open,
                 on_message=self.on_message,
@@ -1351,33 +1426,55 @@ class StartHSIServer:
             )
         except Exception:
             logger.info("WebSocket not supported!")
-        hsiws.run_forever()
+        # Store reference on the owning HSIWebSocket instance
+        if self._owner is not None and self._ws_app:
+            self._owner._ws_app = self._ws_app
+        if self._ws_app:
+            self._ws_app.run_forever(
+                ping_interval=30,
+                ping_timeout=10,
+            )
+            # run_forever() returned — break reference cycles for prompt GC
+            self._ws_app = None
+            self.onopen = None
+            self.onmessage = None
+            self.onerror = None
+            self.onclose = None
+            if self._owner is not None:
+                self._owner = None
 
     def on_message(self, ws, message):
         # logger.info(f"Received message: {message}")
-        self.onmessage(message)
+        callback = self.onmessage
+        if callback:
+            callback(message)
 
     def on_error(self, ws, error):
         logger.info(f"Error: {error}")
-        self.onerror(error)
+        callback = self.onerror
+        if callback:
+            callback(error)
 
     def on_close(self, ws, close_status_code, close_msg):
         logger.info("Connection closed")
         self.OPEN = 0
         self.readyState = 0
-        hsiWs = None
-        self.onclose()
+        self._ws_app = None
+        callback = self.onclose
+        if callback:
+            callback()
 
     def on_open(self, ws):
         logger.info("Connection established HSWebSocket")
         self.OPEN = 1
         self.readyState = 1
-        self.onopen()
+        callback = self.onopen
+        if callback:
+            callback()
 
 
 class HSIWebSocket:
     def __init__(self):
-        # self.hsiWs = None
         self.hsiSocket = None
         self.reqData = None
         self.OPEN = 0
@@ -1387,7 +1484,7 @@ class HSIWebSocket:
         self.onmessage = None
         self.onclose = None
         self.onerror = None
-        # self.token, self.sid = token, sid
+        self._ws_app = None  # Per-instance WebSocketApp reference
 
     def open_connection(self, url, onopen, onmessage, onclose, onerror):
         self.url = url
@@ -1395,7 +1492,7 @@ class HSIWebSocket:
         self.onmessage = onmessage
         self.onclose = onclose
         self.onerror = onerror
-        StartHSIServer(self.url, self.onopen, self.onmessage, self.onerror, self.onclose)
+        StartHSIServer(self.url, self.onopen, self.onmessage, self.onerror, self.onclose, owner=self)
 
     def send(self, d):
         reqJson = json.loads(d)
@@ -1425,13 +1522,21 @@ class HSIWebSocket:
                 req = self.reqData
             else:
                 logger.info("Invalid Request !")
-        if hsiws and req:
+        if self._ws_app and req:
             js_obj = json.dumps(req)
-            hsiws.send(js_obj)
+            self._ws_app.send(js_obj)
         else:
             logger.info("Unable to send request! Reason: Connection faulty or request not valid!")
 
     def close(self):
         self.OPEN = 0
         self.readyState = 0
-        hsiws.close()
+        if self._ws_app:
+            self._ws_app.close()
+            self._ws_app = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass

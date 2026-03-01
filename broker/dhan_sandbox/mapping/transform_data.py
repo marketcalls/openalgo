@@ -82,17 +82,30 @@ def transform_data(data, token):
 
 
 def transform_modify_order_data(data):
-    return {
+    modified = {
         "dhanClientId": data["apikey"],
         "orderId": data["orderid"],
         "orderType": map_order_type(data["pricetype"]),
-        "legName": "ENTRY_LEG",
-        "quantity": data["quantity"],
-        "price": data["price"],
-        "disclosedQuantity": data.get("disclosed_quantity", "0"),
-        "triggerPrice": data.get("trigger_price", "0"),
+        "quantity": int(data["quantity"]),
         "validity": "DAY",
     }
+
+    # Set price for non-market orders
+    if data.get("pricetype") != "MARKET":
+        modified["price"] = float(data["price"])
+
+    # Set disclosed quantity if provided
+    disclosed_qty = int(data.get("disclosed_quantity", 0))
+    if disclosed_qty > 0:
+        modified["disclosedQuantity"] = disclosed_qty
+
+    # Handle trigger price for SL orders
+    if data["pricetype"] in ["SL", "SL-M"]:
+        trigger_price = float(data.get("trigger_price", 0))
+        if trigger_price > 0:
+            modified["triggerPrice"] = float(trigger_price)
+
+    return modified
 
 
 def map_order_type(pricetype):

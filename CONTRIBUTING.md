@@ -309,6 +309,10 @@ git remote add upstream https://github.com/marketcalls/openalgo.git
 git remote -v
 ```
 
+> **Important: Disable GitHub Actions on Your Fork**
+>
+> After forking, go to your fork's **Settings → Actions → General** (`https://github.com/YOUR_USERNAME/openalgo/settings/actions`) and select **"Disable actions"** under Actions permissions. This prevents CI workflows (frontend builds, Docker pushes) from running on your fork unnecessarily — those workflows are only meant to run on the upstream repository.
+
 ### 2. Frontend Build Assets (Auto-Built by CI)
 
 The `/frontend/dist` folder contains pre-built frontend assets. **CI automatically rebuilds and commits these assets** when changes are merged to main.
@@ -338,6 +342,9 @@ git update-index --skip-worktree frontend/dist/*
 # Update your main branch
 git checkout main
 git pull upstream main
+
+# Restore the upstream frontend build (avoids local dist conflicts)
+git checkout frontend/dist
 
 # Create a new branch for your feature
 # Branch naming convention:
