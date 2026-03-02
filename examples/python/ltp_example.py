@@ -8,8 +8,8 @@ from openalgo import api
 
 # Initialize feed client with explicit parameters
 client = api(
-    api_key="7653f710c940cdf1d757b5a7d808a60f43bc7e9c0239065435861da2869ec0fc",  # Replace with your API key
-    host="http://127.0.0.1:5000",  # Replace with your API host
+    api_key="fb77b2df614f43f607c3cd7543200a3d0b7f8e133701ed40bebeceb901b4d440",  # Replace with your API key
+    host="http://127.0.0.1:3300",  # Replace with your API host
     ws_url="ws://127.0.0.1:8765",  # Explicit WebSocket URL (can be different from REST API host)
 )
 

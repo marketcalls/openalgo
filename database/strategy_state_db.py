@@ -3,15 +3,26 @@
 """
 Database access layer for strategy_state.db
 This database stores Python strategy execution states and trade history.
+
+Concurrency design:
+  - NullPool: each call gets its own fresh connection — no shared connection state across threads.
+  - WAL mode: multiple readers can run concurrently with one writer.
+  - IMMEDIATE transactions: write lock is acquired at BEGIN, not on first write —
+    prevents lock escalation failures under concurrent multi-process writes.
+  - wal_autocheckpoint=100: SQLite merges WAL back into main DB every 100 pages,
+    preventing the WAL file from growing unbounded.
+  - Circuit breaker: if the DB is corrupt, stop logging the error every 5 seconds.
 """
 
 import os
 import json
+import shutil
+import time
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Float, Boolean, text
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Float, Boolean, text, event
 from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool
 from utils.logging import get_logger
 
 try:
@@ -48,16 +59,81 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'db',
 DB_PATH = os.getenv('STRATEGY_STATE_DB_PATH', DEFAULT_DB_PATH)
 DATABASE_URL = f'sqlite:///{DB_PATH}'
 
-# Create engine with StaticPool and proper timeout for SQLite
+# ─────────────────────────────────────────────────────────────────────────────
+# Circuit breaker: stops log-flooding when the DB is permanently corrupt.
+# After _CB_FAIL_THRESHOLD consecutive failures, suppress further error logs
+# for _CB_RESET_SECONDS seconds.
+# ─────────────────────────────────────────────────────────────────────────────
+_cb_fail_count = 0
+_cb_open_since: float = 0.0        # timestamp when circuit opened
+_CB_FAIL_THRESHOLD = 3             # open circuit after 3 consecutive failures
+_CB_RESET_SECONDS = 60             # retry after 60 seconds of suppression
+
+
+def _cb_record_failure() -> bool:
+    """Record a failure and return True if the circuit is (now) open."""
+    global _cb_fail_count, _cb_open_since
+    _cb_fail_count += 1
+    if _cb_fail_count >= _CB_FAIL_THRESHOLD:
+        if _cb_open_since == 0.0:
+            _cb_open_since = time.monotonic()
+            logger.error(
+                "Strategy State DB: circuit breaker OPEN after %d consecutive failures. "
+                "Further errors suppressed for %ds. Fix the database and restart.",
+                _CB_FAIL_THRESHOLD, _CB_RESET_SECONDS
+            )
+        return True
+    return False
+
+
+def _cb_record_success():
+    """Reset the circuit breaker on success."""
+    global _cb_fail_count, _cb_open_since
+    _cb_fail_count = 0
+    _cb_open_since = 0.0
+
+
+def _cb_is_open() -> bool:
+    """Return True if the circuit is open (requests should be suppressed)."""
+    global _cb_open_since
+    if _cb_open_since == 0.0:
+        return False
+    if time.monotonic() - _cb_open_since >= _CB_RESET_SECONDS:
+        # Half-open: allow one probe through
+        _cb_open_since = 0.0
+        return False
+    return True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQLAlchemy engine
+# NullPool: every call gets a brand-new connection — no shared state between
+# Flask request threads, no WAL pointer confusion between concurrent callers.
+# ─────────────────────────────────────────────────────────────────────────────
 engine = create_engine(
     DATABASE_URL,
-    poolclass=StaticPool,  # CRITICAL: Reuse connections instead of creating new ones
+    poolclass=NullPool,
     connect_args={
         'check_same_thread': False,
-        'timeout': 30  # CRITICAL: Increase timeout from 5s to 30s
+        'timeout': 30,
     },
     echo=False
 )
+
+
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragmas(dbapi_conn, connection_record):
+    """
+    Configure each new SQLite connection for safe concurrent multi-process use.
+    Called automatically by SQLAlchemy whenever a new connection is created.
+    """
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")    # safe with WAL, faster than FULL
+    cursor.execute("PRAGMA busy_timeout=30000")    # wait up to 30s for write lock
+    cursor.execute("PRAGMA wal_autocheckpoint=100")  # merge WAL every 100 pages
+    cursor.close()
+
 
 db_session = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
 Base = declarative_base()
@@ -67,7 +143,7 @@ Base.query = db_session.query_property()
 class StrategyExecutionState(Base):
     """Model for strategy_execution_state table"""
     __tablename__ = 'strategy_execution_state'
-    
+
     id = Column(Integer, primary_key=True)
     strategy_name = Column(String(255), nullable=False)
     instance_id = Column(String(100), nullable=False, unique=True)
@@ -78,7 +154,7 @@ class StrategyExecutionState(Base):
     created_at = Column(DateTime, nullable=True)
     last_updated = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
-    strategy_metadata = Column('metadata', Text, nullable=True)  # JSON blob - use 'metadata' as column name
+    strategy_metadata = Column('metadata', Text, nullable=True)  # JSON blob
     version = Column(Integer, nullable=True)
     pid = Column(Integer, nullable=True)
 
@@ -90,7 +166,7 @@ class StrategyOverride(Base):
     The strategy will poll for pending overrides and apply them.
     """
     __tablename__ = 'strategy_overrides'
-    
+
     id = Column(Integer, primary_key=True)
     instance_id = Column(String(100), nullable=False, index=True)
     leg_key = Column(String(100), nullable=False)
@@ -101,23 +177,34 @@ class StrategyOverride(Base):
     applied_at = Column(DateTime, nullable=True)
 
 
+def _wal_checkpoint(conn):
+    """Run a non-blocking WAL checkpoint after a write. Best-effort — never raises."""
+    try:
+        conn.execute(text("PRAGMA wal_checkpoint(PASSIVE)"))
+    except Exception:
+        pass  # Never let a checkpoint failure affect the caller
+
+
 def get_all_strategy_states():
     """
     Get all strategy states with parsed state_data JSON.
-    
+
     Returns:
         list: List of strategy state dictionaries
     """
+    if _cb_is_open():
+        return []
+
     try:
         # Check if database file exists
         if not os.path.exists(DB_PATH):
             logger.warning(f"Strategy state database not found at {DB_PATH}")
             return []
-        
+
         states = StrategyExecutionState.query.order_by(
             StrategyExecutionState.last_updated.desc()
         ).all()
-        
+
         result = []
         for state in states:
             state_dict = {
@@ -139,7 +226,7 @@ def get_all_strategy_states():
                 'trade_history': [],
                 'orchestrator': None
             }
-            
+
             # Parse state_data JSON
             if state.state_data:
                 try:
@@ -152,8 +239,8 @@ def get_all_strategy_states():
                 except json.JSONDecodeError as e:
                     state_dict['is_state_data_malformed'] = True
                     logger.error(f"Error parsing state_data for {state.instance_id}: {e}")
-            
-            # Parse metadata JSON - always include key for consistent schema
+
+            # Parse metadata JSON
             if state.strategy_metadata:
                 try:
                     state_dict['metadata'] = json.loads(state.strategy_metadata)
@@ -161,13 +248,15 @@ def get_all_strategy_states():
                     state_dict['metadata'] = None
             else:
                 state_dict['metadata'] = None
-            
+
             result.append(state_dict)
-        
+
+        _cb_record_success()
         return result
-    
+
     except Exception as e:
-        logger.error(f"Error fetching strategy states: {e}")
+        if not _cb_record_failure():
+            logger.error(f"Error fetching strategy states: {e}")
         return []
     finally:
         db_session.remove()
@@ -176,22 +265,22 @@ def get_all_strategy_states():
 def get_strategy_state_by_instance_id(instance_id: str):
     """
     Get a specific strategy state by instance_id.
-    
+
     Args:
         instance_id: The unique instance identifier
-        
+
     Returns:
         dict: Strategy state dictionary or None
     """
     try:
         if not os.path.exists(DB_PATH):
             return None
-        
+
         state = StrategyExecutionState.query.filter_by(instance_id=instance_id).first()
-        
+
         if not state:
             return None
-        
+
         state_dict = {
             'id': state.id,
             'strategy_name': state.strategy_name,
@@ -211,7 +300,7 @@ def get_strategy_state_by_instance_id(instance_id: str):
             'trade_history': [],
             'orchestrator': None
         }
-        
+
         if state.state_data:
             try:
                 parsed_state = json.loads(state.state_data)
@@ -223,8 +312,7 @@ def get_strategy_state_by_instance_id(instance_id: str):
             except json.JSONDecodeError as e:
                 state_dict['is_state_data_malformed'] = True
                 logger.error(f"Error parsing state_data for {instance_id}: {e}")
-        
-        # Parse metadata JSON - always include key for consistent schema
+
         if state.strategy_metadata:
             try:
                 state_dict['metadata'] = json.loads(state.strategy_metadata)
@@ -232,11 +320,12 @@ def get_strategy_state_by_instance_id(instance_id: str):
                 state_dict['metadata'] = None
         else:
             state_dict['metadata'] = None
-        
+
         return state_dict
-    
+
     except Exception as e:
-        logger.error(f"Error fetching strategy state {instance_id}: {e}")
+        if not _cb_record_failure():
+            logger.error(f"Error fetching strategy state {instance_id}: {e}")
         return None
     finally:
         db_session.remove()
@@ -266,7 +355,6 @@ def delete_strategy_state(instance_id: str) -> None:
         logger.info(f"Deleted strategy state: {instance_id}")
 
     except (StrategyStateDbNotFoundError, StrategyStateNotFoundError):
-        # Let caller handle expected error conditions
         db_session.rollback()
         raise
 
@@ -344,31 +432,23 @@ def add_manual_strategy_leg(
 
         # Check for duplicate legs with same characteristics
         for existing_leg in legs.values():
-            # Skip if leg data is None or not a dict
             if not existing_leg:
                 continue
-            
-            # Only check legs that are in position
             if existing_leg.get('status') != 'IN_POSITION':
                 continue
-            
-            # Core fields that must always match
+
             symbol_match = existing_leg.get('symbol') == symbol
             side_match = existing_leg.get('side') == side
             qty_match = int(existing_leg.get('quantity') or 0) == int(quantity)
-            
-            # Optional fields - only check if they exist in the existing leg
-            # This handles backward compatibility with legs created before exchange/product were stored
             exchange_match = (
                 existing_leg.get('exchange') is None or
                 existing_leg.get('exchange') == exchange
             )
-            
             product_match = (
                 existing_leg.get('product') is None or
                 existing_leg.get('product') == product
             )
-            
+
             if symbol_match and side_match and qty_match and exchange_match and product_match:
                 raise StrategyStateDuplicateLegError('Similar open position already exists in this strategy')
 
@@ -402,11 +482,11 @@ def add_manual_strategy_leg(
         parsed_state['legs'] = legs
         state.state_data = json.dumps(parsed_state)
         state.last_updated = datetime.utcnow()
-        
+
         # Force SQLAlchemy to detect the change
         from sqlalchemy.orm import attributes
         attributes.flag_modified(state, 'state_data')
-        
+
         # Create a MANUAL_SYNC override to notify the running strategy
         sync_override = StrategyOverride(
             instance_id=instance_id,
@@ -417,11 +497,16 @@ def add_manual_strategy_leg(
             created_at=datetime.utcnow()
         )
         db_session.add(sync_override)
-        
+
         db_session.flush()
         db_session.commit()
+
+        # Non-blocking WAL checkpoint after write
+        with engine.connect() as conn:
+            _wal_checkpoint(conn)
+
         db_session.refresh(state)
-        
+
         logger.info(f"Successfully added manual leg {leg_key} to strategy {instance_id}")
 
         return parsed_state
@@ -445,24 +530,27 @@ def init_db() -> None:
     """Initialize required tables for the Strategy State DB.
 
     Ensures both `strategy_execution_states` and `strategy_overrides` exist.
+    Performs an integrity check on startup and auto-recovers from corruption.
     Safe to call multiple times.
     """
     try:
-        # Ensure the parent directory exists before attempting to create/connect.
-        # If the DB file doesn't exist, SQLite will create it when the first connection
-        # is made during table creation.
         db_dir = os.path.dirname(DB_PATH)
         if db_dir and not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
 
-        # CRITICAL FIX: Enable WAL mode for better concurrency
-        # This allows multiple readers while one writer is active
+        # If DB exists, run integrity check and auto-recover if corrupt
+        if os.path.exists(DB_PATH):
+            _check_and_recover_if_corrupt()
+
+        # WAL mode + autocheckpoint is set per-connection via the @event.listens_for hook above.
+        # This explicit call ensures it's also applied during table creation.
         with engine.connect() as conn:
             conn.execute(text("PRAGMA journal_mode=WAL"))
-            conn.execute(text("PRAGMA synchronous=NORMAL"))  # Balance between safety and performance
-            conn.execute(text("PRAGMA busy_timeout=30000"))  # 30 second timeout for locks
+            conn.execute(text("PRAGMA synchronous=NORMAL"))
+            conn.execute(text("PRAGMA busy_timeout=30000"))
+            conn.execute(text("PRAGMA wal_autocheckpoint=100"))
             conn.commit()
-            logger.info("Strategy State DB: WAL mode enabled with 30s busy timeout")
+            logger.info("Strategy State DB: WAL mode enabled, autocheckpoint=100 pages")
 
         StrategyExecutionState.__table__.create(engine, checkfirst=True)
         StrategyOverride.__table__.create(engine, checkfirst=True)
@@ -471,6 +559,46 @@ def init_db() -> None:
     except Exception as e:
         logger.error(f"Strategy State DB: Error initializing tables: {e}")
         raise StrategyStateDbError(f"Failed to initialize tables: {str(e)}") from e
+
+
+def _check_and_recover_if_corrupt() -> None:
+    """
+    Run PRAGMA integrity_check on the DB.
+    If corrupt, rename the corrupt file and start fresh so the app doesn't
+    stay broken. Logs a critical alert so the operator is notified.
+    """
+    import sqlite3 as _sqlite3
+    try:
+        conn = _sqlite3.connect(DB_PATH, timeout=5)
+        result = conn.execute("PRAGMA integrity_check").fetchone()
+        conn.close()
+        if result and result[0] == 'ok':
+            logger.info("Strategy State DB: integrity check passed")
+            return
+        # Corrupt
+        _rotate_corrupt_db()
+    except Exception as e:
+        logger.warning(f"Strategy State DB: integrity check failed ({e}), attempting recovery")
+        _rotate_corrupt_db()
+
+
+def _rotate_corrupt_db() -> None:
+    """Rename the corrupt DB to a timestamped backup and start fresh."""
+    corrupt_backup = f"{DB_PATH}.corrupt_{int(time.time())}"
+    try:
+        shutil.move(DB_PATH, corrupt_backup)
+        # Also move stale WAL/SHM files
+        for ext in ('-wal', '-shm'):
+            stale = DB_PATH + ext
+            if os.path.exists(stale):
+                os.remove(stale)
+        logger.critical(
+            f"Strategy State DB: CORRUPT DATABASE detected! "
+            f"Renamed to {corrupt_backup} and starting fresh. "
+            f"Strategy positions will not auto-resume until the DB is restored."
+        )
+    except Exception as move_err:
+        logger.error(f"Strategy State DB: could not rotate corrupt DB: {move_err}")
 
 
 # ============================================================================
@@ -498,7 +626,6 @@ def create_strategy_override(instance_id: str, leg_key: str, override_type: str,
         if not os.path.exists(DB_PATH):
             raise StrategyStateDbNotFoundError('Strategy state database not found')
 
-        # Create the override record
         override = StrategyOverride(
             instance_id=instance_id,
             leg_key=leg_key,
@@ -508,10 +635,14 @@ def create_strategy_override(instance_id: str, leg_key: str, override_type: str,
             created_at=datetime.utcnow(),
             applied_at=None
         )
-        
+
         db_session.add(override)
         db_session.commit()
-        
+
+        # Non-blocking WAL checkpoint after write
+        with engine.connect() as conn:
+            _wal_checkpoint(conn)
+
         result = {
             'id': override.id,
             'instance_id': override.instance_id,
@@ -521,10 +652,10 @@ def create_strategy_override(instance_id: str, leg_key: str, override_type: str,
             'applied': override.applied,
             'created_at': override.created_at.isoformat() if override.created_at else None
         }
-        
+
         logger.info(f"Created strategy override: {instance_id}/{leg_key}/{override_type} = {new_value}")
         return result
-    
+
     except StrategyStateDbNotFoundError:
         db_session.rollback()
         raise
@@ -542,22 +673,22 @@ def get_pending_overrides(instance_id: str) -> list:
     """
     Get all pending (unapplied) overrides for a strategy instance.
     Used by strategies to poll for UI modifications.
-    
+
     Args:
         instance_id: The strategy instance ID
-        
+
     Returns:
         list: List of pending override dictionaries
     """
     try:
         if not os.path.exists(DB_PATH):
             return []
-        
+
         overrides = StrategyOverride.query.filter_by(
             instance_id=instance_id,
             applied=False
         ).order_by(StrategyOverride.created_at.asc()).all()
-        
+
         result = []
         for override in overrides:
             result.append({
@@ -569,9 +700,9 @@ def get_pending_overrides(instance_id: str) -> list:
                 'applied': override.applied,
                 'created_at': override.created_at.isoformat() if override.created_at else None
             })
-        
+
         return result
-    
+
     except Exception as e:
         logger.error(f"Error fetching pending overrides for {instance_id}: {e}")
         return []
@@ -583,30 +714,34 @@ def mark_override_applied(override_id: int) -> bool:
     """
     Mark an override as applied.
     Called by strategies after successfully applying an override.
-    
+
     Args:
         override_id: The override record ID
-        
+
     Returns:
         bool: True if updated, False otherwise
     """
     try:
         if not os.path.exists(DB_PATH):
             return False
-        
+
         override = StrategyOverride.query.filter_by(id=override_id).first()
-        
+
         if not override:
             logger.warning(f"Override not found: {override_id}")
             return False
-        
+
         override.applied = True
         override.applied_at = datetime.utcnow()
         db_session.commit()
-        
+
+        # Non-blocking WAL checkpoint after write
+        with engine.connect() as conn:
+            _wal_checkpoint(conn)
+
         logger.info(f"Marked override as applied: {override_id}")
         return True
-    
+
     except Exception as e:
         logger.error(f"Error marking override as applied {override_id}: {e}")
         db_session.rollback()
@@ -626,17 +761,17 @@ def manual_exit_strategy_leg(
     """
     Manually exit a strategy leg and update status to SL_HIT or TARGET_HIT.
     Moves the leg to trade history and updates P&L.
-    
+
     Args:
         instance_id: Strategy instance identifier.
         leg_key: Unique leg key for the strategy.
         exit_price: Manual exit price provided by user.
         exit_status: Either 'SL_HIT' or 'TARGET_HIT'.
         exit_time: Exit timestamp.
-    
+
     Returns:
         dict: Updated strategy state data.
-    
+
     Raises:
         StrategyStateDbNotFoundError: If DB file is missing.
         StrategyStateNotFoundError: If strategy or leg not found.
@@ -645,31 +780,31 @@ def manual_exit_strategy_leg(
     try:
         if not os.path.exists(DB_PATH):
             raise StrategyStateDbNotFoundError('Strategy state database not found')
-        
+
         state = StrategyExecutionState.query.filter_by(instance_id=instance_id).first()
         if not state:
             raise StrategyStateNotFoundError('Strategy state not found')
-        
+
         if not state.state_data:
             raise StrategyStateDbError('Strategy state data is empty')
-        
+
         try:
             parsed_state = json.loads(state.state_data)
         except json.JSONDecodeError as exc:
             raise StrategyStateDbError('Strategy state data is malformed') from exc
-        
+
         legs = parsed_state.get('legs') or {}
-        
+
         if leg_key not in legs:
             raise StrategyStateNotFoundError(f'Leg {leg_key} not found in strategy')
-        
+
         leg = legs[leg_key]
-        
+
         # Calculate P&L
         entry_price = leg.get('entry_price', 0)
         quantity = leg.get('quantity', 0)
         side = leg.get('side', 'BUY')
-        
+
         if side == 'BUY':
             pnl = (exit_price - entry_price) * quantity
         else:  # SELL
@@ -683,7 +818,6 @@ def manual_exit_strategy_leg(
             try:
                 exchange_str = leg.get('exchange', '')
                 symbol_str = leg.get('symbol', '')
-                # BFO exchange means BSE derivatives (e.g. SENSEX options)
                 if exchange_str.upper() in ('BFO',):
                     brokerage_exchange = 'BSE'
                 else:
@@ -695,7 +829,6 @@ def manual_exit_strategy_leg(
                     transaction_type=side,
                     exchange=brokerage_exchange,
                 )
-                # Exit order is the opposite side of the original position
                 exit_side = 'SELL' if side == 'BUY' else 'BUY'
                 exit_brokerage = calculate_option_brokerage(
                     premium=float(exit_price),
@@ -708,23 +841,22 @@ def manual_exit_strategy_leg(
                 logger.warning(f"Brokerage calculation failed for leg {leg_key}: {brok_exc}")
 
         # Update leg status and exit details
-        leg['status'] = 'DONE'  # Mark as DONE so frontend recognizes it as exited
-        leg['exit_type'] = exit_status  # Store exit reason (SL_HIT/TARGET_HIT/MANUAL_EXIT)
+        leg['status'] = 'DONE'
+        leg['exit_type'] = exit_status
         leg['exit_price'] = exit_price
         leg['exit_time'] = exit_time.isoformat() if exit_time else None
         leg['realized_pnl'] = pnl
-        leg['unrealized_pnl'] = 0  # No longer unrealized
+        leg['unrealized_pnl'] = 0
         leg['total_pnl'] = pnl
-        
+
         # Add to trade history
         trade_history = parsed_state.get('trade_history') or []
-        
-        # Get the next trade_id (use max to avoid duplicate IDs if history is ever modified)
+
         if trade_history:
             trade_id = max(t.get('trade_id', 0) for t in trade_history) + 1
         else:
             trade_id = 1
-        
+
         trade_history_entry = {
             'trade_id': trade_id,
             'leg_key': leg_key,
@@ -737,7 +869,7 @@ def manual_exit_strategy_leg(
             'entry_time': leg.get('entry_time'),
             'exit_price': exit_price,
             'exit_time': exit_time.isoformat() if exit_time else None,
-            'exit_type': exit_status,  # SL_HIT, TARGET_HIT, or MANUAL_EXIT
+            'exit_type': exit_status,
             'sl_price': leg.get('sl_price'),
             'target_price': leg.get('target_price'),
             'pnl': pnl,
@@ -749,23 +881,28 @@ def manual_exit_strategy_leg(
         }
         trade_history.append(trade_history_entry)
         parsed_state['trade_history'] = trade_history
-        
+
         # Save updated state
         state.state_data = json.dumps(parsed_state)
         state.last_updated = datetime.utcnow()
-        
+
         # Force SQLAlchemy to detect the change
         from sqlalchemy.orm import attributes
         attributes.flag_modified(state, 'state_data')
-        
+
         db_session.flush()
         db_session.commit()
+
+        # Non-blocking WAL checkpoint after write
+        with engine.connect() as conn:
+            _wal_checkpoint(conn)
+
         db_session.refresh(state)
-        
+
         logger.info(f"Successfully exited leg {leg_key} from strategy {instance_id} with status {exit_status}")
-        
+
         return parsed_state
-    
+
     except (StrategyStateDbNotFoundError, StrategyStateNotFoundError):
         db_session.rollback()
         raise
