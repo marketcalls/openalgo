@@ -1,4 +1,4 @@
-import { ArrowUpDown, ChevronLeft, ChevronRight, Copy, Search as SearchIcon } from 'lucide-react'
+import { ArrowUpDown, ChevronLeft, ChevronRight, Copy, Search as SearchIcon, SearchX } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { showToast } from '@/utils/toast'
@@ -20,6 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { EmptyState } from '@/components/ui/EmptyState'
 
 interface SearchResult {
   symbol: string
@@ -64,7 +65,6 @@ export default function Search() {
     setIsLoading(true)
     setError(null)
     try {
-      // Build URL with all search params - use the API endpoint
       const params = new URLSearchParams()
       const symbol = searchParams.get('symbol')
       const exchange = searchParams.get('exchange')
@@ -74,7 +74,6 @@ export default function Search() {
       const strike_min = searchParams.get('strike_min')
       const strike_max = searchParams.get('strike_max')
 
-      // Use 'q' parameter for the API endpoint
       if (symbol) params.append('q', symbol)
       if (exchange) params.append('exchange', exchange)
       if (underlying) params.append('underlying', underlying)
@@ -83,7 +82,6 @@ export default function Search() {
       if (strike_min) params.append('strike_min', strike_min)
       if (strike_max) params.append('strike_max', strike_max)
 
-      // Use the API search endpoint which returns JSON
       const response = await fetch(`/search/api/search?${params.toString()}`, {
         credentials: 'include',
       })
@@ -136,14 +134,12 @@ export default function Search() {
       const aVal = a[sortKey]
       const bVal = b[sortKey]
 
-      // Handle numeric sorting
       if (['lotsize', 'token', 'freeze_qty'].includes(sortKey)) {
         const aNum = parseFloat(String(aVal ?? 0).replace(/[^0-9.-]/g, '')) || 0
         const bNum = parseFloat(String(bVal ?? 0).replace(/[^0-9.-]/g, '')) || 0
         return sortDirection === 'asc' ? aNum - bNum : bNum - aNum
       }
 
-      // Handle string sorting
       const aStr = String(aVal ?? '')
       const bStr = String(bVal ?? '')
       return sortDirection === 'asc' ? aStr.localeCompare(bStr) : bStr.localeCompare(aStr)
@@ -152,16 +148,16 @@ export default function Search() {
 
   const paginatedResults = useMemo(() => {
     if (pageSize === 'all') return sortedResults
-    const start = (currentPage - 1) * pageSize
-    return sortedResults.slice(start, start + pageSize)
+    const start = (currentPage - 1) * (pageSize as number)
+    return sortedResults.slice(start, start + (pageSize as number))
   }, [sortedResults, currentPage, pageSize])
 
   const totalPages = useMemo(() => {
     if (pageSize === 'all') return 1
-    return Math.ceil(sortedResults.length / pageSize)
+    return Math.ceil(sortedResults.length / (pageSize as number))
   }, [sortedResults.length, pageSize])
 
-  const showingStart = pageSize === 'all' ? 1 : (currentPage - 1) * pageSize + 1
+  const showingStart = pageSize === 'all' ? 1 : (currentPage - 1) * (pageSize as number) + 1
   const showingEnd =
     pageSize === 'all'
       ? sortedResults.length
@@ -189,7 +185,6 @@ export default function Search() {
 
   return (
     <div className="py-6 space-y-6">
-      {/* Header */}
       <Card>
         <CardContent className="p-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
@@ -209,7 +204,6 @@ export default function Search() {
         </CardContent>
       </Card>
 
-      {/* Results Table */}
       <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
@@ -229,12 +223,12 @@ export default function Search() {
               <TableBody>
                 {paginatedResults.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                      {error ? (
-                        <span className="text-destructive">{error}</span>
-                      ) : (
-                        'No results found'
-                      )}
+                    <TableCell colSpan={8}>
+                      <EmptyState 
+                        icon={SearchX} 
+                        title="No results found" 
+                        description={error || "We couldn't find any symbols matching your search criteria."} 
+                      />
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -276,7 +270,6 @@ export default function Search() {
         </CardContent>
       </Card>
 
-      {/* Pagination */}
       {results.length > 25 && (
         <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
           <div className="text-sm text-muted-foreground">
