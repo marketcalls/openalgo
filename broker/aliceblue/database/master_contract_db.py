@@ -140,14 +140,14 @@ def download_csv_aliceblue_data(output_path):
     logger.info("Downloading Master Contract CSV Files")
     # URLs of the CSV files to be downloaded
     csv_urls = {
-        "CDS": "https://v2api.aliceblueonline.com/restpy/static/contract_master/CDS.csv",
-        "NFO": "https://v2api.aliceblueonline.com/restpy/static/contract_master/NFO.csv",
-        "NSE": "https://v2api.aliceblueonline.com/restpy/static/contract_master/NSE.csv",
-        "BSE": "https://v2api.aliceblueonline.com/restpy/static/contract_master/BSE.csv",
-        "BFO": "https://v2api.aliceblueonline.com/restpy/static/contract_master/BFO.csv",
-        "BCD": "https://v2api.aliceblueonline.com/restpy/static/contract_master/BCD.csv",
-        "MCX": "https://v2api.aliceblueonline.com/restpy/static/contract_master/MCX.csv",
-        "INDICES": "https://v2api.aliceblueonline.com/restpy/static/contract_master/INDICES.csv",
+        "CDS": "https://v2api.aliceblueonline.com/restpy/static/contract_master/V2/CDS.csv",
+        "NFO": "https://v2api.aliceblueonline.com/restpy/static/contract_master/V2/NFO.csv",
+        "NSE": "https://v2api.aliceblueonline.com/restpy/static/contract_master/V2/NSE.csv",
+        "BSE": "https://v2api.aliceblueonline.com/restpy/static/contract_master/V2/BSE.csv",
+        "BFO": "https://v2api.aliceblueonline.com/restpy/static/contract_master/V2/BFO.csv",
+        "BCD": "https://v2api.aliceblueonline.com/restpy/static/contract_master/V2/BCD.csv",
+        "MCX": "https://v2api.aliceblueonline.com/restpy/static/contract_master/V2/MCX.csv",
+        "INDICES": "https://v2api.aliceblueonline.com/restpy/static/contract_master/V2/INDICES.csv",
     }
 
     # Get the shared httpx client with connection pooling
@@ -598,15 +598,49 @@ def process_aliceblue_indices_csv(path):
         {"NSE": "NSE_INDEX", "BSE": "BSE_INDEX", "MCX": "MCX_INDEX"}
     )
     token_df["tick_size"] = 0.01
+    # Step 1: Remove all spaces from symbol names (handles most NSE index mappings automatically)
+    token_df["symbol"] = token_df["symbol"].str.replace(" ", "", regex=False)
+
+    # Step 2: Apply only the special mappings that involve actual renaming (not just space removal)
     token_df["symbol"] = token_df["symbol"].replace(
         {
-            "NIFTY 50": "NIFTY",
-            "NIFTY NEXT 50": "NIFTYNXT50",
-            "NIFTY FIN SERVICE": "FINNIFTY",
-            "NIFTY BANK": "BANKNIFTY",
-            "NIFTY MIDCAP SELECT": "MIDCPNIFTY",
-            "INDIA VIX": "INDIAVIX",
+            # NSE Index Symbols requiring renaming (not just space removal)
+            "NIFTY50": "NIFTY",
+            "NIFTYNEXT50": "NIFTYNXT50",
+            "NIFTYFINSERVICE": "FINNIFTY",
+            "NIFTYBANK": "BANKNIFTY",
+            "NIFTYMIDCAPSELECT": "MIDCPNIFTY",
+            # BSE Index Symbols (AliceBlue -> OpenAlgo)
             "SNSX50": "SENSEX50",
+            "SNXT50": "BSESENSEXNEXT50",
+            "MID150": "BSE150MIDCAPINDEX",
+            "LMI250": "BSE250LARGEMIDCAPINDEX",
+            "MSL400": "BSE400MIDSMALLCAPINDEX",
+            "AUTO": "BSEAUTO",
+            "BSE CG": "BSECAPITALGOODS",
+            "CARBON": "BSECARBONEX",
+            "BSE CD": "BSECONSUMERDURABLES",
+            "CPSE": "BSECPSE",
+            "ENERGY": "BSEENERGY",
+            "BSEFMC": "BSEFASTMOVINGCONSUMERGOODS",
+            "FIN": "BSEFINANCIALSERVICES",
+            "GREENX": "BSEGREENEX",
+            "BSE HC": "BSEHEALTHCARE",
+            "INFRA": "BSEINDIAINFRASTRUCTUREINDEX",
+            "INDSTR": "BSEINDUSTRIALS",
+            "BSE IT": "BSEINFORMATIONTECHNOLOGY",
+            "LRGCAP": "BSELARGECAP",
+            "METAL": "BSEMETAL",
+            "MIDCAP": "BSEMIDCAP",
+            "MIDSEL": "BSEMIDCAPSELECTINDEX",
+            "OILGAS": "BSEOIL&GAS",
+            "POWER": "BSEPOWER",
+            "REALTY": "BSEREALTY",
+            "SMLCAP": "BSESMALLCAP",
+            "SMLSEL": "BSESMALLCAPSELECTINDEX",
+            "SMEIPO": "BSESMEIPO",
+            "TECK": "BSETECK",
+            "TELCOM": "BSETELECOM",
         }
     )
 
