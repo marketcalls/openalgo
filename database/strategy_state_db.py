@@ -324,7 +324,8 @@ def get_strategy_state_by_instance_id(instance_id: str):
         return state_dict
 
     except Exception as e:
-        logger.error(f"Error fetching strategy state {instance_id}: {e}")
+        if not _cb_record_failure():
+            logger.error(f"Error fetching strategy state {instance_id}: {e}")
         return None
     finally:
         db_session.remove()
