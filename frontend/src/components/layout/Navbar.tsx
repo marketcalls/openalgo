@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { showToast } from '@/utils/toast'
 import { authApi } from '@/api/auth'
+import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -29,6 +30,7 @@ export function Navbar() {
   const location = useLocation()
   const navigate = useNavigate()
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const { mode, appMode, toggleMode, toggleAppMode, isTogglingMode } = useThemeStore()
   const { user, logout } = useAuthStore()
 
@@ -268,7 +270,7 @@ export function Navbar() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                onClick={handleLogout}
+                onClick={() => setShowLogoutDialog(true)}
                 className="text-destructive focus:text-destructive"
               >
                 <LogOut className="h-4 w-4 mr-2" />
@@ -278,6 +280,12 @@ export function Navbar() {
           </DropdownMenu>
         </div>
       </div>
+
+      <LogoutConfirmDialog
+        open={showLogoutDialog}
+        onOpenChange={setShowLogoutDialog}
+        onConfirm={handleLogout}
+      />
     </nav>
   )
 }

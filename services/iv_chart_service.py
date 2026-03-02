@@ -28,85 +28,8 @@ from services.quotes_service import get_quotes
 from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
 
-# Import py_vollib for Black-76 IV and Greeks calculation
-try:
-    from py_vollib.black.greeks.analytical import delta as black_delta
-    from py_vollib.black.greeks.analytical import gamma as black_gamma
-    from py_vollib.black.greeks.analytical import theta as black_theta
-    from py_vollib.black.greeks.analytical import vega as black_vega
-    from py_vollib.black.implied_volatility import implied_volatility as black_iv
-
-    PYVOLLIB_AVAILABLE = True
-except Exception:
-    # py_vollib fails on Python 3.13+ due to _testcapi removal.
-    # Fall back to a pure scipy Black-76 implementation with identical signatures.
-    try:
-        import math as _math
-        from scipy.optimize import brentq as _brentq
-        from scipy.stats import norm as _norm
-
-        def _b76(flag, F, K, t, r, sigma):
-            if t <= 0 or sigma <= 0 or F <= 0 or K <= 0:
-                return 0.0
-            sq = _math.sqrt(t)
-            d1 = (_math.log(F / K) + 0.5 * sigma * sigma * t) / (sigma * sq)
-            d2 = d1 - sigma * sq
-            df = _math.exp(-r * t)
-            if flag.lower() == "c":
-                return df * (F * _norm.cdf(d1) - K * _norm.cdf(d2))
-            return df * (K * _norm.cdf(-d2) - F * _norm.cdf(-d1))
-
-        def black_iv(price, F, K, r, t, flag):  # NOTE: r before t (py_vollib convention)
-            if price <= 0 or t <= 0 or F <= 0 or K <= 0:
-                raise ValueError("Invalid inputs")
-            df = _math.exp(-r * t)
-            intr = max(df * (F - K), 0.0) if flag.lower() == "c" else max(df * (K - F), 0.0)
-            if price < intr - 1e-8:
-                raise ValueError("Price below intrinsic value")
-            try:
-                return _brentq(lambda s: _b76(flag, F, K, t, r, s) - price, 1e-7, 20.0, xtol=1e-7, maxiter=200)
-            except ValueError:
-                raise ValueError("IV convergence failure")
-
-        def black_delta(flag, F, K, t, r, sigma):
-            if t <= 0 or sigma <= 0:
-                return 1.0 if flag.lower() == "c" else -1.0
-            sq = _math.sqrt(t)
-            d1 = (_math.log(F / K) + 0.5 * sigma * sigma * t) / (sigma * sq)
-            df = _math.exp(-r * t)
-            return df * _norm.cdf(d1) if flag.lower() == "c" else -df * _norm.cdf(-d1)
-
-        def black_gamma(flag, F, K, t, r, sigma):
-            if t <= 0 or sigma <= 0 or F <= 0:
-                return 0.0
-            sq = _math.sqrt(t)
-            d1 = (_math.log(F / K) + 0.5 * sigma * sigma * t) / (sigma * sq)
-            df = _math.exp(-r * t)
-            return df * _norm.pdf(d1) / (F * sigma * sq)
-
-        def black_theta(flag, F, K, t, r, sigma):
-            """Per calendar day — negative means time decay."""
-            if t <= 0 or sigma <= 0:
-                return 0.0
-            sq = _math.sqrt(t)
-            d1 = (_math.log(F / K) + 0.5 * sigma * sigma * t) / (sigma * sq)
-            df = _math.exp(-r * t)
-            W = df * F * _norm.pdf(d1)
-            price = _b76(flag, F, K, t, r, sigma)
-            return (r * price - W * sigma / (2 * sq)) / 365.0
-
-        def black_vega(flag, F, K, t, r, sigma):
-            """Per 1 % change in volatility."""
-            if t <= 0 or sigma <= 0 or F <= 0:
-                return 0.0
-            sq = _math.sqrt(t)
-            d1 = (_math.log(F / K) + 0.5 * sigma * sigma * t) / (sigma * sq)
-            df = _math.exp(-r * t)
-            return df * F * _norm.pdf(d1) * sq / 100.0
-
-        PYVOLLIB_AVAILABLE = True
-    except ImportError:
-        PYVOLLIB_AVAILABLE = False
+# py_vollib is lazy-loaded inside _calculate_iv_series() and get_iv_chart_data()
+# to avoid loading scipy/numba/llvmlite at startup
 
 logger = get_logger(__name__)
 
@@ -228,7 +151,9 @@ def get_iv_chart_data(
     Returns:
         Tuple of (success, response_dict, status_code)
     """
-    if not PYVOLLIB_AVAILABLE:
+    try:
+        from py_vollib.black.implied_volatility import implied_volatility as black_iv  # noqa: F401
+    except ImportError:
         return (
             False,
             {
@@ -447,6 +372,12 @@ def _calculate_iv_series(df_option, df_underlying, strike, expiry_dt, flag, inte
     Returns:
         List of dicts with time (unix seconds), iv, option_price, underlying_price
     """
+    from py_vollib.black.greeks.analytical import delta as black_delta
+    from py_vollib.black.greeks.analytical import gamma as black_gamma
+    from py_vollib.black.greeks.analytical import theta as black_theta
+    from py_vollib.black.greeks.analytical import vega as black_vega
+    from py_vollib.black.implied_volatility import implied_volatility as black_iv
+
     iv_data = []
 
     # Align on common timestamps using inner join

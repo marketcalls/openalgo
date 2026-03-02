@@ -615,8 +615,21 @@ def process_groww_data(path):
         # Add a symbol column based on trading_symbol
         df_mapped["symbol"] = df["trading_symbol"]
 
-        # Replace specific index symbols with standardized names
-        symbol_replacements = {"NIFTYJR": "NIFTYNXT50", "NIFTYMIDSELECT": "MIDCPNIFTY"}
+        # Replace specific index symbols with standardized OpenAlgo names
+        # Mapping Groww index symbols -> OpenAlgo standard symbols
+        # (from symbol_Openalgo.md documentation)
+        symbol_replacements = {
+            # NSE Index symbols
+            "NIFTYJR": "NIFTYNXT50",
+            "NIFTYMIDSELECT": "MIDCPNIFTY",
+            "NIFTYMIDCAP": "NIFTYMIDCAP100",
+            "NIFTYSMALL": "NIFTYSMLCAP100",
+            "NIFTYSMALLCAP250": "NIFTYSMLCAP250",
+            "NIFTYCDTY": "NIFTYCOMMODITIES",
+            "MIDCAP50": "NIFTYMIDCAP50",
+            # BSE Index symbols
+            "BSESMLCAP": "BSESMALLCAP",
+        }
 
         # Apply replacements
         df_mapped["symbol"] = df_mapped["symbol"].replace(symbol_replacements)

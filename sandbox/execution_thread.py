@@ -57,7 +57,7 @@ class ExecutionEngineThread(threading.Thread):
                     break
                 time.sleep(1)
 
-        logger.info("Sandbox Execution Engine thread stopped")
+        logger.debug("Sandbox Execution Engine thread stopped")
 
     def stop(self):
         """Signal the thread to stop"""
@@ -153,7 +153,7 @@ def start_execution_engine(engine_type: str = None):
                             f"Failed to start WebSocket engine: {message}, falling back to polling"
                         )
                 else:
-                    logger.warning(
+                    logger.debug(
                         "WebSocket proxy not healthy at startup, falling back to polling engine"
                     )
 
@@ -271,7 +271,7 @@ def _start_websocket_upgrade_watcher():
                         if _execution_thread.is_alive():
                             logger.warning("Polling execution engine did not stop after upgrade")
                         else:
-                            logger.info("Polling execution engine stopped after upgrade")
+                            logger.debug("Polling execution engine stopped after upgrade")
                         _execution_thread = None
                         break
                     else:
