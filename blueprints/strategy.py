@@ -88,6 +88,7 @@ DEFAULT_PRODUCT = "MIS"
 # Separate queues for different order types
 regular_order_queue = queue.Queue()  # For placeorder (up to 10/sec)
 smart_order_queue = queue.Queue()  # For placesmartorder (1/sec)
+options_order_queue = queue.Queue()  # For optionsorder (1/sec)
 
 # Order processor state
 order_processor_running = False
@@ -130,7 +131,34 @@ def process_orders():
                 continue  # Start next iteration
 
             except queue.Empty:
-                pass  # No smart orders, continue to regular orders
+                pass  # No smart orders, continue to options orders
+
+            # Process options orders (1 per second)
+            try:
+                options_order = options_order_queue.get_nowait()
+                if options_order is None:
+                    break
+
+                try:
+                    response = requests.post(
+                        f"{BASE_URL}/api/v1/optionsorder", json=options_order["payload"]
+                    )
+                    if response.ok:
+                        logger.info(
+                            f"Options order placed for {options_order['payload'].get('underlying', 'unknown')} in strategy {options_order['payload'].get('strategy', 'unknown')}"
+                        )
+                    else:
+                        logger.error(
+                            f"Error placing options order: {response.text}"
+                        )
+                except Exception as e:
+                    logger.exception(f"Error placing options order: {str(e)}")
+
+                time_module.sleep(1)
+                continue
+
+            except queue.Empty:
+                pass  # No options orders, continue to regular orders
 
             # Process regular orders (up to 10 per second)
             now = time()
@@ -203,6 +231,8 @@ def queue_order(endpoint, payload):
     ensure_order_processor()
     if endpoint == "placesmartorder":
         smart_order_queue.put({"payload": payload})
+    elif endpoint == "optionsorder":
+        options_order_queue.put({"payload": payload})
     else:
         regular_order_queue.put({"payload": payload})
 
@@ -918,6 +948,19 @@ def webhook(webhook_id):
         data = request.get_json()
         if not data:
             return jsonify({"error": "No data received"}), 400
+
+        # Detect options order payload
+        is_options = all(k in data for k in ("underlying", "offset", "option_type"))
+
+        if is_options:
+            api_key = get_api_key_for_tradingview(strategy.user_id)
+            if not api_key:
+                return jsonify({"error": "No API key found"}), 401
+
+            data["apikey"] = api_key
+            data["strategy"] = strategy.name
+            queue_order("optionsorder", data)
+            return jsonify({"message": f"Options order queued for {data.get('underlying', 'unknown')}"}), 200
 
         # Validate required fields
         required_fields = ["symbol", "action"]
