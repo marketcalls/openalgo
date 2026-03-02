@@ -13,18 +13,8 @@ from typing import Any, Dict, Optional, Tuple
 
 from utils.logging import get_logger
 
-# Import py_vollib for Black-76 calculations
-try:
-    from py_vollib.black.greeks.analytical import delta as black_delta
-    from py_vollib.black.greeks.analytical import gamma as black_gamma
-    from py_vollib.black.greeks.analytical import rho as black_rho
-    from py_vollib.black.greeks.analytical import theta as black_theta
-    from py_vollib.black.greeks.analytical import vega as black_vega
-    from py_vollib.black.implied_volatility import implied_volatility as black_iv
-
-    PYVOLLIB_AVAILABLE = True
-except ImportError:
-    PYVOLLIB_AVAILABLE = False
+# py_vollib is lazy-loaded inside calculate_greeks() and check_pyvollib_availability()
+# to avoid loading scipy/numba/llvmlite at startup
 
 logger = get_logger(__name__)
 
@@ -75,7 +65,11 @@ DEFAULT_INTEREST_RATES = {
 
 def check_pyvollib_availability():
     """Check if py_vollib library is available"""
-    if not PYVOLLIB_AVAILABLE:
+    try:
+        from py_vollib.black.implied_volatility import implied_volatility as black_iv  # noqa: F401
+
+        return True, None, None
+    except ImportError:
         logger.error("py_vollib library not installed. Install with: pip install py_vollib")
         return (
             False,
@@ -85,7 +79,6 @@ def check_pyvollib_availability():
             },
             500,
         )
-    return True, None, None
 
 
 def parse_option_symbol(
@@ -277,10 +270,24 @@ def calculate_greeks(
         Tuple of (success, response_dict, status_code)
     """
     try:
-        # Check if py_vollib is available
-        available, error_response, status_code = check_pyvollib_availability()
-        if not available:
-            return False, error_response, status_code
+        # Check if py_vollib is available and import (lazy-loaded to avoid startup overhead)
+        try:
+            from py_vollib.black.greeks.analytical import delta as black_delta
+            from py_vollib.black.greeks.analytical import gamma as black_gamma
+            from py_vollib.black.greeks.analytical import rho as black_rho
+            from py_vollib.black.greeks.analytical import theta as black_theta
+            from py_vollib.black.greeks.analytical import vega as black_vega
+            from py_vollib.black.implied_volatility import implied_volatility as black_iv
+        except ImportError:
+            logger.error("py_vollib library not installed.")
+            return (
+                False,
+                {
+                    "status": "error",
+                    "message": "Option Greeks calculation requires py_vollib library. Install with: pip install py_vollib",
+                },
+                500,
+            )
 
         # Parse option symbol with custom expiry time if provided
         base_symbol, expiry, strike, opt_type = parse_option_symbol(
