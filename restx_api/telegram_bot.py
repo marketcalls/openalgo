@@ -16,7 +16,7 @@ from database.telegram_db import (
     update_user_preferences,
 )
 from limiter import limiter
-from services.telegram_alert_service import TelegramAlertService
+from services.telegram_alert_service import TelegramAlertService, alert_executor
 from services.telegram_bot_service import telegram_bot_service
 from utils.logging import get_logger
 
@@ -70,6 +70,10 @@ notification_model = api.model(
         "username": fields.String(required=True, description="OpenAlgo Username"),
         "message": fields.String(required=True, description="Notification message"),
         "priority": fields.Integer(description="Priority (1-10)", default=5),
+        "wait_for_delivery": fields.Boolean(
+            description="Wait for delivery confirmation (default: false, returns immediately)",
+            default=False,
+        ),
     },
 )
 
@@ -469,18 +473,33 @@ class SendNotification(Resource):
                 )
 
             # Send notification via telegram alert service
-            success = telegram_alert.send_alert_sync(telegram_id, message)
+            wait_for_delivery = data.get("wait_for_delivery", False)
 
-            if success:
-                logger.info(f"Telegram alert sent to user {username} (ID: {telegram_id})")
-                return make_response(
-                    jsonify({"status": "success", "message": "Notification sent successfully"}), 200
-                )
+            if wait_for_delivery:
+                # Synchronous: wait for delivery confirmation
+                success = telegram_alert.send_alert_sync(telegram_id, message)
+                if success:
+                    logger.info(f"Telegram alert sent to user {username} (ID: {telegram_id})")
+                    return make_response(
+                        jsonify({"status": "success", "message": "Notification sent successfully"}),
+                        200,
+                    )
+                else:
+                    logger.warning(
+                        f"Failed to send telegram alert to user {username} (ID: {telegram_id}), queued for retry"
+                    )
+                    return make_response(
+                        jsonify(
+                            {"status": "success", "message": "Notification queued for delivery"}
+                        ),
+                        200,
+                    )
             else:
-                logger.warning(
-                    f"Failed to send telegram alert to user {username} (ID: {telegram_id}), queued for retry"
+                # Async: fire-and-forget (default, fast path)
+                alert_executor.submit(telegram_alert.send_alert_sync, telegram_id, message)
+                logger.info(
+                    f"Telegram notification queued for user {username} (ID: {telegram_id})"
                 )
-                # Still return success since it's queued
                 return make_response(
                     jsonify({"status": "success", "message": "Notification queued for delivery"}),
                     200,
