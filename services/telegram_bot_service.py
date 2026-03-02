@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import concurrent.futures
 import logging
@@ -20,11 +22,7 @@ import json
 from datetime import datetime, timedelta
 
 import httpx
-import pandas as pd
-import plotly.graph_objects as go
 import telegram.error
-from openalgo import api as openalgo_api
-from plotly.subplots import make_subplots
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -71,6 +69,8 @@ class TelegramBotService:
 
     def _get_sdk_client(self, telegram_id: int) -> openalgo_api | None:
         """Get or create OpenAlgo SDK client for a user"""
+        from openalgo import api as openalgo_api
+
         try:
             # Check if client already exists
             if telegram_id in self.sdk_clients:
@@ -119,6 +119,10 @@ class TelegramBotService:
         self, symbol: str, exchange: str, interval: str, days: int, telegram_id: int
     ) -> bytes | None:
         """Generate intraday chart with specified interval"""
+        import pandas as pd
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+
         try:
             client = self._get_sdk_client(telegram_id)
             if not client:
@@ -285,6 +289,10 @@ class TelegramBotService:
         self, symbol: str, exchange: str, interval: str, days: int, telegram_id: int
     ) -> bytes | None:
         """Generate daily chart with specified days"""
+        import pandas as pd
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+
         try:
             client = self._get_sdk_client(telegram_id)
             if not client:
@@ -882,6 +890,8 @@ class TelegramBotService:
 
         # Validate API key by making a test call
         try:
+            from openalgo import api as openalgo_api
+
             # Create temporary SDK client for validation
             test_client = openalgo_api(api_key=api_key, host=host_url)
 
