@@ -63,7 +63,7 @@ limits==3.13.0
 llvmlite==0.46.0b1
 logistro==2.0.1
 logzero==1.7.0
-markdown-it-py==3.0.0
+markdown-it-py==4.0.0
 MarkupSafe==2.1.5
 marshmallow==3.26.2
 matplotlib-inline==0.2.1
