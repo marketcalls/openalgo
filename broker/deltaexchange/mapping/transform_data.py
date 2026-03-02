@@ -106,7 +106,13 @@ def transform_modify_order_data(data):
         id           (int) - Order ID (extracted from composite "{product_id}:{order_id}")
         product_id   (int) - Contract ID
         size         (int) - New order size
-        limit_price  (str) - New limit price
+        limit_price  (str) - New limit price (use "0" for market/stop-market orders)
+        stop_price   (str) - Stop trigger price (for SL / SL-M orders only)
+
+    OpenAlgo pricetype mapping:
+        MARKET / LIMIT  → no stop_price
+        SL              → limit_price = price, stop_price = trigger_price
+        SL-M            → limit_price = "0",  stop_price = trigger_price
     """
     orderid = data["orderid"]
     # Composite ID format: "{product_id}:{order_id}"
@@ -118,12 +124,29 @@ def transform_modify_order_data(data):
         order_id = int(orderid)
         product_id = int(get_token(data["symbol"], data["exchange"]) or 0)
 
+    pricetype = str(data.get("pricetype", "")).upper()
+    is_stop_order = pricetype in ("SL", "SL-M")
+
+    # For stop-market (SL-M) orders the limit_price is irrelevant — use "0".
+    # For stop-limit (SL) orders the limit_price is the limit leg.
+    if pricetype == "SL-M":
+        limit_price = "0"
+    else:
+        limit_price = str(data.get("price", "0"))
+
     transformed = {
         "id": order_id,
         "product_id": product_id,
         "size": int(data["quantity"]),
-        "limit_price": str(data.get("price", "0")),
+        "limit_price": limit_price,
     }
+
+    # Include stop_price only for SL / SL-M orders; omit entirely for regular orders
+    # so Delta does not interpret the field unexpectedly.
+    if is_stop_order:
+        trigger_price = data.get("trigger_price", "0")
+        transformed["stop_price"] = str(trigger_price) if trigger_price else "0"
+
     return transformed
 
 
