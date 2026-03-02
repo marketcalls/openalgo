@@ -61,6 +61,7 @@ import { profileMenuItems } from '@/config/navigation'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useThemeStore } from '@/stores/themeStore'
+import { LogoutConfirmDialog } from '@/components/auth/LogoutConfirmDialog'
 
 // Import Flow components
 import { nodeTypes } from '@/components/flow/nodes'
@@ -97,6 +98,7 @@ function FlowEditorContent() {
   } = useFlowWorkflowStore()
 
   const [isActive, setIsActive] = useState(false)
+  const [showLogoutDialog, setShowLogoutDialog] = useState(false)
   const [showLogPanel, setShowLogPanel] = useState(false)
   const [executionLogs, setExecutionLogs] = useState<LogEntry[]>([])
   const [executionStatus, setExecutionStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle')
@@ -489,7 +491,7 @@ function FlowEditorContent() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                onClick={handleLogout}
+                onClick={() => setShowLogoutDialog(true)}
                 className="text-destructive focus:text-destructive"
               >
                 <LogOut className="h-4 w-4 mr-2" />
@@ -499,6 +501,12 @@ function FlowEditorContent() {
           </DropdownMenu>
         </div>
       </div>
+
+      <LogoutConfirmDialog
+        open={showLogoutDialog}
+        onOpenChange={setShowLogoutDialog}
+        onConfirm={handleLogout}
+      />
 
       {/* Workflow Toolbar */}
       <div className="flex items-center justify-between border-b border-border bg-card px-4 py-2">

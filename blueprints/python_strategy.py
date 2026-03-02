@@ -2473,7 +2473,7 @@ atexit.register(cleanup_on_exit)
 
 def restore_strategy_states():
     """Restore strategy states on startup - restart running strategies or mark as error"""
-    logger.info("Restoring strategy states from previous session...")
+    logger.debug("Restoring strategy states from previous session...")
 
     # During startup, we need to be more lenient with master contract checks
     # since the session might not be fully initialized yet
@@ -2588,7 +2588,7 @@ def restore_strategy_states():
             f"State restoration complete: {restored_count} restored, {error_count} in error state"
         )
     else:
-        logger.info("No strategies needed state restoration")
+        logger.debug("No strategies needed state restoration")
 
 
 def check_and_start_pending_strategies():
@@ -2695,7 +2695,7 @@ def initialize_with_app_context():
         # This stops any scheduled strategies if app starts on a weekend/holiday
         daily_trading_day_check()
 
-        logger.info(f"Python Strategy System fully initialized on {OS_TYPE}")
+        logger.debug(f"Python Strategy System fully initialized on {OS_TYPE}")
     except Exception as e:
         logger.warning(f"Deferred initialization skipped (likely no app context yet): {e}")
         _initialized = False  # Reset flag to retry later
