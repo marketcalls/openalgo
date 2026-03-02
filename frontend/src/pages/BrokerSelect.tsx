@@ -37,6 +37,7 @@ const allBrokers = [
   { id: 'nubra', name: 'Nubra', authType: 'totp' },
   { id: 'paytm', name: 'Paytm Money', authType: 'oauth' },
   { id: 'pocketful', name: 'Pocketful', authType: 'oauth' },
+  { id: 'rmoney', name: 'RMoney', authType: 'oauth' },
   { id: 'samco', name: 'Samco', authType: 'totp' },
   { id: 'shoonya', name: 'Shoonya', authType: 'totp' },
   { id: 'tradejini', name: 'Tradejini', authType: 'totp' },
@@ -141,6 +142,7 @@ export default function BrokerSelect() {
       case 'ibulls':
       case 'iifl':
       case 'kotak':
+      case 'rmoney':
       case 'shoonya':
       case 'tradejini':
       case 'wisdom':
