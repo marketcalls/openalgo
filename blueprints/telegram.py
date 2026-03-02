@@ -15,6 +15,7 @@ from database.telegram_db import (
     update_bot_config,
 )
 from limiter import limiter
+from services.telegram_alert_service import TelegramAlertService
 from services.telegram_bot_service import telegram_bot_service
 from utils.logging import get_logger
 from utils.session import check_session_validity
@@ -292,21 +293,15 @@ def send_test_message():
                 }
             ), 404
 
-        # Run notification using the bot's event loop
-        if telegram_bot_service.bot_loop and telegram_bot_service.is_running:
-            future = asyncio.run_coroutine_threadsafe(
-                telegram_bot_service.send_notification(telegram_user["telegram_id"], message),
-                telegram_bot_service.bot_loop,
-            )
-            success = future.result(timeout=10)
-        else:
-            success = False
-            logger.error("Bot not running or loop not available")
+        # Send test message via the alert service (non-blocking with queue fallback)
+        telegram_alert = TelegramAlertService()
+        success = telegram_alert.send_alert_sync(telegram_user["telegram_id"], message)
 
         if success:
             return jsonify({"status": "success", "message": "Test message sent"})
         else:
-            return jsonify({"status": "error", "message": "Failed to send test message"}), 500
+            # send_alert_sync queues the message on failure, so it will still be delivered
+            return jsonify({"status": "success", "message": "Test message queued for delivery"})
 
     except Exception as e:
         logger.exception(f"Error sending test message: {str(e)}")
