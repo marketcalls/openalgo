@@ -185,6 +185,12 @@ def react_pnltracker():
     return serve_react_app()
 
 
+# Scalper Terminal - Fast 1-click option trading
+@react_bp.route("/scalper")
+def react_scalper():
+    return serve_react_app()
+
+
 # Tools overview (Option Chain, IV Chart, etc.)
 @react_bp.route("/tools")
 def react_tools():
