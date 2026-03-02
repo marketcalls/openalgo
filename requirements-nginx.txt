@@ -59,7 +59,7 @@ jsonschema-specifications==2023.12.1
 jupyter-client==8.8.0
 jupyter-core==5.9.1
 kaleido==1.2.0
-limits==3.13.0
+limits==5.8.0
 llvmlite==0.46.0b1
 logistro==2.0.1
 logzero==1.7.0
