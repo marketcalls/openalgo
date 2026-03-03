@@ -92,26 +92,29 @@ def _black76_gamma(flag: str, F: float, K: float, T: float, r: float, sigma: flo
 
 
 def _black76_theta(flag: str, F: float, K: float, T: float, r: float, sigma: float) -> float:
+    """Daily theta (matches py_vollib: annualized theta / 365)."""
     d1, d2, sqrt_T = _d1d2(F, K, T, sigma)
     df = math.exp(-r * T)
     first_term = -(F * df * norm.pdf(d1) * sigma) / (2.0 * sqrt_T)
     if flag == "c":
-        return first_term - r * df * (F * norm.cdf(d1) - K * norm.cdf(d2))
-    return first_term + r * df * (K * norm.cdf(-d2) - F * norm.cdf(-d1))
+        return (first_term - r * df * (F * norm.cdf(d1) - K * norm.cdf(d2))) / 365.0
+    return (first_term + r * df * (K * norm.cdf(-d2) - F * norm.cdf(-d1))) / 365.0
 
 
 def _black76_vega(flag: str, F: float, K: float, T: float, r: float, sigma: float) -> float:
+    """Vega per 1% IV change (matches py_vollib: raw vega * 0.01)."""
     d1, _, sqrt_T = _d1d2(F, K, T, sigma)
     df = math.exp(-r * T)
-    return F * df * norm.pdf(d1) * sqrt_T
+    return F * df * norm.pdf(d1) * sqrt_T * 0.01
 
 
 def _black76_rho(flag: str, F: float, K: float, T: float, r: float, sigma: float) -> float:
+    """Rho per 1% rate change (matches py_vollib: raw rho * 0.01)."""
     d1, d2, _ = _d1d2(F, K, T, sigma)
     df = math.exp(-r * T)
     if flag == "c":
-        return -T * df * (F * norm.cdf(d1) - K * norm.cdf(d2))
-    return -T * df * (K * norm.cdf(-d2) - F * norm.cdf(-d1))
+        return -T * df * (F * norm.cdf(d1) - K * norm.cdf(d2)) * 0.01
+    return -T * df * (K * norm.cdf(-d2) - F * norm.cdf(-d1)) * 0.01
 
 # Exchange-specific symbol mappings
 NSE_INDEX_SYMBOLS = {
