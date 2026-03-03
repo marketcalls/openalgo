@@ -102,16 +102,19 @@ def transform_order_data(orders):
             )
             continue
 
-        if order.get("status", "") == "COMPLETE":
+        status = order.get("status", "")
+        if status == "COMPLETE":
             order_status = "complete"
-        if order.get("status", "") == "REJECTED":
+        elif status == "REJECTED":
             order_status = "rejected"
-        if order.get("status", "") == "TRIGGER PENDING":
+        elif status == "TRIGGER PENDING":
             order_status = "trigger pending"
-        if order.get("status", "") == "OPEN":
+        elif status == "OPEN":
             order_status = "open"
-        if order.get("status", "") == "CANCELLED":
+        elif status == "CANCELLED":
             order_status = "cancelled"
+        else:
+            order_status = status.lower()
 
         transformed_order = {
             "symbol": order.get("tradingsymbol", ""),
@@ -124,6 +127,7 @@ def transform_order_data(orders):
             "product": order.get("product", ""),
             "orderid": order.get("order_id", ""),
             "order_status": order_status,
+            "variety": order.get("variety", "regular"),
             "timestamp": order.get("order_timestamp", ""),
         }
 
