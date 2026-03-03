@@ -1467,6 +1467,13 @@ class WebSocketProxy:
                         logger.exception(f"Error handling cache invalidation: {e}")
                     continue  # Skip market data processing for cache messages
 
+                # Skip private account-level event topics (orders, positions, margins).
+                # These are published by broker adapters on the shared ZMQ socket but
+                # do not follow the BROKER_EXCHANGE_SYMBOL_MODE market-data format.
+                if topic_str.endswith(("_orders", "_positions", "_margins")):
+                    logger.debug(f"Skipping private event topic: {topic_str}")
+                    continue
+
                 market_data = json.loads(data_str)
 
                 # Extract topic components

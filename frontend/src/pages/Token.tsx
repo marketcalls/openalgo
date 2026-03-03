@@ -32,9 +32,10 @@ const EXCHANGES = [
   { value: 'MCX', label: 'MCX - Multi Commodity Exchange' },
   { value: 'NSE_INDEX', label: 'NSE_INDEX - National Stock Exchange Index' },
   { value: 'BSE_INDEX', label: 'BSE_INDEX - Bombay Stock Exchange Index' },
+  { value: 'CRYPTO', label: 'CRYPTO - Delta Exchange India' },
 ]
 
-const FNO_EXCHANGES = ['NFO', 'BFO', 'MCX', 'CDS']
+const FNO_EXCHANGES = ['NFO', 'BFO', 'MCX', 'CDS', 'CRYPTO']
 
 export default function Token() {
   const navigate = useNavigate()

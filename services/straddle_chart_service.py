@@ -16,12 +16,15 @@ import pytz
 from services.history_service import get_history
 from services.option_greeks_service import parse_option_symbol
 from services.option_symbol_service import (
+    construct_crypto_option_symbol,
     construct_option_symbol,
     find_atm_strike_from_actual,
     get_available_strikes,
     get_option_exchange,
 )
+from database.token_db_enhanced import fno_search_symbols
 from services.quotes_service import get_quotes
+from utils.constants import CRYPTO_EXCHANGES, INSTRUMENT_PERPFUT
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -49,6 +52,9 @@ def _get_quote_exchange(base_symbol, underlying_exchange):
         return "BSE_INDEX"
     if underlying_exchange.upper() in ("NFO", "BFO"):
         return "NSE" if underlying_exchange.upper() == "NFO" else "BSE"
+    # Crypto options — underlying is on the same exchange
+    if underlying_exchange.upper() in CRYPTO_EXCHANGES:
+        return underlying_exchange.upper()
     return underlying_exchange.upper()
 
 
@@ -131,6 +137,20 @@ def get_straddle_chart_data(
         base_symbol = underlying.upper()
         quote_exchange = _get_quote_exchange(base_symbol, exchange)
         options_exchange = get_option_exchange(quote_exchange)
+        # CRYPTO: look up the canonical perpetual symbol from DB (e.g. BTC → BTCUSD.P)
+        if exchange.upper() in CRYPTO_EXCHANGES:
+            _perp = fno_search_symbols(
+                underlying=base_symbol, exchange=exchange, instrumenttype=INSTRUMENT_PERPFUT, limit=1
+            )
+            if not _perp:
+                return (
+                    False,
+                    {"status": "error", "message": f"No perpetual futures found for {base_symbol} on {exchange}"},
+                    404,
+                )
+            underlying_quote_symbol = _perp[0]["symbol"]
+        else:
+            underlying_quote_symbol = base_symbol
 
         # Step 2: Get available strikes for the expiry
         available_strikes = get_available_strikes(
@@ -148,7 +168,7 @@ def get_straddle_chart_data(
 
         # Step 3: Fetch underlying history
         success_u, resp_u, _ = get_history(
-            symbol=base_symbol,
+            symbol=underlying_quote_symbol,
             exchange=quote_exchange,
             interval=interval,
             start_date=start_date_str,
@@ -193,9 +213,10 @@ def get_straddle_chart_data(
         # Build lookup: {strike: {timestamp: {ce_close, pe_close}}}
         strike_data = {}
 
+        _build_sym = construct_crypto_option_symbol if exchange.upper() in CRYPTO_EXCHANGES else construct_option_symbol
         for strike in sorted(unique_strikes):
-            ce_symbol = construct_option_symbol(base_symbol, expiry_date.upper(), strike, "CE")
-            pe_symbol = construct_option_symbol(base_symbol, expiry_date.upper(), strike, "PE")
+            ce_symbol = _build_sym(base_symbol, expiry_date.upper(), strike, "CE")
+            pe_symbol = _build_sym(base_symbol, expiry_date.upper(), strike, "PE")
 
             # Fetch CE history
             success_ce, resp_ce, _ = get_history(
@@ -281,7 +302,7 @@ def get_straddle_chart_data(
 
         # Get current LTP for display
         success_q, quote_resp, _ = get_quotes(
-            symbol=base_symbol,
+            symbol=underlying_quote_symbol,
             exchange=quote_exchange,
             api_key=api_key,
         )
