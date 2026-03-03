@@ -498,6 +498,7 @@ sudo rm -rf /var/lib/docker
 | Angel One | `angel` | No |
 | Compositedge | `compositedge` | Yes |
 | Definedge | `definedge` | No |
+| Delta Exchange | `deltaexchange` | No |
 | Dhan | `dhan` | No |
 | Dhan Sandbox | `dhan_sandbox` | No |
 | Firstock | `firstock` | No |
