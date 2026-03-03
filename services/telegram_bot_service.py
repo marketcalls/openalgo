@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 
 import httpx
 
-from database.auth_db import get_username_by_apikey
+from database.auth_db import get_username_by_apikey, get_broker_name
 
 # Database imports
 from database.telegram_db import (
@@ -37,6 +37,7 @@ from database.telegram_db import (
     log_command,
     update_bot_config,
 )
+from utils.constants import CRYPTO_BROKERS
 from utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -85,6 +86,10 @@ class TelegramBotService:
         except Exception as e:
             logger.exception(f"Error creating SDK client: {e}")
             return None
+
+    def _cs(self, telegram_user: dict) -> str:
+        """Return the currency symbol for the user's broker ($ for crypto brokers, ₹ for others)."""
+        return "$" if telegram_user.get("broker") in CRYPTO_BROKERS else "₹"
 
     async def _make_sdk_call(self, telegram_id: int, method: str, **kwargs) -> dict | None:
         """Make an SDK call in async context"""
@@ -941,6 +946,10 @@ class TelegramBotService:
                 else:
                     logger.info(f"Successfully retrieved OpenAlgo username: {openalgo_username}")
 
+                # Determine broker for currency symbol selection
+                broker_name = get_broker_name(api_key) or "default"
+                logger.info(f"Detected broker for Telegram user {user.id}: {broker_name}")
+
                 create_or_update_telegram_user(
                     telegram_id=user.id,
                     username=openalgo_username,  # Use the actual OpenAlgo username
@@ -949,6 +958,7 @@ class TelegramBotService:
                     last_name=user.last_name,
                     api_key=api_key,
                     host_url=host_url,
+                    broker=broker_name,
                 )
 
                 logger.info(f"Database updated - Username stored as: {openalgo_username}")
@@ -1055,6 +1065,8 @@ class TelegramBotService:
             await update.message.reply_text("❌ Please link your account first using /link")
             return
 
+        cs = self._cs(telegram_user)
+
         # Get orderbook using SDK
         client = self._get_sdk_client(user.id)
         if not client:
@@ -1096,10 +1108,10 @@ class TelegramBotService:
             try:
                 price = float(order.get("price", 0))
                 price_str = (
-                    "Market" if price == 0 and order.get("pricetype") == "MARKET" else f"₹{price}"
+                    "Market" if price == 0 and order.get("pricetype") == "MARKET" else f"{cs}{price}"
                 )
             except (ValueError, TypeError):
-                price_str = f"₹{order.get('price', 0)}"
+                price_str = f"{cs}{order.get('price', 0)}"
 
             try:
                 quantity = int(order.get("quantity", 0))
@@ -1119,7 +1131,7 @@ class TelegramBotService:
             try:
                 trigger_price = float(order.get("trigger_price", 0))
                 if trigger_price > 0:
-                    message += f"├ Trigger: ₹{trigger_price}\n"
+                    message += f"├ Trigger: {cs}{trigger_price}\n"
             except (ValueError, TypeError):
                 # If conversion fails, skip trigger price
                 pass
@@ -1181,6 +1193,8 @@ class TelegramBotService:
             await update.message.reply_text("❌ Please link your account first using /link")
             return
 
+        cs = self._cs(telegram_user)
+
         # Get tradebook using SDK
         client = self._get_sdk_client(user.id)
         if not client:
@@ -1229,15 +1243,15 @@ class TelegramBotService:
 
             try:
                 avg_price = float(trade.get("average_price", 0))
-                avg_price_str = f"₹{avg_price:,.2f}"
+                avg_price_str = f"{cs}{avg_price:,.2f}"
             except (ValueError, TypeError):
-                avg_price_str = f"₹{trade.get('average_price', 0)}"
+                avg_price_str = f"{cs}{trade.get('average_price', 0)}"
 
             message += (
                 f"{action_emoji} *{trade.get('symbol', 'N/A')}* ({trade.get('exchange', 'N/A')})\n"
                 f"├ {trade.get('action', 'N/A')} {quantity} @ {avg_price_str}\n"
                 f"├ Product: {trade.get('product', 'N/A')}\n"
-                f"├ Value: ₹{trade_value:,.2f}\n"
+                f"├ Value: {cs}{trade_value:,.2f}\n"
                 f"├ Time: {trade.get('timestamp', 'N/A')}\n"
                 f"└ Order ID: `{trade.get('orderid', 'N/A')}`\n\n"
             )
@@ -1249,8 +1263,8 @@ class TelegramBotService:
         message += (
             "📊 *Summary*\n"
             f"├ Total Trades: {len(trades)}\n"
-            f"├ Buy Value: ₹{total_buy_value:,.2f}\n"
-            f"└ Sell Value: ₹{total_sell_value:,.2f}"
+            f"├ Buy Value: {cs}{total_buy_value:,.2f}\n"
+            f"└ Sell Value: {cs}{total_sell_value:,.2f}"
         )
 
         await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
@@ -1266,6 +1280,8 @@ class TelegramBotService:
         if not telegram_user:
             await update.message.reply_text("❌ Please link your account first using /link")
             return
+
+        cs = self._cs(telegram_user)
 
         # Get positions using SDK
         client = self._get_sdk_client(user.id)
@@ -1332,7 +1348,7 @@ class TelegramBotService:
             )
 
             if avg_price > 0:
-                message += f"├ Avg Price: ₹{avg_price:,.2f}\n"
+                message += f"├ Avg Price: {cs}{avg_price:,.2f}\n"
 
             message += "\n"
 
@@ -1360,6 +1376,8 @@ class TelegramBotService:
         if not telegram_user:
             await update.message.reply_text("❌ Please link your account first using /link")
             return
+
+        cs = self._cs(telegram_user)
 
         # Get holdings using SDK
         client = self._get_sdk_client(user.id)
@@ -1408,7 +1426,7 @@ class TelegramBotService:
                 f"{pnl_emoji} *{holding.get('symbol', 'N/A')}* ({holding.get('exchange', 'N/A')})\n"
                 f"├ Product: {holding.get('product', 'CNC')}\n"
                 f"├ Qty: {quantity}\n"
-                f"└ P&L: ₹{pnl:,.2f} ({pnl_percent:+.2f}%)\n\n"
+                f"└ P&L: {cs}{pnl:,.2f} ({pnl_percent:+.2f}%)\n\n"
             )
 
         if len(holdings) > 10:
@@ -1441,9 +1459,9 @@ class TelegramBotService:
 
             message += (
                 f"📊 *Portfolio Summary*\n"
-                f"├ Current Value: ₹{total_holding_value:,.2f}\n"
-                f"├ Investment: ₹{total_inv_value:,.2f}\n"
-                f"└ {stats_emoji} P&L: ₹{total_pnl:,.2f} ({total_pnl_percent:+.2f}%)"
+                f"├ Current Value: {cs}{total_holding_value:,.2f}\n"
+                f"├ Investment: {cs}{total_inv_value:,.2f}\n"
+                f"└ {stats_emoji} P&L: {cs}{total_pnl:,.2f} ({total_pnl_percent:+.2f}%)"
             )
 
         await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
@@ -1459,6 +1477,8 @@ class TelegramBotService:
         if not telegram_user:
             await update.message.reply_text("❌ Please link your account first using /link")
             return
+
+        cs = self._cs(telegram_user)
 
         # Get funds using SDK
         client = self._get_sdk_client(user.id)
@@ -1495,13 +1515,13 @@ class TelegramBotService:
             "💰 *FUNDS*\n"
             "━━━━━━━━━━━━━━━\n\n"
             f"💵 *Available Cash*\n"
-            f"└ ₹{available:,.2f}\n\n"
+            f"└ {cs}{available:,.2f}\n\n"
             f"🔒 *Collateral*\n"
-            f"└ ₹{collateral:,.2f}\n\n"
+            f"└ {cs}{collateral:,.2f}\n\n"
             f"📊 *Utilized Margin*\n"
-            f"└ ₹{utilized:,.2f}\n\n"
+            f"└ {cs}{utilized:,.2f}\n\n"
             f"💼 *Total Balance*\n"
-            f"└ ₹{(available + collateral):,.2f}"
+            f"└ {cs}{(available + collateral):,.2f}"
         )
 
         await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
@@ -1517,6 +1537,8 @@ class TelegramBotService:
         if not telegram_user:
             await update.message.reply_text("❌ Please link your account first using /link")
             return
+
+        cs = self._cs(telegram_user)
 
         # Get P&L from funds using SDK
         client = self._get_sdk_client(user.id)
@@ -1555,11 +1577,11 @@ class TelegramBotService:
             "💹 *PROFIT & LOSS*\n"
             "━━━━━━━━━━━━━━━\n\n"
             f"{realized_emoji} *Realized P&L*\n"
-            f"└ ₹{realized_pnl:,.2f}\n\n"
+            f"└ {cs}{realized_pnl:,.2f}\n\n"
             f"{unrealized_emoji} *Unrealized P&L*\n"
-            f"└ ₹{unrealized_pnl:,.2f}\n\n"
+            f"└ {cs}{unrealized_pnl:,.2f}\n\n"
             f"{total_emoji} *Total P&L*\n"
-            f"└ ₹{total_pnl:,.2f}"
+            f"└ {cs}{total_pnl:,.2f}"
         )
 
         await update.message.reply_text(message, parse_mode=ParseMode.MARKDOWN)
@@ -1584,6 +1606,8 @@ class TelegramBotService:
                 parse_mode=ParseMode.MARKDOWN,
             )
             return
+
+        cs = self._cs(telegram_user)
 
         symbol = context.args[0].upper()
         exchange = context.args[1].upper() if len(context.args) > 1 else "NSE"
@@ -1645,12 +1669,12 @@ class TelegramBotService:
         message = (
             f"📊 *{symbol}*\n"
             "━━━━━━━━━━━━━━━\n\n"
-            f"{change_emoji} Price: ₹{ltp:,.2f}\n"
-            f"├ Change: ₹{change:+.2f} ({change_pct:+.2f}%)\n"
-            f"├ Open: ₹{open_price:,.2f}\n"
-            f"├ High: ₹{high_price:,.2f}\n"
-            f"├ Low: ₹{low_price:,.2f}\n"
-            f"├ Prev Close: ₹{prev_close:,.2f}\n"
+            f"{change_emoji} Price: {cs}{ltp:,.2f}\n"
+            f"├ Change: {cs}{change:+.2f} ({change_pct:+.2f}%)\n"
+            f"├ Open: {cs}{open_price:,.2f}\n"
+            f"├ High: {cs}{high_price:,.2f}\n"
+            f"├ Low: {cs}{low_price:,.2f}\n"
+            f"├ Prev Close: {cs}{prev_close:,.2f}\n"
             f"└ Volume: {volume:,}"
         )
 
@@ -1799,7 +1823,7 @@ class TelegramBotService:
 
         log_command(user.id, "menu", update.effective_chat.id)
 
-    def _format_orderbook(self, response: dict) -> str:
+    def _format_orderbook(self, response: dict, cs: str = '₹') -> str:
         """Format orderbook response into message"""
         if not response or response.get("status") != "success":
             return "❌ Failed to fetch orderbook"
@@ -1823,9 +1847,9 @@ class TelegramBotService:
             action_emoji = "📈" if order.get("action") == "BUY" else "📉"
             try:
                 price = float(order.get("price", 0))
-                price_str = "Market" if price == 0 else f"₹{price}"
+                price_str = "Market" if price == 0 else f"{cs}{price}"
             except:
-                price_str = f"₹{order.get('price', 0)}"
+                price_str = f"{cs}{order.get('price', 0)}"
             try:
                 quantity = int(order.get("quantity", 0))
             except:
@@ -1839,7 +1863,7 @@ class TelegramBotService:
             message += f"_... and {len(orders) - 10} more orders_"
         return message
 
-    def _format_tradebook(self, response: dict) -> str:
+    def _format_tradebook(self, response: dict, cs: str = '₹') -> str:
         """Format tradebook response into message"""
         if not response or response.get("status") != "success":
             return "❌ Failed to fetch tradebook"
@@ -1857,9 +1881,9 @@ class TelegramBotService:
                 quantity = trade.get("quantity", 0)
             try:
                 avg_price = float(trade.get("average_price", 0))
-                avg_price_str = f"₹{avg_price:,.2f}"
+                avg_price_str = f"{cs}{avg_price:,.2f}"
             except:
-                avg_price_str = f"₹{trade.get('average_price', 0)}"
+                avg_price_str = f"{cs}{trade.get('average_price', 0)}"
             message += (
                 f"{action_emoji} *{trade.get('symbol', 'N/A')}* ({trade.get('exchange', 'N/A')})\n"
             )
@@ -1869,7 +1893,7 @@ class TelegramBotService:
             message += f"_... and {len(trades) - 10} more trades_"
         return message
 
-    def _format_positions(self, response: dict) -> str:
+    def _format_positions(self, response: dict, cs: str = '₹') -> str:
         """Format positions response into message"""
         if not response or response.get("status") != "success":
             return "❌ Failed to fetch positions"
@@ -1896,7 +1920,7 @@ class TelegramBotService:
             message += f"_... and {len(active_positions) - 10} more positions_"
         return message
 
-    def _format_holdings(self, response: dict) -> str:
+    def _format_holdings(self, response: dict, cs: str = '₹') -> str:
         """Format holdings response into message"""
         if not response or response.get("status") != "success":
             return "❌ Failed to fetch holdings"
@@ -1914,12 +1938,12 @@ class TelegramBotService:
                 pnl, pnl_percent = 0.0, 0.0
             pnl_emoji = "🟢" if pnl > 0 else "🔴" if pnl < 0 else "⚪"
             message += f"{pnl_emoji} *{holding.get('symbol', 'N/A')}*\n"
-            message += f"└ P&L: ₹{pnl:,.2f} ({pnl_percent:+.2f}%)\n\n"
+            message += f"└ P&L: {cs}{pnl:,.2f} ({pnl_percent:+.2f}%)\n\n"
         if len(holdings) > 10:
             message += f"_... and {len(holdings) - 10} more holdings_"
         return message
 
-    def _format_funds(self, response: dict) -> str:
+    def _format_funds(self, response: dict, cs: str = '₹') -> str:
         """Format funds response into message"""
         if not response or response.get("status") != "success":
             return "❌ Failed to fetch funds"
@@ -1934,13 +1958,13 @@ class TelegramBotService:
 
         return (
             "💰 *FUNDS*\n━━━━━━━━━━━━━━━\n\n"
-            f"💵 Available: ₹{available:,.2f}\n"
-            f"🔒 Collateral: ₹{collateral:,.2f}\n"
-            f"📊 Utilized: ₹{utilized:,.2f}\n"
-            f"💼 Total: ₹{(available + collateral):,.2f}"
+            f"💵 Available: {cs}{available:,.2f}\n"
+            f"🔒 Collateral: {cs}{collateral:,.2f}\n"
+            f"📊 Utilized: {cs}{utilized:,.2f}\n"
+            f"💼 Total: {cs}{(available + collateral):,.2f}"
         )
 
-    def _format_pnl(self, response: dict) -> str:
+    def _format_pnl(self, response: dict, cs: str = '₹') -> str:
         """Format P&L response into message (uses positionbook data)"""
         if not response or response.get("status") != "success":
             return "❌ Failed to fetch P&L"
@@ -1955,7 +1979,7 @@ class TelegramBotService:
                 pass
 
         pnl_emoji = "🟢" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
-        return f"💹 *PROFIT & LOSS*\n━━━━━━━━━━━━━━━\n\n{pnl_emoji} *Day P&L*\n└ ₹{total_pnl:,.2f}"
+        return f"💹 *PROFIT & LOSS*\n━━━━━━━━━━━━━━━\n\n{pnl_emoji} *Day P&L*\n└ {cs}{total_pnl:,.2f}"
 
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle inline button callbacks"""
@@ -2011,6 +2035,8 @@ class TelegramBotService:
             )
             return
 
+        cs = self._cs(telegram_user)
+
         client = self._get_sdk_client(user.id)
         if not client:
             await context.bot.send_message(chat_id=chat_id, text="❌ Failed to connect to OpenAlgo")
@@ -2022,22 +2048,22 @@ class TelegramBotService:
 
             if callback_data == "orderbook":
                 response = await loop.run_in_executor(None, client.orderbook)
-                message = self._format_orderbook(response)
+                message = self._format_orderbook(response, cs=cs)
             elif callback_data == "tradebook":
                 response = await loop.run_in_executor(None, client.tradebook)
-                message = self._format_tradebook(response)
+                message = self._format_tradebook(response, cs=cs)
             elif callback_data == "positions":
                 response = await loop.run_in_executor(None, client.positionbook)
-                message = self._format_positions(response)
+                message = self._format_positions(response, cs=cs)
             elif callback_data == "holdings":
                 response = await loop.run_in_executor(None, client.holdings)
-                message = self._format_holdings(response)
+                message = self._format_holdings(response, cs=cs)
             elif callback_data == "funds":
                 response = await loop.run_in_executor(None, client.funds)
-                message = self._format_funds(response)
+                message = self._format_funds(response, cs=cs)
             elif callback_data == "pnl":
                 response = await loop.run_in_executor(None, client.positionbook)
-                message = self._format_pnl(response)
+                message = self._format_pnl(response, cs=cs)
             else:
                 message = "❌ Unknown command"
 

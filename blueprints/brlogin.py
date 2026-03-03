@@ -434,6 +434,12 @@ def broker_callback(broker, para=None):
 
         forward_url = "broker.html"
 
+    elif broker == "deltaexchange":
+        code = "deltaexchange"
+        logger.debug(f"DeltaExchange broker - code: {code}")
+        auth_token, error_message = auth_function(code)
+        forward_url = "broker.html"
+
     elif broker == "dhan_sandbox":
         code = "dhan_sandbox"
         logger.debug(f"Dhan Sandbox broker - The code is {code}")
