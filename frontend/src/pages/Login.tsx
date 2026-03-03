@@ -125,8 +125,10 @@ export default function Login() {
         // This handles shared-credentials reader mode where broker auth
         // completes server-side and the response already has redirect:/dashboard.
         const target = data.redirect || '/broker'
-        if (target === '/dashboard') {
-          // Re-fetch session status so Zustand has the correct broker set
+        if (target === '/dashboard' || target.startsWith('/dashboard')) {
+          // Re-fetch session status so Zustand has the correct broker set.
+          // This handles shared-credentials reader mode where broker auth
+          // completes server-side and the response already has redirect:/dashboard.
           try {
             const { setUser, setApiKey } = useAuthStore.getState()
             const sessionResponse = await fetch('/auth/session-status', { credentials: 'include' })
@@ -148,11 +150,15 @@ export default function Login() {
             // If session sync fails, fall back to basic login state
             setLogin(username, '')
           }
+          // Append shared_creds query param if server signalled an auto-login event
+          const navigateTo =
+            data.shared_creds === 'auto_login' ? '/dashboard?shared_creds=auto_login' : '/dashboard'
+          navigate(navigateTo)
         } else {
           // Normal broker selection flow
           setLogin(username, '')
+          navigate(target)
         }
-        navigate(target)
       }
     } catch (err) {
       setError('Login failed. Please try again.')
