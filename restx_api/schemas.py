@@ -28,6 +28,7 @@ class OrderSchema(Schema):
     underlying_ltp = fields.Float(
         missing=None, allow_none=True
     )  # Optional: passed from options order for execution reference
+    is_amo = fields.Bool(missing=False)  # Optional: True for After Market Orders (AMO)
 
 
 class SmartOrderSchema(Schema):

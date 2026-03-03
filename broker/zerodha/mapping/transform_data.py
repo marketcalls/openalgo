@@ -23,6 +23,7 @@ def transform_data(data):
         "disclosed_quantity": data.get("disclosed_quantity", "0"),
         "validity": "DAY",
         "tag": "openalgo",
+        "variety": "amo" if data.get("is_amo", False) else "regular",
     }
 
     # Extended mapping for fields that might need conditional logic or additional processing
