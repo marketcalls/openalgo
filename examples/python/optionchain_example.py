@@ -2,15 +2,15 @@ from openalgo import api
 
 # Initialize client
 client = api(
-    api_key="83ad96143dd5081d033abcfd20e9108daee5708fbea404121a762bed1e498dd0",
-    host="http://127.0.0.1:5000",
+    api_key="fb77b2df614f43f607c3cd7543200a3d0b7f8e133701ed40bebeceb901b4d440",
+    host="http://127.0.0.1:3300",
 )
 
 # -------------------------------------------------------
 # Get available expiry dates for NIFTY
 # -------------------------------------------------------
 expiry_result = client.expiry(
-    symbol="NIFTY", exchange="NFO", instrumenttype="options", strike_count=10
+    symbol="NIFTY", exchange="NFO", instrumenttype="options", strike_count=20
 )
 
 if expiry_result["status"] == "success":

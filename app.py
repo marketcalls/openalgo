@@ -540,80 +540,6 @@ def setup_environment(app):
         # load broker plugins (lazy - no actual imports until login)
         app.broker_auth_functions = load_broker_auth_functions()
 
-<<<<<<< HEAD
-        # Initialize all databases in parallel for faster startup
-        import time
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        from database.chart_prefs_db import ensure_chart_prefs_tables_exists
-        from database.market_calendar_db import ensure_market_calendar_tables_exists
-        from database.qty_freeze_db import ensure_qty_freeze_tables_exists
-
-        db_init_functions = [
-            ("Auth DB", ensure_auth_tables_exists),
-            ("User DB", ensure_user_tables_exists),
-            ("Master Contract DB", ensure_master_contract_tables_exists),
-            ("API Log DB", ensure_api_log_tables_exists),
-            ("Analyzer DB", ensure_analyzer_tables_exists),
-            ("Settings DB", ensure_settings_tables_exists),
-            ("Chartink DB", ensure_chartink_tables_exists),
-            ("Traffic Logs DB", ensure_traffic_logs_exists),
-            ("Latency DB", ensure_latency_tables_exists),
-            ("Strategy DB", ensure_strategy_tables_exists),
-            ("Sandbox DB", ensure_sandbox_tables_exists),
-            ("Action Center DB", ensure_action_center_tables_exists),
-            ("Chart Prefs DB", ensure_chart_prefs_tables_exists),
-            ("Market Calendar DB", ensure_market_calendar_tables_exists),
-            ("Qty Freeze DB", ensure_qty_freeze_tables_exists),
-            ("Historify DB", ensure_historify_tables_exists),
-            ("Flow DB", ensure_flow_tables_exists),
-            ('Strategy State DB', ensure_strategy_state_tables_exists),
-        ]
-
-        db_init_start = time.time()
-        with ThreadPoolExecutor(max_workers=15) as executor:
-            # Submit all database initialization tasks
-            futures = {executor.submit(func): name for name, func in db_init_functions}
-
-            # Wait for all to complete
-            for future in as_completed(futures):
-                db_name = futures[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    logger.error(f"Failed to initialize {db_name}: {e}")
-
-        db_init_time = (time.time() - db_init_start) * 1000
-        logger.debug(f"All databases initialized in parallel ({db_init_time:.0f}ms)")
-
-        # Initialize Python strategy scheduler (registers cron jobs for scheduled strategies)
-        # This must be AFTER database initialization to avoid "no such table" errors
-        try:
-            init_python_strategy()
-            logger.debug("Python strategy scheduler initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize Python strategy scheduler: {e}")
-
-        # Initialize Flow scheduler
-        try:
-            from services.flow_scheduler_service import init_flow_scheduler
-
-            init_flow_scheduler()
-            logger.debug("Flow scheduler initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize Flow scheduler: {e}")
-
-        # Initialize Historify scheduler
-        try:
-            from services.historify_scheduler_service import init_historify_scheduler
-
-            init_historify_scheduler(socketio=socketio)
-            logger.debug("Historify scheduler initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize Historify scheduler: {e}")
-
-=======
->>>>>>> upstream/main
     # Setup ngrok cleanup handlers (always register, regardless of ngrok being enabled)
     # This ensures proper cleanup on shutdown even if ngrok is enabled/disabled via UI
     # The actual tunnel creation happens in the __main__ block below
@@ -655,6 +581,7 @@ def setup_environment(app):
                 ("Qty Freeze DB", ensure_qty_freeze_tables_exists),
                 ("Historify DB", ensure_historify_tables_exists),
                 ("Flow DB", ensure_flow_tables_exists),
+                ("Strategy State DB", ensure_strategy_state_tables_exists),
             ]
 
             db_init_start = time.time()
