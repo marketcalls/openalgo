@@ -56,11 +56,11 @@ def get_csrf_token():
 
 @auth_bp.route("/broker-config", methods=["GET"])
 def get_broker_config():
-    """Return broker configuration for React SPA."""
-    if "user" not in session:
-        return jsonify({"status": "error", "message": "Not authenticated"}), 401
+    """Return broker configuration for React SPA.
 
-    BROKER_API_KEY = os.getenv("BROKER_API_KEY")
+    broker_name is always returned (needed to display the broker login button).
+    broker_api_key and redirect_url are only returned when authenticated.
+    """
     REDIRECT_URL = os.getenv("REDIRECT_URL")
 
     # Extract broker name from redirect URL
@@ -70,11 +70,24 @@ def get_broker_config():
     if not broker_name:
         return jsonify({"status": "error", "message": "Broker not configured"}), 500
 
+    # Return full config only for authenticated users
+    if "user" in session:
+        BROKER_API_KEY = os.getenv("BROKER_API_KEY")
+        return jsonify(
+            {
+                "status": "success",
+                "broker_name": broker_name,
+                "broker_api_key": BROKER_API_KEY,
+                "redirect_url": REDIRECT_URL,
+            }
+        )
+
+    # Unauthenticated: return broker name only so the login button is visible
     return jsonify(
         {
             "status": "success",
             "broker_name": broker_name,
-            "broker_api_key": BROKER_API_KEY,
+            "broker_api_key": None,
             "redirect_url": REDIRECT_URL,
         }
     )

@@ -45,17 +45,11 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { cn, sanitizeCSV } from '@/lib/utils'
+import { cn, makeFormatCurrency, sanitizeCSV } from '@/lib/utils'
 // Note: AlertDialog still used for Cancel All Orders
 import { useAuthStore } from '@/stores/authStore'
 import { onModeChange } from '@/stores/themeStore'
 import type { Order, OrderStats } from '@/types/trading'
-
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat('en-IN', {
-    minimumFractionDigits: 2,
-  }).format(value)
-}
 
 function formatTime(timestamp: string): string {
   try {
@@ -77,7 +71,8 @@ const statusConfig: Record<string, { icon: typeof CheckCircle2; color: string; l
 }
 
 export default function OrderBook() {
-  const { apiKey } = useAuthStore()
+  const { apiKey, user } = useAuthStore()
+  const formatCurrency = useMemo(() => makeFormatCurrency(user?.broker), [user?.broker])
   const [orders, setOrders] = useState<Order[]>([])
   const [stats, setStats] = useState<OrderStats | null>(null)
   const [isLoading, setIsLoading] = useState(true)
