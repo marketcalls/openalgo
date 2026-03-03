@@ -44,7 +44,7 @@ OPENALGO_DIR="$SCRIPT_DIR"
 XTS_BROKERS="fivepaisaxts,compositedge,ibulls,iifl,jainamxts,wisdom"
 
 # Valid brokers list
-VALID_BROKERS="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
+VALID_BROKERS="fivepaisa,fivepaisaxts,aliceblue,angel,compositedge,definedge,deltaexchange,dhan,dhan_sandbox,firstock,flattrade,fyers,groww,ibulls,iifl,indmoney,jainamxts,kotak,motilal,mstock,nubra,paytm,pocketful,samco,shoonya,tradejini,upstox,wisdom,zebu,zerodha"
 
 # Banner
 echo ""
@@ -192,7 +192,7 @@ do_setup() {
     echo ""
     echo "  Valid brokers:"
     echo "  fivepaisa, fivepaisaxts, aliceblue, angel, compositedge,"
-    echo "  definedge, dhan, dhan_sandbox, firstock, flattrade, fyers,"
+    echo "  definedge, deltaexchange, dhan, dhan_sandbox, firstock, flattrade, fyers,"
     echo "  groww, ibulls, iifl, indmoney, jainamxts, kotak, motilal,"
     echo "  mstock, nubra, paytm, pocketful, samco, shoonya, tradejini,"
     echo "  upstox, wisdom, zebu, zerodha"
