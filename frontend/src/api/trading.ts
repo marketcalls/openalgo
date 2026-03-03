@@ -190,6 +190,7 @@ export const tradingApi = {
       quantity: number
       trigger_price?: number
       disclosed_quantity?: number
+      variety?: string
     }
   ): Promise<ApiResponse<{ orderid: string }>> => {
     const response = await webClient.post<ApiResponse<{ orderid: string }>>('/modify_order', {
@@ -202,9 +203,10 @@ export const tradingApi = {
   /**
    * Cancel order (uses session auth with CSRF)
    */
-  cancelOrder: async (orderid: string): Promise<ApiResponse<{ orderid: string }>> => {
+  cancelOrder: async (orderid: string, variety?: string): Promise<ApiResponse<{ orderid: string }>> => {
     const response = await webClient.post<ApiResponse<{ orderid: string }>>('/cancel_order', {
       orderid,
+      variety: variety ?? 'regular',
     })
     return response.data
   },

@@ -20,7 +20,8 @@ export interface Order {
   pricetype: 'MARKET' | 'LIMIT' | 'SL' | 'SL-M'
   product: 'MIS' | 'NRML' | 'CNC'
   orderid: string
-  order_status: 'complete' | 'rejected' | 'cancelled' | 'open' | 'pending' | 'trigger pending'
+  order_status: 'complete' | 'rejected' | 'cancelled' | 'cancelled amo' | 'open' | 'pending' | 'trigger pending' | 'amo req received' | 'modify amo req received'
+  variety?: string
   timestamp: string
 }
 

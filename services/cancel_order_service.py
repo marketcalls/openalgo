@@ -65,7 +65,7 @@ def import_broker_module(broker_name: str) -> Any | None:
 
 
 def cancel_order_with_auth(
-    orderid: str, auth_token: str, broker: str, original_data: dict[str, Any]
+    orderid: str, auth_token: str, broker: str, original_data: dict[str, Any], variety: str = "regular"
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Cancel an order using provided auth token.
@@ -75,6 +75,7 @@ def cancel_order_with_auth(
         auth_token: Authentication token for the broker API
         broker: Name of the broker
         original_data: Original request data for logging
+        variety: Order variety - "regular" or "amo" (default: "regular")
 
     Returns:
         Tuple containing:
@@ -112,7 +113,13 @@ def cancel_order_with_auth(
 
     try:
         # Use the dynamically imported module's function to cancel the order
-        response_message, status_code = broker_module.cancel_order(orderid, auth_token)
+        # Pass variety if the broker's cancel_order supports it
+        import inspect
+        sig = inspect.signature(broker_module.cancel_order)
+        if "variety" in sig.parameters:
+            response_message, status_code = broker_module.cancel_order(orderid, auth_token, variety)
+        else:
+            response_message, status_code = broker_module.cancel_order(orderid, auth_token)
     except Exception as e:
         logger.error(f"Error in broker_module.cancel_order: {e}")
         traceback.print_exc()
@@ -157,6 +164,7 @@ def cancel_order(
     api_key: str | None = None,
     auth_token: str | None = None,
     broker: str | None = None,
+    variety: str = "regular",
 ) -> tuple[bool, dict[str, Any], int]:
     """
     Cancel an order.
@@ -212,11 +220,11 @@ def cancel_order(
             # Skip logging for invalid API keys to prevent database flooding
             return False, error_response, 403
 
-        return cancel_order_with_auth(orderid, AUTH_TOKEN, broker_name, original_data)
+        return cancel_order_with_auth(orderid, AUTH_TOKEN, broker_name, original_data, variety)
 
     # Case 2: Direct internal call with auth_token and broker
     elif auth_token and broker:
-        return cancel_order_with_auth(orderid, auth_token, broker, original_data)
+        return cancel_order_with_auth(orderid, auth_token, broker, original_data, variety)
 
     # Case 3: Invalid parameters
     else:

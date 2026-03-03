@@ -148,9 +148,12 @@ def place_order_api(data, auth):
         "Content-Type": "application/x-www-form-urlencoded",
     }
 
+    # Determine order variety: "amo" for After Market Orders, "regular" otherwise
+    variety = newdata.get("variety", "regular")
+
     # Make the request using the shared client
     response = client.post(
-        "https://api.kite.trade/orders/regular", headers=headers, content=payload_encoded
+        f"https://api.kite.trade/orders/{variety}", headers=headers, content=payload_encoded
     )
 
     # Parse the response
@@ -289,13 +292,14 @@ def close_all_positions(current_api_key, auth):
     return {"status": "success", "message": "All Open Positions SquaredOff"}, 200
 
 
-def cancel_order(orderid, auth):
+def cancel_order(orderid, auth, variety="regular"):
     """
     Cancel an existing order using the shared httpx client with connection pooling.
 
     Args:
         orderid (str): The ID of the order to cancel
         auth (str): Authentication token
+        variety (str): Order variety - "regular" or "amo" (default: "regular")
 
     Returns:
         tuple: (response data, status code)
@@ -311,7 +315,7 @@ def cancel_order(orderid, auth):
 
         # Make the DELETE request using the shared client
         response = client.delete(
-            f"https://api.kite.trade/orders/regular/{orderid}", headers=headers
+            f"https://api.kite.trade/orders/{variety}/{orderid}", headers=headers
         )
 
         response.raise_for_status()
@@ -367,9 +371,12 @@ def modify_order(data, auth):
         "Content-Type": "application/x-www-form-urlencoded",
     }
 
+    # Determine variety: "amo" for After Market Orders, "regular" otherwise
+    variety = data.get("variety", "regular")
+
     # Make the request using the shared client
     response = client.put(
-        f"https://api.kite.trade/orders/regular/{data['orderid']}",
+        f"https://api.kite.trade/orders/{variety}/{data['orderid']}",
         headers=headers,
         content=payload_encoded,
     )
