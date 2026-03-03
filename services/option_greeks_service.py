@@ -3,21 +3,115 @@ Option Greeks Service
 Calculates option Greeks (Delta, Gamma, Theta, Vega, Rho) and Implied Volatility
 for options across all supported exchanges (NFO, BFO, CDS, MCX)
 
-Uses Black-76 model (py_vollib) - appropriate for options on futures/forwards
+Uses Black-76 model - appropriate for options on futures/forwards
 which is the correct model for Indian F&O markets (NFO, BFO, MCX, CDS)
+
+Primary implementation uses py_vollib. If py_vollib is unavailable or broken
+(e.g. numba incompatibility on Python 3.13+), a pure-scipy fallback is used
+automatically. The fallback implements identical Black-76 formulae using only
+math + scipy.stats.norm + scipy.optimize.brentq — no numba/llvmlite needed.
 """
 
+import math
 import re
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
+from scipy.optimize import brentq
+from scipy.stats import norm
+
 from utils.constants import CRYPTO_EXCHANGES
 from utils.logging import get_logger
 
-# py_vollib is lazy-loaded inside calculate_greeks() and check_pyvollib_availability()
-# to avoid loading scipy/numba/llvmlite at startup
-
 logger = get_logger(__name__)
+
+# ── Try to load py_vollib at module level (once) ────────────────────────
+# If it fails we fall back to the pure-scipy implementation below.
+_USE_PYVOLLIB = False
+try:
+    from py_vollib.black.greeks.analytical import delta as _pv_delta
+    from py_vollib.black.greeks.analytical import gamma as _pv_gamma
+    from py_vollib.black.greeks.analytical import rho as _pv_rho
+    from py_vollib.black.greeks.analytical import theta as _pv_theta
+    from py_vollib.black.greeks.analytical import vega as _pv_vega
+    from py_vollib.black.implied_volatility import (
+        implied_volatility as _pv_iv,
+    )
+
+    # Smoke-test: numba JIT may explode on first real call even though the
+    # import itself succeeds.  Run a trivial calculation to flush that out.
+    _pv_iv(1.0, 100.0, 100.0, 0.0, 0.25, "c")
+    _USE_PYVOLLIB = True
+    logger.info("py_vollib loaded successfully — using numba-accelerated Black-76")
+except Exception as exc:
+    logger.warning(
+        "py_vollib unavailable or broken (%s). Using pure-scipy Black-76 fallback.", exc
+    )
+
+
+# ── Pure-scipy Black-76 implementation ──────────────────────────────────
+def _black76_price(F: float, K: float, T: float, r: float, sigma: float, flag: str) -> float:
+    """Black-76 option price.  flag = 'c' or 'p'."""
+    sqrt_T = math.sqrt(T)
+    d1 = (math.log(F / K) + 0.5 * sigma * sigma * T) / (sigma * sqrt_T)
+    d2 = d1 - sigma * sqrt_T
+    df = math.exp(-r * T)
+    if flag == "c":
+        return df * (F * norm.cdf(d1) - K * norm.cdf(d2))
+    return df * (K * norm.cdf(-d2) - F * norm.cdf(-d1))
+
+
+def _black76_iv(
+    price: float, F: float, K: float, r: float, T: float, flag: str
+) -> float:
+    """Implied volatility via Brent's method.  Same arg order as py_vollib."""
+    def _obj(sigma: float) -> float:
+        return _black76_price(F, K, T, r, sigma, flag) - price
+    return brentq(_obj, 1e-6, 50.0, xtol=1e-12, maxiter=200)
+
+
+def _d1d2(F: float, K: float, T: float, sigma: float):
+    sqrt_T = math.sqrt(T)
+    d1 = (math.log(F / K) + 0.5 * sigma * sigma * T) / (sigma * sqrt_T)
+    d2 = d1 - sigma * sqrt_T
+    return d1, d2, sqrt_T
+
+
+def _black76_delta(flag: str, F: float, K: float, T: float, r: float, sigma: float) -> float:
+    d1, _, _ = _d1d2(F, K, T, sigma)
+    df = math.exp(-r * T)
+    if flag == "c":
+        return df * norm.cdf(d1)
+    return -df * norm.cdf(-d1)
+
+
+def _black76_gamma(flag: str, F: float, K: float, T: float, r: float, sigma: float) -> float:
+    d1, _, sqrt_T = _d1d2(F, K, T, sigma)
+    df = math.exp(-r * T)
+    return df * norm.pdf(d1) / (F * sigma * sqrt_T)
+
+
+def _black76_theta(flag: str, F: float, K: float, T: float, r: float, sigma: float) -> float:
+    d1, d2, sqrt_T = _d1d2(F, K, T, sigma)
+    df = math.exp(-r * T)
+    first_term = -(F * df * norm.pdf(d1) * sigma) / (2.0 * sqrt_T)
+    if flag == "c":
+        return first_term - r * df * (F * norm.cdf(d1) - K * norm.cdf(d2))
+    return first_term + r * df * (K * norm.cdf(-d2) - F * norm.cdf(-d1))
+
+
+def _black76_vega(flag: str, F: float, K: float, T: float, r: float, sigma: float) -> float:
+    d1, _, sqrt_T = _d1d2(F, K, T, sigma)
+    df = math.exp(-r * T)
+    return F * df * norm.pdf(d1) * sqrt_T
+
+
+def _black76_rho(flag: str, F: float, K: float, T: float, r: float, sigma: float) -> float:
+    d1, d2, _ = _d1d2(F, K, T, sigma)
+    df = math.exp(-r * T)
+    if flag == "c":
+        return -T * df * (F * norm.cdf(d1) - K * norm.cdf(d2))
+    return -T * df * (K * norm.cdf(-d2) - F * norm.cdf(-d1))
 
 # Exchange-specific symbol mappings
 NSE_INDEX_SYMBOLS = {
@@ -65,21 +159,9 @@ DEFAULT_INTEREST_RATES = {
 
 
 def check_pyvollib_availability():
-    """Check if py_vollib library is available"""
-    try:
-        from py_vollib.black.implied_volatility import implied_volatility as black_iv  # noqa: F401
-
-        return True, None, None
-    except ImportError:
-        logger.error("py_vollib library not installed. Install with: pip install py_vollib")
-        return (
-            False,
-            {
-                "status": "error",
-                "message": "Option Greeks calculation requires py_vollib library. Install with: pip install py_vollib",
-            },
-            500,
-        )
+    """Check if Black-76 engine is available (py_vollib or scipy fallback)"""
+    # Pure-scipy fallback is always available, so this always succeeds.
+    return True, None, None
 
 
 def parse_option_symbol(
@@ -278,24 +360,21 @@ def calculate_greeks(
         Tuple of (success, response_dict, status_code)
     """
     try:
-        # Check if py_vollib is available and import (lazy-loaded to avoid startup overhead)
-        try:
-            from py_vollib.black.greeks.analytical import delta as black_delta
-            from py_vollib.black.greeks.analytical import gamma as black_gamma
-            from py_vollib.black.greeks.analytical import rho as black_rho
-            from py_vollib.black.greeks.analytical import theta as black_theta
-            from py_vollib.black.greeks.analytical import vega as black_vega
-            from py_vollib.black.implied_volatility import implied_volatility as black_iv
-        except ImportError:
-            logger.error("py_vollib library not installed.")
-            return (
-                False,
-                {
-                    "status": "error",
-                    "message": "Option Greeks calculation requires py_vollib library. Install with: pip install py_vollib",
-                },
-                500,
-            )
+        # Select Black-76 engine: py_vollib (numba-accelerated) or scipy fallback
+        if _USE_PYVOLLIB:
+            black_iv = _pv_iv
+            black_delta = _pv_delta
+            black_gamma = _pv_gamma
+            black_theta = _pv_theta
+            black_vega = _pv_vega
+            black_rho = _pv_rho
+        else:
+            black_iv = _black76_iv
+            black_delta = _black76_delta
+            black_gamma = _black76_gamma
+            black_theta = _black76_theta
+            black_vega = _black76_vega
+            black_rho = _black76_rho
 
         # Parse option symbol with custom expiry time if provided
         base_symbol, expiry, strike, opt_type = parse_option_symbol(
