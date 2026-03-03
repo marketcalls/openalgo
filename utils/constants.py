@@ -95,6 +95,10 @@ EXCHANGE_BADGE_COLORS = {
     EXCHANGE_CRYPTO: "badge-primary",
 }
 
+# Broker init arg counts
+BROKER_INIT_ARGS_WITH_AUTH = 2
+BROKER_INIT_ARGS_WITH_FEED = 3
+
 # Required Fields for Order Placement
 REQUIRED_ORDER_FIELDS = ["apikey", "strategy", "symbol", "exchange", "action", "quantity"]
 
