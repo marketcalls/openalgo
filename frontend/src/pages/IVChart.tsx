@@ -34,11 +34,13 @@ import { showToast } from '@/utils/toast'
 const FNO_EXCHANGES = [
   { value: 'NFO', label: 'NFO' },
   { value: 'BFO', label: 'BFO' },
+  { value: 'CRYPTO', label: 'CRYPTO' },
 ]
 
 const DEFAULT_UNDERLYINGS: Record<string, string[]> = {
   NFO: ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'],
   BFO: ['SENSEX', 'BANKEX'],
+  CRYPTO: ['BTC', 'ETH', 'SOL', 'BNB', 'XRP'],
 }
 
 const METRICS = ['iv', 'delta', 'theta', 'vega', 'gamma'] as const

@@ -39,6 +39,7 @@ class SymToken(Base):
     lotsize = Column(Integer)
     instrumenttype = Column(String)
     tick_size = Column(Float)
+    contract_value = Column(Float)
 
     # Composite indices for improved search performance
     __table_args__ = (
