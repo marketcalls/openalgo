@@ -139,7 +139,20 @@ def load_configs():
         try:
             with open(CONFIG_FILE, encoding="utf-8") as f:
                 STRATEGY_CONFIGS = json.load(f)
-            logger.debug(f"Loaded {len(STRATEGY_CONFIGS)} strategy configurations")
+            # Backfill webhook_id for legacy strategies
+            changed = False
+            for sid, cfg in STRATEGY_CONFIGS.items():
+                if "webhook_id" not in cfg:
+                    cfg["webhook_id"] = str(uuid.uuid4())
+                    changed = True
+            if changed:
+                save_configs()
+                logger.info(
+                    "Backfilled webhook_id for legacy strategies"
+                )
+            logger.debug(
+                f"Loaded {len(STRATEGY_CONFIGS)} strategy configs"
+            )
         except Exception as e:
             logger.exception(f"Failed to load configs: {e}")
             STRATEGY_CONFIGS = {}
@@ -2042,12 +2055,15 @@ def get_schedule_status(config):
 @python_strategy_bp.route("/api/strategies")
 @check_session_validity
 def api_get_strategies():
-    """API: Get all strategies as JSON"""
+    """API: Get all strategies for current user as JSON"""
     cleanup_dead_processes()
+    user_id = session.get("user")
     strategies = []
 
     for strategy_id, config in STRATEGY_CONFIGS.items():
-        # Determine status with detailed schedule info
+        if config.get("user_id") != user_id:
+            continue
+
         if config.get("is_running"):
             status = "running"
             status_message = "Running"
@@ -2129,13 +2145,16 @@ def api_strategy_events():
 @python_strategy_bp.route("/api/strategy/<strategy_id>")
 @check_session_validity
 def api_get_strategy(strategy_id):
-    """API: Get single strategy as JSON"""
+    """API: Get single strategy as JSON (ownership verified)"""
     if strategy_id not in STRATEGY_CONFIGS:
         return jsonify({"status": "error", "message": "Strategy not found"}), 404
 
     config = STRATEGY_CONFIGS[strategy_id]
 
-    # Determine status with detailed schedule info
+    user_id = session.get("user")
+    if config.get("user_id") != user_id:
+        return jsonify({"status": "error", "message": "Unauthorized"}), 403
+
     if config.get("is_running"):
         status = "running"
         status_message = "Running"
