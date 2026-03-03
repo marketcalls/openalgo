@@ -919,6 +919,31 @@ def webhook(webhook_id):
         )
 
         if is_options:
+            # Enforce intraday trading hours for options too
+            if strategy.is_intraday:
+                now = datetime.now(pytz.timezone("Asia/Kolkata"))
+                current_time = now.strftime("%H:%M")
+                action = data.get("action", "").upper()
+
+                is_exit = (
+                    action == "SELL"
+                    if strategy.trading_mode == "LONG"
+                    else action == "BUY"
+                    if strategy.trading_mode == "SHORT"
+                    else int(data.get("position_size", 0)) == 0
+                )
+
+                if not is_exit:
+                    if strategy.start_time and current_time < strategy.start_time:
+                        return jsonify({"error": "Entry orders not allowed before start time"}), 400
+                    if strategy.end_time and current_time > strategy.end_time:
+                        return jsonify({"error": "Entry orders not allowed after end time"}), 400
+                else:
+                    if strategy.start_time and current_time < strategy.start_time:
+                        return jsonify({"error": "Exit orders not allowed before start time"}), 400
+                    if strategy.squareoff_time and current_time > strategy.squareoff_time:
+                        return jsonify({"error": "Exit orders not allowed after square off time"}), 400
+
             api_key = get_api_key_for_tradingview(strategy.user_id)
             if not api_key:
                 return jsonify({"error": "No API key found"}), 401
